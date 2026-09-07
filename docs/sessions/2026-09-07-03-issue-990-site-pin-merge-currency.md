@@ -63,3 +63,27 @@ pins before merging" for the obligation.
 
 Other open pull requests at this checkpoint: #992 (`feat/issue-974`), untouched
 by this session.
+
+## Codex review round on pull request #993
+
+A Codex review of #993 found that the checker's success path validated only the
+sitemap `<lastmod>`. When a canonical page is edited across a date boundary,
+rotating that one pin to the predicted date and recomputing the HTML manifest
+digest is enough to keep every required `ci-gate` job green, because only the
+non-required `Pages` workflow runs `scripts/check-site.sh` — so the required
+pre-merge checker could approve a merge that immediately left `Pages` red on
+the JSON-LD `dateModified` and `PAGE_SPECS` dates. The finding was verified as
+real and fixed in the same branch: `scripts/check_site_pin_merge_currency.rb`
+now validates all four pins at the head revision for every touched canonical
+page source, reporting every stale pin for every affected page in one failure.
+Pins that are genuinely absent from an input (the landing page has no
+`PAGE_SPECS` entry, and `scripts/check-site.sh` or the performance manifest may
+not exist at a given revision) are recorded as skips in the success summary
+rather than turned into diagnostics that would compete with the checkers that
+own them. `docs/decisions/D-239-...` and `docs/WEBSITE.md` were updated in the
+same commit, and `scripts/test_check_site_pin_merge_currency.rb` gained cases
+for each newly validated pin, for the sitemap-only rotation the finding
+describes, and for each skip path — plus two tests that run the new
+`PAGE_SPECS` and JSON-LD parsers against the real repository files, so a
+reindented heredoc or a restructured `@graph` cannot silently degrade those
+pins into permanent skips.

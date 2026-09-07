@@ -1,7 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "digest"
 require "fileutils"
+require "json"
 require "minitest/autorun"
 require "open3"
 require "pathname"
@@ -308,5 +310,222 @@ class SitePinMergeCurrencyTest < Minitest::Test
     assert_equal "-05:30", format_offset(-19_800)
     assert_equal "+00:00", format_offset(0)
     assert_equal "+00:00", format_offset(nil)
+  end
+
+  # --- All-four-pin coverage ---------------------------------------------
+  #
+  # The fixtures below carry the other three pins as well, in the exact shapes
+  # the real repository uses: a JSON-LD "@graph" with a WebPage node, a
+  # PAGE_SPECS dict literal inside scripts/check-site.sh's Python heredoc, and
+  # a performance manifest whose "canonical_pages" entries pin a SHA-256 of the
+  # page HTML.
+
+  def page_html(date_modified:, body: "status")
+    <<~HTML
+      <!doctype html>
+      <html lang="en">
+      <head>
+      <script type="application/ld+json">
+      {"@context": "https://schema.org", "@graph": [
+        {"@type": "WebSite", "name": "pycc"},
+        {"@type": "WebPage", "@id": "#{STATUS_CANONICAL}#webpage",
+         "url": "#{STATUS_CANONICAL}", "dateModified": "#{date_modified}"}
+      ]}
+      </script>
+      </head>
+      <body>#{body}</body>
+      </html>
+    HTML
+  end
+
+  def check_site_sh(status_date:)
+    <<~SH
+      #!/usr/bin/env bash
+      python3 - "$@" <<'PYTHON'
+      PAGE_SPECS = {
+          "status": {
+              "title": "Status",
+              "date_modified": "#{status_date}",
+          },
+          "diagnostics": {
+              "date_modified": "2026-09-06",
+          },
+      }
+
+
+      class PageParser:
+          pass
+      PYTHON
+    SH
+  end
+
+  def manifest(status_digest:)
+    JSON.pretty_generate(
+      "manifest_version" => 1,
+      "canonical_pages" => [
+        { "id" => "status", "source_artifact" => STATUS_SOURCE,
+          "source_artifact_sha256" => status_digest },
+      ],
+      "error_page" => { "id" => "not-found" }
+    )
+  end
+
+  # Head commit with every pin independently controllable. `digest_of` decides
+  # which HTML the manifest digest is computed from, so a stale digest can be
+  # expressed without hand-writing a hash.
+  def commit_all_four(root, lastmod:, date_modified:, spec_date:, digest_of: nil)
+    html = page_html(date_modified: date_modified)
+    write_and_commit(
+      root,
+      {
+        STATUS_SOURCE => html,
+        SITEMAP_RELATIVE_PATH => sitemap(status_date: lastmod, home_date: "2026-09-06"),
+        SITE_CHECKER_PATH => check_site_sh(status_date: spec_date),
+        PERFORMANCE_MANIFEST_PATH =>
+          manifest(status_digest: Digest::SHA256.hexdigest(digest_of || html)),
+      },
+      "rotate pins"
+    )
+  end
+
+  def test_passes_when_all_four_pins_are_current
+    with_repo do |root, base|
+      head = commit_all_four(root, lastmod: "2026-09-07", date_modified: "2026-09-07",
+                                   spec_date: "2026-09-07")
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/2026-09-07/, result)
+      refute_match(/not verified/, result)
+    end
+  end
+
+  # The reported defect: only the sitemap pin was rotated and the digest was
+  # recomputed, so every required ci-gate job stays green while the page's own
+  # dateModified and PAGE_SPECS date remain stale.
+  def test_rejects_a_sitemap_only_rotation_that_leaves_the_other_date_pins_stale
+    with_repo do |root, base|
+      head = commit_all_four(root, lastmod: "2026-09-07", date_modified: "2026-09-06",
+                                   spec_date: "2026-09-06")
+      error = assert_raises(SitePinMergeCurrencyError) do
+        check_site_pin_merge_currency(root, base, head, now: midday)
+      end
+      assert_match(/dateModified.*pinned 2026-09-06/, error.message)
+      assert_match(/PAGE_SPECS\["status"\]\["date_modified"\].*pinned 2026-09-06/, error.message)
+    end
+  end
+
+  def test_rejects_a_stale_json_ld_date_modified_alone
+    with_repo do |root, base|
+      head = commit_all_four(root, lastmod: "2026-09-07", date_modified: "2026-09-06",
+                                   spec_date: "2026-09-07")
+      error = assert_raises(SitePinMergeCurrencyError) do
+        check_site_pin_merge_currency(root, base, head, now: midday)
+      end
+      assert_match(/dateModified/, error.message)
+      refute_match(/PAGE_SPECS\["status"\]/, error.message)
+    end
+  end
+
+  def test_rejects_a_stale_page_specs_date_alone
+    with_repo do |root, base|
+      head = commit_all_four(root, lastmod: "2026-09-07", date_modified: "2026-09-07",
+                                   spec_date: "2026-09-06")
+      error = assert_raises(SitePinMergeCurrencyError) do
+        check_site_pin_merge_currency(root, base, head, now: midday)
+      end
+      assert_match(/PAGE_SPECS\["status"\]\["date_modified"\]/, error.message)
+      assert_match(/pinned 2026-09-06/, error.message)
+    end
+  end
+
+  # The digest is not a date: it is stale whenever it does not equal the
+  # SHA-256 of the page HTML as it exists at the head revision.
+  def test_rejects_a_manifest_digest_that_does_not_match_the_head_page_html
+    with_repo do |root, base|
+      head = commit_all_four(
+        root, lastmod: "2026-09-07", date_modified: "2026-09-07", spec_date: "2026-09-07",
+        digest_of: "<html>some other bytes</html>\n"
+      )
+      error = assert_raises(SitePinMergeCurrencyError) do
+        check_site_pin_merge_currency(root, base, head, now: midday)
+      end
+      assert_match(/source_artifact_sha256/, error.message)
+      assert_match(/hashes to/, error.message)
+    end
+  end
+
+  # site/index.html has no PAGE_SPECS entry -- scripts/check-site.sh validates
+  # the landing page in its own block -- so that pin is a skip, not a failure.
+  def test_skips_the_page_specs_pin_for_a_page_with_no_entry
+    with_repo do |root, base|
+      html = page_html(date_modified: "2026-09-07", body: "home")
+      head = write_and_commit(
+        root,
+        {
+          HOME_SOURCE => html,
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-06", home_date: "2026-09-07"),
+          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07"),
+          PERFORMANCE_MANIFEST_PATH => manifest(status_digest: "0" * 64),
+        },
+        "edit home"
+      )
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/PAGE_SPECS date_modified not verified/, result)
+      assert_match(/source_artifact_sha256 not verified/, result)
+    end
+  end
+
+  def test_skips_a_page_whose_html_carries_no_json_ld_date_modified
+    with_repo do |root, base|
+      head = write_and_commit(
+        root,
+        {
+          STATUS_SOURCE => "<html>no structured data</html>\n",
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-07", home_date: "2026-09-06"),
+          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07"),
+        },
+        "edit status without structured data"
+      )
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/JSON-LD dateModified not verified/, result)
+    end
+  end
+
+  def test_skips_the_digest_pin_when_the_page_is_absent_from_the_manifest
+    with_repo do |root, base|
+      head = write_and_commit(
+        root,
+        {
+          STATUS_SOURCE => page_html(date_modified: "2026-09-07"),
+          SITEMAP_RELATIVE_PATH => sitemap(status_date: "2026-09-07", home_date: "2026-09-06"),
+          SITE_CHECKER_PATH => check_site_sh(status_date: "2026-09-07"),
+          PERFORMANCE_MANIFEST_PATH => JSON.generate("canonical_pages" => []),
+        },
+        "edit status with no manifest entry"
+      )
+      result = check_site_pin_merge_currency(root, base, head, now: midday)
+      assert_match(/source_artifact_sha256 not verified/, result)
+    end
+  end
+
+  # The one test that runs the PAGE_SPECS parser against the file it was
+  # derived from: a reindented or restructured heredoc in the real
+  # scripts/check-site.sh would silently turn every pin-3 check into a skip.
+  def test_page_specs_parser_reads_the_real_check_site_script
+    repository_root = Pathname(__dir__).parent
+    text = (repository_root / SITE_CHECKER_PATH).read(encoding: "UTF-8")
+    dates = page_specs_dates(text)
+    refute_nil dates
+    %w[status architecture python-aot-compilers ai-native language-support diagnostics].each do |slug|
+      assert_match(/\A\d{4}-\d{2}-\d{2}\z/, dates[slug].to_s, "PAGE_SPECS date for #{slug}")
+    end
+  end
+
+  # ...and the JSON-LD reader against the real pages.
+  def test_json_ld_reader_reads_every_real_canonical_page
+    repository_root = Pathname(__dir__).parent
+    CANONICAL_TO_SOURCE.each_value do |source|
+      html = (repository_root / source).read(encoding: "UTF-8")
+      assert_match(/\A\d{4}-\d{2}-\d{2}\z/, json_ld_date_modified(html).to_s, source)
+    end
   end
 end

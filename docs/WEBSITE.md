@@ -201,9 +201,19 @@ its own pull-request leg honestly and then fails the identical check on `main`
 when it is squash-merged on day N+1.
 
 `scripts/check_site_pin_merge_currency.rb` closes that window on the
-pull-request leg: it compares the head tree's pins against the date the
-prospective squash commit is predicted to carry, and it fails closed near a
-date rollover rather than guessing. It runs in `.github/workflows/ci.yml`'s
+pull-request leg: for every touched canonical page source it validates **all
+four** pins above at the head revision — the `<lastmod>`, the JSON-LD
+`WebPage.dateModified`, the `PAGE_SPECS` `date_modified`, and the
+`source_artifact_sha256` digest against the SHA-256 of the page HTML at that
+revision — comparing each against the date the prospective squash commit is
+predicted to carry, and it fails closed near a date rollover rather than
+guessing. Checking only pin 1 would not close the window: rotating just the
+`<lastmod>` and recomputing the digest keeps every required `ci-gate` job
+green, because only the non-required `Pages` workflow runs
+`scripts/check-site.sh`, so a merge could be approved that immediately leaves
+`Pages` red. When a page is genuinely absent from one of those inputs the
+checker records a skip in its success summary and leaves the diagnostic to the
+checker that owns it. It runs in `.github/workflows/ci.yml`'s
 `governance` job (the load-bearing placement — `ci-gate` is a required context
 and fails when `governance` fails) and again in `.github/workflows/pages.yml`'s
 `build` job as defense in depth. Both invocations are pull-request-leg only:

@@ -31,7 +31,19 @@ status: accepted
   repository's own most recent instance of paying for it after the fact.
 - Decision: Add `scripts/check_site_pin_merge_currency.rb`, a second, distinct
   validator that runs on the pull-request leg and compares the head tree's pins
-  against the date the prospective squash commit is *predicted* to carry. It
+  against the date the prospective squash commit is *predicted* to carry. For
+  every touched canonical page source it validates **all four** pins at the
+  head revision, not only the sitemap value: the `<lastmod>`, the JSON-LD
+  `WebPage.dateModified`, the `PAGE_SPECS` `date_modified`, and the
+  `source_artifact_sha256` digest (compared against the SHA-256 of the page
+  HTML as it exists at that revision). Validating only the sitemap value would
+  leave the defect open: rotating just the `<lastmod>` and recomputing the
+  digest keeps every required `ci-gate` job green, because only the
+  non-required `Pages` workflow runs `scripts/check-site.sh` — so the
+  pre-merge checker would approve a merge that immediately leaves `Pages` red.
+  A pin that is *absent* from one of those inputs stays the owning checker's
+  diagnostic and is recorded as a skip in this checker's success summary; a pin
+  that is *present but stale* is this checker's business. It
   computes the diff first and returns success immediately when no canonical
   page source is touched; only then does it derive the date. "Today" means what
   `git log --format=%as` would report — an author date rendered in the merging

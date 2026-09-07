@@ -53,10 +53,29 @@
 # Usage:
 #   ruby scripts/check_site_pin_merge_currency.rb <base-revision> [head-revision] [repository-root]
 #
-# Exits 0 when no canonical page source is touched, or when every touched
-# page's sitemap <lastmod> already equals the predicted merge date. Exits 1
-# otherwise, naming every pin that must be rotated.
+# Exits 0 when no canonical page source is touched, or when every date pin a
+# touched page actually carries already matches the predicted merge date.
+# Exits 1 otherwise, naming every pin that must be rotated.
+#
+# All four pins, not just the sitemap
+# -----------------------------------
+# Each canonical page is pinned in four places: the sitemap <lastmod>, the
+# JSON-LD WebPage "dateModified" in the page's own HTML, the PAGE_SPECS
+# "date_modified" in scripts/check-site.sh, and the "source_artifact_sha256"
+# digest of the page HTML in the performance manifest. Validating only the
+# first would let a partial rotation pass: updating just the sitemap and
+# recomputing the digest keeps every required `ci-gate` job green, because only
+# the non-required Pages workflow runs check-site.sh -- so this checker would
+# approve a merge that immediately leaves Pages red. All four are therefore
+# validated at the head revision.
+#
+# A pin that is *absent* is another checker's diagnostic (check-site.sh and
+# check_pages_performance_budget.rb own "this page is missing from my inputs"),
+# so absence is a recorded skip rather than a competing error here. A pin that
+# is *present but stale* is exactly this checker's business.
 
+require "digest"
+require "json"
 require "open3"
 require "pathname"
 require "time"
@@ -67,6 +86,7 @@ class SitePinMergeCurrencyError < StandardError; end
 
 SITEMAP_RELATIVE_PATH = "site/sitemap.xml"
 PERFORMANCE_MANIFEST_PATH = "tests/fixtures/pages-performance-manifest.json"
+SITE_CHECKER_PATH = "scripts/check-site.sh"
 WEBSITE_GUIDANCE_DOC = "docs/WEBSITE.md"
 PIN_CURRENCY_ISSUE_REFERENCE = "https://github.com/rotnov/pycc/issues/990"
 
@@ -144,10 +164,92 @@ def sitemap_lastmods(sitemap_text)
   sitemap_text.scan(%r{<loc>([^<]+)</loc>\s*<lastmod>([^<]+)</lastmod>}).to_h
 end
 
+# PAGE_SPECS in scripts/check-site.sh is a Python dict literal embedded in a
+# heredoc, so it cannot be parsed as JSON or evaluated. It is read the way it
+# is written there: the dict opens with a line ending in `PAGE_SPECS = {`, its
+# slug keys sit at four-space indentation (`    "status": {`), each spec's
+# entries sit at eight (`        "date_modified": "2026-09-07",`), and the dict
+# closes with a `}` in column zero. Bounding the scan by that column-zero close
+# keeps the scan from bleeding into the Python code that follows.
+# Returns a slug => date hash, or nil when the dict is not found at all --
+# scripts/check-site.sh owns diagnosing its own shape.
+def page_specs_dates(check_site_text)
+  dates = {}
+  slug = nil
+  inside = false
+  check_site_text.each_line do |line|
+    stripped = line.chomp
+    if !inside
+      inside = true if stripped =~ /PAGE_SPECS\s*=\s*\{\s*\z/
+      next
+    end
+    break if stripped == "}"
+
+    if (match = stripped.match(/\A {4}"([^"]+)":\s*\{\s*\z/))
+      slug = match[1]
+    elsif (match = stripped.match(/\A {8}"date_modified":\s*"([^"]+)",?\s*\z/))
+      dates[slug] = match[1] unless slug.nil?
+    end
+  end
+  return nil unless inside
+
+  dates
+end
+
+# The PAGE_SPECS key for a canonical page source, or nil when the page has no
+# entry. The mapping is mechanical -- `site/<slug>/index.html` keys on
+# `<slug>` -- with one genuine exception: `site/index.html`, the landing page,
+# has no PAGE_SPECS entry at all. scripts/check-site.sh validates the landing
+# page in a separate block with its own assertions, so there is no third date
+# pin for it to be stale against; it is a skip, not a failure.
+def page_specs_key(source)
+  match = source.match(%r{\Asite/([^/]+)/index\.html\z})
+  match && match[1]
+end
+
+# The JSON-LD "dateModified" of the page's WebPage node, mirroring how
+# scripts/check-site.sh reads it: parse the page's single
+# `application/ld+json` block and take the "@graph" entry whose "@type" is
+# "WebPage". Returns nil when the block is missing or unparseable -- that page
+# shape is check-site.sh's diagnostic, not this checker's.
+def json_ld_date_modified(html_text)
+  block = html_text[%r{<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>}m, 1]
+  return nil if block.nil?
+
+  document = JSON.parse(block)
+  graph = document["@graph"]
+  return nil unless graph.is_a?(Array)
+
+  web_page = graph.find { |node| node.is_a?(Hash) && node["@type"] == "WebPage" }
+  web_page && web_page["dateModified"]
+rescue JSON::ParserError
+  nil
+end
+
+# source path => source_artifact_sha256, taken only from the manifest's
+# "canonical_pages" cohort. The manifest also carries non-canonical entries
+# (the error page), which have no canonical-page date pins and must not
+# participate. Returns nil when the manifest cannot be parsed --
+# check_pages_performance_budget.rb owns that diagnostic.
+def manifest_source_digests(manifest_text)
+  document = JSON.parse(manifest_text)
+  pages = document["canonical_pages"]
+  return nil unless pages.is_a?(Array)
+
+  pages.each_with_object({}) do |page, digests|
+    next unless page.is_a?(Hash)
+
+    artifact = page["source_artifact"]
+    digest = page["source_artifact_sha256"]
+    digests[artifact] = digest if artifact && digest
+  end
+rescue JSON::ParserError
+  nil
+end
+
 def remediation_message(stale, predicted_date, offset_description)
-  lines = stale.map do |source, lastmod|
-    "  #{source}: pinned #{lastmod}, but this pull request's squash-merge " \
-      "commit is predicted to be dated #{predicted_date}"
+  lines = stale.flat_map do |source, pins|
+    ["  #{source}:"] + pins.map { |pin| "    #{pin}" }
   end
 
   <<~MESSAGE.strip
@@ -225,24 +327,79 @@ def check_site_pin_merge_currency(root, base_revision, head_revision,
   end
 
   lastmods = sitemap_lastmods(sitemap_text)
+
+  # The other three pins live in whole files that may legitimately be absent
+  # from a given revision. A missing scripts/check-site.sh or performance
+  # manifest reds every other website gate in the repository already, so
+  # emitting a competing diagnostic here would add nothing; skip those pins and
+  # say so in the summary instead.
+  check_site_text = read_file_at_revision(root, head_revision, SITE_CHECKER_PATH)
+  page_specs = check_site_text && page_specs_dates(check_site_text)
+  manifest_text = read_file_at_revision(root, head_revision, PERFORMANCE_MANIFEST_PATH)
+  manifest_digests = manifest_text && manifest_source_digests(manifest_text)
+
   stale = {}
+  skipped = []
   touched_sources.each do |source|
+    pins = []
+
     canonical = SOURCE_TO_CANONICAL[source]
     lastmod = lastmods[canonical]
     # A page absent from the sitemap is check_sitemap_lastmod.rb's and
     # check-site.sh's business, not this checker's; skip rather than
-    # duplicating (and disagreeing with) their diagnostics.
-    next if lastmod.nil?
+    # duplicating (and disagreeing with) their diagnostics. The same principle
+    # governs every skip below: a pin that is *absent* belongs to another
+    # checker, a pin that is *present but stale* belongs to this one.
+    if lastmod.nil?
+      skipped << "#{source}: <lastmod> not verified (absent from #{SITEMAP_RELATIVE_PATH})"
+    elsif lastmod != predicted_date
+      pins << "<lastmod> for #{canonical} in #{SITEMAP_RELATIVE_PATH}: " \
+              "pinned #{lastmod}, predicted merge date #{predicted_date}"
+    end
 
-    stale[source] = lastmod if lastmod != predicted_date
+    page_html = read_file_at_revision(root, head_revision, source)
+    date_modified = page_html && json_ld_date_modified(page_html)
+    if date_modified.nil?
+      skipped << "#{source}: JSON-LD dateModified not verified (no parseable WebPage node)"
+    elsif date_modified != predicted_date
+      pins << "JSON-LD WebPage \"dateModified\" in #{source}: " \
+              "pinned #{date_modified}, predicted merge date #{predicted_date}"
+    end
+
+    slug = page_specs_key(source)
+    spec_date = slug && page_specs && page_specs[slug]
+    if spec_date.nil?
+      skipped << "#{source}: PAGE_SPECS date_modified not verified " \
+                 "(no entry in #{SITE_CHECKER_PATH} at this revision)"
+    elsif spec_date != predicted_date
+      pins << "PAGE_SPECS[#{slug.inspect}][\"date_modified\"] in #{SITE_CHECKER_PATH}: " \
+              "pinned #{spec_date}, predicted merge date #{predicted_date}"
+    end
+
+    pinned_digest = manifest_digests && manifest_digests[source]
+    if pinned_digest.nil? || page_html.nil?
+      skipped << "#{source}: source_artifact_sha256 not verified " \
+                 "(no entry in #{PERFORMANCE_MANIFEST_PATH} at this revision)"
+    else
+      actual_digest = Digest::SHA256.hexdigest(page_html)
+      if pinned_digest != actual_digest
+        pins << "\"source_artifact_sha256\" for #{source} in #{PERFORMANCE_MANIFEST_PATH}: " \
+                "pinned #{pinned_digest}, but the page HTML at this revision hashes to " \
+                "#{actual_digest}"
+      end
+    end
+
+    stale[source] = pins unless pins.empty?
   end
 
   unless stale.empty?
     raise SitePinMergeCurrencyError, remediation_message(stale, predicted_date, offset_description)
   end
 
-  "#{touched_sources.length} touched canonical page source(s) pinned to the " \
-    "predicted merge date #{predicted_date} (#{offset_description})"
+  summary = "#{touched_sources.length} touched canonical page source(s) pinned to the " \
+            "predicted merge date #{predicted_date} (#{offset_description})"
+  summary += "; skipped: #{skipped.join('; ')}" unless skipped.empty?
+  summary
 end
 
 def format_offset(seconds)
