@@ -13,7 +13,7 @@ clusters were relocated verbatim into new sibling child modules under
 `crates/pycc_types/src/tests/`, following the sibling-`tests.rs`-plus-`tests/`
 layout (no `mod.rs`) that PR #995 established with `tests/constraints.rs`.
 
-`#695` stays open: at 24,783 lines the file is still far above the ~1,000-line
+`#695` stays open: at 24,765 lines the file is still far above the ~1,000-line
 decomposability threshold, so it is narrowed by comment after each merge rather
 than closed.
 
