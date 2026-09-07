@@ -623,7 +623,7 @@ fn instantiation_protocol_message(attr_name: &str) -> Option<&'static str> {
 /// **The predicate is a deliberate superset of CPython's non-member set.** It
 /// never under-rejects -- every name CPython keeps out of the member list
 /// matches one of the four shapes -- so no D-198 false acceptance survives in
-/// this family. It over-rejects in three measured ways, all recorded in
+/// this family. It over-rejects in four measured ways, all recorded in
 /// D-238:
 ///
 /// * Every sunder-shaped name, including the ones
@@ -648,6 +648,16 @@ fn instantiation_protocol_message(attr_name: &str) -> Option<&'static str> {
 ///   rejects both. `_C__x__` is the same family reached from the other side --
 ///   the class-name-keyed arm skips it because it ends in `__`, and the sunder
 ///   arm then claims it.
+/// * A `__x` assignment in a class whose *own* name begins with an underscore.
+///   CPython's mangling strips the class name's leading underscores while
+///   `_is_private` compares against the unstripped name, so the two disagree
+///   there: measured on CPython 3.13.9, `class _C(Enum): __x = 1` beside
+///   `B = 2` gives `list(_C.__members__) == ['_C__x', 'B']` -- two members,
+///   the first under its mangled name. Modelling that would need a mangling
+///   pass, since pycc would otherwise lower the member as `__x` and report
+///   the wrong `.name`, so the second arm stays class-name-independent and
+///   [`ENUM_PRIVATE_MESSAGE`] states both outcomes instead of claiming the
+///   first.
 ///
 /// This is the same posture the `Enum` arm of [`slots_message`] already
 /// records, and it is forward-compatible in the direction that matters: a
@@ -700,14 +710,32 @@ const ENUM_DUNDER_MESSAGE: &str = "a dunder-named assignment in an `Enum` body i
 /// A separate string from [`ENUM_DUNDER_MESSAGE`] because the mechanism is a
 /// different one and the name is not a dunder: CPython's *compiler* mangles it
 /// before `_EnumDict` ever sees it.
+///
+/// This arm is deliberately class-name-*independent* even though the branch it
+/// models is not, and the message says why rather than overclaiming. Mangling
+/// strips the class name's own leading underscores while `_is_private`
+/// compares against the unstripped name, so the two disagree exactly when the
+/// class name begins with an underscore: in `class _C(Enum)`, `__x` mangles to
+/// `_C__x`, `_is_private('_C', '_C__x')` tests the `__C__` prefix and says no,
+/// and CPython ends up with `list(_C.__members__) == ['_C__x', 'B']` (measured
+/// on 3.13.9). That is still not modellable here -- pycc has no mangling pass,
+/// so it would lower the member under the source name `__x` and report
+/// `.name` as `"__x"` where CPython reports `"_C__x"` -- so the rejection
+/// stands and is recorded as the fourth over-rejected family in
+/// [`enum_non_member_message`] and D-238.
 const ENUM_PRIVATE_MESSAGE: &str = "a name-mangled private assignment in an `Enum` body is not supported yet -- a class-body \
-     name with two leading underscores and at most one trailing underscore is mangled by \
-     CPython's compiler (`__x` in `class C` becomes `_C__x`), and `enum._EnumDict.__setitem__` \
-     keeps a mangled private name out of the member list as an ordinary class attribute \
-     (measured on CPython 3.13.9: `class C(Enum): __x = 1` alongside `B = 2` gives \
-     `list(C.__members__) == [\'B\']`), while this compiler performs no name mangling and has no \
-     non-member class attribute on an enum, so it would otherwise lower the name as a member, \
-     giving two members where CPython has one";
+     name with two leading underscores and at most one trailing underscore is rewritten by \
+     CPython\'s compiler before `enum._EnumDict` ever sees it (`__x` in `class C` becomes \
+     `_C__x`, the class name\'s own leading underscores being stripped first), while this \
+     compiler performs no name mangling at all and has no non-member class attribute on an \
+     enum, so neither of CPython\'s two outcomes is modellable here: when the mangled key still \
+     carries the class\'s `_<ClassName>__` prefix, `_EnumDict.__setitem__` keeps it out of the \
+     member list as an ordinary class attribute (measured on CPython 3.13.9: \
+     `class C(Enum): __x = 1` alongside `B = 2` gives `list(C.__members__) == [\'B\']`), and \
+     when it does not -- a class name that itself begins with an underscore -- CPython admits \
+     it as a member under the *mangled* name (`class _C(Enum): __x = 1` gives \
+     `list(_C.__members__) == [\'_C__x\', \'B\']`) where this compiler would lower it under the \
+     source name `__x`, so the assignment is rejected rather than compiled either way";
 
 /// The `C0001` message for an `Enum`-body assignment already spelled the way
 /// CPython's compiler would have mangled a private name (#979).

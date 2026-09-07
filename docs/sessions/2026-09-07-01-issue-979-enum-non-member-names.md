@@ -59,7 +59,13 @@ non-member family with `C0001`, recorded as
   round corrected two documentation claims (`__order__` is popped out of the
   class dict entirely rather than left as a class attribute; `_x__` and
   `_foo___` are a third over-rejected family, excluded from `_is_sunder` by its
-  `name[-2] != '_'` condition).
+  `name[-2] != '_'` condition). The codex reviewer on PR #988 then found a
+  fourth: `__x` inside `class _C(Enum)` is two members under CPython, because
+  mangling strips the class name's leading underscores while `_is_private`
+  does not. Measured, kept as a rejection (modelling it needs a mangling pass
+  pycc does not have), and `ENUM_PRIVATE_MESSAGE` rewritten to state both of
+  CPython's outcomes rather than claiming the name is kept out of the member
+  list.
 - The guard is the third and last check inside
   `reject_reserved_class_attr_name`, gated to `ClassBodyRoute::Enum`. That
   ordering is load-bearing: `__slots__`, `__init__`, `__new__` and
@@ -69,9 +75,12 @@ non-member family with `C0001`, recorded as
 - The predicate is a documented superset of CPython's own set: it never
   under-rejects, and over-rejects every sunder-shaped name (including the ten
   `_EnumDict` allowlists), names matching only the `__`-prefix-and-suffix shape
-  (`__`, `___`, `____`, `___x___`), and names with one leading underscore and
-  two or more trailing ones (`_x__`, `_foo___`, `_C__x__`). All three families
-  are measured and recorded in D-238 rather than asserted.
+  (`__`, `___`, `____`, `___x___`), names with one leading underscore and
+  two or more trailing ones (`_x__`, `_foo___`, `_C__x__`), and `__x` in a
+  class whose own name begins with an underscore (CPython's mangling strips
+  the class name's leading underscores while `_is_private` does not, so
+  `class _C(Enum): __x = 1` beside `B = 2` has two members there). All four
+  families are measured and recorded in D-238 rather than asserted.
 - Two tests that pinned the old acceptance were inverted, prose included, not
   deleted: `an_enum_member_named_after_an_unreserved_dunder_is_rejected` in
   `crates/pycc_hir/src/tests/reserved_dunder_class_attrs.rs` and in
@@ -93,7 +102,7 @@ regions (55768 lines, 36935 regions, 0 missed).
   unaffected, so merges are not blocked; publishing is.
 - **`docs/ROADMAP.md` is at its llms.txt per-resource budget.** After this
   change the Roadmap document is 168948 bytes against a 168960-byte budget
-  (issue #207) — 12 bytes of headroom. The #979 paragraph had to be rewritten
+  (issue #207) — 13 bytes of headroom. The #979 paragraph had to be rewritten
   four times to fit. The next roadmap prose addition of any size will fail
   `scripts/check-site.sh`, and the fix will have to be a real trim or a budget
   decision rather than more compression.

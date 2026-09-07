@@ -125,7 +125,7 @@ status: accepted
   **The predicate is a deliberate superset of CPython's non-member set.** It
   never under-rejects — every name CPython keeps out of the member list
   matches one of the four shapes, arm 3 included — so no false acceptance
-  survives in this family. It over-rejects in exactly three measured ways:
+  survives in this family. It over-rejects in exactly four measured ways:
 
   * **Every sunder-shaped name**, including the ones
     `_EnumDict.__setitem__` allowlists rather than raising on. Read off the
@@ -153,6 +153,21 @@ status: accepted
     in `C.__members__`, while the sunder arm here rejects both. `_C__x__` is
     the same family reached from the other side — arm 3 skips it because it
     ends in `__` (as `_is_private` does), and arm 4 then claims it.
+  * **A `__x` assignment in a class whose own name begins with an
+    underscore.** CPython's compiler strips the class name's leading
+    underscores when mangling, while `_is_private` compares against the
+    unstripped name, so the two disagree exactly there. Measured on CPython
+    3.13.9: `class _C(Enum): __x = 1` beside `B = 2` gives
+    `list(_C.__members__) == ['_C__x', 'B']` — two members, the first under
+    its *mangled* name — and `class ___(Enum)` (no name left after stripping)
+    does not mangle at all, giving `['__x', 'B']`. Arm 2 rejects all of them.
+    Modelling CPython here would need a real name-mangling pass: without one
+    pycc would lower the member under the source name `__x` and report
+    `.name` as `"__x"` where CPython reports `"_C__x"`, trading an
+    over-rejection for a fresh false acceptance. `ENUM_PRIVATE_MESSAGE`
+    therefore states *both* of CPython's outcomes rather than claiming the
+    name is kept out of the member list. Raised by the codex reviewer on
+    PR #988 and measured before being accepted.
 
   `_` and `_x` and `_foo` are *not* in the set and stay ordinary members,
   agreeing with CPython, and neither is `_C__x` in any class *not* called `C`. `__x_` is rejected on the private arm, correctly:
@@ -184,6 +199,15 @@ status: accepted
     "`_EnumDict` keeps certain names out of the member list" while covering one
     of that function's three branches would leave the other two as live D-198
     false acceptances.
+  - **A mangling-aware second arm** — reproduce CPython's mangling
+    (`'_' + class_name.lstrip('_') + attr_name`) and then apply `_is_private`
+    to the result, so `__x` in `class _C(Enum)` stays an accepted member.
+    Refused: pycc has no name-mangling pass anywhere, so the member would be
+    lowered under its *source* name and `C.MEMBER.name` would read back as
+    `"__x"` where CPython gives `"_C__x"` — a new D-198 false acceptance in
+    place of a documented over-rejection. Accepting these programs correctly
+    requires mangling the member name too, which is a separate capability and
+    a separate decision.
   - **A shape-only `_is_private` port** — reject any `_*__*` name without
     consulting the class name. This was the first draft, and the deep-review
     round refuted it in both directions at once: it under-rejected `_C__x` in

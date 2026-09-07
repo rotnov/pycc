@@ -260,3 +260,27 @@ fn the_shape_only_over_rejections_are_pinned() {
         );
     }
 }
+
+/// A `__x` assignment in a class whose own name begins with an underscore is
+/// rejected too, and the message is written not to overclaim it.
+///
+/// CPython's compiler strips the class name's leading underscores when
+/// mangling while `_is_private` compares against the unstripped name, so they
+/// disagree exactly here: measured on CPython 3.13.9,
+/// `class _C(Enum): __x = 1` beside `B = 2` gives
+/// `list(_C.__members__) == ['_C__x', 'B']` -- two members, the first under
+/// its *mangled* name. pycc has no mangling pass and would lower it under the
+/// source name `__x`, reporting the wrong `.name`, so the rejection stands as
+/// the fourth documented over-rejection rather than as a claim that CPython
+/// keeps the name out of the member list.
+#[test]
+fn a_private_name_in_an_underscored_class_is_still_rejected() {
+    for class_name in ["_C", "__C", "___"] {
+        assert_capability_error_message(
+            &format!(
+                "from enum import Enum\n\n\nclass {class_name}(Enum):\n    __x = 1\n    B = 2\n"
+            ),
+            "a name-mangled private assignment in an `Enum` body is not supported yet",
+        );
+    }
+}
