@@ -118,12 +118,13 @@ jobs:
             exit 0
           fi
           # This job checks out at the default fetch-depth of 1, so neither the
-          # base nor the head commit is present. Fetch each one explicitly
-          # rather than relying on HEAD: on a pull_request event the checkout
-          # resolves to refs/pull/N/merge, a synthetic merge commit that is
-          # neither of the revisions being compared.
-          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
-          git fetch --no-tags --depth=1 origin "${HEAD_SHA}"
+          # base nor the head commit is present. Both SHAs are passed
+          # explicitly rather than relying on HEAD -- on a pull_request event
+          # the checkout resolves to refs/pull/N/merge, a synthetic merge
+          # commit that is neither of the revisions being compared -- and the
+          # checker's own ensure_revision_available shallow-fetches whichever
+          # of them is missing, exactly as
+          # .github/workflows/status-page-freshness.yml relies on.
           ruby scripts/check_site_pin_merge_currency.rb "${BASE_SHA}" "${HEAD_SHA}" .
 
       - name: Check conformance breadth contract (issue #595)
