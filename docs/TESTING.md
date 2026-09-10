@@ -1265,10 +1265,13 @@ whose frontmatter does not parse are unconstrained. For a frozen file, in
 order: deletion (or, under `--no-renames`, the `D` half of a rename) is a
 violation; the head frontmatter must parse and say `accepted` or
 `superseded`, and `superseded` never returns to `accepted`; a D-151
-index-only stub (base contains the exact line `Index-only: no long-form
-entry recorded yet.` *and* no `- Status:` line -- both, so the marker cannot
-be smuggled into a long-form entry and exploited later) may replace its five
-stub body lines while its frontmatter and any later lines stay frozen;
+index-only stub (the base's ninth line, 0-based `splitlines()` index 8, is
+exactly `Index-only: no long-form entry recorded yet.` *and* no base line
+starts with `- Status:` -- both, so the marker cannot be smuggled into a
+long-form entry and exploited later; positional, so a marker at any other
+index is not a stub and the file stays under the strict walk) may replace
+its five stub body lines while its frontmatter and any later lines stay
+frozen;
 otherwise an exact greedy subsequence walk over `splitlines()` (no
 `keepends`, so a trailing-newline-only change passes) requires every base
 line to reappear in the head verbatim and in order, except that the

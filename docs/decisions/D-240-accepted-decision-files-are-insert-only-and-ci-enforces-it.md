@@ -51,9 +51,13 @@ status: accepted
     narrowing annotation while the frontmatter stays `accepted`. Any other
     `- Status:` line, and any body line that merely starts with `status:`,
     is ordinary frozen text.
-  - A D-151 index-only stub -- a base file containing the exact line
-    `Index-only: no long-form entry recorded yet.` *and* no `- Status:`
-    line -- may replace its five stub body lines with the long-form entry.
+  - A D-151 index-only stub -- a base file whose ninth line (0-based
+    `splitlines()` index 8) is exactly
+    `Index-only: no long-form entry recorded yet.` *and* which has no
+    `- Status:` line -- may replace its five stub body lines with the
+    long-form entry. The marker test is positional, not membership: the
+    exemption unfreezes lines 7-11 by number, so a file carrying the marker
+    anywhere else is not the modelled shape and stays under the strict walk.
     Its frontmatter and every base line after the stub (D-005's appended
     supersession paragraph) stay frozen. Both conditions are required so the
     marker cannot be inserted into a long-form entry in one pull request and

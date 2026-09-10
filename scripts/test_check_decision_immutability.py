@@ -69,9 +69,9 @@ class RuleTests(unittest.TestCase):
     def test_untouched_file_passes(self):
         self.assertPasses(long_form(), long_form())
 
-    def test_new_file_is_unconstrained(self):
-        # A path absent at the base never reaches check_file with a base
-        # text; the closest string-level analogue is a proposed base.
+    def test_proposed_base_is_unconstrained_against_any_head(self):
+        # The `A` (new at head) skip lives in check_range, not here -- see
+        # PlumbingTests.test_new_decision_file_at_head_is_skipped_not_compared.
         self.assertPasses(long_form(status="proposed"), "anything at all\n")
 
     def test_proposed_file_may_be_rewritten_freely(self):
@@ -227,6 +227,21 @@ class RuleTests(unittest.TestCase):
         head = long_form(body="## D-101: Long form\n\n- Status: accepted\n- Context: rewritten\n")
         self.assertFails(base, head, "removed or changed")
 
+    def test_stub_marker_at_another_index_is_not_a_stub(self):
+        # The exemption is positional (index 8); the same marker one line
+        # lower is not the modelled shape, so the body stays frozen.
+        shifted = stub().replace("\n# D-001\n", "\n\n# D-001\n")
+        lines = shifted.splitlines()
+        self.assertIn(cdi.STUB_MARKER, lines)
+        self.assertNotEqual(lines[cdi.STUB_MARKER_INDEX], cdi.STUB_MARKER)
+        self.assertFalse(cdi.is_index_only_stub(lines))
+        self.assertTrue(cdi.is_index_only_stub(stub().splitlines()))
+        head = shifted.split("\n---\n")[0] + "\n---\n\n" + (
+            "## D-001: Stub title\n\n- Status: accepted\n- Context: filled in\n"
+        )
+        self.assertFails(shifted, head, "base line 8 removed or changed: # D-001")
+        self.assertFalse(cdi.is_index_only_stub(["short"]))
+
     def test_body_line_starting_with_status_colon_is_not_exempt(self):
         base = long_form(body="- Status: accepted\nstatus: literal body text\n")
         head = long_form(body="- Status: accepted\nstatus: something else\n")
@@ -356,6 +371,48 @@ class PlumbingTests(unittest.TestCase):
         self.assertIn("D-101-long-form.md: accepted decision deleted or renamed", stderr)
         self.assertNotIn("--- base/", stderr)
 
+    def test_new_decision_file_at_head_is_skipped_not_compared(self):
+        (self.decisions / "D-103-new.md").write_text(long_form("D-103", "New", "accepted"))
+        head = commit_all(self.root)
+        self.assertEqual(
+            cdi.changed_decision_files(self.root, self.base, head),
+            [("A", "docs/decisions/D-103-new.md")],
+        )
+        self.assertEqual(cdi.check_range(self.root, self.base, head), ([], 0, ""))
+        code, stdout, _stderr = self.run_main("--base", self.base, "--head", head)
+        self.assertEqual(code, 0)
+        self.assertIn("passed (0 decision files compared)", stdout)
+
+    def test_rename_status_record_is_rejected_fail_closed(self):
+        # `--no-renames` means git never emits R/C; simulate one anyway and
+        # require that it is judged under its source path (a violation, not
+        # a PlumbingError on the absent destination) and that the entry
+        # following the three-token record is still parsed.
+        real_run_git = cdi.run_git
+        record = (
+            b"R100\0docs/decisions/D-101-long-form.md\0docs/decisions/D-101-renamed.md\0"
+            b"M\0docs/decisions/D-102-proposed.md\0"
+        )
+
+        def fake_run_git(root, *args):
+            if args[0] == "diff":
+                return subprocess.CompletedProcess(["git", *args], 0, record, b"")
+            return real_run_git(root, *args)
+
+        with mock.patch.object(cdi, "run_git", fake_run_git):
+            self.assertEqual(
+                cdi.changed_decision_files(self.root, self.base, self.base),
+                [
+                    ("R", "docs/decisions/D-101-long-form.md"),
+                    ("M", "docs/decisions/D-102-proposed.md"),
+                ],
+            )
+            violations, compared, context = cdi.check_range(self.root, self.base, self.base)
+        self.assertEqual(compared, 2)
+        self.assertEqual(context, "")
+        self.assertEqual(len(violations), 1)
+        self.assertIn("D-101-long-form.md: diff status 'R'", violations[0])
+
     def test_frozen_file_replaced_by_a_symlink_fails(self):
         path = self.decisions / "D-101-long-form.md"
         path.unlink()
@@ -416,6 +473,37 @@ class PlumbingTests(unittest.TestCase):
         })
         self.assertEqual(code, 0)
         self.assertIn("passed (1 decision files compared)", stdout)
+
+    def test_pull_request_event_without_base_sha_exits_2(self):
+        for payload in ({}, {"pull_request": {}}, {"pull_request": {"base": None}}):
+            event = Path(self._tmp.name) / "event.json"
+            event.write_text(json.dumps(payload))
+            code, _stdout, stderr = self.run_main(env={
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_EVENT_PATH": str(event),
+                "GITHUB_SHA": self.base,
+            })
+            self.assertEqual(code, 2, payload)
+            self.assertIn("has no pull_request.base.sha", stderr)
+        event.write_text(json.dumps({"pull_request": {"base": {"sha": 42}}}))
+        code, _stdout, stderr = self.run_main(env={
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_SHA": self.base,
+        })
+        self.assertEqual(code, 2)
+        self.assertIn("non-string or empty pull_request.base.sha: 42", stderr)
+
+    def test_push_event_without_before_exits_2(self):
+        event = Path(self._tmp.name) / "event.json"
+        event.write_text(json.dumps({"after": self.base}))
+        code, _stdout, stderr = self.run_main(env={
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_SHA": self.base,
+        })
+        self.assertEqual(code, 2)
+        self.assertIn("non-string or empty before: None", stderr)
 
     def test_push_event_with_all_zero_before_skips(self):
         event = Path(self._tmp.name) / "event.json"

@@ -40,16 +40,19 @@ frozen file, in order:
     CRLF, an inserted frontmatter line, or trailing whitespace after the
     status) and its status must be `accepted` or `superseded`; `superseded`
     can never go back to `accepted`;
-(c) a D-151 *index-only stub* -- the base contains the exact line
-    `Index-only: no long-form entry recorded yet.` **and** no line starting
-    with `- Status:` -- may replace its five stub body lines (0-based
-    `splitlines()` indices 6-10: `# D-NNN`, blank, the marker, blank, the
-    bare title) with the long-form entry. Both conditions are required: every
-    long-form entry has a `- Status:` line and that line can never be removed
-    under this rule, so the marker cannot be smuggled into a long-form entry
-    in one pull request and exploited in the next. The frontmatter and every
-    base line after the stub (D-005's appended supersession paragraph) stay
-    frozen;
+(c) a D-151 *index-only stub* -- the base's 0-based `splitlines()` index 8
+    is exactly `Index-only: no long-form entry recorded yet.` **and** no
+    base line starts with `- Status:` -- may replace its five stub body
+    lines (indices 6-10: `# D-NNN`, blank, the marker, blank, the bare
+    title) with the long-form entry. The marker test is positional, not
+    membership: the exemption unfreezes indices 6-10 by number, so a file
+    carrying the marker anywhere else is not the shape the exemption models
+    and falls through to the strict walk in (d). Both conditions are
+    required: every long-form entry has a `- Status:` line and that line can
+    never be removed under this rule, so the marker cannot be smuggled into
+    a long-form entry in one pull request and exploited in the next. The
+    frontmatter and every base line after the stub (D-005's appended
+    supersession paragraph) stay frozen;
 (d) otherwise every base line must survive verbatim and in order: an exact
     greedy subsequence walk over `base.splitlines()` / `head.splitlines()`
     (no `keepends`, so a trailing-newline-only change is not a violation)
@@ -81,12 +84,13 @@ script reads `GITHUB_EVENT_NAME` and the JSON at `GITHUB_EVENT_PATH`: on
 `GITHUB_SHA` (the checked-out `refs/pull/N/merge` commit, whose first
 parent is `base.sha`, so two-dot is exact there); on `push` the base is
 `before` and the head `GITHUB_SHA`, and an all-zero `before` (branch
-creation) is a skip. Any other event name, or no event at all, is a usage
-error (exit 2). `pull_request.base.sha` can lag `main`'s tip when `main`
-moves between the event and the run; lines `main` inserted in between then
-show as insertions, never as deletions, so there is no false failure, and
-branch protection's up-to-date requirement means the final pre-merge run
-has `base.sha` equal to `main`'s tip.
+creation) is a skip. Any other event name, no event at all, or an event
+JSON without the field the event name promises (`pull_request.base.sha`,
+`before`) is a usage error (exit 2). `pull_request.base.sha` can lag
+`main`'s tip when `main` moves between the event and the run; lines `main`
+inserted in between then show as insertions, never as deletions, so there
+is no false failure, and branch protection's up-to-date requirement means
+the final pre-merge run has `base.sha` equal to `main`'s tip.
 
 The governance checkout is depth 1, so neither `base.sha` nor a pushed
 `before` is normally present: each revision is checked with
@@ -99,7 +103,12 @@ Blobs are read with `git show <rev>:<path>` and decoded as UTF-8 with
 mismatch rather than a traceback. A frozen path whose diff status is
 anything other than `M` or `D` (`T` -- a file replaced by a symlink, whose
 `git show` then returns the link target -- `C`, `R`, `U`, `X`) is a
-violation: the guard fails closed on shapes it does not model.
+violation: the guard fails closed on shapes it does not model. `--no-renames`
+means git never emits `R`/`C` here; should one arrive anyway, its
+three-token record (`status`, source, destination) is consumed whole -- so
+the entries after it are not misread -- and the frozen file is judged under
+its *source* path, which exists at the base, so the verdict is that
+violation rather than a plumbing error on the destination path.
 
 Exit codes: 0 passed (or skipped), 1 at least one violation, 2 usage or
 plumbing error.
@@ -121,6 +130,7 @@ from generate_decisions_index import parse_frontmatter
 FROZEN_STATUSES = frozenset({"accepted", "superseded"})
 STUB_MARKER = "Index-only: no long-form entry recorded yet."
 STUB_BODY_INDICES = frozenset(range(6, 11))
+STUB_MARKER_INDEX = 8
 FRONTMATTER_STATUS_INDEX = 3
 BODY_STATUS_PREFIX = "- Status:"
 DECISION_PATH_RE = re.compile(r"docs/decisions/D-\d+-[^/]+\.md")
@@ -148,8 +158,14 @@ def frozen_status(text):
 
 
 def is_index_only_stub(base_lines):
-    return STUB_MARKER in base_lines and not any(
-        line.startswith(BODY_STATUS_PREFIX) for line in base_lines
+    """True when the base has the D-151 stub shape: the marker at index 8 and
+    no `- Status:` line anywhere. Positional on purpose: the exemption
+    unfreezes `STUB_BODY_INDICES` by number, so a marker elsewhere is not
+    the modelled shape and the file stays under the strict walk."""
+    return (
+        len(base_lines) > STUB_MARKER_INDEX
+        and base_lines[STUB_MARKER_INDEX] == STUB_MARKER
+        and not any(line.startswith(BODY_STATUS_PREFIX) for line in base_lines)
     )
 
 
@@ -272,12 +288,12 @@ def changed_decision_files(root, base, head):
     position = 0
     while position < len(tokens) and tokens[position]:
         status = tokens[position]
-        if status[0] in "RC":
-            path = tokens[position + 2]
-            position += 3
-        else:
-            path = tokens[position + 1]
-            position += 2
+        # `--no-renames` means R/C never appear; if one does, consume its
+        # three-token record whole so later entries stay aligned, and judge
+        # the source path (present at the base) so `check_range`'s
+        # unexpected-status branch reports the violation.
+        path = tokens[position + 1]
+        position += 3 if status[0] in "RC" else 2
         if is_decision_path(path):
             entries.append((status[0], path))
     return entries
@@ -347,11 +363,28 @@ def resolve_revisions(args, environ):
     with open(event_path, encoding="utf-8") as handle:
         event = json.load(handle)
     if event_name == "pull_request":
-        return event["pull_request"]["base"]["sha"], head
+        try:
+            base = event["pull_request"]["base"]["sha"]
+        except (KeyError, TypeError):
+            raise PlumbingError(
+                f"pull_request event JSON at {event_path} has no "
+                "pull_request.base.sha"
+            ) from None
+        if not isinstance(base, str) or not base:
+            raise PlumbingError(
+                f"pull_request event JSON at {event_path} has a non-string "
+                f"or empty pull_request.base.sha: {base!r}"
+            )
+        return base, head
     if event_name == "push":
         base = event.get("before")
         if base == ZERO_SHA:
             return None
+        if not isinstance(base, str) or not base:
+            raise PlumbingError(
+                f"push event JSON at {event_path} has a non-string or empty "
+                f"before: {base!r}"
+            )
         return base, head
     raise PlumbingError(
         f"unsupported GITHUB_EVENT_NAME {event_name!r}: only pull_request "
