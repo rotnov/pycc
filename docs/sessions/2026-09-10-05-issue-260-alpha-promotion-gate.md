@@ -31,17 +31,19 @@ this file and the harden journal.
   literal alpha-skill count in `docs/AGENT_TOOLING.md` that disagrees with
   `len(ALPHA_EVAL_RUNNERS)` when at most two words separate the numeral
   from a following "alpha skill(s)" (an issue number such as `#260` never
-  counts) or it shares a one-line sentence with a mention of
-  `ALPHA_EVAL_RUNNERS`; bound phrases ("at least", "at most", "more than",
-  "fewer than", "up to") are excluded. It runs from `validate_skill_lock`
+  counts) or it is immediately followed by "skill(s)", "alpha",
+  "project-local", or "at the time of writing" inside a one-line sentence
+  that mentions `ALPHA_EVAL_RUNNERS`; bound phrases ("at least", "at most",
+  "more than", "fewer than", "up to") are excluded. It runs from `validate_skill_lock`
   before the lock-shape early return.
 - `scripts/test_validate_agent_assets.py`: promotion tests parametrised over
   every table entry (absent, codex-only, claude-only, all present), the
   non-HTTPS shape, a derivation-from-table proof via `mock.patch.dict`, a
-  vendored-skill-ignored proof (`i-have-an-issue`), and five prose-guard
+  vendored-skill-ignored proof (`i-have-an-issue`), and six prose-guard
   tests (stale spelled-out count, stale digit after the table mention,
-  matching count accepted, unrelated numerals ignored, the real document
-  passes).
+  matching count accepted, unrelated numerals ignored, adjacent numerals
+  counted under a widened table while distant ones stay ignored, the real
+  document passes).
 - `docs/AGENT_TOOLING.md` and `docs/ROADMAP.md`: the promotion gate is
   described as covering every locked skill outside
   `EXTERNAL_ORIGIN_LOCKED_SKILLS`, without a literal count; the structural check's trigger is scoped to agent-relevant

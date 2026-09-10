@@ -1053,8 +1053,9 @@ class AgentAssetValidationTests(unittest.TestCase):
     def test_alpha_skill_count_prose_counts_only_adjacent_numerals(
         self,
     ) -> None:
-        # "two", "#260" and "255" are not counts: more than two words away
-        # from the phrase, an issue number, and a pull-request number. The
+        # "two", "#260" and "255" are not counts: "two" and "255" sit more
+        # than two words from the phrase, "#260" is excluded by the `#`
+        # lookbehind. The
         # two "one"s are counts, so they pass with a one-entry table and fail
         # with a two-entry table while the others stay ignored.
         text = (

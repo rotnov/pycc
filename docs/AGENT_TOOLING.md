@@ -297,9 +297,10 @@ lock contains. The same validator
 (`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
 count in this document that disagrees with the length of
 `ALPHA_EVAL_RUNNERS` whenever at most two words separate the count from a
-following "alpha skill(s)" or the count shares a one-line sentence with a
-mention of `ALPHA_EVAL_RUNNERS`, so a widened runner table cannot leave such
-prose stale. The separate
+following "alpha skill(s)", or the count is immediately followed by
+"skill(s)", "alpha", "project-local", or "at the time of writing" inside a
+one-line sentence that mentions `ALPHA_EVAL_RUNNERS`, so a widened runner
+table cannot leave such prose stale. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 
