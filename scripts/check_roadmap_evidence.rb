@@ -250,9 +250,10 @@ PY3147_ORACLE_CI_WORKFLOW_SHA256 =
 # base-reviewed classifier, cancellation-compatible governance, conditional
 # heavy jobs, and the fail-closed ci-gate truth table while retaining every
 # existing hard-gate body. Rotated by #929/#622 when the governance job
-# gained the decisions-index freshness step.
+# gained the decisions-index freshness step, and by #1000 when it gained the
+# accepted-decision immutability step.
 D171_CHANGE_AWARE_CI_WORKFLOW_SHA256 =
-  "ff27b9e0fa889182210053c2b95a226979453437d90f67ccbf71c3dc3a675e3c"
+  "c61febaf2b7ab38672e31323a9d4eed4ce3d9af2c6f64fde6eeba2d956dcd4a5"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
@@ -1287,7 +1288,12 @@ D171_GOVERNANCE_POLICY_STEPS = {
   # Listed here so the base-owned audit, not only the head-controlled
   # `CiWiringTest`, rejects a head that conditions, replaces, or drops it.
   "Check decisions index freshness and id uniqueness" =>
-    "python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check"
+    "python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check",
+  # Issue #1000 / #77 (D-240): the accepted-decision immutability guard. The
+  # step name deliberately carries no `#` -- an unquoted `#` in a YAML scalar
+  # starts a comment, which is why the coverage-badge key above is truncated.
+  "Check accepted-decision immutability (issue 1000)" =>
+    "python3 -B scripts/check_decision_immutability.py"
 }.freeze
 D171_GOVERNANCE_AGENT_STEPS = {
   "Install LLVM 22 for offline alpha skill contract evals" => <<~'SHELL'.strip,

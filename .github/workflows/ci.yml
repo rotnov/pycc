@@ -133,6 +133,9 @@ jobs:
       - name: Check decisions index freshness and id uniqueness
         run: python3 -B scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md --check
 
+      - name: Check accepted-decision immutability (issue 1000)
+        run: python3 -B scripts/check_decision_immutability.py
+
       - name: Check scratch-directory usage (issue #781)
         run: python3 -B scripts/check_scratch_dir_usage.py
 

@@ -1233,11 +1233,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # above, which now covers the identical live bytes). The fixture file is
   # retained as audit evidence of that provenance, not because its shape is
   # untested elsewhere. Its bytes are historical and stay frozen: the D-171
-  # routing contract has since grown by exactly one governance policy step
-  # (#929/#622's decisions-index freshness check), so the fixture is rejected
-  # for that missing step and for nothing else -- adding that one step back
-  # makes it acceptable again.
-  def test_d215_rustfmt_gate_fixture_predates_only_the_decisions_index_step
+  # routing contract has since grown by governance policy steps added after
+  # D-215 (#929/#622's decisions-index freshness check, then #1000's
+  # accepted-decision immutability guard), so the fixture is rejected for the
+  # first of those missing steps and for nothing else -- appending exactly the
+  # post-D-215 steps makes it acceptable again.
+  def test_d215_rustfmt_gate_fixture_predates_only_the_post_d215_policy_steps
     error = assert_raises(RoadmapEvidenceError) do
       validate_d171_ci_routing(
         D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.read,
@@ -1255,12 +1256,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
       stream.children.first.root,
       D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
     )
-    workflow.dig("jobs", "governance", "steps") << {
-      "name" => "Check decisions index freshness and id uniqueness",
-      "run" => D171_GOVERNANCE_POLICY_STEPS.fetch(
-        "Check decisions index freshness and id uniqueness"
-      )
-    }
+    steps = workflow.dig("jobs", "governance", "steps")
+    fixture_step_names = steps.map { |step| step["name"] }
+    post_d215_steps = D171_GOVERNANCE_POLICY_STEPS.reject do |name, _run|
+      fixture_step_names.include?(name)
+    end
+    assert_equal [
+      "Check decisions index freshness and id uniqueness",
+      "Check accepted-decision immutability (issue 1000)"
+    ], post_d215_steps.keys
+    post_d215_steps.each do |name, run|
+      steps << { "name" => name, "run" => run }
+    end
     assert validate_d171_ci_routing(
       workflow.to_yaml,
       D215_RUSTFMT_GATE_WORKFLOW_FIXTURE.to_s
@@ -4539,7 +4546,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       "Check workflow permission policy",
       "Check roadmap evidence",
       "Check README coverage badge binding (issue",
-      "Check decisions index freshness and id uniqueness"
+      "Check decisions index freshness and id uniqueness",
+      "Check accepted-decision immutability (issue 1000)"
     ]
 
     policy_steps.each do |step_name|
