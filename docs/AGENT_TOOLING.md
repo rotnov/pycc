@@ -286,8 +286,9 @@ and none of them can enter the locked skill set unless immutable HTTPS
 evidence exists for authenticated model evals on both Codex and Claude. Until
 then, they remain project-local alpha workflows. That gate is distinct from
 `validate_alpha_skill_contracts`, the structural check (at least two evals,
-exact runner set, visibly alpha) that runs as a merge gate on every pull
-request regardless of what the lock contains. The same validator
+exact runner set, visibly alpha) that runs as a merge gate on every
+agent-relevant pull request and every `main` push, regardless of what the
+lock contains. The same validator
 (`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
 count in this document that disagrees with the length of
 `ALPHA_EVAL_RUNNERS` whenever the count sits shortly before the phrase
