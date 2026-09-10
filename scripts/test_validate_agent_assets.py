@@ -1050,21 +1050,39 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
-    def test_alpha_skill_count_prose_ignores_numerals_that_are_not_counts(
+    def test_alpha_skill_count_prose_counts_only_adjacent_numerals(
         self,
     ) -> None:
+        # "two", "#260" and "255" are not counts: more than two words away
+        # from the phrase, an issue number, and a pull-request number. The
+        # two "one"s are counts, so they pass with a one-entry table and fail
+        # with a two-entry table while the others stay ignored.
+        text = (
+            "The two clients cover all one alpha skills.\n"
+            "Issue #260 covers every alpha skill.\n"
+            "PR 255 landed the evals of the one project-local alpha "
+            "skill.\n"
+        )
         failures: list[str] = []
         with mock.patch.dict(
             validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
         ):
-            validator.validate_alpha_skill_count_prose(
-                "The two clients cover all one alpha skills.\n"
-                "Issue #260 covers every alpha skill.\n"
-                "PR 255 landed the evals of the one project-local alpha "
-                "skill.\n",
-                failures,
-            )
+            validator.validate_alpha_skill_count_prose(text, failures)
         self.assertEqual(failures, [])
+        failures = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(text, failures)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+                "docs/AGENT_TOOLING.md:3: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+            ],
+        )
 
     def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
         failures: list[str] = []

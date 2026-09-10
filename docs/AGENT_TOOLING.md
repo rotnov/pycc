@@ -309,8 +309,8 @@ discovery through both surfaces without model credentials.
 `.claude/skills/` with a thin `.agents/skills/` entrypoint, following the same
 cross-platform discovery convention as the alpha skills above. It is not alpha
 and is intentionally absent from `validate_agent_assets.py`'s
-`ALPHA_EVAL_RUNNERS` (which `validate_alpha_skill_contracts` and the
-promotion gate both iterate), and from
+`ALPHA_EVAL_RUNNERS` (which `validate_alpha_skill_contracts` iterates and
+the promotion gate's exemption check consults), and from
 `run_alpha_skill_evals.py`'s `EXPECTED_RUNNERS`: its correctness is inherently
 model-judgment-based (diagnosing a process mistake's root cause has no
 deterministic boolean oracle the way `issue_select_higher_ranked` or

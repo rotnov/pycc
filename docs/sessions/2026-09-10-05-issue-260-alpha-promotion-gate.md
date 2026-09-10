@@ -8,8 +8,11 @@ Delivered by the pull request that carries this file. Base `fd16e766`
 derives its skill set from `ALPHA_EVAL_RUNNERS`, tests), `29e28db5` and
 `6f93b1ba` (documentation, review round 1 fixes), `1519cb3d` (the harden
 artefact `validate_alpha_skill_count_prose`), `2277e63b`, `13feef8f`,
-`d9bcbefc`, `8fe9627e`, `93d9193b` (review rounds 3 through 7 fixes), plus
-the commit carrying this file and the harden journal.
+`d9bcbefc`, `8fe9627e`, `93d9193b` (review rounds 3 through 7 fixes),
+`d7958fd5` (the prose guard counts only numerals adjacent to "alpha
+skill(s)", after the external review on PR #1003), `7a570baf` (the
+promotion gate inverted, after the same review), plus the commits carrying
+this file and the harden journal.
 
 ## What landed
 
@@ -63,10 +66,15 @@ then" (fixed `6f93b1ba`); round 2 clean; rounds 3 through 7 each found one
 or two wording inaccuracies in the guard's own description or the code
 comment (per-line scope, early return, pronoun antecedent, sentence
 granularity, "single owner", trigger scope) and were fixed in the commits
-listed above; round 8 clean. Every finding is in
-`.harden/findings/issue-260.jsonl` (ten rows, all `fixed`).
+listed above; round 8 clean. Every finding, including the external ones
+and the rounds run after them, is in `.harden/findings/issue-260.jsonl`
+(all `fixed`).
 
-External review on PR #1003 (Codex, P1) showed the derived intersection
+External review on PR #1003 (Codex, P2) showed the prose guard's
+40-character window counting unrelated numerals ("the two clients cover all
+seven alpha skills", "#260 covers every alpha skill"); rule A now allows at
+most two words between the numeral and the phrase and skips `#`-prefixed
+numbers (`d7958fd5`). The same review (Codex, P1) showed the derived intersection
 omits a skill promoted out of the table in the same change. The mechanism
 was replaced after an independent advisor round: every locked skill is a
 candidate unless a reviewed exemption asserts external origin
@@ -75,7 +83,7 @@ and the lock allowlist. The plan's literal criterion "derive the skill set
 from `ALPHA_EVAL_RUNNERS`" is therefore superseded by a stronger predicate;
 the alpha inventory is consulted only for the disjointness invariant.
 
-Harden batch (one tracer dispatch over the round-1 pile): two classes.
+Harden batch (one tracer dispatch over the round-1 pile): three records.
 `doc-comment-drifts-behind-a-widened-constant-table` shipped the static
 guard above (verdict `profit`, `verify: manual` with violator and clean
 copies of the document). `plan-contradicts-its-own-constraint` is the third
