@@ -278,8 +278,8 @@ skipped.
 
 These deterministic checks do not invoke a language model and do not claim
 that either client's generated response conforms to the prompts. Authenticated
-model-response evals remain a promotion requirement before any of them can
-move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
+model-response evals remain a promotion requirement before any alpha skill
+can move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
 validator enforces that fallback: its promotion gate
 (`validate_alpha_promotion_gate`) covers every skill in `ALPHA_EVAL_RUNNERS`,
 and none of them can enter the locked skill set unless immutable HTTPS
