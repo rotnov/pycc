@@ -588,13 +588,19 @@ _NUMERAL_WORDS = {
     )
 }
 _NUMERAL = r"\b(?P<numeral>\d+|" + "|".join(_NUMERAL_WORDS) + r")\b"
-# Rule A: the numeral is followed within 40 characters by "alpha skill(s)"
-# and is not a floor or ceiling ("at least two evals ... alpha skill").
+# Rule A: the numeral is separated from "alpha skill(s)" by at most two
+# words ("seven alpha skills", "all seven project-local alpha skills"), is
+# not an issue or pull-request number ("#260 covers every alpha skill"), and
+# is not a floor or ceiling ("at least two evals ... alpha skill").
 _NOT_A_BOUND = (
     r"(?<!at least )(?<!at most )(?<!more than )(?<!fewer than )(?<!up to )"
 )
 ALPHA_SKILL_COUNT_NEAR_PHRASE = re.compile(
-    _NOT_A_BOUND + _NUMERAL + r"(?=.{0,40}?\balpha skills?\b)", re.IGNORECASE
+    r"(?<!#)"
+    + _NOT_A_BOUND
+    + _NUMERAL
+    + r"(?=(?:\s+[A-Za-z][\w-]*){0,2}\s+alpha skills?\b)",
+    re.IGNORECASE,
 )
 # Rule B: inside a sentence that names the runner table, the numeral is
 # immediately followed by a word that makes it a count of that table.
@@ -616,9 +622,11 @@ def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
     """Reject a literal alpha-skill count that disagrees with the runner table.
 
     A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
-    skills when it sits within 40 characters before ``alpha skill(s)`` and is
-    not preceded by a bound phrase (``at least``, ``at most``, ``more than``,
-    ``fewer than``, ``up to``), or when its sentence names ``ALPHA_EVAL_RUNNERS`` and the numeral is
+    skills when at most two words separate it from a following
+    ``alpha skill(s)``, it is not an issue or pull-request number (``#260``),
+    and it is not preceded by a bound phrase (``at least``, ``at most``,
+    ``more than``, ``fewer than``, ``up to``), or when its sentence names
+    ``ALPHA_EVAL_RUNNERS`` and the numeral is
     immediately followed by ``skill(s)``, ``alpha``, ``project-local``, or
     ``at the time of writing``. A sentence is approximated as the text
     between periods on a single line; prose wrapped across lines is checked

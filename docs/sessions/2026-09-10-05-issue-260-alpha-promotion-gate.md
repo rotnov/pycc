@@ -23,8 +23,9 @@ the commit carrying this file and the harden journal.
   the code comment names that gap.
 - `validate_alpha_skill_count_prose` (the harden artefact): rejects a
   literal alpha-skill count in `docs/AGENT_TOOLING.md` that disagrees with
-  `len(ALPHA_EVAL_RUNNERS)` when the numeral sits within 40 characters
-  before "alpha skill(s)" or shares a one-line sentence with a mention of
+  `len(ALPHA_EVAL_RUNNERS)` when at most two words separate the numeral
+  from a following "alpha skill(s)" (an issue number such as `#260` never
+  counts) or it shares a one-line sentence with a mention of
   `ALPHA_EVAL_RUNNERS`; bound phrases ("at least", "at most", "more than",
   "fewer than", "up to") are excluded. It runs from `validate_skill_lock`
   before the lock-shape early return.

@@ -992,6 +992,22 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
+    def test_alpha_skill_count_prose_ignores_numerals_that_are_not_counts(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "The two clients cover all one alpha skills.\n"
+                "Issue #260 covers every alpha skill.\n"
+                "PR 255 landed the evals of the one project-local alpha "
+                "skill.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
     def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
         failures: list[str] = []
         validator.validate_alpha_skill_count_prose(
