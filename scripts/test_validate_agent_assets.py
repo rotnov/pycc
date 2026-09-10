@@ -930,6 +930,78 @@ class AgentAssetValidationTests(unittest.TestCase):
         validator.validate_alpha_promotion_gate(locked, failures)
         self.assertEqual(failures, [])
 
+    def test_alpha_skill_count_prose_rejects_stale_spelled_out_count(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "intro line.\n"
+            "`EXPECTED_RUNNERS` in that script names all six alpha skills.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:2: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_rejects_stale_count_after_table_mention(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "covers every skill in `ALPHA_EVAL_RUNNERS` "
+            "(6 at the time of writing), and none of them can enter.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_accepts_the_table_length(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "names all two alpha skills. `ALPHA_EVAL_RUNNERS` "
+                "(2 at the time of writing) lists 2 skills.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_ignores_unrelated_numerals(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "enforcing at least two evals on every alpha skill's file "
+                "in `ALPHA_EVAL_RUNNERS`. Tier-1 coverage since PR #255 "
+                "(2026-08-23) is 100% and one thing stays deferred.\n"
+                "The v0.3 release lists 12 project-wide checks.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            (validator.ROOT / "docs" / "AGENT_TOOLING.md").read_text(
+                encoding="utf-8"
+            ),
+            failures,
+        )
+        self.assertEqual(failures, [])
+
     def test_alpha_promotion_ignores_vendored_non_alpha_skills(self) -> None:
         failures: list[str] = []
         validator.validate_alpha_promotion_gate(

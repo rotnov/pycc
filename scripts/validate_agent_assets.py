@@ -508,6 +508,7 @@ def validate_skill_lock(
     except OSError as error:
         failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
         policy = ""
+    validate_alpha_skill_count_prose(policy, failures)
 
     for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
         entry = entries.get(name)
@@ -571,6 +572,71 @@ def validate_skill_lock(
                 failures.append(
                     f"docs/AGENT_TOOLING.md: missing {field} for {name}"
                 )
+
+
+_NUMERAL_WORDS = {
+    word: index
+    for index, word in enumerate(
+        (
+            "one", "two", "three", "four", "five", "six",
+            "seven", "eight", "nine", "ten", "eleven", "twelve",
+        ),
+        start=1,
+    )
+}
+_NUMERAL = r"\b(?P<numeral>\d+|" + "|".join(_NUMERAL_WORDS) + r")\b"
+# Rule A: the numeral is followed within 40 characters by "alpha skill(s)"
+# and is not a floor or ceiling ("at least two evals ... alpha skill").
+_NOT_A_BOUND = (
+    r"(?<!at least )(?<!at most )(?<!more than )(?<!fewer than )(?<!up to )"
+)
+ALPHA_SKILL_COUNT_NEAR_PHRASE = re.compile(
+    _NOT_A_BOUND + _NUMERAL + r"(?=.{0,40}?\balpha skills?\b)", re.IGNORECASE
+)
+# Rule B: inside a sentence that names the runner table, the numeral is
+# immediately followed by a word that makes it a count of that table.
+ALPHA_SKILL_COUNT_NEAR_TABLE = re.compile(
+    _NUMERAL
+    + r"(?=\s+(?:skills?\b|alpha\b|project-local\b|at the time of writing\b))",
+    re.IGNORECASE,
+)
+ALPHA_EVAL_RUNNERS_MENTION = "`ALPHA_EVAL_RUNNERS`"
+
+
+def _numeral_value(numeral: str) -> int:
+    if numeral.isdigit():
+        return int(numeral)
+    return _NUMERAL_WORDS[numeral.lower()]
+
+
+def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
+    """Reject a literal alpha-skill count that disagrees with the runner table.
+
+    A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
+    skills when it sits within 40 characters before ``alpha skill(s)`` and is
+    not preceded by a bound phrase (``at least``, ``at most``, ``more than``,
+    ``fewer than``, ``up to``), or when its sentence names ```ALPHA_EVAL_RUNNERS``` and the numeral is
+    immediately followed by ``skill(s)``, ``alpha``, ``project-local``, or
+    ``at the time of writing``. A sentence is approximated as the text
+    between periods on a single line; prose wrapped across lines is checked
+    line by line, so a count and the table mention must share a line for the
+    second rule to apply. Every matched numeral must equal
+    ``len(ALPHA_EVAL_RUNNERS)``: the count is allowed, drift is not.
+    """
+    expected = len(ALPHA_EVAL_RUNNERS)
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for sentence in line.split("."):
+            matches = list(ALPHA_SKILL_COUNT_NEAR_PHRASE.finditer(sentence))
+            if ALPHA_EVAL_RUNNERS_MENTION in sentence:
+                matches.extend(ALPHA_SKILL_COUNT_NEAR_TABLE.finditer(sentence))
+            for match in matches:
+                value = _numeral_value(match.group("numeral"))
+                if value != expected:
+                    failures.append(
+                        f"docs/AGENT_TOOLING.md:{line_number}: literal "
+                        f"alpha-skill count {value} disagrees with "
+                        f"ALPHA_EVAL_RUNNERS ({expected})"
+                    )
 
 
 def validate_alpha_promotion_gate(

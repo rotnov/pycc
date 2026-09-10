@@ -287,7 +287,11 @@ evidence exists for authenticated model evals on both Codex and Claude. Until
 then, they remain project-local alpha workflows. That gate is distinct from
 `validate_alpha_skill_contracts`, the structural check (at least two evals,
 exact runner set, visibly alpha) that runs as a merge gate on every pull
-request regardless of what the lock contains. The separate
+request regardless of what the lock contains. The same validator
+(`validate_alpha_skill_count_prose`) also rejects any literal alpha-skill
+count written in this document that disagrees with the length of
+`ALPHA_EVAL_RUNNERS`, so a widened runner table cannot leave stale prose
+behind. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 
