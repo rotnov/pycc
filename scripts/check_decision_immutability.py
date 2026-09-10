@@ -44,25 +44,41 @@ frozen file, in order:
     is exactly `Index-only: no long-form entry recorded yet.` **and** no
     base line starts with `- Status:` -- may replace its five stub body
     lines (indices 6-10: `# D-NNN`, blank, the marker, blank, the bare
-    title) with the long-form entry. The marker test is positional, not
-    membership: the exemption unfreezes indices 6-10 by number, so a file
-    carrying the marker anywhere else is not the shape the exemption models
-    and falls through to the strict walk in (d). Both conditions are
-    required: every long-form entry has a `- Status:` line and that line can
-    never be removed under this rule, so the marker cannot be smuggled into
-    a long-form entry in one pull request and exploited in the next. The
-    frontmatter and every base line after the stub (D-005's appended
-    supersession paragraph) stay frozen;
+    title) with the long-form entry, **but only when the head actually
+    carries one**: some head line must be a well-formed body status line
+    (`BODY_STATUS_LINE_RE`, i.e. `- Status: accepted` or
+    `- Status: superseded`, optionally followed by whitespace and an
+    annotation). Without such a line the exemption is off, the stub body
+    stays frozen, and the strict walk in (d) reports the removed stub line
+    with an `index-only stub replaced without a long-form entry` hint --
+    so deleting the stub body outright, or replacing it with prose that has
+    no `- Status:` line, is a violation rather than a free rewrite. The
+    marker test is positional, not membership: the exemption unfreezes
+    indices 6-10 by number, so a file carrying the marker anywhere else is
+    not the shape the exemption models and falls through to the strict walk
+    in (d). Both base conditions are required: every long-form entry has a
+    `- Status:` line and that line can never be removed under this rule, so
+    the marker cannot be smuggled into a long-form entry in one pull request
+    and exploited in the next. The frontmatter and every base line after
+    the stub (D-005's appended supersession paragraph) stay frozen;
 (d) otherwise every base line must survive verbatim and in order: an exact
     greedy subsequence walk over `base.splitlines()` / `head.splitlines()`
     (no `keepends`, so a trailing-newline-only change is not a violation)
     requires each base line to reappear in the head at or after the previous
-    match. Exactly two base lines may be *replaced* instead of matched: the
-    frontmatter `status:` line (index 3, fixed there by `FRONTMATTER_RE`) by
-    any `status: ...` line, and the *first* body line starting with
-    `- Status:` by any `- Status: ...` line -- the status transition and the
-    narrowing-annotation shape (D-024, D-066, D-130, D-185). Everything else
-    in the head is an insertion, which is how an amendment is recorded.
+    match. Exactly two base lines may be *replaced* instead of matched, and
+    each only by a line of its documented shape: the frontmatter `status:`
+    line (index 3, fixed there by `FRONTMATTER_RE`) by `status: accepted` or
+    `status: superseded` (which (b) already guarantees for the parsed head),
+    and the *first* body line starting with `- Status:` by a line matching
+    `BODY_STATUS_LINE_RE` -- `- Status: accepted` or `- Status: superseded`,
+    optionally followed by whitespace and a supersession or narrowing
+    annotation such as `- Status: superseded by D-241` or `- Status:
+    accepted (one clause is narrowly superseded by D-241)`. These are the
+    status transition and the narrowing-annotation shape (D-024, D-066,
+    D-130, D-185). A `- Status:` line with any other value (`proposed`,
+    `rejected`, blank) is not a replacement: the walk fails on the base
+    status line and names the offending head line. Everything else in the
+    head is an insertion, which is how an amendment is recorded.
 
 `difflib.SequenceMatcher` opcodes are deliberately not the verdict: with
 `autojunk=False` it misreports pure insertions as `delete` on repetitive
@@ -133,6 +149,12 @@ STUB_BODY_INDICES = frozenset(range(6, 11))
 STUB_MARKER_INDEX = 8
 FRONTMATTER_STATUS_INDEX = 3
 BODY_STATUS_PREFIX = "- Status:"
+# The only values a replaced status line may carry. The body form may be
+# followed by whitespace and an annotation (`superseded by D-241`,
+# `(one clause is narrowly superseded by D-241)`); the frontmatter form is
+# exactly the two bare lines (`FRONTMATTER_RE` allows no trailing text).
+BODY_STATUS_LINE_RE = re.compile(r"- Status: (?:accepted|superseded)(?:\s.*)?")
+FRONTMATTER_STATUS_LINES = frozenset(f"status: {s}" for s in FROZEN_STATUSES)
 DECISION_PATH_RE = re.compile(r"docs/decisions/D-\d+-[^/]+\.md")
 ZERO_SHA = "0" * 40
 EXIT_PASS = 0
@@ -176,6 +198,17 @@ def first_body_status_index(lines):
     return None
 
 
+def is_permitted_body_status_line(line):
+    return BODY_STATUS_LINE_RE.fullmatch(line) is not None
+
+
+def has_long_form_entry(head_lines):
+    """True when the head carries a well-formed body status line -- the
+    minimum shape a long-form entry has, and what a stub replacement must
+    produce for the stub exemption to apply."""
+    return any(is_permitted_body_status_line(line) for line in head_lines)
+
+
 def check_file(path, base_text, head_text):
     """Return the violations for one decision file, or [] when it passes.
 
@@ -202,7 +235,8 @@ def check_file(path, base_text, head_text):
     base_lines = base_text.splitlines()
     head_lines = head_text.splitlines()
     required = range(len(base_lines))
-    if is_index_only_stub(base_lines):
+    stub_base = is_index_only_stub(base_lines)
+    if stub_base and has_long_form_entry(head_lines):
         required = [i for i in required if i not in STUB_BODY_INDICES]
     status_index = first_body_status_index(base_lines)
 
@@ -210,9 +244,9 @@ def check_file(path, base_text, head_text):
         if head_line == base_line:
             return True
         if index == FRONTMATTER_STATUS_INDEX:
-            return head_line.startswith("status: ")
+            return head_line in FRONTMATTER_STATUS_LINES
         if index == status_index:
-            return head_line.startswith(f"{BODY_STATUS_PREFIX} ")
+            return is_permitted_body_status_line(head_line)
         return False
 
     cursor = 0
@@ -224,7 +258,28 @@ def check_file(path, base_text, head_text):
         ):
             position += 1
         if position == len(head_lines):
-            return [f"{path}: base line {index + 1} removed or changed: {base_line}"]
+            message = f"{path}: base line {index + 1} removed or changed: {base_line}"
+            if index == status_index:
+                offered = next(
+                    (
+                        line
+                        for line in head_lines[cursor:]
+                        if line.startswith(BODY_STATUS_PREFIX)
+                    ),
+                    None,
+                )
+                if offered is not None:
+                    message += (
+                        f" (head offers {offered!r}, but a replaced body status "
+                        "line must start with '- Status: accepted' or "
+                        "'- Status: superseded')"
+                    )
+            elif stub_base and index in STUB_BODY_INDICES:
+                message += (
+                    " (index-only stub replaced without a long-form entry: no "
+                    "'- Status: accepted' or '- Status: superseded' line at head)"
+                )
+            return [message]
         cursor = position + 1
     return []
 

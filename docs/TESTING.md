@@ -1271,13 +1271,21 @@ starts with `- Status:` -- both, so the marker cannot be smuggled into a
 long-form entry and exploited later; positional, so a marker at any other
 index is not a stub and the file stays under the strict walk) may replace
 its five stub body lines while its frontmatter and any later lines stay
-frozen;
+frozen -- but only when the head carries a well-formed body status line
+(`- Status: accepted` or `- Status: superseded`, optionally annotated); a
+head without one keeps the stub body frozen and fails the walk with an
+`index-only stub replaced without a long-form entry` hint, so deleting the
+stub body or replacing it with prose is a violation;
 otherwise an exact greedy subsequence walk over `splitlines()` (no
 `keepends`, so a trailing-newline-only change passes) requires every base
 line to reappear in the head verbatim and in order, except that the
-frontmatter `status:` line (line 4) may be replaced by another `status:` line
-and the *first* body `- Status:` line by another `- Status:` line -- the
-status-transition and narrowing-annotation shapes. Any other diff status for
+frontmatter `status:` line (line 4) may be replaced by `status: accepted` or
+`status: superseded` and the *first* body `- Status:` line by a line
+starting with `- Status: accepted` or `- Status: superseded` (an annotation
+such as `superseded by D-NNN` may follow after whitespace) -- the
+status-transition and narrowing-annotation shapes. A replacement with any
+other value (`proposed`, `rejected`, blank) fails and names the offending
+head line. Any other diff status for
 a frozen path (`T` for a symlink replacement, `C`, `R`, `U`, `X`) fails
 closed. Blobs are decoded with `errors="surrogateescape"`, so a non-UTF-8
 byte is a line mismatch, not a traceback. `difflib.SequenceMatcher` opcodes
@@ -1322,7 +1330,9 @@ which `audit` binds it too.
 **Evidence.** `scripts/test_check_decision_immutability.py` replays the
 literal PR #74 append on D-032's current bytes (`base line 15 removed or
 changed`), rewords, deletes, renames, symlinks and status-regresses frozen
-files, fills in the real D-001 and D-005 stubs, and runs every current
+files, fills in the real D-001 and D-005 stubs, rejects a stub whose body is
+deleted or replaced without a `- Status: accepted`/`superseded` line and a
+status replacement carrying any other value, and runs every current
 `docs/decisions/D-*.md` against itself; its plumbing tests build two-commit
 throwaway repositories and drive `main` with explicit revisions, fake
 `pull_request`/`push` events, and a depth-1 clone that must trigger exactly

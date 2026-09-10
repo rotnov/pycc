@@ -216,8 +216,11 @@ class RuleTests(unittest.TestCase):
         path = f"docs/decisions/{base_paths[0].name}"
         reworded = lines[:12] + ["**Superseded by D-173** -- reworded."]
         self.assertFails(base_text, "\n".join(reworded) + "\n", "base line 13 removed or changed", path=path)
+        # Truncating after the stub title drops the blank line and the note;
+        # with no long-form entry at the head the stub exemption is off, so
+        # the walk fails on the first missing line after the (kept) stub.
         deleted = lines[:11]
-        self.assertFails(base_text, "\n".join(deleted) + "\n", "base line 13 removed or changed", path=path)
+        self.assertFails(base_text, "\n".join(deleted) + "\n", "base line 12 removed or changed", path=path)
 
     def test_stub_marker_inside_a_long_form_entry_does_not_unlock_the_body(self):
         # Step one (an earlier PR) inserted the marker; step two rewrites the
@@ -251,6 +254,80 @@ class RuleTests(unittest.TestCase):
         base = long_form(body="- Status: accepted\n- Status: a second one\n")
         head = long_form(body="- Status: accepted (annotated)\n- Status: a rewritten second one\n")
         self.assertFails(base, head, "base line 8 removed or changed: - Status: a second one")
+
+    def test_accepted_stub_body_deleted_outright_fails(self):
+        # Frontmatter kept, the five stub body lines gone, no long-form entry:
+        # the exemption must not apply, and the hint names the reason.
+        head = stub().split("\n---\n")[0] + "\n---\n\n"
+        self.assertFails(stub(), head, "base line 7 removed or changed: # D-001")
+        self.assertIn(
+            "index-only stub replaced without a long-form entry",
+            cdi.check_file(PATH, stub(), head)[0],
+        )
+
+    def test_accepted_stub_body_replaced_by_prose_without_a_status_line_fails(self):
+        head = stub().split("\n---\n")[0] + "\n---\n\n## D-001: Stub title\n\nProse with no status line.\n"
+        self.assertFalse(cdi.has_long_form_entry(head.splitlines()))
+        self.assertFails(stub(), head, "index-only stub replaced without a long-form entry")
+
+    def test_superseded_stub_with_a_frozen_tail_cannot_have_its_body_deleted(self):
+        # The D-005 shape: an accepted stub with an appended supersession
+        # note. Deleting the stub body while keeping the tail must fail even
+        # though every tail line survives.
+        base = stub(status="superseded", tail="\n**Superseded by D-173** -- note.\n")
+        head = stub(status="superseded").split("\n---\n")[0] + "\n---\n\n**Superseded by D-173** -- note.\n"
+        self.assertFails(base, head, "index-only stub replaced without a long-form entry")
+
+    def test_stub_replaced_by_an_entry_whose_status_is_proposed_fails(self):
+        head = stub().split("\n---\n")[0] + "\n---\n\n## D-001: Stub title\n\n- Status: proposed\n"
+        self.assertFalse(cdi.has_long_form_entry(head.splitlines()))
+        self.assertFails(stub(), head, "index-only stub replaced without a long-form entry")
+
+    def test_stub_replaced_by_a_superseded_entry_with_annotation_passes(self):
+        head = stub().split("\n---\n")[0] + "\n---\n\n## D-001: Stub title\n\n- Status: superseded by D-241\n"
+        self.assertPasses(stub(), head)
+
+    def test_accepted_to_superseded_on_both_status_lines_passes(self):
+        head = long_form().replace("status: accepted\n", "status: superseded\n").replace(
+            "- Status: accepted\n", "- Status: superseded\n"
+        )
+        self.assertPasses(long_form(), head)
+
+    def test_body_status_replaced_by_proposed_fails_with_a_clear_message(self):
+        head = long_form().replace("- Status: accepted\n", "- Status: proposed\n")
+        self.assertFails(long_form(), head, "base line 9 removed or changed: - Status: accepted")
+        self.assertIn(
+            "head offers '- Status: proposed', but a replaced body status line "
+            "must start with '- Status: accepted' or '- Status: superseded'",
+            cdi.check_file(PATH, long_form(), head)[0],
+        )
+
+    def test_body_status_replaced_by_rejected_or_blank_fails(self):
+        for value in ("- Status: rejected", "- Status: ", "- Status:", "- Status: acceptedish"):
+            head = long_form().replace("- Status: accepted\n", f"{value}\n")
+            self.assertFails(long_form(), head, f"head offers {value!r}")
+
+    def test_body_status_annotation_suffix_passes(self):
+        for value in (
+            "- Status: superseded by D-241",
+            "- Status: accepted (one clause is narrowly superseded by D-241)",
+            "- Status: superseded\t(tab-separated annotation)",
+        ):
+            head = long_form().replace("- Status: accepted\n", f"{value}\n")
+            self.assertPasses(long_form(), head)
+
+    def test_permitted_body_status_line_shapes(self):
+        for line in ("- Status: accepted", "- Status: superseded", "- Status: superseded by D-241"):
+            self.assertTrue(cdi.is_permitted_body_status_line(line), line)
+        for line in ("- Status: proposed", "- Status: ", "- Status:", "- Status: accepted.", "Status: accepted", " - Status: accepted"):
+            self.assertFalse(cdi.is_permitted_body_status_line(line), line)
+
+    def test_frontmatter_status_replacement_is_limited_to_the_frozen_values(self):
+        self.assertEqual(cdi.FRONTMATTER_STATUS_LINES, {"status: accepted", "status: superseded"})
+        # A `status: proposed` head is rejected before the walk by (b); the
+        # walk's own membership test is the belt to that brace.
+        head = long_form().replace("status: accepted\n", "status: proposed\n")
+        self.assertFails(long_form(), head, "status accepted -> proposed is not a permitted transition")
 
     def test_rewriting_the_context_line_together_with_the_status_line_fails(self):
         head = long_form().replace(

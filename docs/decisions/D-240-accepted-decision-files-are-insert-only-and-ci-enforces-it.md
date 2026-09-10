@@ -42,20 +42,32 @@ status: accepted
     correction, not an edit -- so the first such pull request does not
     "fix" the guard instead. A same-line append (the PR #74 shape) changes
     the line and is therefore never an insertion.
-  - Exactly two base lines may be *replaced* rather than kept: the
-    frontmatter `status:` line (line 4, fixed there by the frontmatter
-    grammar) by another `status:` line, and the *first* body line starting
-    with `- Status:` by another `- Status:` line. The frontmatter status may
+  - Exactly two base lines may be *replaced* rather than kept, and each
+    only by a line of its documented shape: the frontmatter `status:` line
+    (line 4, fixed there by the frontmatter grammar) by `status: accepted`
+    or `status: superseded`, and the *first* body line starting with
+    `- Status:` by a line that starts with `- Status: accepted` or
+    `- Status: superseded`, optionally followed by whitespace and an
+    annotation (`- Status: superseded by D-NNN`, `- Status: accepted (one
+    clause is narrowly superseded by D-NNN)`). The frontmatter status may
     move from `accepted` to `superseded` and never back to `accepted` or to
     `proposed`; the body line may carry either that transition or a
-    narrowing annotation while the frontmatter stays `accepted`. Any other
-    `- Status:` line, and any body line that merely starts with `status:`,
-    is ordinary frozen text.
+    narrowing annotation while the frontmatter stays `accepted`. A
+    replacement carrying any other value (`proposed`, `rejected`, a blank
+    `- Status: `) is a violation that names the offending head line. Any
+    other `- Status:` line, and any body line that merely starts with
+    `status:`, is ordinary frozen text.
   - A D-151 index-only stub -- a base file whose ninth line (0-based
     `splitlines()` index 8) is exactly
     `Index-only: no long-form entry recorded yet.` *and* which has no
     `- Status:` line -- may replace its five stub body lines with the
-    long-form entry. The marker test is positional, not membership: the
+    long-form entry, and only with one: the exemption applies only when the
+    head carries a well-formed body status line (`- Status: accepted` or
+    `- Status: superseded`, with an optional annotation). A head that
+    deletes the stub body outright, or replaces it with text that has no
+    such line, is judged under the strict walk with the stub body frozen,
+    and the violation says so (`index-only stub replaced without a
+    long-form entry`). The marker test is positional, not membership: the
     exemption unfreezes lines 7-11 by number, so a file carrying the marker
     anywhere else is not the modelled shape and stays under the strict walk.
     Its frontmatter and every base line after the stub (D-005's appended
