@@ -281,13 +281,13 @@ that either client's generated response conforms to the prompts. Authenticated
 model-response evals remain a promotion requirement before any of them can
 move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
 validator enforces that fallback: its promotion gate
-(`validate_alpha_promotion_gate`) covers every skill in `ALPHA_EVAL_RUNNERS`
-(seven at the time of writing), and none of them can enter the locked skill
-set unless immutable HTTPS evidence exists for authenticated model evals on
-both Codex and Claude. That gate is distinct from `validate_alpha_skill_contracts`,
-the structural check (at least two evals, exact runner set, visibly alpha)
-that runs as a merge gate on every pull request regardless of what the lock
-contains. Until then, they remain project-local alpha workflows. The separate
+(`validate_alpha_promotion_gate`) covers every skill in `ALPHA_EVAL_RUNNERS`,
+and none of them can enter the locked skill set unless immutable HTTPS
+evidence exists for authenticated model evals on both Codex and Claude. Until
+then, they remain project-local alpha workflows. That gate is distinct from
+`validate_alpha_skill_contracts`, the structural check (at least two evals,
+exact runner set, visibly alpha) that runs as a merge gate on every pull
+request regardless of what the lock contains. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 
