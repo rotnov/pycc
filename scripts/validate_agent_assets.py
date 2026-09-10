@@ -485,6 +485,17 @@ def validate_skill_lock(
     payload from git. A rejected payload suppresses only the hash comparison,
     never the policy-document checks.
     """
+    # The policy document is read and its literal alpha-skill counts checked
+    # before any lock-shape early return: the prose guard does not depend on
+    # the lock file and must run on every invocation.
+    policy_path = root / "docs" / "AGENT_TOOLING.md"
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as error:
+        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
+        policy = ""
+    validate_alpha_skill_count_prose(policy, failures)
+
     lock = load_json("skills-lock.json", failures, root)
     if lock.get("version") != 1:
         failures.append("skills-lock.json: version must be 1")
@@ -501,14 +512,6 @@ def validate_skill_lock(
             "skills-lock.json: locked skill set must be exactly "
             + ", ".join(sorted(expected_names))
         )
-
-    policy_path = root / "docs" / "AGENT_TOOLING.md"
-    try:
-        policy = policy_path.read_text(encoding="utf-8")
-    except OSError as error:
-        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
-        policy = ""
-    validate_alpha_skill_count_prose(policy, failures)
 
     for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
         entry = entries.get(name)
@@ -615,7 +618,7 @@ def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
     A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
     skills when it sits within 40 characters before ``alpha skill(s)`` and is
     not preceded by a bound phrase (``at least``, ``at most``, ``more than``,
-    ``fewer than``, ``up to``), or when its sentence names ```ALPHA_EVAL_RUNNERS``` and the numeral is
+    ``fewer than``, ``up to``), or when its sentence names ``ALPHA_EVAL_RUNNERS`` and the numeral is
     immediately followed by ``skill(s)``, ``alpha``, ``project-local``, or
     ``at the time of writing``. A sentence is approximated as the text
     between periods on a single line; prose wrapped across lines is checked

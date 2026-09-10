@@ -250,9 +250,9 @@ visibly alpha" on every skill's `evals.json` independently of
 `run_alpha_skill_evals.py`'s own, narrower type-only checks in `load_cases`
 (that check's own `ALPHA_EVAL_RUNNERS` constant mirrors `EXPECTED_RUNNERS`
 and must be kept in sync by hand whenever a runner is added or renamed). One
-thing remains deferred for all seven: authenticated model-response evals on
-both Codex and Claude (the promotion requirement described below, enforced
-for every skill in `ALPHA_EVAL_RUNNERS`).
+thing remains deferred for all seven alpha skills: authenticated
+model-response evals on both Codex and Claude (the promotion requirement
+described below, enforced for every skill in `ALPHA_EVAL_RUNNERS`).
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
@@ -288,10 +288,11 @@ then, they remain project-local alpha workflows. That gate is distinct from
 `validate_alpha_skill_contracts`, the structural check (at least two evals,
 exact runner set, visibly alpha) that runs as a merge gate on every pull
 request regardless of what the lock contains. The same validator
-(`validate_alpha_skill_count_prose`) also rejects any literal alpha-skill
-count written in this document that disagrees with the length of
-`ALPHA_EVAL_RUNNERS`, so a widened runner table cannot leave stale prose
-behind. The separate
+(`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
+count in this document that disagrees with the length of
+`ALPHA_EVAL_RUNNERS` whenever the count shares a line with the phrase
+"alpha skill(s)" or with a mention of `ALPHA_EVAL_RUNNERS`, so a widened
+runner table cannot leave such prose stale. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 
