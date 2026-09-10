@@ -7,7 +7,9 @@ import codecs
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -328,30 +330,166 @@ def load_json(
     return value
 
 
-def compute_skill_folder_hash(skill_root: Path) -> str:
-    """Match skills CLI 1.5.20's path-plus-content SHA-256."""
-    files = [
-        path
-        for path in skill_root.rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and path.suffix != ".pyc"
-    ]
-    files.sort(
-        key=lambda path: path.relative_to(skill_root).as_posix().casefold()
+SKILL_PAYLOAD_BLOB_MODES = {"100644", "100755"}
+SKILL_PAYLOAD_REJECTED_SUFFIXES = {".pyc", ".pyo"}
+SKILL_PAYLOAD_REJECTED_DIRECTORIES = {
+    "__pycache__",
+    "__pypackages__",
+    ".git",
+    "node_modules",
+}
+
+
+class TrackedIndexRecord(NamedTuple):
+    """One `git ls-files --stage` record with its raw mode and stage."""
+
+    path: str
+    mode: str
+    stage: int
+
+
+class SkillPayloadEntry(NamedTuple):
+    """A tracked entry of a vendored skill, relative to the skill root."""
+
+    relative: str
+    mode: str
+    stage: int
+
+
+def compute_skill_folder_hash(skill_root: Path, files: Iterable[Path]) -> str:
+    """Match skills CLI 1.5.20's path-plus-content SHA-256 over ``files``.
+
+    Upstream's ``collectFiles`` hashes every regular file it finds, skips only
+    directories named ``.git`` and ``node_modules``, and ignores symlinks; it
+    has no bytecode rule. Deciding which tracked entries may be hashed is
+    ``validate_skill_payload``'s job, so this function hashes exactly the
+    files it is given. Upstream orders paths with ``localeCompare``; the
+    case-folded key below agrees with it for the vendored set, so a future
+    vendored file whose position differs between the two orderings must be
+    checked when the pin is updated.
+    """
+    ordered = sorted(
+        files,
+        key=lambda path: path.relative_to(skill_root).as_posix().casefold(),
     )
     digest = hashlib.sha256()
-    for path in files:
+    for path in ordered:
         digest.update(path.relative_to(skill_root).as_posix().encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def skill_payload_entries(skill_root: Path) -> list[SkillPayloadEntry]:
+    """Enumerate the tracked entries under ``skill_root`` from the git index.
+
+    The lock is defined over tracked files so untracked or ignored local
+    artefacts (bytecode caches) cannot flip the verdict while a force-added
+    one is still visible. The prefix is derived with ``os.path.relpath`` and
+    never ``realpath``, so a symlinked skill root keeps its tracked spelling
+    and is returned as the single ``120000`` entry ``"."``.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(skill_root), "rev-parse", "--show-toplevel"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or "git rev-parse failed")
+    toplevel = result.stdout.decode("utf-8", errors="surrogateescape").rstrip(
+        "\r\n"
+    )
+    prefix = os.path.relpath(str(skill_root), toplevel)
+    if prefix == os.pardir or prefix.startswith(os.pardir + os.sep):
+        raise RuntimeError("skill root is outside the git toplevel")
+    prefix_posix = Path(prefix).as_posix()
+    entries: list[SkillPayloadEntry] = []
+    for record in run_git_ls_files_stage(Path(toplevel), prefix_posix):
+        if record.path == prefix_posix:
+            relative = "."
+        elif record.path.startswith(prefix_posix + "/"):
+            relative = record.path[len(prefix_posix) + 1 :]
+        else:
+            raise RuntimeError(
+                f"git ls-files returned {record.path!r} outside {prefix_posix!r}"
+            )
+        entries.append(SkillPayloadEntry(relative, record.mode, record.stage))
+    return entries
+
+
+def skill_payload_rejection(
+    skill_root: Path,
+    relative: str,
+    entry: SkillPayloadEntry,
+) -> str | None:
+    """Return the first reason ``entry`` cannot be part of the reviewed copy."""
+    if entry.mode == "120000":
+        return "tracked symlinks are not part of the reviewed vendored copy"
+    if entry.mode not in SKILL_PAYLOAD_BLOB_MODES:
+        return f"tracked mode {entry.mode} is not a regular file blob"
+    try:
+        relative.encode("utf-8")
+    except UnicodeEncodeError:
+        return "tracked path is not valid UTF-8"
+    if entry.stage != 0:
+        return "tracked entry is unmerged"
+    posix = PurePosixPath(relative)
+    if posix.suffix.lower() in SKILL_PAYLOAD_REJECTED_SUFFIXES:
+        return "Python bytecode is not part of the reviewed vendored copy"
+    for component in posix.parts:
+        if component in SKILL_PAYLOAD_REJECTED_DIRECTORIES:
+            return f"{component}/ is not part of the reviewed vendored copy"
+    try:
+        info = os.lstat(skill_root / relative)
+    except FileNotFoundError:
+        return "tracked entry is missing from the working tree"
+    except OSError as error:
+        return f"tracked entry could not be inspected: {error}"
+    if not stat.S_ISREG(info.st_mode):
+        return "tracked entry is not a regular file"
+    return None
+
+
+def validate_skill_payload(
+    label: str,
+    skill_root: Path,
+    entries: Iterable[SkillPayloadEntry],
+    failures: list[str],
+) -> list[Path]:
+    """Reject tracked entries the reviewed hash cannot represent.
+
+    Appends one ``<label>: <relative>: <reason>`` line per offending entry
+    (first matching reason only) and returns the accepted regular files as
+    absolute paths under ``skill_root``.
+    """
+    accepted: list[Path] = []
+    records = list(entries)
+    if not records:
+        failures.append(f"{label}: no tracked payload under {skill_root}")
+        return accepted
+    for entry in records:
+        relative = entry.relative or "."
+        reason = skill_payload_rejection(skill_root, relative, entry)
+        if reason is not None:
+            failures.append(f"{label}: {relative}: {reason}")
+            continue
+        accepted.append(skill_root / relative)
+    return accepted
 
 
 def validate_skill_lock(
     failures: list[str],
     root: Path = ROOT,
     skills_root: Path = SKILLS_ROOT,
+    payload_entries: Iterable[SkillPayloadEntry] | None = None,
 ) -> None:
+    """Bind the vendored skill to its reviewed provenance and content hash.
+
+    ``payload_entries`` is injected by tests; ``None`` enumerates the tracked
+    payload from git. A rejected payload suppresses only the hash comparison,
+    never the policy-document checks.
+    """
     lock = load_json("skills-lock.json", failures, root)
     if lock.get("version") != 1:
         failures.append("skills-lock.json: version must be 1")
@@ -400,6 +538,23 @@ def validate_skill_lock(
         if not (skill_root / "SKILL.md").is_file():
             failures.append(f"{label} has no canonical .claude skill")
             continue
+        payload_failures: list[str] = []
+        accepted_files: list[Path] = []
+        try:
+            payload = (
+                skill_payload_entries(skill_root)
+                if payload_entries is None
+                else payload_entries
+            )
+        except (RuntimeError, OSError) as error:
+            payload_failures.append(
+                f"{label}: could not enumerate tracked payload: {error}"
+            )
+        else:
+            accepted_files = validate_skill_payload(
+                label, skill_root, payload, payload_failures
+            )
+        failures.extend(payload_failures)
         expected_hash = expected_entry["computedHash"]
         locked_hash = entry.get("computedHash")
         if (
@@ -408,12 +563,13 @@ def validate_skill_lock(
         ):
             failures.append(f"{label}.computedHash must be a SHA-256 digest")
             continue
-        actual = compute_skill_folder_hash(skill_root)
-        if actual != expected_hash:
-            failures.append(
-                f"{label}.computedHash does not match the reviewed vendored skill: "
-                f"expected {expected_hash}, got {actual}"
-            )
+        if not payload_failures:
+            actual = compute_skill_folder_hash(skill_root, accepted_files)
+            if actual != expected_hash:
+                failures.append(
+                    f"{label}.computedHash does not match the reviewed "
+                    f"vendored skill: expected {expected_hash}, got {actual}"
+                )
         for field in ("ref", "reviewedCommit", "computedHash"):
             value = expected_entry[field]
             if value not in policy:
@@ -853,9 +1009,35 @@ def optional_marketplace_source_references(
     }
 
 
-def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
+def parse_git_ls_files_stage(output: bytes) -> list[TrackedIndexRecord]:
+    """Parse ``git ls-files --stage -z`` output, keeping raw modes and stages."""
+    records: list[TrackedIndexRecord] = []
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, encoded_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3 or not fields[2].isdigit():
+            raise RuntimeError("git ls-files returned an invalid staged record")
+        records.append(
+            TrackedIndexRecord(
+                encoded_path.decode("utf-8", errors="surrogateescape"),
+                fields[0].decode("ascii", errors="replace"),
+                int(fields[2]),
+            )
+        )
+    return records
+
+
+def run_git_ls_files_stage(
+    root: Path,
+    pathspec: str | None = None,
+) -> list[TrackedIndexRecord]:
+    command = ["git", "-C", str(root), "ls-files", "--stage", "-z"]
+    if pathspec is not None:
+        command.extend(["--full-name", "--", pathspec])
     result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        command,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -863,20 +1045,15 @@ def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(detail or "git ls-files failed")
+    return parse_git_ls_files_stage(result.stdout)
 
+
+def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     files: list[tuple[Path, str]] = []
-    for record in result.stdout.split(b"\0"):
-        if not record:
+    for record in run_git_ls_files_stage(root):
+        if record.mode not in {"100644", "100755", "120000"}:
             continue
-        metadata, separator, encoded_path = record.partition(b"\t")
-        fields = metadata.split()
-        if not separator or len(fields) != 3:
-            raise RuntimeError("git ls-files returned an invalid staged record")
-        mode = fields[0]
-        if mode not in {b"100644", b"100755", b"120000"}:
-            continue
-        relative = Path(encoded_path.decode("utf-8", errors="surrogateescape"))
-        files.append((root / relative, mode.decode("ascii")))
+        files.append((root / Path(record.path), record.mode))
     return files
 
 

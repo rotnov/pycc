@@ -54,6 +54,19 @@ wrapper. `skills-lock.json` records the immutable upstream tag, exact reviewed
 commit, and content hash. Updates are deliberate repository changes and must
 preserve the canonical-copy/wrapper split.
 
+The lock's `computedHash` is skills CLI 1.5.20's path-plus-content SHA-256
+over every **tracked** regular file under `.claude/skills/i-have-an-issue/`
+(`git ls-files --stage`), so it is the same number `npx skills` prints for the
+reviewed copy. Before comparing, `validate_skill_lock` in
+`scripts/validate_agent_assets.py` rejects by name any tracked symlink,
+gitlink, unmerged or non-regular entry, `.pyc`/`.pyo` file, or path under
+`__pycache__/`, `__pypackages__/`, `.git/`, or `node_modules/`, and it never
+falls back to a working-tree walk. Untracked or ignored local artefacts (for
+example the `scripts/__pycache__/` that `scripts/test_i_have_an_issue.py`
+leaves behind when run without `-B`) do not affect the verdict; a force-added
+one fails with a message naming the offending path. Mutation tests in
+`scripts/test_validate_agent_assets.py` cover each rejected class (#80).
+
 The pre-install iEvo security review scanned all seven distributed files
 (31,206 bytes). The content verdict is **YELLOW** because the skill necessarily
 loads outsider-authored GitHub issue and pull-request text into agent context.
