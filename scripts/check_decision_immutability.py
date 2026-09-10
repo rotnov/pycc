@@ -44,15 +44,24 @@ frozen file, in order:
     is exactly `Index-only: no long-form entry recorded yet.` **and** no
     base line starts with `- Status:` -- may replace its five stub body
     lines (indices 6-10: `# D-NNN`, blank, the marker, blank, the bare
-    title) with the long-form entry, **but only when the head actually
-    carries one**: some head line must be a well-formed body status line
-    (`BODY_STATUS_LINE_RE`, i.e. `- Status: accepted` or
-    `- Status: superseded`, optionally followed by whitespace and an
-    annotation). Without such a line the exemption is off, the stub body
-    stays frozen, and the strict walk in (d) reports the removed stub line
-    with an `index-only stub replaced without a long-form entry` hint --
-    so deleting the stub body outright, or replacing it with prose that has
-    no `- Status:` line, is a violation rather than a free rewrite. The
+    title) with the long-form entry, **but only when the replaced stub body
+    itself carries one**: the guard walks the frontmatter and the blank
+    line that closes it (indices 0-5), takes the first head line after
+    them that is a well-formed body status line (`BODY_STATUS_LINE_RE`,
+    i.e. `- Status: accepted` or `- Status: superseded`, optionally
+    followed by whitespace and an annotation), and requires every frozen
+    base line after the stub (index 11 onward) to reappear, in order,
+    *after* that status line. A status line that sits after the frozen
+    tail, or inside the frontmatter, is not part of the replaced body and
+    unlocks nothing. Without a qualifying line the exemption is off, the
+    stub body stays frozen, and the strict walk in (d) reports the removed
+    stub line with an `index-only stub replaced without a long-form entry`
+    hint -- so deleting the stub body outright, or replacing it with prose
+    that has no `- Status:` line, is a violation rather than a free
+    rewrite (an insert-only edit that keeps the stub text passes as
+    before). When a status line was found but the tail did not fully
+    reappear after it, the hint also says why that line did not count and
+    which frozen tail line is missing. The
     marker test is positional, not membership: the exemption unfreezes
     indices 6-10 by number, so a file carrying the marker anywhere else is
     not the shape the exemption models and falls through to the strict walk
@@ -202,11 +211,13 @@ def is_permitted_body_status_line(line):
     return BODY_STATUS_LINE_RE.fullmatch(line) is not None
 
 
-def has_long_form_entry(head_lines):
-    """True when the head carries a well-formed body status line -- the
-    minimum shape a long-form entry has, and what a stub replacement must
-    produce for the stub exemption to apply."""
-    return any(is_permitted_body_status_line(line) for line in head_lines)
+def first_permitted_body_status_position(head_lines, start):
+    """Head position of the first well-formed body status line at or after
+    `start` -- the minimum shape a long-form entry has -- or None."""
+    for position in range(start, len(head_lines)):
+        if is_permitted_body_status_line(head_lines[position]):
+            return position
+    return None
 
 
 def check_file(path, base_text, head_text):
@@ -234,13 +245,10 @@ def check_file(path, base_text, head_text):
 
     base_lines = base_text.splitlines()
     head_lines = head_text.splitlines()
-    required = range(len(base_lines))
-    stub_base = is_index_only_stub(base_lines)
-    if stub_base and has_long_form_entry(head_lines):
-        required = [i for i in required if i not in STUB_BODY_INDICES]
     status_index = first_body_status_index(base_lines)
 
-    def matches(index, base_line, head_line):
+    def matches(index, head_line):
+        base_line = base_lines[index]
         if head_line == base_line:
             return True
         if index == FRONTMATTER_STATUS_INDEX:
@@ -249,39 +257,88 @@ def check_file(path, base_text, head_text):
             return is_permitted_body_status_line(head_line)
         return False
 
-    cursor = 0
-    for index in required:
-        base_line = base_lines[index]
-        position = cursor
-        while position < len(head_lines) and not matches(
-            index, base_line, head_lines[position]
-        ):
-            position += 1
-        if position == len(head_lines):
-            message = f"{path}: base line {index + 1} removed or changed: {base_line}"
-            if index == status_index:
-                offered = next(
-                    (
-                        line
-                        for line in head_lines[cursor:]
-                        if line.startswith(BODY_STATUS_PREFIX)
-                    ),
-                    None,
-                )
-                if offered is not None:
-                    message += (
-                        f" (head offers {offered!r}, but a replaced body status "
-                        "line must start with '- Status: accepted' or "
-                        "'- Status: superseded')"
-                    )
-            elif stub_base and index in STUB_BODY_INDICES:
+    def walk(indices, cursor):
+        """Greedy subsequence walk: match each base index in `indices`, in
+        order, at or after `cursor`. Returns `(failed_index, cursor)` --
+        `failed_index` is None when every index matched, and `cursor` is
+        then the head position just past the last match; on failure it is
+        the position the failed index was searched from."""
+        for index in indices:
+            position = cursor
+            while position < len(head_lines) and not matches(
+                index, head_lines[position]
+            ):
+                position += 1
+            if position == len(head_lines):
+                return index, cursor
+            cursor = position + 1
+        return None, cursor
+
+    def violation(index, cursor, hint=""):
+        message = f"{path}: base line {index + 1} removed or changed: {base_lines[index]}"
+        if index == status_index:
+            offered = next(
+                (
+                    line
+                    for line in head_lines[cursor:]
+                    if line.startswith(BODY_STATUS_PREFIX)
+                ),
+                None,
+            )
+            if offered is not None:
                 message += (
-                    " (index-only stub replaced without a long-form entry: no "
-                    "'- Status: accepted' or '- Status: superseded' line at head)"
+                    f" (head offers {offered!r}, but a replaced body status "
+                    "line must start with '- Status: accepted' or "
+                    "'- Status: superseded')"
                 )
-            return [message]
-        cursor = position + 1
-    return []
+        return [message + hint]
+
+    if not is_index_only_stub(base_lines):
+        failed, cursor = walk(range(len(base_lines)), 0)
+        return [] if failed is None else violation(failed, cursor)
+
+    # An index-only stub: the frontmatter and the blank line that closes it
+    # (indices 0-5) are frozen and come first.
+    stub_body_start = min(STUB_BODY_INDICES)
+    tail_start = max(STUB_BODY_INDICES) + 1
+    failed, body_cursor = walk(range(stub_body_start), 0)
+    if failed is not None:
+        return violation(failed, body_cursor)
+    # The exemption applies only when the replaced stub body itself carries
+    # a well-formed body status line: the first such line after the
+    # frontmatter, with every frozen tail line (D-005's supersession
+    # paragraph) reappearing in order *after* it. A status line that sits
+    # after the tail (or inside the frontmatter) unlocks nothing. Taking the
+    # first candidate is sufficient: an earlier split leaves more head for
+    # the tail to match in.
+    status_position = first_permitted_body_status_position(head_lines, body_cursor)
+    if status_position is not None:
+        tail_failed, tail_cursor = walk(
+            range(tail_start, len(base_lines)), status_position + 1
+        )
+        if tail_failed is None:
+            return []
+    # No long-form entry in the replaced region: the stub body stays frozen
+    # and the strict walk decides (an insert-only edit that keeps the stub
+    # text still passes).
+    failed, cursor = walk(range(stub_body_start, len(base_lines)), body_cursor)
+    if failed is None:
+        return []
+    hint = ""
+    if failed in STUB_BODY_INDICES:
+        hint = (
+            " (index-only stub replaced without a long-form entry: no "
+            "'- Status: accepted' or '- Status: superseded' line in the "
+            "replaced stub body"
+        )
+        if status_position is not None:
+            hint += (
+                f"; the status line at head line {status_position + 1} does "
+                f"not count because frozen base line {tail_failed + 1} does "
+                "not reappear after it"
+            )
+        hint += ")"
+    return violation(failed, cursor, hint)
 
 
 def context_diff(path, base_text, head_text):

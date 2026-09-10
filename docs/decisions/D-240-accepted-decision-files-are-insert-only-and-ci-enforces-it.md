@@ -62,12 +62,18 @@ status: accepted
     `Index-only: no long-form entry recorded yet.` *and* which has no
     `- Status:` line -- may replace its five stub body lines with the
     long-form entry, and only with one: the exemption applies only when the
-    head carries a well-formed body status line (`- Status: accepted` or
-    `- Status: superseded`, with an optional annotation). A head that
-    deletes the stub body outright, or replaces it with text that has no
-    such line, is judged under the strict walk with the stub body frozen,
-    and the violation says so (`index-only stub replaced without a
-    long-form entry`). The marker test is positional, not membership: the
+    replaced stub body itself carries a well-formed body status line
+    (`- Status: accepted` or `- Status: superseded`, with an optional
+    annotation) -- the first such line after the frontmatter and its
+    closing blank line, with every frozen base line after the stub
+    reappearing in order after it. A status line placed after the frozen
+    tail, or inside the frontmatter, is not part of the replaced body and
+    unlocks nothing. A head that deletes the stub body outright, or
+    replaces it with text that has no such line in that region, is judged
+    under the strict walk with the stub body frozen, and the violation says
+    so (`index-only stub replaced without a long-form entry: no
+    '- Status: accepted' or '- Status: superseded' line in the replaced
+    stub body`). The marker test is positional, not membership: the
     exemption unfreezes lines 7-11 by number, so a file carrying the marker
     anywhere else is not the modelled shape and stays under the strict walk.
     Its frontmatter and every base line after the stub (D-005's appended

@@ -52,10 +52,11 @@ verbatim and in order. What you may do:
   is frozen.
 - **Fill in an index-only stub.** A D-151 stub (`Index-only: no long-form entry
   recorded yet.` and no `- Status:` line) may have its five stub body lines replaced by
-  the long-form section, provided the new section carries a `- Status: accepted` or
-  `- Status: superseded` line; deleting the stub body, or replacing it with text
-  without such a line, is rejected. Its frontmatter and any lines after the stub stay
-  frozen.
+  the long-form section, provided the new section itself carries a `- Status: accepted`
+  or `- Status: superseded` line -- inside the replaced body, before any lines that
+  followed the stub; a status line placed after those lines does not count. Deleting
+  the stub body, or replacing it with text without such a line, is rejected. Its
+  frontmatter and any lines after the stub stay frozen.
 
 Deleting or renaming an accepted or superseded file is a violation. Verify locally with
 `python3 -B scripts/check_decision_immutability.py --base "$(git merge-base origin/main

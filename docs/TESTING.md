@@ -1271,11 +1271,16 @@ starts with `- Status:` -- both, so the marker cannot be smuggled into a
 long-form entry and exploited later; positional, so a marker at any other
 index is not a stub and the file stays under the strict walk) may replace
 its five stub body lines while its frontmatter and any later lines stay
-frozen -- but only when the head carries a well-formed body status line
-(`- Status: accepted` or `- Status: superseded`, optionally annotated); a
-head without one keeps the stub body frozen and fails the walk with an
-`index-only stub replaced without a long-form entry` hint, so deleting the
-stub body or replacing it with prose is a violation;
+frozen -- but only when the replaced stub body itself carries a well-formed
+body status line (`- Status: accepted` or `- Status: superseded`, optionally
+annotated): the first such head line after the frontmatter's closing blank,
+with every frozen line after the stub reappearing in order after it, so a
+status line placed after the frozen tail or inside the frontmatter unlocks
+nothing; a head without one in that region keeps the stub body frozen and
+fails the walk with an `index-only stub replaced without a long-form entry:
+no '- Status: accepted' or '- Status: superseded' line in the replaced stub
+body` hint, so deleting the stub body or replacing it with prose is a
+violation;
 otherwise an exact greedy subsequence walk over `splitlines()` (no
 `keepends`, so a trailing-newline-only change passes) requires every base
 line to reappear in the head verbatim and in order, except that the
@@ -1331,8 +1336,10 @@ which `audit` binds it too.
 literal PR #74 append on D-032's current bytes (`base line 15 removed or
 changed`), rewords, deletes, renames, symlinks and status-regresses frozen
 files, fills in the real D-001 and D-005 stubs, rejects a stub whose body is
-deleted or replaced without a `- Status: accepted`/`superseded` line and a
-status replacement carrying any other value, and runs every current
+deleted or replaced without a `- Status: accepted`/`superseded` line in the
+replaced body (a decoy after D-005's frozen tail, or between its tail lines,
+unlocks nothing) and a status replacement carrying any other value, and runs
+every current
 `docs/decisions/D-*.md` against itself; its plumbing tests build two-commit
 throwaway repositories and drive `main` with explicit revisions, fake
 `pull_request`/`push` events, and a depth-1 clone that must trigger exactly

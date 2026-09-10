@@ -267,7 +267,6 @@ class RuleTests(unittest.TestCase):
 
     def test_accepted_stub_body_replaced_by_prose_without_a_status_line_fails(self):
         head = stub().split("\n---\n")[0] + "\n---\n\n## D-001: Stub title\n\nProse with no status line.\n"
-        self.assertFalse(cdi.has_long_form_entry(head.splitlines()))
         self.assertFails(stub(), head, "index-only stub replaced without a long-form entry")
 
     def test_superseded_stub_with_a_frozen_tail_cannot_have_its_body_deleted(self):
@@ -278,9 +277,62 @@ class RuleTests(unittest.TestCase):
         head = stub(status="superseded").split("\n---\n")[0] + "\n---\n\n**Superseded by D-173** -- note.\n"
         self.assertFails(base, head, "index-only stub replaced without a long-form entry")
 
+    # The D-005 shape again: a 13-line superseded stub whose frozen tail
+    # (0-based lines 11-12) is a blank line and the supersession paragraph.
+    TAIL = "\n**Superseded by D-173** -- note.\n"
+
+    def stub_with_tail_body(self, body):
+        """Frontmatter of the tailed stub, its closing blank, then `body`."""
+        return stub(status="superseded").split("\n---\n")[0] + "\n---\n\n" + body
+
+    def test_status_line_after_the_frozen_tail_does_not_unlock_the_stub_body(self):
+        base = stub(status="superseded", tail=self.TAIL)
+        head = self.stub_with_tail_body("garbage\n" + self.TAIL + "\n- Status: accepted\n")
+        self.assertFails(base, head, "base line 7 removed or changed: # D-001")
+        self.assertIn(
+            "no '- Status: accepted' or '- Status: superseded' line in the replaced stub body",
+            cdi.check_file(PATH, base, head)[0],
+        )
+
+    def test_status_line_between_the_frozen_tail_lines_does_not_unlock_the_stub_body(self):
+        base = stub(status="superseded", tail=self.TAIL)
+        head = self.stub_with_tail_body("garbage\n\n- Status: superseded\n**Superseded by D-173** -- note.\n")
+        self.assertFails(base, head, "base line 7 removed or changed: # D-001")
+        self.assertIn(
+            "the status line at head line 9 does not count because frozen base line 12 does not reappear after it",
+            cdi.check_file(PATH, base, head)[0],
+        )
+
+    def test_long_form_entry_in_the_replaced_body_with_the_tail_kept_passes(self):
+        base = stub(status="superseded", tail=self.TAIL)
+        head = self.stub_with_tail_body(
+            "## D-001: Stub title\n\n- Status: superseded by D-006\n- Context: filled in\n" + self.TAIL
+        )
+        self.assertPasses(base, head)
+
+    def test_long_form_entry_whose_tail_is_reworded_names_the_tail_line(self):
+        base = stub(status="superseded", tail=self.TAIL)
+        head = self.stub_with_tail_body(
+            "## D-001: Stub title\n\n- Status: superseded by D-006\n\n**Superseded by D-174** -- reworded.\n"
+        )
+        self.assertFails(base, head, "base line 7 removed or changed: # D-001")
+        self.assertIn(
+            "the status line at head line 9 does not count because frozen base line 13 does not reappear after it",
+            cdi.check_file(PATH, base, head)[0],
+        )
+
+    def test_intact_stub_with_a_status_line_appended_after_the_tail_passes(self):
+        # Insert-only: the stub text and the tail both survive verbatim, so a
+        # stray status line after the tail is an ordinary appended line.
+        base = stub(status="superseded", tail=self.TAIL)
+        self.assertPasses(base, base + "\n- Status: accepted\n")
+
+    def test_stub_body_kept_but_tail_deleted_fails_on_the_tail_line(self):
+        base = stub(status="superseded", tail=self.TAIL)
+        self.assertFails(base, stub(status="superseded"), "base line 12 removed or changed")
+
     def test_stub_replaced_by_an_entry_whose_status_is_proposed_fails(self):
         head = stub().split("\n---\n")[0] + "\n---\n\n## D-001: Stub title\n\n- Status: proposed\n"
-        self.assertFalse(cdi.has_long_form_entry(head.splitlines()))
         self.assertFails(stub(), head, "index-only stub replaced without a long-form entry")
 
     def test_stub_replaced_by_a_superseded_entry_with_annotation_passes(self):
