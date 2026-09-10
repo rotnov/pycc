@@ -646,9 +646,10 @@ def validate_alpha_promotion_gate(
     locked_skills: dict[str, object],
     failures: list[str],
 ) -> None:
-    # Every project-local alpha skill is a promotion candidate. The runner
-    # table is the single owner of that inventory, so a skill cannot bind
-    # evals without also falling under the authenticated-evidence gate.
+    # Every project-local alpha skill is a promotion candidate. This
+    # validator's inventory of them is ALPHA_EVAL_RUNNERS, which mirrors
+    # EXPECTED_RUNNERS in run_alpha_skill_evals.py and is kept in sync by
+    # hand; a skill listed only there would not reach this gate.
     for name in sorted(set(ALPHA_EVAL_RUNNERS) & set(locked_skills)):
         evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
         if (

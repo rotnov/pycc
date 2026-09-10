@@ -290,9 +290,10 @@ exact runner set, visibly alpha) that runs as a merge gate on every pull
 request regardless of what the lock contains. The same validator
 (`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
 count in this document that disagrees with the length of
-`ALPHA_EVAL_RUNNERS` whenever the count shares a sentence, on one line,
-with the phrase "alpha skill(s)" or with a mention of `ALPHA_EVAL_RUNNERS`,
-so a widened runner table cannot leave such prose stale. The separate
+`ALPHA_EVAL_RUNNERS` whenever the count sits shortly before the phrase
+"alpha skill(s)" or shares a one-line sentence with a mention of
+`ALPHA_EVAL_RUNNERS`, so a widened runner table cannot leave such prose
+stale. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 
