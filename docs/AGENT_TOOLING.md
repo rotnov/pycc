@@ -54,6 +54,29 @@ wrapper. `skills-lock.json` records the immutable upstream tag, exact reviewed
 commit, and content hash. Updates are deliberate repository changes and must
 preserve the canonical-copy/wrapper split.
 
+The lock's `computedHash` is skills CLI 1.5.20's path-plus-content SHA-256
+over every regular file under `.claude/skills/i-have-an-issue/` that is
+**tracked in this repository's own index** (`git ls-files --stage`, run from
+the repository root rather than from the skill directory, so a nested
+repository boundary inside the skill -- a stray `git init` or an interrupted
+`npx skills add` -- cannot substitute its own index), so it is the same number
+`npx skills` prints for the reviewed copy. Before comparing,
+`validate_skill_lock` in `scripts/validate_agent_assets.py` fails when the
+index holds no tracked payload under the skill at all, and otherwise rejects
+by name any tracked symlink, gitlink or other non-blob mode, path that is not
+valid UTF-8, unmerged entry, `.pyc`/`.pyo` file, path with a component
+matching `__pycache__`, `__pypackages__`, `.git`, or `node_modules` (suffix
+and component both matched case-insensitively), entry that is missing from
+the working tree or cannot be inspected there (`os.lstat` fails), or entry
+that is present but not a regular file; it never falls back to a working-tree
+walk. Files that are not in the repository's
+index -- untracked or ignored local artefacts such as the
+`scripts/__pycache__/` that `scripts/test_i_have_an_issue.py` leaves behind
+when run without `-B` -- do not affect the verdict; a force-added one fails
+with a message naming the offending path. Mutation tests in
+`scripts/test_validate_agent_assets.py` cover each rejected class, the
+nested-repository case, and the case-folded directory match (#80).
+
 The pre-install iEvo security review scanned all seven distributed files
 (31,206 bytes). The content verdict is **YELLOW** because the skill necessarily
 loads outsider-authored GitHub issue and pull-request text into agent context.
