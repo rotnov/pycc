@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import validate_agent_assets as validator
 
@@ -805,39 +806,137 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
+    ALPHA_PROMOTION_CANDIDATES = (
+        "issue-implement",
+        "issue-select",
+        "issue-to-plan",
+        "next-milestone",
+        "pycc",
+        "pycc-feedback",
+        "ultra-review",
+    )
+
     def test_alpha_promotion_requires_both_authenticated_client_evals(
         self,
     ) -> None:
-        failures: list[str] = []
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            shapes = {
+                "absent": {},
+                "codex-only": {
+                    name: {"codex": "https://example.test/codex-eval"}
+                },
+                "claude-only": {
+                    name: {"claude": "https://example.test/claude-eval"}
+                },
+            }
+            for shape, evidence in shapes.items():
+                with self.subTest(name=name, shape=shape), mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(name, failures[0])
+                    self.assertIn(
+                        "authenticated Codex and Claude model-eval evidence",
+                        failures[0],
+                    )
+
+        failures = []
         validator.validate_alpha_promotion_gate(
-            {"pycc": {"source": "future"}},
+            {name: {"source": "future"} for name in validator.ALPHA_EVAL_RUNNERS},
             failures,
         )
-        self.assertEqual(len(failures), 1)
-        self.assertIn(
-            "authenticated Codex and Claude model-eval evidence",
-            failures[0],
+        self.assertEqual(
+            failures,
+            [
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+                for name in sorted(validator.ALPHA_EVAL_RUNNERS)
+            ],
         )
 
     def test_alpha_promotion_accepts_complete_authenticated_evidence(
         self,
     ) -> None:
-        original = validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
-        try:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = {
-                "pycc": {
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            evidence = {
+                name: {
                     "codex": "https://example.test/codex-eval",
                     "claude": "https://example.test/claude-eval",
                 }
             }
+            with self.subTest(name=name), mock.patch.object(
+                validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+            ):
+                failures: list[str] = []
+                validator.validate_alpha_promotion_gate(
+                    {name: {"source": "future"}},
+                    failures,
+                )
+                self.assertEqual(failures, [])
+
+    def test_alpha_promotion_rejects_non_https_evidence(self) -> None:
+        evidence = {
+            "pycc": {
+                "codex": "http://example.test/codex-eval",
+                "claude": "https://example.test/claude-eval",
+            }
+        }
+        with mock.patch.object(
+            validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+        ):
             failures: list[str] = []
             validator.validate_alpha_promotion_gate(
                 {"pycc": {"source": "future"}},
                 failures,
             )
-            self.assertEqual(failures, [])
-        finally:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = original
+        self.assertEqual(len(failures), 1)
+        self.assertIn("pycc cannot be promoted", failures[0])
+
+    def test_alpha_promotion_set_is_derived_from_the_eval_runner_table(
+        self,
+    ) -> None:
+        """The promotion gate reads ``ALPHA_EVAL_RUNNERS`` at call time.
+
+        ``ALPHA_PROMOTION_CANDIDATES`` below is a test-side pin, not a second
+        production copy of the inventory: its only job is to turn an inventory
+        change into a reviewable test diff, so it must be edited whenever a
+        skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
+        """
+        self.assertEqual(
+            tuple(sorted(validator.ALPHA_EVAL_RUNNERS)),
+            self.ALPHA_PROMOTION_CANDIDATES,
+        )
+        locked = {"future-alpha-skill": {"source": "future"}}
+
+        failures: list[str] = []
+        validator.validate_alpha_promotion_gate(locked, failures)
+        self.assertEqual(failures, [])
+
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS,
+            {"future-alpha-skill": {"future_runner"}},
+        ):
+            failures = []
+            validator.validate_alpha_promotion_gate(locked, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("future-alpha-skill cannot be promoted", failures[0])
+
+        failures = []
+        validator.validate_alpha_promotion_gate(locked, failures)
+        self.assertEqual(failures, [])
+
+    def test_alpha_promotion_ignores_vendored_non_alpha_skills(self) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_promotion_gate(
+            {"i-have-an-issue": {"source": "vercel-labs/skills"}},
+            failures,
+        )
+        self.assertEqual(failures, [])
 
     def alpha_contract_failures(
         self,

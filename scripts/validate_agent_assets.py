@@ -98,7 +98,6 @@ ALPHA_EVAL_RUNNERS = {
         "attribution-falls-back-to-unattributed-or-ambiguous",
     },
 }
-PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
 # reviewed, stable authenticated runs exist for both supported client surfaces.
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
@@ -578,7 +577,10 @@ def validate_alpha_promotion_gate(
     locked_skills: dict[str, object],
     failures: list[str],
 ) -> None:
-    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+    # Every project-local alpha skill is a promotion candidate. The runner
+    # table is the single owner of that inventory, so a skill cannot bind
+    # evals without also falling under the authenticated-evidence gate.
+    for name in sorted(set(ALPHA_EVAL_RUNNERS) & set(locked_skills)):
         evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
         if (
             not isinstance(evidence, dict)
@@ -3417,15 +3419,7 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in (
-        "pycc",
-        "pycc-feedback",
-        "issue-to-plan",
-        "issue-implement",
-        "issue-select",
-        "next-milestone",
-        "ultra-review",
-    ):
+    for name in sorted(ALPHA_EVAL_RUNNERS):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:
