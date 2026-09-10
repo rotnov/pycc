@@ -251,8 +251,8 @@ visibly alpha" on every skill's `evals.json` independently of
 (that check's own `ALPHA_EVAL_RUNNERS` constant mirrors `EXPECTED_RUNNERS`
 and must be kept in sync by hand whenever a runner is added or renamed). One
 thing remains deferred for all seven: authenticated model-response evals on
-both Codex and Claude (the `pycc`/`pycc-feedback` promotion requirement
-described below).
+both Codex and Claude (the promotion requirement described below, enforced
+for every skill in `ALPHA_EVAL_RUNNERS`).
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
@@ -278,14 +278,18 @@ skipped.
 
 These deterministic checks do not invoke a language model and do not claim
 that either client's generated response conforms to the prompts. Authenticated
-model-response evals remain a promotion requirement before either alpha skill
-can move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
-validator enforces that fallback: `pycc` and `pycc-feedback` cannot enter the
-locked skill set unless immutable HTTPS evidence exists for authenticated
-model evals on both Codex and Claude. Until then, they remain project-local
-alpha workflows. The separate `Agent assets` job still installs the real
-pinned client CLIs and verifies discovery through both surfaces without model
-credentials.
+model-response evals remain a promotion requirement before any of them can
+move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
+validator enforces that fallback: its promotion gate
+(`validate_alpha_promotion_gate`) covers every skill in `ALPHA_EVAL_RUNNERS`
+(seven at the time of writing), and none of them can enter the locked skill
+set unless immutable HTTPS evidence exists for authenticated model evals on
+both Codex and Claude. That gate is distinct from `validate_alpha_skill_contracts`,
+the structural check (at least two evals, exact runner set, visibly alpha)
+that runs as a merge gate on every pull request regardless of what the lock
+contains. Until then, they remain project-local alpha workflows. The separate
+`Agent assets` job still installs the real pinned client CLIs and verifies
+discovery through both surfaces without model credentials.
 
 ## Project-local non-alpha skills
 
@@ -293,7 +297,8 @@ credentials.
 `.claude/skills/` with a thin `.agents/skills/` entrypoint, following the same
 cross-platform discovery convention as the alpha skills above. It is not alpha
 and is intentionally absent from `validate_agent_assets.py`'s
-`ALPHA_EVAL_RUNNERS` and `validate_alpha_skill_contracts` tuple, and from
+`ALPHA_EVAL_RUNNERS` (which `validate_alpha_skill_contracts` and the
+promotion gate both iterate), and from
 `run_alpha_skill_evals.py`'s `EXPECTED_RUNNERS`: its correctness is inherently
 model-judgment-based (diagnosing a process mistake's root cause has no
 deterministic boolean oracle the way `issue_select_higher_ranked` or
