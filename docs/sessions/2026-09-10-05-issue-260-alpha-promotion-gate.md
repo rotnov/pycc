@@ -14,13 +14,16 @@ the commit carrying this file and the harden journal.
 ## What landed
 
 - `scripts/validate_agent_assets.py`: `PROJECT_ALPHA_SKILLS` is deleted.
-  `validate_alpha_promotion_gate` iterates
-  `sorted(set(ALPHA_EVAL_RUNNERS) & set(locked_skills))` at call time and
-  `validate_alpha_skill_contracts` iterates `sorted(ALPHA_EVAL_RUNNERS)`, so a
-  skill added to the runner table falls under the authenticated-evidence
-  gate without a second hand-maintained list. `ALPHA_EVAL_RUNNERS` still
-  mirrors `EXPECTED_RUNNERS` in `scripts/run_alpha_skill_evals.py` by hand;
-  the code comment names that gap.
+  `validate_alpha_promotion_gate` treats every locked skill as a promotion
+  candidate unless it is named in `EXTERNAL_ORIGIN_LOCKED_SKILLS`, a reviewed
+  exemption asserting external origin (currently `i-have-an-issue`); it
+  iterates `sorted(set(locked_skills) - EXTERNAL_ORIGIN_LOCKED_SKILLS)` at
+  call time and first rejects an exemption that names an alpha skill or a
+  name outside `EXPECTED_SKILL_LOCK_ENTRIES`. `validate_alpha_skill_contracts`
+  iterates `sorted(ALPHA_EVAL_RUNNERS)`, so a skill added to the runner table
+  falls under the structural check without a second hand-maintained list.
+  `ALPHA_EVAL_RUNNERS` still mirrors `EXPECTED_RUNNERS` in
+  `scripts/run_alpha_skill_evals.py` by hand; the code comment names that gap.
 - `validate_alpha_skill_count_prose` (the harden artefact): rejects a
   literal alpha-skill count in `docs/AGENT_TOOLING.md` that disagrees with
   `len(ALPHA_EVAL_RUNNERS)` when at most two words separate the numeral
@@ -37,8 +40,8 @@ the commit carrying this file and the harden journal.
   matching count accepted, unrelated numerals ignored, the real document
   passes).
 - `docs/AGENT_TOOLING.md` and `docs/ROADMAP.md`: the promotion gate is
-  described as covering every skill in `ALPHA_EVAL_RUNNERS`, without a
-  literal count; the structural check's trigger is scoped to agent-relevant
+  described as covering every locked skill outside
+  `EXTERNAL_ORIGIN_LOCKED_SKILLS`, without a literal count; the structural check's trigger is scoped to agent-relevant
   pull requests and `main` pushes. No new decision entry: the change restores
   the policy D-190 already documents. D-190 and the dated plan file under
   `docs/superpowers/plans/` still name `PROJECT_ALPHA_SKILLS`; both are
@@ -63,6 +66,15 @@ granularity, "single owner", trigger scope) and were fixed in the commits
 listed above; round 8 clean. Every finding is in
 `.harden/findings/issue-260.jsonl` (ten rows, all `fixed`).
 
+External review on PR #1003 (Codex, P1) showed the derived intersection
+omits a skill promoted out of the table in the same change. The mechanism
+was replaced after an independent advisor round: every locked skill is a
+candidate unless a reviewed exemption asserts external origin
+(`EXTERNAL_ORIGIN_LOCKED_SKILLS`), cross-checked against the alpha inventory
+and the lock allowlist. The plan's literal criterion "derive the skill set
+from `ALPHA_EVAL_RUNNERS`" is therefore superseded by a stronger predicate;
+the alpha inventory is consulted only for the disjointness invariant.
+
 Harden batch (one tracer dispatch over the round-1 pile): two classes.
 `doc-comment-drifts-behind-a-widened-constant-table` shipped the static
 guard above (verdict `profit`, `verify: manual` with violator and clean
@@ -77,6 +89,11 @@ is the right rung for it.
 
 ## Known follow-ups
 
+- The promotion gate's residual is a deliberate false exemption in a
+  reviewed diff (a name added to `EXTERNAL_ORIGIN_LOCKED_SKILLS` in the same
+  change that promotes it). A base-to-head transition check would close it;
+  it is deferred under the D-192 filing bar since no promotion has ever
+  occurred.
 - `ALPHA_EVAL_RUNNERS` and `EXPECTED_RUNNERS` are two hand-synced tables; an
   equality check between them was deferred as out of scope.
 - `docs/ROADMAP.md`'s unrelated "All seven alpha skills bind deterministic

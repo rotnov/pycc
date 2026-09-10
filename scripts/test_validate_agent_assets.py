@@ -897,15 +897,20 @@ class AgentAssetValidationTests(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("pycc cannot be promoted", failures[0])
 
-    def test_alpha_promotion_set_is_derived_from_the_eval_runner_table(
+    def test_alpha_promotion_gate_covers_every_non_exempt_locked_skill(
         self,
     ) -> None:
-        """The promotion gate reads ``ALPHA_EVAL_RUNNERS`` at call time.
+        """Every locked skill outside the exemption is a candidate.
 
-        ``ALPHA_PROMOTION_CANDIDATES`` below is a test-side pin, not a second
-        production copy of the inventory: its only job is to turn an inventory
-        change into a reviewable test diff, so it must be edited whenever a
-        skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
+        ``ALPHA_PROMOTION_CANDIDATES`` above is a test-side pin of the alpha
+        inventory, not a second production copy: its only job is to turn an
+        inventory change into a reviewable test diff, so it must be edited
+        whenever a skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
+        The alpha inventory is a subset of the gated set (a table member in
+        the lock is gated), but the gate does not depend on the table: a
+        locked name in neither the table nor the exemption -- exactly the
+        shape a promotion produces, since the promoting change removes the
+        skill from ``ALPHA_EVAL_RUNNERS`` -- is gated too.
         """
         self.assertEqual(
             tuple(sorted(validator.ALPHA_EVAL_RUNNERS)),
@@ -913,22 +918,75 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         locked = {"future-alpha-skill": {"source": "future"}}
 
-        failures: list[str] = []
-        validator.validate_alpha_promotion_gate(locked, failures)
-        self.assertEqual(failures, [])
-
         with mock.patch.dict(
             validator.ALPHA_EVAL_RUNNERS,
             {"future-alpha-skill": {"future_runner"}},
         ):
-            failures = []
+            failures: list[str] = []
             validator.validate_alpha_promotion_gate(locked, failures)
         self.assertEqual(len(failures), 1)
         self.assertIn("future-alpha-skill cannot be promoted", failures[0])
 
+        graduated = {"graduated-skill": {"source": "rotnov/skills"}}
+        self.assertNotIn("graduated-skill", validator.ALPHA_EVAL_RUNNERS)
+        self.assertNotIn(
+            "graduated-skill", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS
+        )
         failures = []
-        validator.validate_alpha_promotion_gate(locked, failures)
-        self.assertEqual(failures, [])
+        validator.validate_alpha_promotion_gate(graduated, failures)
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: graduated-skill cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_not_name_an_alpha_skill(
+        self,
+    ) -> None:
+        # Widen the lock allowlist too, so only the disjointness invariant
+        # fires and this test proves that message on its own.
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "pycc"}),
+        ), mock.patch.dict(
+            validator.EXPECTED_SKILL_LOCK_ENTRIES, {"pycc": {"source": "x"}}
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
+                failures,
+            )
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name "
+                "an alpha skill: pycc"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_be_inside_the_lock_allowlist(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "unreviewed-skill"}),
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
+                failures,
+            )
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a "
+                "subset of EXPECTED_SKILL_LOCK_ENTRIES: unreviewed-skill"
+            ],
+        )
 
     def test_alpha_skill_count_prose_rejects_stale_spelled_out_count(
         self,
@@ -1019,9 +1077,14 @@ class AgentAssetValidationTests(unittest.TestCase):
         self.assertEqual(failures, [])
 
     def test_alpha_promotion_ignores_vendored_non_alpha_skills(self) -> None:
+        """A locked skill in the reviewed exemption needs no eval evidence."""
+        self.assertIn("i-have-an-issue", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS)
+        self.assertNotIn(
+            "i-have-an-issue", validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
+        )
         failures: list[str] = []
         validator.validate_alpha_promotion_gate(
-            {"i-have-an-issue": {"source": "vercel-labs/skills"}},
+            {"i-have-an-issue": {"source": "rotnov/skills"}},
             failures,
         )
         self.assertEqual(failures, [])

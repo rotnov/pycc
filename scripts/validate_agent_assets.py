@@ -41,6 +41,11 @@ EXPECTED_SKILL_LOCK_ENTRIES = {
         ),
     }
 }
+# Locked skills of external origin that were never project-local alpha skills
+# here; every other locked skill must carry authenticated model-eval evidence.
+# Adding a name here is a provenance claim reviewed with the lock allowlist
+# edit.
+EXTERNAL_ORIGIN_LOCKED_SKILLS: frozenset[str] = frozenset({"i-have-an-issue"})
 FEEDBACK_CONSENT_GUARDS = (
     "explicit approval",
     "exact payload",
@@ -654,11 +659,33 @@ def validate_alpha_promotion_gate(
     locked_skills: dict[str, object],
     failures: list[str],
 ) -> None:
-    # Every project-local alpha skill is a promotion candidate. This
-    # validator's inventory of them is ALPHA_EVAL_RUNNERS, which mirrors
-    # EXPECTED_RUNNERS in run_alpha_skill_evals.py and is kept in sync by
-    # hand; a skill listed only there would not reach this gate.
-    for name in sorted(set(ALPHA_EVAL_RUNNERS) & set(locked_skills)):
+    # A hand-maintained list of things to gate fails silently when an entry
+    # is forgotten: the change that promotes a skill removes it from
+    # ALPHA_EVAL_RUNNERS (validate_alpha_skill_contracts requires members to
+    # stay visibly alpha) and adds it to the lock, so an intersection with
+    # the alpha inventory would omit exactly the promoted skill. A list of
+    # things to exempt fails loudly instead: every locked skill is a
+    # candidate unless a reviewed exemption asserts external origin, and the
+    # exemption is cross-checked against the alpha inventory (it must not
+    # name an alpha skill) and the lock allowlist (it must not name an
+    # unknown skill). The residual is a deliberate false exemption in a
+    # reviewed diff; a base-to-head transition check would close it and is
+    # deferred.
+    alpha_exempt = sorted(EXTERNAL_ORIGIN_LOCKED_SKILLS & set(ALPHA_EVAL_RUNNERS))
+    if alpha_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name an "
+            f"alpha skill: {', '.join(alpha_exempt)}"
+        )
+    unknown_exempt = sorted(
+        EXTERNAL_ORIGIN_LOCKED_SKILLS - set(EXPECTED_SKILL_LOCK_ENTRIES)
+    )
+    if unknown_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a subset "
+            f"of EXPECTED_SKILL_LOCK_ENTRIES: {', '.join(unknown_exempt)}"
+        )
+    for name in sorted(set(locked_skills) - EXTERNAL_ORIGIN_LOCKED_SKILLS):
         evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
         if (
             not isinstance(evidence, dict)
