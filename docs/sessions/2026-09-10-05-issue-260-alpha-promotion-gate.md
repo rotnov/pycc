@@ -30,12 +30,13 @@ this file and the harden journal.
 - `validate_alpha_skill_count_prose` (the harden artefact): rejects a
   literal alpha-skill count in `docs/AGENT_TOOLING.md` that disagrees with
   `len(ALPHA_EVAL_RUNNERS)` when at most two words separate the numeral
-  from a following "alpha skill(s)" (an issue number such as `#260` never
-  counts) or it is immediately followed by "skill(s)", "alpha",
-  "project-local", or "at the time of writing" inside a one-line sentence
-  that mentions `ALPHA_EVAL_RUNNERS`; bound phrases ("at least", "at most",
-  "more than", "fewer than", "up to") are excluded. It runs from `validate_skill_lock`
-  before the lock-shape early return.
+  from a following "alpha skill(s)" (in that rule only, an issue number
+  such as `#260` never counts and a numeral after a bound phrase ("at
+  least", "at most", "more than", "fewer than", "up to") is excluded) or it
+  is immediately followed by "skill(s)", "alpha", "project-local", or "at
+  the time of writing" inside a one-line sentence that mentions
+  `ALPHA_EVAL_RUNNERS`. It runs from `validate_skill_lock` before the
+  lock-shape early return.
 - `scripts/test_validate_agent_assets.py`: promotion tests parametrised over
   every table entry (absent, codex-only, claude-only, all present), the
   non-HTTPS shape, a derivation-from-table proof via `mock.patch.dict`, a
