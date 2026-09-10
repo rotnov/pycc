@@ -146,11 +146,17 @@ class AgentAssetValidationTests(unittest.TestCase):
             if not canonical_present:
                 skills_root = root / "empty-skills"
                 skills_root.mkdir()
+            # The lock and policy live in the temp root while the payload is
+            # the real vendored copy, so enumerate it from the real repository.
+            payload_entries = validator.skill_payload_entries(
+                validator.SKILLS_ROOT / "i-have-an-issue", validator.ROOT
+            )
             failures: list[str] = []
             validator.validate_skill_lock(
                 failures,
                 root=root,
                 skills_root=skills_root,
+                payload_entries=payload_entries,
             )
             return failures
 
@@ -537,7 +543,7 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         self.assertFalse(any(self.HASH_MISMATCH in item for item in failures))
 
-    def test_skill_payload_entries_rejects_root_outside_toplevel(self) -> None:
+    def test_skill_payload_entries_rejects_root_outside_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory).resolve()
             repo = base / "repo"
@@ -547,9 +553,146 @@ class AgentAssetValidationTests(unittest.TestCase):
             os.symlink(repo, base / "link")
             spelled = base / "link" / ".claude" / "skills" / self.VENDORED_SKILL
             with self.assertRaisesRegex(
-                RuntimeError, "skill root is outside the git toplevel"
+                RuntimeError, "skill root is outside the repository root"
             ):
-                validator.skill_payload_entries(spelled)
+                validator.skill_payload_entries(spelled, repo)
+
+    def test_skill_payload_entries_rejects_records_outside_prefix(self) -> None:
+        # Anchoring below the git toplevel makes ``--full-name`` records
+        # disagree with the root-relative prefix; that must fail closed.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            anchor = repo / "sub"
+            skill_root = anchor / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", "sub"], check=True
+            )
+            with self.assertRaisesRegex(RuntimeError, "outside"):
+                validator.skill_payload_entries(skill_root, anchor)
+
+    def test_skill_lock_rejects_wrong_case_rejected_directory(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "__PYCACHE__").mkdir()
+            (skill_root / "__PYCACHE__" / "note.txt").write_bytes(b"x")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("__PYCACHE__/note.txt", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "__PYCACHE__/note.txt",
+            "__PYCACHE__/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_tracked_git_component_beside_nested_repo(
+        self,
+    ) -> None:
+        def mutate(skill_root: Path) -> None:
+            subprocess.run(
+                ["git", "init", "--quiet", str(skill_root)], check=True
+            )
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [(".git/config", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            ".git/config",
+            ".git/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_end_to_end_ignores_nested_repository_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            expected = self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+            # A nested repository boundary appears inside the skill after the
+            # outer index was populated; its empty index must not answer.
+            subprocess.run(
+                ["git", "init", "--quiet", str(skill_root)], check=True
+            )
+            (skill_root / "untracked-anywhere.txt").write_bytes(b"x")
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(skill_root), "ls-files", "--stage"],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                ).stdout,
+                b"",
+            )
+
+            entries = validator.skill_payload_entries(skill_root, repo)
+            self.assertEqual(
+                sorted(entry.relative for entry in entries),
+                sorted(relative for relative, _, _ in expected),
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assertEqual(failures, [])
+
+    def test_skill_lock_end_to_end_rejects_tracked_nested_repository(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            nested = skill_root / "vendor"
+            nested.mkdir()
+            (nested / "x").write_bytes(b"x")
+            subprocess.run(["git", "init", "--quiet", str(nested)], check=True)
+            subprocess.run(
+                ["git", "-C", str(nested), "add", "--", "x"], check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(nested),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "nested",
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+
+            entries = validator.skill_payload_entries(skill_root, repo)
+            self.assertIn(
+                validator.SkillPayloadEntry("vendor", "160000", 0), entries
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assert_payload_rejected(
+            failures, "vendor", "tracked mode 160000 is not a regular file blob"
+        )
+        self.assertEqual(len(failures), 1, failures)
 
     def test_skill_lock_end_to_end_rejects_force_added_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -566,7 +709,7 @@ class AgentAssetValidationTests(unittest.TestCase):
                 check=True,
             )
 
-            entries = validator.skill_payload_entries(skill_root)
+            entries = validator.skill_payload_entries(skill_root, repo)
             self.assertIn(
                 validator.SkillPayloadEntry("payload.pyc", "100644", 0), entries
             )

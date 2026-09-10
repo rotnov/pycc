@@ -379,33 +379,29 @@ def compute_skill_folder_hash(skill_root: Path, files: Iterable[Path]) -> str:
     return digest.hexdigest()
 
 
-def skill_payload_entries(skill_root: Path) -> list[SkillPayloadEntry]:
-    """Enumerate the tracked entries under ``skill_root`` from the git index.
+def skill_payload_entries(
+    skill_root: Path, root: Path = ROOT
+) -> list[SkillPayloadEntry]:
+    """Enumerate the tracked entries under ``skill_root`` from ``root``'s index.
 
     The lock is defined over tracked files so untracked or ignored local
     artefacts (bytecode caches) cannot flip the verdict while a force-added
-    one is still visible. The prefix is derived with ``os.path.relpath`` and
-    never ``realpath``, so a symlinked skill root keeps its tracked spelling
-    and is returned as the single ``120000`` entry ``"."``.
+    one is still visible. Enumeration is anchored at the repository ``root``
+    rather than discovered from ``skill_root``: ``git ls-files`` runs with
+    ``root`` as its working directory, so a nested repository boundary inside
+    the skill directory (a stray ``git init``, an interrupted
+    ``npx skills add``) cannot redirect the query to its own index. The
+    prefix is derived with ``os.path.relpath`` and never ``realpath``, so a
+    symlinked skill root keeps its tracked spelling and is returned as the
+    single ``120000`` entry ``"."``. A skill root outside ``root``, or a
+    record ``git`` reports outside the prefix, raises ``RuntimeError``.
     """
-    result = subprocess.run(
-        ["git", "-C", str(skill_root), "rev-parse", "--show-toplevel"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(detail or "git rev-parse failed")
-    toplevel = result.stdout.decode("utf-8", errors="surrogateescape").rstrip(
-        "\r\n"
-    )
-    prefix = os.path.relpath(str(skill_root), toplevel)
+    prefix = os.path.relpath(str(skill_root), str(root))
     if prefix == os.pardir or prefix.startswith(os.pardir + os.sep):
-        raise RuntimeError("skill root is outside the git toplevel")
+        raise RuntimeError("skill root is outside the repository root")
     prefix_posix = Path(prefix).as_posix()
     entries: list[SkillPayloadEntry] = []
-    for record in run_git_ls_files_stage(Path(toplevel), prefix_posix):
+    for record in run_git_ls_files_stage(root, prefix_posix):
         if record.path == prefix_posix:
             relative = "."
         elif record.path.startswith(prefix_posix + "/"):
@@ -435,10 +431,10 @@ def skill_payload_rejection(
     if entry.stage != 0:
         return "tracked entry is unmerged"
     posix = PurePosixPath(relative)
-    if posix.suffix.lower() in SKILL_PAYLOAD_REJECTED_SUFFIXES:
+    if posix.suffix.casefold() in SKILL_PAYLOAD_REJECTED_SUFFIXES:
         return "Python bytecode is not part of the reviewed vendored copy"
     for component in posix.parts:
-        if component in SKILL_PAYLOAD_REJECTED_DIRECTORIES:
+        if component.casefold() in SKILL_PAYLOAD_REJECTED_DIRECTORIES:
             return f"{component}/ is not part of the reviewed vendored copy"
     try:
         info = os.lstat(skill_root / relative)
@@ -542,7 +538,7 @@ def validate_skill_lock(
         accepted_files: list[Path] = []
         try:
             payload = (
-                skill_payload_entries(skill_root)
+                skill_payload_entries(skill_root, root)
                 if payload_entries is None
                 else payload_entries
             )
