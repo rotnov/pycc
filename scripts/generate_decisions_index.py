@@ -33,13 +33,25 @@ def unescape_yaml(value):
     return value.replace('\\"', '"').replace("\\\\", "\\")
 
 
-def read_frontmatter(path):
-    text = path.read_text(encoding="utf-8")
+def parse_frontmatter(text):
+    """Return ``(id, title, status)`` from a decision file's text.
+
+    Raises ``ValueError`` (without a path, so callers that hold a revision
+    rather than a file -- ``scripts/check_decision_immutability.py`` -- can
+    prefix their own) when the frontmatter block is missing or malformed.
+    """
     m = FRONTMATTER_RE.match(text)
     if not m:
-        raise ValueError(f"{path}: missing or malformed frontmatter")
+        raise ValueError("missing or malformed frontmatter")
     id_, title_escaped, status = m.groups()
     return id_, unescape_yaml(title_escaped), status
+
+
+def read_frontmatter(path):
+    try:
+        return parse_frontmatter(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
 
 
 def check_unique_ids(entries):

@@ -34,6 +34,20 @@ class ReadFrontmatterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gen.read_frontmatter(path)
 
+    def test_parse_frontmatter_works_on_text_without_a_path(self):
+        # scripts/check_decision_immutability.py reads decision files at a
+        # git revision rather than from disk, so the parser is exposed on
+        # text; its error carries no path (the file wrapper adds one).
+        text = '---\nid: D-005\ntitle: "Fifth"\nstatus: superseded\n---\n\nbody\n'
+        self.assertEqual(gen.parse_frontmatter(text), ("D-005", "Fifth", "superseded"))
+        with self.assertRaisesRegex(ValueError, r"^missing or malformed frontmatter$"):
+            gen.parse_frontmatter("# no frontmatter here\n")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "D-006.md"
+            path.write_text("# no frontmatter here\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"D-006\.md: missing or malformed"):
+                gen.read_frontmatter(path)
+
 
 class GenerateIndexTests(unittest.TestCase):
     def test_sorts_numerically_not_lexically(self):
