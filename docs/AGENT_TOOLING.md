@@ -61,11 +61,15 @@ the repository root rather than from the skill directory, so a nested
 repository boundary inside the skill -- a stray `git init` or an interrupted
 `npx skills add` -- cannot substitute its own index), so it is the same number
 `npx skills` prints for the reviewed copy. Before comparing,
-`validate_skill_lock` in `scripts/validate_agent_assets.py` rejects by name
-any tracked symlink, gitlink, unmerged or non-regular entry, `.pyc`/`.pyo`
-file, or path with a component matching `__pycache__`, `__pypackages__`,
-`.git`, or `node_modules` (both matched case-insensitively), and it never
-falls back to a working-tree walk. Files that are not in the repository's
+`validate_skill_lock` in `scripts/validate_agent_assets.py` fails when the
+index holds no tracked payload under the skill at all, and otherwise rejects
+by name any tracked symlink, gitlink or other non-blob mode, path that is not
+valid UTF-8, unmerged entry, `.pyc`/`.pyo` file, path with a component
+matching `__pycache__`, `__pypackages__`, `.git`, or `node_modules` (suffix
+and component both matched case-insensitively), entry that is missing from
+the working tree or cannot be inspected there (`os.lstat` fails), or entry
+that is present but not a regular file; it never falls back to a working-tree
+walk. Files that are not in the repository's
 index -- untracked or ignored local artefacts such as the
 `scripts/__pycache__/` that `scripts/test_i_have_an_issue.py` leaves behind
 when run without `-B` -- do not affect the verdict; a force-added one fails

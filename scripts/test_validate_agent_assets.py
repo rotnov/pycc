@@ -195,18 +195,24 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
 
     @classmethod
-    def copy_vendored_skill(cls, destination: Path) -> list[tuple[str, str, int]]:
-        """Copy the vendored skill and return its files as payload entries."""
-        shutil.copytree(
-            validator.SKILLS_ROOT / cls.VENDORED_SKILL,
-            destination,
-            ignore=shutil.ignore_patterns("__pycache__", "*.py[cod]"),
-        )
-        return [
-            (path.relative_to(destination).as_posix(), "100644", 0)
-            for path in sorted(destination.rglob("*"))
-            if path.is_file()
-        ]
+    def copy_vendored_skill(
+        cls, destination: Path
+    ) -> list[validator.SkillPayloadEntry]:
+        """Copy the vendored skill's tracked files and return their entries.
+
+        Both the fixture's file set and the returned entry list derive from
+        the repository index, exactly as ``validate_skill_lock`` enumerates
+        them, so an untracked stray inside the real skill directory (a
+        ``.DS_Store``, a bytecode cache) can never enter the fixture or be
+        synthesized as a tracked entry.
+        """
+        source = validator.SKILLS_ROOT / cls.VENDORED_SKILL
+        entries = validator.skill_payload_entries(source, validator.ROOT)
+        for entry in entries:
+            target = destination / entry.relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / entry.relative, target)
+        return entries
 
     def mutated_skill_lock_failures(
         self,
@@ -222,15 +228,15 @@ class AgentAssetValidationTests(unittest.TestCase):
             payload = self.copy_vendored_skill(skill_root)
             if mutate is not None:
                 mutate(skill_root)
-            payload.extend(entries or [])
+            payload.extend(
+                validator.SkillPayloadEntry(*entry) for entry in entries or []
+            )
             failures: list[str] = []
             validator.validate_skill_lock(
                 failures,
                 root=root,
                 skills_root=skills_root,
-                payload_entries=[
-                    validator.SkillPayloadEntry(*entry) for entry in payload
-                ],
+                payload_entries=payload,
             )
             return failures
 
@@ -457,15 +463,13 @@ class AgentAssetValidationTests(unittest.TestCase):
             (root / "docs" / "AGENT_TOOLING.md").write_text("", encoding="utf-8")
             skills_root = root / ".claude" / "skills"
             payload = self.copy_vendored_skill(skills_root / self.VENDORED_SKILL)
-            payload.append(("ghost.md", "100644", 0))
+            payload.append(validator.SkillPayloadEntry("ghost.md", "100644", 0))
             failures: list[str] = []
             validator.validate_skill_lock(
                 failures,
                 root=root,
                 skills_root=skills_root,
-                payload_entries=[
-                    validator.SkillPayloadEntry(*entry) for entry in payload
-                ],
+                payload_entries=payload,
             )
         self.assertIn(
             f"{self.LOCK_LABEL}: ghost.md: tracked entry is missing from the "
@@ -586,6 +590,19 @@ class AgentAssetValidationTests(unittest.TestCase):
             "__PYCACHE__/ is not part of the reviewed vendored copy",
         )
 
+    def test_skill_lock_rejects_wrong_case_bytecode_suffix(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "payload.PYC").write_bytes(b"\x00bytecode")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("payload.PYC", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "payload.PYC",
+            "Python bytecode is not part of the reviewed vendored copy",
+        )
+
     def test_skill_lock_rejects_tracked_git_component_beside_nested_repo(
         self,
     ) -> None:
@@ -635,7 +652,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             entries = validator.skill_payload_entries(skill_root, repo)
             self.assertEqual(
                 sorted(entry.relative for entry in entries),
-                sorted(relative for relative, _, _ in expected),
+                sorted(entry.relative for entry in expected),
             )
             failures: list[str] = []
             validator.validate_skill_lock(
