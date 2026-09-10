@@ -288,8 +288,8 @@ stays gated, and none of them can enter the locked skill set unless immutable
 HTTPS evidence exists for authenticated model evals on both Codex and Claude.
 The exemption set must stay disjoint from `ALPHA_EVAL_RUNNERS` and inside the
 lock allowlist (`EXPECTED_SKILL_LOCK_ENTRIES`); the same gate rejects either
-drift. Until then, they remain project-local alpha workflows. That gate is
-distinct from
+drift. Until that evidence exists, the skills in `ALPHA_EVAL_RUNNERS` remain
+project-local alpha workflows. That gate is distinct from
 `validate_alpha_skill_contracts`, the structural check (at least two evals,
 exact runner set, visibly alpha) that runs as a merge gate on every
 agent-relevant pull request and every `main` push, regardless of what the

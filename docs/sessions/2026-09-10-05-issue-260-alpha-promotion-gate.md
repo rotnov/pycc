@@ -62,15 +62,18 @@ with the runner table forcibly emptied, reports lines 245, 247 and 253 of
 else. No Rust or coverage impact: the diff touches Python validators and
 Markdown only.
 
-D-068 review: `ievo:deep-reviewer` rounds 1 through 8. Round 1 found the
+D-068 review: `ievo:deep-reviewer`, one round per fix commit until a clean
+round, itemized by round in `.harden/findings/issue-260.jsonl`. Round 1 found the
 newly written prose reintroducing a literal count and a dangling "Until
 then" (fixed `6f93b1ba`); round 2 clean; rounds 3 through 7 each found one
 or two wording inaccuracies in the guard's own description or the code
 comment (per-line scope, early return, pronoun antecedent, sentence
 granularity, "single owner", trigger scope) and were fixed in the commits
-listed above; round 8 clean. Every finding, including the external ones
-and the rounds run after them, is in `.harden/findings/issue-260.jsonl`
-(all `fixed`).
+listed above; round 8 clean. The rounds run after the external review
+(below) found only documentation and test-comment drift in this file, in
+`docs/AGENT_TOOLING.md`, and in the prose-guard test, each fixed in the
+commit its pile row names. Every finding, including the external ones, is
+in `.harden/findings/issue-260.jsonl` (all `fixed`).
 
 External review on PR #1003 (Codex, P2) showed the prose guard's
 40-character window counting unrelated numerals ("the two clients cover all
