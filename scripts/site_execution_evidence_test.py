@@ -59,7 +59,7 @@ class ExecutionEvidenceTests(unittest.TestCase):
 
     def test_published_execution_inventory(self):
         manifest = json.loads((ROOT / "site/evidence-heroes.json").read_text())
-        self.assertEqual(manifest["schema_version"], "2.1.0")
+        self.assertEqual(manifest["schema_version"], "2.2.0")
         for hero in manifest["heroes"][1:3]:
             self.assertEqual(hero["state"], "all-Tier-1")
             self.assertTrue((ROOT / hero["page_path"]).is_file())

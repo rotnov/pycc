@@ -862,10 +862,16 @@ The supported consumer contract is now explicit and enforced:
   manifest. Requiring the sum to fit makes each per-resource budget a real
   allocation and makes an over-budget failure name the document responsible,
   at the cost of no longer letting one document draw on another's unused
-  headroom. The current allocation (278016 of 278528 bytes, after D-241
-  raised the Markdown landing's budget to 13824 bytes for the status
-  snapshot summary line) leaves 512 bytes of the ceiling deliberately
-  unallocated. Because the per-resource budgets now bind first by
+  headroom. The current allocation (278016 of 278528 bytes) leaves
+  512 bytes of the ceiling deliberately unallocated. D-241 first raised the
+  Markdown landing's budget to 13824 bytes for the status snapshot summary
+  line; D-243 raised it again to 15360 bytes for the architecture
+  pipeline-trace summary line and took the 1536 bytes from
+  `docs/PYTHON_STANDARDS.md` (43008 -> 41472), which carried the largest
+  slack of any document in the manifest. D-227 rejected raising `budget_kib`
+  a third time, so growth is absorbed by reallocation between documents
+  rather than by a larger ceiling, and the 512 unallocated bytes are
+  preserved across every such reallocation. Because the per-resource budgets now bind first by
   construction, the aggregate check is provably unreachable; it is knowingly
   retained as documented defense-in-depth, since it is the direct statement of
   the ceiling this contract publishes.

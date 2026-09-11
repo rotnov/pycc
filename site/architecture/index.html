@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-US">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,7 +11,7 @@
     >
     <meta name="pycc:evidence-id" content="architecture-trace-v1">
     <meta name="pycc:evidence-kind" content="compiler-pipeline-trace">
-    <meta name="pycc:evidence-state" content="unavailable">
+    <meta name="pycc:evidence-state" content="partial">
     <meta
       name="robots"
       content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
@@ -31,7 +31,7 @@
       content="The implemented v0.1 compiler pipeline, present crate boundaries, documented gaps, and planned strict typed-Python architecture—clearly separated."
       data-evidence-id="architecture-trace-v1"
       data-evidence-kind="compiler-pipeline-trace"
-      data-evidence-state="unavailable"
+      data-evidence-state="partial"
     >
     <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
@@ -43,7 +43,7 @@
       content="The implemented v0.1 compiler pipeline, present crate boundaries, documented gaps, and planned strict typed-Python architecture—clearly separated."
       data-evidence-id="architecture-trace-v1"
       data-evidence-kind="compiler-pipeline-trace"
-      data-evidence-state="unavailable"
+      data-evidence-state="partial"
     >
     <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
     <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
@@ -58,8 +58,8 @@
             "url": "https://rotnov.github.io/pycc/architecture/",
             "name": "pycc architecture — typed Python to LLVM native binaries",
             "description": "Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries.",
-            "inLanguage": "en",
-            "dateModified": "2026-09-06",
+            "inLanguage": "en-US",
+            "dateModified": "2026-09-11",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -74,7 +74,7 @@
               {
                 "@type": "PropertyValue",
                 "propertyID": "pycc:evidence-state",
-                "value": "unavailable"
+                "value": "partial"
               }
             ],
             "isPartOf": {
@@ -143,26 +143,116 @@
         data-evidence-role="hero"
         data-evidence-id="architecture-trace-v1"
         data-evidence-kind="compiler-pipeline-trace"
-        data-evidence-state="unavailable"
+        data-evidence-state="partial"
       >
-        <p class="eyebrow">Architecture · Updated 2026-09-05</p>
+        <p class="eyebrow">Architecture · Updated 2026-09-11</p>
         <h1>Python source to <span>native code.</span></h1>
-        <p class="page-lede">
-          pycc is a pre-alpha Rust compiler pipeline with an LLVM backend. The
-          implemented v0.1 language surface runs end to end with documented
-          gaps; SSA, ownership analysis, and broader runtime and standard
-          library support remain staged roadmap work.
-        </p>
+        <p class="page-lede">pycc is a pre-alpha Rust compiler pipeline with an LLVM backend. The hero below is not a diagram: it is one production fixture carried through every implemented stage, with the bytes each stage produced checked into the repository and re-derived by a test.</p>
         <div class="page-meta">
           <span
             data-evidence-id="architecture-trace-v1"
             data-evidence-kind="compiler-pipeline-trace"
-            data-evidence-state="unavailable"
-          ><strong>Evidence hero</strong> unavailable · fixture-derived trace tracked in <a href="https://github.com/rotnov/pycc/issues/566">#566</a></span>
+            data-evidence-state="partial"
+          >Evidence hero partial · tests/fixtures/quick_start.py traced through 7 of 8 stages · LLVM IR unavailable · compiler b6060623 · captured 2026-09-11T17:34:06Z</span>
           <span><strong>Frontend</strong> v0.1 checked</span>
           <span><strong>Backend</strong> LLVM 22 · v0.1 implemented</span>
           <span><strong>Output</strong> native executable</span>
         </div>
+        <details class="hero-evidence-details">
+          <summary>Stage artifacts, SHA-256 identities and excerpts</summary>
+          <dl>
+            <dt>01 Source</dt>
+            <dd><a href="https://github.com/rotnov/pycc/blob/b606062313e71f915d0a377acb548ce80c787940/tests/fixtures/quick_start.py">tests/fixtures/quick_start.py</a> · sha256 09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043 · 143 bytes · tests/fixtures/quick_start.py · The one production fixture every later stage is derived from.</dd>
+            <dt>02 Parser</dt>
+            <dd>tests/fixtures/architecture-trace/parser-ast.txt · sha256 e3bab36a048cba708813e94e39a0301cc4dc4934bd14d9b8fc7101a5028cf45e · 19360 bytes · pycc_parser::parse_all · Debug rendering of the returned ModModule.</dd>
+            <dt>03 HIR</dt>
+            <dd>tests/fixtures/architecture-trace/hir-module.txt · sha256 8e92d002b5438d4cf8b41d2390ad1f37679a4d43c76bc1e357963ded2594c84c · 3977 bytes · pycc_hir::lower_module, link, finalize · Debug rendering of the linked and finalized HirModule.</dd>
+            <dt>04 Type checking</dt>
+            <dd>tests/fixtures/architecture-trace/hir-module.txt · sha256 8e92d002b5438d4cf8b41d2390ad1f37679a4d43c76bc1e357963ded2594c84c · 3977 bytes · pycc_types::check_and_resolve_all_keyed · Accepted without rewriting a node: the returned HIR is byte-identical to stage 03, so the two stages share one SHA-256.</dd>
+            <dt>05 MIR</dt>
+            <dd>tests/fixtures/architecture-trace/mir-items.txt · sha256 dc6b710e2975df6b718f2fb30d48cef4b2738d3544fecdf4b50ba826320f3d7e · 3521 bytes · pycc_mir::build · Debug rendering of each item of the public mir.items field; MirModule itself derives no Debug.</dd>
+            <dt>06 LLVM IR</dt>
+            <dd>unavailable · no artifact · pycc_codegen · No artifact: pycc has no --emit flag, so LLVM IR cannot be captured through the public CLI. This stage is unavailable, which is why the hero is partial.</dd>
+            <dt>07 Native executable</dt>
+            <dd>exit 0 · no artifact · pycc build · pycc build tests/fixtures/quick_start.py -o &lt;scratch&gt;/quick_start exits 0. No SHA-256: a linked binary is not reproducible across hosts.</dd>
+            <dt>08 Program stdout</dt>
+            <dd>26 bytes · published in full · the linked executable · 26 bytes, the first eleven Fibonacci numbers one per line, exit 0 and empty stderr.</dd>
+            <dt>02 Parser · first 18 lines</dt>
+            <dd><pre><code data-execution="parser-excerpt">ModModule {
+    node_index: NodeIndex(None),
+    range: 0..143,
+    body: [
+        FunctionDef(
+            StmtFunctionDef {
+                node_index: NodeIndex(None),
+                range: 0..89,
+                is_async: false,
+                decorator_list: [],
+                name: Identifier {
+                    id: Name("fib"),
+                    range: 4..7,
+                    node_index: NodeIndex(None),
+                },
+                type_params: None,
+                parameters: Parameters {
+                    range: 7..15,
+</code></pre></dd>
+            <dt>03 HIR · first 18 lines</dt>
+            <dd><pre><code data-execution="hir-excerpt">HirModule {
+    items: [
+        Function {
+            name: "fib",
+            params: [
+                (
+                    "n",
+                    Int,
+                ),
+            ],
+            return_ty: Int,
+            body: [
+                If {
+                    test: Compare {
+                        op: Lt,
+                        left: Name(
+                            "n",
+                        ),
+</code></pre></dd>
+            <dt>05 MIR · first 18 lines</dt>
+            <dd><pre><code data-execution="mir-excerpt">Function {
+    name: "fib",
+    params: [
+        (
+            "n",
+            Int,
+        ),
+    ],
+    return_ty: Int,
+    body: [
+        If {
+            test: Compare {
+                op: Lt,
+                left: Name {
+                    name: "n",
+                    ty: Int,
+                },
+                right: IntLiteral(
+</code></pre></dd>
+            <dt>Compiler revision</dt>
+            <dd><a href="https://github.com/rotnov/pycc/commit/b606062313e71f915d0a377acb548ce80c787940"><code>b606062313e71f915d0a377acb548ce80c787940</code></a> · tree <a href="https://github.com/rotnov/pycc/tree/b606062313e71f915d0a377acb548ce80c787940"><code>bc0b823ac9e06ff4285fb05d39c19da8a4ee0538</code></a> · re-derived by <code>tests/architecture_trace.rs</code> · <code>cargo test --test architecture_trace</code></dd>
+            <dt>Scope owner</dt>
+            <dd><a href="https://github.com/rotnov/pycc/issues/566">#566</a> (parent) · <a href="https://github.com/rotnov/pycc/issues/1007">#1007</a> (this part)</dd>
+            <dt>Verification targets</dt>
+            <dd>cargo test --workspace runs the trace on every Tier-1 target:</dd>
+          </dl>
+          <ul>
+              <li><code>macos-14</code> · <code>aarch64-apple-darwin</code></li>
+              <li><code>macos-15-intel</code> · <code>x86_64-apple-darwin</code></li>
+              <li><code>ubuntu-latest</code> · <code>x86_64-unknown-linux-gnu</code></li>
+              <li><code>ubuntu-24.04-arm</code> · <code>aarch64-unknown-linux-gnu</code></li>
+              <li><code>windows-latest</code> · <code>x86_64-pc-windows-msvc</code></li>
+          </ul>
+          <p>Captured 2026-09-11T17:34:06Z by cargo test --test architecture_trace (offline, host toolchain) on macos-26.5.1 / aarch64-apple-darwin with Rust 1.97.1, LLVM 22, profile debug; a host LLVM 22 toolchain and linker; no network. One fixture is not the language. The LLVM IR stage carries no artifact at all, because pycc has no --emit flag, so this trace is partial and never all-Tier-1. The parser, HIR and MIR artifacts are Rust Debug renderings: a developer-facing format with no stability guarantee, so their SHA-256 identities change whenever those types change. The native build and its stdout were observed on one host; tests/architecture_trace.rs re-derives every stage wherever cargo test --workspace runs.</p>
+        </details>
       </header>
 
       <div class="prose-layout">

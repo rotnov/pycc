@@ -64,7 +64,7 @@ class StatusEvidenceTests(unittest.TestCase):
 
     def test_published_status_record(self):
         manifest = json.loads((ROOT / "site/evidence-heroes.json").read_text())
-        self.assertEqual(manifest["schema_version"], "2.1.0")
+        self.assertEqual(manifest["schema_version"], "2.2.0")
         hero = manifest["heroes"][STATUS]
         self.assertEqual(hero["page_id"], "status")
         self.assertEqual(hero["state"], "all-Tier-1")

@@ -8,6 +8,7 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 import site_execution_evidence
+import site_pipeline_evidence
 import site_status_evidence
 from site_status_evidence import require_exact_fields
 
@@ -17,7 +18,7 @@ evidence_root = Path(sys.argv[2]).resolve()
 repo_root = Path(sys.argv[3]).resolve()
 site_dir = Path(sys.argv[4]).resolve()
 
-SCHEMA_VERSION = "2.1.0"
+SCHEMA_VERSION = "2.2.0"
 EVIDENCE_STATES = [
     "all-Tier-1",
     "partial",
@@ -281,6 +282,14 @@ for hero in heroes:
 
     if page_id == "status" and hero["state"] != "unavailable":
         site_status_evidence.validate(hero, evidence_root, repo_root)
+        continue
+
+    # D-243 (Part 2 of #566): the architecture hero is a checked-in, re-derivable
+    # compiler pipeline trace. Like the status branch above it must be reached
+    # before the "no accepted artifact" branch below, which would otherwise
+    # reject every non-unavailable state.
+    if page_id == "architecture" and hero["state"] != "unavailable":
+        site_pipeline_evidence.validate(hero, evidence_root, repo_root)
         continue
 
     if page_id != "landing":
@@ -547,11 +556,17 @@ for page_id, hero in hero_by_page.items():
     if page_id in site_execution_evidence.SPECS:
         site_execution_evidence.validate_projection(hero, repo_root, site_dir)
     status_snapshot = page_id == "status" and hero["state"] != "unavailable"
+    pipeline_trace = page_id == "architecture" and hero["state"] != "unavailable"
     if page_id == "status":
         if hero["state"] == "unavailable":
             site_status_evidence.validate_unavailable_projection(hero, repo_root, site_dir)
         else:
             site_status_evidence.validate_projection(hero, repo_root, site_dir)
+    if page_id == "architecture":
+        if hero["state"] == "unavailable":
+            site_pipeline_evidence.validate_unavailable_projection(hero, repo_root, site_dir)
+        else:
+            site_pipeline_evidence.validate_projection(hero, repo_root, site_dir)
     expected_tuple = (hero["evidence_id"], hero["kind"], hero["state"])
     html_projection = hero["projections"].get("html")
     if html_projection is not None:
@@ -559,6 +574,12 @@ for page_id, hero in hero_by_page.items():
         html_text = html_path.read_text()
         navigation = EvaluationParser()
         navigation.feed(html_text)
+        # D-243 decision, recorded rather than left implicit: the architecture
+        # hero is deliberately NOT added to this set. CURRENT_FUTURE_SCOPE is the
+        # `from __future__ import annotations` scope paragraph, a language-surface
+        # claim owned by the language and status pages. The architecture page
+        # makes no future-import claim at all, so requiring the paragraph there
+        # would publish a claim the hero does not evidence.
         if page_id in {"language", "status"}:
             visible = " ".join("".join(navigation.visible_text).split())
             if site_execution_evidence.CURRENT_FUTURE_SCOPE not in visible:
@@ -645,7 +666,7 @@ for page_id, hero in hero_by_page.items():
         webpages = [node for node in graph if node.get("@type") == "WebPage"]
         if len(webpages) != 1:
             fail(f"hero {page_id!r} JSON-LD must carry exactly one WebPage")
-        if (page_id in site_execution_evidence.SPECS or status_snapshot) and webpages[0].get("inLanguage") != "en-US":
+        if (page_id in site_execution_evidence.SPECS or status_snapshot or pipeline_trace) and webpages[0].get("inLanguage") != "en-US":
             fail(f"hero {page_id!r} JSON-LD inLanguage must be en-US")
         properties = webpages[0].get("additionalProperty")
         expected_properties = [

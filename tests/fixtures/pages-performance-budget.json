@@ -45,8 +45,8 @@
   "resource_budgets": {
     "html": {
       "max_bytes_per_page": 25600,
-      "current_max_bytes": 17922,
-      "description": "Per-page HTML document size (uncompressed). Current max is site/index.html at 17,922 bytes."
+      "current_max_bytes": 25532,
+      "description": "Per-page HTML document size (uncompressed). Current max is site/status/index.html at 25,532 bytes."
     },
     "css": {
       "max_bytes_total": 35840,
