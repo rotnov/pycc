@@ -12,6 +12,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -665,6 +666,7 @@ class HeroProseTests(ProjectionCase):
             ("toggle hidden inline", "<summary>", '<summary style="opacity: .0">'),
             ("toggle inert", "<summary>", "<summary inert>"),
             ("toggle and paragraph inert with the disclosure", "<details>", "<details inert>"),
+            ("toggle and paragraph inside a closed dialog", "<details>", "<dialog><details>"),
             ("toggle hidden by a signed exponent zero", "<summary>", '<summary style="opacity: -0e0">'),
             ("toggle removed", f"<summary>{status.HERO_DETAILS_TOGGLE}</summary>", ""),
             ("closing paragraph moved outside the hero", "</details></header>", "</details></header><p>" + status.expected_closing_paragraph(self.hero) + "</p>"),
@@ -680,6 +682,19 @@ class HeroProseTests(ProjectionCase):
                 self.assertIn("must render every reviewed masthead block, the details toggle and the record's closing paragraph "
                               "exactly once; missing: " + (status.HERO_DETAILS_TOGGLE if name.startswith("toggle") else "Roadmap"),
                               str(caught.exception))
+
+    def test_repeated_attributes_are_rejected_and_open_dialogs_accepted(self):
+        job = re.search(r'<a href="([^"]+)">job</a>', self.page).group(0)
+        for name, old, new in (
+            ("a repeated href on a job link", job, job.replace("<a ", '<a href="https://example.invalid/wrong" ', 1)),
+            ("a repeated class on the hero", '<header data-evidence-role="hero"', '<header class="a" data-evidence-role="hero" class="b"'),
+            ("a repeated id outside the hero", '<main id="main-content"', '<main id="main-content" class="x" id="other"'),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, self.page)
+                self.reject(self.page.replace(old, new, 1), "repeats an attribute, which browsers and this checker would read differently: ")
+        opened = self.page.replace("<details>", "<dialog open><details>", 1).replace("</details>", "</details></dialog>", 1)
+        status.validate_projection(self.hero, self.repo, self.projection(self.hero, opened))
 
     def test_embedded_stylesheets_and_foreign_links_are_checked(self):
         for name, old, new, expected in (

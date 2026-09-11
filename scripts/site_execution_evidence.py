@@ -234,13 +234,20 @@ class VisibleExecutionParser(HTMLParser):
         self.h1_count = 0
         self.language = None
         self.locales = []
+    def reject(self, message):
+        fail(message)
     def handle_starttag(self, tag, attrs):
+        names = [name for name, _ in attrs]
+        if len(names) != len(set(names)):
+            # Browsers keep the first of a repeated attribute; dict() would keep the last.
+            self.reject(f"<{tag}> repeats an attribute, which browsers and this checker would read differently: "
+                        + ", ".join(sorted({name for name in names if names.count(name) > 1})))
         attrs = dict(attrs)
         if tag == "html":
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav

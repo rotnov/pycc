@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T10:59:43Z. The record pins the collector's and its suite's
+  2026-09-11T11:25:30Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T10:59:43Z` after the suite changed.
+  `--collected-at 2026-09-11T11:25:30Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -270,6 +270,15 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     the accidental hiding the scan exists to catch. Cases in the execution,
     synthetic and public-CLI suites, snapshot re-collected at `2026-09-11T10:59:43Z`
     with `--subject 4111208c`, pins rotated.
+18. External, on PR #1008, two Codex P2s: a `<dialog>` without `open` is
+    hidden by user-agent styling but was not in the hidden-element set, and a
+    repeated attribute (`<a href="wrong" href="expected">`) is read first-wins
+    by browsers but last-wins by the `dict(attrs)` collapse, so a visible job
+    link could navigate elsewhere. Fixed in the shared visibility parser: a
+    closed `dialog` hides its subtree, and any element repeating an attribute
+    is rejected before the collapse (no page in `site/` repeats one). Cases in
+    all three suites, snapshot re-collected at `2026-09-11T11:25:30Z` with
+    `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

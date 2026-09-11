@@ -223,9 +223,18 @@ class ExecutionEvidenceTests(unittest.TestCase):
                                     ('data-execution="source"', 'style="font-size: +0.0e-1px" data-execution="source"'),
                                     ('data-evidence-role="hero"', 'style="transform: scale(-.0e2)" data-evidence-role="hero"'),
                                     ('data-execution="source"', 'inert data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'inert data-evidence-role="hero"')]:
+                                    ('data-evidence-role="hero"', 'inert data-evidence-role="hero"'),
+                                    ('<code data-execution="source">', '<dialog><code data-execution="source">')]:
                 with self.subTest(slug=slug, original=original, wrong=wrong):
                     self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "visible H1" if original == 'data-evidence-role="hero"' else "visible ordered")
+
+    def test_repeated_attributes_are_rejected_before_they_are_collapsed(self):
+        for slug in ("language-support", "diagnostics"):
+            for original, wrong in [('data-execution="source"', 'data-execution="another-source" data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'hidden="" data-evidence-role="hero" hidden'),
+                                    ('<html lang="en-US"', '<html lang="fr" lang="en-US"')]:
+                with self.subTest(slug=slug, wrong=wrong):
+                    self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "repeats an attribute, which browsers and this checker would read differently: ")
 
     def test_every_visible_execution_unit_rejects_byte_and_visibility_drift(self):
         for slug, executions in (("language-support", ("pycc", "cpython")),

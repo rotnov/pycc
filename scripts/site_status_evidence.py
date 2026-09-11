@@ -455,6 +455,8 @@ def compound_hooks(compound):
 
 
 class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
+    def reject(self, message):
+        fail(f"status page {message}")
     """Also keep every visible ``<dt>``/``<dd>``/``<li>`` row inside the hero as its own text and links.
 
     The collapsed summary — the visible element inside the hero that repeats
