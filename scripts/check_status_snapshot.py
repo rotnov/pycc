@@ -6,11 +6,11 @@ Usage:
 
 Without flags only the shallow-safe structural validation and the
 record-internal invariants run.  ``--verify-git`` additionally proves the
-subject side from Git objects (ancestor of HEAD, exactly one parent, recorded
-tree); it needs a full-history checkout.  ``--currency`` is the Pages
+subject side from Git objects (on the first-parent history of HEAD, exactly
+one parent, recorded tree); it needs a full-history checkout.  ``--currency`` is the Pages
 pull-request leg: when the ``base...head`` range edits the status page or the
-status record, the subject must be an ancestor of the base tip and at most N
-first-parent merges behind it.  A record whose state is ``unavailable`` is
+status record, the subject must lie on the base tip's first-parent history
+and at most N first-parent merges behind it.  A record whose state is ``unavailable`` is
 owned by ``check_site_evidence.py`` and passes every mode here unchanged.
 """
 
@@ -64,7 +64,7 @@ def main(argv=None):
     commit = hero["repository"]["commit"]
     if args.verify_git:
         site_status_evidence.verify_git(hero, repo_root)
-        print(f"status snapshot: subject {commit} is an ancestor of HEAD with one parent and the recorded tree")
+        print(f"status snapshot: subject {commit} is on the first-parent history of HEAD with one parent and the recorded tree")
     if args.currency:
         if not site_status_evidence.currency_required(repo_root, args.base, args.head):
             print("status snapshot: range does not edit the status page or record; currency not required")

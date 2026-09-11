@@ -316,11 +316,22 @@ def git(repo_root, *args):
     return subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True)
 
 
+def on_first_parent_history(repo_root, commit, head):
+    """True when ``commit`` is ``head`` or one of its first-parent ancestors.
+
+    Plain ancestry is not enough: a one-parent commit merged through a merge
+    commit's second parent is an ancestor of ``head`` without ever having been
+    the default branch's published revision.
+    """
+    listed = git(repo_root, "rev-list", "--first-parent", head)
+    return not listed.returncode and commit in listed.stdout.split()
+
+
 def verify_git(hero, repo_root, head="HEAD"):
     """Prove the subject side from Git objects a full-history checkout has."""
     commit = hero["repository"]["commit"]
-    if git(repo_root, "merge-base", "--is-ancestor", commit, head).returncode:
-        fail(f"status subject {commit} is not an ancestor of {head}")
+    if not on_first_parent_history(repo_root, commit, head):
+        fail(f"status subject {commit} is not on the first-parent history of {head}")
     parents = git(repo_root, "rev-list", "--parents", "-n", "1", commit)
     if parents.returncode or len(parents.stdout.split()) != 2:
         fail(f"status subject {commit} must have exactly one parent")
@@ -359,8 +370,8 @@ def currency_required(repo_root, base, head):
 
 def check_currency(hero, repo_root, base, max_distance):
     commit = hero["repository"]["commit"]
-    if git(repo_root, "merge-base", "--is-ancestor", commit, base).returncode:
-        fail(f"status subject {commit} is not an ancestor of the base {base}; refresh the snapshot")
+    if not on_first_parent_history(repo_root, commit, base):
+        fail(f"status subject {commit} is not on the first-parent history of the base {base}; refresh the snapshot")
     count = git(repo_root, "rev-list", "--count", "--first-parent", f"{commit}..{base}")
     if count.returncode:
         fail(f"cannot count first-parent merges from {commit} to {base}")
@@ -387,6 +398,26 @@ ROW_TAGS = {"dt", "dd", "li"}
 TIER1_HEADING = "Tier-1 jobs"
 TIER1_HEADING_ROW = "in the ci-gate run, all success:"
 HIDING_RULE = site_execution_evidence.HIDING_DECLARATION
+# Elements whose text forms one visible block of the hero; nested inline markup
+# (``<em>``, ``<code>``, ``<a>``, a ``<span>`` inside an ``<h1>``) joins its block.
+BLOCK_TAGS = ROW_TAGS | {"p", "h1", "h2", "h3", "h4", "h5", "h6", "span", "summary"}
+# The reviewed masthead the hero renders before its proof rows, the ``<details>``
+# toggle, and (built per record by ``expected_closing_paragraph``) the closing
+# paragraph.  No other visible text is allowed inside the hero: free prose beside
+# the bound rows could contradict them ("Current gate result: ci-gate failure")
+# without touching any row, so the hero's text is closed rather than filtered.
+# The eyebrow's date is the page's own modification date and may only vary in
+# its digits.
+HERO_EYEBROW = re.compile(r"Evidence page · Updated \d{4}-\d{2}-\d{2}")
+HERO_MASTHEAD = (
+    "What pycc can do today.",
+    "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14. This page separates working, "
+    "repository-tested behavior from the larger design contract. It is not a release announcement.",
+    "Milestone v0.3 acceptance criteria met, released as v0.3.0; v0.4 in progress",
+    "Acceptance v0.1, v0.2, and v0.3 all fully met",
+    "Readiness pre-alpha",
+)
+HERO_DETAILS_TOGGLE = "Snapshot subjects, conclusions and immutable links"
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")
@@ -440,6 +471,8 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
         self.ancestry = []
         self.hero_hooks = set()
         self.ancestor_hooks = set()
+        self.prose = []
+        self.block_depth = None
 
     def handle_starttag(self, tag, attrs):
         links_before = len(self.links)
@@ -459,21 +492,38 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
             self.row_depth = len(self.stack)
         if self.row_depth is not None:
             self.rows[-1][2].extend(self.links[links_before:])
+        elif tag in BLOCK_TAGS and self.block_depth is None and entry is not None and entry[2] and not entry[1]:
+            self.prose.append("")
+            self.block_depth = len(self.stack)
 
     def handle_endtag(self, tag):
         super().handle_endtag(tag)
         del self.ancestry[len(self.stack):]
         if self.row_depth is not None and len(self.stack) < self.row_depth:
             self.row_depth = None
+        if self.block_depth is not None and len(self.stack) < self.block_depth:
+            self.block_depth = None
 
     def handle_data(self, text):
         super().handle_data(text)
-        if self.row_depth is not None and self.stack and not self.stack[-1][1]:
+        if not (self.stack and self.stack[-1][2] and not self.stack[-1][1]):
+            return
+        if self.row_depth is not None:
             self.rows[-1][1] += text
+        elif self.block_depth is not None:
+            self.prose[-1] += text
+        elif text.strip():
+            # Visible text directly inside a container: a block of its own, never allowed.
+            self.prose.append(text)
 
 
 def hiding_rules(css, parser):
-    """Stylesheet rules that hide an element the hero renders: the subject compound can match a hero element and every earlier compound a hero element or ancestor."""
+    """Stylesheet rules that hide the hero: every compound, the subject included, can match a hero element or one of its ancestors.
+
+    A rule on an ancestor (``body``, ``#main-content``, ``.content-page``) hides
+    the hero exactly as a rule on the hero itself does, so the subject compound
+    is checked against the same reachable set as the earlier compounds.
+    """
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     reachable = parser.hero_hooks | parser.ancestor_hooks
     found = []
@@ -488,7 +538,7 @@ def hiding_rules(css, parser):
             if not compounds or any(hooks is None for hooks in compounds):
                 found.append(selector)
                 continue
-            if compounds[-1] <= parser.hero_hooks and all(hooks <= reachable for hooks in compounds[:-1]):
+            if all(hooks <= reachable for hooks in compounds):
                 found.append(selector)
     return found
 
@@ -519,6 +569,29 @@ def expected_summary_line(hero):
     return (f"Evidence hero {hero['state']} · snapshot of main {hero['repository']['commit'][:8]} · "
             f"ci-gate {subjects['post-merge-ci-gate']['conclusion']} · audit {subjects['pre-merge-audit']['conclusion']} "
             f"(PR #{merged['number']}) · captured {hero['attestation']['collected_at']}")
+
+
+def expected_closing_paragraph(hero):
+    """The exact visible text of the paragraph closing the hero's ``<details>``."""
+    attestation = hero["attestation"]
+    return (f"Roadmap at that revision: {attestation['milestone_line']} Captured {attestation['collected_at']} "
+            f"by scripts/collect_status_snapshot.py (read-only gh api). {hero['limitations']}")
+
+
+def check_prose_blocks(hero, prose):
+    """Every visible hero text block outside the proof rows is one reviewed block, each at most once."""
+    allowed = [HERO_EYEBROW, *HERO_MASTHEAD, HERO_DETAILS_TOGGLE, expected_closing_paragraph(hero)]
+    seen = []
+    for block in prose:
+        text = " ".join(block.split())
+        match = next((item for item in allowed
+                      if (item.fullmatch(text) if isinstance(item, re.Pattern) else item == text)), None)
+        if match is None:
+            fail("status hero prose must be exactly the reviewed masthead, the details toggle and the record's "
+                 f"closing paragraph; unexpected: {text}")
+        if match in seen:
+            fail(f"status hero prose block rendered twice: {text}")
+        seen.append(match)
 
 
 def check_summary_line(hero, summaries):
@@ -583,6 +656,7 @@ def validate_projection(hero, repo_root, site_dir):
         fail("status must render exactly one visible evidence hero")
     labelled, platforms, summaries = proof_rows(parser)
     check_summary_line(hero, summaries)
+    check_prose_blocks(hero, parser.prose)
     visible = " ".join("".join(parser.hero_text).split())
     revision = subject_by_id(hero)["published-revision"]
     literals = [hero["state"], hero["limitations"], hero["attestation"]["collected_at"],

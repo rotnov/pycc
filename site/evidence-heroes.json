@@ -465,7 +465,7 @@
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "2b3ff8a8875d2a0984ff651b718648ab26fa3a070a4176c99535bb8207661c6b",
+        "sha256": "67fc7feb25857896fc908fed956a7e8c59c290c1cc98898ecdb94870f46b29df",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
@@ -492,6 +492,7 @@
           "test_milestone_line_must_be_a_current_milestone_lead",
           "test_pinned_scripts_and_test_names_are_verified",
           "test_subject_not_an_ancestor_of_head_is_rejected",
+          "test_subject_reachable_only_through_a_second_parent_is_rejected",
           "test_two_parent_subject_commit_is_rejected_from_git",
           "test_milestone_line_is_proved_against_the_subject_not_the_working_tree",
           "test_recorded_tree_must_match_git",
@@ -502,8 +503,12 @@
           "test_stylesheet_rules_hiding_the_hero_are_rejected",
           "test_collapsed_summary_is_checked_exactly",
           "test_rows_outside_or_hidden_inside_the_hero_do_not_count",
+          "test_unlabelled_prose_inside_the_hero_is_rejected",
+          "test_reviewed_prose_block_cannot_repeat",
+          "test_hidden_or_outside_prose_and_inline_markup_are_accepted",
           "test_distance_twenty_is_accepted_and_twenty_one_is_rejected",
           "test_subject_outside_the_base_history_is_rejected",
+          "test_subject_merged_into_the_base_through_a_second_parent_is_rejected",
           "test_currency_is_required_only_for_status_page_or_record_edits",
           "test_cli_currency_skips_untriggered_ranges_and_enforces_triggered_ones",
           "test_structural_and_verify_git_modes",
@@ -578,7 +583,7 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T08:02:33Z",
+        "collected_at": "2026-09-11T08:32:49Z",
         "collection_method": "gh api check-runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",

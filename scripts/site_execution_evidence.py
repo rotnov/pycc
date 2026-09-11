@@ -201,7 +201,8 @@ def summary(hero):
 # ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
 # element off-screen, covering it or painting it in the background colour is
 # outside this model and stays a review concern (docs/WEBSITE.md).
-ZERO = r"0+(?:\.0+)?"
+# Zero in every CSS spelling: ``0``, ``0.0``, ``0.``, ``.0``, ``.00``.
+ZERO = r"(?:0+(?:\.0*)?|\.0+)"
 HIDING_DECLARATION = re.compile(
     r"(?<![\w-])(?:display\s*:\s*none"
     r"|visibility\s*:\s*(?:hidden|collapse)"

@@ -109,7 +109,7 @@ class StatusEvidenceTests(unittest.TestCase):
             page.write_text(source.replace(old, new))
         self.run_case(mutate, "milestone_line differs from docs/ROADMAP.md at")
 
-    def test_subject_must_be_an_ancestor_of_head(self):
+    def test_subject_must_be_on_the_first_parent_history_of_head(self):
         def mutate(doc, site, root):
             commit = doc["heroes"][STATUS]["repository"]["commit"]
             self.replace_everywhere(site, commit, "a" * 40)
@@ -117,7 +117,7 @@ class StatusEvidenceTests(unittest.TestCase):
             page.write_text(page.read_text().replace(f"snapshot of main <code>{commit[:8]}</code>", "snapshot of main <code>aaaaaaaa</code>"))
             doc.clear()
             doc.update(json.loads((site / "evidence-heroes.json").read_text()))
-        self.run_case(mutate, "is not an ancestor of HEAD")
+        self.run_case(mutate, "is not on the first-parent history of HEAD")
 
     def test_recorded_tree_must_match_the_subject_tree(self):
         def mutate(doc, site, root):
@@ -151,7 +151,8 @@ class StatusEvidenceTests(unittest.TestCase):
         for old, new, expected in (
             ('<details class="hero-evidence-details">', '<details hidden class="hero-evidence-details">',
              "visible proof row/limitation missing"),
-            ("not release readiness.", "release readiness.", "visible proof row/limitation missing"),
+            ("not release readiness.", "release readiness.",
+             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Roadmap"),
             ("https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163",
              "https://github.com/rotnov/pycc/actions/workflows/audit.yml",
              "proof row for Pre-merge policy audit must read exactly as that subject's own sha, check, conclusion, time and links"),
@@ -177,6 +178,15 @@ class StatusEvidenceTests(unittest.TestCase):
              "proof row for Tier-1 jobs must read exactly"),
             ('<details class="hero-evidence-details">', '<details style="opacity: 0" class="hero-evidence-details">',
              "visible proof row/limitation missing"),
+            ('<details class="hero-evidence-details">', '<details style="font-size: .0px" class="hero-evidence-details">',
+             "visible proof row/limitation missing"),
+            ("<summary>Snapshot subjects, conclusions and immutable links</summary>",
+             "<summary>Snapshot subjects, conclusions and immutable links</summary><p>Current gate result: ci-gate failure; audit failure.</p>",
+             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Current gate result"),
+            ("<span><strong>Readiness</strong> pre-alpha</span>", "<span><strong>Readiness</strong> pre-alpha</span><span>ci-gate failure</span>",
+             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: ci-gate failure"),
+            ("(read-only <code>gh api</code>).", "(read-only <code>gh api</code>; ci-gate failure).",
+             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Roadmap"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -214,7 +224,9 @@ class StatusEvidenceTests(unittest.TestCase):
         for rule in (".hero-evidence-details { display: none; }", "@media (max-width: 980px) { .page-hero dd { display: none; } }",
                      "body details li { visibility: hidden; }", ".page-hero DD { DISPLAY: NONE; }", ".page-meta span { Visibility: Hidden }",
                      ".hero-evidence-details { opacity: 0; }", ".page-hero dl { font-size: 0 }", ".page-hero { transform: scale(0) }",
-                     ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }"):
+                     ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }",
+                     ".content-page { display: none; }", "#main-content { opacity: .0 }", "body { font-size: .0px }",
+                     "main > .page-hero { transform: scale(.0) }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):
                     path = site / "styles.css"

@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T08:02:33Z. The record pins the collector's and its suite's
+  2026-09-11T08:32:49Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T08:02:33Z` after the suite changed.
+  `--collected-at 2026-09-11T08:32:49Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1194 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1199 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -201,6 +201,26 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     jobs` heading row, itself matched exactly. Cases in the execution,
     synthetic and public-CLI suites, snapshot re-collected at
     `2026-09-11T08:02:33Z`, pins rotated.
+14. External, on PR #1008, four Codex P2s: `verify_git` and `--currency`
+    accepted any ancestor, so a one-parent commit merged through a merge
+    commit's second parent passed as the published revision; the stylesheet
+    scan compared the subject compound with hero hooks only, so
+    `.content-page { display: none }` on a hero ancestor was invisible to it;
+    the zero pattern missed `.0`/`.00` spellings; and unlabelled hero prose
+    (`<p>Current gate result: ci-gate failure</p>`) was checked only for the
+    required literals. Fixed: `on_first_parent_history` (`git rev-list
+    --first-parent`) replaces `merge-base --is-ancestor` in both checks;
+    every compound is matched against hero and ancestor hooks; `ZERO` accepts
+    leading-dot zeros; and the hero's visible text outside the proof rows is
+    closed — the parser collects every text block, and each must equal one of
+    the reviewed masthead lines, the `<details>` toggle or the record-built
+    closing paragraph, each at most once. The design fork (a vocabulary filter
+    on free prose versus a closed enumeration) was resolved for the closed
+    enumeration: a filter is a model with a boundary that each further review
+    round chips at, while the masthead is reviewed text pinned exactly as
+    `LIMITATIONS` already is. Cases in the execution, synthetic (a `--no-ff`
+    merge fixture) and public-CLI suites, snapshot re-collected at
+    `2026-09-11T08:32:49Z`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

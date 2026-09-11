@@ -343,7 +343,27 @@ class GitObjectTests(SyntheticRepository):
         git(self.repo, "commit", "-qm", "side")
         with self.assertRaises(SystemExit) as caught:
             status.verify_git(self.hero, self.repo)
-        self.assertIn("not an ancestor of HEAD", str(caught.exception))
+        self.assertIn("not on the first-parent history of HEAD", str(caught.exception))
+
+    def merge_subject_through_second_parent(self):
+        """Rebuild main so the subject is reachable from HEAD only as a merge commit's second parent."""
+        git(self.repo, "branch", "-q", "side", self.commit)
+        git(self.repo, "reset", "-q", "--hard", f"{self.commit}^")
+        (self.repo / "mainline.txt").write_text("mainline\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "mainline")
+        git(self.repo, "merge", "-q", "--no-ff", "--no-edit", "side")
+        head = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD^2"), self.commit)
+        self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "merge-base", "--is-ancestor", self.commit, head]).returncode, 0)
+        return head
+
+    def test_subject_reachable_only_through_a_second_parent_is_rejected(self):
+        self.merge_subject_through_second_parent()
+        with self.assertRaises(SystemExit) as caught:
+            status.verify_git(self.hero, self.repo)
+        self.assertIn("not on the first-parent history of HEAD", str(caught.exception))
+        self.assertTrue(status.on_first_parent_history(self.repo, self.commit, "side"))
 
     def test_two_parent_subject_commit_is_rejected_from_git(self):
         git(self.repo, "checkout", "-qb", "topic", f"{self.commit}^")
@@ -396,16 +416,21 @@ def render_page(hero):
     items = [f'<li><a href="{row["job_url"]}">{status.platform_row_text(row)}</a></li>'
              for row in hero["environment"]["platforms"]]
     return ('<html lang="en-US"><head><meta property="og:locale" content="en_US"></head><body>'
-            f'<header data-evidence-role="hero" data-evidence-id="{hero["evidence_id"]}"><div class="page-meta">'
+            '<main id="main-content" class="content-page">'
+            f'<header data-evidence-role="hero" data-evidence-id="{hero["evidence_id"]}">'
+            '<p class="eyebrow">Evidence page · Updated 2026-01-01</p><h1>What pycc can do <span>today.</span></h1>'
+            '<div class="page-meta">'
             f'<span data-evidence-id="{hero["evidence_id"]}"><strong>Evidence hero</strong> {hero["state"]} · snapshot of main '
             f'{hero["repository"]["commit"][:8]} · ci-gate {subjects["post-merge-ci-gate"]["conclusion"]} · '
             f'audit {subjects["pre-merge-audit"]["conclusion"]} (PR #{merged["number"]}) · '
-            f'captured {hero["attestation"]["collected_at"]}</span></div>'
+            f'captured {hero["attestation"]["collected_at"]}</span>'
+            '<span><strong>Readiness</strong> pre-alpha</span></div>'
+            f'<details><summary>{status.HERO_DETAILS_TOGGLE}</summary>'
             f'<dl>{"".join(rows)}<dt>{status.TIER1_HEADING}</dt><dd>{status.TIER1_HEADING_ROW}</dd></dl><ul>{"".join(items)}</ul>'
-            f'<p>{hero["attestation"]["milestone_line"]} {hero["limitations"]}</p></header></body></html>\n')
+            f'<p>{status.expected_closing_paragraph(hero)}</p></details></header></main></body></html>\n')
 
 
-class ProjectionTests(SyntheticRepository):
+class ProjectionCase(SyntheticRepository):
     def write_site(self, hero, page=None):
         site = self.root / "site"
         (site / "status").mkdir(parents=True, exist_ok=True)
@@ -427,6 +452,8 @@ class ProjectionTests(SyntheticRepository):
             status.validate_projection(self.hero, self.repo, site)
         self.assertIn(fragment, str(caught.exception))
 
+
+class ProjectionTests(ProjectionCase):
     def test_rendered_rows_bound_to_their_subjects_are_accepted(self):
         site = self.write_site(self.hero)
         self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
@@ -498,7 +525,10 @@ class ProjectionTests(SyntheticRepository):
                      "[data-evidence-role] { display: none; }", "header > dl > dd:nth-child(2) { display: none; }",
                      "HEADER DD { DISPLAY: NONE; }", "dl dt { Visibility : Hidden }", ".page-meta span { display:NONE }",
                      "header { opacity: 0; }", "dl { opacity: 0.0 }", "header dd { visibility: collapse }", "header { content-visibility: hidden }",
-                     "header li { font-size: 0 }", "header dl { transform: translateY(1px) scale(0) }"):
+                     "header li { font-size: 0 }", "header dl { transform: translateY(1px) scale(0) }",
+                     ".content-page { display: none; }", "#main-content { opacity: 0 }", "body { display:none }",
+                     "html body main { font-size: 0 }", "main > header { opacity: .0 }", "header dd { font-size: .0px }",
+                     "header { transform: scale(.00) }", "dl { opacity: 0. }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
                 (site / "styles.css").write_text(f"footer p {{ display: none; }}\n{rule}\n")
@@ -508,7 +538,9 @@ class ProjectionTests(SyntheticRepository):
         for rule in ("footer p { display: none; }", ".pipeline-step::after { display: none; }", "#elsewhere { display: none; }",
                      "/* header dd { display: none; } */", "header dd { color: red; }", "[hidden] { display: none; }",
                      "body .other dd { display: none; }", ".site-nav a:not([aria-current]) { display: none; }",
-                     "header { opacity: 0.9 }", "header dd { font-size: 0.76rem }", "header { transform: scale(0.5) }", "table { border-collapse: collapse }"):
+                     "header { opacity: 0.9 }", "header dd { font-size: 0.76rem }", "header { transform: scale(0.5) }", "table { border-collapse: collapse }",
+                     ".content-page .other { display: none; }", "main footer { display: none }", "header { opacity: .5 }",
+                     "header dd { font-size: .76rem }", "header { transform: scale(.5) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page)
                 (site / "styles.css").write_text(rule + "\n")
@@ -549,7 +581,8 @@ class ProjectionTests(SyntheticRepository):
             hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
             self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
         for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none", "opacity: 0", "opacity:0.0 !important",
-                      "visibility: collapse", "content-visibility: hidden", "font-size: 0", "transform: scale(0)"):
+                      "visibility: collapse", "content-visibility: hidden", "font-size: 0", "transform: scale(0)",
+                      "opacity: .0", "font-size: .0px", "transform: scale(.00)"):
             with self.subTest(mutation=f"row hidden inline by {style}"):
                 hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd style="{style}">', 1)
                 self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
@@ -564,6 +597,9 @@ class ProjectionTests(SyntheticRepository):
         with self.subTest(mutation="Tier-1 heading row drifted"):
             self.assert_page_rejected(page.replace(status.TIER1_HEADING_ROW, "in the ci-gate run, all failure:", 1),
                                       f"proof row for {status.TIER1_HEADING} must read exactly")
+        with self.subTest(mutation="closing paragraph contradicted beside the required literals"):
+            self.assert_page_rejected(page.replace("(read-only gh api).", "(read-only gh api; ci-gate failure).", 1),
+                                      "hero prose must be exactly the reviewed masthead")
         with self.subTest(mutation="row without a label"):
             self.assert_page_rejected(page.replace(f'<dt>{gate["label"]}</dt>', "", 1),
                                       "must pair one visible label with one row each")
@@ -571,6 +607,56 @@ class ProjectionTests(SyntheticRepository):
             audit = self.hero["snapshot"]["subjects"][2]
             self.assert_page_rejected(page.replace(f'<dt>{audit["label"]}</dt>', f'<dt>{gate["label"]}</dt>', 1),
                                       "must pair one visible label with one row each")
+
+
+class HeroProseTests(ProjectionCase):
+    """Free text inside the hero is closed: only the reviewed blocks, each once."""
+
+    def setUp(self):
+        super().setUp()
+        self.page = render_page(self.hero)
+        self.projection = self.write_site
+        self.reject = self.assert_page_rejected
+
+    def test_unlabelled_prose_inside_the_hero_is_rejected(self):
+        contradiction = "<p>Current gate result: ci-gate failure; audit failure.</p>"
+        for name, old, new in (
+            ("paragraph after the summary toggle", "</summary>", "</summary>" + contradiction),
+            ("paragraph before the rows", '<div class="page-meta">', contradiction + '<div class="page-meta">'),
+            ("span in the page meta", "<span><strong>Readiness", "<span>ci-gate failure</span><span><strong>Readiness"),
+            ("heading", "<h1>", "<h2>ci-gate failure</h2><h1>"),
+            ("loose text in a container", "<details>", "<details>ci-gate failure"),
+            ("loose text in the hero itself", "<p class=\"eyebrow\">", "ci-gate failure<p class=\"eyebrow\">"),
+            ("eyebrow extended", "Updated 2026-01-01</p>", "Updated 2026-01-01 · ci-gate failure</p>"),
+            ("eyebrow date malformed", "Updated 2026-01-01</p>", "Updated 2026-1-1</p>"),
+            ("masthead drifted", "Readiness</strong> pre-alpha", "Readiness</strong> alpha"),
+            ("toggle drifted", status.HERO_DETAILS_TOGGLE, "Snapshot subjects (ci-gate failure)"),
+            ("closing paragraph reordered", "Roadmap at that revision: ", "Roadmap: "),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, self.page)
+                self.reject(self.page.replace(old, new, 1),
+                            "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: ")
+
+    def test_reviewed_prose_block_cannot_repeat(self):
+        for old in ("<h1>What pycc can do <span>today.</span></h1>", '<p class="eyebrow">Evidence page · Updated 2026-01-01</p>'):
+            with self.subTest(block=old):
+                self.assertIn(old, self.page)
+                self.reject(self.page.replace(old, old + old.replace("2026-01-01", "2026-02-02"), 1), "hero prose block rendered twice")
+
+    def test_hidden_or_outside_prose_and_inline_markup_are_accepted(self):
+        for name, old, new in (
+            ("hidden paragraph", "</summary>", '</summary><p hidden>Current gate result: ci-gate failure.</p>'),
+            ("inline-hidden span", "<span><strong>Readiness", '<span style="DISPLAY: NONE">ci-gate failure</span><span><strong>Readiness'),
+            ("prose after the hero", "</header>", "</header><p>Current gate result: ci-gate failure; audit failure.</p>"),
+            ("inline emphasis inside a block", "Readiness</strong> pre-alpha", "Readiness</strong> <em>pre</em>-alpha"),
+            ("whitespace and comments", "Roadmap at that revision: ", "Roadmap at that\n   revision: <!-- ci-gate failure -->"),
+            ("masthead omitted", '<p class="eyebrow">Evidence page · Updated 2026-01-01</p>', ""),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, self.page)
+                site = self.projection(self.hero, self.page.replace(old, new, 1))
+                self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
 
 
 class CurrencyTests(SyntheticRepository):
@@ -609,7 +695,13 @@ class CurrencyTests(SyntheticRepository):
         base = git(self.repo, "rev-parse", "HEAD")
         with self.assertRaises(SystemExit) as caught:
             status.check_currency(self.hero, self.repo, base, 20)
-        self.assertIn("not an ancestor of the base", str(caught.exception))
+        self.assertIn("not on the first-parent history of the base", str(caught.exception))
+
+    def test_subject_merged_into_the_base_through_a_second_parent_is_rejected(self):
+        base = GitObjectTests.merge_subject_through_second_parent(self)
+        with self.assertRaises(SystemExit) as caught:
+            status.check_currency(self.hero, self.repo, base, 20)
+        self.assertIn("not on the first-parent history of the base", str(caught.exception))
 
     def test_currency_is_required_only_for_status_page_or_record_edits(self):
         base = self.advance(1)
