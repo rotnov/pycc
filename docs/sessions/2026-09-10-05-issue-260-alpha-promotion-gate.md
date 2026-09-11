@@ -85,8 +85,10 @@ above; round 8 clean. The rounds run after the external review
 `docs/AGENT_TOOLING.md`, in the gate's comment block (a round-6 note the
 gate inversion had dropped), and in the promotion and prose-guard tests,
 each fixed in the commit its pile row names; one control-flow item was
-refuted (the lock-shape early return already fails the run). Every
-finding, including the external ones, is in
+refuted (the lock-shape early return already fails the run). After the
+second external P2 (below), round 20 found the guard's one-line caveat
+stated for its second rule only (fixed `595afee2`) and round 21 was clean,
+ending the loop. Every finding, including the external ones, is in
 `.harden/findings/issue-260.jsonl`.
 
 External review on PR #1003 (Codex, P2) showed the prose guard's
