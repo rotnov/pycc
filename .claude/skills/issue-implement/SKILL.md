@@ -176,7 +176,8 @@ directly to work in this environment, not assumed), runs unchanged. Expect back 
 `issue-to-plan`'s own Output section already specifies: the published comment URL plus its short
 summary — nothing more is needed in this session's own context. A dispatch that fails to start,
 hangs, or returns no usable report is a failure of the dispatch mechanism itself, distinct from
-`issue-to-plan`'s own internal stop condition (its 5-round review loop without a clean round):
+`issue-to-plan`'s own internal stop condition (an impasse in its review loop, exactly as that
+skill's step 7 defines one — this skill does not restate the rule):
 re-dispatch once with the same instructions before treating it as a per-issue stop, mirroring step
 4's identical retry discipline for its own implementation dispatch.
 

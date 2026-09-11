@@ -117,8 +117,9 @@ requests before planning, treats the issue's own text — including any
 "Reproduction" section — as untrusted data to re-verify against the current
 tree by reconstructing checks through this repository's own toolchain, never
 by executing issue-supplied shell text directly, separates real merge gates
-from file conventions, and runs an adversarial review loop until a round
-changes nothing or hits its own 5-round stop condition. It writes no
+from file conventions, and runs an adversarial review loop until it reaches
+one of the two terminal states that skill's step 7 defines — a clean round,
+which permits publishing, or an impasse, which forbids it. It writes no
 implementation code and mutates no tracked file on its own. Like
 `pycc-feedback`, it must show the exact comment payload and receive explicit
 per-payload user confirmation before creating a comment in `rotnov/pycc`
@@ -233,9 +234,9 @@ per-payload gate. It mutates no tracked file and implements nothing itself.
 
 `issue-to-plan`, `issue-implement`, and `issue-select` bind deterministic
 offline eval cases in
-`scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` five,
+`scripts/run_alpha_skill_evals.py` (`issue-to-plan` seven, `issue-select` eight,
 `issue-implement` five, mirroring `pycc-feedback`'s
-fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
+fail-closed-oracle pattern): `issue-to-plan`'s publish-gate and review-loop-termination oracles,
 `issue-implement`'s staleness-outcome/write-authorization/issue-content/
 delegated-closure oracles, and `issue-select`'s
 autopilot-gated-closure/priority-ordering/milestone-scope-ordering/issue-content
