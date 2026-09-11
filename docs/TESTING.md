@@ -293,8 +293,11 @@ re-derives the pipeline: it drives `tests/fixtures/quick_start.py` through the
 public crate APIs (`pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`) and a
 native build, byte-compares every stage against the artifacts checked in under
 `tests/fixtures/architecture-trace/`, asserts the native exit status and exact
-stdout, and carries an omitted-stage negative control so a silently dropped
-stage cannot pass. It runs under `cargo test --workspace` on all five Tier-1
+stdout, and carries a negative control that rejects both a byte-mutated
+artifact and one stage's artifact substituted for another's. The separate
+guarantee that a stage carrying no evidence may not be presented as
+implemented is a record-level property, proved through the public CLI by
+`scripts/site_pipeline_evidence_test.py`. It runs under `cargo test --workspace` on all five Tier-1
 targets. `scripts/site_pipeline_evidence.py` owns the record shape, the closed
 eight-stage vocabulary, the derived state and the visible projection, and never
 runs the compiler. Its controls are split by cost: the fast pure-function,

@@ -26,7 +26,10 @@ status: accepted
   pinned by canonical LF SHA-256. `tests/architecture_trace.rs` is the only
   party that re-derives them: it drives the public crate APIs and a native
   build, byte-compares every stage, asserts the native exit status and exact
-  stdout, and carries an omitted-stage negative control.
+  stdout, and carries a negative control that rejects both a byte-mutated
+  artifact and a substituted stage artifact. The record-level guarantee that an
+  unevidenced stage may not be presented as implemented belongs to the
+  validator instead, and is proved through the public CLI.
   `scripts/site_pipeline_evidence.py` owns the record shape, the closed stage
   vocabulary, the derived state and the visible projection, and never runs the
   compiler. Schema version becomes `2.2.0` and the kind vocabulary gains

@@ -372,7 +372,6 @@ HERO_DETAILS_TOGGLE = "Stage artifacts, SHA-256 identities and excerpts"
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 GENERATED_CONTENT = re.compile(r"(?<![\w-])content\s*:\s*(?=\S)(?!(?:none|normal|\"\"|'')?\s*(?:;|!|$))", re.I)
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
-PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")
 # The two selector helpers are identical to the status hero's; import them
 # rather than restate them, so one reviewed implementation covers both pages.
 from site_status_evidence import compound_hooks, selector_hooks  # noqa: E402

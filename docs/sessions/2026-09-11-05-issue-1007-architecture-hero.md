@@ -25,7 +25,8 @@ Both limitations are published verbatim on every surface.
   the exact stdout, and the excerpt line count.
 - `tests/architecture_trace.rs` — the only party that re-derives the pipeline:
   public crate APIs plus a native build, byte-compared against the artifacts,
-  with an omitted-stage negative control and a coverage-safe regeneration path.
+  with a mutated-artifact and substituted-stage-artifact negative control and a
+  coverage-safe regeneration path.
 - `scripts/site_pipeline_evidence.py` — the record shape, the closed
   eight-stage vocabulary, the derived state and the visible projection. Never
   runs the compiler.

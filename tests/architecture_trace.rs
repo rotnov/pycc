@@ -284,6 +284,5 @@ fn a_mutated_artifact_and_a_substituted_stage_artifact_are_both_rejected() {
         out_dir(Some(std::ffi::OsString::from(TRACE_DIR)), fallback),
         repo_root().join(TRACE_DIR)
     );
-    assert!(configured_out_dir().is_none() || configured_out_dir().is_some());
     assert_eq!(canonical_lf(b"a\r\nb\r"), b"a\nb\r");
 }
