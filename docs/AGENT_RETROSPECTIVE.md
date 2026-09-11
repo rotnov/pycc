@@ -33,6 +33,52 @@ never a merge gate.
 
 ---
 
+## 2026-09-11 — A doc-comment fix dropped the qualifier that made it true and cost a fourth review round
+
+**What happened.** Extracting tests out of `crates/pycc_types/src/tests.rs`
+for #695 on `autopilot/iter-2026-09-11-02`, round 3 (`c00ad0d7`) consolidated
+two sibling test modules' section banners and rewrote the surviving module's
+`//!` header to say it holds "every test covering the `is_assignable`
+`Ty::Param` clause". The banner it consolidated under carries `(line 3229)`;
+the rewritten header dropped that qualifier, so the sentence also read as
+covering the distinct `from == Ty::Param` clause at line 3240, which lives in
+`crates/pycc_types/src/tests/generic_monomorphization_arms.rs`. Round 4
+(`5447e0f5`) had to correct the correction. The same round also caught a
+newly written header in `tests/generic_class_instantiation.rs` claiming the
+whole `check_and_resolve -> monomorphize -> instantiate_generic_class_methods`
+pipeline when its last two tests stop at `check`.
+
+**Root cause.** Trigger gap. `.claude/skills/issue-implement/SKILL.md`'s D-185
+oversized-file decomposition block governs exactly the fork where a child
+module's header gets written, and said nothing about the doc comments the
+extraction authors — so no check fired at the moment the claim was made. A
+header can be true about its own file and false only against a sibling, which
+is invisible to every per-file check the loop already runs. This is the fifth
+occurrence of the class in `.harden/incidents/doc-comment-overclaims-unqualified-scope/`;
+the three prior entries concluded review was a sufficient defence, which a fix
+that reproduces the class refutes.
+
+**What fixed it.** Round 4's corrections (`5447e0f5`), plus an authoring-time
+rule added to that D-185 block: a doc comment an extraction writes or leaves
+behind is checked before the commit against what the file actually holds *and*
+against the sibling files' claims, quantifiers are enumerated or dropped, and
+a narrowing edit may not shed a qualifier its own neighbourhood carried.
+That pointer covers the extraction arm only; the four earlier occurrences are
+prose written or amended under review pressure outside any decomposition, and
+that arm stays uncovered with its counter running. Recorded as
+`.harden/incidents/doc-comment-overclaims-unqualified-scope/2026-09-11-issue-695.md`.
+
+**Lesson.** When an extraction rewrites prose to narrow an overclaim, check
+the rewrite against the sibling files that cover neighbouring arms of the same
+symbol, not only against the file it sits in — a narrowing that drops the
+qualifier distinguishing the two arms is the same defect with a new subject.
+Treat the fix's own wording with the suspicion the original diff got.
+
+*(Relative order against the same-day entry below cannot be recovered from
+either entry's content; they describe work on different branches.)*
+
+---
+
 ## 2026-09-11 — A loop's round cap and its open-disagreement state each claimed to be the terminal condition
 
 **What happened.** Planning issue #261 through `issue-to-plan`, the

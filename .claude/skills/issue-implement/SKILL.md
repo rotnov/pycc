@@ -304,6 +304,18 @@ Never treat a D-185 tracking issue's first pull request as the whole task: scope
 request to a handful of cohesion-driven submodules extracted cleanly, not an attempt at the
 entire file, and leave the issue open and narrowed for the next session to continue from.
 
+**Every doc comment an extraction writes or leaves behind is part of the extraction, not
+commentary on it.** A module header or section banner authored by a decomposition states a scope
+claim, and that claim is checked before the commit against two things: the items the file
+actually holds now, and the claims the sibling files of the same tree make about the same
+subject. Write the narrowest true claim — where a neighbouring arm of the same symbol is covered
+elsewhere, the qualifier that separates the two belongs in the prose itself, not only in an
+adjacent banner, and a claim quantified over "every" or "all" is either enumerated or dropped.
+The same check applies to a header rewritten to repair an earlier overclaim: a narrowing edit
+that drops a qualifier its own neighbourhood already carried reproduces the defect it was meant
+to fix. Prose the extraction leaves behind in the parent is checked the same way — a comment run
+whose subject moved away re-binds to whatever now follows it.
+
 **Separately again, when the unit of work handed over is a checklist item inside a standing
 umbrella issue** (`AGENTS.md`'s D-021 step 9 rule, per
 `docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md`: each cross-cutting area —
