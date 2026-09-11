@@ -567,6 +567,7 @@ class ProjectionTests(ProjectionCase):
                      "dl { transform: matrix(1, 0, 0, 0, 0, 0) }", "dl { -webkit-transform: scale(1, 0) }", "header { -moz-opacity: 0 }",
                      "header { -ms-transform: var(--t) }",
                      "header { -o-opacity: 0 }",
+                     "header { scale: 0 }", "dl { scale: 1 0 }", "header { scale: 0% }", "dl { scale: var(--s) }", "header { SCALE: .0 }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
@@ -587,7 +588,7 @@ class ProjectionTests(ProjectionCase):
                      "header { transform: scale(1.0, 1) }", "dl { transform: scale3d(10, 1.0, 1) }", "header { transform: scale(1e-0) }",
                      "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) }", "dl { color: var(--ink) }", "header { width: calc(100% - 1rem) }",
                      "header dd { font-size: clamp(.5rem, 1vw, 1rem) }", "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) !important }",
-                     "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }",
+                     "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }", "header { scale: 1 }", "dl { scale: 0.5 1 }", "header { scale: none }", "dl { --scale: 0 }",
                      "header { font-size: clamp(+1rem, 1vw, 2rem) }", "dl { font-size: clamp(00.5rem, 1vw, 2rem) }",
                      "dl { --webkit-transform: scale(0); transform: scale(1) }", "header { --hero-opacity: 0 }"):
             with self.subTest(rule=rule):

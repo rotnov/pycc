@@ -197,7 +197,9 @@ def summary(hero):
 # The enumerated declarations that remove an element from view: ``display:
 # none``, ``visibility: hidden``/``collapse``, ``opacity: 0``,
 # ``content-visibility: hidden``, ``font-size: 0`` and a ``transform`` whose
-# ``scale``/``scaleX``/``scaleY``/``scaleZ``/``scale3d`` has any zero argument.  CSS property names and keywords are case-insensitive, so
+# ``scale``/``scaleX``/``scaleY``/``scaleZ``/``scale3d`` has any zero argument,
+# and the individual ``scale`` property (``scale: 0``, ``scale: 1 0``) has any
+# zero component.  CSS property names and keywords are case-insensitive, so
 # ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
 # element off-screen, covering it or painting it in the background colour is
 # outside this model and stays a review concern (docs/WEBSITE.md).
@@ -209,8 +211,8 @@ def summary(hero):
 # A value the checker cannot resolve is treated as hiding: any function call
 # (``var()``, ``calc()``, ``abs()``, ``round()``, whatever CSS adds next) on a
 # hiding-critical property computes at render time from state this scan does
-# not model, so every parenthesis on ``display``, ``visibility``, ``opacity``
-# and ``content-visibility`` is a hiding declaration.  Two forms are resolved
+# not model, so every parenthesis on ``display``, ``visibility``, ``opacity``,
+# ``content-visibility`` and ``scale`` is a hiding declaration.  Two forms are resolved
 # by inspection instead: ``font-size: clamp(<positive literal length>, ...)``
 # with no nested call, whose result is ``max(<minimum>, ...)`` and so never
 # below that positive minimum whatever the other arguments are (the
@@ -240,7 +242,8 @@ HIDING_DECLARATION = re.compile(
     r"|content-visibility\s*:\s*hidden"
     r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
     r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)]"
-    r"|(?:display|visibility|opacity|content-visibility)\s*:[^;]*\("
+    r"|scale\s*:[^;]*?(?<![\w.+-])" + ZERO + r"%?(?![\w.%])"
+    r"|(?:display|visibility|opacity|content-visibility|scale)\s*:[^;]*\("
     r"|font-size\s*:(?!\s*clamp\(\s*" + POSITIVE_LENGTH + r"\s*,[^;()]*\)\s*(?:!important\s*)?(?:;|$))[^;]*\("
     r"|transform\s*:[^;]*(?:\([^;()]*\(|(?<![\w-])(?!(?:" + TRANSFORM_FUNCTIONS + r")\()[\w-]+\())",
     re.I | re.M)

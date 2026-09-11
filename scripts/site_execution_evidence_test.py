@@ -231,6 +231,8 @@ class ExecutionEvidenceTests(unittest.TestCase):
                                     ('data-evidence-role="hero"', 'style="transform: translate(calc(0px))" data-evidence-role="hero"'),
                                     ('data-evidence-role="hero"', 'style="transform: var(--t)" data-evidence-role="hero"'),
                                     ('data-evidence-role="hero"', 'style="-webkit-transform: scale(1, 0)" data-evidence-role="hero"'),
+                                    ('data-evidence-role="hero"', 'style="scale: 1 0" data-evidence-role="hero"'),
+                                    ('data-evidence-role="hero"', 'style="scale: var(--s)" data-evidence-role="hero"'),
                                     ('data-evidence-role="hero"', 'style="opacity: /**/0" data-evidence-role="hero"'),
                                     ('data-evidence-role="hero"', 'style="opacity: 0E0" data-evidence-role="hero"'),
                                     ('data-execution="source"', 'style="font-size: +0.0e-1px" data-execution="source"'),
