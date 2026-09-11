@@ -459,17 +459,171 @@
       "kind": "required-checks-snapshot",
       "route": "/status/",
       "page_path": "site/status/index.html",
-      "fixture": null,
-      "test": null,
-      "command": null,
-      "snapshot": null,
-      "repository": null,
-      "attestation": null,
-      "environment": null,
-      "state": "unavailable",
-      "limitations": "The explanatory status page is live, but no accepted commit-bound required-check snapshot drives its hero. Issue #566 owns that projection.",
+      "fixture": {
+        "path": "scripts/collect_status_snapshot.py",
+        "sha256": "c697f91f7ca86bc8d129e2b2e4ba6a2945d3c723e12b513f6518e4aca3bd7565"
+      },
+      "test": {
+        "path": "scripts/test_check_status_snapshot.py",
+        "sha256": "f4c95688b7824748590d17a9905ace2f009ea49636132fc7f824fc7edbfd35d9",
+        "names": [
+          "test_consistent_record_is_accepted_and_verified_against_git",
+          "test_every_nested_field_is_required",
+          "test_head_tree_mismatch_is_rejected",
+          "test_another_pull_request_head_is_rejected_when_audit_stays_on_the_old_head",
+          "test_wrong_app_id_is_rejected",
+          "test_missing_merged_pull_request_is_rejected",
+          "test_unequal_trees_are_rejected",
+          "test_two_parent_subject_is_rejected",
+          "test_incomplete_collection_is_rejected",
+          "test_relabelled_checks_are_rejected",
+          "test_head_equal_to_merge_commit_is_rejected",
+          "test_non_success_conclusions_with_all_tier_1_state_are_rejected",
+          "test_state_must_match_the_derived_state",
+          "test_non_immutable_links_are_rejected",
+          "test_timestamps_must_be_rfc3339_utc",
+          "test_attestation_and_command_drift_are_rejected",
+          "test_stale_milestone_text_is_rejected",
+          "test_pinned_scripts_and_test_names_are_verified",
+          "test_subject_not_an_ancestor_of_head_is_rejected",
+          "test_two_parent_subject_commit_is_rejected_from_git",
+          "test_recorded_tree_must_match_git",
+          "test_distance_twenty_is_accepted_and_twenty_one_is_rejected",
+          "test_subject_outside_the_base_history_is_rejected",
+          "test_currency_is_required_only_for_status_page_or_record_edits",
+          "test_cli_currency_skips_untriggered_ranges_and_enforces_triggered_ones",
+          "test_structural_and_verify_git_modes",
+          "test_unavailable_record_passes_every_mode",
+          "test_missing_or_invalid_inventory_is_rejected",
+          "test_argument_validation",
+          "test_summary_is_one_line_and_names_the_subjects"
+        ]
+      },
+      "command": {
+        "cwd": "repository-root",
+        "argv": [
+          "python3",
+          "scripts/collect_status_snapshot.py",
+          "--subject",
+          "4111208c0910c0a7588408a6ac7d2b2bad20592c"
+        ],
+        "requires": "gh auth (read-only), run offline by the refreshing agent; never in CI"
+      },
+      "snapshot": {
+        "subjects": [
+          {
+            "id": "published-revision",
+            "label": "Published revision (default branch)",
+            "sha": "4111208c0910c0a7588408a6ac7d2b2bad20592c",
+            "check": null,
+            "app_id": null,
+            "conclusion": null,
+            "completed_at": null,
+            "run_id": null,
+            "run_url": null,
+            "job_url": null,
+            "tree": "d9d6b55888897921f3dba4b14868b9c78b61bb9f",
+            "parent_count": 1,
+            "merged_pull_request": {
+              "number": 1005,
+              "head_sha": "984eb6f27ca9f4809fa1277e12f8c83283bef1f6",
+              "head_tree": "d9d6b55888897921f3dba4b14868b9c78b61bb9f",
+              "url": "https://github.com/rotnov/pycc/pull/1005"
+            }
+          },
+          {
+            "id": "post-merge-ci-gate",
+            "label": "Post-merge CI gate",
+            "sha": "4111208c0910c0a7588408a6ac7d2b2bad20592c",
+            "check": "ci-gate",
+            "app_id": 15368,
+            "conclusion": "success",
+            "completed_at": "2026-09-11T02:10:46Z",
+            "run_id": 34552872912,
+            "run_url": "https://github.com/rotnov/pycc/actions/runs/34552872912",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103121414776"
+          },
+          {
+            "id": "pre-merge-audit",
+            "label": "Pre-merge policy audit",
+            "sha": "984eb6f27ca9f4809fa1277e12f8c83283bef1f6",
+            "check": "audit",
+            "app_id": 15368,
+            "conclusion": "success",
+            "completed_at": "2026-09-11T01:50:30Z",
+            "run_id": 34552229293,
+            "run_url": "https://github.com/rotnov/pycc/actions/runs/34552229293",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163"
+          }
+        ]
+      },
+      "repository": {
+        "commit": "4111208c0910c0a7588408a6ac7d2b2bad20592c",
+        "tree": "d9d6b55888897921f3dba4b14868b9c78b61bb9f",
+        "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
+      },
+      "attestation": {
+        "collected_at": "2026-09-11T03:09:20Z",
+        "collection_method": "gh api check-runs, commits, pulls (read-only)",
+        "sanitized": true,
+        "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",
+        "required_contexts": [
+          "ci-gate",
+          "audit"
+        ]
+      },
+      "environment": {
+        "platforms": [
+          {
+            "runner": "macos-14",
+            "architecture": "aarch64-apple-darwin",
+            "check_run_name": "build-test-coverage",
+            "conclusion": "success",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276938"
+          },
+          {
+            "runner": "macos-15-intel",
+            "architecture": "x86_64-apple-darwin",
+            "check_run_name": "native-build-test (macos-15-intel, x86_64-apple-darwin)",
+            "conclusion": "success",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119277030"
+          },
+          {
+            "runner": "ubuntu-latest",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "check_run_name": "native-build-test (ubuntu-latest, x86_64-unknown-linux-gnu)",
+            "conclusion": "success",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276989"
+          },
+          {
+            "runner": "ubuntu-24.04-arm",
+            "architecture": "aarch64-unknown-linux-gnu",
+            "check_run_name": "native-build-test (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)",
+            "conclusion": "success",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276976"
+          },
+          {
+            "runner": "windows-latest",
+            "architecture": "x86_64-pc-windows-msvc",
+            "check_run_name": "native-build-test (windows-latest, x86_64-pc-windows-msvc)",
+            "conclusion": "success",
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276920"
+          }
+        ]
+      },
+      "state": "all-Tier-1",
+      "limitations": "A point-in-time observation of one default-branch revision; later merges are not covered until the snapshot is refreshed. all-Tier-1 means the listed jobs concluded success in that run, not release readiness. The merged pull request's head commit is not reachable from a clean checkout, so its tree equality is proven from the collector's recorded fields, not from Git.",
       "stable_links": {
-        "owner": "https://github.com/rotnov/pycc/issues/566"
+        "commit": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c",
+        "tree": "https://github.com/rotnov/pycc/tree/4111208c0910c0a7588408a6ac7d2b2bad20592c",
+        "merged_pull_request": "https://github.com/rotnov/pycc/pull/1005",
+        "ci_gate_run": "https://github.com/rotnov/pycc/actions/runs/34552872912",
+        "audit_run": "https://github.com/rotnov/pycc/actions/runs/34552229293",
+        "job_macos-14": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276938",
+        "job_macos-15-intel": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119277030",
+        "job_ubuntu-latest": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276989",
+        "job_ubuntu-24.04-arm": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276976",
+        "job_windows-latest": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103119276920"
       },
       "projections": {
         "html": "site/status/index.html",

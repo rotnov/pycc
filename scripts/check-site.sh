@@ -50,6 +50,13 @@ test -s "$site_dir/og.png"
 python3 "$repo_root/scripts/check_site_evidence.py" \
   "$evidence_manifest" "$evidence_root" "$repo_root" "$site_dir"
 
+# Issue #1006 (D-241): the status hero is a checked-in, commit-bound
+# required-check snapshot.  Prove the subject side from the local Git object
+# database (ancestor of HEAD, exactly one parent, recorded tree) and the
+# record's internal invariants; no provider is contacted.
+python3 "$repo_root/scripts/check_status_snapshot.py" --verify-git \
+  "$evidence_manifest" "$evidence_root" "$repo_root"
+
 # Issue #200: validate the social preview image for format, dimensions, and
 # file size so it meets GitHub's repository social-preview upload constraints
 # (PNG/JPG/GIF under 1 MB, at least 640x320, 1280x640 recommended) and remains
@@ -650,7 +657,7 @@ PAGE_SPECS = {
     },
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-09-07",
+        "date_modified": "2026-09-11",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
