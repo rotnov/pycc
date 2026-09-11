@@ -263,7 +263,10 @@ class AlphaSkillEvalTests(unittest.TestCase):
         allowed = evals.SubmissionState(True, True, True)
         self.assertTrue(evals.submission_allowed(allowed))
 
-    def test_issue_to_plan_oracle_cannot_publish_without_exact_consent(self) -> None:
+    def test_issue_to_plan_oracle_runs_every_bound_issue_to_plan_case(self) -> None:
+        # Renamed from ..._cannot_publish_without_exact_consent: the bound set
+        # now also carries runners whose correct outcome is that publication
+        # IS permitted, so the old name described only half of what it runs.
         skill = evals.canonical_skill("claude", "issue-to-plan")
         for case in evals.load_cases("issue-to-plan"):
             evals.run_issue_to_plan_case(case, skill)
@@ -279,6 +282,117 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
         allowed = evals.PlanPublicationState(True, True, True)
         self.assertTrue(evals.plan_publication_allowed(allowed))
+
+    def test_plan_review_terminal_state_covers_every_branch(self) -> None:
+        clean = (
+            evals.PlanReviewLoopState(rounds=(evals.PLAN_ROUND_NO_CHANGE,)),
+            evals.PlanReviewLoopState(
+                rounds=(evals.PLAN_ROUND_EDIT, evals.PLAN_ROUND_NO_CHANGE)
+            ),
+        )
+        for loop in clean:
+            with self.subTest(loop=loop):
+                self.assertEqual(evals.plan_review_terminal_state(loop), "clean")
+        self.assertEqual(
+            evals.plan_review_terminal_state(evals.PlanReviewLoopState(rounds=())),
+            "continue",
+        )
+        self.assertEqual(
+            evals.plan_review_terminal_state(
+                evals.PlanReviewLoopState(rounds=(evals.PLAN_ROUND_EDIT,) * 3)
+            ),
+            "continue",
+        )
+        self.assertEqual(
+            evals.plan_review_terminal_state(
+                evals.PlanReviewLoopState(
+                    rounds=(evals.PLAN_ROUND_EDIT,) * evals.MAX_PLAN_REVIEW_ROUNDS
+                )
+            ),
+            "impasse",
+        )
+        self.assertEqual(
+            evals.plan_review_terminal_state(
+                evals.PlanReviewLoopState(
+                    rounds=(evals.PLAN_ROUND_EDIT,),
+                    finding_survived_two_resolutions=True,
+                )
+            ),
+            "impasse",
+        )
+        # A recurring finding is an impasse even on a round that changed
+        # nothing: that arm outranks the clean-round arm.
+        self.assertEqual(
+            evals.plan_review_terminal_state(
+                evals.PlanReviewLoopState(
+                    rounds=(evals.PLAN_ROUND_NO_CHANGE,),
+                    finding_survived_two_resolutions=True,
+                )
+            ),
+            "impasse",
+        )
+
+    def test_plan_publication_authorized_has_two_independent_arms(self) -> None:
+        unconsented = evals.PlanPublicationState(False, False, False)
+        consented = evals.PlanPublicationState(True, True, True)
+        self.assertTrue(
+            evals.plan_publication_authorized(
+                unconsented, delegated_authorization=True
+            )
+        )
+        self.assertTrue(
+            evals.plan_publication_authorized(
+                consented, delegated_authorization=False
+            )
+        )
+        self.assertFalse(
+            evals.plan_publication_authorized(
+                unconsented, delegated_authorization=False
+            )
+        )
+
+    def test_plan_comment_needs_both_consent_and_a_clean_round(self) -> None:
+        consented = evals.PlanPublicationState(True, True, True)
+        unconsented = evals.PlanPublicationState(True, True, False)
+        clean = evals.PlanReviewLoopState(rounds=(evals.PLAN_ROUND_NO_CHANGE,))
+        changing = evals.PlanReviewLoopState(rounds=(evals.PLAN_ROUND_EDIT,) * 3)
+        self.assertTrue(evals.plan_comment_may_be_posted(consented, clean))
+        # Loop clean, consent absent.
+        self.assertFalse(evals.plan_comment_may_be_posted(unconsented, clean))
+        # Consent present, loop not clean.
+        self.assertFalse(evals.plan_comment_may_be_posted(consented, changing))
+        # Delegated authorization replaces consent, never the clean round.
+        self.assertTrue(
+            evals.plan_comment_may_be_posted(
+                unconsented, clean, delegated_authorization=True
+            )
+        )
+        self.assertFalse(
+            evals.plan_comment_may_be_posted(
+                unconsented, changing, delegated_authorization=True
+            )
+        )
+
+    def test_issue_to_plan_eval_fails_when_a_loop_contract_phrase_is_missing(
+        self,
+    ) -> None:
+        # #261: each of the four step-7/Output pins is checked individually.
+        # A single-phrase test would pass while three of the four pins are
+        # bound to nothing, which is exactly the state this change repairs.
+        raw = evals.canonical_skill("claude", "issue-to-plan")
+        normalized = " ".join(raw.split())
+        case = next(
+            case
+            for case in evals.load_cases("issue-to-plan")
+            if case["runner"] == "clean-round-permits-publication"
+        )
+        loop_phrases = tuple(evals.ISSUE_TO_PLAN_CONTRACT)[3:]
+        self.assertEqual(len(loop_phrases), 4)
+        for phrase in loop_phrases:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized)
+                with self.assertRaisesRegex(evals.EvalError, "is missing"):
+                    evals.run_issue_to_plan_case(case, normalized.replace(phrase, ""))
 
     def test_issue_to_plan_eval_fails_when_the_preview_gate_text_is_missing(
         self,
