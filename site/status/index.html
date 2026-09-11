@@ -59,7 +59,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete through v0.3 (released as v0.3.0) and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-09-07",
+            "dateModified": "2026-09-11",
             "additionalProperty": [
               {
                 "@type": "PropertyValue",
@@ -234,10 +234,10 @@
               </div>
               <div class="evidence-card">
                 <span>Quality</span>
-                <strong>100% lines and regions</strong>
+                <strong>100% of changed lines</strong>
                 <p>
-                  Pull requests must keep the current Rust implementation at 100% line
-                  and region coverage before the protected branch can merge.
+                  Pull requests must cover every Rust line they add or modify
+                  before the protected branch can merge; totals are reported.
                   The published llms.txt context expansion is bounded the same
                   way: its per-resource byte budgets must now sum within the
                   reviewed 272 KiB ceiling, so each document carries a real,
@@ -420,14 +420,14 @@
               plan.
             </p>
             <p>
-              The 100% line/region coverage gate and the required
+              The 100% changed-line coverage gate and the required
               <code>frontend-perf-gate</code> (currently a
               greater-than-7.0% regression floor, enforced by a paired
               predecessor/candidate measurement — see the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">roadmap</a>
               for the full mechanics) stay required through all of this work.
-              The README coverage badge is bound to the enforced CI coverage
-              thresholds by <code>scripts/check_readme_coverage_badge.rb</code>,
+              The README coverage badge is bound to the enforced CI diff-coverage
+              threshold by <code>scripts/check_readme_coverage_badge.rb</code>,
               which runs in both <code>ci.yml</code> and <code>pages.yml</code>.
               The implementation gaps listed above are accepted boundaries
               the met v0.1/v0.2/v0.3 milestones' acceptance criteria never
