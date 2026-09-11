@@ -41,6 +41,10 @@ EXPECTED_RUNNERS = {
         "refuse-publication-without-payload-preview",
         "refuse-publication-without-approval",
         "refuse-publication-after-payload-edited-post-approval",
+        "clean-round-permits-publication",
+        "three-changing-rounds-never-publish",
+        "impasse-stops-without-publishing",
+        "delegated-authorization-still-requires-a-clean-round",
     },
     "issue-implement": {
         "partial-resolution-never-closes",
@@ -105,6 +109,15 @@ ISSUE_TO_PLAN_CONTRACT = (
     "shown to the user and explicitly approved before any write to GitHub",
     "Approval is per payload",
     "Delegated invocation is the one exception",
+    "A round is clean when it produced no concrete edit to the plan \u2014 either it "
+    "raised no findings at all, or every finding it raised was resolved as "
+    '"considered, no change, because X".',
+    "never advance to Publish merely because a round count has elapsed.",
+    "An impasse is the only other exit, and it forbids publishing: a fifth round "
+    "that still produces a concrete edit, or the same finding surviving two genuine "
+    "resolution attempts.",
+    "The summary also reports step 7's terminal state: clean, naming the clean "
+    "round's number, or impasse, naming which arm fired.",
 )
 ISSUE_IMPLEMENT_CONTRACT = (
     "Do not close",
@@ -186,6 +199,53 @@ def plan_publication_allowed(state: PlanPublicationState) -> bool:
         state.exact_payload_shown
         and state.approval_after_preview
         and state.payload_unchanged_since_approval
+    )
+
+
+MAX_PLAN_REVIEW_ROUNDS = 5
+PLAN_ROUND_EDIT = "edit"  # the round produced a concrete edit to the plan
+PLAN_ROUND_NO_CHANGE = "no-change"  # every finding resolved "considered, no change"
+
+
+@dataclass(frozen=True)
+class PlanReviewLoopState:
+    """issue-to-plan step 7's round sequence and its terminal state."""
+
+    rounds: tuple[str, ...]
+    finding_survived_two_resolutions: bool = False
+
+
+def plan_review_terminal_state(state: PlanReviewLoopState) -> str:
+    """'clean' | 'impasse' | 'continue' -- step 7's one terminal-state rule."""
+    if state.finding_survived_two_resolutions:
+        return "impasse"
+    if state.rounds and state.rounds[-1] == PLAN_ROUND_NO_CHANGE:
+        return "clean"
+    if len(state.rounds) >= MAX_PLAN_REVIEW_ROUNDS:
+        return "impasse"
+    return "continue"
+
+
+def plan_publication_authorized(
+    publication: PlanPublicationState, *, delegated_authorization: bool
+) -> bool:
+    """Publish-step consent: per-payload approval, or issue-implement's standing
+    delegated authorization (SKILL.md's Publish-step exception; D-143)."""
+    return delegated_authorization or plan_publication_allowed(publication)
+
+
+def plan_comment_may_be_posted(
+    publication: PlanPublicationState,
+    loop: PlanReviewLoopState,
+    *,
+    delegated_authorization: bool = False,
+) -> bool:
+    """Both gates: Publish-step consent and step 7's clean terminal state."""
+    return (
+        plan_publication_authorized(
+            publication, delegated_authorization=delegated_authorization
+        )
+        and plan_review_terminal_state(loop) == "clean"
     )
 
 
@@ -775,22 +835,66 @@ def run_issue_to_plan_case(case: dict[str, Any], skill_text: str) -> None:
 
     runner_name = case["runner"]
     expected = case["expected_output"]
+    consented = PlanPublicationState(True, True, True)
     if runner_name == "refuse-publication-without-payload-preview":
         state = PlanPublicationState(False, True, True)
         required = ("payload was never shown", "payload-preview gate")
+        if plan_publication_allowed(state):
+            raise EvalError(f"{runner_name} allowed publication that must be refused")
     elif runner_name == "refuse-publication-without-approval":
         state = PlanPublicationState(True, False, True)
         required = ("no explicit approval", "published yet")
+        if plan_publication_allowed(state):
+            raise EvalError(f"{runner_name} allowed publication that must be refused")
     elif runner_name == "refuse-publication-after-payload-edited-post-approval":
         state = PlanPublicationState(True, True, False)
         required = ("per payload", "fresh approval")
+        if plan_publication_allowed(state):
+            raise EvalError(f"{runner_name} allowed publication that must be refused")
+    elif runner_name == "clean-round-permits-publication":
+        required = ("clean round", "both arms")
+        for rounds in ((PLAN_ROUND_NO_CHANGE,), (PLAN_ROUND_EDIT, PLAN_ROUND_NO_CHANGE)):
+            loop = PlanReviewLoopState(rounds=rounds)
+            if plan_review_terminal_state(loop) != "clean":
+                raise EvalError(f"{runner_name} did not call {rounds!r} a clean round")
+            if not plan_comment_may_be_posted(consented, loop):
+                raise EvalError(f"{runner_name} refused a consented clean-round post")
+    elif runner_name == "three-changing-rounds-never-publish":
+        loop = PlanReviewLoopState(rounds=(PLAN_ROUND_EDIT,) * 3)
+        required = ("still changing", "not a terminal state")
+        if plan_review_terminal_state(loop) != "continue":
+            raise EvalError(f"{runner_name} terminated a still-changing loop")
+        if plan_comment_may_be_posted(consented, loop):
+            raise EvalError(f"{runner_name} published before a clean round")
+    elif runner_name == "impasse-stops-without-publishing":
+        required = ("impasse", "both arms")
+        for loop in (
+            PlanReviewLoopState(rounds=(PLAN_ROUND_EDIT,) * MAX_PLAN_REVIEW_ROUNDS),
+            PlanReviewLoopState(
+                rounds=(PLAN_ROUND_EDIT,), finding_survived_two_resolutions=True
+            ),
+        ):
+            if plan_review_terminal_state(loop) != "impasse":
+                raise EvalError(f"{runner_name} did not recognize the impasse")
+            if plan_comment_may_be_posted(consented, loop):
+                raise EvalError(f"{runner_name} published out of an impasse")
+    elif runner_name == "delegated-authorization-still-requires-a-clean-round":
+        unconsented = PlanPublicationState(False, False, False)
+        loop = PlanReviewLoopState(rounds=(PLAN_ROUND_EDIT,) * 3)
+        required = ("delegated authorization", "clean round")
+        if not plan_publication_authorized(unconsented, delegated_authorization=True):
+            raise EvalError(f"{runner_name} refused the delegated authorization")
+        if plan_comment_may_be_posted(
+            unconsented, loop, delegated_authorization=True
+        ):
+            raise EvalError(
+                f"{runner_name} let delegation bypass step 7's clean round"
+            )
     else:
         raise EvalError(f"unknown issue-to-plan runner {runner_name!r}")
 
     if not all(fragment in expected for fragment in required):
         raise EvalError(f"{runner_name} has an incomplete expected output")
-    if plan_publication_allowed(state):
-        raise EvalError(f"{runner_name} allowed publication that must be refused")
 
 
 def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
