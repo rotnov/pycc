@@ -120,6 +120,8 @@ ISSUE_TO_PLAN_LOOP_CONTRACT = (
     "produced no concrete edit.",
     "The summary also reports step 7's terminal state: clean, naming the clean "
     "round's number, or impasse, naming which arm fired.",
+    '"Clean" means a round changed nothing \u2014 not that the ideas ran out: a '
+    "round that raised nothing is clean only when the reviewer actually reviewed.",
 )
 
 ISSUE_TO_PLAN_CONTRACT = (
@@ -212,7 +214,9 @@ def plan_publication_allowed(state: PlanPublicationState) -> bool:
 
 MAX_PLAN_REVIEW_ROUNDS = 5
 PLAN_ROUND_EDIT = "edit"  # the round produced a concrete edit to the plan
-PLAN_ROUND_NO_CHANGE = "no-change"  # every finding resolved "considered, no change"
+PLAN_ROUND_NO_CHANGE = "no-change"  # the round changed nothing: it either raised
+# no findings at all, or resolved every finding it raised as "considered, no
+# change, because X". Step 7 treats both readings as the same round outcome.
 
 
 @dataclass(frozen=True)

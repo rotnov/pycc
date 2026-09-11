@@ -21,8 +21,8 @@
     },
     {
       "id": 4,
-      "prompt": "Step 7's latest review round raised no findings at all; in a second scenario, an earlier round produced an edit and the next one resolved every finding as \"considered, no change, because X\". Consent for the exact payload is complete in both. May the plan comment be posted?",
-      "expected_output": "Yes in both arms: each is a clean round \u2014 one raised nothing, the other changed nothing \u2014 so step 7 has reached its clean terminal state and the consented payload may be posted.",
+      "prompt": "Step 7's loop reached a clean round in two arms: in one the very first round was clean; in the other an earlier round produced a concrete edit and the round after it was clean. Consent for the exact payload is complete in both. May the plan comment be posted?",
+      "expected_output": "Yes in both arms: a clean round ends the loop wherever it falls \u2014 on round 1, or on round 2 after an edit \u2014 so step 7 has reached its clean terminal state and the consented payload may be posted.",
       "runner": "clean-round-permits-publication"
     },
     {
