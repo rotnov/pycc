@@ -7,7 +7,9 @@ import codecs
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -39,6 +41,11 @@ EXPECTED_SKILL_LOCK_ENTRIES = {
         ),
     }
 }
+# Locked skills of external origin that were never project-local alpha skills
+# here; every other locked skill must carry authenticated model-eval evidence.
+# Adding a name here is a provenance claim reviewed with the lock allowlist
+# edit.
+EXTERNAL_ORIGIN_LOCKED_SKILLS: frozenset[str] = frozenset({"i-have-an-issue"})
 FEEDBACK_CONSENT_GUARDS = (
     "explicit approval",
     "exact payload",
@@ -96,7 +103,6 @@ ALPHA_EVAL_RUNNERS = {
         "attribution-falls-back-to-unattributed-or-ambiguous",
     },
 }
-PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
 # reviewed, stable authenticated runs exist for both supported client surfaces.
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
@@ -328,30 +334,173 @@ def load_json(
     return value
 
 
-def compute_skill_folder_hash(skill_root: Path) -> str:
-    """Match skills CLI 1.5.20's path-plus-content SHA-256."""
-    files = [
-        path
-        for path in skill_root.rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and path.suffix != ".pyc"
-    ]
-    files.sort(
-        key=lambda path: path.relative_to(skill_root).as_posix().casefold()
+SKILL_PAYLOAD_BLOB_MODES = {"100644", "100755"}
+SKILL_PAYLOAD_REJECTED_SUFFIXES = {".pyc", ".pyo"}
+SKILL_PAYLOAD_REJECTED_DIRECTORIES = {
+    "__pycache__",
+    "__pypackages__",
+    ".git",
+    "node_modules",
+}
+
+
+class TrackedIndexRecord(NamedTuple):
+    """One `git ls-files --stage` record with its raw mode and stage."""
+
+    path: str
+    mode: str
+    stage: int
+
+
+class SkillPayloadEntry(NamedTuple):
+    """A tracked entry of a vendored skill, relative to the skill root."""
+
+    relative: str
+    mode: str
+    stage: int
+
+
+def compute_skill_folder_hash(skill_root: Path, files: Iterable[Path]) -> str:
+    """Match skills CLI 1.5.20's path-plus-content SHA-256 over ``files``.
+
+    Upstream's ``collectFiles`` hashes every regular file it finds, skips only
+    directories named ``.git`` and ``node_modules``, and ignores symlinks; it
+    has no bytecode rule. Deciding which tracked entries may be hashed is
+    ``validate_skill_payload``'s job, so this function hashes exactly the
+    files it is given. Upstream orders paths with ``localeCompare``; the
+    case-folded key below agrees with it for the vendored set, so a future
+    vendored file whose position differs between the two orderings must be
+    checked when the pin is updated.
+    """
+    ordered = sorted(
+        files,
+        key=lambda path: path.relative_to(skill_root).as_posix().casefold(),
     )
     digest = hashlib.sha256()
-    for path in files:
+    for path in ordered:
         digest.update(path.relative_to(skill_root).as_posix().encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()
+
+
+def skill_payload_entries(
+    skill_root: Path, root: Path = ROOT
+) -> list[SkillPayloadEntry]:
+    """Enumerate the tracked entries under ``skill_root`` from ``root``'s index.
+
+    The lock is defined over tracked files so untracked or ignored local
+    artefacts (bytecode caches) cannot flip the verdict while a force-added
+    one is still visible. Enumeration is anchored at the repository ``root``
+    rather than discovered from ``skill_root``: ``git ls-files`` runs with
+    ``root`` as its working directory, so a nested repository boundary inside
+    the skill directory (a stray ``git init``, an interrupted
+    ``npx skills add``) cannot redirect the query to its own index. The
+    prefix is derived with ``os.path.relpath`` and never ``realpath``, so a
+    symlinked skill root keeps its tracked spelling and is returned as the
+    single ``120000`` entry ``"."``. A skill root outside ``root``, or a
+    record ``git`` reports outside the prefix, raises ``RuntimeError``.
+    """
+    prefix = os.path.relpath(str(skill_root), str(root))
+    if prefix == os.pardir or prefix.startswith(os.pardir + os.sep):
+        raise RuntimeError("skill root is outside the repository root")
+    prefix_posix = Path(prefix).as_posix()
+    entries: list[SkillPayloadEntry] = []
+    for record in run_git_ls_files_stage(root, prefix_posix):
+        if record.path == prefix_posix:
+            relative = "."
+        elif record.path.startswith(prefix_posix + "/"):
+            relative = record.path[len(prefix_posix) + 1 :]
+        else:
+            raise RuntimeError(
+                f"git ls-files returned {record.path!r} outside {prefix_posix!r}"
+            )
+        entries.append(SkillPayloadEntry(relative, record.mode, record.stage))
+    return entries
+
+
+def skill_payload_rejection(
+    skill_root: Path,
+    relative: str,
+    entry: SkillPayloadEntry,
+) -> str | None:
+    """Return the first reason ``entry`` cannot be part of the reviewed copy."""
+    if entry.mode == "120000":
+        return "tracked symlinks are not part of the reviewed vendored copy"
+    if entry.mode not in SKILL_PAYLOAD_BLOB_MODES:
+        return f"tracked mode {entry.mode} is not a regular file blob"
+    try:
+        relative.encode("utf-8")
+    except UnicodeEncodeError:
+        return "tracked path is not valid UTF-8"
+    if entry.stage != 0:
+        return "tracked entry is unmerged"
+    posix = PurePosixPath(relative)
+    if posix.suffix.casefold() in SKILL_PAYLOAD_REJECTED_SUFFIXES:
+        return "Python bytecode is not part of the reviewed vendored copy"
+    for component in posix.parts:
+        if component.casefold() in SKILL_PAYLOAD_REJECTED_DIRECTORIES:
+            return f"{component}/ is not part of the reviewed vendored copy"
+    try:
+        info = os.lstat(skill_root / relative)
+    except FileNotFoundError:
+        return "tracked entry is missing from the working tree"
+    except OSError as error:
+        return f"tracked entry could not be inspected: {error}"
+    if not stat.S_ISREG(info.st_mode):
+        return "tracked entry is not a regular file"
+    return None
+
+
+def validate_skill_payload(
+    label: str,
+    skill_root: Path,
+    entries: Iterable[SkillPayloadEntry],
+    failures: list[str],
+) -> list[Path]:
+    """Reject tracked entries the reviewed hash cannot represent.
+
+    Appends one ``<label>: <relative>: <reason>`` line per offending entry
+    (first matching reason only) and returns the accepted regular files as
+    absolute paths under ``skill_root``.
+    """
+    accepted: list[Path] = []
+    records = list(entries)
+    if not records:
+        failures.append(f"{label}: no tracked payload under {skill_root}")
+        return accepted
+    for entry in records:
+        relative = entry.relative or "."
+        reason = skill_payload_rejection(skill_root, relative, entry)
+        if reason is not None:
+            failures.append(f"{label}: {relative}: {reason}")
+            continue
+        accepted.append(skill_root / relative)
+    return accepted
 
 
 def validate_skill_lock(
     failures: list[str],
     root: Path = ROOT,
     skills_root: Path = SKILLS_ROOT,
+    payload_entries: Iterable[SkillPayloadEntry] | None = None,
 ) -> None:
+    """Bind the vendored skill to its reviewed provenance and content hash.
+
+    ``payload_entries`` is injected by tests; ``None`` enumerates the tracked
+    payload from git. A rejected payload suppresses only the hash comparison,
+    never the policy-document checks.
+    """
+    # The policy document is read and its literal alpha-skill counts checked
+    # before any lock-shape early return: the prose guard does not depend on
+    # the lock file and must run on every invocation.
+    policy_path = root / "docs" / "AGENT_TOOLING.md"
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as error:
+        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
+        policy = ""
+    validate_alpha_skill_count_prose(policy, failures)
+
     lock = load_json("skills-lock.json", failures, root)
     if lock.get("version") != 1:
         failures.append("skills-lock.json: version must be 1")
@@ -368,13 +517,6 @@ def validate_skill_lock(
             "skills-lock.json: locked skill set must be exactly "
             + ", ".join(sorted(expected_names))
         )
-
-    policy_path = root / "docs" / "AGENT_TOOLING.md"
-    try:
-        policy = policy_path.read_text(encoding="utf-8")
-    except OSError as error:
-        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
-        policy = ""
 
     for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
         entry = entries.get(name)
@@ -400,6 +542,23 @@ def validate_skill_lock(
         if not (skill_root / "SKILL.md").is_file():
             failures.append(f"{label} has no canonical .claude skill")
             continue
+        payload_failures: list[str] = []
+        accepted_files: list[Path] = []
+        try:
+            payload = (
+                skill_payload_entries(skill_root, root)
+                if payload_entries is None
+                else payload_entries
+            )
+        except (RuntimeError, OSError) as error:
+            payload_failures.append(
+                f"{label}: could not enumerate tracked payload: {error}"
+            )
+        else:
+            accepted_files = validate_skill_payload(
+                label, skill_root, payload, payload_failures
+            )
+        failures.extend(payload_failures)
         expected_hash = expected_entry["computedHash"]
         locked_hash = entry.get("computedHash")
         if (
@@ -408,12 +567,13 @@ def validate_skill_lock(
         ):
             failures.append(f"{label}.computedHash must be a SHA-256 digest")
             continue
-        actual = compute_skill_folder_hash(skill_root)
-        if actual != expected_hash:
-            failures.append(
-                f"{label}.computedHash does not match the reviewed vendored skill: "
-                f"expected {expected_hash}, got {actual}"
-            )
+        if not payload_failures:
+            actual = compute_skill_folder_hash(skill_root, accepted_files)
+            if actual != expected_hash:
+                failures.append(
+                    f"{label}.computedHash does not match the reviewed "
+                    f"vendored skill: expected {expected_hash}, got {actual}"
+                )
         for field in ("ref", "reviewedCommit", "computedHash"):
             value = expected_entry[field]
             if value not in policy:
@@ -422,11 +582,125 @@ def validate_skill_lock(
                 )
 
 
+_NUMERAL_WORDS = {
+    word: index
+    for index, word in enumerate(
+        (
+            "one", "two", "three", "four", "five", "six",
+            "seven", "eight", "nine", "ten", "eleven", "twelve",
+        ),
+        start=1,
+    )
+}
+_NUMERAL = r"\b(?P<numeral>\d+|" + "|".join(_NUMERAL_WORDS) + r")\b"
+# Rule A: the numeral heads a count phrase whose noun is "alpha skill(s)":
+# "seven alpha skills", "all seven project-local alpha skills". Only the
+# qualifiers below may sit between them, so "the two clients support alpha
+# skills" (a count of clients) does not match. The numeral is also not an
+# issue or pull-request number ("#260 covers every alpha skill") and not a
+# floor or ceiling ("at least two evals ... alpha skill").
+_NOT_A_BOUND = (
+    r"(?<!at least )(?<!at most )(?<!more than )(?<!fewer than )(?<!up to )"
+)
+_COUNT_QUALIFIERS = (
+    r"(?:project-local|remaining|current|existing|listed|tracked|other|such)"
+)
+ALPHA_SKILL_COUNT_NEAR_PHRASE = re.compile(
+    r"(?<!#)"
+    + _NOT_A_BOUND
+    + _NUMERAL
+    + r"(?=(?:\s+"
+    + _COUNT_QUALIFIERS
+    + r"){0,2}\s+alpha skills?\b)",
+    re.IGNORECASE,
+)
+# Rule B: inside a sentence that names the runner table, the numeral is
+# immediately followed by a word that makes it a count of that table.
+ALPHA_SKILL_COUNT_NEAR_TABLE = re.compile(
+    _NUMERAL
+    + r"(?=\s+(?:skills?\b|alpha\b|project-local\b|at the time of writing\b))",
+    re.IGNORECASE,
+)
+ALPHA_EVAL_RUNNERS_MENTION = "`ALPHA_EVAL_RUNNERS`"
+
+
+def _numeral_value(numeral: str) -> int:
+    if numeral.isdigit():
+        return int(numeral)
+    return _NUMERAL_WORDS[numeral.lower()]
+
+
+def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
+    """Reject a literal alpha-skill count that disagrees with the runner table.
+
+    A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
+    skills when it is followed by ``alpha skill(s)`` with at most two
+    qualifiers (``project-local``, ``remaining``, ``current``, ``existing``,
+    ``listed``, ``tracked``, ``other``, ``such``) in between, so a numeral
+    that counts something else (``the two clients support alpha skills``)
+    is ignored, it is not an issue or pull-request number (``#260``),
+    and it is not preceded by a bound phrase (``at least``, ``at most``,
+    ``more than``, ``fewer than``, ``up to``), or when its sentence names
+    ``ALPHA_EVAL_RUNNERS`` and the numeral is
+    immediately followed by ``skill(s)``, ``alpha``, ``project-local``, or
+    ``at the time of writing``. A sentence is approximated as the text
+    between periods on a single line; prose wrapped across lines is checked
+    line by line, so a count and the table mention must share a line for the
+    second rule to apply, and a bound phrase or ``#`` wrapped onto the
+    previous line does not exclude the numeral it precedes under the first
+    rule. Every matched numeral must equal
+    ``len(ALPHA_EVAL_RUNNERS)``: the count is allowed, drift is not.
+    """
+    expected = len(ALPHA_EVAL_RUNNERS)
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for sentence in line.split("."):
+            matches = list(ALPHA_SKILL_COUNT_NEAR_PHRASE.finditer(sentence))
+            if ALPHA_EVAL_RUNNERS_MENTION in sentence:
+                matches.extend(ALPHA_SKILL_COUNT_NEAR_TABLE.finditer(sentence))
+            for match in matches:
+                value = _numeral_value(match.group("numeral"))
+                if value != expected:
+                    failures.append(
+                        f"docs/AGENT_TOOLING.md:{line_number}: literal "
+                        f"alpha-skill count {value} disagrees with "
+                        f"ALPHA_EVAL_RUNNERS ({expected})"
+                    )
+
+
 def validate_alpha_promotion_gate(
     locked_skills: dict[str, object],
     failures: list[str],
 ) -> None:
-    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+    # A hand-maintained list of things to gate fails silently when an entry
+    # is forgotten: the change that promotes a skill removes it from
+    # ALPHA_EVAL_RUNNERS (validate_alpha_skill_contracts requires members to
+    # stay visibly alpha) and adds it to the lock, so an intersection with
+    # the alpha inventory would omit exactly the promoted skill. A list of
+    # things to exempt fails loudly instead: every locked skill is a
+    # candidate unless a reviewed exemption asserts external origin, and the
+    # exemption is cross-checked against the alpha inventory (it must not
+    # name an alpha skill) and the lock allowlist (it must not name an
+    # unknown skill). The residual is a deliberate false exemption in a
+    # reviewed diff; a base-to-head transition check would close it and is
+    # deferred. The alpha inventory consulted here, ALPHA_EVAL_RUNNERS,
+    # mirrors EXPECTED_RUNNERS in run_alpha_skill_evals.py and is kept in
+    # sync by hand; a skill listed only there is invisible to the
+    # disjointness check.
+    alpha_exempt = sorted(EXTERNAL_ORIGIN_LOCKED_SKILLS & set(ALPHA_EVAL_RUNNERS))
+    if alpha_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name an "
+            f"alpha skill: {', '.join(alpha_exempt)}"
+        )
+    unknown_exempt = sorted(
+        EXTERNAL_ORIGIN_LOCKED_SKILLS - set(EXPECTED_SKILL_LOCK_ENTRIES)
+    )
+    if unknown_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a subset "
+            f"of EXPECTED_SKILL_LOCK_ENTRIES: {', '.join(unknown_exempt)}"
+        )
+    for name in sorted(set(locked_skills) - EXTERNAL_ORIGIN_LOCKED_SKILLS):
         evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
         if (
             not isinstance(evidence, dict)
@@ -853,9 +1127,35 @@ def optional_marketplace_source_references(
     }
 
 
-def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
+def parse_git_ls_files_stage(output: bytes) -> list[TrackedIndexRecord]:
+    """Parse ``git ls-files --stage -z`` output, keeping raw modes and stages."""
+    records: list[TrackedIndexRecord] = []
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, encoded_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3 or not fields[2].isdigit():
+            raise RuntimeError("git ls-files returned an invalid staged record")
+        records.append(
+            TrackedIndexRecord(
+                encoded_path.decode("utf-8", errors="surrogateescape"),
+                fields[0].decode("ascii", errors="replace"),
+                int(fields[2]),
+            )
+        )
+    return records
+
+
+def run_git_ls_files_stage(
+    root: Path,
+    pathspec: str | None = None,
+) -> list[TrackedIndexRecord]:
+    command = ["git", "-C", str(root), "ls-files", "--stage", "-z"]
+    if pathspec is not None:
+        command.extend(["--full-name", "--", pathspec])
     result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        command,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -863,20 +1163,15 @@ def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(detail or "git ls-files failed")
+    return parse_git_ls_files_stage(result.stdout)
 
+
+def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     files: list[tuple[Path, str]] = []
-    for record in result.stdout.split(b"\0"):
-        if not record:
+    for record in run_git_ls_files_stage(root):
+        if record.mode not in {"100644", "100755", "120000"}:
             continue
-        metadata, separator, encoded_path = record.partition(b"\t")
-        fields = metadata.split()
-        if not separator or len(fields) != 3:
-            raise RuntimeError("git ls-files returned an invalid staged record")
-        mode = fields[0]
-        if mode not in {b"100644", b"100755", b"120000"}:
-            continue
-        relative = Path(encoded_path.decode("utf-8", errors="surrogateescape"))
-        files.append((root / relative, mode.decode("ascii")))
+        files.append((root / Path(record.path), record.mode))
     return files
 
 
@@ -3244,15 +3539,7 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in (
-        "pycc",
-        "pycc-feedback",
-        "issue-to-plan",
-        "issue-implement",
-        "issue-select",
-        "next-milestone",
-        "ultra-review",
-    ):
+    for name in sorted(ALPHA_EVAL_RUNNERS):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:

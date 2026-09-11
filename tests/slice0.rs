@@ -71,7 +71,9 @@ fn defining_main_without_calling_it_produces_no_output() {
     // source (not shelled out to from this test, since a hardcoded
     // interpreter path would be machine-specific and break CI; the real
     // conformance harness that runs this kind of check portably is
-    // pycc_testkit, deferred per DECISIONS.md): zero bytes of stdout.
+    // pycc_testkit, deferred per
+    // docs/decisions/D-018-pycc-testkit-deferred-past-pr-1-pr-2.md): zero
+    // bytes of stdout.
     let dir = ScratchDir::new("e2e_uncalled_main").expect("failed to create scratch dir");
     let src = write_fixture(
         &dir,

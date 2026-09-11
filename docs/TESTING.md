@@ -1240,6 +1240,112 @@ and collide (the exact defect `crates/pycc_codegen/src/tests_support.rs`'s
 naming used only the process ID, so two call sites sharing a `label` in the
 same test binary raced on the same directory).
 
+## Accepted-decision immutability (issue #1000, Part 2 of #77)
+
+`AGENTS.md` has always said that an accepted decision is never rewritten, but
+nothing enforced it: PR #74 appended a parenthetical to the accepted
+Consequences text of D-032 and merged with every required check green, and
+Part 1 of #77 (#999, PR #1001) restored the line by hand.
+`scripts/check_decision_immutability.py` (D-240) is the guard.
+
+**What it compares.** Only the event's own `base..head` range, two-dot:
+`git diff --name-status --no-renames <base> <head> -- docs/decisions/`,
+restricted to paths matching `docs/decisions/D-<n>-<slug>.md` (anchored, no
+`/` in the basename, so `README.md`, `TEMPLATE.md` and a file inside a
+directory named like a decision are ignored). History is never re-judged: a
+replay of the rule over the 35 first-parent commits in `7ae33ae1..4b317abe`
+that modified an existing decision file would have failed 19 of them
+(including Part 1's own restoring merge, which is itself an in-place
+replacement), and none of those are retrofitted -- a pull request answers
+only for the lines it removes or changes.
+
+**The rule.** A file is frozen when its base frontmatter says `accepted` or
+`superseded`; `proposed` files, files new at the head (`A`), and base files
+whose frontmatter does not parse are unconstrained. For a frozen file, in
+order: deletion (or, under `--no-renames`, the `D` half of a rename) is a
+violation; the head frontmatter must parse and say `accepted` or
+`superseded`, and `superseded` never returns to `accepted`; a D-151
+index-only stub (the base's ninth line, 0-based `splitlines()` index 8, is
+exactly `Index-only: no long-form entry recorded yet.` *and* no base line
+starts with `- Status:` -- both, so the marker cannot be smuggled into a
+long-form entry and exploited later; positional, so a marker at any other
+index is not a stub and the file stays under the strict walk) may replace
+its five stub body lines while its frontmatter and any later lines stay
+frozen -- but only when the replaced stub body itself carries a well-formed
+body status line (`- Status: accepted` or `- Status: superseded`, optionally
+annotated): the first such head line after the frontmatter's closing blank,
+with every frozen line after the stub reappearing in order after it, so a
+status line placed after the frozen tail or inside the frontmatter unlocks
+nothing; a head without one in that region keeps the stub body frozen and
+fails the walk with an `index-only stub replaced without a long-form entry:
+no '- Status: accepted' or '- Status: superseded' line in the replaced stub
+body` hint, so deleting the stub body or replacing it with prose is a
+violation;
+otherwise an exact greedy subsequence walk over `splitlines()` (no
+`keepends`, so a trailing-newline-only change passes) requires every base
+line to reappear in the head verbatim and in order, except that the
+frontmatter `status:` line (line 4) may be replaced by `status: accepted` or
+`status: superseded` and the *first* body `- Status:` line by a line
+starting with `- Status: accepted` or `- Status: superseded` (an annotation
+such as `superseded by D-NNN` may follow after whitespace) -- the
+status-transition and narrowing-annotation shapes. A replacement with any
+other value (`proposed`, `rejected`, blank) fails and names the offending
+head line. Any other diff status for
+a frozen path (`T` for a symlink replacement, `C`, `R`, `U`, `X`) fails
+closed. Blobs are decoded with `errors="surrogateescape"`, so a non-UTF-8
+byte is a line mismatch, not a traceback. `difflib.SequenceMatcher` opcodes
+are deliberately not the verdict (they misreport pure insertions as
+deletions on repetitive ADR-like lines); `difflib` only prints context.
+
+**Event plumbing.** With no flags the script reads `GITHUB_EVENT_NAME`: on
+`pull_request` the base is `pull_request.base.sha` and the head `GITHUB_SHA`
+(the `refs/pull/N/merge` commit whose first parent is `base.sha`, so two-dot
+is exact); on `push` the base is `before` and an all-zero `before` is a skip;
+any other event, or none, exits 2. The governance checkout is depth 1, so a
+missing revision is shallow-fetched once (`git fetch --no-tags --depth=1
+origin <rev>`), the `ensure_revision_available` shape from
+`scripts/check_site_pin_merge_currency.rb`. Exit codes: 0 passed or skipped,
+1 violation, 2 usage or plumbing error. Locally, use the merge base rather
+than `origin/main` (a two-dot diff against a base that has since merged an
+inserted amendment would report `main`'s own insertions as removals):
+
+```
+python3 -B scripts/check_decision_immutability.py \
+  --base "$(git merge-base origin/main HEAD)" --head HEAD
+```
+
+**Binding.** The step `Check accepted-decision immutability (issue 1000)`
+(deliberately no `#` in the name: an unquoted `#` in a YAML scalar starts a
+comment) runs in `.github/workflows/ci.yml`'s `governance` job, which the
+required `ci-gate` context needs unconditionally;
+`scripts/test_check_decision_immutability.py`'s `CiWiringTest` fails if the
+step, the `needs`, or the `ci-gate` truth-table entry is removed or the job
+is made advisory. The step is also listed in `D171_GOVERNANCE_POLICY_STEPS`
+in `scripts/check_roadmap_evidence.rb`, with the
+`tests/fixtures/policy-successors/ci-d171.yml` fixture and
+`D171_CHANGE_AWARE_CI_WORKFLOW_SHA256` rotated in the same pull request (the
+#936 precedent), so the base-owned `audit` rejects a later head that drops,
+conditions, or replaces it. During the pull request that adds the step, the
+base-owned `audit` cannot yet see it -- unlisted steps are invisible to the
+base checker, which was verified to accept the head's `ci.yml` with the new
+step present, with its `run` replaced, and with `if: always()` added -- so
+the head-controlled `ci-gate` is the only enforcement until the merge, after
+which `audit` binds it too.
+
+**Evidence.** `scripts/test_check_decision_immutability.py` replays the
+literal PR #74 append on D-032's current bytes (`base line 15 removed or
+changed`), rewords, deletes, renames, symlinks and status-regresses frozen
+files, fills in the real D-001 and D-005 stubs, rejects a stub whose body is
+deleted or replaced without a `- Status: accepted`/`superseded` line in the
+replaced body (a decoy after D-005's frozen tail, or between its tail lines,
+unlocks nothing) and a status replacement carrying any other value, and runs
+every current
+`docs/decisions/D-*.md` against itself; its plumbing tests build two-commit
+throwaway repositories and drive `main` with explicit revisions, fake
+`pull_request`/`push` events, and a depth-1 clone that must trigger exactly
+one shallow fetch. Local Ruby suites need a UTF-8 locale
+(`LC_ALL=en_US.UTF-8`); CI's runner already has one.
+
 ## Multi-file (project-import) tests
 
 A multi-file program's layout is part of what is under test, so a project

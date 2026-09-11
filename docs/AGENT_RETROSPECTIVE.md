@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-09-11 — A temporary workflow outlived the activation change that promised to delete it
+
+**What happened.** `.github/workflows/frontend-perf-shadow.yml` was added
+by PR #269 as a D-112 shadow-measurement workflow whose own header said
+"delete this file entirely in the activation PR once evidence gathering,
+Task 4, is done". The five evidence runs happened on 2026-08-01 and D-112's
+activation landed the same day, but the deletion never did: the file sat
+unused on `main` for six weeks, and #293 was filed against it asking for a
+trigger pin the file no longer needed.
+
+**Root cause.** The deletion was one clause of the activation plan
+(`docs/superpowers/plans/2026-08-01-issue-109-frontend-perf-gate-runner-move.md`,
+Task 5: "remove the shadow job"), and the activation (PR #278, commit
+`80854834`) landed through the #282 emergency path while a D-103 deadlock
+was being resolved; the clause was dropped with the rest of the plan's
+non-code deliverables, and nothing checked those against the merged tree.
+
+**What fixed it.** PR for #293 deleted the file and adjusted the one live
+reference (`docs/ROADMAP.md`'s Quality gates row) instead of adding a
+policy pin for a file the tree had promised to remove.
+
+**Lesson.** A temporary artefact's own deletion promise is a plan item:
+when a plan's activation step lands, walk its enumerated non-code
+deliverables (the AGENTS.md completion check, item 6) before closing the
+issue, and treat a "temporary" header still present after activation as a
+stale deliverable rather than as something to protect with a new gate.
+
+---
+
 ## 2026-09-07 — A session file's own line counts went stale three review rounds running, because each fix invalidated them
 
 **What happened:** on PR [#996](https://github.com/rotnov/pycc/pull/996) (#695,

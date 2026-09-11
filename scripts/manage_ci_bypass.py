@@ -383,7 +383,8 @@ def relax(
     # before either creates its incident. This second check catches the case
     # where a second incident appeared during evidence-gathering/issue
     # creation above. A residual window remains between this check and the
-    # PATCH call itself -- see D-125's Consequences in docs/DECISIONS.md.
+    # PATCH call itself -- see D-125's Consequences in
+    # docs/decisions/D-125-session-driven-temporary-ci-check-relaxation.md.
     other_open = find_open_bypass_issue(repo)
     if other_open is not None and other_open != issue_number:
         raise CiBypassError(

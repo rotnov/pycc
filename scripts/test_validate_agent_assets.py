@@ -6,11 +6,13 @@ from __future__ import annotations
 import codecs
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import validate_agent_assets as validator
 
@@ -90,7 +92,30 @@ class AgentAssetValidationTests(unittest.TestCase):
             expected.update(b"SKILL.md")
             expected.update(b"skill")
             self.assertEqual(
-                validator.compute_skill_folder_hash(root),
+                validator.compute_skill_folder_hash(
+                    root,
+                    [root / "SKILL.md", root / "agents" / "openai.yaml"],
+                ),
+                expected.hexdigest(),
+            )
+
+    def test_skill_folder_hash_hashes_every_listed_file(self) -> None:
+        # The hash function no longer filters bytecode: rejection is the
+        # payload validator's job, and upstream hashes every regular file.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "SKILL.md").write_bytes(b"skill")
+            (root / "payload.pyc").write_bytes(b"bytecode")
+
+            expected = hashlib.sha256()
+            expected.update(b"payload.pyc")
+            expected.update(b"bytecode")
+            expected.update(b"SKILL.md")
+            expected.update(b"skill")
+            self.assertEqual(
+                validator.compute_skill_folder_hash(
+                    root, [root / "SKILL.md", root / "payload.pyc"]
+                ),
                 expected.hexdigest(),
             )
 
@@ -122,11 +147,17 @@ class AgentAssetValidationTests(unittest.TestCase):
             if not canonical_present:
                 skills_root = root / "empty-skills"
                 skills_root.mkdir()
+            # The lock and policy live in the temp root while the payload is
+            # the real vendored copy, so enumerate it from the real repository.
+            payload_entries = validator.skill_payload_entries(
+                validator.SKILLS_ROOT / "i-have-an-issue", validator.ROOT
+            )
             failures: list[str] = []
             validator.validate_skill_lock(
                 failures,
                 root=root,
                 skills_root=skills_root,
+                payload_entries=payload_entries,
             )
             return failures
 
@@ -149,39 +180,966 @@ class AgentAssetValidationTests(unittest.TestCase):
         failures = self.skill_lock_failures(canonical_present=False)
         self.assertTrue(any("has no canonical" in item for item in failures))
 
+    VENDORED_SKILL = "i-have-an-issue"
+    LOCK_LABEL = f"skills-lock.json: skills.{VENDORED_SKILL}"
+    HASH_MISMATCH = ".computedHash does not match"
+
+    @staticmethod
+    def copy_lock_fixtures(root: Path) -> None:
+        (root / "docs").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            validator.ROOT / "docs" / "AGENT_TOOLING.md",
+            root / "docs" / "AGENT_TOOLING.md",
+        )
+        shutil.copyfile(
+            validator.ROOT / "skills-lock.json", root / "skills-lock.json"
+        )
+
+    @classmethod
+    def copy_vendored_skill(
+        cls, destination: Path
+    ) -> list[validator.SkillPayloadEntry]:
+        """Copy the vendored skill's tracked files and return their entries.
+
+        Both the fixture's file set and the returned entry list derive from
+        the repository index, exactly as ``validate_skill_lock`` enumerates
+        them, so an untracked stray inside the real skill directory (a
+        ``.DS_Store``, a bytecode cache) can never enter the fixture or be
+        synthesized as a tracked entry.
+        """
+        source = validator.SKILLS_ROOT / cls.VENDORED_SKILL
+        entries = validator.skill_payload_entries(source, validator.ROOT)
+        for entry in entries:
+            target = destination / entry.relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / entry.relative, target)
+        return entries
+
+    def mutated_skill_lock_failures(
+        self,
+        mutate=None,
+        entries: list[tuple[str, str, int]] | None = None,
+    ) -> list[str]:
+        """Run the lock against a mutated temp copy with injected entries."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.copy_lock_fixtures(root)
+            skills_root = root / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            payload = self.copy_vendored_skill(skill_root)
+            if mutate is not None:
+                mutate(skill_root)
+            payload.extend(
+                validator.SkillPayloadEntry(*entry) for entry in entries or []
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=skills_root,
+                payload_entries=payload,
+            )
+            return failures
+
+    def assert_payload_rejected(
+        self,
+        failures: list[str],
+        relative: str,
+        reason: str,
+    ) -> None:
+        self.assertIn(f"{self.LOCK_LABEL}: {relative}: {reason}", failures)
+        self.assertFalse(
+            any(self.HASH_MISMATCH in item for item in failures), failures
+        )
+
+    def test_skill_lock_accepts_tracked_copy_of_vendored_payload(self) -> None:
+        self.assertEqual(self.mutated_skill_lock_failures(), [])
+
+    def test_skill_lock_rejects_tracked_bytecode_at_skill_root(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "payload.pyc").write_bytes(b"\x00bytecode")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("payload.pyc", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "payload.pyc",
+            "Python bytecode is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_tracked_pycache_payload(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "__pycache__").mkdir()
+            (skill_root / "__pycache__" / "payload.bin").write_bytes(b"x")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("__pycache__/payload.bin", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "__pycache__/payload.bin",
+            "__pycache__/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_nested_pycache_component(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "scripts" / "__pycache__").mkdir()
+            (skill_root / "scripts" / "__pycache__" / "x.py").write_bytes(b"x")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("scripts/__pycache__/x.py", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "scripts/__pycache__/x.py",
+            "__pycache__/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_upstream_skipped_directories(self) -> None:
+        for directory in ("__pypackages__", "node_modules", ".git"):
+            with self.subTest(directory=directory):
+
+                def mutate(skill_root: Path) -> None:
+                    (skill_root / directory).mkdir()
+                    (skill_root / directory / "x").write_bytes(b"x")
+
+                failures = self.mutated_skill_lock_failures(
+                    mutate, [(f"{directory}/x", "100644", 0)]
+                )
+                self.assert_payload_rejected(
+                    failures,
+                    f"{directory}/x",
+                    f"{directory}/ is not part of the reviewed vendored copy",
+                )
+
+    def test_skill_lock_rejects_tracked_symlinks(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            os.symlink("missing-target", skill_root / "dangling")
+            os.symlink("SKILL.md", skill_root / "alias.md")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate,
+            [("dangling", "120000", 0), ("alias.md", "120000", 0)],
+        )
+        for relative in ("dangling", "alias.md"):
+            self.assert_payload_rejected(
+                failures,
+                relative,
+                "tracked symlinks are not part of the reviewed vendored copy",
+            )
+
+    def test_skill_lock_rejects_tracked_gitlink(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "vendor").mkdir()
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("vendor", "160000", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "vendor",
+            "tracked mode 160000 is not a regular file blob",
+        )
+
+    def test_skill_lock_rejects_tracked_entry_missing_from_tree(self) -> None:
+        failures = self.mutated_skill_lock_failures(
+            None, [("ghost.md", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "ghost.md",
+            "tracked entry is missing from the working tree",
+        )
+
+    def test_skill_lock_rejects_tracked_entry_under_a_file(self) -> None:
+        failures = self.mutated_skill_lock_failures(
+            None, [("SKILL.md/x", "100644", 0)]
+        )
+        self.assertTrue(
+            any(
+                item.startswith(
+                    f"{self.LOCK_LABEL}: SKILL.md/x: tracked entry could not "
+                    "be inspected: "
+                )
+                for item in failures
+            ),
+            failures,
+        )
+        self.assertFalse(any(self.HASH_MISMATCH in item for item in failures))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are not supported")
+    def test_skill_lock_rejects_tracked_fifo(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            os.mkfifo(skill_root / "pipe")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("pipe", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures, "pipe", "tracked entry is not a regular file"
+        )
+
+    def test_skill_lock_never_hashes_through_a_file_symlink(self) -> None:
+        # A blob-mode index entry whose checkout is a symlink to a regular
+        # file used to be hashed by accident (Path.is_file follows links).
+        def mutate(skill_root: Path) -> None:
+            os.symlink("SKILL.md", skill_root / "alias.md")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("alias.md", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures, "alias.md", "tracked entry is not a regular file"
+        )
+
+    def test_skill_lock_rejects_non_utf8_tracked_path(self) -> None:
+        failures = self.mutated_skill_lock_failures(
+            None, [("bad\udcff", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures, "bad\udcff", "tracked path is not valid UTF-8"
+        )
+
+    def test_skill_lock_rejects_symlinked_skill_root_entry(self) -> None:
+        for relative in (".", ""):
+            with self.subTest(relative=repr(relative)):
+                failures: list[str] = []
+                validator.validate_skill_payload(
+                    self.LOCK_LABEL,
+                    validator.SKILLS_ROOT / self.VENDORED_SKILL,
+                    [validator.SkillPayloadEntry(relative, "120000", 0)],
+                    failures,
+                )
+                self.assertEqual(
+                    failures,
+                    [
+                        f"{self.LOCK_LABEL}: .: tracked symlinks are not "
+                        "part of the reviewed vendored copy"
+                    ],
+                )
+
+    def test_skill_lock_rejects_empty_tracked_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.copy_lock_fixtures(root)
+            skills_root = root / ".claude" / "skills"
+            self.copy_vendored_skill(skills_root / self.VENDORED_SKILL)
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=root, skills_root=skills_root, payload_entries=[]
+            )
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(
+            failures[0].startswith(f"{self.LOCK_LABEL}: no tracked payload under ")
+        )
+
+    def test_skill_lock_rejects_unmerged_tracked_entry(self) -> None:
+        failures = self.mutated_skill_lock_failures(
+            None, [("SKILL.md", "100644", 2)]
+        )
+        self.assert_payload_rejected(
+            failures, "SKILL.md", "tracked entry is unmerged"
+        )
+
+    def test_skill_lock_emits_first_rejection_reason_only(self) -> None:
+        # A bytecode file inside __pycache__ that is also missing from the
+        # working tree produces exactly one line: the suffix rule wins.
+        failures = self.mutated_skill_lock_failures(
+            None, [("__pycache__/x.pyc", "100644", 0)]
+        )
+        offending = [item for item in failures if "__pycache__/x.pyc" in item]
+        self.assertEqual(
+            offending,
+            [
+                f"{self.LOCK_LABEL}: __pycache__/x.pyc: Python bytecode is "
+                "not part of the reviewed vendored copy"
+            ],
+        )
+
+    def test_skill_lock_keeps_policy_check_after_payload_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.copy_lock_fixtures(root)
+            (root / "docs" / "AGENT_TOOLING.md").write_text("", encoding="utf-8")
+            skills_root = root / ".claude" / "skills"
+            payload = self.copy_vendored_skill(skills_root / self.VENDORED_SKILL)
+            payload.append(validator.SkillPayloadEntry("ghost.md", "100644", 0))
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=skills_root,
+                payload_entries=payload,
+            )
+        self.assertIn(
+            f"{self.LOCK_LABEL}: ghost.md: tracked entry is missing from the "
+            "working tree",
+            failures,
+        )
+        self.assertIn(
+            "docs/AGENT_TOOLING.md: missing computedHash for i-have-an-issue",
+            failures,
+        )
+        self.assertFalse(any(self.HASH_MISMATCH in item for item in failures))
+
+    def test_skill_lock_hashes_extra_tracked_regular_file(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "evil.py").write_bytes(b"print('evil')\n")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("evil.py", "100644", 0)]
+        )
+        self.assertEqual(len(failures), 1, failures)
+        self.assertIn(self.HASH_MISMATCH, failures[0])
+
+    def test_skill_lock_ignores_untracked_bytecode_noise(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            cache = skill_root / "scripts" / "__pycache__"
+            cache.mkdir()
+            (cache / "search_github.cpython-313.pyc").write_bytes(b"\x00")
+
+        self.assertEqual(self.mutated_skill_lock_failures(mutate), [])
+
+    def test_parse_git_ls_files_stage_records(self) -> None:
+        sha = "0" * 40
+        output = (
+            f"100644 {sha} 0\tSKILL.md\0"
+            f"120000 {sha} 0\tlink\0"
+            f"160000 {sha} 0\tvendor\0"
+            f"100644 {sha} 2\tconflict.md\0"
+        ).encode("utf-8") + b"100644 " + sha.encode() + b" 0\tbad\xff\0"
+        records = validator.parse_git_ls_files_stage(output)
+        self.assertEqual(
+            records,
+            [
+                validator.TrackedIndexRecord("SKILL.md", "100644", 0),
+                validator.TrackedIndexRecord("link", "120000", 0),
+                validator.TrackedIndexRecord("vendor", "160000", 0),
+                validator.TrackedIndexRecord("conflict.md", "100644", 2),
+                validator.TrackedIndexRecord("bad\udcff", "100644", 0),
+            ],
+        )
+        for malformed in (b"100644 " + sha.encode() + b"\tno-stage\0", b"junk\0"):
+            with self.subTest(record=malformed):
+                with self.assertRaises(RuntimeError):
+                    validator.parse_git_ls_files_stage(malformed)
+        with self.assertRaises(RuntimeError):
+            validator.parse_git_ls_files_stage(
+                b"100644 " + sha.encode() + b" x\tSKILL.md\0"
+            )
+
+    def test_skill_lock_reports_unenumerable_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.copy_lock_fixtures(root)
+            skills_root = root / "skills"
+            self.copy_vendored_skill(skills_root / self.VENDORED_SKILL)
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=root, skills_root=skills_root
+            )
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(
+            failures[0].startswith(
+                f"{self.LOCK_LABEL}: could not enumerate tracked payload: "
+            ),
+            failures,
+        )
+        self.assertFalse(any(self.HASH_MISMATCH in item for item in failures))
+
+    def test_skill_payload_entries_rejects_root_outside_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            repo = base / "repo"
+            skill_root = repo / ".claude" / "skills" / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            os.symlink(repo, base / "link")
+            spelled = base / "link" / ".claude" / "skills" / self.VENDORED_SKILL
+            with self.assertRaisesRegex(
+                RuntimeError, "skill root is outside the repository root"
+            ):
+                validator.skill_payload_entries(spelled, repo)
+
+    def test_skill_payload_entries_rejects_records_outside_prefix(self) -> None:
+        # Anchoring below the git toplevel makes ``--full-name`` records
+        # disagree with the root-relative prefix; that must fail closed.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            anchor = repo / "sub"
+            skill_root = anchor / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", "sub"], check=True
+            )
+            with self.assertRaisesRegex(RuntimeError, "outside"):
+                validator.skill_payload_entries(skill_root, anchor)
+
+    def test_skill_lock_rejects_wrong_case_rejected_directory(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "__PYCACHE__").mkdir()
+            (skill_root / "__PYCACHE__" / "note.txt").write_bytes(b"x")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("__PYCACHE__/note.txt", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "__PYCACHE__/note.txt",
+            "__PYCACHE__/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_wrong_case_bytecode_suffix(self) -> None:
+        def mutate(skill_root: Path) -> None:
+            (skill_root / "payload.PYC").write_bytes(b"\x00bytecode")
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [("payload.PYC", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            "payload.PYC",
+            "Python bytecode is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_rejects_tracked_git_component_beside_nested_repo(
+        self,
+    ) -> None:
+        def mutate(skill_root: Path) -> None:
+            subprocess.run(
+                ["git", "init", "--quiet", str(skill_root)], check=True
+            )
+
+        failures = self.mutated_skill_lock_failures(
+            mutate, [(".git/config", "100644", 0)]
+        )
+        self.assert_payload_rejected(
+            failures,
+            ".git/config",
+            ".git/ is not part of the reviewed vendored copy",
+        )
+
+    def test_skill_lock_end_to_end_ignores_nested_repository_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            expected = self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+            # A nested repository boundary appears inside the skill after the
+            # outer index was populated; its empty index must not answer.
+            subprocess.run(
+                ["git", "init", "--quiet", str(skill_root)], check=True
+            )
+            (skill_root / "untracked-anywhere.txt").write_bytes(b"x")
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(skill_root), "ls-files", "--stage"],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                ).stdout,
+                b"",
+            )
+
+            entries = validator.skill_payload_entries(skill_root, repo)
+            self.assertEqual(
+                sorted(entry.relative for entry in entries),
+                sorted(entry.relative for entry in expected),
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assertEqual(failures, [])
+
+    def test_skill_lock_end_to_end_rejects_tracked_nested_repository(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            nested = skill_root / "vendor"
+            nested.mkdir()
+            (nested / "x").write_bytes(b"x")
+            subprocess.run(["git", "init", "--quiet", str(nested)], check=True)
+            subprocess.run(
+                ["git", "-C", str(nested), "add", "--", "x"], check=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(nested),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "nested",
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+
+            entries = validator.skill_payload_entries(skill_root, repo)
+            self.assertIn(
+                validator.SkillPayloadEntry("vendor", "160000", 0), entries
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assert_payload_rejected(
+            failures, "vendor", "tracked mode 160000 is not a regular file blob"
+        )
+        self.assertEqual(len(failures), 1, failures)
+
+    def test_skill_lock_end_to_end_rejects_force_added_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            (skill_root / "payload.pyc").write_bytes(b"\x00bytecode")
+            os.symlink("SKILL.md", skill_root / "alias.md")
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+
+            entries = validator.skill_payload_entries(skill_root, repo)
+            self.assertIn(
+                validator.SkillPayloadEntry("payload.pyc", "100644", 0), entries
+            )
+            self.assertIn(
+                validator.SkillPayloadEntry("alias.md", "120000", 0), entries
+            )
+            self.assertIn(
+                validator.SkillPayloadEntry("SKILL.md", "100644", 0), entries
+            )
+
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assert_payload_rejected(
+            failures,
+            "payload.pyc",
+            "Python bytecode is not part of the reviewed vendored copy",
+        )
+        self.assert_payload_rejected(
+            failures,
+            "alias.md",
+            "tracked symlinks are not part of the reviewed vendored copy",
+        )
+        self.assertEqual(len(failures), 2, failures)
+
+    def test_skill_lock_end_to_end_rejects_symlinked_skill_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            self.copy_vendored_skill(repo / "vendored" / self.VENDORED_SKILL)
+            skills_root = repo / ".claude" / "skills"
+            skills_root.mkdir(parents=True)
+            os.symlink(
+                Path("..") / ".." / "vendored" / self.VENDORED_SKILL,
+                skills_root / self.VENDORED_SKILL,
+            )
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude", "vendored"],
+                check=True,
+            )
+            self.assertTrue((skills_root / self.VENDORED_SKILL / "SKILL.md").is_file())
+
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assertEqual(
+            failures,
+            [
+                f"{self.LOCK_LABEL}: .: tracked symlinks are not part of the "
+                "reviewed vendored copy"
+            ],
+        )
+
+    def test_skill_lock_end_to_end_accepts_clean_tracked_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            self.copy_lock_fixtures(repo)
+            skills_root = repo / ".claude" / "skills"
+            skill_root = skills_root / self.VENDORED_SKILL
+            self.copy_vendored_skill(skill_root)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-f", "--", ".claude"],
+                check=True,
+            )
+            # Untracked bytecode next to the tracked payload must not matter.
+            (skill_root / "scripts" / "__pycache__").mkdir()
+            (skill_root / "scripts" / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures, root=repo, skills_root=skills_root
+            )
+        self.assertEqual(failures, [])
+
+    PINNED_ALPHA_EVAL_RUNNER_NAMES = (
+        "issue-implement",
+        "issue-select",
+        "issue-to-plan",
+        "next-milestone",
+        "pycc",
+        "pycc-feedback",
+        "ultra-review",
+    )
+
     def test_alpha_promotion_requires_both_authenticated_client_evals(
         self,
     ) -> None:
-        failures: list[str] = []
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            shapes = {
+                "absent": {},
+                "codex-only": {
+                    name: {"codex": "https://example.test/codex-eval"}
+                },
+                "claude-only": {
+                    name: {"claude": "https://example.test/claude-eval"}
+                },
+            }
+            for shape, evidence in shapes.items():
+                with self.subTest(name=name, shape=shape), mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(name, failures[0])
+                    self.assertIn(
+                        "authenticated Codex and Claude model-eval evidence",
+                        failures[0],
+                    )
+
+        failures = []
         validator.validate_alpha_promotion_gate(
-            {"pycc": {"source": "future"}},
+            {name: {"source": "future"} for name in validator.ALPHA_EVAL_RUNNERS},
             failures,
         )
-        self.assertEqual(len(failures), 1)
-        self.assertIn(
-            "authenticated Codex and Claude model-eval evidence",
-            failures[0],
+        self.assertEqual(
+            failures,
+            [
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+                for name in sorted(validator.ALPHA_EVAL_RUNNERS)
+            ],
         )
 
     def test_alpha_promotion_accepts_complete_authenticated_evidence(
         self,
     ) -> None:
-        original = validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
-        try:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = {
-                "pycc": {
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            evidence = {
+                name: {
                     "codex": "https://example.test/codex-eval",
                     "claude": "https://example.test/claude-eval",
                 }
             }
+            with self.subTest(name=name), mock.patch.object(
+                validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+            ):
+                failures: list[str] = []
+                validator.validate_alpha_promotion_gate(
+                    {name: {"source": "future"}},
+                    failures,
+                )
+                self.assertEqual(failures, [])
+
+    def test_alpha_promotion_rejects_non_https_evidence(self) -> None:
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            with self.subTest(skill=name):
+                evidence = {
+                    name: {
+                        "codex": "http://example.test/codex-eval",
+                        "claude": "https://example.test/claude-eval",
+                    }
+                }
+                with mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                self.assertEqual(len(failures), 1)
+                self.assertIn(f"{name} cannot be promoted", failures[0])
+
+    def test_alpha_promotion_gate_covers_every_non_exempt_locked_skill(
+        self,
+    ) -> None:
+        """Every locked skill outside the exemption is a candidate.
+
+        ``PINNED_ALPHA_EVAL_RUNNER_NAMES`` above is a test-side pin of the alpha
+        inventory, not a second production copy: its only job is to turn an
+        inventory change into a reviewable test diff, so it must be edited
+        whenever a skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
+        The alpha inventory is a subset of the gated set (a table member in
+        the lock is gated), but the gate does not depend on the table: a
+        locked name in neither the table nor the exemption -- exactly the
+        shape a promotion produces, since the promoting change removes the
+        skill from ``ALPHA_EVAL_RUNNERS`` -- is gated too.
+        """
+        self.assertEqual(
+            tuple(sorted(validator.ALPHA_EVAL_RUNNERS)),
+            self.PINNED_ALPHA_EVAL_RUNNER_NAMES,
+        )
+        locked = {"future-alpha-skill": {"source": "future"}}
+
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS,
+            {"future-alpha-skill": {"future_runner"}},
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(locked, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("future-alpha-skill cannot be promoted", failures[0])
+
+        graduated = {"graduated-skill": {"source": "rotnov/skills"}}
+        self.assertNotIn("graduated-skill", validator.ALPHA_EVAL_RUNNERS)
+        self.assertNotIn(
+            "graduated-skill", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS
+        )
+        failures = []
+        validator.validate_alpha_promotion_gate(graduated, failures)
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: graduated-skill cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_not_name_an_alpha_skill(
+        self,
+    ) -> None:
+        # Widen the lock allowlist too, so only the disjointness invariant
+        # fires and this test proves that message on its own.
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "pycc"}),
+        ), mock.patch.dict(
+            validator.EXPECTED_SKILL_LOCK_ENTRIES, {"pycc": {"source": "x"}}
+        ):
             failures: list[str] = []
             validator.validate_alpha_promotion_gate(
-                {"pycc": {"source": "future"}},
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
                 failures,
             )
-            self.assertEqual(failures, [])
-        finally:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = original
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name "
+                "an alpha skill: pycc"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_be_inside_the_lock_allowlist(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "unreviewed-skill"}),
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
+                failures,
+            )
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a "
+                "subset of EXPECTED_SKILL_LOCK_ENTRIES: unreviewed-skill"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_rejects_stale_spelled_out_count(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "intro line.\n"
+            "`EXPECTED_RUNNERS` in that script names all six alpha skills.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:2: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_rejects_stale_count_after_table_mention(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "covers every skill in `ALPHA_EVAL_RUNNERS` "
+            "(6 at the time of writing), and none of them can enter.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_accepts_the_table_length(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "names all two alpha skills. `ALPHA_EVAL_RUNNERS` "
+                "(2 at the time of writing) lists 2 skills.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_ignores_unrelated_numerals(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "enforcing at least two evals on every alpha skill's file "
+                "in `ALPHA_EVAL_RUNNERS`. Tier-1 coverage since PR #255 "
+                "(2026-08-23) is 100% and one thing stays deferred.\n"
+                "The v0.3 release lists 12 project-wide checks.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_counts_only_adjacent_numerals(
+        self,
+    ) -> None:
+        # "two", "#260", "255" and the second "two" are not counts of alpha
+        # skills: "clients" and "landed" are not count qualifiers, "#260" is
+        # excluded by the `#` lookbehind, and "two clients support" counts
+        # clients. The two "one"s are counts, so they pass with a one-entry
+        # table and fail with a two-entry table while the others stay
+        # ignored.
+        text = (
+            "The two clients cover all one alpha skills.\n"
+            "Issue #260 covers every alpha skill.\n"
+            "PR 255 landed the evals of the one project-local alpha "
+            "skill.\n"
+            "The two clients support alpha skills.\n"
+        )
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(text, failures)
+        self.assertEqual(failures, [])
+        failures = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(text, failures)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+                "docs/AGENT_TOOLING.md:3: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+            ],
+        )
+
+    def test_skill_lock_runs_prose_guard_before_lock_shape_early_return(
+        self,
+    ) -> None:
+        stale = len(validator.ALPHA_EVAL_RUNNERS) + 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs" / "AGENT_TOOLING.md").write_text(
+                f"names all {stale} alpha skills.\n", encoding="utf-8"
+            )
+            (root / "skills-lock.json").write_text(
+                json.dumps({"version": 1, "skills": {}}), encoding="utf-8"
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=root,
+                payload_entries=[],
+            )
+        self.assertIn(
+            "skills-lock.json: skills must be a non-empty object", failures
+        )
+        self.assertIn(
+            f"docs/AGENT_TOOLING.md:1: literal alpha-skill count {stale} "
+            f"disagrees with ALPHA_EVAL_RUNNERS ({stale - 1})",
+            failures,
+        )
+
+    def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            (validator.ROOT / "docs" / "AGENT_TOOLING.md").read_text(
+                encoding="utf-8"
+            ),
+            failures,
+        )
+        self.assertEqual(failures, [])
+
+    def test_alpha_promotion_ignores_vendored_non_alpha_skills(self) -> None:
+        """A locked skill in the reviewed exemption needs no eval evidence."""
+        self.assertIn("i-have-an-issue", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS)
+        self.assertNotIn(
+            "i-have-an-issue", validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
+        )
+        failures: list[str] = []
+        validator.validate_alpha_promotion_gate(
+            {"i-have-an-issue": {"source": "rotnov/skills"}},
+            failures,
+        )
+        self.assertEqual(failures, [])
 
     def alpha_contract_failures(
         self,
