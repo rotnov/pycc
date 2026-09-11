@@ -156,6 +156,17 @@ class StatusEvidenceTests(unittest.TestCase):
                 self.run_case(mutate, "must be success for a non-unavailable record")
 
     def test_hidden_or_missing_proof_rows_are_rejected(self):
+        """Every vector below is rejected, but read the hero-anchored ones for what they are.
+
+        `style`, `hidden`, `inert` and `<dialog>` are outside the hero allowlist, so an
+        element carrying one inside an evidence hero hides its own subtree structurally,
+        before the inline-declaration model is ever consulted -- a benign
+        `style="color: red"` on the same anchor is rejected identically.  These cases
+        therefore pin the allowlist, not `HIDING_DECLARATION`.  The declaration model
+        itself is exercised where it actually decides the verdict: on the
+        primary-navigation link battery in `scripts/site_execution_evidence_test.py`
+        and on the stylesheet and embedded-`<style>` cases at the end of this list.
+        """
         for old, new, expected in (
             ('<details class="hero-evidence-details">', '<details hidden class="hero-evidence-details">',
              "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),

@@ -703,6 +703,12 @@ class HeroProseTests(ProjectionCase):
                             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: ")
 
     def test_details_toggle_and_closing_paragraph_are_mandatory(self):
+        """The toggle sits inside the hero, so these mutations are rejected structurally.
+
+        `style`, `hidden`, `inert` and `<dialog>` are outside the hero allowlist; a benign
+        declaration on the same anchor is rejected identically.  The inline-declaration
+        model is exercised outside a hero, in `scripts/site_execution_evidence_test.py`.
+        """
         for name, old, new in (
             ("toggle hidden", "<summary>", "<summary hidden>"),
             ("toggle hidden inline", "<summary>", '<summary style="opacity: .0">'),
