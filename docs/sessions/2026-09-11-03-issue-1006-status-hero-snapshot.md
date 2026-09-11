@@ -94,7 +94,8 @@ bytes; the context aggregate is 278,016 of 278,528.
 
 ## Review rounds
 
-Five D-068 `ievo:deep-reviewer` rounds over the full merge-base range; every
+Twenty-eight review rounds over the full merge-base range -- twenty-four D-068
+`ievo:deep-reviewer` rounds and four external Codex rounds on PR #1008; every
 verdict is a row in `.harden/findings/issue-1006.jsonl`.
 
 1. One warning: `paginated_check_runs` accepted a non-dict check-run entry
@@ -321,6 +322,32 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     stylesheet scan already did.
     Cases in all three suites, snapshot re-collected at `2026-09-11T16:30:06Z` with
     `--subject 4111208c`, pins rotated.
+
+22. External, on PR #1008, two Codex findings plus one refutation. The first:
+    the container-hiding axis inside a hero was still an open denylist
+    (`hidden`, `inert`, `aria-hidden`, a closed `<dialog>`), which six
+    consecutive rounds had extended one vector at a time -- a `popover`, a
+    disabled `<fieldset>`, a custom element and a second `<details>` level each
+    hide proof rows from a reader that the projection gate still counted.
+    Closed the way the declaration axis already was, by a reviewed structural
+    allowlist (22 tags, 15 attribute names) plus a single-disclosure rule,
+    since the hero legitimately renders its rows behind one `<details>` and a
+    nested one puts them a second click away. The second: an `unavailable`
+    record skipped `validate_projection` entirely, so a page still rendering
+    real proof rows beside it passed; `validate_unavailable_projection` now
+    asserts the page carries no proof-row markers. Keeping `style` out of the
+    hero attribute allowlist shadowed a thirty-case inline-CSS hiding battery
+    anchored inside heroes -- still passing, on the allowlist rather than on
+    `HIDING_DECLARATION` -- so the battery moved to a primary-navigation link,
+    outside every hero subtree, with a benign-declaration negative control.
+    The refutation: the collector cannot prove the `audit` run it records
+    belongs to the pull request it records. `filter=latest` is the check-runs
+    default, so the ambiguity guard cannot see two pull requests on one head
+    SHA, and `filter=all` would fail-close on an ordinary rerun. The probe
+    returned empty `pull_requests` on both the workflow run and the check-run,
+    so the binding is not observable through the API; the residual is recorded
+    rather than closed. Cases in all three suites, snapshot re-collected at
+    `2026-09-11T16:30:06Z` with `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
