@@ -200,6 +200,100 @@ class RoadmapEvidenceCliTest < Minitest::Test
     YAML
   end
 
+  PRODUCT_MODE_COVERAGE_STEP_HEADER =
+    "      - name: Coverage gate — 100% of changed lines, totals reported (D-242)"
+  PRODUCT_MODE_GATE_SCRIPT = <<~SHELL
+    set -euo pipefail
+    LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+    TRUSTED_CARGO="$(rustup which cargo)"
+    TRUSTED_RUSTC="$(rustup which rustc)"
+    TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+    TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+    TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+    cd "$RUNNER_TEMP"
+    RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+    "$TRUSTED_COV" llvm-cov --version
+    sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+    sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+    sudo chmod o+rx "$TRUSTED_COV"
+    ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+    mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+    sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+    ISOLATED_ENV=(
+      "HOME=$ISOLATED_ROOT/home"
+      "TMPDIR=$ISOLATED_ROOT/tmp/"
+      "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+      "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+      "CARGO=$TRUSTED_CARGO"
+      "RUSTC=$TRUSTED_RUSTC"
+      "RUSTDOC=$TRUSTED_RUSTDOC"
+      "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+      "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+    )
+    run_isolated() {
+      sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+    }
+    ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
+    cd "$GITHUB_WORKSPACE"
+    if [ -n "$PR_BASE_SHA" ]; then base_sha="$PR_BASE_SHA"; else base_sha="$PUSH_BASE_SHA"; fi
+    git diff -U0 --no-color "$base_sha" HEAD -- '*.rs' > "$RUNNER_TEMP/coverage-changed.diff"
+    run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
+    run_isolated "$TRUSTED_CARGO" build --workspace
+    run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
+    run_isolated "$TRUSTED_COV" llvm-cov --workspace --lcov --output-path "$ISOLATED_ROOT/coverage.lcov"
+    WORKSPACE_PACKAGE_FLAGS=()
+    while IFS= read -r package; do WORKSPACE_PACKAGE_FLAGS+=(-p "$package"); done < <(run_isolated "$TRUSTED_CARGO" metadata --no-deps --format-version 1 | python3 -c 'import json,sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"]]')
+    run_isolated "$TRUSTED_COV" llvm-cov report "${WORKSPACE_PACKAGE_FLAGS[@]}"
+    python3 -B scripts/check_diff_coverage.py --lcov "$ISOLATED_ROOT/coverage.lcov" --diff "$RUNNER_TEMP/coverage-changed.diff" --root "$GITHUB_WORKSPACE" --require-changed-lines 100
+    rm "$GITHUB_WORKSPACE/target"
+    printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
+  SHELL
+
+  # The D-242 product-mode coverage job as a Hash; `overrides` replace the
+  # gate script (`script:`) or the gate step's env (`env:`), and a block may
+  # mutate the whole workflow before it is serialized by the caller.
+  def product_mode_coverage_workflow(script: PRODUCT_MODE_GATE_SCRIPT, env: COVERAGE_GATE_ENV.dup)
+    workflow = {
+      "on" => { "pull_request" => nil },
+      "env" => TRUSTED_COVERAGE_ENV.dup,
+      "jobs" => {
+        "build-test-coverage" => {
+          "runs-on" => "macos-14",
+          "steps" => [
+            {
+              "uses" => PINNED_CHECKOUT_ACTION,
+              "with" => { "persist-credentials" => false }
+            },
+            { "name" => "Show pinned toolchain", "run" => "rustup show" },
+            { "name" => "Install LLVM 22 (D-015)", "run" => "brew install llvm@22" },
+            { "name" => "Install llvm-tools-preview", "run" => "rustup component add llvm-tools-preview" },
+            { "name" => "Add x86_64-apple-darwin Rust target", "run" => "rustup target add x86_64-apple-darwin" },
+            {
+              "name" => PRODUCT_MODE_COVERAGE_STEP,
+              "env" => env,
+              "run" => script
+            }
+          ]
+        }
+      }
+    }
+    yield workflow if block_given?
+    workflow
+  end
+
+  def product_mode_gate_step(workflow)
+    workflow.dig("jobs", "build-test-coverage", "steps").find do |step|
+      step["name"] == PRODUCT_MODE_COVERAGE_STEP
+    end
+  end
+
+  def assert_product_mode_rejected(workflow, label, expected_context:)
+    error = assert_raises(RoadmapEvidenceError, label) do
+      coverage_gate_present?(workflow.to_yaml, "ci.yml")
+    end
+    assert_includes error.message, expected_context, label
+  end
+
   def run_checker(roadmap:, workflow:)
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
@@ -4781,6 +4875,299 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       assert status.success?, stderr
       assert_includes stdout, "Roadmap evidence policy passed."
+    end
+  end
+
+  # D-242 product mode: the coverage job is audited by named properties, and
+  # the legacy D91 byte-exact shape stays accepted permanently.
+
+  def test_product_mode_coverage_gate_is_accepted
+    assert coverage_gate_present?(product_mode_coverage_workflow.to_yaml, "ci.yml")
+  end
+
+  def test_product_mode_coverage_gate_accepts_setup_steps_in_any_order_and_continue_on_error_false
+    workflow = product_mode_coverage_workflow do |candidate|
+      steps = candidate.dig("jobs", "build-test-coverage", "steps")
+      steps[1], steps[4] = steps[4], steps[1]
+      steps[2]["continue-on-error"] = false
+    end
+    assert coverage_gate_present?(workflow.to_yaml, "ci.yml")
+  end
+
+  def test_product_mode_coverage_gate_rejects_each_script_property_mutation
+    {
+      "lowered threshold" =>
+        ["--require-changed-lines 100", "--require-changed-lines 99"],
+      "missing workspace denominator" =>
+        ["llvm-cov --workspace --lcov", "llvm-cov --lcov"],
+      "sandbox without nobody" =>
+        ["sudo -u nobody env -i", "sudo env -i"],
+      "missing report table" =>
+        ["run_isolated \"$TRUSTED_COV\" llvm-cov report \"${WORKSPACE_PACKAGE_FLAGS[@]}\"\n", ""],
+      "exit 0 inserted" =>
+        ["rm \"$GITHUB_WORKSPACE/target\"\n", "rm \"$GITHUB_WORKSPACE/target\" || exit 0\n"],
+      "|| true inserted" =>
+        ["--require-changed-lines 100\n", "--require-changed-lines 100 || true\n"],
+      "set +e inserted" =>
+        ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nset +e\n"],
+      "trap inserted" =>
+        ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\ntrap 'exit' ERR\n"],
+      "second TRUSTED_COV assignment" =>
+        ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nTRUSTED_COV=/tmp/evil\n"],
+      "second run_isolated definition" =>
+        ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nrun_isolated() { \"$@\"; }\n"],
+      "missing set -euo pipefail" =>
+        ["set -euo pipefail\n", ""],
+      "sanitized PATH replaced" =>
+        ["\"PATH=$(dirname \"$TRUSTED_CARGO\"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin\"",
+         "\"PATH=$PATH\""],
+      "chown to nobody removed" =>
+        ["sudo chown -R nobody:nobody \"$ISOLATED_ROOT\"\n", ""],
+      "pinned install replaced" =>
+        ["--locked --version \"${CARGO_LLVM_COV_VERSION}\"", "--locked"]
+    }.each do |label, (before, after)|
+      script = PRODUCT_MODE_GATE_SCRIPT.sub(before, after)
+      refute_equal PRODUCT_MODE_GATE_SCRIPT, script, label
+      assert_product_mode_rejected(
+        product_mode_coverage_workflow(script: script),
+        label,
+        expected_context: "coverage gate script"
+      )
+    end
+  end
+
+  def test_product_mode_coverage_gate_rejects_required_lines_out_of_order
+    report = "run_isolated \"$TRUSTED_COV\" llvm-cov report \"${WORKSPACE_PACKAGE_FLAGS[@]}\"\n"
+    lcov = "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace --lcov --output-path \"$ISOLATED_ROOT/coverage.lcov\"\n"
+    script = PRODUCT_MODE_GATE_SCRIPT.sub(report, "").sub(lcov, report + lcov)
+    assert_product_mode_rejected(
+      product_mode_coverage_workflow(script: script),
+      "report before lcov",
+      expected_context: "out of order"
+    )
+  end
+
+  def test_product_mode_coverage_gate_rejects_each_gate_env_mutation
+    {
+      "extra key" => COVERAGE_GATE_ENV.merge("CARGO_HOME" => "/tmp/evil"),
+      "missing key" => COVERAGE_GATE_ENV.reject { |key, _| key == "PUSH_BASE_SHA" },
+      "different expression" =>
+        COVERAGE_GATE_ENV.merge("PR_BASE_SHA" => "${{ github.event.pull_request.head.sha }}")
+    }.each do |label, env|
+      assert_product_mode_rejected(
+        product_mode_coverage_workflow(env: env),
+        label,
+        expected_context: "coverage gate step environment"
+      )
+    end
+  end
+
+  def test_product_mode_coverage_gate_rejects_each_gate_step_mutation
+    {
+      "continue-on-error true" => [{ "continue-on-error" => true }, "run unconditionally"],
+      "if on the gate step" => [{ "if" => "github.event_name == 'push'" }, "run unconditionally"],
+      "custom shell" => [{ "shell" => "bash" }, "default shell"],
+      "extra key" => [{ "working-directory" => "crates" }, "coverage gate step environment"]
+    }.each do |label, (extra, expected_context)|
+      workflow = product_mode_coverage_workflow do |candidate|
+        product_mode_gate_step(candidate).merge!(extra)
+      end
+      assert_product_mode_rejected(workflow, label, expected_context: expected_context)
+    end
+  end
+
+  def test_product_mode_coverage_gate_with_the_wrong_step_name_is_not_a_gate
+    workflow = product_mode_coverage_workflow do |candidate|
+      product_mode_gate_step(candidate)["name"] = "Coverage gate (D-242)"
+    end
+    refute coverage_gate_present?(workflow.to_yaml, "ci.yml")
+
+    _stdout, stderr, status = run_checker(roadmap: "# pycc Roadmap\n", workflow: workflow.to_yaml)
+    refute status.success?
+    assert_includes stderr, "does not provide the exact 100% line and region gate"
+  end
+
+  def test_product_mode_coverage_gate_rejects_each_pre_gate_step_mutation
+    {
+      "extra unlisted run step" =>
+        { "name" => "Warm cache", "run" => "cargo fetch" },
+      "duplicate setup command" =>
+        { "name" => "Show pinned toolchain again", "run" => "rustup show" },
+      "setup step with shell" =>
+        { "name" => "Show pinned toolchain", "run" => "rustup show", "shell" => "bash" },
+      "setup step with if" =>
+        { "name" => "Show pinned toolchain", "run" => "rustup show", "if" => "always()" },
+      "setup step with env" =>
+        { "name" => "Show pinned toolchain", "run" => "rustup show", "env" => { "X" => "1" } },
+      "setup step with continue-on-error true" =>
+        { "name" => "Show pinned toolchain", "run" => "rustup show", "continue-on-error" => true },
+      "unpinned action" =>
+        { "uses" => "actions/setup-python@v5" },
+      "second checkout" =>
+        { "uses" => PINNED_CHECKOUT_ACTION, "with" => { "persist-credentials" => false } }
+    }.each do |label, step|
+      workflow = product_mode_coverage_workflow do |candidate|
+        steps = candidate.dig("jobs", "build-test-coverage", "steps")
+        if label.start_with?("setup step") || label == "duplicate setup command"
+          steps.delete_at(1) if label.start_with?("setup step")
+          steps.insert(1, step)
+        else
+          steps.insert(-2, step)
+        end
+      end
+      assert_product_mode_rejected(
+        workflow,
+        label,
+        expected_context: "coverage setup steps do not match the trusted sequence"
+      )
+    end
+  end
+
+  def test_product_mode_coverage_gate_rejects_each_checkout_mutation
+    {
+      "persist-credentials true" => { "persist-credentials" => true },
+      "extra with key" => { "persist-credentials" => false, "fetch-depth" => 0 },
+      "missing with" => nil
+    }.each do |label, with|
+      workflow = product_mode_coverage_workflow do |candidate|
+        checkout = candidate.dig("jobs", "build-test-coverage", "steps", 0)
+        if with.nil?
+          checkout.delete("with")
+        else
+          checkout["with"] = with
+        end
+      end
+      assert_product_mode_rejected(
+        workflow,
+        label,
+        expected_context: "coverage setup steps do not match the trusted sequence"
+      )
+    end
+  end
+
+  def test_product_mode_coverage_gate_shares_the_job_level_checks
+    {
+      "job env" => [->(job) { job["env"] = { "PATH" => "/tmp" } }, "environment"],
+      "job needs" => [->(job) { job["needs"] = ["rustfmt"] }, "depend on other jobs"],
+      "job if" => [->(job) { job["if"] = "always()" }, "run unconditionally"],
+      "job runner" => [->(job) { job["runs-on"] = "ubuntu-latest" }, "trusted runner"],
+      "job continue-on-error" => [->(job) { job["continue-on-error"] = true }, "propagate failures"]
+    }.each do |label, (mutate, expected_context)|
+      workflow = product_mode_coverage_workflow do |candidate|
+        mutate.call(candidate.dig("jobs", "build-test-coverage"))
+      end
+      assert_product_mode_rejected(workflow, label, expected_context: expected_context)
+    end
+  end
+
+  def test_legacy_coverage_gate_stays_accepted_beside_product_mode
+    assert coverage_gate_present?(coverage_workflow, "ci.yml")
+    # A tampered legacy step is not a reviewed script, so it is no gate at all
+    # (and the product-mode arm has no step of its own to audit).
+    refute coverage_gate_present?(
+      coverage_workflow(
+        "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
+        "--fail-under-lines 99 --fail-under-regions 100"
+      ),
+      "ci.yml"
+    )
+  end
+
+  def d171_product_mode_workflow
+    d171_workflow do |workflow|
+      step = workflow.dig("jobs", "build-test-coverage", "steps").find do |candidate|
+        candidate["name"] == COVERAGE_STEP
+      end
+      step["name"] = PRODUCT_MODE_COVERAGE_STEP
+      step["env"] = COVERAGE_GATE_ENV.dup
+      step["run"] = PRODUCT_MODE_GATE_SCRIPT
+      yield workflow if block_given?
+    end
+  end
+
+  def test_d171_routed_workflow_accepts_the_product_mode_coverage_gate
+    assert_d171_routing_accepted(d171_product_mode_workflow, "ci-d171-product-mode")
+  end
+
+  def test_d171_routed_workflow_delegates_product_mode_coverage_checks
+    {
+      "line threshold" => ["--require-changed-lines 100", "--require-changed-lines 99"],
+      "workspace denominator" => ["llvm-cov --workspace --lcov", "llvm-cov --lcov"],
+      "nobody sandbox" => ["sudo -u nobody env -i", "sudo env -i"]
+    }.each do |label, (before, after)|
+      workflow = d171_product_mode_workflow do |candidate|
+        step = product_mode_gate_step(candidate)
+        step["run"] = step.fetch("run").sub(before, after)
+      end
+      assert_d171_routing_rejected(workflow, label, expected_context: "coverage")
+    end
+  end
+
+  # D-242 evidence identifiers, registered ahead of the activation pull
+  # request that cites them (mirrors the readme-coverage-badge-bound tests).
+
+  def test_accepts_ci_diff_coverage_100_evidence
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI. <!-- roadmap-evidence: ci-diff-coverage-100 -->
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold. <!-- roadmap-evidence: readme-diff-coverage-badge-bound -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_diff_coverage_evidence_with_the_wrong_claim
+    {
+      "ci-diff-coverage-100" => "The diff coverage gate is green.",
+      "readme-diff-coverage-badge-bound" => "The README coverage badge is green."
+    }.each do |evidence_id, claim|
+      roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## Current delivery status
+
+        ### v0.1 acceptance checklist
+
+        - [x] #{claim} <!-- roadmap-evidence: #{evidence_id} -->
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+      refute status.success?, evidence_id
+      assert_includes stderr, "does not prove this roadmap claim", evidence_id
+    end
+  end
+
+  def test_rejects_diff_coverage_evidence_outside_the_v0_1_checklist
+    {
+      "ci-diff-coverage-100" =>
+        "Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI.",
+      "readme-diff-coverage-badge-bound" =>
+        "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold."
+    }.each do |evidence_id, claim|
+      roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## v1.0 — spec freeze
+
+        ### v0.1 acceptance checklist
+
+        - [x] #{claim} <!-- roadmap-evidence: #{evidence_id} -->
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+      refute status.success?, evidence_id
+      assert_includes stderr, "must appear under the expected roadmap section", evidence_id
     end
   end
 end
