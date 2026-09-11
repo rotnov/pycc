@@ -440,7 +440,7 @@
       },
       "test": {
         "path": "tests/architecture_trace.rs",
-        "sha256": "ce0b393c0369fa75fb792f49c41c587cf3f536f8e1bbcee7f61f7f35d5c6684c",
+        "sha256": "d1a34facec3e93fd80784b90b4f58ea959f3e7908e8aedac1e3169bd5ba13ffb",
         "names": [
           "checked_in_stage_artifacts_are_what_the_compiler_produces_today",
           "regeneration_writes_exactly_the_checked_in_stage_artifacts",
@@ -448,7 +448,7 @@
           "type_checking_returns_hir_byte_identical_to_the_finalized_hir",
           "the_page_excerpts_are_exact_prefixes_of_the_artifacts",
           "the_fixture_builds_a_native_executable_whose_stdout_is_the_published_transcript",
-          "a_mutated_artifact_a_foreign_artifact_and_an_unevidenced_stage_are_all_rejected"
+          "a_mutated_artifact_and_a_substituted_stage_artifact_are_both_rejected"
         ]
       },
       "command": {

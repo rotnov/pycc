@@ -267,6 +267,12 @@ def validate(hero, evidence_root, repo_root):
     stages = hero["snapshot"]["stages"]
     if not isinstance(stages, list) or len(stages) != len(STAGES):
         fail(f"architecture snapshot stages must be the {len(STAGES)} ordered pipeline stages")
+    # Ahead of the closed-list comparison below, so an overstated LLVM IR stage
+    # is rejected with the reason it is unevidenced rather than with the generic
+    # drift message. `pycc` has no `--emit` flag, so the stage has no artifact.
+    for item in stages:
+        if isinstance(item, dict) and item.get("id") == "llvm-ir" and item.get("evidence") != "none":
+            fail("architecture llvm-ir stage may not claim evidence; pycc has no --emit flag")
     for (identity, label, api, evidence, path), item in zip(STAGES, stages):
         require_exact_fields(item, shape["stage"], f"architecture stage {identity}")
         if (item["id"], item["label"], item["api"], item["evidence"]) != (identity, label, api, evidence):
@@ -291,8 +297,6 @@ def validate(hero, evidence_root, repo_root):
     by_id = {item["id"]: item for item in stages}
     if by_id["type-check"]["sha256"] != by_id["hir"]["sha256"]:
         fail("architecture type-check stage is an identity claim and must share the HIR stage's SHA-256")
-    if by_id["llvm-ir"]["evidence"] != "none":
-        fail("architecture llvm-ir stage may not claim evidence; pycc has no --emit flag")
 
     attestation = hero["attestation"]
     if not is_utc_instant(attestation["collected_at"]):

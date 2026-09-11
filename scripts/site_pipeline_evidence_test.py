@@ -192,6 +192,15 @@ class PipelineEvidenceTests(unittest.TestCase):
                     path.write_text(source.replace(marker, marker.replace("| partial |", "| all-Tier-1 |")))
                 self.run_case(mutate, "architecture")
 
+    def test_a_stage_cannot_claim_evidence_it_does_not_have(self):
+        """The LLVM IR stage has no artifact; presenting it as one must be rejected."""
+        def mutate(doc, site, root):
+            stages = doc["heroes"][ARCHITECTURE]["snapshot"]["stages"]
+            llvm_ir = next(item for item in stages if item["id"] == "llvm-ir")
+            self.assertEqual(llvm_ir["evidence"], "none")
+            llvm_ir["evidence"] = "artifact"
+        self.run_case(mutate, "may not claim evidence")
+
     def test_softened_limitations_are_rejected(self):
         def mutate(doc, site, root):
             doc["heroes"][ARCHITECTURE]["limitations"] = "Everything is covered."

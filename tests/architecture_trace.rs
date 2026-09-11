@@ -83,18 +83,6 @@ fn compare_stage(stage: &str, derived: &str, checked_in: &[u8]) -> Result<(), St
     ))
 }
 
-/// A stage may be presented as implemented only when it actually carries
-/// evidence. The LLVM IR stage has none today (`--emit` does not exist), which
-/// is why the hero is `partial` and not `all-Tier-1`.
-fn present_as_implemented(stage: &str, evidence: Option<usize>) -> Result<usize, String> {
-    match evidence {
-        Some(bytes) => Ok(bytes),
-        None => Err(format!(
-            "{stage} has no artifact and must be presented as unavailable, not implemented"
-        )),
-    }
-}
-
 fn read_artifact(name: &str) -> Vec<u8> {
     std::fs::read(artifact_path(name))
         .unwrap_or_else(|e| panic!("missing stage artifact {name}: {e}"))
@@ -264,7 +252,7 @@ fn the_fixture_builds_a_native_executable_whose_stdout_is_the_published_transcri
 }
 
 #[test]
-fn a_mutated_artifact_a_foreign_artifact_and_an_unevidenced_stage_are_all_rejected() {
+fn a_mutated_artifact_and_a_substituted_stage_artifact_are_both_rejected() {
     let derived = derive();
     // 1. One mutated byte in an otherwise correct artifact.
     let mut mutated = canonical_lf(&read_artifact("hir-module.txt"));
@@ -274,26 +262,20 @@ fn a_mutated_artifact_a_foreign_artifact_and_an_unevidenced_stage_are_all_reject
             .unwrap_err()
             .contains("hir artifact drifted")
     );
-    // 2. A different fixture's artifact presented as this stage's: the MIR of
-    //    the same program is not its HIR, and byte length alone does not save it.
+    // 2. Another stage's artifact presented as this one's: the MIR of the same
+    //    program is not its HIR, so the comparison is not satisfied by any
+    //    plausible-looking text of a similar shape from the same pipeline run.
     assert!(
         compare_stage("hir", &derived.hir, &read_artifact("mir-items.txt"))
             .unwrap_err()
             .contains("hir artifact drifted")
     );
-    // 3. An omitted stage presented as implemented.
-    assert_eq!(present_as_implemented("mir", Some(derived.mir.len())), Ok(derived.mir.len()));
-    assert!(
-        present_as_implemented("llvm-ir", None)
-            .unwrap_err()
-            .contains("must be presented as unavailable")
-    );
-    // 4. The positive control: the shipped artifacts still compare equal.
+    // 3. The positive control: the shipped artifacts still compare equal.
     assert_eq!(
         compare_stage("parser", &derived.parser, &read_artifact("parser-ast.txt")),
         Ok(())
     );
-    // 5. The regeneration override resolves to the fixture directory when the
+    // 4. The regeneration override resolves to the fixture directory when the
     //    environment names one, and to the caller's scratch directory otherwise.
     let scratch = ScratchDir::new("architecture_trace_out_dir").expect("scratch directory");
     let fallback: &Path = scratch.as_ref();
