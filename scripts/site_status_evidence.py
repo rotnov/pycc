@@ -193,6 +193,8 @@ def validate(hero, evidence_root, repo_root):
     for name in names:
         if not re.search(r"^\s+def " + re.escape(name) + r"\(", test_source, re.M):
             fail(f"status test is not registered: {name}")
+    if names != re.findall(r"^\s+def (test_\w+)\(", test_source, re.M):
+        fail("status test names must list every registered test in source order")
 
     command = hero["command"]
     if command["cwd"] != "repository-root" or command["requires"] != REQUIRES:

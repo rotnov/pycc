@@ -465,7 +465,7 @@
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "f4c95688b7824748590d17a9905ace2f009ea49636132fc7f824fc7edbfd35d9",
+        "sha256": "4f188d54659e66cb6896d3005cf1264b0d8dabaaa0cbbaec66fd5c1468474d59",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",

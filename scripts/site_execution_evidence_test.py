@@ -28,7 +28,11 @@ class ExecutionEvidenceTests(unittest.TestCase):
                 if hero["fixture"] is None:
                     continue
                 paths.update([hero["fixture"]["path"], hero["test"]["path"]])
-                paths.update(item["path"] for item in hero["snapshot"].get("artifacts", [hero["snapshot"]]))
+                artifacts = hero["snapshot"].get("artifacts")
+                if artifacts is None:
+                    # The status record's snapshot holds subjects, not artifact paths.
+                    artifacts = [hero["snapshot"]] if "path" in hero["snapshot"] else []
+                paths.update(item["path"] for item in artifacts)
             for relative in paths:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)

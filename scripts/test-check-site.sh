@@ -44,6 +44,11 @@ restore_fixtures() {
   cp "$repo_root/tests/diagnostics/d0021_range_argument_type.expected.json" "$fixture_root/evidence-root/tests/diagnostics/"
   cp "$repo_root/tests/diagnostics/quick_start_type_error.expected.txt" \
     "$fixture_root/evidence-root/tests/diagnostics/quick_start_type_error.expected.txt"
+  # Issue #1006 (D-241): the status record pins the collector and its
+  # shallow-safe test suite as its fixture/test artifacts.
+  mkdir -p "$fixture_root/evidence-root/scripts"
+  cp "$repo_root/scripts/collect_status_snapshot.py" "$fixture_root/evidence-root/scripts/"
+  cp "$repo_root/scripts/test_check_status_snapshot.py" "$fixture_root/evidence-root/scripts/"
 }
 
 restore_fixtures
@@ -339,8 +344,9 @@ for index, hero in enumerate(json.loads((repo_root / "site/evidence-heroes.json"
     )
 
 # Unavailable heroes must not grow decorative evidence.  Their owner issue is
-# the only stable link until a child issue lands a real artifact.
-for index in range(3, 8):
+# the only stable link until a child issue lands a real artifact.  Status
+# (index 5) left this set under D-241; its record owns its own mutations below.
+for index in (3, 4, 6, 7):
     rejected(
         f"unavailable {index} carries invented snapshot",
         lambda doc, index=index: doc["heroes"][index].__setitem__(
@@ -396,8 +402,9 @@ reset_site()
 PY
 restore_fixtures
 
-# RED/negative projection control for #564: an unavailable Status hero must
-# not be able to advertise all-Tier-1 through a decorative HTML attribute.
+# RED/negative projection control for #564/#1006: the Status hero's visible
+# HTML tuple cannot drift from its all-Tier-1 record through a decorative
+# attribute, in either direction.
 python3 - "$fixture_root/site/status/index.html" <<'PY'
 from pathlib import Path
 import sys
@@ -409,40 +416,60 @@ anchor = '''      <header
         data-evidence-role="hero"
         data-evidence-id="status-snapshot-v1"
         data-evidence-kind="required-checks-snapshot"
-        data-evidence-state="unavailable"
+        data-evidence-state="all-Tier-1"
       >'''
 assert anchor in content
 path.write_text(
     content.replace(
         anchor,
         anchor.replace(
-            'data-evidence-state="unavailable"',
             'data-evidence-state="all-Tier-1"',
+            'data-evidence-state="unavailable"',
         ),
         1,
     )
 )
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted an overstated decorative Status hero (issue #564)" >&2
+  echo "Validator accepted a drifted decorative Status hero (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
 
-# Markdown inventory cannot claim stronger evidence than the manifest.
+# The Status record's own overstatement: the manifest cannot claim all-Tier-1
+# when a required conclusion is not success (D-241 state mapping).
+python3 - "$fixture_root/site/evidence-heroes.json" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+path = Path(sys.argv[1])
+document = json.loads(path.read_text())
+hero = next(item for item in document["heroes"] if item["page_id"] == "status")
+assert hero["state"] == "all-Tier-1"
+hero["environment"]["platforms"][2]["conclusion"] = "skipped"
+path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a skipped Tier-1 job under all-Tier-1 (issue #1006)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Markdown inventory cannot disagree with the manifest's state.
 python3 - "$fixture_root/site/index.html.md" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->"
-new = old.replace("unavailable", "all-Tier-1")
+old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | all-Tier-1 | /status/ -->"
+new = old.replace("all-Tier-1", "unavailable")
 assert old in content
 path.write_text(content.replace(old, new, 1))
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted an overstated Markdown evidence state (issue #564)" >&2
+  echo "Validator accepted a drifted Markdown evidence state (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
@@ -454,16 +481,36 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->"
-new = old.replace("unavailable", "all-Tier-1")
+old = "<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | all-Tier-1 | /status/ -->"
+new = old.replace("all-Tier-1", "unavailable")
 assert old in content
 path.write_text(content.replace(old, new, 1))
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted an overstated LLM evidence state (issue #564)" >&2
+  echo "Validator accepted a drifted LLM evidence state (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
+
+# The shared Markdown/LLM status summary carries the record's limitations
+# verbatim; softening them on either surface is drift (D-241).
+for surface in index.html.md llms.txt; do
+  python3 - "$fixture_root/site/$surface" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = "all-Tier-1 means the listed jobs concluded success in that run, not release readiness."
+assert content.count(old) == 1
+path.write_text(content.replace(old, "all-Tier-1 means the release is ready.", 1))
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted softened status limitations in $surface (issue #1006)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
 
 # Structured data carries the same tuple as visible HTML.
 python3 - "$fixture_root/site/status/index.html" <<'PY'
@@ -473,13 +520,13 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 old = '''                "propertyID": "pycc:evidence-state",
-                "value": "unavailable"'''
-new = old.replace('"unavailable"', '"all-Tier-1"')
+                "value": "all-Tier-1"'''
+new = old.replace('"all-Tier-1"', '"unavailable"')
 assert old in content
 path.write_text(content.replace(old, new, 1))
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted overstated structured evidence data (issue #564)" >&2
+  echo "Validator accepted drifted structured evidence data (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
@@ -492,12 +539,12 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-old = 'data-evidence-state="unavailable"'
+old = 'data-evidence-state="all-Tier-1"'
 assert old in content
-path.write_text(content.replace(old, 'data-evidence-state="all-Tier-1"', 1))
+path.write_text(content.replace(old, 'data-evidence-state="unavailable"', 1))
 PY
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
-  echo "Validator accepted an overstated social evidence state (issue #564)" >&2
+  echo "Validator accepted a drifted social evidence state (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
@@ -540,6 +587,88 @@ restore_fixtures
 rm -f "$fixture_root/evidence-root/tests/fixtures/quick_start.expected.txt"
 if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a missing evidence snapshot (issue #564)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The status record pins the collector and its test suite (D-241): removing
+# either from the evidence root must fail the canonical gate.
+for pinned in collect_status_snapshot.py test_check_status_snapshot.py; do
+  rm -f "$fixture_root/evidence-root/scripts/$pinned"
+  if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted a missing status snapshot artifact $pinned (issue #1006)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
+
+# Full-history controls for the status snapshot (D-241): the subject side is
+# proven from the local Git object database, so a record whose subject is not
+# an ancestor of HEAD, whose recorded tree differs from the subject's tree, or
+# whose subject claims two parents is rejected even when every projection is
+# co-mutated to agree with it.  The shipped record itself must be accepted.
+status_mutation() {
+  python3 - "$fixture_root/site" "$1" "$2" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+site = Path(sys.argv[1])
+field = sys.argv[2]
+value = sys.argv[3]
+manifest = site / "evidence-heroes.json"
+document = json.loads(manifest.read_text())
+hero = next(item for item in document["heroes"] if item["page_id"] == "status")
+revision = hero["snapshot"]["subjects"][0]
+if field == "commit":
+    old = hero["repository"]["commit"]
+    hero["repository"]["commit"] = value
+    hero["repository"]["url"] = hero["repository"]["url"].replace(old, value)
+    hero["command"]["argv"] = [value if item == old else item for item in hero["command"]["argv"]]
+    for subject in hero["snapshot"]["subjects"]:
+        if subject["sha"] == old:
+            subject["sha"] = value
+    for key in ("commit", "tree"):
+        hero["stable_links"][key] = hero["stable_links"][key].replace(old, value)
+elif field == "tree":
+    old = hero["repository"]["tree"]
+    hero["repository"]["tree"] = value
+    revision["tree"] = value
+    revision["merged_pull_request"]["head_tree"] = value
+else:
+    old = None
+    revision["parent_count"] = int(value)
+manifest.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+if old is not None:
+    for relative in ("status/index.html", "index.html.md", "llms.txt"):
+        path = site / relative
+        path.write_text(path.read_text().replace(old, value))
+PY
+}
+
+status_mutation commit "$(printf 'a%.0s' $(seq 1 40))"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a status subject that is not an ancestor of HEAD (issue #1006)" >&2
+  exit 1
+fi
+restore_fixtures
+
+status_mutation tree "$(printf 'b%.0s' $(seq 1 40))"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a status record whose tree differs from the subject's tree (issue #1006)" >&2
+  exit 1
+fi
+restore_fixtures
+
+status_mutation parent_count 2
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a two-parent status subject (issue #1006)" >&2
+  exit 1
+fi
+restore_fixtures
+
+if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected the shipped status snapshot record (issue #1006)" >&2
   exit 1
 fi
 restore_fixtures
@@ -1341,8 +1470,8 @@ mutations = (
         site_dir / "status" / "index.html",
         (
             "matrix, differential fuzzing, and corpus testing beyond the\n"
-            "              v0.3 floor remain planned test-depth work carried over from\n"
-            "              earlier milestones"
+            "              v0.3 floor remain planned test-depth work tracked alongside\n"
+            "              v0.4."
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",
@@ -1374,8 +1503,8 @@ mutations = (
     (
         site_dir / "status" / "index.html",
         (
-            "currently a\n              greater-than-7.0% regression floor, "
-            "enforced by a paired\n              predecessor/candidate measurement"
+            "currently a greater-than-7.0% regression floor, "
+            "enforced by a paired predecessor/candidate measurement"
         ),
         "currently a non-blocking telemetry signal, not enforced",
         "status page that understates perf-gate enforcement",
@@ -4669,5 +4798,6 @@ restore_fixtures
 # These immutable-blob controls need the full-history Pages checkout. Keep the
 # shallow governance discovery suite limited to their wiring contract.
 python3 -B "$repo_root/scripts/site_execution_evidence_test.py"
+python3 -B "$repo_root/scripts/site_status_evidence_test.py"
 
 echo "Website validator self-tests passed."

@@ -273,6 +273,13 @@ class RecordInvariantTests(SyntheticRepository):
         self.assert_rejected(lambda hero: hero["fixture"].__setitem__("path", "scripts/other.py"), "fixture path must be")
         self.assert_rejected(lambda hero: hero["test"].__setitem__("names", ["test_missing"]), "test is not registered")
         self.assert_rejected(lambda hero: hero["test"].__setitem__("names", []), "non-empty list")
+        self.assert_rejected(lambda hero: hero["test"].__setitem__("names", ["test_synthetic_case", "test_synthetic_case"]),
+                             "every registered test in source order")
+        (self.evidence / "scripts" / "test_check_status_snapshot.py").write_text(
+            TEST_SOURCE + "    def test_added_later(self):\n        pass\n")
+        self.assert_rejected(lambda hero: hero["test"].__setitem__("sha256", sha256(
+            TEST_SOURCE + "    def test_added_later(self):\n        pass\n")), "every registered test in source order")
+        (self.evidence / "scripts" / "test_check_status_snapshot.py").write_text(TEST_SOURCE)
         (self.evidence / "scripts" / "collect_status_snapshot.py").unlink()
         self.assert_rejected(lambda hero: None, "missing or unsafe")
 
