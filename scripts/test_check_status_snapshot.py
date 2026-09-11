@@ -533,6 +533,7 @@ class ProjectionTests(ProjectionCase):
                      ".content-page { display: none; }", "#main-content { opacity: 0 }", "body { display:none }",
                      "html body main { font-size: 0 }", "main > header { opacity: .0 }", "header dd { font-size: .0px }",
                      "header { transform: scale(.00) }", "dl { opacity: 0. }",
+                     "header { opacity: -0 }", "dl { opacity: 0e0 }", "header dd { font-size: +0.0E-1px }", "dl { transform: scale(-.0e2) }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
@@ -590,9 +591,12 @@ class ProjectionTests(ProjectionCase):
             hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
             # A visible label whose row is hidden is a dangling label: the pairing check fires first.
             self.assert_page_rejected(hidden, "must pair one visible label with one row each")
+            inert = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd inert>', 1)
+            self.assert_page_rejected(inert, "must pair one visible label with one row each")
         for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none", "opacity: 0", "opacity:0.0 !important",
                       "visibility: collapse", "content-visibility: hidden", "font-size: 0", "transform: scale(0)",
-                      "opacity: .0", "font-size: .0px", "transform: scale(.00)"):
+                      "opacity: .0", "font-size: .0px", "transform: scale(.00)",
+                      "opacity: -0", "opacity: 0e0", "font-size: +0.0E-1px", "transform: scale(-.0e2)"):
             with self.subTest(mutation=f"row hidden inline by {style}"):
                 hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd style="{style}">', 1)
                 self.assert_page_rejected(hidden, "must pair one visible label with one row each")
@@ -659,6 +663,9 @@ class HeroProseTests(ProjectionCase):
         for name, old, new in (
             ("toggle hidden", "<summary>", "<summary hidden>"),
             ("toggle hidden inline", "<summary>", '<summary style="opacity: .0">'),
+            ("toggle inert", "<summary>", "<summary inert>"),
+            ("toggle and paragraph inert with the disclosure", "<details>", "<details inert>"),
+            ("toggle hidden by a signed exponent zero", "<summary>", '<summary style="opacity: -0e0">'),
             ("toggle removed", f"<summary>{status.HERO_DETAILS_TOGGLE}</summary>", ""),
             ("closing paragraph moved outside the hero", "</details></header>", "</details></header><p>" + status.expected_closing_paragraph(self.hero) + "</p>"),
         ):

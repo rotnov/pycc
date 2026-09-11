@@ -217,7 +217,13 @@ class ExecutionEvidenceTests(unittest.TestCase):
                                     ('data-execution="source"', 'style="opacity: 0" data-execution="source"'),
                                     ('data-evidence-role="hero"', 'style="font-size: 0" data-evidence-role="hero"'),
                                     ('data-execution="source"', 'style="opacity: .0" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="transform: scale(.00)" data-evidence-role="hero"')]:
+                                    ('data-evidence-role="hero"', 'style="transform: scale(.00)" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'style="opacity: -0" data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'style="opacity: 0E0" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'style="font-size: +0.0e-1px" data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'style="transform: scale(-.0e2)" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'inert data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'inert data-evidence-role="hero"')]:
                 with self.subTest(slug=slug, original=original, wrong=wrong):
                     self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "visible H1" if original == 'data-evidence-role="hero"' else "visible ordered")
 

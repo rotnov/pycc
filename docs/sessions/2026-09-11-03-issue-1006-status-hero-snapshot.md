@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T10:03:39Z. The record pins the collector's and its suite's
+  2026-09-11T10:59:43Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T10:03:39Z` after the suite changed.
+  `--collected-at 2026-09-11T10:59:43Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -256,6 +256,20 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     public-CLI suites, snapshot re-collected at `2026-09-11T10:03:39Z` with
     `--subject 4111208c` (now two first-parent merges behind `origin/main`
     after merging #1009), pins rotated.
+17. External, on PR #1008, three Codex P2s: `opacity: -0` and `opacity: 0e0`
+    (signed and exponent-form zeros, which compute to zero) escaped the
+    enumerated zero spellings; an `inert` attribute removed a proof row or the
+    disclosure from view without being treated as hiding; and D-241's own text
+    said "ancestor" where the gate checks first-parent history. Fixed: the
+    zero pattern accepts an optional sign and exponent; `inert` joins
+    `hidden`/`aria-hidden="true"` in the subtree-hiding attributes; D-241
+    reads "on the first-parent history". The same thread's escaped-identifier
+    case (`d\69 splay: none`) is refuted and recorded as a model boundary in
+    `docs/WEBSITE.md`: the scanned CSS is the repository's own reviewed
+    stylesheet, where an escaped property name is deliberate obfuscation, not
+    the accidental hiding the scan exists to catch. Cases in the execution,
+    synthetic and public-CLI suites, snapshot re-collected at `2026-09-11T10:59:43Z`
+    with `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

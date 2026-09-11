@@ -51,7 +51,7 @@ status: accepted
   - The subject side is proven from Git, the pull-request side from the
     record. `scripts/check_status_snapshot.py --verify-git` (run by
     `scripts/check-site.sh`, so in the full-history Pages checkout)
-    requires the subject to be an ancestor of `HEAD`, to have exactly one
+    requires the subject to be on the first-parent history of `HEAD`, to have exactly one
     parent, and to have the recorded tree; the association with the pull
     request head is then the record-internal equality
     `merged_pull_request.head_tree == repository.tree`, whose inputs the
@@ -74,7 +74,7 @@ status: accepted
     the collector against the then-current `origin/main` tip. That
     convention is backed by a diff-conditioned currency step on the Pages
     pull-request leg only (`check_status_snapshot.py --currency`), which
-    requires the subject to be an ancestor of the base tip and at most 20
+    requires the subject to be on the first-parent history of the base tip and at most 20
     first-parent merges behind it. It never runs on `push`, so it cannot
     turn `main` red on its own. Twenty is a reviewed constant: daily
     first-parent merge counts on `main` since 2026-08-25 range 2-27 with a

@@ -176,6 +176,12 @@ class StatusEvidenceTests(unittest.TestCase):
              "proof rows must be exactly the three subject rows and the Tier-1 heading; unexpected: Current gate result"),
             ("<dd>in the ci-gate run, all success:</dd>", "<dd>in the ci-gate run, all failure:</dd>",
              "proof row for Tier-1 jobs must read exactly"),
+            ('<details class="hero-evidence-details">', '<details inert class="hero-evidence-details">',
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
+            ("<summary>Snapshot subjects, conclusions and immutable links</summary>", "<summary inert>Snapshot subjects, conclusions and immutable links</summary>",
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
+            ('<details class="hero-evidence-details">', '<details style="opacity: -0e0" class="hero-evidence-details">',
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="opacity: 0" class="hero-evidence-details">',
              "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="font-size: .0px" class="hero-evidence-details">',
@@ -238,7 +244,7 @@ class StatusEvidenceTests(unittest.TestCase):
                      ".hero-evidence-details { opacity: 0; }", ".page-hero dl { font-size: 0 }", ".page-hero { transform: scale(0) }",
                      ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }",
                      ".content-page { display: none; }", "#main-content { opacity: .0 }", "body { font-size: .0px }",
-                     "main > .page-hero { transform: scale(.0) }",
+                     "main > .page-hero { transform: scale(.0) }", ".page-hero { opacity: -0 }", "#main-content { opacity: 0e0 }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', ".page-hero::before { content: attr(data-evidence-state) }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):

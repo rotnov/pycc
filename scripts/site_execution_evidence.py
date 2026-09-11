@@ -201,8 +201,12 @@ def summary(hero):
 # ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
 # element off-screen, covering it or painting it in the background colour is
 # outside this model and stays a review concern (docs/WEBSITE.md).
-# Zero in every CSS spelling: ``0``, ``0.0``, ``0.``, ``.0``, ``.00``.
-ZERO = r"(?:0+(?:\.0*)?|\.0+)"
+# Zero in every CSS number spelling: ``0``, ``0.0``, ``0.``, ``.0``, ``.00``, an
+# optional sign (``-0``, ``+0``) and an optional exponent (``0e0``, ``0E-2``),
+# every one of which computes to zero.  Escaped identifiers (``d\\69 splay``)
+# are deliberate obfuscation in the repository's own reviewed CSS, outside the
+# accidental-hiding model this scan implements (docs/WEBSITE.md).
+ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
 HIDING_DECLARATION = re.compile(
     r"(?<![\w-])(?:display\s*:\s*none"
     r"|visibility\s*:\s*(?:hidden|collapse)"
@@ -236,7 +240,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav
