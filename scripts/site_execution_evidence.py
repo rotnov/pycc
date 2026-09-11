@@ -227,13 +227,31 @@ def summary(hero):
 # comment opener inside a string (``content: "{ ci-gate failure"``) cannot
 # split a rule or a declaration, and a quote inside a comment cannot open a
 # string.  Both surfaces (inline ``style`` and stylesheet rules) use it.
-CSS_COMMENT_OR_STRING = re.compile(r"/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
+# An unterminated comment runs to the end of the input and an unterminated
+# string to the end of its line, exactly as a browser tokenizer treats them, so
+# a lone quote cannot leave a brace live for the rule splitter to mis-pair.
+CSS_COMMENT_OR_STRING = re.compile(
+    r"/\*.*?\*/|/\*.*"
+    r"|\"(?:\\.|[^\"\\\n])*\"?"
+    r"|'(?:\\.|[^'\\\n])*'?", re.S)
+
+
+def unterminated_css(css):
+    """True when a comment or a quoted string is left open: the tokenizer's structure is then unknowable, so callers fail closed."""
+    for match in CSS_COMMENT_OR_STRING.finditer(css):
+        token = match.group(0)
+        if token.startswith("/*"):
+            if not token.endswith("*/"):
+                return True
+        elif len(token) < 2 or token[-1] != token[0]:
+            return True
+    return False
 
 
 def plain_css(css):
     """Drop CSS comments and reduce every quoted string to ``\"\"`` (empty) or ``\"x\"`` (non-empty)."""
     return CSS_COMMENT_OR_STRING.sub(
-        lambda m: "" if m.group(0).startswith("/*") else ('""' if len(m.group(0)) == 2 else '"x"'), css)
+        lambda m: "" if m.group(0).startswith("/*") else ('""' if m.group(0) in ('""', "''") else '"x"'), css)
 
 
 ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
@@ -294,7 +312,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", ""))))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", "")))) or unterminated_css(attrs.get("style", ""))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav
@@ -333,7 +351,10 @@ class VisibleExecutionParser(HTMLParser):
 
 
 def validate_projection(hero, repo_root, site_dir):
-    css = plain_css((site_dir / "styles.css").read_text())
+    raw_css = (site_dir / "styles.css").read_text()
+    if unterminated_css(raw_css):
+        fail("styles.css must not leave a CSS comment or quoted string open")
+    css = plain_css(raw_css)
     provenance = re.search(r"\.hero-provenance\s*\{([^}]+)\}", css)
     mobile = css.split("@media (max-width: 980px)", 1)[-1]
     navigation = re.search(r"\.site-nav\s*\{([^}]+)\}", mobile)

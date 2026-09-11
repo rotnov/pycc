@@ -571,6 +571,7 @@ class ProjectionTests(ProjectionCase):
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      'header::after { content: "{ ci-gate failure"; }', "dl::after { content: '}'; }", "dl::after { content: \"\\\"{\"; }",
                      'header { /* " */ opacity: 0 }', 'header::after { content: "/*"; opacity: 0 }', "dl { --t: '{'; opacity: 0 }",
+                     'footer { content: "unterminated }', "footer { color: red } /* unterminated",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))

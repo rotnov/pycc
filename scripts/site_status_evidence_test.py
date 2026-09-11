@@ -274,6 +274,14 @@ class StatusEvidenceTests(unittest.TestCase):
                     path.write_text(path.read_text() + "\n" + rule + "\n")
                 self.run_case(mutate, "stylesheet must not hide the evidence hero")
 
+    def test_stylesheet_left_open_is_rejected(self):
+        for rule in ('.other { content: "unterminated }', ".other { color: red } /* unterminated"):
+            with self.subTest(rule=rule):
+                def mutate(doc, site, root, rule=rule):
+                    path = site / "styles.css"
+                    path.write_text(path.read_text() + "\n" + rule + "\n")
+                self.run_case(mutate, "styles.css must not leave a CSS comment or quoted string open")
+
     def test_central_summaries_cannot_drift(self):
         for relative in ("index.html.md", "llms.txt"):
             for old, new in (("five Tier-1 jobs success", "five Tier-1 jobs green"),

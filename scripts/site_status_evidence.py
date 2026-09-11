@@ -555,9 +555,11 @@ def hiding_rules(css, parser):
     failure" }``) is rejected on the same selectors: the browser shows it beside
     the bound rows while the HTML parser sees an unchanged page.
     """
+    found = []
+    if site_execution_evidence.unterminated_css(css):
+        found.append("unterminated CSS comment or string")
     css = site_execution_evidence.plain_css(css)
     reachable = parser.hero_hooks | parser.ancestor_hooks
-    found = []
     if re.search(r"@import\b", css, re.I):
         found.append("@import")
     for selectors, body in CSS_RULE.findall(css):
