@@ -4,7 +4,10 @@
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
 //! #387 tests that drive the full `check_and_resolve` -> `monomorphize` ->
-//! `instantiate_generic_class_methods` pipeline for a generic class. Their
+//! `instantiate_generic_class_methods` pipeline for a generic class, plus two
+//! `check`-only coverage tests for the `GenericClassInstantiate` arm — its
+//! undefined-class rejection and the `reject_generic_calls_in_expr` traversal
+//! arm — which stop at `check` and never reach that pipeline. Their
 //! fixture helper `generic_class_module_with_call` stays in the parent,
 //! because `tests/generic_method_instantiation.rs` uses it too and sibling
 //! child modules cannot see each other's private items. As a child module this

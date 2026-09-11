@@ -4,7 +4,9 @@
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
 //! `instantiate_generic_class_methods` continue/dedup and `seen.insert` paths,
-//! every test covering the `is_assignable` `Ty::Param` clause, and the
+//! every test covering the `is_assignable` `Ty::Param` clause at line 3229
+//! (the separate `from == Ty::Param` clause at line 3240 is covered in
+//! `tests/generic_monomorphization_arms.rs`), and the
 //! `reject_generic_calls_in_expr` generic-class-instantiate path. They carry
 //! no helper of their own; the fixtures they use stay in the parent. As a
 //! child module this still sees the parent's private items directly through
