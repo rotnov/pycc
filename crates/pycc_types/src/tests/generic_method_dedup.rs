@@ -4,7 +4,7 @@
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
 //! `instantiate_generic_class_methods` continue/dedup and `seen.insert` paths,
-//! the second `is_assignable` `Ty::Param` branch, and the
+//! every test covering the `is_assignable` `Ty::Param` clause, and the
 //! `reject_generic_calls_in_expr` generic-class-instantiate path. They carry
 //! no helper of their own; the fixtures they use stay in the parent. As a
 //! child module this still sees the parent's private items directly through
@@ -457,6 +457,61 @@ fn is_assignable_param_branch_direct() {
         Ty::List(Box::new(Ty::Int)),
         Ty::Param(Box::new("T".to_string()))
     ));
+}
+
+#[test]
+fn is_assignable_param_clause_accepts_scalar_assignment_in_generic_method() {
+    // A generic class `C[T]` whose `__init__` assigns a scalar literal
+    // (`1`, type `Int`) to `self.x` (attr type `Ty::Param("T")`). This
+    // exercises `is_assignable`'s `Ty::Param` clause at line 3229:
+    // `matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | ...)`.
+    // The method has no `Ty::Param` parameter (only `self`), so it is
+    // NOT a generic function and goes through `check_function_in`,
+    // which type-checks the body and calls `is_assignable(Int, Param("T"))`.
+    let self_ty = Ty::Instance(Box::new("C".to_string()));
+    let init = HirItem::Function {
+        name: "C.__init__".to_string(),
+        params: vec![("self".to_string(), self_ty)],
+        return_ty: Ty::None,
+        body: vec![HirStmt::AttrSet {
+            base: HirExpr::Name("self".to_string()),
+            attr: "x".to_string(),
+            value: HirExpr::IntLiteral(1),
+        }],
+    };
+    let class_def = HirClassDef {
+        class_attrs: Vec::new(),
+        exception_type_tag: None,
+        name: "C".to_string(),
+        bases: Vec::new(),
+        mro: vec!["C".to_string()],
+        attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+        methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+        type_param: Some("T".to_string()),
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![init],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: vec![("C".to_string(), class_def)],
+    };
+    // `check` must accept this — `is_assignable(Int, Param("T"))` returns
+    // true via the new clause.
+    assert!(check(&hir).is_ok());
 }
 
 // -- reject_generic_calls_in_expr GCI ? path (line 4569) --------------

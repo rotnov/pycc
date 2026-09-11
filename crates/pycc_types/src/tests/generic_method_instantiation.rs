@@ -2,8 +2,8 @@
 //!
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
-//! `instantiate_generic_class_methods` edge cases, the `is_assignable`
-//! `Ty::Param` clause, and the `rewrite_generic_calls_in_expr` error paths.
+//! `instantiate_generic_class_methods` edge cases and the
+//! `rewrite_generic_calls_in_expr` error paths.
 //! The `generic_class_module_with_call` fixture helper they share with
 //! `tests/generic_class_instantiation.rs` stays in the parent, because sibling
 //! child modules cannot see each other's private items. As a child module this
@@ -400,63 +400,6 @@ fn check_and_resolve_monomorphizes_two_different_type_args_into_distinct_classes
         find_function(&resolved, "0gen_C__T_str.__init__").is_some(),
         "str specialization should exist"
     );
-}
-
-// -- is_assignable Ty::Param clause (line 3229) -----------------------
-
-#[test]
-fn is_assignable_param_clause_accepts_scalar_assignment_in_generic_method() {
-    // A generic class `C[T]` whose `__init__` assigns a scalar literal
-    // (`1`, type `Int`) to `self.x` (attr type `Ty::Param("T")`). This
-    // exercises `is_assignable`'s `Ty::Param` clause at line 3229:
-    // `matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | ...)`.
-    // The method has no `Ty::Param` parameter (only `self`), so it is
-    // NOT a generic function and goes through `check_function_in`,
-    // which type-checks the body and calls `is_assignable(Int, Param("T"))`.
-    let self_ty = Ty::Instance(Box::new("C".to_string()));
-    let init = HirItem::Function {
-        name: "C.__init__".to_string(),
-        params: vec![("self".to_string(), self_ty)],
-        return_ty: Ty::None,
-        body: vec![HirStmt::AttrSet {
-            base: HirExpr::Name("self".to_string()),
-            attr: "x".to_string(),
-            value: HirExpr::IntLiteral(1),
-        }],
-    };
-    let class_def = HirClassDef {
-        class_attrs: Vec::new(),
-        exception_type_tag: None,
-        name: "C".to_string(),
-        bases: Vec::new(),
-        mro: vec!["C".to_string()],
-        attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
-        methods: vec![("__init__".to_string(), "C.__init__".to_string())],
-        type_param: Some("T".to_string()),
-        properties: Vec::new(),
-        static_methods: Vec::new(),
-        class_methods: Vec::new(),
-        is_enum: false,
-        implicit_object_init: false,
-        enum_members: Vec::new(),
-        is_dataclass: false,
-        dataclass_fields: Vec::new(),
-        is_protocol: false,
-        runtime_checkable: false,
-        protocol_members: Vec::new(),
-        abstract_methods: Vec::new(),
-        is_abstract: false,
-    };
-    let hir = HirModule {
-        seeded_builtin_exception_classes: false,
-        items: vec![init],
-        type_aliases: Vec::new(),
-        imports: Vec::new(),
-        class_defs: vec![("C".to_string(), class_def)],
-    };
-    // `check` must accept this — `is_assignable(Int, Param("T"))` returns
-    // true via the new clause.
-    assert!(check(&hir).is_ok());
 }
 
 // -- rewrite_generic_calls_in_expr error paths (lines 5036-5049) ------
