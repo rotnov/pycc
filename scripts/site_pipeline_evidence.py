@@ -14,8 +14,8 @@ Division of labour with the other evidence modules:
 * ``tests/architecture_trace.rs`` owns re-derivation (the artifacts are what
   today's compiler produces, the native build exits 0, the stdout is exact);
 * this module owns the record shape, the SHA-256 identities and the page;
-* ``tests/site_evidence.rs`` owns the per-hero manifest facts and never re-runs
-  the pipeline.
+* ``tests/architecture_manifest.rs`` owns the per-hero manifest facts and never
+  re-runs the pipeline.
 
 Bootstrap note (the same rule Part 1 followed): the artifacts are read from the
 working tree's ``evidence_root``, never through ``git show`` at a pinned commit.

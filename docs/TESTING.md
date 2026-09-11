@@ -294,11 +294,12 @@ public crate APIs (`pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`) and a
 native build, byte-compares every stage against the artifacts checked in under
 `tests/fixtures/architecture-trace/`, asserts the native exit status and exact
 stdout, and carries a negative control that rejects both a byte-mutated
-artifact and one stage's artifact substituted for another's. The separate
-guarantee that a stage carrying no evidence may not be presented as
-implemented is a record-level property, proved through the public CLI by
-`scripts/site_pipeline_evidence_test.py`. It runs under `cargo test --workspace` on all five Tier-1
-targets. `scripts/site_pipeline_evidence.py` owns the record shape, the closed
+artifact and one stage's artifact substituted for another's. It runs under
+`cargo test --workspace` on all five Tier-1 targets. The separate guarantee
+that a stage carrying no evidence may not be presented as implemented is a
+record-level property owned by the validator, not by re-derivation, and is
+proved through the public CLI by `scripts/site_pipeline_evidence_test.py`
+described below. `scripts/site_pipeline_evidence.py` owns the record shape, the closed
 eight-stage vocabulary, the derived state and the visible projection, and never
 runs the compiler. Its controls are split by cost: the fast pure-function,
 record-internal and wiring cases live in `scripts/test_site_pipeline_wiring.py`

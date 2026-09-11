@@ -17,6 +17,7 @@ and `test_healthy_public_cli` is the positive control that keeps those
 rejections honest.
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,15 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHITECTURE = 4
+
+# Fields whose absence is caught by a check that names the rule rather than the
+# field: the hero-order check sees a `None` page id, and the stable-links check
+# compares the whole closed set at once.
+FIELD_REJECTIONS = {
+    ("page_id",): "hero page inventory/order must be exactly",
+    ("stable_links", "owner"): "stable_links must be exactly the immutable commit",
+    ("stable_links", "part"): "stable_links must be exactly the immutable commit",
+}
 
 
 def artifact_paths(document):
@@ -113,7 +123,14 @@ class PipelineEvidenceTests(unittest.TestCase):
                     for key in trail[:-1]:
                         value = value[key]
                     del value[trail[-1]]
-                self.run_case(mutate, "evidence")
+                # The deleted key's own name, not the universal
+                # "evidence-heroes.json:" prefix every rejection carries: the
+                # subTest has to prove that this field's absence is what was
+                # caught. List elements have no name, so those fall back to the
+                # hero's id, which no other hero's message contains.
+                expected = FIELD_REJECTIONS.get(
+                    trail, trail[-1] if isinstance(trail[-1], str) else "architecture")
+                self.run_case(mutate, expected)
 
     # -- artifact-identity negative controls --------------------------------
 
@@ -149,8 +166,14 @@ class PipelineEvidenceTests(unittest.TestCase):
             path = root / "tests/fixtures/architecture-trace/trace.json"
             trace = json.loads(path.read_text())
             trace["compiler_commit"] = "0" * 40
-            path.write_text(json.dumps(trace, indent=2) + "\n")
-        self.run_case(mutate, "architecture snapshot trace sha256/bytes differ")
+            rewritten = (json.dumps(trace, indent=2) + "\n").encode()
+            path.write_bytes(rewritten)
+            # Re-pin the digest, or the generic trace sha256/bytes check fires
+            # first and the compiler-revision branch is never reached.
+            pinned = doc["heroes"][ARCHITECTURE]["snapshot"]["trace"]
+            pinned["sha256"] = hashlib.sha256(rewritten).hexdigest()
+            pinned["bytes"] = len(rewritten)
+        self.run_case(mutate, "names a different compiler revision")
 
     def test_verification_command_cannot_drift(self):
         def mutate(doc, site, root):
@@ -162,12 +185,12 @@ class PipelineEvidenceTests(unittest.TestCase):
     def test_state_cannot_be_overstated_in_the_record(self):
         def mutate(doc, site, root):
             doc["heroes"][ARCHITECTURE]["state"] = "all-Tier-1"
-        self.run_case(mutate, "architecture")
+        self.run_case(mutate, "does not match the derived state")
 
     def test_state_cannot_be_understated_in_the_record(self):
         def mutate(doc, site, root):
             doc["heroes"][ARCHITECTURE]["state"] = "unavailable"
-        self.run_case(mutate, "architecture")
+        self.run_case(mutate, "must keep fixture=null; decorative partial evidence is forbidden")
 
     def test_page_state_drift_is_rejected(self):
         for drifted in ("all-Tier-1", "unavailable"):
@@ -178,7 +201,7 @@ class PipelineEvidenceTests(unittest.TestCase):
                     self.assertIn('data-evidence-state="partial"', source)
                     page.write_text(source.replace('data-evidence-state="partial"',
                                                    f'data-evidence-state="{drifted}"'))
-                self.run_case(mutate, "architecture")
+                self.run_case(mutate, "must carry exactly one matching data-evidence-role")
 
     def test_markdown_and_llm_markers_must_carry_the_record_state(self):
         marker = ("<!-- evidence-hero: architecture | architecture-trace-v1 | "
@@ -190,7 +213,7 @@ class PipelineEvidenceTests(unittest.TestCase):
                     source = path.read_text()
                     self.assertIn(marker, source)
                     path.write_text(source.replace(marker, marker.replace("| partial |", "| all-Tier-1 |")))
-                self.run_case(mutate, "architecture")
+                self.run_case(mutate, "must contain exactly one marker for hero 'architecture'")
 
     def test_a_stage_cannot_claim_evidence_it_does_not_have(self):
         """The LLVM IR stage has no artifact; presenting it as one must be rejected."""
@@ -204,7 +227,7 @@ class PipelineEvidenceTests(unittest.TestCase):
     def test_softened_limitations_are_rejected(self):
         def mutate(doc, site, root):
             doc["heroes"][ARCHITECTURE]["limitations"] = "Everything is covered."
-        self.run_case(mutate, "architecture")
+        self.run_case(mutate, "limitations drifted from the reviewed text")
 
     def test_page_cannot_paraphrase_a_stage_excerpt(self):
         def mutate(doc, site, root):
@@ -213,7 +236,7 @@ class PipelineEvidenceTests(unittest.TestCase):
             marker = "ModModule {"
             self.assertIn(marker, source)
             page.write_text(source.replace(marker, "ModModule { /* trimmed */", 1))
-        self.run_case(mutate, "architecture")
+        self.run_case(mutate, "must read exactly as that stage's own path, identity, byte count")
 
     def test_moving_branch_link_is_rejected(self):
         def mutate(doc, site, root):
@@ -221,7 +244,7 @@ class PipelineEvidenceTests(unittest.TestCase):
             doc["heroes"][ARCHITECTURE]["stable_links"]["fixture"] = (
                 "https://github.com/rotnov/pycc/blob/main/tests/fixtures/quick_start.py")
             self.assertEqual(len(commit), 40)
-        self.run_case(mutate, "architecture")
+        self.run_case(mutate, "stable_links must be exactly the immutable commit")
 
 
 if __name__ == "__main__":

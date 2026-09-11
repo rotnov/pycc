@@ -18,8 +18,8 @@
 //! * `scripts/site_pipeline_evidence.py` owns the **record** — the SHA-256
 //!   identities in `trace.json`, the hero record's shape, and the visible page
 //!   projection;
-//! * `tests/site_evidence.rs` owns the **per-hero manifest facts** and never
-//!   re-runs the pipeline.
+//! * `tests/architecture_manifest.rs` owns the **per-hero manifest facts** and
+//!   never re-runs the pipeline.
 //!
 //! Regenerating the artifacts after a deliberate compiler change is one step:
 //!
