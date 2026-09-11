@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import validate_agent_assets as validator
 
@@ -805,39 +806,340 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
+    PINNED_ALPHA_EVAL_RUNNER_NAMES = (
+        "issue-implement",
+        "issue-select",
+        "issue-to-plan",
+        "next-milestone",
+        "pycc",
+        "pycc-feedback",
+        "ultra-review",
+    )
+
     def test_alpha_promotion_requires_both_authenticated_client_evals(
         self,
     ) -> None:
-        failures: list[str] = []
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            shapes = {
+                "absent": {},
+                "codex-only": {
+                    name: {"codex": "https://example.test/codex-eval"}
+                },
+                "claude-only": {
+                    name: {"claude": "https://example.test/claude-eval"}
+                },
+            }
+            for shape, evidence in shapes.items():
+                with self.subTest(name=name, shape=shape), mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(name, failures[0])
+                    self.assertIn(
+                        "authenticated Codex and Claude model-eval evidence",
+                        failures[0],
+                    )
+
+        failures = []
         validator.validate_alpha_promotion_gate(
-            {"pycc": {"source": "future"}},
+            {name: {"source": "future"} for name in validator.ALPHA_EVAL_RUNNERS},
             failures,
         )
-        self.assertEqual(len(failures), 1)
-        self.assertIn(
-            "authenticated Codex and Claude model-eval evidence",
-            failures[0],
+        self.assertEqual(
+            failures,
+            [
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+                for name in sorted(validator.ALPHA_EVAL_RUNNERS)
+            ],
         )
 
     def test_alpha_promotion_accepts_complete_authenticated_evidence(
         self,
     ) -> None:
-        original = validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
-        try:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = {
-                "pycc": {
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            evidence = {
+                name: {
                     "codex": "https://example.test/codex-eval",
                     "claude": "https://example.test/claude-eval",
                 }
             }
+            with self.subTest(name=name), mock.patch.object(
+                validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+            ):
+                failures: list[str] = []
+                validator.validate_alpha_promotion_gate(
+                    {name: {"source": "future"}},
+                    failures,
+                )
+                self.assertEqual(failures, [])
+
+    def test_alpha_promotion_rejects_non_https_evidence(self) -> None:
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            with self.subTest(skill=name):
+                evidence = {
+                    name: {
+                        "codex": "http://example.test/codex-eval",
+                        "claude": "https://example.test/claude-eval",
+                    }
+                }
+                with mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                self.assertEqual(len(failures), 1)
+                self.assertIn(f"{name} cannot be promoted", failures[0])
+
+    def test_alpha_promotion_gate_covers_every_non_exempt_locked_skill(
+        self,
+    ) -> None:
+        """Every locked skill outside the exemption is a candidate.
+
+        ``PINNED_ALPHA_EVAL_RUNNER_NAMES`` above is a test-side pin of the alpha
+        inventory, not a second production copy: its only job is to turn an
+        inventory change into a reviewable test diff, so it must be edited
+        whenever a skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
+        The alpha inventory is a subset of the gated set (a table member in
+        the lock is gated), but the gate does not depend on the table: a
+        locked name in neither the table nor the exemption -- exactly the
+        shape a promotion produces, since the promoting change removes the
+        skill from ``ALPHA_EVAL_RUNNERS`` -- is gated too.
+        """
+        self.assertEqual(
+            tuple(sorted(validator.ALPHA_EVAL_RUNNERS)),
+            self.PINNED_ALPHA_EVAL_RUNNER_NAMES,
+        )
+        locked = {"future-alpha-skill": {"source": "future"}}
+
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS,
+            {"future-alpha-skill": {"future_runner"}},
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(locked, failures)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("future-alpha-skill cannot be promoted", failures[0])
+
+        graduated = {"graduated-skill": {"source": "rotnov/skills"}}
+        self.assertNotIn("graduated-skill", validator.ALPHA_EVAL_RUNNERS)
+        self.assertNotIn(
+            "graduated-skill", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS
+        )
+        failures = []
+        validator.validate_alpha_promotion_gate(graduated, failures)
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: graduated-skill cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_not_name_an_alpha_skill(
+        self,
+    ) -> None:
+        # Widen the lock allowlist too, so only the disjointness invariant
+        # fires and this test proves that message on its own.
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "pycc"}),
+        ), mock.patch.dict(
+            validator.EXPECTED_SKILL_LOCK_ENTRIES, {"pycc": {"source": "x"}}
+        ):
             failures: list[str] = []
             validator.validate_alpha_promotion_gate(
-                {"pycc": {"source": "future"}},
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
                 failures,
             )
-            self.assertEqual(failures, [])
-        finally:
-            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = original
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name "
+                "an alpha skill: pycc"
+            ],
+        )
+
+    def test_alpha_promotion_exemption_must_be_inside_the_lock_allowlist(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            validator,
+            "EXTERNAL_ORIGIN_LOCKED_SKILLS",
+            frozenset({"i-have-an-issue", "unreviewed-skill"}),
+        ):
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(
+                {"i-have-an-issue": {"source": "rotnov/skills"}},
+                failures,
+            )
+        self.assertEqual(
+            failures,
+            [
+                "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a "
+                "subset of EXPECTED_SKILL_LOCK_ENTRIES: unreviewed-skill"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_rejects_stale_spelled_out_count(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "intro line.\n"
+            "`EXPECTED_RUNNERS` in that script names all six alpha skills.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:2: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_rejects_stale_count_after_table_mention(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            "covers every skill in `ALPHA_EVAL_RUNNERS` "
+            "(6 at the time of writing), and none of them can enter.\n",
+            failures,
+        )
+        expected = len(validator.ALPHA_EVAL_RUNNERS)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 6 "
+                f"disagrees with ALPHA_EVAL_RUNNERS ({expected})"
+            ],
+        )
+
+    def test_alpha_skill_count_prose_accepts_the_table_length(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "names all two alpha skills. `ALPHA_EVAL_RUNNERS` "
+                "(2 at the time of writing) lists 2 skills.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_ignores_unrelated_numerals(self) -> None:
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(
+                "enforcing at least two evals on every alpha skill's file "
+                "in `ALPHA_EVAL_RUNNERS`. Tier-1 coverage since PR #255 "
+                "(2026-08-23) is 100% and one thing stays deferred.\n"
+                "The v0.3 release lists 12 project-wide checks.\n",
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+    def test_alpha_skill_count_prose_counts_only_adjacent_numerals(
+        self,
+    ) -> None:
+        # "two", "#260", "255" and the second "two" are not counts of alpha
+        # skills: "clients" and "landed" are not count qualifiers, "#260" is
+        # excluded by the `#` lookbehind, and "two clients support" counts
+        # clients. The two "one"s are counts, so they pass with a one-entry
+        # table and fail with a two-entry table while the others stay
+        # ignored.
+        text = (
+            "The two clients cover all one alpha skills.\n"
+            "Issue #260 covers every alpha skill.\n"
+            "PR 255 landed the evals of the one project-local alpha "
+            "skill.\n"
+            "The two clients support alpha skills.\n"
+        )
+        failures: list[str] = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"only": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(text, failures)
+        self.assertEqual(failures, [])
+        failures = []
+        with mock.patch.dict(
+            validator.ALPHA_EVAL_RUNNERS, {"a": set(), "b": set()}, clear=True
+        ):
+            validator.validate_alpha_skill_count_prose(text, failures)
+        self.assertEqual(
+            failures,
+            [
+                "docs/AGENT_TOOLING.md:1: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+                "docs/AGENT_TOOLING.md:3: literal alpha-skill count 1 "
+                "disagrees with ALPHA_EVAL_RUNNERS (2)",
+            ],
+        )
+
+    def test_skill_lock_runs_prose_guard_before_lock_shape_early_return(
+        self,
+    ) -> None:
+        stale = len(validator.ALPHA_EVAL_RUNNERS) + 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs" / "AGENT_TOOLING.md").write_text(
+                f"names all {stale} alpha skills.\n", encoding="utf-8"
+            )
+            (root / "skills-lock.json").write_text(
+                json.dumps({"version": 1, "skills": {}}), encoding="utf-8"
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=root,
+                payload_entries=[],
+            )
+        self.assertIn(
+            "skills-lock.json: skills must be a non-empty object", failures
+        )
+        self.assertIn(
+            f"docs/AGENT_TOOLING.md:1: literal alpha-skill count {stale} "
+            f"disagrees with ALPHA_EVAL_RUNNERS ({stale - 1})",
+            failures,
+        )
+
+    def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_skill_count_prose(
+            (validator.ROOT / "docs" / "AGENT_TOOLING.md").read_text(
+                encoding="utf-8"
+            ),
+            failures,
+        )
+        self.assertEqual(failures, [])
+
+    def test_alpha_promotion_ignores_vendored_non_alpha_skills(self) -> None:
+        """A locked skill in the reviewed exemption needs no eval evidence."""
+        self.assertIn("i-have-an-issue", validator.EXTERNAL_ORIGIN_LOCKED_SKILLS)
+        self.assertNotIn(
+            "i-have-an-issue", validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
+        )
+        failures: list[str] = []
+        validator.validate_alpha_promotion_gate(
+            {"i-have-an-issue": {"source": "rotnov/skills"}},
+            failures,
+        )
+        self.assertEqual(failures, [])
 
     def alpha_contract_failures(
         self,

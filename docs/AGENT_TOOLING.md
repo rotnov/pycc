@@ -250,9 +250,9 @@ visibly alpha" on every skill's `evals.json` independently of
 `run_alpha_skill_evals.py`'s own, narrower type-only checks in `load_cases`
 (that check's own `ALPHA_EVAL_RUNNERS` constant mirrors `EXPECTED_RUNNERS`
 and must be kept in sync by hand whenever a runner is added or renamed). One
-thing remains deferred for all seven: authenticated model-response evals on
-both Codex and Claude (the `pycc`/`pycc-feedback` promotion requirement
-described below).
+thing remains deferred for all seven alpha skills: authenticated
+model-response evals on both Codex and Claude (the promotion requirement
+described below, enforced for every skill in `ALPHA_EVAL_RUNNERS`).
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
@@ -278,14 +278,38 @@ skipped.
 
 These deterministic checks do not invoke a language model and do not claim
 that either client's generated response conforms to the prompts. Authenticated
-model-response evals remain a promotion requirement before either alpha skill
+model-response evals remain a promotion requirement before any alpha skill
 can move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
-validator enforces that fallback: `pycc` and `pycc-feedback` cannot enter the
-locked skill set unless immutable HTTPS evidence exists for authenticated
-model evals on both Codex and Claude. Until then, they remain project-local
-alpha workflows. The separate `Agent assets` job still installs the real
-pinned client CLIs and verifies discovery through both surfaces without model
-credentials.
+validator enforces that fallback: its promotion gate
+(`validate_alpha_promotion_gate`) covers every locked skill outside
+`EXTERNAL_ORIGIN_LOCKED_SKILLS` (the reviewed set of vendored skills that were
+never project-local alpha), so a skill promoted out of `ALPHA_EVAL_RUNNERS`
+stays gated, and none of them can enter the locked skill set unless immutable
+HTTPS evidence exists for authenticated model evals on both Codex and Claude.
+The exemption set must stay disjoint from `ALPHA_EVAL_RUNNERS` and inside the
+lock allowlist (`EXPECTED_SKILL_LOCK_ENTRIES`); the same gate rejects either
+drift. Until that evidence exists, the skills in `ALPHA_EVAL_RUNNERS` remain
+project-local alpha workflows. That gate is distinct from
+`validate_alpha_skill_contracts`, the structural check (at least two evals,
+exact runner set, visibly alpha) that runs as a merge gate on every
+agent-relevant pull request and every `main` push, regardless of what the
+lock contains. The same validator
+(`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
+count in this document that disagrees with the length of
+`ALPHA_EVAL_RUNNERS` whenever the count heads a phrase ending in "alpha
+skill(s)" with at most two qualifiers such as "project-local" or
+"remaining" in between (a count of something else, as in "the two clients
+support alpha skills", is ignored; an issue or pull-request number such as
+`#260` never counts; and a count preceded by "at least", "at most", "more
+than", "fewer than", or "up to" is a bound rather than a count), or the count is
+immediately followed by "skill(s)", "alpha", "project-local", or "at the time
+of writing" inside a one-line sentence that mentions `ALPHA_EVAL_RUNNERS`, so
+a widened runner table cannot leave such prose stale. Both rules read one
+physical line at a time, so a bound phrase, an issue number, or the table
+mention wrapped onto the previous line does not reach the numeral it
+precedes. The separate
+`Agent assets` job still installs the real pinned client CLIs and verifies
+discovery through both surfaces without model credentials.
 
 ## Project-local non-alpha skills
 
@@ -293,7 +317,8 @@ credentials.
 `.claude/skills/` with a thin `.agents/skills/` entrypoint, following the same
 cross-platform discovery convention as the alpha skills above. It is not alpha
 and is intentionally absent from `validate_agent_assets.py`'s
-`ALPHA_EVAL_RUNNERS` and `validate_alpha_skill_contracts` tuple, and from
+`ALPHA_EVAL_RUNNERS` (which `validate_alpha_skill_contracts` iterates and
+the promotion gate's exemption check consults), and from
 `run_alpha_skill_evals.py`'s `EXPECTED_RUNNERS`: its correctness is inherently
 model-judgment-based (diagnosing a process mistake's root cause has no
 deterministic boolean oracle the way `issue_select_higher_ranked` or

@@ -41,6 +41,11 @@ EXPECTED_SKILL_LOCK_ENTRIES = {
         ),
     }
 }
+# Locked skills of external origin that were never project-local alpha skills
+# here; every other locked skill must carry authenticated model-eval evidence.
+# Adding a name here is a provenance claim reviewed with the lock allowlist
+# edit.
+EXTERNAL_ORIGIN_LOCKED_SKILLS: frozenset[str] = frozenset({"i-have-an-issue"})
 FEEDBACK_CONSENT_GUARDS = (
     "explicit approval",
     "exact payload",
@@ -98,7 +103,6 @@ ALPHA_EVAL_RUNNERS = {
         "attribution-falls-back-to-unattributed-or-ambiguous",
     },
 }
-PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
 # reviewed, stable authenticated runs exist for both supported client surfaces.
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
@@ -486,6 +490,17 @@ def validate_skill_lock(
     payload from git. A rejected payload suppresses only the hash comparison,
     never the policy-document checks.
     """
+    # The policy document is read and its literal alpha-skill counts checked
+    # before any lock-shape early return: the prose guard does not depend on
+    # the lock file and must run on every invocation.
+    policy_path = root / "docs" / "AGENT_TOOLING.md"
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as error:
+        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
+        policy = ""
+    validate_alpha_skill_count_prose(policy, failures)
+
     lock = load_json("skills-lock.json", failures, root)
     if lock.get("version") != 1:
         failures.append("skills-lock.json: version must be 1")
@@ -502,13 +517,6 @@ def validate_skill_lock(
             "skills-lock.json: locked skill set must be exactly "
             + ", ".join(sorted(expected_names))
         )
-
-    policy_path = root / "docs" / "AGENT_TOOLING.md"
-    try:
-        policy = policy_path.read_text(encoding="utf-8")
-    except OSError as error:
-        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
-        policy = ""
 
     for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
         entry = entries.get(name)
@@ -574,11 +582,125 @@ def validate_skill_lock(
                 )
 
 
+_NUMERAL_WORDS = {
+    word: index
+    for index, word in enumerate(
+        (
+            "one", "two", "three", "four", "five", "six",
+            "seven", "eight", "nine", "ten", "eleven", "twelve",
+        ),
+        start=1,
+    )
+}
+_NUMERAL = r"\b(?P<numeral>\d+|" + "|".join(_NUMERAL_WORDS) + r")\b"
+# Rule A: the numeral heads a count phrase whose noun is "alpha skill(s)":
+# "seven alpha skills", "all seven project-local alpha skills". Only the
+# qualifiers below may sit between them, so "the two clients support alpha
+# skills" (a count of clients) does not match. The numeral is also not an
+# issue or pull-request number ("#260 covers every alpha skill") and not a
+# floor or ceiling ("at least two evals ... alpha skill").
+_NOT_A_BOUND = (
+    r"(?<!at least )(?<!at most )(?<!more than )(?<!fewer than )(?<!up to )"
+)
+_COUNT_QUALIFIERS = (
+    r"(?:project-local|remaining|current|existing|listed|tracked|other|such)"
+)
+ALPHA_SKILL_COUNT_NEAR_PHRASE = re.compile(
+    r"(?<!#)"
+    + _NOT_A_BOUND
+    + _NUMERAL
+    + r"(?=(?:\s+"
+    + _COUNT_QUALIFIERS
+    + r"){0,2}\s+alpha skills?\b)",
+    re.IGNORECASE,
+)
+# Rule B: inside a sentence that names the runner table, the numeral is
+# immediately followed by a word that makes it a count of that table.
+ALPHA_SKILL_COUNT_NEAR_TABLE = re.compile(
+    _NUMERAL
+    + r"(?=\s+(?:skills?\b|alpha\b|project-local\b|at the time of writing\b))",
+    re.IGNORECASE,
+)
+ALPHA_EVAL_RUNNERS_MENTION = "`ALPHA_EVAL_RUNNERS`"
+
+
+def _numeral_value(numeral: str) -> int:
+    if numeral.isdigit():
+        return int(numeral)
+    return _NUMERAL_WORDS[numeral.lower()]
+
+
+def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
+    """Reject a literal alpha-skill count that disagrees with the runner table.
+
+    A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
+    skills when it is followed by ``alpha skill(s)`` with at most two
+    qualifiers (``project-local``, ``remaining``, ``current``, ``existing``,
+    ``listed``, ``tracked``, ``other``, ``such``) in between, so a numeral
+    that counts something else (``the two clients support alpha skills``)
+    is ignored, it is not an issue or pull-request number (``#260``),
+    and it is not preceded by a bound phrase (``at least``, ``at most``,
+    ``more than``, ``fewer than``, ``up to``), or when its sentence names
+    ``ALPHA_EVAL_RUNNERS`` and the numeral is
+    immediately followed by ``skill(s)``, ``alpha``, ``project-local``, or
+    ``at the time of writing``. A sentence is approximated as the text
+    between periods on a single line; prose wrapped across lines is checked
+    line by line, so a count and the table mention must share a line for the
+    second rule to apply, and a bound phrase or ``#`` wrapped onto the
+    previous line does not exclude the numeral it precedes under the first
+    rule. Every matched numeral must equal
+    ``len(ALPHA_EVAL_RUNNERS)``: the count is allowed, drift is not.
+    """
+    expected = len(ALPHA_EVAL_RUNNERS)
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for sentence in line.split("."):
+            matches = list(ALPHA_SKILL_COUNT_NEAR_PHRASE.finditer(sentence))
+            if ALPHA_EVAL_RUNNERS_MENTION in sentence:
+                matches.extend(ALPHA_SKILL_COUNT_NEAR_TABLE.finditer(sentence))
+            for match in matches:
+                value = _numeral_value(match.group("numeral"))
+                if value != expected:
+                    failures.append(
+                        f"docs/AGENT_TOOLING.md:{line_number}: literal "
+                        f"alpha-skill count {value} disagrees with "
+                        f"ALPHA_EVAL_RUNNERS ({expected})"
+                    )
+
+
 def validate_alpha_promotion_gate(
     locked_skills: dict[str, object],
     failures: list[str],
 ) -> None:
-    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+    # A hand-maintained list of things to gate fails silently when an entry
+    # is forgotten: the change that promotes a skill removes it from
+    # ALPHA_EVAL_RUNNERS (validate_alpha_skill_contracts requires members to
+    # stay visibly alpha) and adds it to the lock, so an intersection with
+    # the alpha inventory would omit exactly the promoted skill. A list of
+    # things to exempt fails loudly instead: every locked skill is a
+    # candidate unless a reviewed exemption asserts external origin, and the
+    # exemption is cross-checked against the alpha inventory (it must not
+    # name an alpha skill) and the lock allowlist (it must not name an
+    # unknown skill). The residual is a deliberate false exemption in a
+    # reviewed diff; a base-to-head transition check would close it and is
+    # deferred. The alpha inventory consulted here, ALPHA_EVAL_RUNNERS,
+    # mirrors EXPECTED_RUNNERS in run_alpha_skill_evals.py and is kept in
+    # sync by hand; a skill listed only there is invisible to the
+    # disjointness check.
+    alpha_exempt = sorted(EXTERNAL_ORIGIN_LOCKED_SKILLS & set(ALPHA_EVAL_RUNNERS))
+    if alpha_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must not name an "
+            f"alpha skill: {', '.join(alpha_exempt)}"
+        )
+    unknown_exempt = sorted(
+        EXTERNAL_ORIGIN_LOCKED_SKILLS - set(EXPECTED_SKILL_LOCK_ENTRIES)
+    )
+    if unknown_exempt:
+        failures.append(
+            "skills-lock.json: EXTERNAL_ORIGIN_LOCKED_SKILLS must be a subset "
+            f"of EXPECTED_SKILL_LOCK_ENTRIES: {', '.join(unknown_exempt)}"
+        )
+    for name in sorted(set(locked_skills) - EXTERNAL_ORIGIN_LOCKED_SKILLS):
         evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
         if (
             not isinstance(evidence, dict)
@@ -3417,15 +3539,7 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in (
-        "pycc",
-        "pycc-feedback",
-        "issue-to-plan",
-        "issue-implement",
-        "issue-select",
-        "next-milestone",
-        "ultra-review",
-    ):
+    for name in sorted(ALPHA_EVAL_RUNNERS):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:
