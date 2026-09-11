@@ -213,9 +213,13 @@ Follow the plan. Write tests for success, failure, and edge paths alongside the 
 100% line coverage of the Rust lines the diff adds or modifies is a merge invariant, not a
 target ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 1; total coverage is reported, never enforced). Update every
 affected document in the same commits as the code. Before entering review, run the full local
-gate set: the diff-coverage gate as three commands, capturing each exit status —
-`cargo llvm-cov --workspace --lcov --output-path "$S/coverage.lcov" > "$S/cov.log" 2>&1; echo $?`
-(about five minutes cold on an M-series Mac; run under an isolated `TMPDIR`/`CARGO_TARGET_DIR`),
+gate set: the diff-coverage gate as three commands, capturing each exit status. First
+define the scratch directory they write to — an isolated, automatically cleaned one, per
+`docs/TESTING.md`'s "Scratch directories" section (never a `pycc_` prefix, never a path
+under the working tree): `S="$(mktemp -d)"; trap 'rm -rf "$S"' EXIT`. Then
+`TMPDIR="$S" CARGO_TARGET_DIR="$S/target" cargo llvm-cov --workspace --lcov --output-path "$S/coverage.lcov" > "$S/cov.log" 2>&1; echo $?`
+(about five minutes cold on an M-series Mac; the isolated `TMPDIR`/`CARGO_TARGET_DIR` keep
+the instrumented build and the test scratch out of the shared tree),
 then `git diff -U0 --no-color --no-renames "$(git merge-base origin/main HEAD)" HEAD > "$S/changed.diff"`,
 then `python3 -B scripts/check_diff_coverage.py --lcov "$S/coverage.lcov" --diff "$S/changed.diff" --root "$PWD" --require-changed-lines 100; echo $?`
 (the merge base is the right local base because the local branch is not a merge commit) —
