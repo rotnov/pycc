@@ -49,6 +49,12 @@ restore_fixtures() {
   mkdir -p "$fixture_root/evidence-root/scripts"
   cp "$repo_root/scripts/collect_status_snapshot.py" "$fixture_root/evidence-root/scripts/"
   cp "$repo_root/scripts/test_check_status_snapshot.py" "$fixture_root/evidence-root/scripts/"
+  # Issue #1007 (D-243): the architecture record pins the trace test plus the
+  # checked-in per-stage artifacts it re-derives.
+  mkdir -p "$fixture_root/evidence-root/tests/fixtures/architecture-trace"
+  cp "$repo_root/tests/architecture_trace.rs" "$fixture_root/evidence-root/tests/"
+  cp "$repo_root/tests/fixtures/architecture-trace/"* \
+    "$fixture_root/evidence-root/tests/fixtures/architecture-trace/"
 }
 
 restore_fixtures
@@ -345,8 +351,10 @@ for index, hero in enumerate(json.loads((repo_root / "site/evidence-heroes.json"
 
 # Unavailable heroes must not grow decorative evidence.  Their owner issue is
 # the only stable link until a child issue lands a real artifact.  Status
-# (index 5) left this set under D-241; its record owns its own mutations below.
-for index in (3, 4, 6, 7):
+# (index 5) left this set under D-241; architecture (index 4) left it under
+# D-243, which moved it to `partial` behind a real pipeline trace.  Both own
+# their own mutations below.
+for index in (3, 6, 7):
     rejected(
         f"unavailable {index} carries invented snapshot",
         lambda doc, index=index: doc["heroes"][index].__setitem__(
@@ -669,6 +677,171 @@ restore_fixtures
 
 if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator rejected the shipped status snapshot record (issue #1006)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# ---------------------------------------------------------------------------
+# Architecture pipeline-trace controls (issue #1007, D-243).  The architecture
+# record left the generic unavailable set above, so every invariant that used
+# to be covered by "it must stay unavailable" is re-proven here explicitly:
+# state drift on all four surfaces, a missing pinned artifact per artifact, a
+# softened limitation, and the positive control that the shipped record is
+# accepted.
+# ---------------------------------------------------------------------------
+
+# Visible HTML cannot drift from the manifest's partial state, in either
+# direction: overstating it as all-Tier-1 and understating it as unavailable
+# are both rejected.
+for drifted_state in all-Tier-1 unavailable; do
+  python3 - "$fixture_root/site/architecture/index.html" "$drifted_state" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+state = sys.argv[2]
+content = path.read_text()
+anchor = '''      <header
+        class="page-hero"
+        data-evidence-role="hero"
+        data-evidence-id="architecture-trace-v1"
+        data-evidence-kind="compiler-pipeline-trace"
+        data-evidence-state="partial"
+      >'''
+assert anchor in content
+path.write_text(
+    content.replace(
+        anchor,
+        anchor.replace('data-evidence-state="partial"', f'data-evidence-state="{state}"'),
+        1,
+    )
+)
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted a drifted architecture hero state $drifted_state (issue #1007)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
+
+# Structured data carries the same tuple as the visible hero.
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = '''                "propertyID": "pycc:evidence-state",
+                "value": "partial"'''
+new = old.replace('"partial"', '"all-Tier-1"')
+assert old in content
+path.write_text(content.replace(old, new, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted drifted architecture structured data (issue #1007)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The Markdown and LLM inventories use the same record and must each fail
+# independently when their marker state drifts.
+for surface in index.html.md llms.txt; do
+  python3 - "$fixture_root/site/$surface" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = "<!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | partial | /architecture/ -->"
+assert content.count(old) == 1
+path.write_text(content.replace(old, old.replace("| partial |", "| all-Tier-1 |"), 1))
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted a drifted architecture marker state in $surface (issue #1007)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
+
+# The shared summary carries the record's limitations verbatim on both text
+# surfaces; softening the LLVM IR gap is drift (D-243).
+for surface in index.html.md llms.txt; do
+  python3 - "$fixture_root/site/$surface" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+old = (
+    "The LLVM IR stage carries no artifact at all, because pycc has no --emit "
+    "flag, so this trace is partial and never all-Tier-1."
+)
+assert content.count(old) == 1
+path.write_text(content.replace(old, "Every pipeline stage is fully covered.", 1))
+PY
+  if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted softened architecture limitations in $surface (issue #1007)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
+
+# Removing any pinned architecture artifact must fail the canonical gate.  The
+# trace record, the per-stage renderings and the re-deriving test are each
+# load-bearing on their own.
+for pinned in \
+  tests/architecture_trace.rs \
+  tests/fixtures/architecture-trace/trace.json \
+  tests/fixtures/architecture-trace/parser-ast.txt \
+  tests/fixtures/architecture-trace/hir-module.txt \
+  tests/fixtures/architecture-trace/mir-items.txt; do
+  rm -f "$fixture_root/evidence-root/$pinned"
+  if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+    echo "Validator accepted a missing architecture artifact $pinned (issue #1007)" >&2
+    exit 1
+  fi
+  restore_fixtures
+done
+
+# Corrupting a pinned stage artifact must fail even though the file still
+# exists: the record pins SHA-256 identities, not names.
+python3 - "$fixture_root/evidence-root/tests/fixtures/architecture-trace/mir-items.txt" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_bytes(path.read_bytes() + b"; injected\n")
+PY
+if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a corrupted architecture stage artifact (issue #1007)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# The record cannot claim a stdout transcript the trace record does not carry.
+python3 - "$fixture_root/site/evidence-heroes.json" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+path = Path(sys.argv[1])
+document = json.loads(path.read_text())
+hero = next(item for item in document["heroes"] if item["page_id"] == "architecture")
+assert hero["state"] == "partial"
+hero["state"] = "all-Tier-1"
+path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+PY
+if EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an overstated architecture record state (issue #1007)" >&2
+  exit 1
+fi
+restore_fixtures
+
+# Positive control: the shipped architecture record is accepted against the
+# real evidence root.  Without this every rejection above could pass for the
+# wrong reason.
+if ! EVIDENCE_ROOT_PATH="$fixture_root/evidence-root" SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected the shipped architecture pipeline trace (issue #1007)" >&2
   exit 1
 fi
 restore_fixtures
@@ -4799,5 +4972,6 @@ restore_fixtures
 # shallow governance discovery suite limited to their wiring contract.
 python3 -B "$repo_root/scripts/site_execution_evidence_test.py"
 python3 -B "$repo_root/scripts/site_status_evidence_test.py"
+python3 -B "$repo_root/scripts/site_pipeline_evidence_test.py"
 
 echo "Website validator self-tests passed."
