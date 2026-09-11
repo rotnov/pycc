@@ -33,6 +33,39 @@ never a merge gate.
 
 ---
 
+## 2026-09-11 — A loop's round cap and its open-disagreement state each claimed to be the terminal condition
+
+**What happened.** Planning issue #261 through `issue-to-plan`, the
+delegated planning run reached its 5-round cap without a clean round while
+every finding it had raised was accepted and none refuted. Two rules in the
+same skill then pointed opposite ways: the stop condition said not to start
+a sixth round, and the loop's own definition said the loop is finished only
+when a round changes nothing. The orchestrating session had to adjudicate
+which one governed before it could act on the plan — which is the exact
+ambiguity #261 was filed to remove, observed while fixing it.
+
+**Root cause.** The terminating condition was stated twice, in two
+sections, in two different vocabularies: once as a count and once as a
+per-round outcome. Both statements were normative, neither cross-referenced
+the other, and nothing bound either to a test, so the contradiction only
+surfaced when a run reached the one state where the two answers differ.
+
+**What fixed it.** One section now owns the definition and states both
+terminal states positively; every other mention cross-references it rather
+than restating it, and each sentence the rule depends on is pinned by an
+evaluation contract, so deleting the definition fails the suite instead of
+passing it.
+
+**Lesson.** When a loop, retry, or escalation rule has both a budget and a
+success condition, write down which one terminates it and where the other
+sits relative to that — a budget alone cannot terminate a loop whose
+success condition is still unmet, and prose that implies otherwise will be
+read both ways under pressure. Rules that appear in two sections need one
+owner and cross-references, not two independent statements, and a rule
+worth stating is worth pinning to a check that fails when it disappears.
+
+---
+
 ## 2026-09-11 — A temporary workflow outlived the activation change that promised to delete it
 
 **What happened.** `.github/workflows/frontend-perf-shadow.yml` was added
