@@ -670,7 +670,10 @@ def validate_alpha_promotion_gate(
     # name an alpha skill) and the lock allowlist (it must not name an
     # unknown skill). The residual is a deliberate false exemption in a
     # reviewed diff; a base-to-head transition check would close it and is
-    # deferred.
+    # deferred. The alpha inventory consulted here, ALPHA_EVAL_RUNNERS,
+    # mirrors EXPECTED_RUNNERS in run_alpha_skill_evals.py and is kept in
+    # sync by hand; a skill listed only there is invisible to the
+    # disjointness check.
     alpha_exempt = sorted(EXTERNAL_ORIGIN_LOCKED_SKILLS & set(ALPHA_EVAL_RUNNERS))
     if alpha_exempt:
         failures.append(
