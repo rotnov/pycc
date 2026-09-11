@@ -15,12 +15,13 @@
 //! runtime value for `argv`, `NoReturn`-style divergence handling in
 //! `pycc_types`/`pycc_mir` for `exit`) that has no existing precedent in
 //! this codebase and no concrete lowering slice in this PR's Task 4 scope.
-//! Recorded as a D-136 addendum in `docs/DECISIONS.md` rather than silently
-//! narrowing the ADR's own text. `math.floor`/`math.ceil` are likewise
-//! withheld from the registry for the same reason: D-136 (via D-088's
-//! established series precedent) requires that nothing type-checkable here
-//! be left unlowerable in `pycc_mir`/`pycc_codegen`, and only `sqrt`/`pi`
-//! have a concrete lowering path landing in this PR.
+//! Recorded as a D-136 addendum in
+//! `docs/decisions/D-136-pycc-std-is-a-plain-data-crate-math-sys-symbols.md`
+//! rather than silently narrowing the ADR's own text. `math.floor`/`math.pow`
+//! are likewise withheld from the registry for the same reason: D-136 (via
+//! D-088's established series precedent) requires that nothing
+//! type-checkable here be left unlowerable in `pycc_mir`/`pycc_codegen`, and
+//! only `sqrt`/`pi` have a concrete lowering path landing in this PR.
 
 /// A stdlib module name this compiler recognizes as an `import`/
 /// `from ... import ...` target.

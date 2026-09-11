@@ -1576,9 +1576,10 @@ fn to_str<'ctx>(
         // runtime object to hand to a conversion function, since a tuple is
         // a bare LLVM struct with no `pycc_rt` type at all (D-115). Panics
         // honestly instead of reinterpreting the struct's first field as a
-        // `PyStrObj` pointer. See `docs/DECISIONS.md`'s D-116 deferred-
-        // capability list and `docs/ROADMAP.md`'s matching follow-up for
-        // this new-as-of-PR-11b reachability.
+        // `PyStrObj` pointer. See the D-116 deferred-capability list in
+        // `docs/decisions/D-116-tuple-v0-2-scope-int-bool-float-elements-only.md`
+        // and `docs/ROADMAP.md`'s matching follow-up for this
+        // new-as-of-PR-11b reachability.
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: string conversion of a tuple[...] value is not supported yet")
         }
@@ -3989,9 +3990,11 @@ fn truthy<'ctx>(
         // semantics -- and CPython's own rule (a tuple is falsey only when
         // empty) is not derivable from this representation for free
         // anyway, since D-116 admits no empty tuple in the first place.
-        // Panics honestly rather than guessing. See `docs/DECISIONS.md`'s
-        // D-116 deferred-capability list and `docs/ROADMAP.md`'s matching
-        // follow-up for this new-as-of-PR-11b reachability.
+        // Panics honestly rather than guessing. See the D-116
+        // deferred-capability list in
+        // `docs/decisions/D-116-tuple-v0-2-scope-int-bool-float-elements-only.md`
+        // and `docs/ROADMAP.md`'s matching follow-up for this
+        // new-as-of-PR-11b reachability.
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: truthiness of a tuple[...] value is not supported yet")
         }

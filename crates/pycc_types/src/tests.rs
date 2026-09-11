@@ -8578,7 +8578,8 @@ fn an_int_argument_for_a_float_parameter_is_a_clean_error() {
     // following the Python typing spec's numeric-tower rule that `int`
     // is accepted wherever `float` is annotated. This is a deliberate
     // deviation from `mypy --strict` (which accepts this call), not an
-    // oversight -- see D-086's rationale in docs/DECISIONS.md.
+    // oversight -- see D-086's rationale in
+    // docs/decisions/D-086-two-type-boundary-strictness-decisions-equality.md.
     let mut env = Environment::new();
     env.bind_function("identity".to_string(), vec![Ty::Float], Ty::Float);
     let expr = HirExpr::Call {
