@@ -196,8 +196,8 @@ def summary(hero):
 
 # The enumerated declarations that remove an element from view: ``display:
 # none``, ``visibility: hidden``/``collapse``, ``opacity: 0``,
-# ``content-visibility: hidden``, ``font-size: 0`` and a ``transform`` that
-# scales to zero.  CSS property names and keywords are case-insensitive, so
+# ``content-visibility: hidden``, ``font-size: 0`` and a ``transform`` whose
+# ``scale``/``scaleX``/``scaleY``/``scaleZ``/``scale3d`` has any zero argument.  CSS property names and keywords are case-insensitive, so
 # ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
 # element off-screen, covering it or painting it in the background colour is
 # outside this model and stays a review concern (docs/WEBSITE.md).
@@ -213,7 +213,7 @@ HIDING_DECLARATION = re.compile(
     r"|opacity\s*:\s*" + ZERO + r"%?(?=\s*(?:;|!|$))"
     r"|content-visibility\s*:\s*hidden"
     r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
-    r"|transform\s*:[^;]*\bscale[xy]?\(\s*" + ZERO + r"\s*[,)])",
+    r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)])",
     re.I | re.M)
 
 

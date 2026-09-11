@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T11:25:30Z. The record pins the collector's and its suite's
+  2026-09-11T11:54:15Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T11:25:30Z` after the suite changed.
+  `--collected-at 2026-09-11T11:54:15Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -279,6 +279,14 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     is rejected before the collapse (no page in `site/` repeats one). Cases in
     all three suites, snapshot re-collected at `2026-09-11T11:25:30Z` with
     `--subject 4111208c`, pins rotated.
+19. External, on PR #1008, two Codex P2s: the `transform` match read only
+    the first `scale` argument, so `scale(1, 0)` collapsed the hero unseen;
+    and selector attribute names kept their casing while `HTMLParser`
+    lowercases them, so `[DATA-EVIDENCE-ROLE="hero"] { display: none }`
+    hid the hero unseen. Fixed: any zero argument of `scale`/`scaleX`/
+    `scaleY`/`scaleZ`/`scale3d` counts, and attribute-name hooks are
+    lower-cased on the selector side. Cases in all three suites, snapshot
+    re-collected at `2026-09-11T11:54:15Z` with `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

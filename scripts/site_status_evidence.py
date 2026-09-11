@@ -443,7 +443,8 @@ def compound_hooks(compound):
     compound = PSEUDO.sub("", compound)
     hooks = set()
     for kind, pattern in (("class", r"\.([\w-]+)"), ("id", r"#([\w-]+)"), ("attr", r"\[([\w-]+)")):
-        hooks.update(f"{kind}:{name}" for name in re.findall(pattern, compound))
+        # HTML attribute names match case-insensitively; classes and ids do not.
+        hooks.update(f"{kind}:{name.lower() if kind == 'attr' else name}" for name in re.findall(pattern, compound))
     rest = re.sub(r"\.[\w-]+|#[\w-]+|\[[^\]]*\]", "", compound).strip()
     if rest == "*" or not rest:
         hooks.add("*")
@@ -455,8 +456,6 @@ def compound_hooks(compound):
 
 
 class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
-    def reject(self, message):
-        fail(f"status page {message}")
     """Also keep every visible ``<dt>``/``<dd>``/``<li>`` row inside the hero as its own text and links.
 
     The collapsed summary — the visible element inside the hero that repeats
@@ -471,6 +470,8 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
     selector hooks of every element inside the hero and of the hero's
     ancestors, so a stylesheet rule that could hide the proof is rejected.
     """
+    def reject(self, message):
+        fail(f"status page {message}")
     def __init__(self):
         super().__init__()
         self.rows = []

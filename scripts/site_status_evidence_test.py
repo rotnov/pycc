@@ -250,6 +250,7 @@ class StatusEvidenceTests(unittest.TestCase):
                      ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }",
                      ".content-page { display: none; }", "#main-content { opacity: .0 }", "body { font-size: .0px }",
                      "main > .page-hero { transform: scale(.0) }", ".page-hero { opacity: -0 }", "#main-content { opacity: 0e0 }",
+                     ".page-hero { transform: scale(1, 0) }", '[DATA-EVIDENCE-ROLE="hero"] { display: none; }',
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', ".page-hero::before { content: attr(data-evidence-state) }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):
