@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1180 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1178 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -94,7 +94,38 @@ bytes; the context aggregate is 278,016 of 278,528.
 
 ## Review rounds
 
-(filled by the orchestrating session)
+Five D-068 `ievo:deep-reviewer` rounds over the full merge-base range; every
+verdict is a row in `.harden/findings/issue-1006.jsonl`.
+
+1. One warning: `paginated_check_runs` accepted a non-dict check-run entry
+   and died with `AttributeError` instead of the collector's `Unavailable`
+   path. Fixed in `c3f929a5` (guard plus test; snapshot re-collected because
+   the record pins the collector's bytes).
+2. One warning: the `parent_count` invariant used `!= 1`, which `True` and
+   `1.0` satisfy. One note: an unused `verify_git` flag on the test helper.
+   Fixed in `8e5adcf5` (int-not-bool check with a subTest over `True`, `1.0`,
+   `"1"`; flag removed; snapshot re-collected).
+3. One warning: `scripts/test_site_status_wiring.py` imported a `TestCase`
+   by name, so `unittest discover` ran its six tests twice. Fixed in
+   `48d9b813` (qualified module import; 1182 collected became 1176).
+4. One warning: `validate()` compared `attestation.milestone_line` with
+   `docs/ROADMAP.md` at `HEAD` while the subject must be a `main` commit, so a
+   milestone-transition pull request could never re-collect a green record.
+   The plan prescribed the `HEAD` comparison; an independent advisor round
+   (D-127) chose to prove the line against the subject commit in
+   `verify_git`, exactly as the subject's tree is proved, over hand-edited
+   records or an accepted red leg, and D-241 records the bounded window in
+   which the hero shows the previous milestone. One note: the pin prose
+   called the validator suite the collector's suite. Fixed in `c2d8cf79`
+   (snapshot re-collected at `2026-09-11T04:38:32Z`).
+5. Clean.
+
+Harden batch over the pile: four classes, all recorded as open counters
+under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
+(rows 1-2, review is the right rung), `plan-contradicts-its-own-constraint`
+(rows 5-6, file 4; the step-7 reviewer-brief line is routed to the agent-tooling
+umbrella #806), `test-seam-widens-public-api` (row 3, second file) and the new
+`testcase-import-rediscovered-by-unittest` (row 4, fails the D-192 filing bar).
 
 ## Follow-ups
 
