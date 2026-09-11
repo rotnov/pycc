@@ -1635,6 +1635,7 @@ TRUSTED_COVERAGE_SETUP_COMMANDS = [
 PRODUCT_MODE_COVERAGE_STEP =
   "Coverage gate — 100% of changed lines, totals reported (D-242)"
 REQUIRED_COVERAGE_GATE_LINES = [
+  "git diff -U0 --no-color --no-renames \"$COVERAGE_BASE_SHA\" HEAD > \"$RUNNER_TEMP/coverage-changed.diff\"",
   "TRUSTED_COV=\"/Users/runner/.cargo/bin/cargo-llvm-cov\"",
   "RUSTC=\"$TRUSTED_RUSTC\" RUSTDOC=\"$TRUSTED_RUSTDOC\" \"$TRUSTED_CARGO\" install cargo-llvm-cov --locked --version \"${CARGO_LLVM_COV_VERSION}\"",
   "sudo chown -R nobody:nobody \"$ISOLATED_ROOT\"",

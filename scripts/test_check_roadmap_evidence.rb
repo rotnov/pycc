@@ -204,6 +204,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     "      - name: Coverage gate — 100% of changed lines, totals reported (D-242)"
   PRODUCT_MODE_GATE_SCRIPT = <<~SHELL
     set -euo pipefail
+    if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then COVERAGE_BASE_SHA="$PR_BASE_SHA"; else COVERAGE_BASE_SHA="$PUSH_BASE_SHA"; fi
+    git diff -U0 --no-color --no-renames "$COVERAGE_BASE_SHA" HEAD > "$RUNNER_TEMP/coverage-changed.diff"
     LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
     TRUSTED_CARGO="$(rustup which cargo)"
     TRUSTED_RUSTC="$(rustup which rustc)"
@@ -235,8 +237,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     }
     ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
     cd "$GITHUB_WORKSPACE"
-    if [ -n "$PR_BASE_SHA" ]; then base_sha="$PR_BASE_SHA"; else base_sha="$PUSH_BASE_SHA"; fi
-    git diff -U0 --no-color "$base_sha" HEAD -- '*.rs' > "$RUNNER_TEMP/coverage-changed.diff"
     run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
     run_isolated "$TRUSTED_CARGO" build --workspace
     run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
@@ -4908,6 +4908,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
         ["rm \"$GITHUB_WORKSPACE/target\"\n", "rm \"$GITHUB_WORKSPACE/target\" || exit 0\n"],
       "|| true inserted" =>
         ["--require-changed-lines 100\n", "--require-changed-lines 100 || true\n"],
+      "|| : inserted" =>
+        ["--require-changed-lines 100\n", "--require-changed-lines 100 || :\n"],
+      "missing changed-line diff" =>
+        ["git diff -U0 --no-color --no-renames \"$COVERAGE_BASE_SHA\" HEAD > \"$RUNNER_TEMP/coverage-changed.diff\"\n", ""],
+      "pathspec appended to the changed-line diff" =>
+        ["\"$COVERAGE_BASE_SHA\" HEAD > \"$RUNNER_TEMP/coverage-changed.diff\"",
+         "\"$COVERAGE_BASE_SHA\" HEAD -- '*.rs' > \"$RUNNER_TEMP/coverage-changed.diff\""],
+      "--no-renames dropped from the changed-line diff" =>
+        ["git diff -U0 --no-color --no-renames", "git diff -U0 --no-color"],
+      "different base variable in the changed-line diff" =>
+        ["--no-renames \"$COVERAGE_BASE_SHA\" HEAD", "--no-renames \"$PUSH_BASE_SHA\" HEAD"],
       "set +e inserted" =>
         ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nset +e\n"],
       "trap inserted" =>

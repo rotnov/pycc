@@ -426,7 +426,10 @@ threshold.") — requires all of the following named properties of
   default shell, unconditional, with exactly the two-key `env` that supplies
   the diff base (`PR_BASE_SHA`, `PUSH_BASE_SHA`);
 - a gate script that starts with `set -euo pipefail`, contains each of
-  `REQUIRED_COVERAGE_GATE_LINES` exactly once and in order — the trusted
+  `REQUIRED_COVERAGE_GATE_LINES` exactly once and in order — the changed-line
+  diff `git diff -U0 --no-color --no-renames "$COVERAGE_BASE_SHA" HEAD >
+  "$RUNNER_TEMP/coverage-changed.diff"` that writes the gate's denominator
+  (no pathspec, no rename detection), the trusted
   `cargo-llvm-cov` path and its pinned `--locked --version` install, `nobody`
   ownership of the isolated root, the sanitized `PATH`, the three-line
   `run_isolated` definition (`sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"`),
@@ -442,7 +445,9 @@ regions (D-014)` step with its reviewed script and pinned setup-step prefix)
 stays accepted permanently as a strictly stricter historical form, so
 `ci.yml` satisfies the checker in either shape. **Threat model:** the audit
 proves *shape* — unprivileged sandbox, trusted binary, workspace denominator,
-gate command line, threshold — not byte identity; a hostile edit placed
+pinned changed-line denominator (the diff command itself, so no pathspec or
+rename detection can shrink the measured line set), gate command line,
+threshold — not byte identity; a hostile edit placed
 between the required lines is caught by the D-068 full-diff review that
 precedes every merge, which is the compensating control. Privileged jobs keep
 every `scripts/check_ci_permissions.rb` check unchanged. Adding a required
@@ -1176,11 +1181,16 @@ region table (`run_isolated "$TRUSTED_COV" llvm-cov report
 never as a threshold. **What the diff gate cannot see:** coverage lost on
 *unchanged* lines — a deleted test that orphans an old path — never fails
 the gate; the `report` TOTAL row and the totals line are the only signal for
-that drift, and the D-068 review reads them. Locally:
+that drift, and the D-068 review reads them. Until the activation pull
+request for #1010 lands, CI still enforces the whole-workspace
+`--fail-under-lines 100 --fail-under-regions 100` gate, so during that
+transitional window also run
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+locally: a diff-clean change that deletes a test can still fail CI. Locally:
 
 ```
 cargo llvm-cov --workspace --lcov --output-path target/coverage.lcov
-git diff -U0 --no-color "$(git merge-base origin/main HEAD)" HEAD -- '*.rs' > target/changed.diff
+git diff -U0 --no-color --no-renames "$(git merge-base origin/main HEAD)" HEAD > target/changed.diff
 python3 -B scripts/check_diff_coverage.py --lcov target/coverage.lcov --diff target/changed.diff --root "$PWD" --require-changed-lines 100
 cargo llvm-cov report
 ```
@@ -1188,7 +1198,10 @@ cargo llvm-cov report
 **Threat model:** `scripts/check_roadmap_evidence.rb` audits the coverage
 job by named properties (see "Roadmap acceptance evidence" above), which
 proves *shape* — unprivileged sandbox, trusted binary, workspace denominator,
-gate command line, threshold — not byte identity; a hostile edit placed
+pinned changed-line denominator (the `git diff -U0 --no-color --no-renames
+"$COVERAGE_BASE_SHA" HEAD` command is itself a required line, so neither a
+pathspec nor rename detection can shrink the measured line set), gate command
+line, threshold — not byte identity; a hostile edit placed
 between the required lines is caught by the D-068 full-diff review that
 precedes every merge, which is the compensating control.
 
@@ -1241,7 +1254,7 @@ fail-closed `ci-gate` remain required.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
 - Gate (legacy shape, live until the #1010 activation pull request; the product-mode shape replaces only the `--fail-under-*` command line with the LCOV export, the `report` table, and `scripts/check_diff_coverage.py`, keeping everything else in this bullet): `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; no head-controlled policy step runs earlier in this coverage job, while the separate always-run governance job remains unprivileged. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
-- Test code itself (`tests/`, `examples/`, `benches/`, `build.rs`, `tests.rs`, `*_tests.rs`, `*-tests.rs`) is excluded from the denominator automatically by cargo-llvm-cov's default exclusion (`src/report.rs:919-923` in 0.8.7), and `scripts/check_diff_coverage.py` applies the identical predicate to the diff — the gate measures product code exercised by tests, not tests covering themselves, and a test-only pull request has no changed source lines and passes.
+- Test code itself (`tests/`, `examples/`, `benches/`, `build.rs`, `tests.rs`, `<name>_tests.rs`, `<name>-tests.rs` — exactly the basename regex `^(tests\.rs|[0-9a-zA-Z_-]+[_-]tests\.rs)$` stated in the "Code coverage" section's file predicate) is excluded from the denominator automatically by cargo-llvm-cov's default exclusion (`src/report.rs:919-923` in 0.8.7), and `scripts/check_diff_coverage.py` applies the identical predicate to the diff — the gate measures product code exercised by tests, not tests covering themselves, and a test-only pull request has no changed source lines and passes.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 
   | File pattern | Reason |
