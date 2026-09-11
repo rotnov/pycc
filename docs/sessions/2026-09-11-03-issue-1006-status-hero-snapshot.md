@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T16:30:06Z. The record pins the collector's and its suite's
+  2026-09-11T16:48:51Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T16:30:06Z` after the suite changed.
+  `--collected-at 2026-09-11T16:48:51Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -94,9 +94,10 @@ bytes; the context aggregate is 278,016 of 278,528.
 
 ## Review rounds
 
-Twenty-eight review rounds over the full merge-base range -- twenty-four D-068
-`ievo:deep-reviewer` rounds and four external Codex rounds on PR #1008; every
-verdict is a row in `.harden/findings/issue-1006.jsonl`.
+Twenty-nine review rounds over the full merge-base range -- twenty-four D-068
+`ievo:deep-reviewer` rounds, four external Codex rounds on PR #1008 and one
+D-127 advisor round; every verdict is a row in
+`.harden/findings/issue-1006.jsonl`.
 
 1. One warning: `paginated_check_runs` accepted a non-dict check-run entry
    and died with `AttributeError` instead of the collector's `Unavailable`
@@ -320,7 +321,7 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     an optional `-webkit-`/`-moz-`/`-ms-`/`-o-` prefix is now matched behind
     the same boundary, and inline styles have CSS comments stripped as the
     stylesheet scan already did.
-    Cases in all three suites, snapshot re-collected at `2026-09-11T16:30:06Z` with
+    Cases in all three suites, snapshot re-collected at `2026-09-11T16:48:51Z` with
     `--subject 4111208c`, pins rotated.
 
 22. External, on PR #1008, two Codex findings plus one refutation. The first:
@@ -346,8 +347,26 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     SHA, and `filter=all` would fail-close on an ordinary rerun. The probe
     returned empty `pull_requests` on both the workflow run and the check-run,
     so the binding is not observable through the API; the residual is recorded
-    rather than closed. Cases in all three suites, snapshot re-collected at
-    `2026-09-11T16:30:06Z` with `--subject 4111208c`, pins rotated.
+    rather than closed. Snapshot re-collected with `--subject 4111208c`, pins
+    rotated.
+
+23. D-127 advisor round, one finding. Round 22 relocated the inline-CSS battery
+    out of `scripts/site_execution_evidence_test.py`'s heroes but left the same
+    shadowing live in the two sister suites, while the `docs/WEBSITE.md` row for
+    `scripts/site_status_evidence_test.py` went on claiming those cases prove
+    inline-declaration coverage. Measured rather than argued: a benign
+    `style="color: red"` on each of the three hero anchors in that suite is
+    rejected with the same message its hiding spelling produces, so the cases
+    pin the allowlist, not `HIDING_DECLARATION`. The same holds for the
+    hero-anchored `hidden`, `inert` and `<dialog>` cases in both suites, since
+    none of those names is in `HERO_ATTRS`/`HERO_TAGS` either. Relabelled rather
+    than relocated a second time: the declaration axis is already proven where
+    it decides the verdict, on the navigation-link battery and on the stylesheet
+    and embedded-`<style>` rules, so duplicating the relocation would add churn
+    without adding evidence. Both suites gained a docstring saying what their
+    hero-anchored cases actually pin, and the `docs/WEBSITE.md` row now says the
+    same. Snapshot re-collected at `2026-09-11T16:48:51Z` with
+    `--subject 4111208c`, pins rotated; all eleven local gates green.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
