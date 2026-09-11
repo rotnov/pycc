@@ -40,11 +40,15 @@ this file and the harden journal.
 - `scripts/test_validate_agent_assets.py`: promotion tests parametrised over
   every table entry (absent, codex-only, claude-only, all present), the
   non-HTTPS shape, a derivation-from-table proof via `mock.patch.dict`, a
-  vendored-skill-ignored proof (`i-have-an-issue`), and six prose-guard
-  tests (stale spelled-out count, stale digit after the table mention,
-  matching count accepted, unrelated numerals ignored, adjacent numerals
-  counted under a widened table while distant ones stay ignored, the real
-  document passes).
+  vendored-skill-ignored proof (`i-have-an-issue`), two exemption-invariant
+  tests (the exemption naming an alpha skill; the exemption naming a skill
+  outside the lock allowlist), six prose-guard tests (stale spelled-out
+  count, stale digit after the table mention, matching count accepted,
+  unrelated numerals ignored, adjacent numerals counted under a widened
+  table while distant ones stay ignored, the real document passes), and a
+  `validate_skill_lock` test pinning the prose guard ahead of the
+  lock-shape early return (an empty `skills` object reports both
+  failures).
 - `docs/AGENT_TOOLING.md` and `docs/ROADMAP.md`: the promotion gate is
   described as covering every locked skill outside
   `EXTERNAL_ORIGIN_LOCKED_SKILLS`, without a literal count; the structural check's trigger is scoped to agent-relevant
@@ -66,11 +70,13 @@ Markdown only.
 D-068 review: `ievo:deep-reviewer`, one round per fix commit until a clean
 round, itemized by round in `.harden/findings/issue-260.jsonl`. Round 1 found the
 newly written prose reintroducing a literal count and a dangling "Until
-then" (fixed `6f93b1ba`); round 2 clean; rounds 3 through 7 each found one
-or two wording inaccuracies in the guard's own description or the code
-comment (per-line scope, early return, pronoun antecedent, sentence
-granularity, "single owner", trigger scope) and were fixed in the commits
-listed above; round 8 clean. The rounds run after the external review
+then" (fixed `6f93b1ba`); round 2 clean; round 3 found three items, one
+of them a control-flow gap (the lock-shape early return skipped the prose
+guard) and two wording ones (per-line scope, docstring formatting); rounds
+4 through 7 each found one or two wording inaccuracies in the guard's own
+description or the code comment (pronoun antecedent, sentence granularity,
+"single owner", trigger scope); all were fixed in the commits listed
+above; round 8 clean. The rounds run after the external review
 (below) found only documentation and test-comment drift in this file, in
 `docs/AGENT_TOOLING.md`, and in the prose-guard test, each fixed in the
 commit its pile row names. Every finding, including the external ones, is

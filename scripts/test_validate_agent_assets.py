@@ -1085,6 +1085,35 @@ class AgentAssetValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_skill_lock_runs_prose_guard_before_lock_shape_early_return(
+        self,
+    ) -> None:
+        stale = len(validator.ALPHA_EVAL_RUNNERS) + 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs" / "AGENT_TOOLING.md").write_text(
+                f"names all {stale} alpha skills.\n", encoding="utf-8"
+            )
+            (root / "skills-lock.json").write_text(
+                json.dumps({"version": 1, "skills": {}}), encoding="utf-8"
+            )
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=root,
+                payload_entries=[],
+            )
+        self.assertIn(
+            "skills-lock.json: skills must be a non-empty object", failures
+        )
+        self.assertIn(
+            f"docs/AGENT_TOOLING.md:1: literal alpha-skill count {stale} "
+            f"disagrees with ALPHA_EVAL_RUNNERS ({stale - 1})",
+            failures,
+        )
+
     def test_alpha_skill_count_prose_accepts_the_tracked_policy(self) -> None:
         failures: list[str] = []
         validator.validate_alpha_skill_count_prose(
