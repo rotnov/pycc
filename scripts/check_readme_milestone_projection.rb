@@ -65,6 +65,10 @@ EVIDENCE_PROJECTION_BINDINGS = {
   "ci-build-test-coverage-100" =>
     /100%.*line\/region.*coverage|coverage gate.*required.*green/i,
   "readme-coverage-badge-bound" =>
+    /coverage badge.*bound|badge.*bound.*CI.*coverage/i,
+  "ci-diff-coverage-100" =>
+    /100%.*(added|changed|modified).*lines?.*coverage|100% coverage of changed lines/i,
+  "readme-diff-coverage-badge-bound" =>
     /coverage badge.*bound|badge.*bound.*CI.*coverage/i
 }.freeze
 

@@ -151,7 +151,7 @@ Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 3
 
 **Debug/release conformance (resolves #10):** TESTING.md's conformance-harness rule ("compile `--debug` and `--release` both... flips to ✅ only when green on all Tier-1 targets in both profiles") describes the steady-state contract once `--release` exists. It does not apply yet: `--release`/LTO is a named v0.2 item (see the milestone table above), so for the whole of v0.1 the conformance harness runs `--debug` only, and no v0.1 PEP/feature is held to a `--release` bar that has nothing to build against. TESTING.md's wording is annotated accordingly rather than left to look like a v0.1 requirement no PR could actually satisfy.
 
-Cutting across all of these: the D-014 coverage gate (`cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`) applies to every crate from PR-1 on — it is not a v0.1-specific item but a standing requirement, wired into the CI skeleton before any crate has a chance to accumulate untested code. Each task in the implementation plan below writes its test alongside its code for exactly this reason.
+Cutting across all of these: the coverage gate (D-014, narrowed by D-242 to 100% line coverage of the Rust lines each pull request adds or modifies, with total line and region coverage reported) applies to every crate from PR-1 on — it is not a v0.1-specific item but a standing requirement, wired into the CI skeleton before any crate has a chance to accumulate untested code. Each task in the implementation plan below writes its test alongside its code for exactly this reason.
 
 ## Scope honesty
 

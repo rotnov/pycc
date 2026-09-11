@@ -2,8 +2,8 @@
 # frozen_string_literal: true
 
 # Test suite for scripts/check_readme_coverage_badge.rb — validates
-# that the README coverage badge is bound to the CI-enforced threshold
-# (issue #211).
+# that the README coverage badge is bound to the CI-enforced diff-coverage
+# threshold (issue #211, D-242).
 
 require "minitest/autorun"
 require "pathname"
@@ -43,39 +43,39 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
   end
 
   def test_live_readme_has_coverage_badge
-    assert_match(/test coverage:\s*\d+%/, live_readme,
+    assert_match(/diff coverage:\s*\d+%/, live_readme,
                  "README must have a coverage badge")
   end
 
-  def test_live_ci_has_fail_under_lines
-    assert_match(/--fail-under-lines\s+\d+/, live_ci,
-                 "ci.yml must have a --fail-under-lines threshold")
+  def test_live_ci_has_require_changed_lines
+    assert_match(/--require-changed-lines\s+\d+/, live_ci,
+                 "ci.yml must have a --require-changed-lines threshold")
   end
 
   # --- Negative: badge percentage mismatches ---
 
   def test_rejects_badge_with_wrong_percentage
     text = live_readme.sub(
-      /test%20coverage-100%25-brightgreen/,
-      "test%20coverage-99%25-brightgreen"
-    ).sub(/test coverage: 100%/, "test coverage: 99%")
+      /diff%20coverage-100%25-brightgreen/,
+      "diff%20coverage-99%25-brightgreen"
+    ).sub(/diff coverage: 100%/, "diff coverage: 99%")
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted badge with 99% when CI enforces 100%"
   end
 
   def test_rejects_badge_with_inflated_percentage
     text = live_readme.sub(
-      /test%20coverage-100%25-brightgreen/,
-      "test%20coverage-101%25-brightgreen"
-    ).sub(/test coverage: 100%/, "test coverage: 101%")
+      /diff%20coverage-100%25-brightgreen/,
+      "diff%20coverage-101%25-brightgreen"
+    ).sub(/diff coverage: 100%/, "diff coverage: 101%")
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted badge with 101% when CI enforces 100%"
   end
 
   def test_rejects_alt_text_and_url_disagreeing
     text = live_readme.sub(
-      /test%20coverage-100%25-brightgreen/,
-      "test%20coverage-95%25-brightgreen"
+      /diff%20coverage-100%25-brightgreen/,
+      "diff%20coverage-95%25-brightgreen"
     )
     # Alt text still says 100%, URL says 95%
     status, = run_checker(text, live_ci)
@@ -86,8 +86,8 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_ci_threshold_different_from_badge
     text = live_ci.sub(
-      /--fail-under-lines 100/,
-      "--fail-under-lines 95"
+      /--require-changed-lines 100/,
+      "--require-changed-lines 95"
     )
     status, = run_checker(live_readme, text)
     refute_equal 0, status, "accepted CI threshold 95 when badge says 100%"
@@ -97,7 +97,7 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_missing_coverage_badge
     text = live_readme.sub(
-      /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
+      /\[!\[diff coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
       ""
     )
     status, = run_checker(text, live_ci)
@@ -108,8 +108,8 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_badge_not_linking_to_testing_md
     text = live_readme.sub(
-      /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)/,
-      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/ROADMAP.md)"
+      /\[!\[diff coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)/,
+      "[![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)](./docs/ROADMAP.md)"
     )
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted badge linking to ROADMAP.md instead of TESTING.md"
@@ -119,22 +119,11 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_missing_ci_threshold
     text = live_ci.sub(
-      /--fail-under-lines 100/,
-      "--fail-under-lines"
+      /--require-changed-lines 100/,
+      "--require-changed-lines"
     )
     status, = run_checker(live_readme, text)
-    refute_equal 0, status, "accepted ci.yml without --fail-under-lines value"
-  end
-
-  # --- Negative: lines and regions thresholds disagree ---
-
-  def test_rejects_lines_and_regions_thresholds_disagreeing
-    text = live_ci.sub(
-      /--fail-under-regions 100/,
-      "--fail-under-regions 95"
-    )
-    status, = run_checker(live_readme, text)
-    refute_equal 0, status, "accepted CI with lines=100 but regions=95"
+    refute_equal 0, status, "accepted ci.yml without --require-changed-lines value"
   end
 
   # --- Negative: CI badge mutations (issue #211) ---
@@ -182,9 +171,9 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_duplicate_coverage_badge
     text = live_readme.sub(
-      /\[!\[test coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
-      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n" \
-      "[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n"
+      /\[!\[diff coverage: \d+%\]\([^)]+\)\]\(\.\/docs\/TESTING\.md\)\n/,
+      "[![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n" \
+      "[![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)](./docs/TESTING.md)\n"
     )
     status, = run_checker(text, live_ci)
     refute_equal 0, status, "accepted README with duplicate coverage badge"
@@ -194,7 +183,7 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_coverage_step_with_if_condition
     text = live_ci.sub(
-      /(      - name: Hard coverage gate[^\n]*\n)/,
+      /(      - name: Coverage gate[^\n]*\n)/,
       "\\1        if: failure()\n"
     )
     status, = run_checker(live_readme, text)
@@ -216,7 +205,7 @@ class TestCheckReadmeCoverageBadge < Minitest::Test
 
   def test_rejects_coverage_step_with_continue_on_error
     text = live_ci.sub(
-      /(      - name: Hard coverage gate[^\n]*\n)/,
+      /(      - name: Coverage gate[^\n]*\n)/,
       "\\1        continue-on-error: true\n"
     )
     status, = run_checker(live_readme, text)

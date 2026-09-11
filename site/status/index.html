@@ -247,11 +247,11 @@
               </div>
               <div class="evidence-card">
                 <span>Quality</span>
-                <strong>100% lines and regions</strong>
+                <strong>100% of changed lines</strong>
                 <p>
-                  Pull requests must keep the Rust implementation at 100% line
-                  and region coverage before the protected branch can merge;
-                  the published llms.txt context is bounded by per-resource
+                  Pull requests must cover every Rust line they add or modify
+                  before the protected branch can merge; totals are reported.
+                  The published llms.txt context is bounded by per-resource
                   byte budgets within a reviewed 272 KiB ceiling.
                 </p>
               </div>
@@ -401,7 +401,7 @@
               v0.4.
             </p>
             <p>
-              The 100% line/region coverage gate and the required
+              The 100% changed-line coverage gate and the required
               <code>frontend-perf-gate</code> (currently a greater-than-7.0% regression floor, enforced by a paired predecessor/candidate measurement — see the
               <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">roadmap</a>)
               stay required through all of this work.

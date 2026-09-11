@@ -680,7 +680,7 @@ PAGE_SPECS = {
             "v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete.",
             "The full multi-version conformance matrix, differential fuzzing, and corpus testing beyond the",
             "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
-            "The 100% line/region coverage gate and the required",
+            "The 100% changed-line coverage gate and the required",
             "currently a greater-than-7.0% regression floor, enforced by a paired predecessor/candidate measurement",
             "stay required through all of this work.",
             "The implementation gaps listed above are accepted boundaries",
@@ -755,7 +755,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
-        "date_modified": "2026-09-06",
+        "date_modified": "2026-09-11",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),

@@ -135,7 +135,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def coverage_workflow(command = COVERAGE_COMMAND)
+  # The retired D-014 whole-workspace gate as YAML text. Kept only for the
+  # one negative that proves `coverage_gate_present?`'s permanent legacy arm
+  # does not admit a tampered legacy step; the live shape is
+  # `coverage_workflow` below.
+  def legacy_coverage_workflow(command = COVERAGE_COMMAND)
     <<~YAML
       on:
         pull_request:
@@ -157,7 +161,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: rustup component add llvm-tools-preview
             - name: Add x86_64-apple-darwin Rust target
               run: rustup target add x86_64-apple-darwin
-            - name: Hard coverage gate — 100% lines + regions (D-014)
+      #{COVERAGE_STEP_HEADER}
               run: |
                 set -euo pipefail
                 LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -248,6 +252,40 @@ class RoadmapEvidenceCliTest < Minitest::Test
     rm "$GITHUB_WORKSPACE/target"
     printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
   SHELL
+
+  # The live D-242 product-mode coverage job as YAML text, the text-level
+  # counterpart of `product_mode_coverage_workflow` below for tests that
+  # mutate the workflow with `String#sub`.
+  def coverage_workflow(script = PRODUCT_MODE_GATE_SCRIPT)
+    <<~YAML
+      on:
+        pull_request:
+      env:
+        CARGO_LLVM_COV_VERSION: "0.8.7"
+        LLVM_VERSION: "22.1.1"
+      jobs:
+        build-test-coverage:
+          runs-on: macos-14
+          steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                persist-credentials: false
+            - name: Show pinned toolchain
+              run: rustup show
+            - name: Install LLVM 22 (D-015)
+              run: brew install llvm@22
+            - name: Install llvm-tools-preview
+              run: rustup component add llvm-tools-preview
+            - name: Add x86_64-apple-darwin Rust target
+              run: rustup target add x86_64-apple-darwin
+      #{PRODUCT_MODE_COVERAGE_STEP_HEADER}
+              env:
+                PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                PUSH_BASE_SHA: ${{ github.event.before }}
+              run: |
+      #{script.gsub(/^/, "          ").chomp}
+    YAML
+  end
 
   # The D-242 product-mode coverage job as a Hash; `overrides` replace the
   # gate script (`script:`) or the gate step's env (`env:`), and a block may
@@ -3382,10 +3420,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [ ] The 100% line and region coverage gate is required and green for the current slice.
     MARKDOWN
 
-    _stdout, stderr, status = run_checker(
-      roadmap: roadmap,
-      workflow: coverage_workflow("true")
+    # A job with no step named `PRODUCT_MODE_COVERAGE_STEP` has no gate at all.
+    workflow = coverage_workflow.sub(
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n",
+      "      - name: Not the coverage gate\n"
     )
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
     assert_includes stderr, "does not provide the exact 100% line and region gate"
@@ -3402,16 +3442,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
 
+    lowered = PRODUCT_MODE_GATE_SCRIPT.sub(
+      "--require-changed-lines 100",
+      "--require-changed-lines 99"
+    )
+    refute_equal PRODUCT_MODE_GATE_SCRIPT, lowered
     _stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: coverage_workflow(
-        "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
-        "--fail-under-lines 99 --fail-under-regions 100"
-      )
+      workflow: coverage_workflow(lowered)
     )
 
     refute status.success?
-    assert_includes stderr, "does not provide the exact 100% line and region gate"
+    assert_includes stderr, "coverage gate script must contain"
+    assert_includes stderr, "--require-changed-lines 100"
   end
 
   def test_rejects_a_coverage_step_that_can_be_skipped
@@ -3425,8 +3468,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
     workflow = coverage_workflow.sub(
-      "#{COVERAGE_STEP_HEADER}\n        run:",
-      "#{COVERAGE_STEP_HEADER}\n        if: false\n        run:"
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        env:",
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        if: false\n        env:"
     )
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
@@ -3479,8 +3522,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_accepts_explicit_continue_on_error_false
     workflow = coverage_workflow.sub(
-      "#{COVERAGE_STEP_HEADER}\n        run:",
-      "#{COVERAGE_STEP_HEADER}\n        continue-on-error: false\n        run:"
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        env:",
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        continue-on-error: false\n        env:"
     )
 
     assert coverage_gate_present?(workflow, "ci.yml")
@@ -3544,8 +3587,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
     workflow = coverage_workflow.sub(
-      "#{COVERAGE_STEP_HEADER}\n        run:",
-      "#{COVERAGE_STEP_HEADER}\n        shell: 'true {0}'\n        run:"
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        env:",
+      "#{PRODUCT_MODE_COVERAGE_STEP_HEADER}\n        shell: 'true {0}'\n        env:"
     )
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
@@ -5078,11 +5121,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_legacy_coverage_gate_stays_accepted_beside_product_mode
+    assert coverage_gate_present?(legacy_coverage_workflow, "ci.yml")
     assert coverage_gate_present?(coverage_workflow, "ci.yml")
     # A tampered legacy step is not a reviewed script, so it is no gate at all
     # (and the product-mode arm has no step of its own to audit).
     refute coverage_gate_present?(
-      coverage_workflow(
+      legacy_coverage_workflow(
         "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
         "--fail-under-lines 99 --fail-under-regions 100"
       ),

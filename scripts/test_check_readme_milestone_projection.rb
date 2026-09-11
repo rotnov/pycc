@@ -66,8 +66,8 @@ class TestCheckReadmeMilestoneProjection < Minitest::Test
       - [x] `pycc check` processes 1k LOC in under 75 ms. <!-- roadmap-evidence: check-throughput-1k-loc-75ms -->
       - [x] The error demonstration matches the stable CLI specification output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
       - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
-      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
-      - [x] The README coverage badge percentage is bound to ci.yml's enforced thresholds. <!-- roadmap-evidence: readme-coverage-badge-bound -->
+      - [x] Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI. <!-- roadmap-evidence: ci-diff-coverage-100 -->
+      - [x] The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold. <!-- roadmap-evidence: readme-diff-coverage-badge-bound -->
 
       ## v0.3 — classes & pattern matching
 
@@ -89,7 +89,7 @@ class TestCheckReadmeMilestoneProjection < Minitest::Test
       all five Tier-1 targets (Linux x64/arm64, macOS x64/arm64, Windows x64),
       `pycc check` clears its <75ms/1000 LOC throughput floor, diagnostic output
       matches the CLI specification, the five-target native CI matrix and one
-      cross-host compilation path are live, the 100% line/region coverage gate is
+      cross-host compilation path are live, 100% coverage of changed lines is
       required and green, and the README coverage badge is bound to the enforced
       CI coverage thresholds. v0.2's container/generics corpus and `--release`
       speedup floor are likewise met on all five Tier-1 targets. v0.3 (classes,
@@ -259,14 +259,14 @@ class TestCheckReadmeMilestoneProjection < Minitest::Test
     readme = valid_readme_projection.sub(/, and the README coverage badge is bound to the enforced\nCI coverage thresholds\./, ".")
     status, output = run_checker(readme, valid_roadmap)
     refute_equal 0, status, "accepted projection missing the coverage-badge evidence"
-    assert_match(/readme-coverage-badge-bound/i, output)
+    assert_match(/readme-diff-coverage-badge-bound/i, output)
   end
 
   # --- Mutation: a new accepted v0.1 evidence identifier with no binding ---
 
   def test_rejects_new_evidence_id_without_binding
     roadmap = valid_roadmap.sub(
-      /(?<=readme-coverage-badge-bound -->\n)/,
+      /(?<=readme-diff-coverage-badge-bound -->\n)/,
       "\n- [x] A new accepted evidence item. <!-- roadmap-evidence: new-unbound-evidence -->\n"
     )
     status, output = run_checker(valid_readme_projection, roadmap)
