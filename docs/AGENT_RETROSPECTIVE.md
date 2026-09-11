@@ -62,6 +62,36 @@ stale deliverable rather than as something to protect with a new gate.
 
 ---
 
+## 2026-09-07 — A session file's own line counts went stale three review rounds running, because each fix invalidated them
+
+**What happened:** on PR [#996](https://github.com/rotnov/pycc/pull/996) (#695,
+extracting test clusters out of `crates/pycc_types/src/tests.rs`), the
+automated reviewer raised a stale line count in
+`docs/sessions/2026-09-07-06-issue-695-tests-six-cluster-extraction.md`, it was
+corrected, and the correcting push drew the same finding again — three CI
+cycles in a row. Each round's fix was a comment or a helper relocation that
+itself changed a line count the snapshot quoted, and each round's correction
+was applied only to the occurrence the reviewer had named.
+
+**Root cause:** two mechanisms compounding. The snapshot is *self-referential*
+— it quotes counts of the very files each fix edits, so any fix invalidates it
+by construction — and the corrections were carried forward arithmetically
+("24,783 plus 39") instead of recounted, so an unrelated one-line comment edit
+silently broke the sum. Fixing the named occurrence rather than sweeping the
+file left the other copies of the same number to be found one round later.
+
+**What fixed it:** recounting every figure from the tree with `wc -l` and
+`grep -c '#\[test\]'` in one pass and grepping the file for every numeric
+literal, rather than patching the line the reviewer pointed at.
+
+**Lesson:** a document that quotes counts of files in its own change set is
+invalidated by every later edit to that change set, including a one-line
+comment fix. Recount it from the tree — never carry a number forward by
+arithmetic — as the *last* step before each push, and when a review finding
+names one stale figure, grep the file for every occurrence of that class of
+figure and fix them together. This is the numeric case of the sweep-before-the-
+first-push lesson in the 2026-09-06 eighteen-review-rounds entry below.
+
 ## 2026-09-07 — Treated an agent's "completed" notification as its termination and wrote into a shared worktree
 
 **What happened.** While delivering PR #995 (issue #695), the dispatched
