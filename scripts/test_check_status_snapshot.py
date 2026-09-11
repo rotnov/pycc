@@ -561,6 +561,10 @@ class ProjectionTests(ProjectionCase):
                      "header { opacity: calc(1 - 1) }", "dl { font-size: min(0px, 1rem) }", "header { font-size: clamp(0, 1vw, 2rem) }",
                      "dl { font-size: clamp(var(--min), 1vw, 2rem) }", "header { transform: scale(var(--s)) }", "header { transform: var(--t) }",
                      "dl { content-visibility: env(--cv) }", "header dd { font-size: attr(data-size px) }",
+                     "header { opacity: abs(0) }", "dl { font-size: round(0.4px, 1px) }", "header { font-size: clamp(-5px, 10vw, -1px) }",
+                     "dl { font-size: clamp(0.0e1px, 1vw, 2rem) }", "header { font-size: clamp(1, 1vw, 2rem) }", "dl { font-size: clamp(1rem, calc(0px), 2rem) }",
+                     "header { transform: translate(calc(0px)) }", "dl { transform: var(--t) }", "header { transform: scale(1) rotate(var(--r)) }",
+                     "dl { -webkit-transform: scale(1); transform: matrix(1, 0, 0, 0, 0, 0) }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
@@ -580,7 +584,9 @@ class ProjectionTests(ProjectionCase):
                      "header dd { font-size: .76rem }", "header { transform: scale(.5) }",
                      "header { transform: scale(1.0, 1) }", "dl { transform: scale3d(10, 1.0, 1) }", "header { transform: scale(1e-0) }",
                      "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) }", "dl { color: var(--ink) }", "header { width: calc(100% - 1rem) }",
-                     "header dd { font-size: clamp(.5rem, 1vw, 1rem) }"):
+                     "header dd { font-size: clamp(.5rem, 1vw, 1rem) }", "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) !important }",
+                     "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }",
+                     "header { font-size: clamp(+1rem, 1vw, 2rem) }", "dl { font-size: clamp(00.5rem, 1vw, 2rem) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page)
                 (site / "styles.css").write_text(rule + "\n")

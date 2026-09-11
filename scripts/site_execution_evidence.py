@@ -206,14 +206,28 @@ def summary(hero):
 # every one of which computes to zero.  Escaped identifiers (``d\\69 splay``)
 # are deliberate obfuscation in the repository's own reviewed CSS, outside the
 # accidental-hiding model this scan implements (docs/WEBSITE.md).
-# A value the checker cannot resolve is treated as hiding: ``opacity:
-# var(--hidden)``, ``calc()``, ``env()``, ``attr()``, ``min()``, ``max()`` and
-# ``clamp()`` on the hiding-critical properties compute at render time from
-# state this scan does not model (custom properties, the cascade, the viewport).
-# The one resolvable form is ``font-size: clamp(<non-zero>, ...)``, whose result
-# is never below its literal lower bound; the stylesheet uses it for headings.
+# A value the checker cannot resolve is treated as hiding: any function call
+# (``var()``, ``calc()``, ``abs()``, ``round()``, whatever CSS adds next) on a
+# hiding-critical property computes at render time from state this scan does
+# not model, so every parenthesis on ``display``, ``visibility``, ``opacity``
+# and ``content-visibility`` is a hiding declaration.  Two forms are resolved
+# by inspection instead: ``font-size: clamp(<positive literal length>, ...)``
+# with no nested call, whose result is ``max(<minimum>, ...)`` and so never
+# below that positive minimum whatever the other arguments are (the
+# stylesheet's headings use it); and ``transform`` values built only from the
+# known transform functions (``translate``, ``scale``, ``rotate``, ``skew``,
+# ``perspective`` families) with no nested call, whose ``scale`` arguments the
+# literal-zero match above inspects.  A negative or zero minimum, an unknown
+# function name and any nested parenthesis all fall back to hiding.
 ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
-COMPUTED = r"\b(?:var|calc|env|attr|min|max|clamp)\("
+# A literal length that is provably positive: unsigned or ``+``, not a zero
+# spelling (``0.0e1px`` is zero), with a unit (a unitless font-size is invalid
+# CSS and therefore ignored, not hiding).
+POSITIVE_LENGTH = r"\+?(?!" + ZERO + r"(?![\d.]))(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z]+|%)"
+# ``matrix()``/``matrix3d()`` are deliberately absent: a zero in their scale
+# components hides too, and resolving which entry is which is not inspection.
+TRANSFORM_FUNCTIONS = (r"translate3d|translate[xyz]?|scale3d|scale[xyz]?"
+                       r"|rotate3d|rotate[xyz]?|skew[xy]?|perspective")
 HIDING_DECLARATION = re.compile(
     r"(?<![\w-])(?:display\s*:\s*none"
     r"|visibility\s*:\s*(?:hidden|collapse)"
@@ -221,9 +235,9 @@ HIDING_DECLARATION = re.compile(
     r"|content-visibility\s*:\s*hidden"
     r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
     r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)]"
-    r"|(?:display|visibility|opacity|content-visibility|transform)\s*:[^;]*" + COMPUTED +
-    r"|font-size\s*:[^;]*\b(?:var|calc|env|attr|min|max)\("
-    r"|font-size\s*:\s*clamp\(\s*" + ZERO + r"(?:[a-z]+|%)?\s*,)",
+    r"|(?:display|visibility|opacity|content-visibility)\s*:[^;]*\("
+    r"|font-size\s*:(?!\s*clamp\(\s*" + POSITIVE_LENGTH + r"\s*,[^;()]*\)\s*(?:!important\s*)?(?:;|$))[^;]*\("
+    r"|transform\s*:[^;]*(?:\([^;()]*\(|(?<![\w-])(?!(?:" + TRANSFORM_FUNCTIONS + r")\()[\w-]+\())",
     re.I | re.M)
 
 

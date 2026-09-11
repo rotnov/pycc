@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T13:07:02Z. The record pins the collector's and its suite's
+  2026-09-11T13:47:04Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T13:07:02Z` after the suite changed.
+  `--collected-at 2026-09-11T13:47:04Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -303,14 +303,19 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     only literal zeros, so `.page-hero { --hidden: 0; opacity: var(--hidden) }`
     hid the proof while the scan passed. Resolved without modelling the
     cascade (D-127 judgment, same closed-enumeration reasoning as rounds
-    9-14): a value the checker cannot resolve is never green. Any `var()`,
-    `calc()`, `env()`, `attr()`, `min()`, `max()` or `clamp()` call on the
-    six hiding-critical properties is now a hiding declaration wherever
-    the rule or inline style reaches the hero or its ancestors; the one
-    resolvable form, `font-size: clamp(<non-zero literal>, ...)`, stays
-    accepted because `clamp()` never returns less than its lower bound and
-    `site/styles.css` relies on it for headings. Cases in all three suites,
-    snapshot re-collected at `2026-09-11T13:07:02Z` with `--subject 4111208c`, pins rotated.
+    9-14): a value the checker cannot resolve is never green. First cut
+    (e37f3c0e) enumerated seven function names; D-068 round 21 showed the
+    enumeration reopened the hole one layer up (`opacity: abs(0)`,
+    `font-size: round(0.4px, 1px)`) and that a negative `clamp()` minimum
+    (`clamp(-5px, 10vw, -1px)`, clamped to `0px` by range-checking) slipped
+    the carve-out. Inverted: any parenthesis on `display`, `visibility`,
+    `opacity`, `content-visibility` is hiding; `font-size` accepts only
+    `clamp(<positive literal length>, ...)` with no nested call (the result
+    is `max(<minimum>, ...)`); `transform` accepts only the known transform
+    functions with no nested call (`matrix()` excluded), still subject to
+    the `scale` zero check.
+    Cases in all three suites, snapshot re-collected at `2026-09-11T13:47:04Z` with
+    `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
