@@ -343,6 +343,14 @@ class UnavailableTests(CollectorHarness):
         self.assertIn("synthetic rejection", err)
         self.assertEqual(self.manifest.read_text(), before)
 
+    def test_capture_time_before_check_completion_is_rejected(self):
+        before = self.manifest.read_text()
+        code, _, err = self.run_collector("--collected-at", "2025-01-01T00:00:00Z")
+        self.assertEqual(code, 1)
+        self.assertIn("built record rejected", err)
+        self.assertIn("no earlier than every recorded completed_at", err)
+        self.assertEqual(self.manifest.read_text(), before)
+
     def test_working_tree_roadmap_edit_does_not_block_collection(self):
         # A milestone-transition pull request edits the working-tree roadmap; the
         # record still describes the subject commit's own line.

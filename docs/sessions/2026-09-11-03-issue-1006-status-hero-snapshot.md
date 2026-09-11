@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T05:19:28Z. The record pins the collector's and its suite's
+  2026-09-11T05:40:28Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T05:19:28Z` after the suite changed.
+  `--collected-at 2026-09-11T05:40:28Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1178 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1181 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -117,7 +117,7 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
    records or an accepted red leg, and D-241 records the bounded window in
    which the hero shows the previous milestone. One note: the pin prose
    called the validator suite the collector's suite. Fixed in `c2d8cf79`
-   (snapshot re-collected at `2026-09-11T05:19:28Z`).
+   (snapshot re-collected at `2026-09-11T05:40:28Z`).
 5. Clean.
 6. External, on PR #1008: a Codex P2 — the RFC 3339 predicate was a shape
    regex, so `2026-99-99T99:99:99Z` passed both the collector's `--collected-at`
@@ -125,7 +125,14 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
    the instant after the shape check; the collector's `completed_at` and
    `--collected-at` guards use it; impossible-instant cases added to both
    suites. The pinned files changed, so the snapshot was re-collected at
-   `2026-09-11T05:19:28Z` and the pins rotated.
+   `2026-09-11T05:40:28Z` and the pins rotated.
+7. External, on PR #1008, two more Codex P2s: platform rows could share a
+   `job_url` (only the enclosing run id was checked), and a valid but earlier
+   `--collected-at` could claim capture before completion. Fixed in the
+   validator: the five platform job links plus the `ci-gate` job must be six
+   distinct URLs, and `collected_at` must be no earlier than either recorded
+   `completed_at`; cases in both suites, `docs/WEBSITE.md` gate row updated,
+   snapshot re-collected at `2026-09-11T05:40:28Z`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

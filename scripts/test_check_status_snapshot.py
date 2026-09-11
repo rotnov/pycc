@@ -248,6 +248,20 @@ class RecordInvariantTests(SyntheticRepository):
             self.assert_rejected(lambda hero, v=value: hero["attestation"].__setitem__("collected_at", v), "RFC 3339 UTC")
             self.assert_rejected(lambda hero, v=value: hero["snapshot"]["subjects"][1].__setitem__("completed_at", v), "RFC 3339 UTC")
 
+    def test_capture_time_must_not_precede_check_completion(self):
+        for value in ("2000-01-01T00:00:00Z", "2026-09-11T01:50:29Z"):
+            self.assert_rejected(lambda hero, v=value: hero["attestation"].__setitem__("collected_at", v), "no earlier than every recorded completed_at")
+
+    def test_platform_rows_must_link_distinct_jobs(self):
+        def duplicate_row(hero):
+            hero["environment"]["platforms"][1]["job_url"] = hero["environment"]["platforms"][0]["job_url"]
+
+        def reuse_gate_job(hero):
+            hero["environment"]["platforms"][3]["job_url"] = hero["snapshot"]["subjects"][1]["job_url"]
+
+        self.assert_rejected(duplicate_row, "distinct jobs")
+        self.assert_rejected(reuse_gate_job, "distinct jobs")
+
     def test_attestation_and_command_drift_are_rejected(self):
         self.assert_rejected(lambda hero: hero["attestation"].__setitem__("sanitized", "yes"), "collection_method/sanitized")
         self.assert_rejected(lambda hero: hero["attestation"].__setitem__("collection_method", "curl"), "collection_method/sanitized")

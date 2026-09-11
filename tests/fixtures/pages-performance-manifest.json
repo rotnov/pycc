@@ -21,7 +21,7 @@
       "local_route": "/pycc/status/",
       "expected_http_status": 200,
       "source_artifact": "site/status/index.html",
-      "source_artifact_sha256": "212f365eee46ecfcba694b471efec09a746f813cec64e15a50dcf257100ea1f9",
+      "source_artifact_sha256": "ee248279d6a55c32ba40ef598d1ff7d7492c3b70c48fb8653c042d11e7ecbea0",
       "expected_title": "pycc status — what the Python AOT compiler can do today",
       "expected_h1": "What pycc can do today.",
       "canonical_url": "https://rotnov.github.io/pycc/status/",
