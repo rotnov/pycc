@@ -243,7 +243,8 @@ class RecordInvariantTests(SyntheticRepository):
         self.assert_rejected(lambda hero: hero["stable_links"].pop("job_macos-14"), "stable_links must be exactly")
 
     def test_timestamps_must_be_rfc3339_utc(self):
-        for value in ("2026-09-11T03:00:00+00:00", "2026-09-11 03:00:00Z", "2026-09-11", None, 3):
+        for value in ("2026-09-11T03:00:00+00:00", "2026-09-11 03:00:00Z", "2026-09-11", None, 3,
+                      "2026-99-99T99:99:99Z", "2026-02-30T00:00:00Z", "2026-09-11T24:00:00Z"):
             self.assert_rejected(lambda hero, v=value: hero["attestation"].__setitem__("collected_at", v), "RFC 3339 UTC")
             self.assert_rejected(lambda hero, v=value: hero["snapshot"]["subjects"][1].__setitem__("completed_at", v), "RFC 3339 UTC")
 

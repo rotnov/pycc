@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T04:38:32Z. The record pins the collector's and its suite's
+  2026-09-11T05:19:28Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T04:38:32Z` after the suite changed.
+  `--collected-at 2026-09-11T05:19:28Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -117,8 +117,15 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
    records or an accepted red leg, and D-241 records the bounded window in
    which the hero shows the previous milestone. One note: the pin prose
    called the validator suite the collector's suite. Fixed in `c2d8cf79`
-   (snapshot re-collected at `2026-09-11T04:38:32Z`).
+   (snapshot re-collected at `2026-09-11T05:19:28Z`).
 5. Clean.
+6. External, on PR #1008: a Codex P2 — the RFC 3339 predicate was a shape
+   regex, so `2026-99-99T99:99:99Z` passed both the collector's `--collected-at`
+   guard and the validator. Fixed: `site_status_evidence.is_utc_instant` parses
+   the instant after the shape check; the collector's `completed_at` and
+   `--collected-at` guards use it; impossible-instant cases added to both
+   suites. The pinned files changed, so the snapshot was re-collected at
+   `2026-09-11T05:19:28Z` and the pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

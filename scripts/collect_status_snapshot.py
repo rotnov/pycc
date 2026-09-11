@@ -117,7 +117,7 @@ def check_run(runs, name, sha):
         raise Unavailable(f"check-run {name!r} on {sha} has no immutable job URL")
     conclusion = run.get("conclusion") if run.get("status") == "completed" else None
     completed_at = run.get("completed_at") if conclusion is not None else None
-    if completed_at is not None and not status.TIME_RE.match(str(completed_at)):
+    if completed_at is not None and not status.is_utc_instant(completed_at):
         raise Unavailable(f"check-run {name!r} on {sha} has a non-RFC 3339 completed_at")
     return {
         "conclusion": conclusion,
@@ -206,8 +206,8 @@ def parse_args(argv):
     parser.add_argument("--collected-at", help="RFC 3339 UTC capture time (default: now)")
     parser.add_argument("--repo-root", default=".")
     args = parser.parse_args(argv)
-    if args.collected_at is not None and not status.TIME_RE.match(args.collected_at):
-        parser.error("--collected-at must look like 2026-09-11T00:00:00Z")
+    if args.collected_at is not None and not status.is_utc_instant(args.collected_at):
+        parser.error("--collected-at must be a real RFC 3339 UTC instant such as 2026-09-11T00:00:00Z")
     return args
 
 

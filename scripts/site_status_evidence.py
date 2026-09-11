@@ -10,6 +10,7 @@ writes the record through ``expected_shape``/``derive_state`` so it cannot emit
 what this module would reject.
 """
 
+import datetime
 import hashlib
 import json
 import re
@@ -56,6 +57,21 @@ LIMITATIONS = (
 )
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def is_utc_instant(value):
+    """True when ``value`` is a real RFC 3339 UTC instant in the ``Z`` form.
+
+    The shape check alone accepts impossible calendar and clock components
+    (``2026-99-99T99:99:99Z``); parsing them proves the instant exists.
+    """
+    if not isinstance(value, str) or not TIME_RE.match(value):
+        return False
+    try:
+        datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
 RUN_URL_RE = re.compile(r"^https://github\.com/rotnov/pycc/actions/runs/(\d+)$")
 JOB_URL_RE = re.compile(r"^https://github\.com/rotnov/pycc/actions/runs/(\d+)/job/(\d+)$")
 
@@ -148,7 +164,7 @@ def check_run_fields(item, context):
         fail(f"{context} app_id must be {APP_ID}")
     if item["conclusion"] != "success":
         fail(f"{context} conclusion must be success for a non-unavailable record")
-    if not isinstance(item["completed_at"], str) or not TIME_RE.match(item["completed_at"]):
+    if not is_utc_instant(item["completed_at"]):
         fail(f"{context} completed_at must be an RFC 3339 UTC timestamp")
     if not isinstance(item["run_id"], int) or isinstance(item["run_id"], bool) or item["run_id"] <= 0:
         fail(f"{context} run_id must be a positive integer")
@@ -247,7 +263,7 @@ def validate(hero, evidence_root, repo_root):
     check_run_fields(audit, "status pre-merge-audit")
 
     attestation = hero["attestation"]
-    if not isinstance(attestation["collected_at"], str) or not TIME_RE.match(attestation["collected_at"]):
+    if not is_utc_instant(attestation["collected_at"]):
         fail("status attestation collected_at must be an RFC 3339 UTC timestamp")
     if attestation["collection_method"] != COLLECTION_METHOD or attestation["sanitized"] is not True:
         fail("status attestation collection_method/sanitized drifted")

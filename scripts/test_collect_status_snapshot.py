@@ -302,6 +302,8 @@ class UnavailableTests(CollectorHarness):
         runs[0]["html_url"] = f"{status.REPO}/actions/runs/{GATE_RUN}/job/1"
         runs[0]["completed_at"] = "2026-09-11 02:10:46"
         self.assert_unavailable("non-RFC 3339")
+        runs[0]["completed_at"] = "2026-99-99T99:99:99Z"
+        self.assert_unavailable("non-RFC 3339")
 
     def test_missing_milestone_line_is_unavailable(self):
         (self.repo / "docs" / "ROADMAP.md").write_text("# Roadmap\n")
@@ -356,6 +358,9 @@ class ArgumentTests(CollectorHarness):
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 collector.parse_args(["--collected-at", "yesterday"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                collector.parse_args(["--collected-at", "2026-99-99T99:99:99Z"])
 
     def test_missing_manifest_and_missing_status_hero_fail(self):
         code, _, err = self.run_collector("--manifest", "site/absent.json")
