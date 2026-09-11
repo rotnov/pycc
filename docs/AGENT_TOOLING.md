@@ -304,7 +304,10 @@ support alpha skills", is ignored; an issue or pull-request number such as
 than", "fewer than", or "up to" is a bound rather than a count), or the count is
 immediately followed by "skill(s)", "alpha", "project-local", or "at the time
 of writing" inside a one-line sentence that mentions `ALPHA_EVAL_RUNNERS`, so
-a widened runner table cannot leave such prose stale. The separate
+a widened runner table cannot leave such prose stale. Both rules read one
+physical line at a time, so a bound phrase, an issue number, or the table
+mention wrapped onto the previous line does not reach the numeral it
+precedes. The separate
 `Agent assets` job still installs the real pinned client CLIs and verifies
 discovery through both surfaces without model credentials.
 

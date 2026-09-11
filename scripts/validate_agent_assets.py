@@ -646,7 +646,9 @@ def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
     ``at the time of writing``. A sentence is approximated as the text
     between periods on a single line; prose wrapped across lines is checked
     line by line, so a count and the table mention must share a line for the
-    second rule to apply. Every matched numeral must equal
+    second rule to apply, and a bound phrase or ``#`` wrapped onto the
+    previous line does not exclude the numeral it precedes under the first
+    rule. Every matched numeral must equal
     ``len(ALPHA_EVAL_RUNNERS)``: the count is allowed, drift is not.
     """
     expected = len(ALPHA_EVAL_RUNNERS)
