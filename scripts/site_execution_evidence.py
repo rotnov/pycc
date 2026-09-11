@@ -221,6 +221,21 @@ def summary(hero):
 # ``perspective`` families) with no nested call, whose ``scale`` arguments the
 # literal-zero match above inspects.  A negative or zero minimum, an unknown
 # function name and any nested parenthesis all fall back to hiding.
+# Comments and quoted strings are consumed in one left-to-right pass, as a CSS
+# tokenizer does: a comment is dropped and a string is replaced by a
+# placeholder that keeps only whether it was empty, so a brace, semicolon or
+# comment opener inside a string (``content: "{ ci-gate failure"``) cannot
+# split a rule or a declaration, and a quote inside a comment cannot open a
+# string.  Both surfaces (inline ``style`` and stylesheet rules) use it.
+CSS_COMMENT_OR_STRING = re.compile(r"/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'", re.S)
+
+
+def plain_css(css):
+    """Drop CSS comments and reduce every quoted string to ``\"\"`` (empty) or ``\"x\"`` (non-empty)."""
+    return CSS_COMMENT_OR_STRING.sub(
+        lambda m: "" if m.group(0).startswith("/*") else ('""' if len(m.group(0)) == 2 else '"x"'), css)
+
+
 ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
 # A literal length that is provably positive: unsigned or ``+``, not a zero
 # spelling (``0.0e1px`` is zero), with a unit (a unitless font-size is invalid
@@ -279,7 +294,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(re.sub(r"/\*.*?\*/", "", attrs.get("style", ""), flags=re.S)))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", ""))))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav
@@ -318,7 +333,7 @@ class VisibleExecutionParser(HTMLParser):
 
 
 def validate_projection(hero, repo_root, site_dir):
-    css = re.sub(r"/\*.*?\*/", "", (site_dir / "styles.css").read_text(), flags=re.S)
+    css = plain_css((site_dir / "styles.css").read_text())
     provenance = re.search(r"\.hero-provenance\s*\{([^}]+)\}", css)
     mobile = css.split("@media (max-width: 980px)", 1)[-1]
     navigation = re.search(r"\.site-nav\s*\{([^}]+)\}", mobile)

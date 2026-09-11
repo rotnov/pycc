@@ -555,7 +555,7 @@ def hiding_rules(css, parser):
     failure" }``) is rejected on the same selectors: the browser shows it beside
     the bound rows while the HTML parser sees an unchanged page.
     """
-    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    css = site_execution_evidence.plain_css(css)
     reachable = parser.hero_hooks | parser.ancestor_hooks
     found = []
     if re.search(r"@import\b", css, re.I):

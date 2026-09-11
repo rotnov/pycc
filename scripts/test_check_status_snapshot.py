@@ -569,6 +569,8 @@ class ProjectionTests(ProjectionCase):
                      "header { -o-opacity: 0 }",
                      "header { scale: 0 }", "dl { scale: 1 0 }", "header { scale: 0% }", "dl { scale: var(--s) }", "header { SCALE: .0 }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
+                     'header::after { content: "{ ci-gate failure"; }', "dl::after { content: '}'; }", "dl::after { content: \"\\\"{\"; }",
+                     'header { /* " */ opacity: 0 }', 'header::after { content: "/*"; opacity: 0 }', "dl { --t: '{'; opacity: 0 }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
@@ -588,7 +590,7 @@ class ProjectionTests(ProjectionCase):
                      "header { transform: scale(1.0, 1) }", "dl { transform: scale3d(10, 1.0, 1) }", "header { transform: scale(1e-0) }",
                      "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) }", "dl { color: var(--ink) }", "header { width: calc(100% - 1rem) }",
                      "header dd { font-size: clamp(.5rem, 1vw, 1rem) }", "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) !important }",
-                     "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }", "header { scale: 1 }", "dl { scale: 0.5 1 }", "header { scale: none }", "dl { --scale: 0 }",
+                     "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }", "header { scale: 1 }", 'footer::after { content: "{"; }', 'header::after { content: ""; }', "header { /* opacity: 0 */ color: red }", "dl { scale: 0.5 1 }", "header { scale: none }", "dl { --scale: 0 }",
                      "header { font-size: clamp(+1rem, 1vw, 2rem) }", "dl { font-size: clamp(00.5rem, 1vw, 2rem) }",
                      "dl { --webkit-transform: scale(0); transform: scale(1) }", "header { --hero-opacity: 0 }"):
             with self.subTest(rule=rule):

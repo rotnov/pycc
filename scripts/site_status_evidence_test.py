@@ -264,6 +264,8 @@ class StatusEvidenceTests(unittest.TestCase):
                      ".page-hero { transform: scale(var(--s)) }", "#main-content { opacity: abs(0) }", ".page-hero { font-size: clamp(-5px, 10vw, -1px) }",
                      ".page-hero { -webkit-transform: scale(1, 0) }",
                      "#main-content { scale: 0 }",
+                     '.page-hero::after { content: "{ ci-gate failure"; }', ".page-hero::after { content: '}'; }",
+                     '.page-hero { /* " */ opacity: 0 }', '.page-hero::after { content: "/*"; opacity: 0 }',
                      ".page-hero { transform: scale(1, 0) }", '[DATA-EVIDENCE-ROLE="hero"] { display: none; }',
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', ".page-hero::before { content: attr(data-evidence-state) }"):
             with self.subTest(rule=rule):
