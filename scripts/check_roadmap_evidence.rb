@@ -2378,6 +2378,10 @@ def product_mode_coverage_gate?(steps, gate_index, source)
     end
     seen_setup << command
   end
+  unless seen_checkout
+    raise RoadmapEvidenceError,
+          "#{source}: coverage setup steps do not match the trusted sequence"
+  end
 
   gate = yaml_value(steps.children[gate_index], "#{source} coverage gate step")
   gate.delete("continue-on-error") if gate["continue-on-error"] == "false"
@@ -2424,8 +2428,13 @@ def product_mode_coverage_gate?(steps, gate_index, source)
     end
     previous_index = indices.first
   end
+  # The required-line check above already demands the exact opening line, so
+  # `definition_start` is never nil today; the nil arm keeps a one-line
+  # `run_isolated() { ...; }` a RoadmapEvidenceError rather than a TypeError
+  # should that list ever change.
   definition_start = lines.index(RUN_ISOLATED_DEFINITION.first)
-  unless lines[definition_start, RUN_ISOLATED_DEFINITION.length] == RUN_ISOLATED_DEFINITION
+  if definition_start.nil? ||
+     lines[definition_start, RUN_ISOLATED_DEFINITION.length] != RUN_ISOLATED_DEFINITION
     raise RoadmapEvidenceError,
           "#{source}: coverage gate script must define run_isolated as the nobody sandbox"
   end

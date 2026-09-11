@@ -4927,6 +4927,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
         ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nTRUSTED_COV=/tmp/evil\n"],
       "second run_isolated definition" =>
         ["cd \"$GITHUB_WORKSPACE\"\n", "cd \"$GITHUB_WORKSPACE\"\nrun_isolated() { \"$@\"; }\n"],
+      "run_isolated collapsed to one line" =>
+        ["run_isolated() {\n  sudo -u nobody env -i \"${ISOLATED_ENV[@]}\" \"$@\"\n}\n",
+         "run_isolated() { sudo -u nobody env -i \"${ISOLATED_ENV[@]}\" \"$@\"; }\n"],
       "missing set -euo pipefail" =>
         ["set -euo pipefail\n", ""],
       "sanitized PATH replaced" =>
@@ -5038,14 +5041,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     {
       "persist-credentials true" => { "persist-credentials" => true },
       "extra with key" => { "persist-credentials" => false, "fetch-depth" => 0 },
-      "missing with" => nil
+      "missing with" => nil,
+      "missing checkout entirely" => :delete_step
     }.each do |label, with|
       workflow = product_mode_coverage_workflow do |candidate|
-        checkout = candidate.dig("jobs", "build-test-coverage", "steps", 0)
-        if with.nil?
-          checkout.delete("with")
+        steps = candidate.dig("jobs", "build-test-coverage", "steps")
+        if with == :delete_step
+          steps.delete_at(0)
+        elsif with.nil?
+          steps[0].delete("with")
         else
-          checkout["with"] = with
+          steps[0]["with"] = with
         end
       end
       assert_product_mode_rejected(

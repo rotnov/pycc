@@ -128,6 +128,16 @@ class DiffParsing(unittest.TestCase):
         diff = added(SRC, 10, ["++ not a header", "-- neither"]) + added("other.rs", 1, ["y"])
         self.assertEqual(CHECKER.parse_added_lines(diff), {SRC: {10, 11}, "other.rs": {1}})
 
+    def test_removed_line_starting_with_minus_minus_is_content_not_a_header(self) -> None:
+        # "-" + "-- x" renders as "--- x" inside a hunk whose old-side count is
+        # still owed; the pending counter marks it as content, not a header
+        # (the removal counterpart of the "++" case above).
+        diff = (
+            f"diff --git a/{SRC} b/{SRC}\n--- a/{SRC}\n+++ b/{SRC}\n@@ -4,2 +4 @@\n"
+            "--- not a header\n-plain\n+kept\n"
+        ) + added("other.rs", 1, ["y"])
+        self.assertEqual(CHECKER.parse_added_lines(diff), {SRC: {4}, "other.rs": {1}})
+
     def test_path_is_the_whole_remainder_including_spaces(self) -> None:
         diff = "diff --git a/src/a b.rs b/src/a b.rs\n--- a/src/a b.rs\n+++ b/src/a b.rs\n@@ -0,0 +1 @@\n+x\n"
         self.assertEqual(CHECKER.parse_added_lines(diff), {"src/a b.rs": {1}})
