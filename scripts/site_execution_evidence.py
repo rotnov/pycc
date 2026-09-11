@@ -226,10 +226,15 @@ ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
 POSITIVE_LENGTH = r"\+?(?!" + ZERO + r"(?![\d.]))(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z]+|%)"
 # ``matrix()``/``matrix3d()`` are deliberately absent: a zero in their scale
 # components hides too, and resolving which entry is which is not inspection.
+# A vendor-prefixed spelling (``-webkit-transform``) is the same declaration to
+# the browsers that honour it; the boundary before the optional prefix still
+# keeps a custom property whose name ends in a property name (``--hero-transform``,
+# ``--webkit-transform``) from counting as that property.
+VENDOR_PREFIX = r"(?:-(?:webkit|moz|ms|o)-)?"
 TRANSFORM_FUNCTIONS = (r"translate3d|translate[xyz]?|scale3d|scale[xyz]?"
                        r"|rotate3d|rotate[xyz]?|skew[xy]?|perspective")
 HIDING_DECLARATION = re.compile(
-    r"(?<![\w-])(?:display\s*:\s*none"
+    r"(?<![\w-])" + VENDOR_PREFIX + r"(?:display\s*:\s*none"
     r"|visibility\s*:\s*(?:hidden|collapse)"
     r"|opacity\s*:\s*" + ZERO + r"%?(?=\s*(?:;|!|$))"
     r"|content-visibility\s*:\s*hidden"
@@ -271,7 +276,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(re.sub(r"/\*.*?\*/", "", attrs.get("style", ""), flags=re.S)))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav

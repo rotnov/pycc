@@ -564,7 +564,8 @@ class ProjectionTests(ProjectionCase):
                      "header { opacity: abs(0) }", "dl { font-size: round(0.4px, 1px) }", "header { font-size: clamp(-5px, 10vw, -1px) }",
                      "dl { font-size: clamp(0.0e1px, 1vw, 2rem) }", "header { font-size: clamp(1, 1vw, 2rem) }", "dl { font-size: clamp(1rem, calc(0px), 2rem) }",
                      "header { transform: translate(calc(0px)) }", "dl { transform: var(--t) }", "header { transform: scale(1) rotate(var(--r)) }",
-                     "dl { -webkit-transform: scale(1); transform: matrix(1, 0, 0, 0, 0, 0) }",
+                     "dl { transform: matrix(1, 0, 0, 0, 0, 0) }", "dl { -webkit-transform: scale(1, 0) }", "header { -moz-opacity: 0 }",
+                     "header { -ms-transform: var(--t) }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
@@ -586,7 +587,8 @@ class ProjectionTests(ProjectionCase):
                      "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) }", "dl { color: var(--ink) }", "header { width: calc(100% - 1rem) }",
                      "header dd { font-size: clamp(.5rem, 1vw, 1rem) }", "header { font-size: clamp(2.5rem, 4.8vw, 4.8rem) !important }",
                      "dl { transform: translateY(-2px) }", "header { transform: scale(1) rotate(45deg) }", "dl { transform: none }",
-                     "header { font-size: clamp(+1rem, 1vw, 2rem) }", "dl { font-size: clamp(00.5rem, 1vw, 2rem) }"):
+                     "header { font-size: clamp(+1rem, 1vw, 2rem) }", "dl { font-size: clamp(00.5rem, 1vw, 2rem) }",
+                     "dl { --webkit-transform: scale(0); transform: scale(1) }", "header { --hero-opacity: 0 }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page)
                 (site / "styles.css").write_text(rule + "\n")

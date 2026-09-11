@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T13:47:04Z. The record pins the collector's and its suite's
+  2026-09-11T14:15:48Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T13:47:04Z` after the suite changed.
+  `--collected-at 2026-09-11T14:15:48Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -313,8 +313,13 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     `clamp(<positive literal length>, ...)` with no nested call (the result
     is `max(<minimum>, ...)`); `transform` accepts only the known transform
     functions with no nested call (`matrix()` excluded), still subject to
-    the `scale` zero check.
-    Cases in all three suites, snapshot re-collected at `2026-09-11T13:47:04Z` with
+    the `scale` zero check. D-068 round 22 then showed the property-name
+    boundary added for custom properties also excluded vendor-prefixed
+    spellings (`-webkit-transform: scale(1, 0)`, latent in the stylesheet);
+    an optional `-webkit-`/`-moz-`/`-ms-`/`-o-` prefix is now matched behind
+    the same boundary, and inline styles have CSS comments stripped as the
+    stylesheet scan already did.
+    Cases in all three suites, snapshot re-collected at `2026-09-11T14:15:48Z` with
     `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
