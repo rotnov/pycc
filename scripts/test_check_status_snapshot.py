@@ -566,6 +566,7 @@ class ProjectionTests(ProjectionCase):
                      "header { transform: translate(calc(0px)) }", "dl { transform: var(--t) }", "header { transform: scale(1) rotate(var(--r)) }",
                      "dl { transform: matrix(1, 0, 0, 0, 0, 0) }", "dl { -webkit-transform: scale(1, 0) }", "header { -moz-opacity: 0 }",
                      "header { -ms-transform: var(--t) }",
+                     "header { -o-opacity: 0 }",
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
                      "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
