@@ -89,6 +89,18 @@ OK, 6 skipped); `test_check_roadmap_evidence.rb` (247 runs, 1294 assertions,
 `validate_agent_policies.py` ("agent policies: valid");
 `validate_agent_assets.py` ("agent assets: valid").
 
+## Review rounds (D-068, `ievo:deep-reviewer`)
+
+- Round 1 (head `ccef67c5`): two doc-drift findings, both pre-existing
+  wording that became checkable once the path pointed at a specific
+  decision file. `crates/pycc_std/src/lib.rs` named `math.ceil` as withheld
+  per D-136, which never mentions it (its addendum lists `math.floor`,
+  `math.pow`, `math.e`); now `math.pow`. `scripts/test_check_roadmap_evidence.rb`
+  attributed the retained-audit-evidence rationale to D-112's Consequences
+  field; it lives in D-112's 2026-08-01 update note. Both fixed in
+  `ad8d108e`; rows in `.harden/findings/issue-423.jsonl`.
+- Round 2: see the pull request body for the closing round.
+
 ## Follow-ups
 
 None filed. Comment-only change; no roadmap, delivery-plan, or decision text
