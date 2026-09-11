@@ -109,6 +109,7 @@ class PipelineEvidenceTests(unittest.TestCase):
         document = json.loads((ROOT / "site/evidence-heroes.json").read_text())
 
         def fields(value, trail=()):
+            """Every deletable field, as a trail whose last element names it."""
             if isinstance(value, dict):
                 for key, child in value.items():
                     yield trail + (key,)
@@ -126,11 +127,9 @@ class PipelineEvidenceTests(unittest.TestCase):
                 # The deleted key's own name, not the universal
                 # "evidence-heroes.json:" prefix every rejection carries: the
                 # subTest has to prove that this field's absence is what was
-                # caught. List elements have no name, so those fall back to the
-                # hero's id, which no other hero's message contains.
-                expected = FIELD_REJECTIONS.get(
-                    trail, trail[-1] if isinstance(trail[-1], str) else "architecture")
-                self.run_case(mutate, expected)
+                # caught. Only dict keys are yielded, so the name is always the
+                # trail's last element.
+                self.run_case(mutate, FIELD_REJECTIONS.get(trail, trail[-1]))
 
     # -- artifact-identity negative controls --------------------------------
 
