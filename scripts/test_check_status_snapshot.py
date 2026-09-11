@@ -415,15 +415,19 @@ def render_page(hero):
                     f'<a href="{item["run_url"]}">run {item["run_id"]}</a> · <a href="{item["job_url"]}">job</a></dd>')
     items = [f'<li><a href="{row["job_url"]}">{status.platform_row_text(row)}</a></li>'
              for row in hero["environment"]["platforms"]]
-    return ('<html lang="en-US"><head><meta property="og:locale" content="en_US"></head><body>'
+    return ('<html lang="en-US"><head><meta property="og:locale" content="en_US">'
+            '<script type="application/ld+json">{"dateModified": "2026-01-01"}</script></head><body>'
             '<main id="main-content" class="content-page">'
             f'<header data-evidence-role="hero" data-evidence-id="{hero["evidence_id"]}">'
             '<p class="eyebrow">Evidence page · Updated 2026-01-01</p><h1>What pycc can do <span>today.</span></h1>'
+            f'<p class="page-lede">{status.HERO_MASTHEAD[1]}</p>'
             '<div class="page-meta">'
             f'<span data-evidence-id="{hero["evidence_id"]}"><strong>Evidence hero</strong> {hero["state"]} · snapshot of main '
             f'{hero["repository"]["commit"][:8]} · ci-gate {subjects["post-merge-ci-gate"]["conclusion"]} · '
             f'audit {subjects["pre-merge-audit"]["conclusion"]} (PR #{merged["number"]}) · '
             f'captured {hero["attestation"]["collected_at"]}</span>'
+            '<span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 in progress</span>'
+            '<span><strong>Acceptance</strong> v0.1, v0.2, and v0.3 all fully met</span>'
             '<span><strong>Readiness</strong> pre-alpha</span></div>'
             f'<details><summary>{status.HERO_DETAILS_TOGGLE}</summary>'
             f'<dl>{"".join(rows)}<dt>{status.TIER1_HEADING}</dt><dd>{status.TIER1_HEADING_ROW}</dd></dl><ul>{"".join(items)}</ul>'
@@ -528,7 +532,9 @@ class ProjectionTests(ProjectionCase):
                      "header li { font-size: 0 }", "header dl { transform: translateY(1px) scale(0) }",
                      ".content-page { display: none; }", "#main-content { opacity: 0 }", "body { display:none }",
                      "html body main { font-size: 0 }", "main > header { opacity: .0 }", "header dd { font-size: .0px }",
-                     "header { transform: scale(.00) }", "dl { opacity: 0. }"):
+                     "header { transform: scale(.00) }", "dl { opacity: 0. }",
+                     '.page-meta span:first-child::after { content: " · ci-gate failure"; }', "header::before { content: attr(data-evidence-state) }",
+                     "main > header dd::after { CONTENT : 'failure' }", "body::after { content: counter(x) }", "dl::before { content: url(x.svg) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
                 (site / "styles.css").write_text(f"footer p {{ display: none; }}\n{rule}\n")
@@ -536,6 +542,9 @@ class ProjectionTests(ProjectionCase):
                     status.validate_projection(self.hero, self.repo, site)
                 self.assertIn("stylesheet must not hide the evidence hero", str(caught.exception))
         for rule in ("footer p { display: none; }", ".pipeline-step::after { display: none; }", "#elsewhere { display: none; }",
+                     'body::before { content: ""; }', "header::after { content: none }", "dl::before { content: normal; }",
+                     ".page-meta { justify-content: center }", '.pipeline-step:not(:last-child)::after { content: "→" }',
+                     "footer::after { content: 'x' }", "header dd { content: '' !important }",
                      "/* header dd { display: none; } */", "header dd { color: red; }", "[hidden] { display: none; }",
                      "body .other dd { display: none; }", ".site-nav a:not([aria-current]) { display: none; }",
                      "header { opacity: 0.9 }", "header dd { font-size: 0.76rem }", "header { transform: scale(0.5) }", "table { border-collapse: collapse }",
@@ -636,6 +645,7 @@ class HeroProseTests(ProjectionCase):
             ("loose text in the hero itself", "<p class=\"eyebrow\">", "ci-gate failure<p class=\"eyebrow\">"),
             ("eyebrow extended", "Updated 2026-01-01</p>", "Updated 2026-01-01 · ci-gate failure</p>"),
             ("eyebrow date malformed", "Updated 2026-01-01</p>", "Updated 2026-1-1</p>"),
+            ("eyebrow date off the JSON-LD dateModified", "Updated 2026-01-01</p>", "Updated 9999-99-99</p>"),
             ("masthead drifted", "Readiness</strong> pre-alpha", "Readiness</strong> alpha"),
             ("toggle drifted", status.HERO_DETAILS_TOGGLE, "Snapshot subjects (ci-gate failure)"),
             ("closing paragraph reordered", "Roadmap at that revision: ", "Roadmap: "),
@@ -660,14 +670,15 @@ class HeroProseTests(ProjectionCase):
                 site = self.projection(self.hero, mutated)
                 with self.assertRaises(SystemExit) as caught:
                     status.validate_projection(self.hero, self.repo, site)
-                self.assertIn("must render the visible details toggle and the record's closing paragraph exactly once",
+                self.assertIn("must render every reviewed masthead block, the details toggle and the record's closing paragraph "
+                              "exactly once; missing: " + (status.HERO_DETAILS_TOGGLE if name.startswith("toggle") else "Roadmap"),
                               str(caught.exception))
 
     def test_embedded_stylesheets_and_foreign_links_are_checked(self):
         for name, old, new, expected in (
             ("style in head", "</head>", "<style>.content-page { display: none }</style></head>", "stylesheet must not hide"),
             ("style in the hero", "<details>", "<details><style>dl { opacity: .0 }</style>", "stylesheet must not hide"),
-            ("import", "</head>", "<style>@import url(other.css);</style></head>", "stylesheet must not hide the evidence hero or its proof rows: @import"),
+            ("import", "</head>", "<style>@import url(other.css);</style></head>", "stylesheet must not hide the evidence hero or its proof rows or add text to them: @import"),
             ("foreign stylesheet link", "</head>", '<link rel="stylesheet" href="../other.css"></head>', "may link no stylesheet but site/styles.css: ../other.css"),
         ):
             with self.subTest(mutation=name):
@@ -685,7 +696,22 @@ class HeroProseTests(ProjectionCase):
         for old in ("<h1>What pycc can do <span>today.</span></h1>", '<p class="eyebrow">Evidence page · Updated 2026-01-01</p>'):
             with self.subTest(block=old):
                 self.assertIn(old, self.page)
-                self.reject(self.page.replace(old, old + old.replace("2026-01-01", "2026-02-02"), 1), "hero prose block rendered twice")
+                self.reject(self.page.replace(old, old + old, 1), "hero prose block rendered twice")
+
+    def test_every_reviewed_masthead_block_is_mandatory(self):
+        for old in ('<p class="eyebrow">Evidence page · Updated 2026-01-01</p>', "<h1>What pycc can do <span>today.</span></h1>",
+                    f'<p class="page-lede">{status.HERO_MASTHEAD[1]}</p>',
+                    "<span><strong>Milestone</strong> v0.3 acceptance criteria met, released as v0.3.0; v0.4 in progress</span>",
+                    "<span><strong>Acceptance</strong> v0.1, v0.2, and v0.3 all fully met</span>",
+                    "<span><strong>Readiness</strong> pre-alpha</span>"):
+            for name, new in (("removed", ""), ("hidden", old.replace(">", ' style="opacity: .0">', 1))):
+                with self.subTest(block=old[:40], mutation=name):
+                    self.assertIn(old, self.page)
+                    self.reject(self.page.replace(old, new, 1), "must render every reviewed masthead block")
+        script = '<script type="application/ld+json">{"dateModified": "2026-01-01"}</script>'
+        for name, new in (("no dateModified", ""), ("two dateModified", script + script.replace("2026-01-01", "2026-02-02"))):
+            with self.subTest(mutation=name):
+                self.reject(self.page.replace(script, new, 1), "exactly one JSON-LD dateModified")
 
     def test_hidden_or_outside_prose_and_inline_markup_are_accepted(self):
         for name, old, new in (
@@ -694,7 +720,7 @@ class HeroProseTests(ProjectionCase):
             ("prose after the hero", "</header>", "</header><p>Current gate result: ci-gate failure; audit failure.</p>"),
             ("inline emphasis inside a block", "Readiness</strong> pre-alpha", "Readiness</strong> <em>pre</em>-alpha"),
             ("whitespace and comments", "Roadmap at that revision: ", "Roadmap at that\n   revision: <!-- ci-gate failure -->"),
-            ("masthead omitted", '<p class="eyebrow">Evidence page · Updated 2026-01-01</p>', ""),
+            ("dateModified spacing", '{"dateModified": "2026-01-01"}', '{ "dateModified" :"2026-01-01" }'),
         ):
             with self.subTest(mutation=name):
                 self.assertIn(old, self.page)

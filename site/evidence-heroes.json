@@ -465,7 +465,7 @@
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "b31ca02ad39dfd8eeab198542ddb1f0f88a4612a4e7927028260e115c5f4b056",
+        "sha256": "6a4b860989f69ea23673e41774ce226d5c93d624e9b6cb28d47edb76bb67e6d4",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
@@ -507,6 +507,7 @@
           "test_details_toggle_and_closing_paragraph_are_mandatory",
           "test_embedded_stylesheets_and_foreign_links_are_checked",
           "test_reviewed_prose_block_cannot_repeat",
+          "test_every_reviewed_masthead_block_is_mandatory",
           "test_hidden_or_outside_prose_and_inline_markup_are_accepted",
           "test_distance_twenty_is_accepted_and_twenty_one_is_rejected",
           "test_subject_outside_the_base_history_is_rejected",
@@ -585,7 +586,7 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T09:17:02Z",
+        "collected_at": "2026-09-11T10:03:39Z",
         "collection_method": "gh api check-runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",

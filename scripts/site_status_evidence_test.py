@@ -150,7 +150,7 @@ class StatusEvidenceTests(unittest.TestCase):
     def test_hidden_or_missing_proof_rows_are_rejected(self):
         for old, new, expected in (
             ('<details class="hero-evidence-details">', '<details hidden class="hero-evidence-details">',
-             "hero must render the visible details toggle and the record's closing paragraph exactly once"),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ("not release readiness.", "release readiness.",
              "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Roadmap"),
             ("https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163",
@@ -169,7 +169,7 @@ class StatusEvidenceTests(unittest.TestCase):
             ('<span\n            data-evidence-id="status-snapshot-v1"', '<span style="DISPLAY: NONE"\n            data-evidence-id="status-snapshot-v1"',
              "exactly one visible collapsed hero summary"),
             ('<details class="hero-evidence-details">', '<details style="Visibility: Hidden" class="hero-evidence-details">',
-             "hero must render the visible details toggle and the record's closing paragraph exactly once"),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ("<dt>Pre-merge policy audit</dt>", '<dt style="DISPLAY:NONE">Pre-merge policy audit</dt>',
              "proof rows must pair one visible label with one row each"),
             ("<dt>Tier-1 jobs</dt>", "<dt>Current gate result</dt><dd>ci-gate failure</dd><dt>Tier-1 jobs</dt>",
@@ -177,9 +177,9 @@ class StatusEvidenceTests(unittest.TestCase):
             ("<dd>in the ci-gate run, all success:</dd>", "<dd>in the ci-gate run, all failure:</dd>",
              "proof row for Tier-1 jobs must read exactly"),
             ('<details class="hero-evidence-details">', '<details style="opacity: 0" class="hero-evidence-details">',
-             "hero must render the visible details toggle and the record's closing paragraph exactly once"),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="font-size: .0px" class="hero-evidence-details">',
-             "hero must render the visible details toggle and the record's closing paragraph exactly once"),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ("<summary>Snapshot subjects, conclusions and immutable links</summary>",
              "<summary>Snapshot subjects, conclusions and immutable links</summary><p>Current gate result: ci-gate failure; audit failure.</p>",
              "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Current gate result"),
@@ -189,11 +189,16 @@ class StatusEvidenceTests(unittest.TestCase):
              "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: Roadmap"),
             ("</dl>", "<dt>Current gate result: ci-gate failure</dt></dl>", "proof rows must pair one visible label with one row each"),
             ("<summary>Snapshot subjects, conclusions and immutable links</summary>", "<summary hidden>Snapshot subjects, conclusions and immutable links</summary>",
-             "hero must render the visible details toggle and the record's closing paragraph exactly once"),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<link rel="stylesheet" href="../styles.css">', '<link rel="stylesheet" href="../styles.css"><style>.page-hero { display: none }</style>',
              "stylesheet must not hide the evidence hero"),
             ('<link rel="stylesheet" href="../styles.css">', '<link rel="stylesheet" href="../styles.css"><link rel="stylesheet" href="../hide.css">',
              "may link no stylesheet but site/styles.css"),
+            ("<p class=\"eyebrow\">Evidence page · Updated 2026-09-11</p>", "<p class=\"eyebrow\">Evidence page · Updated 9999-99-99</p>",
+             "hero prose must be exactly the reviewed masthead"),
+            ('"dateModified": "2026-09-11"', '"dateModified": "2026-09-10"', "hero prose must be exactly the reviewed masthead"),
+            ("<h1>What pycc can do <span>today.</span></h1>", "", "must render every reviewed masthead block"),
+            ("<span><strong>Readiness</strong> pre-alpha</span>", "", "must render every reviewed masthead block"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -233,7 +238,8 @@ class StatusEvidenceTests(unittest.TestCase):
                      ".hero-evidence-details { opacity: 0; }", ".page-hero dl { font-size: 0 }", ".page-hero { transform: scale(0) }",
                      ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }",
                      ".content-page { display: none; }", "#main-content { opacity: .0 }", "body { font-size: .0px }",
-                     "main > .page-hero { transform: scale(.0) }"):
+                     "main > .page-hero { transform: scale(.0) }",
+                     '.page-meta span:first-child::after { content: " · ci-gate failure"; }', ".page-hero::before { content: attr(data-evidence-state) }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):
                     path = site / "styles.css"

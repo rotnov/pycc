@@ -406,9 +406,10 @@ BLOCK_TAGS = ROW_TAGS | {"p", "h1", "h2", "h3", "h4", "h5", "h6", "span", "summa
 # paragraph.  No other visible text is allowed inside the hero: free prose beside
 # the bound rows could contradict them ("Current gate result: ci-gate failure")
 # without touching any row, so the hero's text is closed rather than filtered.
-# The eyebrow's date is the page's own modification date and may only vary in
-# its digits.
-HERO_EYEBROW = re.compile(r"Evidence page · Updated \d{4}-\d{2}-\d{2}")
+# The eyebrow carries the page's own modification date, bound to the page's
+# single JSON-LD ``dateModified``.
+HERO_EYEBROW = "Evidence page · Updated {date}"
+PAGE_DATE = re.compile(r'"dateModified"\s*:\s*"(\d{4}-\d{2}-\d{2})"')
 HERO_MASTHEAD = (
     "What pycc can do today.",
     "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14. This page separates working, "
@@ -419,6 +420,10 @@ HERO_MASTHEAD = (
 )
 HERO_DETAILS_TOGGLE = "Snapshot subjects, conclusions and immutable links"
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+# A ``content`` declaration that renders text (anything but none/normal/empty):
+# generated text on the hero or an ancestor is prose the HTML parser never
+# sees.  ``justify-content`` and friends are excluded by the leading guard.
+GENERATED_CONTENT = re.compile(r"(?<![\w-])content\s*:\s*(?=\S)(?!(?:none|normal|\"\"|'')?\s*(?:;|!|$))", re.I)
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")
 
@@ -526,11 +531,14 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
 
 
 def hiding_rules(css, parser):
-    """Stylesheet rules that hide the hero: every compound, the subject included, can match a hero element or one of its ancestors.
+    """Stylesheet rules that hide the hero or add text to it: every compound, the subject included, can match a hero element or one of its ancestors.
 
     A rule on an ancestor (``body``, ``#main-content``, ``.content-page``) hides
     the hero exactly as a rule on the hero itself does, so the subject compound
-    is checked against the same reachable set as the earlier compounds.
+    is checked against the same reachable set as the earlier compounds.  A
+    ``content`` declaration that renders text (``::after { content: " · ci-gate
+    failure" }``) is rejected on the same selectors: the browser shows it beside
+    the bound rows while the HTML parser sees an unchanged page.
     """
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     reachable = parser.hero_hooks | parser.ancestor_hooks
@@ -538,7 +546,7 @@ def hiding_rules(css, parser):
     if re.search(r"@import\b", css, re.I):
         found.append("@import")
     for selectors, body in CSS_RULE.findall(css):
-        if not HIDING_RULE.search(body):
+        if not (HIDING_RULE.search(body) or GENERATED_CONTENT.search(body)):
             continue
         for selector in selectors.split(","):
             selector = selector.strip()
@@ -592,22 +600,22 @@ def expected_closing_paragraph(hero):
             f"by scripts/collect_status_snapshot.py (read-only gh api). {hero['limitations']}")
 
 
-def check_prose_blocks(hero, prose):
-    """Every visible hero text block outside the proof rows is one reviewed block, each at most once."""
-    allowed = [HERO_EYEBROW, *HERO_MASTHEAD, HERO_DETAILS_TOGGLE, expected_closing_paragraph(hero)]
+def check_prose_blocks(hero, prose, page_date):
+    """Every visible hero text block outside the proof rows is one reviewed block, and every reviewed block is rendered exactly once."""
+    allowed = [HERO_EYEBROW.format(date=page_date), *HERO_MASTHEAD, HERO_DETAILS_TOGGLE, expected_closing_paragraph(hero)]
     seen = []
     for block in prose:
         text = " ".join(block.split())
-        match = next((item for item in allowed
-                      if (item.fullmatch(text) if isinstance(item, re.Pattern) else item == text)), None)
-        if match is None:
+        if text not in allowed:
             fail("status hero prose must be exactly the reviewed masthead, the details toggle and the record's "
                  f"closing paragraph; unexpected: {text}")
-        if match in seen:
+        if text in seen:
             fail(f"status hero prose block rendered twice: {text}")
-        seen.append(match)
-    if HERO_DETAILS_TOGGLE not in seen or allowed[-1] not in seen:
-        fail("status hero must render the visible details toggle and the record's closing paragraph exactly once")
+        seen.append(text)
+    missing = [item for item in allowed if item not in seen]
+    if missing:
+        fail("status hero must render every reviewed masthead block, the details toggle and the record's closing "
+             "paragraph exactly once; missing: " + " | ".join(missing))
 
 
 def check_summary_line(hero, summaries):
@@ -665,14 +673,18 @@ def check_platform_rows(hero, platforms):
 def validate_projection(hero, repo_root, site_dir):
     """Visible proof rows bound to their subjects, immutable links, locale and the shared summaries."""
     parser = ProofRowParser()
-    parser.feed((site_dir / hero["page_path"].removeprefix("site/")).read_text())
+    page = (site_dir / hero["page_path"].removeprefix("site/")).read_text()
+    parser.feed(page)
+    dates = PAGE_DATE.findall(page)
+    if len(dates) != 1:
+        fail("status page must declare exactly one JSON-LD dateModified")
     if parser.language != "en-US" or parser.locales != ["en_US"]:
         fail("status locale must be en-US / en_US")
     if parser.hero_count != 1:
         fail("status must render exactly one visible evidence hero")
     labelled, platforms, summaries = proof_rows(parser)
     check_summary_line(hero, summaries)
-    check_prose_blocks(hero, parser.prose)
+    check_prose_blocks(hero, parser.prose, dates[0])
     visible = " ".join("".join(parser.hero_text).split())
     revision = subject_by_id(hero)["published-revision"]
     literals = [hero["state"], hero["limitations"], hero["attestation"]["collected_at"],
@@ -693,7 +705,7 @@ def validate_projection(hero, repo_root, site_dir):
     # scan: an embedded rule hides the hero exactly as a linked one does.
     hidden_by = hiding_rules("\n".join([stylesheet.read_text(), *parser.embedded_css]), parser)
     if hidden_by:
-        fail("status stylesheet must not hide the evidence hero or its proof rows: " + ", ".join(hidden_by))
+        fail("status stylesheet must not hide the evidence hero or its proof rows or add text to them: " + ", ".join(hidden_by))
     for surface in ("markdown", "llm"):
         text = (site_dir / hero["projections"][surface].removeprefix("site/")).read_text()
         if text.count(summary(hero)) != 1:

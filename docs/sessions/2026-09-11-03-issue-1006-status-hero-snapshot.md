@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T09:17:02Z. The record pins the collector's and its suite's
+  2026-09-11T10:03:39Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T09:17:02Z` after the suite changed.
+  `--collected-at 2026-09-11T10:03:39Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -240,6 +240,22 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     round-14 check rejects it locally (the pull-request merge ref CI checks out
     has the base tip as its first parent); `docs/WEBSITE.md` records the
     `--subject` route. Pins rotated.
+16. External, on PR #1008, three Codex P2s: only the toggle and the closing
+    paragraph were mandatory, so the H1, lede, milestone, acceptance,
+    readiness or eyebrow could vanish; the eyebrow date was shape-checked
+    only (`Updated 9999-99-99` passed beside a `2026-09-11` JSON-LD
+    `dateModified`); and the stylesheet scan looked for hiding declarations
+    only, so `.page-meta span:first-child::after { content: " · ci-gate
+    failure" }` rendered contradicting text the HTML parser never saw. Fixed:
+    every reviewed block is required exactly once; the page must declare one
+    JSON-LD `dateModified` and the eyebrow is bound to it; a `content`
+    declaration rendering text (anything but `none`/`normal`/empty) on a
+    hero-reachable selector is rejected with the hiding rules (the
+    `justify-content` family is excluded by the word guard; `site/styles.css`'s
+    own `content` rules are empty or off the hero). Cases in the synthetic and
+    public-CLI suites, snapshot re-collected at `2026-09-11T10:03:39Z` with
+    `--subject 4111208c` (now two first-parent merges behind `origin/main`
+    after merging #1009), pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
