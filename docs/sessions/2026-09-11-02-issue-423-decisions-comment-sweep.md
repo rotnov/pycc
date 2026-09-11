@@ -99,7 +99,14 @@ OK, 6 skipped); `test_check_roadmap_evidence.rb` (247 runs, 1294 assertions,
   attributed the retained-audit-evidence rationale to D-112's Consequences
   field; it lives in D-112's 2026-08-01 update note. Both fixed in
   `ad8d108e`; rows in `.harden/findings/issue-423.jsonl`.
-- Round 2: see the pull request body for the closing round.
+- Round 2 (head `c865515a`): clean. The reviewer re-read all nine cited
+  decision files against their comments and confirmed both round-1 fixes.
+- Harden batch over the pile: one class, `paraphrase-of-a-formal-rule-drifts-
+  from-its-source` (recurrence 3). Build nothing, deliberately: the drift is
+  semantic (a wrong symbol name, a wrong section heading inside a correct
+  citation) and only the review rung reading the cited file catches it; the
+  citation rewrite is what lets that rung fire. Entry at
+  `.harden/incidents/paraphrase-of-a-formal-rule-drifts-from-its-source/2026-09-11-issue-423.md`.
 
 ## Follow-ups
 
