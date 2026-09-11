@@ -158,10 +158,6 @@ def canonical_sha256(data):
     return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
-def canonical_bytes(data):
-    return len(data.replace(b"\r\n", b"\n"))
-
-
 def read_artifact(evidence_root, path, context):
     """Read one checked-in artifact from the working tree, refusing anything unsafe."""
     resolved = Path(evidence_root) / path

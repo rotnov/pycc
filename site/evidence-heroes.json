@@ -440,7 +440,7 @@
       },
       "test": {
         "path": "tests/architecture_trace.rs",
-        "sha256": "77121f28a6c31aff8fe7892c2fb4eba00ae6e385cf72a96e0f6f65e7e765c6b4",
+        "sha256": "b3d7a0c05cbff29145d8ee854c8ef3a4b9ec698ed155c173620355b803716717",
         "names": [
           "checked_in_stage_artifacts_are_what_the_compiler_produces_today",
           "regeneration_writes_exactly_the_checked_in_stage_artifacts",

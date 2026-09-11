@@ -115,7 +115,6 @@ class IdentityTests(unittest.TestCase):
 
     def test_crlf_is_canonicalized_before_hashing(self):
         self.assertEqual(pipeline.canonical_sha256(b"a\r\nb"), pipeline.canonical_sha256(b"a\nb"))
-        self.assertEqual(pipeline.canonical_bytes(b"a\r\nb"), 3)
 
     def test_excerpts_are_exact_artifact_prefixes(self):
         for stage in hero()["snapshot"]["stages"]:

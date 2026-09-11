@@ -33,12 +33,12 @@ never a merge gate.
 
 ---
 
-## 2026-09-11 — An implementation plan directed an edit into a byte-pinned file, and a new hero shape broke 186 assertions in unrelated suites
+## 2026-09-11 — An implementation plan directed an edit into a byte-pinned file, a new hero shape broke 186 assertions in unrelated suites, and a repair round's own rewrite overstated the gate it described
 
 *(Relative order against the other 2026-09-11 entries in this file cannot be
 recovered from their content; this one describes work on issue #1007.)*
 
-**What happened.** Two avoidable fix rounds while implementing #1007
+**What happened.** Three avoidable fix rounds while implementing #1007
 (Architecture hero as a pipeline evidence trace).
 
 1. The authoritative plan directed the new manifest-facts test case into
@@ -56,15 +56,27 @@ recovered from their content; this one describes work on issue #1007.)*
    failed with the same unrelated message — the architecture validator ran
    first and masked whichever mutation each case was actually testing.
 
+3. Round 1 deleted a negative-control test case; round 2 found four documents
+   still describing it and rewrote their clauses; round 3 then found that one
+   of those very rewrites, in `docs/TESTING.md`, had attached the
+   `cargo test --workspace` Tier-1 clause to the Python public-CLI battery,
+   which runs only in the non-required Pages leg. The repair round's own edit
+   became the next round's finding.
+
 **Root cause.** (1) Plans are written against a file's contents, not against
 the gates that pin it; nothing in the planning loop checks whether a file
 named as an edit target is itself hero-pinned. (2) A shared evidence contract
 gained a second snapshot shape, and the fixture-path collectors in sibling
 suites were written to the only shape that existed when they were authored.
+(3) A documentation clause repaired under review pressure was checked against
+the deleted case it had to stop describing, not against the workflow that
+actually runs the suite the repaired clause now named.
 
 **What fixed it.** (1) A separate integration test file plus the recorded
 deviation. (2) A three-line addition to both suites' path collectors that also
-gathers `snapshot["trace"]["path"]` and each `stage["path"]`.
+gathers `snapshot["trace"]["path"]` and each `stage["path"]`. (3) Round 3
+re-derived the clause from the workflow definitions instead of from the prose
+it was replacing.
 
 **Lessons.**
 - Before writing a plan step that edits an existing file, grep
@@ -75,6 +87,11 @@ gathers `snapshot["trace"]["path"]` and each `stage["path"]`.
   every consumer for the old shape's key (here `["artifacts"]`) and extend
   each one in the same change. A validator that fails first makes every other
   suite's failure message a lie about what broke.
+- A documentation clause rewritten to stop describing something deleted is a
+  new claim, not a deletion: verify it against the mechanism it now names —
+  the workflow, the gate, the suite — before committing the repair. A review
+  round's own edits enter the next round's diff, and an unverified repair is
+  the cheapest way to spend one.
 
 ---
 

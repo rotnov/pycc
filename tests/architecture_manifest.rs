@@ -41,7 +41,10 @@ fn architecture_hero_record_states_a_partial_pipeline_trace() {
     assert_eq!(hero["state"], json!("partial"));
     assert_eq!(hero["page_path"], json!("site/architecture/index.html"));
     assert_eq!(hero["test"]["path"], json!("tests/architecture_trace.rs"));
-    assert_eq!(hero["fixture"]["path"], json!("tests/fixtures/quick_start.py"));
+    assert_eq!(
+        hero["fixture"]["path"],
+        json!("tests/fixtures/quick_start.py")
+    );
 
     for field in [
         "evidence_id",
@@ -53,7 +56,10 @@ fn architecture_hero_record_states_a_partial_pipeline_trace() {
         "limitations",
         "stable_links",
     ] {
-        assert!(!hero[field].is_null(), "architecture {field} must be present");
+        assert!(
+            !hero[field].is_null(),
+            "architecture {field} must be present"
+        );
     }
 
     let stages = hero["snapshot"]["stages"]

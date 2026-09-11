@@ -109,7 +109,8 @@ fn derive() -> Derived {
     }])
     .expect("a single-module program links");
     let finalized = pycc_hir::finalize(linked).expect("the linked program finalizes");
-    let typed = pycc_types::check_and_resolve_all_keyed(&finalized).expect("the fixture type-checks");
+    let typed =
+        pycc_types::check_and_resolve_all_keyed(&finalized).expect("the fixture type-checks");
     let mir = pycc_mir::build(&typed);
     let mut mir_text = String::new();
     for item in &mir.items {
@@ -228,7 +229,11 @@ fn the_page_excerpts_are_exact_prefixes_of_the_artifacts() {
         let bytes = canonical_lf(&read_artifact(name));
         let text = String::from_utf8(bytes).expect("stage artifacts are UTF-8");
         let excerpt: Vec<&str> = text.lines().take(EXCERPT_LINES).collect();
-        assert_eq!(excerpt.len(), EXCERPT_LINES, "{name} is shorter than its excerpt");
+        assert_eq!(
+            excerpt.len(),
+            EXCERPT_LINES,
+            "{name} is shorter than its excerpt"
+        );
         let prefix = format!("{}\n", excerpt.join("\n"));
         assert!(text.starts_with(&prefix), "{name} excerpt is not a prefix");
     }
@@ -244,10 +249,16 @@ fn the_fixture_builds_a_native_executable_whose_stdout_is_the_published_transcri
         .output()
         .expect("could not execute the production pycc binary");
     assert_eq!(build.status.code(), Some(0), "{build:?}");
-    let run = Command::new(&binary).output().expect("native executable runs");
+    let run = Command::new(&binary)
+        .output()
+        .expect("native executable runs");
     assert_eq!(run.status.code(), Some(0), "{run:?}");
     assert!(run.stderr.is_empty(), "unexpected stderr: {run:?}");
-    assert_eq!(run.stdout, EXPECTED_STDOUT.as_bytes(), "stdout transcript drift");
+    assert_eq!(
+        run.stdout,
+        EXPECTED_STDOUT.as_bytes(),
+        "stdout transcript drift"
+    );
     assert_eq!(run.stdout.len(), 26, "published stdout byte count drift");
 }
 

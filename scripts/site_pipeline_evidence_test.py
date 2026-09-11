@@ -322,5 +322,102 @@ class PipelineEvidenceTests(unittest.TestCase):
         self.run_case(mutate, "stable_links must be exactly the immutable commit")
 
 
+    # -- attestation and provenance negative controls ------------------------
+
+    def test_attestation_collected_at_cannot_be_in_the_future(self):
+        """A well-formed RFC 3339 instant that has not happened yet. The field
+        stays present and syntactically valid, so `require_exact_fields` and
+        `is_utc_instant` both accept it and the freshness branch is what
+        rejects it."""
+        def mutate(doc, site, root):
+            doc["heroes"][ARCHITECTURE]["attestation"]["collected_at"] = "2099-01-02T03:04:05Z"
+        self.run_case(
+            mutate,
+            "architecture attestation collected_at must not be later than the validation time")
+
+    def test_environment_cannot_drift_from_the_reviewed_toolchain(self):
+        """A wrong-but-well-formed toolchain version: the record still carries
+        every environment field, so only the reviewed-tuple comparison can
+        refuse it."""
+        def mutate(doc, site, root):
+            doc["heroes"][ARCHITECTURE]["environment"]["rust"] = "1.98.0"
+        self.run_case(
+            mutate,
+            "architecture environment drifted from the reviewed toolchain and capture host")
+
+    def test_recorded_tree_must_be_the_commit_s_real_tree(self):
+        """A syntactically valid SHA that is not this commit's tree. `git
+        rev-parse <commit>^{tree}` is the only thing that can tell: the tree is
+        not part of `stable_links`, so no link check sees it. The trace record
+        must be rewritten and re-pinned alongside, or the trace record's own
+        `compiler_tree` comparison fires first and `verify_git` is never
+        reached."""
+        def mutate(doc, site, root):
+            bogus = "b" * 40
+            doc["heroes"][ARCHITECTURE]["repository"]["tree"] = bogus
+            path = root / "tests/fixtures/architecture-trace/trace.json"
+            trace = json.loads(path.read_text())
+            trace["compiler_tree"] = bogus
+            rewritten = (json.dumps(trace, indent=2) + "\n").encode()
+            path.write_bytes(rewritten)
+            pinned = doc["heroes"][ARCHITECTURE]["snapshot"]["trace"]
+            pinned["sha256"] = hashlib.sha256(rewritten).hexdigest()
+            pinned["bytes"] = len(rewritten)
+        self.run_case(mutate, "tree differs from the recorded tree")
+
+    # -- visibility negative controls ----------------------------------------
+
+    def test_the_stylesheet_cannot_hide_the_architecture_hero(self):
+        """A stage row must be removed, not hidden. The rule names the hero's
+        own class, so the stylesheet surface of the visibility model is what
+        rejects it -- the selector is echoed back, which is what distinguishes
+        this case from the embedded-`<style>` one below."""
+        def mutate(doc, site, root):
+            path = site / "styles.css"
+            path.write_text(path.read_text() + "\n.page-hero { display: none; }\n")
+        self.run_case(
+            mutate,
+            "must not hide the evidence hero or its stage rows or add text to them: .page-hero")
+
+    def test_an_embedded_style_block_cannot_hide_the_stage_rows(self):
+        """The same claim on the page's own embedded surface, aimed at the
+        stage-row definitions rather than the hero root, so the echoed selector
+        proves this case reached the embedded-CSS collection and not the
+        stylesheet one."""
+        def mutate(doc, site, root):
+            page = site / "architecture/index.html"
+            source = page.read_text()
+            self.assertIn("</head>", source)
+            page.write_text(source.replace(
+                "</head>",
+                "<style>.hero-evidence-details dd { visibility: hidden; }</style>\n</head>",
+                1))
+        self.run_case(
+            mutate,
+            "must not hide the evidence hero or its stage rows or add text to them: "
+            ".hero-evidence-details dd")
+
+    def test_any_inline_style_inside_the_hero_is_rejected_structurally(self):
+        """The third surface is an allowlist, not a declaration model: a
+        `style` attribute anywhere in the hero is refused for being there at
+        all. The benign declaration is the control -- it is rejected with the
+        identical message, which is the proof that this case is about the
+        attribute allowlist and says nothing about `display: none` in
+        particular."""
+        for declaration in ("display: none", "color: red"):
+            with self.subTest(declaration=declaration):
+                def mutate(doc, site, root, declaration=declaration):
+                    page = site / "architecture/index.html"
+                    source = page.read_text()
+                    self.assertIn("<dt>05 MIR</dt>", source)
+                    page.write_text(source.replace(
+                        "<dt>05 MIR</dt>",
+                        f'<dt style="{declaration}">05 MIR</dt>',
+                        1))
+                self.run_case(
+                    mutate,
+                    "architecture stage rows must pair one visible label with one row each")
+
+
 if __name__ == "__main__":
     unittest.main()
