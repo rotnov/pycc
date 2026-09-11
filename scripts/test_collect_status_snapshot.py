@@ -256,6 +256,12 @@ class UnavailableTests(CollectorHarness):
         self.responses[path] = {"body": {"total_count": 1}}
         self.assert_unavailable("check-runs payload")
 
+    def test_non_dict_check_run_entry_is_unavailable(self):
+        path = self.api(f"commits/{self.commit}/check-runs?per_page=100&page=1")
+        self.responses[path]["body"]["check_runs"].append(None)
+        self.responses[path]["body"]["total_count"] += 1
+        self.assert_unavailable("check-runs payload for " + self.commit + " is malformed")
+
     def test_missing_ambiguous_or_foreign_app_runs_are_unavailable(self):
         path = self.api(f"commits/{HEAD}/check-runs?per_page=100&page=1")
         body = self.responses[path]["body"]

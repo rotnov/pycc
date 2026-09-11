@@ -62,7 +62,8 @@ def paginated_check_runs(sha):
     total = None
     while True:
         headers, body = gh_api(f"{API}/commits/{sha}/check-runs?per_page={PER_PAGE}&page={page}")
-        if not isinstance(body, dict) or not isinstance(body.get("check_runs"), list):
+        if not isinstance(body, dict) or not isinstance(body.get("check_runs"), list) \
+                or not all(isinstance(run, dict) for run in body["check_runs"]):
             raise Unavailable(f"check-runs payload for {sha} is malformed")
         total = body.get("total_count") if total is None else total
         runs.extend(body["check_runs"])
