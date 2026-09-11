@@ -21590,9 +21590,9 @@ fn check_skips_abstract_method_body_checking() {
     );
 }
 
-// -- #382 exception handling test helpers shared with tests that stayed
-// here; the exception tests themselves live in the `exception_handling` and
-// `enum_unrolling` child modules (#695) --
+// -- #382 parse/check helpers, shared by the tests that stayed here (the
+// `#382 coverage tests` run below) and, through `super::`, by the
+// `exception_handling` and `enum_unrolling` child modules (#695) --
 
 fn parse_check_resolve(src: &str) -> Result<HirModule, Diagnostic> {
     let module = pycc_parser::parse(src).expect("test fixture must parse");

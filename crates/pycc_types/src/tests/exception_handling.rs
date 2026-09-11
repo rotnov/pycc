@@ -2,8 +2,10 @@
 //!
 //! Extracted verbatim from `tests.rs` under AGENTS.md's decomposability rule
 //! (part of #695, which tracks decomposing that oversized file). These are the
-//! tests that exercise the #382 exception-handling checks, together with the
-//! two `expect_top_level_*` assertion helpers only they use. The `parse_check`
+//! #382 tests that exercise the exception-handling checks themselves, together
+//! with the two `expect_top_level_*` assertion helpers only they use; the
+//! `contains_return`/`introduces_bindings` traversal-coverage tests that walk
+//! `try`/`try*` statements stay in the parent's own `#382 coverage tests` run. The `parse_check`
 //! and `parse_check_resolve` helpers stay in the parent, because tests that
 //! remain there call them too and a parent cannot see a child's private items.
 //! As a child module this still sees the parent's private items directly

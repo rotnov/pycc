@@ -23,7 +23,7 @@ than closed.
 |---|---|---|
 | `crates/pycc_types/src/tests/typing_cast.rs` | 526 | 31 |
 | `crates/pycc_types/src/tests/pattern_matching.rs` | 559 | 43 |
-| `crates/pycc_types/src/tests/exception_handling.rs` | 342 | 26 |
+| `crates/pycc_types/src/tests/exception_handling.rs` | 344 | 26 |
 | `crates/pycc_types/src/tests/optional_narrowing.rs` | 559 | 36 |
 | `crates/pycc_types/src/tests/type_checking_marker.rs` | 125 | 6 |
 | `crates/pycc_types/src/tests/enum_unrolling.rs` | 115 | 5 |
