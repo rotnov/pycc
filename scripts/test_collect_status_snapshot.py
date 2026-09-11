@@ -333,13 +333,22 @@ class UnavailableTests(CollectorHarness):
         self.assertIn("cannot read docs/ROADMAP.md", err)
 
     def test_built_record_rejected_by_the_validator_leaves_the_manifest_untouched(self):
-        (self.repo / "docs" / "ROADMAP.md").write_text(ROADMAP.replace("v0.4 in progress", "v0.4 met"))
         before = self.manifest.read_text()
-        code, _, err = self.run_collector()
+        with mock.patch.object(status, "validate", side_effect=SystemExit("synthetic rejection")):
+            code, _, err = self.run_collector()
         self.assertEqual(code, 1)
         self.assertIn("built record rejected", err)
-        self.assertIn("milestone_line is stale", err)
+        self.assertIn("synthetic rejection", err)
         self.assertEqual(self.manifest.read_text(), before)
+
+    def test_working_tree_roadmap_edit_does_not_block_collection(self):
+        # A milestone-transition pull request edits the working-tree roadmap; the
+        # record still describes the subject commit's own line.
+        (self.repo / "docs" / "ROADMAP.md").write_text(ROADMAP.replace("v0.4 in progress", "v0.4 met"))
+        code, _, err = self.run_collector()
+        self.assertEqual(code, 0, err)
+        hero = json.loads(self.manifest.read_text())["heroes"][1]
+        self.assertEqual(hero["attestation"]["milestone_line"], MILESTONE)
 
 
 class ArgumentTests(CollectorHarness):

@@ -61,8 +61,13 @@ status: accepted
     the collector is the trusted party for that one field, as D-230
     already trusts it for `tested_commit`.
   - Freshness is visible, not asserted. The subject SHA and the capture
-    time are visible in the hero; the hero's milestone text must equal
-    `docs/ROADMAP.md`'s current `**Current milestone:` line at `HEAD`; the
+    time are visible in the hero; the hero's milestone text is the
+    `docs/ROADMAP.md` `**Current milestone:` line **at the subject
+    commit**, proved from Git like the subject's tree, never against the
+    working tree — a milestone-transition pull request therefore merges
+    with the previous snapshot and the hero shows the prior milestone,
+    labelled as the roadmap at that revision, until the next refresh (a
+    window the currency bound below caps at 20 first-parent merges); the
     D-156/D-170 freshness gate keeps forcing a Status-page edit on every
     milestone-truth change; and the convention is that any pull request
     which edits `site/status/index.html` or the `status` record re-runs
@@ -104,8 +109,8 @@ status: accepted
   and the Pages PR leg fails when it is skipped for long enough. The
   collector and validator share one `expected_shape`/`derive_state`, so
   the collector cannot write a record the gate rejects; the record pins
-  the collector's and its test suite's canonical SHA-256, so editing either
-  requires re-collecting. Schema `2.1.0` adds the status record shape and
+  the collector's and the validator suite's canonical SHA-256, so editing
+  either requires re-collecting. Schema `2.1.0` adds the status record shape and
   the `snapshot.subjects` form; D-186's landing adapter and D-230's
   execution heroes are unchanged. Four heroes (performance, architecture,
   comparison, provenance) remain explicitly `unavailable`; Part 2 of #566

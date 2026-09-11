@@ -253,9 +253,8 @@ def validate(hero, evidence_root, repo_root):
         fail("status attestation collection_method/sanitized drifted")
     if attestation["required_contexts"] != REQUIRED_CONTEXTS:
         fail("status attestation required_contexts must be the protected-branch contexts")
-    current = milestone_lead((repo_root / "docs" / "ROADMAP.md").read_text())
-    if not isinstance(attestation["milestone_line"], str) or attestation["milestone_line"] != current:
-        fail("status attestation milestone_line is stale against docs/ROADMAP.md; refresh the snapshot")
+    if not isinstance(attestation["milestone_line"], str) or not attestation["milestone_line"].startswith("Current milestone:"):
+        fail("status attestation milestone_line must be the roadmap's current-milestone lead")
 
     rows = hero["environment"]["platforms"]
     if not isinstance(rows, list) or len(rows) != len(TIER1):
@@ -292,6 +291,13 @@ def verify_git(hero, repo_root, head="HEAD"):
     tree = git(repo_root, "rev-parse", f"{commit}^{{tree}}")
     if tree.returncode or tree.stdout.strip() != hero["repository"]["tree"]:
         fail(f"status subject {commit} tree differs from the recorded tree")
+    # The milestone line is a fact about the subject revision, like its tree: it is
+    # proved against docs/ROADMAP.md at that commit, never against the working tree,
+    # so a milestone-transition pull request can still merge with the previous
+    # snapshot and refresh it afterwards.
+    roadmap = git(repo_root, "show", f"{commit}:docs/ROADMAP.md")
+    if roadmap.returncode or milestone_lead(roadmap.stdout) != hero["attestation"]["milestone_line"]:
+        fail(f"status attestation milestone_line differs from docs/ROADMAP.md at {commit}; refresh the snapshot")
 
 
 def status_record_at(repo_root, revision):

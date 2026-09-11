@@ -262,12 +262,10 @@ class RecordInvariantTests(SyntheticRepository):
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][0]["merged_pull_request"].__setitem__("head_sha", 5), "full lowercase SHA")
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][0]["merged_pull_request"].__setitem__("number", "1005"), "positive integer")
 
-    def test_stale_milestone_text_is_rejected(self):
-        self.assert_rejected(lambda hero: hero["attestation"].__setitem__("milestone_line", "Current milestone: v0.2 — met."), "milestone_line is stale")
-        (self.repo / "docs" / "ROADMAP.md").write_text(ROADMAP.replace("v0.4 in progress", "v0.4 — acceptance criteria met"))
-        self.assert_rejected(lambda hero: None, "milestone_line is stale")
-        (self.repo / "docs" / "ROADMAP.md").write_text("# Roadmap\n\nno milestone line\n")
-        self.assert_rejected(lambda hero: None, "milestone_line is stale")
+    def test_milestone_line_must_be_a_current_milestone_lead(self):
+        for value in (None, 7, "", "v0.3 — acceptance criteria met"):
+            with self.subTest(value=value):
+                self.assert_rejected(lambda hero, value=value: hero["attestation"].__setitem__("milestone_line", value), "current-milestone lead")
         self.assertIsNone(status.milestone_lead("**Current milestone: unterminated"))
 
     def test_pinned_scripts_and_test_names_are_verified(self):
@@ -309,6 +307,19 @@ class GitObjectTests(SyntheticRepository):
         with self.assertRaises(SystemExit) as caught:
             status.verify_git(hero, self.repo)
         self.assertIn("exactly one parent", str(caught.exception))
+
+    def test_milestone_line_is_proved_against_the_subject_not_the_working_tree(self):
+        hero = self.mutated(lambda hero: hero["attestation"].__setitem__("milestone_line", "Current milestone: v0.2 — met."))
+        with self.assertRaises(SystemExit) as caught:
+            status.verify_git(hero, self.repo)
+        self.assertIn(f"differs from docs/ROADMAP.md at {self.commit}", str(caught.exception))
+        # A milestone-transition pull request rewrites the working-tree roadmap while the
+        # pinned subject keeps its own line: both checks still accept the record.
+        (self.repo / "docs" / "ROADMAP.md").write_text(ROADMAP.replace("v0.4 in progress", "v0.4 — acceptance criteria met"))
+        status.validate(self.hero, self.evidence, self.repo)
+        status.verify_git(self.hero, self.repo)
+        (self.repo / "docs" / "ROADMAP.md").write_text("# Roadmap\n\nno milestone line\n")
+        status.verify_git(self.hero, self.repo)
 
     def test_recorded_tree_must_match_git(self):
         hero = self.mutated(lambda hero: None)

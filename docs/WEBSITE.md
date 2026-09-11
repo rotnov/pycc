@@ -655,9 +655,12 @@ build or deploy time contacts GitHub. Its shape, closed by
 field-for-field, is:
 
 - `fixture`/`test`: the collector `scripts/collect_status_snapshot.py` and
-  its suite `scripts/test_check_status_snapshot.py`, pinned by canonical LF
-  SHA-256 with the ordered `test_*` names; editing either requires
-  re-collecting.
+  the validator's shallow-safe suite `scripts/test_check_status_snapshot.py`,
+  pinned by canonical LF SHA-256 with the ordered `test_*` names; editing
+  either requires re-collecting. The collector's own suite
+  `scripts/test_collect_status_snapshot.py` is governance-discovered but not
+  pinned: it exercises the collector against stubbed `gh` output and never
+  shapes the record.
 - `command`: `python3 scripts/collect_status_snapshot.py --subject <sha>`
   from the repository root, requiring only the authenticated read-only
   `gh api` CLI.
@@ -684,7 +687,7 @@ Validation layers, in gate-versus-convention terms:
 
 | Check | Where it runs | Gate or convention |
 |---|---|---|
-| Structural validation and every projection (visible proof rows inside the `data-evidence-role="hero"` element, immutable links, `<details>` rows, milestone line equal to `docs/ROADMAP.md` at `HEAD`, `en-US` locale, one exact summary line in `site/index.html.md` and `site/llms.txt`) | `scripts/check_site_evidence.py` via `scripts/check-site.sh` (Pages, push and pull request) | must pass; Pages is not a required context |
+| Structural validation and every projection (visible proof rows inside the `data-evidence-role="hero"` element, immutable links, `<details>` rows, milestone line equal to `docs/ROADMAP.md` at the subject commit (proved by `--verify-git`, never against the working tree), `en-US` locale, one exact summary line in `site/index.html.md` and `site/llms.txt`) | `scripts/check_site_evidence.py` via `scripts/check-site.sh` (Pages, push and pull request) | must pass; Pages is not a required context |
 | Subject-side Git checks: ancestor of `HEAD`, exactly one parent, recorded tree equals `git rev-parse <subject>^{tree}`; pull-request association proven record-internally (`merged_pull_request.head_tree == repository.tree`), never by fetching `refs/pull/*` | `scripts/check_status_snapshot.py --verify-git` via `scripts/check-site.sh` (full-history Pages checkout) | must pass |
 | Snapshot currency when `site/status/index.html` or the `status` record changes: subject is an ancestor of the pull request's base tip and at most 20 first-parent merges behind it | `scripts/check_status_snapshot.py --currency` as a `pages.yml` pull-request-leg step only (never on `push`) | Pages red on the pull request is the signal; not a merge gate |
 | Synthetic-repository and pure-function unit tests | `scripts/test_check_status_snapshot.py` in the depth-1 `governance` job | gate via `ci-gate` |

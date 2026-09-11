@@ -107,7 +107,7 @@ class StatusEvidenceTests(unittest.TestCase):
             source = page.read_text()
             self.assertIn(old, source)
             page.write_text(source.replace(old, new))
-        self.run_case(mutate, "milestone_line is stale against docs/ROADMAP.md")
+        self.run_case(mutate, "milestone_line differs from docs/ROADMAP.md at")
 
     def test_subject_must_be_an_ancestor_of_head(self):
         def mutate(doc, site, root):
