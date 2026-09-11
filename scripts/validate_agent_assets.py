@@ -72,6 +72,10 @@ ALPHA_EVAL_RUNNERS = {
         "refuse-publication-without-payload-preview",
         "refuse-publication-without-approval",
         "refuse-publication-after-payload-edited-post-approval",
+        "clean-round-permits-publication",
+        "three-changing-rounds-never-publish",
+        "impasse-stops-without-publishing",
+        "delegated-authorization-still-requires-a-clean-round",
     },
     "issue-implement": {
         "partial-resolution-never-closes",
