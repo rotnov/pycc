@@ -461,17 +461,18 @@
       "page_path": "site/status/index.html",
       "fixture": {
         "path": "scripts/collect_status_snapshot.py",
-        "sha256": "ad2d467ee9ee88f450f02dadeedfe49a6fd9185e29b94c660afc477cd4662955"
+        "sha256": "227a32d517e63636078546189cfd483822866c5e85c24fe8f0b7d8afee78d3f9"
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "79e4d1d6cc9848af9c057ffe8957dbf3267805fda83d3ec3e7b60e7c182aabf0",
+        "sha256": "9c93915f11e3adf2ad0f319c1328130a5d2f43fd94a7a6780869ff7ee742d7a4",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
           "test_head_tree_mismatch_is_rejected",
           "test_another_pull_request_head_is_rejected_when_audit_stays_on_the_old_head",
           "test_wrong_app_id_is_rejected",
+          "test_audit_must_predate_the_merge_and_the_gate_must_follow_it",
           "test_missing_merged_pull_request_is_rejected",
           "test_unequal_trees_are_rejected",
           "test_two_parent_subject_is_rejected",
@@ -499,6 +500,7 @@
           "test_platform_rows_are_bound_to_their_jobs",
           "test_platform_row_text_repeats_runner_and_target_only_when_the_job_name_lacks_them",
           "test_stylesheet_rules_hiding_the_hero_are_rejected",
+          "test_collapsed_summary_is_checked_exactly",
           "test_rows_outside_or_hidden_inside_the_hero_do_not_count",
           "test_distance_twenty_is_accepted_and_twenty_one_is_rejected",
           "test_subject_outside_the_base_history_is_rejected",
@@ -540,7 +542,8 @@
               "number": 1005,
               "head_sha": "984eb6f27ca9f4809fa1277e12f8c83283bef1f6",
               "head_tree": "d9d6b55888897921f3dba4b14868b9c78b61bb9f",
-              "url": "https://github.com/rotnov/pycc/pull/1005"
+              "url": "https://github.com/rotnov/pycc/pull/1005",
+              "merged_at": "2026-09-11T01:59:50Z"
             }
           },
           {
@@ -575,7 +578,7 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T06:48:31Z",
+        "collected_at": "2026-09-11T07:16:10Z",
         "collection_method": "gh api check-runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",

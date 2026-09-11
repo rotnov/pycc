@@ -95,7 +95,7 @@ def record(commit, tree, head_sha="a" * 40):
              "check": None, "app_id": None, "conclusion": None, "completed_at": None, "run_id": None,
              "run_url": None, "job_url": None, "tree": tree, "parent_count": 1,
              "merged_pull_request": {"number": 1005, "head_sha": head_sha, "head_tree": tree,
-                                     "url": f"{status.REPO}/pull/1005"}},
+                                     "url": f"{status.REPO}/pull/1005", "merged_at": "2026-09-11T01:59:50Z"}},
             check("post-merge-ci-gate", "Post-merge CI gate", "ci-gate", commit, GATE_RUN, 103121414776, "2026-09-11T02:10:46Z"),
             check("pre-merge-audit", "Pre-merge policy audit", "audit", head_sha, AUDIT_RUN, 103117345163, "2026-09-11T01:50:30Z"),
         ]},
@@ -165,7 +165,8 @@ class RecordInvariantTests(SyntheticRepository):
             self.assert_rejected(lambda hero, f=field: hero[f].__setitem__("extra", 1), "fields drifted")
         for index, key in [(0, "merged_pull_request"), (0, "tree"), (0, "parent_count"), (1, "run_url"), (2, "job_url")]:
             self.assert_rejected(lambda hero, i=index, k=key: hero["snapshot"]["subjects"][i].pop(k), "fields drifted")
-        self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][0]["merged_pull_request"].pop("head_tree"), "fields drifted")
+        for key in ("head_tree", "merged_at"):
+            self.assert_rejected(lambda hero, k=key: hero["snapshot"]["subjects"][0]["merged_pull_request"].pop(k), "fields drifted")
         self.assert_rejected(lambda hero: hero["environment"]["platforms"][0].pop("job_url"), "fields drifted")
 
     def test_head_tree_mismatch_is_rejected(self):
@@ -179,6 +180,23 @@ class RecordInvariantTests(SyntheticRepository):
 
     def test_wrong_app_id_is_rejected(self):
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][1].__setitem__("app_id", 1), "app_id must be 15368")
+
+    def test_audit_must_predate_the_merge_and_the_gate_must_follow_it(self):
+        merged = lambda hero: hero["snapshot"]["subjects"][0]["merged_pull_request"]
+        for value in ("2026-09-11T01:50:29Z", "2026-09-11T00:00:00Z"):
+            self.assert_rejected(lambda hero, v=value: merged(hero).__setitem__("merged_at", v),
+                                 "pre-merge-audit must complete no later than the pull request merged")
+        self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][2].__setitem__("completed_at", "2026-09-11T01:59:51Z"),
+                             "pre-merge-audit must complete no later than the pull request merged")
+        for value in ("2026-09-11T02:10:47Z", "2026-09-11T03:00:00Z"):
+            self.assert_rejected(lambda hero, v=value: merged(hero).__setitem__("merged_at", v),
+                                 "post-merge-ci-gate must complete no earlier than the pull request merged")
+        for value in ("2026-09-11T01:59:50", "2026-09-11 01:59:50Z", None, 1):
+            self.assert_rejected(lambda hero, v=value: merged(hero).__setitem__("merged_at", v),
+                                 "merged_at must be an RFC 3339 UTC timestamp")
+        for value in ("2026-09-11T01:50:30Z", "2026-09-11T02:10:46Z"):
+            hero = self.mutated(lambda hero, v=value: merged(hero).__setitem__("merged_at", v))
+            self.assertIsNone(status.validate(hero, self.evidence, self.repo))
 
     def test_missing_merged_pull_request_is_rejected(self):
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][0].__setitem__("merged_pull_request", None), "must be an object")
@@ -378,7 +396,11 @@ def render_page(hero):
     items = [f'<li><a href="{row["job_url"]}">{status.platform_row_text(row)}</a></li>'
              for row in hero["environment"]["platforms"]]
     return ('<html lang="en-US"><head><meta property="og:locale" content="en_US"></head><body>'
-            f'<header data-evidence-role="hero">{hero["state"]} · captured {hero["attestation"]["collected_at"]}'
+            f'<header data-evidence-role="hero" data-evidence-id="{hero["evidence_id"]}"><div class="page-meta">'
+            f'<span data-evidence-id="{hero["evidence_id"]}"><strong>Evidence hero</strong> {hero["state"]} · snapshot of main '
+            f'{hero["repository"]["commit"][:8]} · ci-gate {subjects["post-merge-ci-gate"]["conclusion"]} · '
+            f'audit {subjects["pre-merge-audit"]["conclusion"]} (PR #{merged["number"]}) · '
+            f'captured {hero["attestation"]["collected_at"]}</span></div>'
             f'<dl>{"".join(rows)}<dt>Tier-1 jobs</dt><dd>in the ci-gate run:</dd></dl><ul>{"".join(items)}</ul>'
             f'<p>{hero["attestation"]["milestone_line"]} {hero["limitations"]}</p></header></body></html>\n')
 
@@ -473,7 +495,8 @@ class ProjectionTests(SyntheticRepository):
         page = render_page(self.hero)
         for rule in (".hero-row { display: none; }", "header dd { visibility: hidden; }", "body header li { display:none }",
                      "@media (max-width: 980px) { dl dt, .other { display: none; } }", "* { display: none; }",
-                     "[data-evidence-role] { display: none; }", "header > dl > dd:nth-child(2) { display: none; }"):
+                     "[data-evidence-role] { display: none; }", "header > dl > dd:nth-child(2) { display: none; }",
+                     "HEADER DD { DISPLAY: NONE; }", "dl dt { Visibility : Hidden }", ".page-meta span { display:NONE }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
                 (site / "styles.css").write_text(f"footer p {{ display: none; }}\n{rule}\n")
@@ -487,6 +510,28 @@ class ProjectionTests(SyntheticRepository):
                 site = self.write_site(self.hero, page)
                 (site / "styles.css").write_text(rule + "\n")
                 self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
+
+    def test_collapsed_summary_is_checked_exactly(self):
+        page = render_page(self.hero)
+        exact = "collapsed hero summary must read exactly"
+        self.assertIn(status.expected_summary_line(self.hero), " ".join(page.replace("<strong>Evidence hero</strong>", "Evidence hero").split()))
+        for name, old, new, expected in (
+            ("contradicted conclusions", "ci-gate success · audit success", "ci-gate failure · audit failure", exact),
+            ("one contradicted conclusion", "· audit success (PR", "· audit failure (PR", exact),
+            ("another subject", f"snapshot of main {self.hero['repository']['commit'][:8]}", "snapshot of main deadbeef", exact),
+            ("another pull request", "(PR #1005)", "(PR #1006)", exact),
+            ("another capture time", "captured 2026-09-11T03:00:00Z</span>", "captured 2026-09-11T04:00:00Z</span>", exact),
+            ("a link inside the summary", "<strong>Evidence hero</strong>", '<a href="https://example.invalid">Evidence hero</a>', exact),
+            ("hidden summary", '<span data-evidence-id=', '<span hidden data-evidence-id=', "exactly one visible collapsed hero summary"),
+            ("summary without the evidence id", '<span data-evidence-id=', "<span data-other=", "exactly one visible collapsed hero summary"),
+            ("duplicated summary", "</span></div>", "</span><span data-evidence-id=\"x\">again</span></div>", "exactly one visible collapsed hero summary"),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, page)
+                self.assert_page_rejected(page.replace(old, new, 1), expected)
+        with self.subTest(mutation="summary moved outside the hero"):
+            start, end = page.index('<div class="page-meta">'), page.index("</div>") + 6
+            self.assert_page_rejected(page[:start] + page[end:] + page[start:end], "exactly one visible collapsed hero summary")
 
     def test_rows_outside_or_hidden_inside_the_hero_do_not_count(self):
         page = render_page(self.hero)

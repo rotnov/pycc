@@ -164,14 +164,15 @@ class HappyPathTests(CollectorHarness):
         self.assertEqual([item["id"] for item in subjects], ["published-revision", "post-merge-ci-gate", "pre-merge-audit"])
         self.assertEqual(subjects[0]["merged_pull_request"], {"number": 1005, "head_sha": HEAD,
                                                               "head_tree": hero["repository"]["tree"],
-                                                              "url": f"{status.REPO}/pull/1005"})
+                                                              "url": f"{status.REPO}/pull/1005",
+                                                              "merged_at": "2026-09-11T01:59:50Z"})
         self.assertEqual(subjects[1]["run_id"], GATE_RUN)
         self.assertEqual(subjects[2]["run_id"], AUDIT_RUN)
         self.assertEqual(subjects[2]["completed_at"], "2026-09-11T01:50:30Z")
         self.assertEqual([row["runner"] for row in hero["environment"]["platforms"]], [row[1] for row in status.TIER1])
         self.assertEqual(set(hero["stable_links"]), {"commit", "tree", "merged_pull_request", "ci_gate_run", "audit_run",
                                                      *(f"job_{row[1]}" for row in status.TIER1)})
-        for forbidden in ("token", "login", "actor", "merged_at"):
+        for forbidden in ("token", "login", "actor", "html_url", "node_id"):
             self.assertNotIn(forbidden, json.dumps(hero))
         status.validate(hero, self.repo, self.repo)
         self.assertTrue(self.manifest.read_text().endswith("}\n"))
@@ -236,6 +237,24 @@ class UnavailableTests(CollectorHarness):
         self.assert_unavailable("pull request payload")
         self.responses[self.api(f"commits/{self.commit}/pulls")] = {"body": [{"merged_at": "x", "merge_commit_sha": self.commit}]}
         self.assert_unavailable("pull request payload")
+
+    def test_malformed_merged_at_is_unavailable(self):
+        for value in ("x", "2026-09-11T01:59:50", None):
+            self.responses[self.api(f"commits/{self.commit}/pulls")]["body"][0]["merged_at"] = value
+            self.assert_unavailable("exactly one merged pull request" if value is None else "non-RFC 3339 merged_at")
+
+    def test_audit_completed_after_the_merge_is_unavailable(self):
+        self.responses[self.api(f"commits/{HEAD}/check-runs?per_page=100&page=1")]["body"]["check_runs"][0] = \
+            check_run("audit", AUDIT_RUN, 103117345163, completed="2026-09-11T01:59:51Z")
+        self.assert_unavailable("after #1005 merged at 2026-09-11T01:59:50Z; a post-merge rerun is not the pre-merge audit")
+        self.responses[self.api(f"commits/{HEAD}/check-runs?per_page=100&page=1")]["body"]["check_runs"][0] = \
+            check_run("audit", AUDIT_RUN, 103117345163, completed="2026-09-11T01:59:50Z")
+        code, _, err = self.run_collector()
+        self.assertEqual(code, 0, err)
+
+    def test_gate_completed_before_the_merge_is_unavailable(self):
+        self.responses[self.api(f"commits/{self.commit}/pulls")]["body"][0]["merged_at"] = "2026-09-11T02:10:47Z"
+        self.assert_unavailable("completed at 2026-09-11T02:10:46Z, before #1005 merged at 2026-09-11T02:10:47Z")
 
     def test_head_equal_to_merge_commit_is_unavailable(self):
         self.responses[self.api(f"commits/{self.commit}/pulls")]["body"][0]["head"]["sha"] = self.commit

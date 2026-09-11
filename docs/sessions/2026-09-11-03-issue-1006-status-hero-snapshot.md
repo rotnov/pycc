@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T06:48:31Z. The record pins the collector's and its suite's
+  2026-09-11T07:16:10Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T06:48:31Z` after the suite changed.
+  `--collected-at 2026-09-11T07:16:10Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1189 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1194 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -164,6 +164,22 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     validating clock and the collector refuses a future override. Cases in
     the synthetic, collector and public-CLI suites, gate row updated,
     snapshot re-collected at `2026-09-11T06:48:31Z`, pins rotated.
+11. External, on PR #1008, three more Codex P2s: a successful `audit`
+    rerun that completed after the pull request merged would have been
+    published as the pre-merge audit because `merged_pull_request()`
+    discarded `merged_at`; the collapsed `page-meta` summary (`ci-gate
+    success · audit success (PR #1005)`) was not checked at all; and
+    `HIDING_RULE` matched `display: none` case-sensitively although CSS
+    declarations are not. Fixed: the record now carries
+    `merged_pull_request.merged_at` (a provider timestamp of the same class
+    as `completed_at`; the sanitization note lists it), the collector refuses
+    an `audit` completed after the merge or a `ci-gate` completed before it,
+    and the validator enforces both orderings offline; `ProofRowParser`
+    keeps the visible element repeating the hero's `data-evidence-id` as a
+    `summary` row that must equal `expected_summary_line` exactly and appear
+    exactly once; `HIDING_RULE` is case-insensitive. Cases in the synthetic,
+    collector and public-CLI suites, gate row and record description
+    updated, snapshot re-collected at `2026-09-11T07:16:10Z`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

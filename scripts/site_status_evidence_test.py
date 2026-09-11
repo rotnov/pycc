@@ -113,6 +113,8 @@ class StatusEvidenceTests(unittest.TestCase):
         def mutate(doc, site, root):
             commit = doc["heroes"][STATUS]["repository"]["commit"]
             self.replace_everywhere(site, commit, "a" * 40)
+            page = site / "status/index.html"
+            page.write_text(page.read_text().replace(f"snapshot of main <code>{commit[:8]}</code>", "snapshot of main <code>aaaaaaaa</code>"))
             doc.clear()
             doc.update(json.loads((site / "evidence-heroes.json").read_text()))
         self.run_case(mutate, "is not an ancestor of HEAD")
@@ -157,6 +159,12 @@ class StatusEvidenceTests(unittest.TestCase):
              "proof row for Post-merge CI gate must read exactly as that subject's own sha, check, conclusion, time and links"),
             ("aarch64-apple-darwin · success</a>", "aarch64-apple-darwin · failure (recorded success)</a>",
              "Tier-1 row for build-test-coverage must appear exactly once, reading exactly"),
+            ("ci-gate success · audit success (PR #1005)", "ci-gate failure · audit failure (PR #1005)",
+             "collapsed hero summary must read exactly as the record's state, subject, conclusions, pull request and capture time"),
+            ("snapshot of main <code>4111208c</code>", "snapshot of main <code>deadbeef</code>",
+             "collapsed hero summary must read exactly as the record's state, subject, conclusions, pull request and capture time"),
+            ('<span\n            data-evidence-id="status-snapshot-v1"', '<span hidden\n            data-evidence-id="status-snapshot-v1"',
+             "exactly one visible collapsed hero summary"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -192,7 +200,7 @@ class StatusEvidenceTests(unittest.TestCase):
 
     def test_stylesheet_hiding_the_proof_is_rejected(self):
         for rule in (".hero-evidence-details { display: none; }", "@media (max-width: 980px) { .page-hero dd { display: none; } }",
-                     "body details li { visibility: hidden; }"):
+                     "body details li { visibility: hidden; }", ".page-hero DD { DISPLAY: NONE; }", ".page-meta span { Visibility: Hidden }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):
                     path = site / "styles.css"

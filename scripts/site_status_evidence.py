@@ -107,7 +107,7 @@ def expected_shape():
         "published-revision": {"id", "label", "sha", "check", "app_id", "conclusion",
                                "completed_at", "run_id", "run_url", "job_url",
                                "tree", "parent_count", "merged_pull_request"},
-        "merged_pull_request": {"number", "head_sha", "head_tree", "url"},
+        "merged_pull_request": {"number", "head_sha", "head_tree", "url", "merged_at"},
         "repository": {"commit", "tree", "url"},
         "attestation": {"collected_at", "collection_method", "sanitized",
                         "milestone_line", "required_contexts"},
@@ -258,6 +258,8 @@ def validate(hero, evidence_root, repo_root):
         fail("status merged_pull_request head_sha must differ from the merge commit")
     if merged["head_tree"] != tree:
         fail("status merged_pull_request head_tree must equal the published tree")
+    if not is_utc_instant(merged["merged_at"]):
+        fail("status merged_pull_request merged_at must be an RFC 3339 UTC timestamp")
     gate = by_id["post-merge-ci-gate"]
     audit = by_id["pre-merge-audit"]
     if gate["sha"] != commit:
@@ -268,6 +270,10 @@ def validate(hero, evidence_root, repo_root):
     check_run_fields(audit, "status pre-merge-audit")
     if audit["run_id"] == gate["run_id"]:
         fail("status pre-merge-audit must be observed in a run distinct from the ci-gate run")
+    if audit["completed_at"] > merged["merged_at"]:
+        fail("status pre-merge-audit must complete no later than the pull request merged; a later rerun is not the pre-merge audit")
+    if gate["completed_at"] < merged["merged_at"]:
+        fail("status post-merge-ci-gate must complete no earlier than the pull request merged")
 
     attestation = hero["attestation"]
     if not is_utc_instant(attestation["collected_at"]):
@@ -378,7 +384,7 @@ def summary(hero):
 
 
 ROW_TAGS = {"dt", "dd", "li"}
-HIDING_RULE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden")
+HIDING_RULE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")
@@ -413,6 +419,11 @@ def compound_hooks(compound):
 class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
     """Also keep every visible ``<dt>``/``<dd>``/``<li>`` row inside the hero as its own text and links.
 
+    The collapsed summary — the visible element inside the hero that repeats
+    the hero's ``data-evidence-id`` — is kept as a ``summary`` row so the
+    conclusions it states are checked exactly, not just the rows behind the
+    ``<details>`` disclosure.
+
     The flattened hero text proves that each literal is visible somewhere; the
     rows prove that a subject's sha, check, conclusion, completion time and run
     and job links sit in the same row as its label, so two subjects' evidence
@@ -440,8 +451,9 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
             self.hero_hooks.update(selector_hooks(tag, dict(attrs)))
         if entry is not None:
             self.ancestry.append(selector_hooks(tag, dict(attrs)))
-        if tag in ROW_TAGS and self.row_depth is None and entry is not None and entry[2] and not entry[1]:
-            self.rows.append([tag, "", []])
+        is_summary = not starts_hero and "data-evidence-id" in dict(attrs)
+        if (tag in ROW_TAGS or is_summary) and self.row_depth is None and entry is not None and entry[2] and not entry[1]:
+            self.rows.append(["summary" if is_summary else tag, "", []])
             self.row_depth = len(self.stack)
         if self.row_depth is not None:
             self.rows[-1][2].extend(self.links[links_before:])
@@ -480,11 +492,13 @@ def hiding_rules(css, parser):
 
 
 def proof_rows(parser):
-    """Bind each ``<dd>`` to the ``<dt>`` label before it; list the ``<li>`` rows in order."""
-    labelled, platforms, label = {}, [], None
+    """Bind each ``<dd>`` to the ``<dt>`` label before it; list the ``<li>`` rows and the collapsed summaries in order."""
+    labelled, platforms, summaries, label = {}, [], [], None
     for tag, text, links in parser.rows:
         text = " ".join(text.split())
-        if tag == "dt":
+        if tag == "summary":
+            summaries.append((text, links))
+        elif tag == "dt":
             label = text
         elif tag == "dd":
             if label is None or label in labelled:
@@ -493,7 +507,23 @@ def proof_rows(parser):
             label = None
         else:
             platforms.append((text, links))
-    return labelled, platforms
+    return labelled, platforms, summaries
+
+
+def expected_summary_line(hero):
+    """The exact visible text of the collapsed hero summary."""
+    subjects = subject_by_id(hero)
+    merged = subjects["published-revision"]["merged_pull_request"]
+    return (f"Evidence hero {hero['state']} · snapshot of main {hero['repository']['commit'][:8]} · "
+            f"ci-gate {subjects['post-merge-ci-gate']['conclusion']} · audit {subjects['pre-merge-audit']['conclusion']} "
+            f"(PR #{merged['number']}) · captured {hero['attestation']['collected_at']}")
+
+
+def check_summary_line(hero, summaries):
+    if len(summaries) != 1:
+        fail("status must render exactly one visible collapsed hero summary carrying the evidence id")
+    if summaries[0] != (expected_summary_line(hero), []):
+        fail("status collapsed hero summary must read exactly as the record's state, subject, conclusions, pull request and capture time")
 
 
 def expected_rows(hero):
@@ -544,6 +574,8 @@ def validate_projection(hero, repo_root, site_dir):
         fail("status locale must be en-US / en_US")
     if parser.hero_count != 1:
         fail("status must render exactly one visible evidence hero")
+    labelled, platforms, summaries = proof_rows(parser)
+    check_summary_line(hero, summaries)
     visible = " ".join("".join(parser.hero_text).split())
     revision = subject_by_id(hero)["published-revision"]
     literals = [hero["state"], hero["limitations"], hero["attestation"]["collected_at"],
@@ -553,7 +585,6 @@ def validate_projection(hero, repo_root, site_dir):
     for literal in literals:
         if " ".join(literal.split()) not in visible:
             fail(f"status visible proof row/limitation missing: {literal}")
-    labelled, platforms = proof_rows(parser)
     check_subject_rows(hero, labelled)
     check_platform_rows(hero, platforms)
     hidden_by = hiding_rules((site_dir / "styles.css").read_text(), parser)

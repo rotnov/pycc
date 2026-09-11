@@ -9,8 +9,10 @@ ambiguous or non-success makes the observation ``unavailable``: the collector
 then reports why, exits non-zero and leaves the manifest untouched.
 
 Sanitization: only the enumerated fields are written.  No tokens, actor logins
-or timestamps other than the provider's ``completed_at`` and the collector's
-own ``collected_at`` reach the record.
+or timestamps other than the provider's ``completed_at`` and ``merged_at`` and
+the collector's own ``collected_at`` reach the record.  ``merged_at`` is what
+proves the ``audit`` observation is the pre-merge one: a rerun that completed
+after the merge is refused, not published.
 
 Usage:
     python3 scripts/collect_status_snapshot.py [--subject SHA]
@@ -98,12 +100,14 @@ def merged_pull_request(sha):
         raise Unavailable(f"expected exactly one merged pull request for {sha}, found {len(merged)}")
     item = merged[0]
     try:
-        number, head_sha = item["number"], item["head"]["sha"]
+        number, head_sha, merged_at = item["number"], item["head"]["sha"], item["merged_at"]
     except (KeyError, TypeError):
         raise Unavailable(f"pull request payload for {sha} is malformed")
     if not isinstance(number, int) or not status.SHA_RE.match(str(head_sha)):
         raise Unavailable(f"pull request payload for {sha} is malformed")
-    return number, head_sha
+    if not status.is_utc_instant(merged_at):
+        raise Unavailable(f"pull request #{number} has a non-RFC 3339 merged_at")
+    return number, head_sha, merged_at
 
 
 def check_run(runs, name, sha):
@@ -142,7 +146,7 @@ def test_names(source):
 def build_record(subject, repo_root, collected_at):
     """Observe one revision and return the status record fields (state included)."""
     commit, parent_count, tree = commit_facts(subject)
-    number, head_sha = merged_pull_request(commit)
+    number, head_sha, merged_at = merged_pull_request(commit)
     head_full, _, head_tree = commit_facts(head_sha)
     if head_full == commit:
         raise Unavailable("merged pull request head equals the merge commit")
@@ -150,6 +154,11 @@ def build_record(subject, repo_root, collected_at):
     head_runs = paginated_check_runs(head_full)
     gate = check_run(main_runs, "ci-gate", commit)
     audit = check_run(head_runs, "audit", head_full)
+    if audit["completed_at"] is not None and audit["completed_at"] > merged_at:
+        raise Unavailable(f"audit on {head_full} completed at {audit['completed_at']}, after #{number} merged at {merged_at}; "
+                          "a post-merge rerun is not the pre-merge audit")
+    if gate["completed_at"] is not None and gate["completed_at"] < merged_at:
+        raise Unavailable(f"ci-gate on {commit} completed at {gate['completed_at']}, before #{number} merged at {merged_at}")
     platforms = []
     for name, runner, architecture in status.TIER1:
         row = check_run(main_runs, name, commit)
@@ -173,7 +182,7 @@ def build_record(subject, repo_root, collected_at):
              "app_id": None, "conclusion": None, "completed_at": None, "run_id": None, "run_url": None,
              "job_url": None, "tree": tree, "parent_count": parent_count,
              "merged_pull_request": {"number": number, "head_sha": head_full, "head_tree": head_tree,
-                                     "url": f"{status.REPO}/pull/{number}"}},
+                                     "url": f"{status.REPO}/pull/{number}", "merged_at": merged_at}},
             {"id": status.SUBJECTS[1][0], "label": status.SUBJECTS[1][1], "sha": commit,
              "check": "ci-gate", "app_id": status.APP_ID, **gate},
             {"id": status.SUBJECTS[2][0], "label": status.SUBJECTS[2][1], "sha": head_full,
