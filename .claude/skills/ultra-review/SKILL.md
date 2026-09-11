@@ -139,8 +139,11 @@ both compared review variants missed the same real bug:
 
 - when a changed line updates a status/summary statement, check whether adjacent
   *unchanged* prose still describes the prior state;
-- check whether files under `docs/sessions/` were updated to checkpoint the merges in
-  this diff range, per that convention's own non-blocking note in `AGENTS.md`.
+- when a merge in this diff range records an incident (a wrong merge decision, a defect
+  that reached `main`, a gate that lied, or a run that lost meaningful time to a process
+  mistake), check whether a `docs/sessions/` file checkpoints it, per
+  [D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5 and that convention's own non-blocking note in `AGENTS.md`; an
+  ordinary merge writes none, and its absence is not a finding.
 
 ### 5. Triage findings into candidate issues
 

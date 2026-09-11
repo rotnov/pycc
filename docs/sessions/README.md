@@ -6,11 +6,16 @@ narrowed by [D-130](../decisions/D-130-decompose-the-session-handoff-log-into-pe
 Distinct from `docs/AGENT_RETROSPECTIVE.md`: this directory is "what state
 is the work in and what's next," not "what went wrong."
 
-Each file is one dated snapshot of the work a **pull request** delivers,
-written inside that pull request so it lands with the merge — at most one per
-merged pull request, narrowed from D-066/D-130's original per-checkpoint trigger by
-[D-192](../decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) —
-named `YYYY-MM-DD-NN-<slug>.md`,
+Each file is one dated snapshot written for an **incident** — a wrong merge
+decision, a defect that reached `main`, a gate that lied, or a run that lost
+meaningful time to a process mistake — inside the pull request that delivers
+the work, so it lands with the merge; an ordinary merged pull request writes
+none. D-066/D-130's original per-checkpoint trigger was narrowed to one per
+merged pull request by
+[D-192](../decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
+and then to incidents only by
+[D-242](../decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md)
+rule 5. Files are named `YYYY-MM-DD-NN-<slug>.md`,
 extending the dated-slug convention already used for
 `docs/superpowers/specs/` and `docs/superpowers/plans/` with a two-digit
 `NN` sequence number. `NN` disambiguates same-day entries by true creation
@@ -22,9 +27,9 @@ for that date (or `01` if it is the first entry of the day). A snapshot
 identifies the exact commit and repository state actually inspected, and
 distinguishes uncommitted or unmerged work from delivered work.
 
-A task that merges nothing writes no file here; a fix round, an intermediate
+A task without an incident writes no file here; a fix round, an intermediate
 CI result, or a lesson learned belongs in `docs/AGENT_RETROSPECTIVE.md`
-instead.
+instead, under its unchanged bar.
 
 This file is the only static document in the directory — a purpose
 statement, not an index. It is never appended to. To resume: list only the

@@ -50,8 +50,9 @@ Under a standing autopilot directive from `/issue-select`'s own staleness screen
 evidence-gated closure authority extends to any other issue that screen identifies as provably
 stale in the same pass — not just the named target issue.
 
-When the issue's own fix requires this repository's established two-PR CI-digest
-stage-then-activate pattern (see `docs/decisions/D-080-the-conformance-oracle-s-ci-setup-runs-after-the.md`'s Staging note),
+When the issue's own fix must first teach the base-owned `audit` something new (see
+`docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md` rule 2,
+which narrows the D-080 Staging note),
 a second, stage-only pull request that does not itself carry `Fixes #N` is also authorized — see
 step 4's detection branches. The same applies, without a fixed pull-request count, to a D-185
 oversized-file tracking issue (`AGENTS.md`'s "Keep source files decomposable" carve-out, see
@@ -155,6 +156,11 @@ since moved in ways that matter — files the plan touches, gates it cites, open
 it reasons about. A plan whose relevant ground has shifted is refreshed by invoking
 `/issue-to-plan` again, exactly as below, not followed on faith.
 
+A plan published on the *parent* issue for a homogeneous series (several `str` methods,
+several stdlib registrations) is the current plan for every item in that series
+([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 6): cite it and skip the invocation below; the adversarial loop stays
+for a new subsystem, a cross-crate seam, or a CI trust boundary.
+
 If no plan exists, or an existing one needs refreshing per above, invoke `/issue-to-plan` inside
 a freshly-dispatched `Agent` — the same
 context-isolation reasoning as step 4's dispatched implementation (see
@@ -204,9 +210,11 @@ as the retry discipline elsewhere in this workflow (step 8's rejected-merge retr
 applies once, not unboundedly.
 
 Follow the plan. Write tests for success, failure, and edge paths alongside the behavior —
-the coverage gate is a merge invariant, not a target. Update every affected document in the
-same commits as the code. Before entering review, run the full local gate set: the coverage
-gate with its preparatory builds exactly as CI performs them, the `scripts/` unittest suite,
+100% line coverage of the Rust lines the diff adds or modifies is a merge invariant, not a
+target ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 1; total coverage is reported, never enforced). Update every
+affected document in the same commits as the code. Before entering review, run the full local
+gate set: the coverage gate with its preparatory builds exactly as CI performs them (the
+command line `AGENTS.md`'s "Testing and the coverage gate" section names), the `scripts/` unittest suite,
 the agent-asset and agent-policy validators, and clippy with warnings denied. When the diff
 touches any document `site/llms-txt-context-manifest.json` lists as non-optional (today
 `README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`, `docs/PYTHON_STANDARDS.md`,
@@ -223,39 +231,41 @@ pass/fail decision hangs on it, and read the numbers in the output rather than t
 echoed code alone — this bit twice in one session, once nearly shipping a red coverage gate
 as green.
 
-If the diff touches a workflow file under `.github/workflows/` **and** requires registering a
-new digest in one of `scripts/check_roadmap_evidence.rb`'s reviewed allowlist constants
-(`TRUSTED_COVERAGE_STEPS`, `REVIEWED_PERF_CI_WORKFLOW_SHA256S`, or similar), split the work
-into two sequential pull requests rather than one, matching this repository's own established
-D-080/D-048/D-051 precedent exactly — that precedent checks in an inert byte-exact fixture, it
-does not compute a digest against ephemeral local state:
+A change to `.github/workflows/ci.yml` that keeps the named properties
+`scripts/check_roadmap_evidence.rb` audits — a coverage-job preparatory build, gate wording,
+setup-step order — ships in **one** pull request ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 2). Split the work into
+two sequential pull requests only when the base-owned `audit` must learn something first: a
+new roadmap-evidence identifier, a new trusted setup command, or a new required gate line.
+`audit` runs the *base* revision of the checker against the *head* revision of the workflow,
+so the checker must know the new shape before any workflow uses it:
 
-- **Stage PR:** assemble the target `ci.yml`'s exact final bytes and check them in as an inert
-  fixture under `tests/fixtures/` (matching the naming convention nearby staging fixtures use,
-  e.g. `tests/fixtures/d80-conformance-oracle-ci.yml`); bind that fixture's SHA-256 in
-  `scripts/check_roadmap_evidence.rb`'s allowlist constant, add or update its structural
-  acceptance test to reference the checked-in fixture (not a re-derived digest), and touch no
-  other file — no `ci.yml` change, and specifically no `Fixes #N` in the body, since merging the
-  stage PR must not close the issue before the activation PR delivers the real fix. Because it
-  never carries `Fixes #N`, the stage PR is exempt from step 6's `Fixes #N` requirement, and
-  step 8's `Fixes #N` merge-confirmation step does not apply to it either — every other part of
-  steps 5 through 8 (review loop, monitoring, merge preconditions) still applies to the stage PR
-  unchanged. Tag its body instead: "Stage 1/2 for #N — see issue-implement's staged CI-digest
-  pattern."
+- **Stage PR:** teach the checker — register the identifier, command, or line in
+  `scripts/check_roadmap_evidence.rb`, add the accepting test and the mutation that rejects
+  its absence in `scripts/test_check_roadmap_evidence.rb`, and update the policy documents
+  that describe the new shape — but leave `ci.yml` and `docs/ROADMAP.md` unchanged, and
+  specifically put no `Fixes #N` in the body, since merging the stage PR must not close the
+  issue before the activation PR delivers the real fix. Because it never carries `Fixes #N`,
+  the stage PR is exempt from step 6's `Fixes #N` requirement, and step 8's `Fixes #N`
+  merge-confirmation step does not apply to it either — every other part of steps 5 through 8
+  (review loop, monitoring, merge preconditions) still applies to the stage PR unchanged. Tag
+  its body instead: "Stage 1/2 for #N — see issue-implement's checker-first two-PR rule."
 - **Activation PR:** opened only after the stage PR's commit is confirmed present on the default
-  branch. Replaces `ci.yml` byte-for-byte from the now-checked-in fixture and carries the real
-  `Fixes #N`; the activation commit must byte-identically match the fixture the stage PR already
-  landed, or the pattern is broken. Runs the normal steps 4-8 unchanged. **When this pattern is
-  triggered by an umbrella checklist item** rather than by an ordinary issue — a CI-governance
+  branch. Changes `ci.yml` (and `docs/ROADMAP.md`, when the stage registered an evidence
+  identifier) to the shape the stage PR taught the checker, and carries the real `Fixes #N`.
+  Before pushing, prove the base-owned audit will accept it: `git show
+  origin/main:scripts/check_roadmap_evidence.rb > "$S/base_checker.rb" && ruby
+  "$S/base_checker.rb" .` must exit 0. Runs the normal steps 4-8 unchanged. **When this
+  pattern is triggered by an umbrella checklist item** rather than by an ordinary issue — a CI-governance
   item is exactly the kind of work that registers a digest in a workflow file — the activation PR
   carries the D-192 umbrella body tag in place of `Fixes #N`, since closing the umbrella is never
   correct, and the D-192 tick-off comment still applies after it merges. In that umbrella-sourced
   case, and only there, both pull requests report `totalCount: 0` in step 8; the ordinary
   activation PR still reports `totalCount: 1`.
 
-The stage PR's step 5 review explicitly verifies the fixture-to-allowlisted-digest binding is
-correct and that the fixture is byte-identical to what the activation PR intends to ship, and
-treats any ambiguity in that verification as a stop condition rather than a best-effort guess.
+The stage PR's step 5 review explicitly verifies that the checker's new acceptance is bound
+by a mutation test (the property's absence is rejected, not just its presence accepted) and
+that the activation PR's intended `ci.yml` shape is what the stage PR taught, and treats any
+ambiguity in that verification as a stop condition rather than a best-effort guess.
 
 **Separately, and independently of whether the digest-allowlist case above applies:** check
 whether the diff renames, deletes, or moves any path listed in
@@ -270,7 +280,7 @@ stage-then-activate mechanism (PR #570, merged 2026-08-17), removing
 reads the manifest at all; the base-owned checker now validates named permissions, Action pins,
 checkout credentials, trusted-event guards, D-171 routing, Tier-1 coverage, and aggregate-gate
 properties within a single pull request. Do not split a change into stage and activation pull
-requests for a manifest-listed path. The D-080 CI-digest pattern above is a separate,
+requests for a manifest-listed path. The checker-first two-PR rule above is a separate,
 still-live mechanism and its own two-PR shape is unaffected by this.
 
 **Separately, when the named issue is a D-185 oversized-file tracking issue** (`AGENTS.md`'s
@@ -282,7 +292,7 @@ rather than the fixed two-PR stage/activate shape above.
 
 - **Any pull request that extracts one or more cohesion-driven submodules but leaves the
   tracked file over the threshold** does not carry `Fixes #N` — merging it must not close the
-  issue while work remains, the same reasoning the D-080 stage PR above already applies.
+  issue while work remains, the same reasoning the D-242 stage PR above already applies.
   Tag its body instead: "Partial decomposition for #N — see issue-implement's D-185
   narrowing-PR pattern; #N stays open." It is exempt from step 6's `Fixes #N`
   requirement and step 8's `Fixes #N` merge-confirmation step; every other part of steps 5
@@ -325,7 +335,7 @@ the umbrella issue is a standing container, not a task that ever completes, so i
 by a delivery.
 
 - **The pull request delivering one checklist item** does not carry `Fixes #N` — merging it must
-  not close the umbrella, the same reasoning the D-080 stage PR and the D-185 narrowing PR above
+  not close the umbrella, the same reasoning the D-242 stage PR and the D-185 narrowing PR above
   already apply. Tag its body instead: "Umbrella checklist item for #N — see issue-implement's
   D-192 umbrella branch; #N stays open." It is exempt from step 6's `Fixes #N` requirement and
   step 8's `Fixes #N` merge-confirmation step; every other part of steps 5 through 8 (review loop,
@@ -350,7 +360,7 @@ Each umbrella-checklist PR's step 5 review explicitly verifies that the pull req
 exactly the checklist item claimed in its body tag and no adjacent umbrella scope — an item
 silently widened into neighbouring checklist entries defeats both the one-item scoping above and
 the quota's measure — and treats any ambiguity in that verification as a stop condition rather
-than a best-effort guess, the same discipline the D-080 stage PR and the D-185 narrowing PR above
+than a best-effort guess, the same discipline the D-242 stage PR and the D-185 narrowing PR above
 already require for their own binding checks.
 
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
@@ -379,9 +389,9 @@ with the orchestrator's context, and the reviewer reads the plan itself in its f
 (it has Read and Grep, not `gh` — anything it needs from the issue must live in the plan or
 be quoted in the brief). A dispatch missing the plan pointer is an invalid round —
 re-dispatch with it instead of reviewing blind. The brief also states what this round must
-*not* expect: the deliverables step 6 schedules after the loop (the `docs/sessions/` file,
-the pull-request body) and the `.harden/findings/` pile (which cannot exist before the
-first round's verdicts) are absent from the range by design, and gate results, GitHub
+*not* expect: the pull-request body (step 6 writes it after the loop), and the
+`docs/sessions/` file and the `.harden/findings/` pile (absent by design unless an incident
+occurred — [D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5) are absent from the range by design, and gate results, GitHub
 state, and any claim that needs `git` to check (a pure-move commit's behaviour-neutrality, a
 rename's line-set identity, a commit's ancestry) are verified by this session, not by the
 reviewer — their absence, or the reviewer's own inability to verify them with `Read` and
@@ -410,7 +420,9 @@ fixes whenever the previous findings may no longer describe the diff. The loop e
 round reports no actionable findings. The same finding surviving two genuine fix attempts is
 a stop condition, not a reason for a third identical attempt.
 
-As each round's verdicts land, append every finding — fixed and refuted alike — to
+A findings pile is written only for an incident — a wrong merge decision, a defect that reached `main`, a gate that lied, or a run that lost meaningful time to a process mistake
+([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5); an ordinary review loop writes none. When an incident occurred,
+as each round's verdicts land, append every finding — fixed and refuted alike — to
 `.harden/findings/issue-<N>.jsonl`, one JSON line per finding per round, append-only
 (schema and rationale: `.claude/skills/harden/references/batch.md`). This is collection
 only and must not interrupt the loop: refuted findings carry their refutation in `note`,
@@ -434,9 +446,11 @@ comment and pin each with its own test before calling the round done.
 
 ### 5.5 Harden batch
 
-However step 5's review loop ended — a clean round with no actionable findings, or its
-stop condition — run `/harden batch .harden/findings/issue-<N>.jsonl` before opening the
-pull request: one pass over the pile. Findings cluster into root-cause classes, recurrence
+This step runs only when an incident occurred and step 5 therefore wrote a findings pile
+([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5); for an ordinary task it is a no-op and the pull request opens
+directly. When it applies — however step 5's review loop ended, a clean round with no
+actionable findings or its stop condition — run `/harden batch .harden/findings/issue-<N>.jsonl`
+before opening the pull request: one pass over the pile. Findings cluster into root-cause classes, recurrence
 is counted inside the batch and against `.harden/incidents/`, and only classes that clear
 the threshold earn an artefact (expected product is promotions to cheaper gates, not new
 prose; singletons seed counters). Artefacts and journal entries it lands are commits on
@@ -459,13 +473,14 @@ pull request: `Fixes #N` in the body — or, for a pull request exempted by step
 or D-192 branch, that branch's own body tag in place of `Fixes #N` — a summary of what was built, any plan deviations with
 their reasons, and the test evidence. Write the PR body to a temporary file and use
 `gh pr create --body-file <path>` — never inline a heredoc in `--body`, which fails on
-bodies containing apostrophes or backticks. Add **at most one** new dated file under
-`docs/sessions/` within this pull request — D-066/D-130 as narrowed by
-[D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md) allow one
-session file per merged pull request, not one per checkpoint, so it is written here (landing with
-the merge) and never supplemented by a second file for a later fix round; a fix round, an
-intermediate CI result, or a lesson learned goes to `docs/AGENT_RETROSPECTIVE.md` instead.
-Re-fetch immediately before that commit so every referenced remote state is current.
+bodies containing apostrophes or backticks. Add a new dated file under `docs/sessions/` within this pull request **only if
+an incident — a wrong merge decision, a defect that reached `main`, a gate that lied, or a run that lost meaningful time to a process mistake
+([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5, narrowing D-066/D-130/D-192): an ordinary pull request adds none,
+and an incident adds exactly one, written here (landing with the merge) and never
+supplemented by a second file for a later fix round; a fix round, an intermediate CI result,
+or a lesson learned goes to `docs/AGENT_RETROSPECTIVE.md` instead, under its unchanged bar.
+When a session file is written, re-fetch immediately before that commit so every referenced
+remote state is current.
 
 ### 7. Monitor (D-078)
 
@@ -606,7 +621,8 @@ the rest of the pool):
 - the delegated `/issue-to-plan` call is stopped by its own stop condition;
 - the step 3 dispatch of `/issue-to-plan` itself fails to start, hangs, or returns no usable
   report twice in a row (the mechanical dispatch failure, distinct from the case above);
-- (when executing the staged CI-digest pattern) the digest computation is ambiguous;
+- (when executing the checker-first two-PR rule) whether the base-owned `audit` already
+  knows the target `ci.yml` shape is ambiguous;
 - (when executing the D-185 narrowing-PR pattern) whether an extraction is genuinely
   cohesion-driven, with no unrelated logic or behavior rewritten, is ambiguous;
 - (when executing the D-192 umbrella-checklist pattern) whether the pull request delivers exactly
