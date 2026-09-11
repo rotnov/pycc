@@ -222,7 +222,8 @@ def validate(hero, evidence_root, repo_root):
             fail(f"status published-revision {field} must be null; a revision is not a check")
     if revision["sha"] != commit or revision["tree"] != tree:
         fail("status published-revision must be the repository commit and tree")
-    if revision["parent_count"] != 1:
+    if not isinstance(revision["parent_count"], int) or isinstance(revision["parent_count"], bool) \
+            or revision["parent_count"] != 1:
         fail("status published-revision must record exactly one parent")
     merged = revision["merged_pull_request"]
     require_exact_fields(merged, shape["merged_pull_request"], "status merged_pull_request")

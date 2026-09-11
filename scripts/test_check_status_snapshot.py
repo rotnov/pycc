@@ -135,12 +135,10 @@ class SyntheticRepository(unittest.TestCase):
         mutate(hero)
         return hero
 
-    def assert_rejected(self, mutate, fragment, verify_git=False):
+    def assert_rejected(self, mutate, fragment):
         hero = self.mutated(mutate)
         with self.assertRaises(SystemExit) as caught:
             status.validate(hero, self.evidence, self.repo)
-            if verify_git:
-                status.verify_git(hero, self.repo)
         self.assertIn(fragment, str(caught.exception))
 
     def run_cli(self, argv):
@@ -191,6 +189,11 @@ class RecordInvariantTests(SyntheticRepository):
 
     def test_two_parent_subject_is_rejected(self):
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][0].__setitem__("parent_count", 2), "exactly one parent")
+
+    def test_parent_count_that_only_compares_equal_to_one_is_rejected(self):
+        for value in (True, 1.0, "1"):
+            with self.subTest(value=value):
+                self.assert_rejected(lambda hero, value=value: hero["snapshot"]["subjects"][0].__setitem__("parent_count", value), "exactly one parent")
 
     def test_incomplete_collection_is_rejected(self):
         self.assert_rejected(lambda hero: hero["environment"]["platforms"].pop(), "five Tier-1 jobs")
