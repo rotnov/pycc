@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import unittest
 
-from test_site_execution_wiring import ExecutionEvidenceWiringTests
+import test_site_execution_wiring as execution_wiring
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +28,7 @@ STATUS_INPUTS = (
 
 
 class StatusEvidenceWiringTests(unittest.TestCase):
-    helper = ExecutionEvidenceWiringTests()
+    helper = execution_wiring.ExecutionEvidenceWiringTests()
 
     def setUp(self):
         self.shell = (ROOT / "scripts/test-check-site.sh").read_text()
