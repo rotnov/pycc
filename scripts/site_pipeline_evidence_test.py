@@ -32,11 +32,19 @@ ARCHITECTURE = 4
 
 # Fields whose absence is caught by a check that names the rule rather than the
 # field: the hero-order check sees a `None` page id, and the stable-links check
-# compares the whole closed set at once.
+# compares the whole closed set at once.  Every one of `stable_links`' keys
+# belongs here, including the three the rejection's own prose happens to name --
+# an assertion on "commit" would otherwise pass against a message that says
+# "commit" only because it lists all five keys, proving nothing about which one
+# was deleted.
+STABLE_LINKS = "stable_links must be exactly the immutable commit"
 FIELD_REJECTIONS = {
     ("page_id",): "hero page inventory/order must be exactly",
-    ("stable_links", "owner"): "stable_links must be exactly the immutable commit",
-    ("stable_links", "part"): "stable_links must be exactly the immutable commit",
+    ("stable_links", "owner"): STABLE_LINKS,
+    ("stable_links", "part"): STABLE_LINKS,
+    ("stable_links", "commit"): STABLE_LINKS,
+    ("stable_links", "tree"): STABLE_LINKS,
+    ("stable_links", "fixture"): STABLE_LINKS,
 }
 
 

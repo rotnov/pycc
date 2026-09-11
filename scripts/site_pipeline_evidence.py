@@ -294,9 +294,10 @@ def validate(hero, evidence_root, repo_root):
         if not isinstance(recorded, dict) or (recorded.get("path"), recorded.get("sha256"), recorded.get("bytes")) != (
                 item["path"], item["sha256"], item["bytes"]):
             fail(f"architecture stage {identity} differs from the checked-in trace record")
-    by_id = {item["id"]: item for item in stages}
-    if by_id["type-check"]["sha256"] != by_id["hir"]["sha256"]:
-        fail("architecture type-check stage is an identity claim and must share the HIR stage's SHA-256")
+    # The type-check stage's identity claim needs no comparison of its own:
+    # `STAGES` pins it to the HIR stage's own artifact path, and the loop above
+    # has just verified both recorded digests against that one file's bytes, so
+    # a drifted type-check digest fails there, naming the file it differs from.
 
     attestation = hero["attestation"]
     if not is_utc_instant(attestation["collected_at"]):
