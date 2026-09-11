@@ -357,6 +357,118 @@ class GitObjectTests(SyntheticRepository):
         self.assertIn("tree differs from the recorded tree", str(caught.exception))
 
 
+def render_page(hero):
+    """A minimal status page whose hero carries one visible row per subject and per Tier-1 platform."""
+    subjects = subject_by_id = {item["id"]: item for item in hero["snapshot"]["subjects"]}
+    revision = subject_by_id["published-revision"]
+    merged = revision["merged_pull_request"]
+    links = hero["stable_links"]
+    rows = [f'<dt>{revision["label"]}</dt><dd><a href="{links["commit"]}">{revision["sha"]}</a> · '
+            f'<a href="{links["tree"]}">tree</a> {hero["repository"]["tree"]} · '
+            f'<a href="{merged["url"]}">#{merged["number"]}</a> head {merged["head_sha"]}</dd>']
+    for item in (subjects["post-merge-ci-gate"], subjects["pre-merge-audit"]):
+        rows.append(f'<dt>{item["label"]}</dt><dd>{item["check"]} on {item["sha"]} · App {status.APP_ID} · '
+                    f'{item["conclusion"]} · completed {item["completed_at"]} · '
+                    f'<a href="{item["run_url"]}">run</a> · <a href="{item["job_url"]}">job</a></dd>')
+    items = [f'<li><a href="{row["job_url"]}">{row["check_run_name"]} · {row["runner"]} · {row["architecture"]} · '
+             f'{row["conclusion"]}</a></li>' for row in hero["environment"]["platforms"]]
+    return ('<html lang="en-US"><head><meta property="og:locale" content="en_US"></head><body>'
+            f'<header data-evidence-role="hero">{hero["state"]} · captured {hero["attestation"]["collected_at"]}'
+            f'<dl>{"".join(rows)}<dt>Tier-1 jobs</dt><dd>in the ci-gate run:</dd></dl><ul>{"".join(items)}</ul>'
+            f'<p>{hero["attestation"]["milestone_line"]} {hero["limitations"]}</p></header></body></html>\n')
+
+
+class ProjectionTests(SyntheticRepository):
+    def write_site(self, hero, page=None):
+        site = self.root / "site"
+        (site / "status").mkdir(parents=True, exist_ok=True)
+        (site / "status" / "index.html").write_text(page or render_page(hero))
+        for name in ("index.html.md", "llms.txt"):
+            (site / name).write_text(f"# central\n\n{status.summary(hero)}\n")
+        return site
+
+    def swap(self, page, first, second):
+        self.assertIn(first, page)
+        self.assertIn(second, page)
+        return page.replace(first, "\0", 1).replace(second, first, 1).replace("\0", second, 1)
+
+    def assert_page_rejected(self, page, fragment):
+        site = self.write_site(self.hero, page)
+        with self.assertRaises(SystemExit) as caught:
+            status.validate_projection(self.hero, self.repo, site)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_rendered_rows_bound_to_their_subjects_are_accepted(self):
+        site = self.write_site(self.hero)
+        self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
+
+    def test_swapped_subject_evidence_is_rejected(self):
+        page = render_page(self.hero)
+        gate, audit = [subject for subject in self.hero["snapshot"]["subjects"][1:]]
+        rejected = "must carry that subject's own sha, check, conclusion, time and links"
+        for name, first, second in (
+            ("run links", f'href="{gate["run_url"]}"', f'href="{audit["run_url"]}"'),
+            ("job links", f'href="{gate["job_url"]}"', f'href="{audit["job_url"]}"'),
+            ("shas", f'on {gate["sha"]}', f'on {audit["sha"]}'),
+            ("completion times", f'completed {gate["completed_at"]}', f'completed {audit["completed_at"]}'),
+            ("labels", f'<dt>{gate["label"]}</dt>', f'<dt>{audit["label"]}</dt>'),
+            ("checks", f'<dd>{gate["check"]} on', f'<dd>{audit["check"]} on'),
+        ):
+            with self.subTest(swapped=name):
+                self.assert_page_rejected(self.swap(page, first, second), rejected)
+        with self.subTest(swapped="published revision links"):
+            first, second = self.hero["stable_links"]["commit"], self.hero["stable_links"]["tree"]
+            self.assert_page_rejected(self.swap(page, f'href="{first}"', f'href="{second}"'), rejected)
+        with self.subTest(missing="audit row"):
+            self.assert_page_rejected(page.replace(f'<dt>{audit["label"]}</dt>', "<dt>Audit</dt>", 1),
+                                      f"proof row missing for {audit['label']}")
+
+    def test_platform_rows_are_bound_to_their_jobs(self):
+        page = render_page(self.hero)
+        first, second = self.hero["environment"]["platforms"][:2]
+        with self.subTest(swapped="job links"):
+            self.assert_page_rejected(self.swap(page, f'href="{first["job_url"]}"', f'href="{second["job_url"]}"'),
+                                      "must carry its own runner, target, conclusion and job link")
+        with self.subTest(swapped="runner and target"):
+            self.assert_page_rejected(self.swap(page, f'· {first["runner"]} ·', f'· {second["runner"]} ·'),
+                                      "must carry its own runner, target, conclusion and job link")
+        with self.subTest(mutation="dropped row"):
+            start = page.index("<li>")
+            self.assert_page_rejected(page[:start] + page[page.index("</li>", start) + 5:],
+                                      "exactly one visible row per Tier-1 platform")
+        with self.subTest(mutation="duplicated row"):
+            start = page.index("<li>")
+            end = page.index("</li>", start) + 5
+            self.assert_page_rejected(page[:end] + page[start:end] + page[end:], "exactly one visible row per Tier-1 platform")
+        with self.subTest(mutation="duplicated row in place of another"):
+            start = page.index("<li>")
+            end = page.index("</li>", start) + 5
+            second_start = page.index("<li>", end)
+            second_end = page.index("</li>", second_start) + 5
+            self.assert_page_rejected(page[:second_start] + page[start:end] + page[second_end:],
+                                      f"Tier-1 row for {first['check_run_name']} must appear exactly once")
+
+    def test_rows_outside_or_hidden_inside_the_hero_do_not_count(self):
+        page = render_page(self.hero)
+        gate = self.hero["snapshot"]["subjects"][1]
+        with self.subTest(mutation="row moved outside the hero"):
+            row = f'<dt>{gate["label"]}</dt>'
+            start = page.index(row)
+            end = page.index("</dd>", start) + 5
+            moved = page[:start] + page[end:] + f"<dl>{page[start:end]}</dl>"
+            self.assert_page_rejected(moved, f"proof row missing for {gate['label']}")
+        with self.subTest(mutation="hidden row"):
+            hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
+            self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
+        with self.subTest(mutation="row without a label"):
+            self.assert_page_rejected(page.replace(f'<dt>{gate["label"]}</dt>', "", 1),
+                                      "must pair one visible label with one row each")
+        with self.subTest(mutation="label reused"):
+            audit = self.hero["snapshot"]["subjects"][2]
+            self.assert_page_rejected(page.replace(f'<dt>{audit["label"]}</dt>', f'<dt>{gate["label"]}</dt>', 1),
+                                      "must pair one visible label with one row each")
+
+
 class CurrencyTests(SyntheticRepository):
     def advance(self, merges):
         for _ in range(merges):

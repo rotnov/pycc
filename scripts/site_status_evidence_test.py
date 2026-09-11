@@ -151,7 +151,8 @@ class StatusEvidenceTests(unittest.TestCase):
              "visible proof row/limitation missing"),
             ("not release readiness.", "release readiness.", "visible proof row/limitation missing"),
             ("https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163",
-             "https://github.com/rotnov/pycc/actions/workflows/audit.yml", "immutable commit/tree/pull/run/job links missing"),
+             "https://github.com/rotnov/pycc/actions/workflows/audit.yml",
+             "proof row for Pre-merge policy audit must carry that subject's own sha, check, conclusion, time and links"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -160,6 +161,29 @@ class StatusEvidenceTests(unittest.TestCase):
                     source = page.read_text()
                     self.assertIn(old, source)
                     page.write_text(source.replace(old, new, 1))
+                self.run_case(mutate, expected)
+
+    def test_swapped_proof_rows_are_rejected(self):
+        gate_run = "https://github.com/rotnov/pycc/actions/runs/34552872912"
+        audit_run = "https://github.com/rotnov/pycc/actions/runs/34552229293"
+        subject = "proof row for Post-merge CI gate must carry that subject's own sha, check, conclusion, time and links"
+        for name, first, second, expected in (
+            ("run links", f'href="{gate_run}"', f'href="{audit_run}"', subject),
+            ("job links", f'href="{gate_run}/job/103121414776"', f'href="{audit_run}/job/103117345163"', subject),
+            ("subject shas", "on <code>4111208c0910c0a7588408a6ac7d2b2bad20592c</code>",
+             "on <code>984eb6f27ca9f4809fa1277e12f8c83283bef1f6</code>", subject),
+            ("completion times", "completed 2026-09-11T02:10:46Z", "completed 2026-09-11T01:50:30Z", subject),
+            ("subject labels", "<dt>Post-merge CI gate</dt>", "<dt>Pre-merge policy audit</dt>", subject),
+            ("platform job links", f'href="{gate_run}/job/103119276938"', f'href="{gate_run}/job/103119277030"',
+             "Tier-1 row for build-test-coverage must carry its own runner, target, conclusion and job link"),
+        ):
+            with self.subTest(swapped=name):
+                def mutate(doc, site, root, first=first, second=second):
+                    page = site / "status/index.html"
+                    source = page.read_text()
+                    self.assertIn(first, source)
+                    self.assertIn(second, source)
+                    page.write_text(source.replace(first, "\0", 1).replace(second, first, 1).replace("\0", second, 1))
                 self.run_case(mutate, expected)
 
     def test_central_summaries_cannot_drift(self):

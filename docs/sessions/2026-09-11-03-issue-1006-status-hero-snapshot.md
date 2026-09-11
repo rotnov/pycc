@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T06:00:33Z. The record pins the collector's and its suite's
+  2026-09-11T06:25:14Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T06:00:33Z` after the suite changed.
+  `--collected-at 2026-09-11T06:25:14Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1182 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1186 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -138,6 +138,18 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
    ci-gate `run_id`, and the audit job joins the distinct-job set (seven
    URLs); cases added, gate row updated, snapshot re-collected at
    `2026-09-11T06:00:33Z`, pins rotated.
+9. External, on PR #1008, a fourth Codex P2: the projection check searched
+   one flattened hero string and compared links as an unordered set, so
+   swapping the `ci-gate` and `audit` run links, shas or completion times
+   between the two visible rows still passed. Fixed: `ProofRowParser` keeps
+   each visible `<dt>`/`<dd>`/`<li>` row inside the hero with its own text
+   and links, and the validator binds every subject's full tuple (sha,
+   check, App id, conclusion, completion time, run and job links) to the one
+   row carrying its label, and every Tier-1 platform's runner, target and
+   conclusion to the one row linking its job; swap, drop, duplicate, hidden
+   and out-of-hero cases in the synthetic suite, swap cases in the public-CLI
+   suite, gate row updated, snapshot re-collected at `2026-09-11T06:25:14Z`,
+   pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

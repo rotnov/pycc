@@ -370,9 +370,94 @@ def summary(hero):
     )
 
 
+ROW_TAGS = {"dt", "dd", "li"}
+
+
+class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
+    """Also keep every visible ``<dt>``/``<dd>``/``<li>`` row inside the hero as its own text and links.
+
+    The flattened hero text proves that each literal is visible somewhere; the
+    rows prove that a subject's sha, check, conclusion, completion time and run
+    and job links sit in the same row as its label, so two subjects' evidence
+    cannot be swapped without the gate noticing.
+    """
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.row_depth = None
+
+    def handle_starttag(self, tag, attrs):
+        links_before = len(self.links)
+        super().handle_starttag(tag, attrs)
+        entry = self.stack[-1] if self.stack and tag not in self.VOID else None
+        if tag in ROW_TAGS and self.row_depth is None and entry is not None and entry[2] and not entry[1]:
+            self.rows.append([tag, "", []])
+            self.row_depth = len(self.stack)
+        if self.row_depth is not None:
+            self.rows[-1][2].extend(self.links[links_before:])
+
+    def handle_endtag(self, tag):
+        super().handle_endtag(tag)
+        if self.row_depth is not None and len(self.stack) < self.row_depth:
+            self.row_depth = None
+
+    def handle_data(self, text):
+        super().handle_data(text)
+        if self.row_depth is not None and self.stack and not self.stack[-1][1]:
+            self.rows[-1][1] += text
+
+
+def proof_rows(parser):
+    """Bind each ``<dd>`` to the ``<dt>`` label before it; list the ``<li>`` rows in order."""
+    labelled, platforms, label = {}, [], None
+    for tag, text, links in parser.rows:
+        text = " ".join(text.split())
+        if tag == "dt":
+            label = text
+        elif tag == "dd":
+            if label is None or label in labelled:
+                fail("status proof rows must pair one visible label with one row each")
+            labelled[label] = (text, links)
+            label = None
+        else:
+            platforms.append((text, links))
+    return labelled, platforms
+
+
+def check_subject_rows(hero, labelled):
+    revision = subject_by_id(hero)["published-revision"]
+    merged = revision["merged_pull_request"]
+    expected = {
+        revision["label"]: ([revision["sha"], hero["repository"]["tree"], f"#{merged['number']}", merged["head_sha"]],
+                            [hero["stable_links"]["commit"], hero["stable_links"]["tree"], merged["url"]]),
+    }
+    for item in hero["snapshot"]["subjects"][1:]:
+        expected[item["label"]] = ([item["check"], item["sha"], str(APP_ID), item["conclusion"], item["completed_at"]],
+                                   [item["run_url"], item["job_url"]])
+    for label, (literals, links) in expected.items():
+        if label not in labelled:
+            fail(f"status proof row missing for {label}")
+        text, row_links = labelled[label]
+        if any(literal not in text for literal in literals) or row_links != links:
+            fail(f"status proof row for {label} must carry that subject's own sha, check, conclusion, time and links")
+
+
+def check_platform_rows(hero, platforms):
+    rows = hero["environment"]["platforms"]
+    if len(platforms) != len(rows):
+        fail("status must render exactly one visible row per Tier-1 platform")
+    for row in rows:
+        matches = [(text, links) for text, links in platforms if row["check_run_name"] in text]
+        if len(matches) != 1:
+            fail(f"status Tier-1 row for {row['check_run_name']} must appear exactly once")
+        text, links = matches[0]
+        if any(literal not in text for literal in (row["runner"], row["architecture"], row["conclusion"])) or links != [row["job_url"]]:
+            fail(f"status Tier-1 row for {row['check_run_name']} must carry its own runner, target, conclusion and job link")
+
+
 def validate_projection(hero, repo_root, site_dir):
-    """Visible proof rows, immutable links, locale and the shared summaries."""
-    parser = site_execution_evidence.VisibleExecutionParser()
+    """Visible proof rows bound to their subjects, immutable links, locale and the shared summaries."""
+    parser = ProofRowParser()
     parser.feed((site_dir / hero["page_path"].removeprefix("site/")).read_text())
     if parser.language != "en-US" or parser.locales != ["en_US"]:
         fail("status locale must be en-US / en_US")
@@ -384,19 +469,12 @@ def validate_projection(hero, repo_root, site_dir):
                 hero["attestation"]["milestone_line"], str(APP_ID),
                 f"#{revision['merged_pull_request']['number']}",
                 revision["merged_pull_request"]["head_sha"], hero["repository"]["tree"]]
-    for item in hero["snapshot"]["subjects"]:
-        literals.extend([item["label"], item["sha"]])
-        if item["check"] is not None:
-            literals.extend([item["check"], item["conclusion"], item["completed_at"]])
-    for row in hero["environment"]["platforms"]:
-        literals.extend([row["check_run_name"], row["runner"], row["architecture"], row["conclusion"]])
     for literal in literals:
         if " ".join(literal.split()) not in visible:
             fail(f"status visible proof row/limitation missing: {literal}")
-    links = list(hero["stable_links"].values())
-    links.extend(item["job_url"] for item in hero["snapshot"]["subjects"] if item["job_url"])
-    if not set(links) <= set(parser.links):
-        fail("status visible immutable commit/tree/pull/run/job links missing")
+    labelled, platforms = proof_rows(parser)
+    check_subject_rows(hero, labelled)
+    check_platform_rows(hero, platforms)
     for surface in ("markdown", "llm"):
         text = (site_dir / hero["projections"][surface].removeprefix("site/")).read_text()
         if text.count(summary(hero)) != 1:
