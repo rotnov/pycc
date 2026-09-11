@@ -28,7 +28,11 @@ EVIDENCE_CLAIMS = {
   "cli-spec-diagnostic-match" =>
     "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.",
   "readme-coverage-badge-bound" =>
-    "The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds."
+    "The README coverage badge percentage is bound to ci.yml's enforced --fail-under-lines and --fail-under-regions thresholds.",
+  "ci-diff-coverage-100" =>
+    "Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI.",
+  "readme-diff-coverage-badge-bound" =>
+    "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold."
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -57,6 +61,16 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ],
   "readme-coverage-badge-bound" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "ci-diff-coverage-100" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "readme-diff-coverage-badge-bound" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
@@ -1604,6 +1618,45 @@ D91_TRUSTED_COVERAGE_STEPS =
     }
   ]).freeze
 REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
+# D-242 product mode: the coverage job is audited by named properties rather
+# than by a byte-exact step prefix. The legacy D91 shape above stays accepted
+# permanently as a strictly stricter historical form; `coverage_gate_present?`
+# accepts either. What the product-mode audit pins: the job-level shape (the
+# checks shared with the legacy arm), an order-free set of pre-gate steps drawn
+# only from the pinned checkout and these setup commands, and a gate step whose
+# script carries each required line exactly once and in order, none of the
+# forbidden fragments, and exactly the two-key `env` the diff base needs.
+TRUSTED_COVERAGE_SETUP_COMMANDS = [
+  "rustup show",
+  "brew install llvm@22",
+  "rustup component add llvm-tools-preview",
+  "rustup target add x86_64-apple-darwin"
+].freeze
+PRODUCT_MODE_COVERAGE_STEP =
+  "Coverage gate — 100% of changed lines, totals reported (D-242)"
+REQUIRED_COVERAGE_GATE_LINES = [
+  "git diff -U0 --no-color --no-renames \"$COVERAGE_BASE_SHA\" HEAD > \"$RUNNER_TEMP/coverage-changed.diff\"",
+  "TRUSTED_COV=\"/Users/runner/.cargo/bin/cargo-llvm-cov\"",
+  "RUSTC=\"$TRUSTED_RUSTC\" RUSTDOC=\"$TRUSTED_RUSTDOC\" \"$TRUSTED_CARGO\" install cargo-llvm-cov --locked --version \"${CARGO_LLVM_COV_VERSION}\"",
+  "sudo chown -R nobody:nobody \"$ISOLATED_ROOT\"",
+  "\"PATH=$(dirname \"$TRUSTED_CARGO\"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin\"",
+  "run_isolated() {",
+  "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace --lcov --output-path \"$ISOLATED_ROOT/coverage.lcov\"",
+  "run_isolated \"$TRUSTED_COV\" llvm-cov report \"${WORKSPACE_PACKAGE_FLAGS[@]}\"",
+  "python3 -B scripts/check_diff_coverage.py --lcov \"$ISOLATED_ROOT/coverage.lcov\" --diff \"$RUNNER_TEMP/coverage-changed.diff\" --root \"$GITHUB_WORKSPACE\" --require-changed-lines 100"
+].freeze
+# The `run_isolated` definition must be exactly this contiguous three-line
+# block: an unprivileged `nobody` sandbox with a cleared environment.
+RUN_ISOLATED_DEFINITION = [
+  "run_isolated() {",
+  "sudo -u nobody env -i \"${ISOLATED_ENV[@]}\" \"$@\"",
+  "}"
+].freeze
+FORBIDDEN_COVERAGE_GATE_FRAGMENTS = ["exit 0", "|| true", "|| :", "set +e", "trap "].freeze
+COVERAGE_GATE_ENV = {
+  "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+  "PUSH_BASE_SHA" => "${{ github.event.before }}"
+}.freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -2245,11 +2298,17 @@ def coverage_gate_present?(workflow_text, source)
   end
 
   coverage_index = nil
+  product_mode_index = nil
   steps.children.each_with_index do |step_node, index|
     step = yaml_mapping(step_node, "#{source} step")
     next unless step["name"] && step["run"]
 
-    next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
+    step_name = yaml_scalar(step["name"], "#{source} step name")
+    if step_name == PRODUCT_MODE_COVERAGE_STEP
+      product_mode_index ||= index
+      next
+    end
+    next unless step_name == COVERAGE_STEP
     next unless REVIEWED_COVERAGE_SCRIPTS.include?(
       yaml_scalar(step["run"], "#{source} step run").strip
     )
@@ -2269,7 +2328,7 @@ def coverage_gate_present?(workflow_text, source)
     coverage_index = index
     break
   end
-  return false unless coverage_index
+  return product_mode_coverage_gate?(steps, product_mode_index, source) unless coverage_index
 
   actual_prefix = steps.children.first(coverage_index + 1).map do |step_node|
     step = yaml_value(step_node, "#{source} coverage setup step")
@@ -2279,6 +2338,105 @@ def coverage_gate_present?(workflow_text, source)
   unless REVIEWED_TRUSTED_COVERAGE_STEPS.include?(actual_prefix)
     raise RoadmapEvidenceError,
           "#{source}: coverage setup steps do not match the trusted sequence"
+  end
+
+  true
+end
+
+# D-242 product-mode arm of `coverage_gate_present?`. `steps` is the coverage
+# job's step sequence (job-level checks already passed); `gate_index` is the
+# index of the step named `PRODUCT_MODE_COVERAGE_STEP`, or nil when the job has
+# no such step (then there is no gate to audit and the result is false).
+def product_mode_coverage_gate?(steps, gate_index, source)
+  return false unless gate_index
+
+  seen_setup = []
+  seen_checkout = false
+  steps.children.first(gate_index).each do |step_node|
+    step = yaml_value(step_node, "#{source} coverage setup step")
+    step.delete("continue-on-error") if step["continue-on-error"] == "false"
+    if step.key?("uses")
+      unless step == { "uses" => PINNED_CHECKOUT_ACTION, "with" => { "persist-credentials" => "false" } }
+        raise RoadmapEvidenceError,
+              "#{source}: coverage setup steps do not match the trusted sequence"
+      end
+      if seen_checkout
+        raise RoadmapEvidenceError,
+              "#{source}: coverage setup steps do not match the trusted sequence"
+      end
+      seen_checkout = true
+      next
+    end
+    unless step.keys.sort == %w[name run] && step["name"].is_a?(String) && step["run"].is_a?(String)
+      raise RoadmapEvidenceError,
+            "#{source}: coverage setup steps do not match the trusted sequence"
+    end
+    command = step["run"].strip
+    unless TRUSTED_COVERAGE_SETUP_COMMANDS.include?(command) && !seen_setup.include?(command)
+      raise RoadmapEvidenceError,
+            "#{source}: coverage setup steps do not match the trusted sequence"
+    end
+    seen_setup << command
+  end
+  unless seen_checkout
+    raise RoadmapEvidenceError,
+          "#{source}: coverage setup steps do not match the trusted sequence"
+  end
+
+  gate = yaml_value(steps.children[gate_index], "#{source} coverage gate step")
+  gate.delete("continue-on-error") if gate["continue-on-error"] == "false"
+  if gate.key?("shell")
+    raise RoadmapEvidenceError, "#{source}: coverage step must use the default shell"
+  end
+  if gate.key?("if") || gate.key?("continue-on-error")
+    raise RoadmapEvidenceError, "#{source}: coverage evidence must run unconditionally"
+  end
+  unless gate.keys.sort == %w[env name run] && gate["env"] == COVERAGE_GATE_ENV
+    raise RoadmapEvidenceError,
+          "#{source}: coverage gate step environment does not match the trusted values"
+  end
+  unless gate["run"].is_a?(String)
+    raise RoadmapEvidenceError, "#{source}: coverage gate step run must be a script"
+  end
+
+  lines = gate["run"].lines.map { |line| line.sub(/\A\s+/, "").rstrip }
+  unless lines.first == "set -euo pipefail"
+    raise RoadmapEvidenceError, "#{source}: coverage gate script must start with set -euo pipefail"
+  end
+  FORBIDDEN_COVERAGE_GATE_FRAGMENTS.each do |fragment|
+    if lines.any? { |line| line.include?(fragment) }
+      raise RoadmapEvidenceError,
+            "#{source}: coverage gate script contains the forbidden fragment #{fragment.inspect}"
+    end
+  end
+  if lines.count { |line| line.start_with?("TRUSTED_COV=") } != 1
+    raise RoadmapEvidenceError, "#{source}: coverage gate script must assign TRUSTED_COV exactly once"
+  end
+  if lines.count { |line| line.start_with?("run_isolated()") } != 1
+    raise RoadmapEvidenceError, "#{source}: coverage gate script must define run_isolated exactly once"
+  end
+  previous_index = -1
+  REQUIRED_COVERAGE_GATE_LINES.each do |required|
+    indices = lines.each_index.select { |index| lines[index] == required }
+    unless indices.length == 1
+      raise RoadmapEvidenceError,
+            "#{source}: coverage gate script must contain #{required.inspect} exactly once"
+    end
+    unless indices.first > previous_index
+      raise RoadmapEvidenceError,
+            "#{source}: coverage gate script has #{required.inspect} out of order"
+    end
+    previous_index = indices.first
+  end
+  # The required-line check above already demands the exact opening line, so
+  # `definition_start` is never nil today; the nil arm keeps a one-line
+  # `run_isolated() { ...; }` a RoadmapEvidenceError rather than a TypeError
+  # should that list ever change.
+  definition_start = lines.index(RUN_ISOLATED_DEFINITION.first)
+  if definition_start.nil? ||
+     lines[definition_start, RUN_ISOLATED_DEFINITION.length] != RUN_ISOLATED_DEFINITION
+    raise RoadmapEvidenceError,
+          "#{source}: coverage gate script must define run_isolated as the nobody sandbox"
   end
 
   true

@@ -8,9 +8,10 @@ description: Use at a checkpoint the agent itself creates — a /harden cycle sh
 One snapshot per checkpoint under `docs/sessions/`: what state the work is in
 and what a fresh session should pick up. **In this repository the trigger is
 narrower than the generic one below:**
-[D-192](../../../docs/decisions/D-192-bound-the-tracker-with-milestone-at-filing-a.md)
-allows at most one file per *merged pull request*, and routes everything else a
-checkpoint would have captured to `docs/AGENT_RETROSPECTIVE.md`. Distinct from `.harden/incidents/`,
+[D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5
+(narrowing D-066/D-130/D-192) writes a file only for an incident — a wrong merge decision, a defect that reached `main`, a gate that lied, or a run that lost meaningful time to a process mistake; an ordinary merged pull
+request writes none, and everything else a checkpoint would have captured goes to
+`docs/AGENT_RETROSPECTIVE.md` under its unchanged bar. Distinct from `.harden/incidents/`,
 which records what went wrong — this records where things stand.
 
 ## If the project has no handoff log yet

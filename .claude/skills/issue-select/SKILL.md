@@ -43,10 +43,11 @@ Hard exclusions — needs authority or state an agent session does not have:
 - anything whose execution path requires an explicit maintainer sign-off by this repository's
   own governance documents.
 
-Deprioritized, not excluded — take only deliberately: changes requiring the staged CI-workflow
-digest process, the two-pull-request D-080 stage-then-activate cycle `/issue-implement`'s own
-step 4 executes for a change that edits a workflow file and registers its digest in a
-`check_roadmap_evidence.rb` allowlist; changes that would
+Deprioritized, not excluded — take only deliberately: changes requiring the checker-first
+two-pull-request rule `/issue-implement`'s own step 4 executes when the base-owned `audit`
+must first learn a new roadmap-evidence identifier, trusted setup command, or required gate
+line in `check_roadmap_evidence.rb` ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 2 — an ordinary `ci.yml` change
+that keeps the audited properties is one pull request); changes that would
 conflict with an open pull request's in-flight rewrite of the same files; tree-wide mechanical
 sweeps that bloat review surface.
 

@@ -17,10 +17,11 @@ Plan: <PLAN_PATH_OR_COMMENT_URL>. Acceptance criteria, quoted:
 History: <ROUND_HISTORY — one line per earlier round: findings, fix commit>.
 
 Out of scope for this round, by design of the workflow that dispatches you:
-- the `docs/sessions/` handoff file and the pull-request body: step 6 writes them after
-  this loop ends;
-- the `.harden/findings/issue-<N>.jsonl` pile: it is appended as each round's verdicts
-  land and cannot exist before the first round;
+- the pull-request body: step 6 writes it after this loop ends;
+- the `docs/sessions/` handoff file and the `.harden/findings/issue-<N>.jsonl` pile: absent
+  by design unless an incident occurred (D-242 rule 5 — a wrong merge decision, a defect
+  that reached `main`, a gate that lied, or a run that lost meaningful time to a process
+  mistake); their absence is never a finding;
 - gate results (coverage, clippy, fmt, validators), GitHub state (issue comments,
   pull-request state), and any claim that needs `git` to check — a pure-move commit's
   behaviour-neutrality, a rename's line-set identity, a commit's ancestry. The

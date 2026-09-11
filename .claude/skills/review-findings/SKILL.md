@@ -6,7 +6,9 @@ description: Use when review findings exist and are not yet persisted — a revi
 # Review findings: collect the pile, then one harden pass
 
 A review-fix loop catches failures one at a time; the class only exists in
-the pile. This skill owns the user-invoked moments AND, in free-form
+the pile. **In this repository a pile is written only for an incident — a wrong merge decision, a defect that reached `main`, a gate that lied, or a run that lost meaningful time to a process mistake
+([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 5); an ordinary review loop persists nothing and this
+skill does not fire for it.** Otherwise this skill owns the user-invoked moments AND, in free-form
 review tasks, usually fires on its description alone — measured across four
 harnesses: devin, grok and codex persisted findings unaided 9/9; claude 0/6,
 whose minimal-scope reading resisted even a governance routing line (arena
@@ -37,7 +39,8 @@ mechanics stay here and in the contract, never inlined there:
   minimum IN the step — a summary the runner follows instead of the
   reference must carry the acts, not their names (field-measured: "singletons
   seed counters" alone produced a committed findings file and zero
-  counters): *however step N's review loop ended — a clean round with no
+  counters): *when an incident occurred and the loop therefore wrote a pile
+  (D-242 rule 5), however step N's review loop ended — a clean round with no
   actionable findings, or its stop condition — run `/harden batch
   .harden/findings/<task>.jsonl` before opening the pull request: cluster
   the findings, count each class against `.harden/incidents/` topics, give
@@ -62,8 +65,8 @@ issue start — read zero times).
 
 ## 2. Collect by hand
 
-Asked mid-conversation to capture findings from a review that was not wired:
-write the same JSONL, one line per finding, `disposition: fixed|refuted`,
+Asked mid-conversation to capture findings from a review that was not wired,
+and only when an incident occurred (D-242 rule 5): write the same JSONL, one line per finding, `disposition: fixed|refuted`,
 refutation reason in `note`. Then stop — collection is not the pass.
 
 ## 3. Run the pass
