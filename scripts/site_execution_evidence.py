@@ -194,6 +194,130 @@ def summary(hero):
     return f"{hero['evidence_id']} — all-Tier-1: {executions}. {result} {hero['limitations']} [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc{hero['route']})."
 
 
+# The enumerated declarations that remove an element from view: ``display:
+# none``, ``visibility: hidden``/``collapse``, ``opacity: 0``,
+# ``content-visibility: hidden``, ``font-size: 0`` and a ``transform`` whose
+# ``scale``/``scaleX``/``scaleY``/``scaleZ``/``scale3d`` has any zero argument,
+# and the individual ``scale`` property (``scale: 0``, ``scale: 1 0``) has any
+# zero component.  CSS property names and keywords are case-insensitive, so
+# ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
+# element off-screen, covering it or painting it in the background colour is
+# outside this model and stays a review concern (docs/WEBSITE.md).
+# Zero in every CSS number spelling: ``0``, ``0.0``, ``0.``, ``.0``, ``.00``, an
+# optional sign (``-0``, ``+0``) and an optional exponent (``0e0``, ``0E-2``),
+# every one of which computes to zero.  Escaped identifiers (``d\\69 splay``)
+# are deliberate obfuscation in the repository's own reviewed CSS, outside the
+# accidental-hiding model this scan implements (docs/WEBSITE.md).
+# A value the checker cannot resolve is treated as hiding: any function call
+# (``var()``, ``calc()``, ``abs()``, ``round()``, whatever CSS adds next) on a
+# hiding-critical property computes at render time from state this scan does
+# not model, so every parenthesis on ``display``, ``visibility``, ``opacity``,
+# ``content-visibility`` and ``scale`` is a hiding declaration.  Two forms are resolved
+# by inspection instead: ``font-size: clamp(<positive literal length>, ...)``
+# with no nested call, whose result is ``max(<minimum>, ...)`` and so never
+# below that positive minimum whatever the other arguments are (the
+# stylesheet's headings use it); and ``transform`` values built only from the
+# known transform functions (``translate``, ``scale``, ``rotate``, ``skew``,
+# ``perspective`` families) with no nested call, whose ``scale`` arguments the
+# literal-zero match above inspects.  A negative or zero minimum, an unknown
+# function name and any nested parenthesis all fall back to hiding.
+# Comments and quoted strings are consumed in one left-to-right pass, as a CSS
+# tokenizer does: a comment is dropped and a string is replaced by a
+# placeholder that keeps only whether it was empty, so a brace, semicolon or
+# comment opener inside a string (``content: "{ ci-gate failure"``) cannot
+# split a rule or a declaration, and a quote inside a comment cannot open a
+# string.  Both surfaces (inline ``style`` and stylesheet rules) use it.
+# An unterminated comment runs to the end of the input and an unterminated
+# string to the end of its line, exactly as a browser tokenizer treats them, so
+# a lone quote cannot leave a brace live for the rule splitter to mis-pair.
+CSS_COMMENT_OR_STRING = re.compile(
+    r"/\*.*?\*/|/\*.*"
+    r"|\"(?:\\.|[^\"\\\n])*\"?"
+    r"|'(?:\\.|[^'\\\n])*'?", re.S)
+
+
+def unterminated_css(css):
+    """True when a comment or a quoted string is left open: the tokenizer's structure is then unknowable, so callers fail closed."""
+    for match in CSS_COMMENT_OR_STRING.finditer(css):
+        token = match.group(0)
+        if token.startswith("/*"):
+            if not token.endswith("*/"):
+                return True
+        elif len(token) < 2 or token[-1] != token[0]:
+            return True
+    return False
+
+
+def plain_css(css):
+    """Drop CSS comments and reduce every quoted string to ``\"\"`` (empty) or ``\"x\"`` (non-empty)."""
+    return CSS_COMMENT_OR_STRING.sub(
+        lambda m: "" if m.group(0).startswith("/*") else ('""' if m.group(0) in ('""', "''") else '"x"'), css)
+
+
+ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
+# A literal length that is provably positive: unsigned or ``+``, not a zero
+# spelling (``0.0e1px`` is zero), with a unit (a unitless font-size is invalid
+# CSS and therefore ignored, not hiding).
+POSITIVE_LENGTH = r"\+?(?!" + ZERO + r"(?![\d.]))(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z]+|%)"
+# ``matrix()``/``matrix3d()`` are deliberately absent: a zero in their scale
+# components hides too, and resolving which entry is which is not inspection.
+# A vendor-prefixed spelling (``-webkit-transform``) is the same declaration to
+# the browsers that honour it; the boundary before the optional prefix still
+# keeps a custom property whose name ends in a property name (``--hero-transform``,
+# ``--webkit-transform``) from counting as that property.
+VENDOR_PREFIX = r"(?:-(?:webkit|moz|ms|o)-)?"
+TRANSFORM_FUNCTIONS = (r"translate3d|translate[xyz]?|scale3d|scale[xyz]?"
+                       r"|rotate3d|rotate[xyz]?|skew[xy]?|perspective")
+HIDING_DECLARATION = re.compile(
+    r"(?<![\w-])" + VENDOR_PREFIX + r"(?:display\s*:\s*none"
+    r"|visibility\s*:\s*(?:hidden|collapse)"
+    r"|opacity\s*:\s*" + ZERO + r"%?(?=\s*(?:;|!|$))"
+    r"|content-visibility\s*:\s*hidden"
+    r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
+    r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)]"
+    r"|scale\s*:[^;]*?(?<![\w.+-])" + ZERO + r"%?(?![\w.%])"
+    r"|(?:display|visibility|opacity|content-visibility|scale)\s*:[^;]*\("
+    r"|font-size\s*:(?!\s*clamp\(\s*" + POSITIVE_LENGTH + r"\s*,[^;()]*\)\s*(?:!important\s*)?(?:;|$))[^;]*\("
+    r"|transform\s*:[^;]*(?:\([^;()]*\(|(?<![\w-])(?!(?:" + TRANSFORM_FUNCTIONS + r")\()[\w-]+\())",
+    re.I | re.M)
+
+
+# The container axis, closed the way the declaration axis above is closed.
+# Enumerating the elements and attributes that actually occur inside every
+# ``data-evidence-role="hero"`` subtree of every tracked page yields 22 tags and
+# 15 attributes, and that set is stable across the pages.  So the hero's
+# structure is an allowlist rather than a denylist of hiding containers: a start
+# tag outside HERO_TAGS, or any attribute outside HERO_ATTRS, hides its subtree
+# the same way ``hidden`` does.  A denylist had to be extended once per newly
+# discovered container (``hidden``, ``inert``, ``aria-hidden``, ``<dialog>``
+# without ``open``, then ``popover``, ``<fieldset disabled>``, ``<template>``,
+# custom elements, ...); an allowlist rejects the vector that has not been
+# invented yet, and a legitimate new element inside a hero is a one-line,
+# reviewed addition here.
+HERO_TAGS = frozenset({
+    "a", "br", "button", "code", "dd", "details", "div", "dl", "dt", "em", "h1", "h2", "h3",
+    "header", "li", "p", "pre", "section", "span", "strong", "summary", "ul",
+})
+HERO_ATTRS = frozenset({
+    "aria-hidden", "aria-label", "aria-labelledby", "class", "data-copy", "data-evidence-id",
+    "data-evidence-kind", "data-evidence-role", "data-evidence-state", "data-execution", "href",
+    "id", "role", "tabindex", "type",
+})
+
+
+def hero_structure_hides(tag, attrs, stack):
+    """Report whether ``tag`` hides its own subtree inside a hero.
+
+    Two rules: the structural allowlist above, and the single-disclosure rule.
+    The hero renders its proof rows behind exactly one ``<details>`` toggle, so
+    a ``<details>`` nested inside another one puts those rows a second click
+    away — visible to this parser, not to a reader — and contributes nothing.
+    """
+    if tag not in HERO_TAGS or any(name not in HERO_ATTRS for name in attrs):
+        return True
+    return tag == "details" and any(item[0] == "details" for item in stack)
+
+
 class VisibleExecutionParser(HTMLParser):
     """Parse visible hero code and primary-navigation links independently."""
     VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -211,14 +335,21 @@ class VisibleExecutionParser(HTMLParser):
         self.h1_count = 0
         self.language = None
         self.locales = []
+    def reject(self, message):
+        fail(message)
     def handle_starttag(self, tag, attrs):
+        names = [name for name, _ in attrs]
+        if len(names) != len(set(names)):
+            # Browsers keep the first of a repeated attribute; dict() would keep the last.
+            self.reject(f"<{tag}> repeats an attribute, which browsers and this checker would read differently: "
+                        + ", ".join(sorted({name for name in names if names.count(name) > 1})))
         attrs = dict(attrs)
         if tag == "html":
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", attrs.get("style", "")))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", "")))) or unterminated_css(attrs.get("style", "")) or (in_hero and hero_structure_hides(tag, attrs, self.stack))
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav
         if starts_nav and not hidden:
@@ -256,7 +387,10 @@ class VisibleExecutionParser(HTMLParser):
 
 
 def validate_projection(hero, repo_root, site_dir):
-    css = re.sub(r"/\*.*?\*/", "", (site_dir / "styles.css").read_text(), flags=re.S)
+    raw_css = (site_dir / "styles.css").read_text()
+    if unterminated_css(raw_css):
+        fail("styles.css must not leave a CSS comment or quoted string open")
+    css = plain_css(raw_css)
     provenance = re.search(r"\.hero-provenance\s*\{([^}]+)\}", css)
     mobile = css.split("@media (max-width: 980px)", 1)[-1]
     navigation = re.search(r"\.site-nav\s*\{([^}]+)\}", mobile)

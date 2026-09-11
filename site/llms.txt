@@ -45,7 +45,7 @@ Unavailable means no accepted unique hero artifact; it is not zero or failed evi
 <!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | all-Tier-1 | /diagnostics/ -->
 <!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
 <!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | unavailable | /architecture/ -->
-<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | unavailable | /status/ -->
+<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | all-Tier-1 | /status/ -->
 <!-- evidence-hero: comparison | comparison-sources-v1 | source-backed-comparison | unavailable | /python-aot-compilers/ -->
 <!-- evidence-hero: provenance | ai-provenance-v1 | authorship-attestation | unavailable | /ai-native/ -->
 
@@ -99,6 +99,8 @@ Exact landing stdout:
 language-support-v1 — all-Tier-1: `pycc run tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr); `python3.14 tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr). Both stdout streams: `15\n`. One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/language-support/).
 
 diagnostics-v1 — all-Tier-1: `pycc check tests/diagnostics/d0021_range_argument_type.py` (exit 1, empty stderr); `pycc check tests/diagnostics/d0021_range_argument_type.py --error-format json` (exit 1, empty stderr). Human stdout: T0021; JSON stdout includes ``"help":["pass an `int` value"]``. Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/diagnostics/).
+
+status-snapshot-v1 — all-Tier-1: main 4111208c0910c0a7588408a6ac7d2b2bad20592c (PR #1005 head 984eb6f27ca9f4809fa1277e12f8c83283bef1f6) — ci-gate success, audit success, five Tier-1 jobs success; captured 2026-09-11T16:48:51Z. A point-in-time observation of one default-branch revision; later merges are not covered until the snapshot is refreshed. all-Tier-1 means the listed jobs concluded success in that run, not release readiness. The merged pull request's head commit is not reachable from a clean checkout, so its tree equality is proven from the collector's recorded fields, not from Git. [Exact subjects, run and job links](https://rotnov.github.io/pycc/status/).
 
 ## Project (Markdown-first)
 

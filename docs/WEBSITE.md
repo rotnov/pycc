@@ -561,7 +561,7 @@ it does not expand the historical PEP 526 transcript's claim.
 
 ## Versioned evidence-hero contract
 
-`site/evidence-heroes.json` schema version `2.0.0` is the canonical ordered
+`site/evidence-heroes.json` schema version `2.1.0` is the canonical ordered
 inventory for the landing, language, diagnostics, performance, architecture,
 status, comparison, and provenance heroes. Every record has the same required
 field set and one allowlisted evidence kind. The state vocabulary is closed:
@@ -591,16 +591,20 @@ attestation, exact source/output projection and current-scope distinction.
 projection path for both new heroes, invoked by `check-site.sh` with the same
 path overrides. The public checker never runs the compiler or oracle.
 
-The other five records remain explicitly `unavailable`. Performance has no
-published route until #567 provides real artifacts. Architecture, Status,
+Status carries a checked-in required-check snapshot under
+[D-241](./decisions/D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md);
+see "Status snapshot record" below.
+
+The other four records remain explicitly `unavailable`. Performance has no
+published route until #567 provides real artifacts. Architecture,
 Comparison, and Provenance retain their
 useful explanatory pages, but the first screen now says that its unique
 commit-bound hero is unavailable and links to the responsible issue. This
 state does not invalidate the pages' separately owned semantic source
 contracts; it prevents those contracts from being mistaken for the unique
 fixture/run proof required by the evidence-first redesign. #566 owns the
-Architecture and Status artifacts, #563 coordinates the Comparison hero, and
-#217 owns the sanitized immutable Provenance record.
+Architecture artifact (Part 2, #1007), #563 coordinates the Comparison
+hero, and #217 owns the sanitized immutable Provenance record.
 
 The validator is hermetic. It reads only the checkout, the local Git object
 database, and the manifest; it never calls GitHub or another provider and
@@ -641,6 +645,70 @@ site gate. Accepting a child issue's hero requires filling its null fields,
 adding a reviewed immutable attestation tuple, projecting every required
 surface, updating D-186 through a superseding decision when the versioned
 contract changes, and extending both positive and negative mutations.
+
+### Status snapshot record
+
+The `status` record (D-241) is a point-in-time observation of the required
+checks for exactly one default-branch revision, not a live badge: nothing at
+build or deploy time contacts GitHub. Its shape, closed by
+`scripts/site_status_evidence.py`'s `expected_shape` and validated
+field-for-field, is:
+
+- `fixture`/`test`: the collector `scripts/collect_status_snapshot.py` and
+  the validator's shallow-safe suite `scripts/test_check_status_snapshot.py`,
+  pinned by canonical LF SHA-256 with the ordered `test_*` names; editing
+  either requires re-collecting. The collector's own suite
+  `scripts/test_collect_status_snapshot.py` is governance-discovered but not
+  pinned: it exercises the collector against stubbed `gh` output and never
+  shapes the record.
+- `command`: `python3 scripts/collect_status_snapshot.py --subject <sha>`
+  from the repository root, requiring only the authenticated read-only
+  `gh api` CLI.
+- `snapshot.subjects`: three rows -- `published-revision` (the merge commit
+  on `main` with its tree, parent count and merged pull request number,
+  head SHA, head tree and `merged_at`), `post-merge-ci-gate` (`ci-gate` on that commit,
+  App id 15368) and `pre-merge-audit` (`audit` on the pull request head,
+  where D-172's workflow-policy check actually runs). Each check row
+  carries conclusion, `completed_at`, run id, immutable run/job URLs, and
+  the workflow file and trigger event of the run behind the job, which
+  the collector reads from `actions/runs/<id>` and both it and the
+  validator require to be `.github/workflows/ci.yml` under `push` for
+  `ci-gate` and `.github/workflows/workflow-policy.yml` under
+  `pull_request_target` for `audit`, on the observed commit: App 15368
+  is GitHub Actions as a whole, so a check-run name alone would accept a
+  job called `audit` published by any other workflow, including a pull
+  request's own workflow YAML under `pull_request`.
+- `repository`: the subject commit, its tree and the commit URL.
+- `attestation`: `collected_at`, `collection_method`, `sanitized`, the
+  `docs/ROADMAP.md` `**Current milestone:` line at the subject, and the
+  required-context names `ci-gate` and `audit`.
+- `environment.platforms`: the five Tier-1 jobs of the same `ci-gate` run
+  (runner, target triple, check-run name, conclusion, immutable job URL).
+- `state`: `all-Tier-1` only when every conclusion above is `success`;
+  otherwise `unavailable`. Unknown is never green: an absent, incomplete,
+  ambiguous or non-completed run makes the collector report why, exit
+  non-zero and leave the manifest untouched.
+- `limitations` and `stable_links` (commit, tree, merged pull request,
+  `ci-gate` run, `audit` run, five jobs) derive from the fields above.
+
+Validation layers, in gate-versus-convention terms:
+
+| Check | Where it runs | Gate or convention |
+|---|---|---|
+| Structural validation and every projection (the collapsed hero summary — the visible element inside the hero repeating its `data-evidence-id` — reading exactly as the record's state, subject, `ci-gate` and `audit` conclusions, pull request and capture time; visible proof rows inside the `data-evidence-role="hero"` element, each subject's `<dt>`/`<dd>` row reading exactly as its own sha, check, conclusion, completion time and run/job links, each Tier-1 platform's `<li>` row reading exactly as its runner, target, conclusion and job link, and no labelled row beyond the three subject rows and the `Tier-1 jobs` heading, so swapped, contradicted or surplus rows are rejected; every other visible text block inside the hero — the reviewed masthead (eyebrow with the page's own date, title, lede, milestone, acceptance and readiness lines), the `<details>` toggle and the closing paragraph built from the record's milestone line, capture time and limitations — reading exactly as one of those blocks and every block rendered exactly once (the eyebrow's date bound to the page's single JSON-LD `dateModified`), so unlabelled prose contradicting the rows ("Current gate result: ci-gate failure") has nowhere to sit; no rule in `site/styles.css` or in an embedded `<style>` element (the page may link no other stylesheet and no scanned CSS may `@import`), hiding or rendering `content` text, whose every compound, the subject compound included, can match an element inside the hero (attribute names in selectors compared case-insensitively, as HTML does) or one of the hero's own ancestors (`body`, `#main-content`, `.content-page`) sets one of the enumerated hiding declarations — `display: none`, `visibility: hidden`/`collapse`, `opacity: 0`, `content-visibility: hidden`, `font-size: 0`, a `transform` whose `scale` form has any zero argument (`scale(1, 0)`, `scale3d(1, 1, 0)`), or the individual `scale` property with any zero component (`scale: 0`, `scale: 1 0`) — in any letter case, any zero number spelling (`0`, `0.0`, `.0`, a sign as in `-0`, an exponent as in `0e0`) and with or without a `-webkit-`/`-moz-`/`-ms-`/`-o-` vendor prefix (a custom property whose name ends in a property name, `--hero-transform`, is not that property), or sets one of those seven properties to a value the checker cannot resolve — any function call (`var()`, `calc()`, `abs()`, `round()`, whatever CSS adds next) on `display`, `visibility`, `opacity`, `content-visibility` or `scale` computes at render time from state the scan does not model, so every parenthesis there is hiding and `--hidden: 0; opacity: var(--hidden)` is rejected rather than passed as unknown; two forms are resolved by inspection instead: `font-size: clamp(<positive literal length>, …)` with no nested call is accepted because `clamp()` is `max(<minimum>, …)` and never returns less than that positive minimum whatever its other arguments (a negative, zero-spelled or unitless minimum, and any nested call, are hiding), and a `transform` built only from the `translate`, `scale`, `rotate`, `skew` and `perspective` function families with no nested call is accepted subject to the `scale` zero check (`matrix()`, whose zero scale components cannot be read off by inspection, an unknown function name such as `var(--t)` and any nested call are hiding) — the same declaration match the inline `style` visibility model uses (CSS comments dropped and quoted strings reduced to an empty or non-empty placeholder in one left-to-right pass on both surfaces, so a brace, semicolon or comment opener inside a string cannot split a rule or a declaration and a quote inside a comment cannot open a string; a comment or string left open makes the stylesheet's structure unknowable and is rejected outright), which also treats the `hidden`, `inert` and `aria-hidden="true"` attributes and a `<dialog>` without `open` as hiding their subtree, closes the container axis inside an evidence hero with a reviewed structural allowlist rather than a denylist extended one vector at a time -- an element inside a hero whose tag, or any of whose attribute names, is outside the hero allowlist hides its own subtree, as does a `<details>` nested inside the hero's own single disclosure, whose rows a reader would reach only on a second click; `style` is deliberately not an allowed hero attribute, so an inline declaration inside a hero is rejected structurally before it is ever parsed, and the declaration model above governs the stylesheet, the embedded `<style>` element and every element outside a hero -- and rejects any element repeating an attribute, since browsers keep the first value where a dictionary would keep the last (off-screen positioning, overlays, background-coloured text and escaped CSS identifiers such as `d\69 splay` are outside the model — the scanned CSS is the repository's own reviewed stylesheet, where an escaped property name is deliberate obfuscation rather than accidental hiding — and remain a review concern); immutable links (the `audit` run is distinct from the `ci-gate` run, each check row's workflow file and event are the ones the closed `EXPECTED_WORKFLOWS` table binds its context to, and the five platform rows, the `ci-gate` job and the `audit` job link seven distinct jobs), real RFC 3339 UTC instants with the `audit` completion no later than `merged_pull_request.merged_at` and the `ci-gate` completion no earlier than it (so a post-merge `audit` rerun is never published as the pre-merge audit; the collector refuses such an observation instead of writing it), and the capture time no earlier than either recorded completion and no later than the validating clock (the collector rejects a future `--collected-at` before writing), `<details>` rows, milestone line equal to `docs/ROADMAP.md` at the subject commit (proved by `--verify-git`, never against the working tree), `en-US` locale, one exact summary line in `site/index.html.md` and `site/llms.txt`) | `scripts/check_site_evidence.py` via `scripts/check-site.sh` (Pages, push and pull request) | must pass; Pages is not a required context |
+| Subject-side Git checks: on the first-parent history of `HEAD` — on a task branch that merged the default branch instead of rebasing, the newest default-branch commits are second-parent only, so collect with `--subject` at a commit the branch's own first-parent history reaches; the pull-request merge ref CI checks out has the base tip as its first parent (plain ancestry would accept a commit merged through a merge commit's second parent, which was never the published revision), exactly one parent, recorded tree equals `git rev-parse <subject>^{tree}`; pull-request association proven record-internally (`merged_pull_request.head_tree == repository.tree`), never by fetching `refs/pull/*` | `scripts/check_status_snapshot.py --verify-git` via `scripts/check-site.sh` (full-history Pages checkout) | must pass |
+| Snapshot currency when `site/status/index.html` or the `status` record changes: subject lies on the first-parent history of the pull request's base tip and at most 20 first-parent merges behind it | `scripts/check_status_snapshot.py --currency` as a `pages.yml` pull-request-leg step only (never on `push`) | Pages red on the pull request is the signal; not a merge gate |
+| Synthetic-repository and pure-function unit tests | `scripts/test_check_status_snapshot.py` in the depth-1 `governance` job | gate via `ci-gate` |
+| Public-CLI controls against the real record (nested-field mirror, stale milestone, subject off the first-parent history, tree mismatch, two parents, non-success conclusions, hidden proof rows, softened limitation, mutable link, swapped run/job links, shas, completion times and labels between the two check rows, swapped platform job links, a contradicted conclusion beside the recorded one, contradicted or hidden collapsed summary, a surplus or dangling labelled row, unlabelled hero prose contradicting the rows, a hidden or `inert` details toggle, a closed `<dialog>` around the disclosure, a check row bound to another workflow file or event, an `opacity: var(--hidden)`, `opacity: abs(0)` or `transform: scale(var(--s))` computed hiding declaration, a `font-size: clamp(0px, …)` or `clamp(-5px, …)` lower bound, a `-webkit-transform: scale(1, 0)`, `scale: 0` / `scale: 1 0` on the individual property, `content: "{ ci-gate failure"` on a hero pseudo-element rule, a repeated `href` on a job link, a `scale(1, 0)` transform, an upper-case attribute selector, a signed or exponent-form zero hiding declaration, a removed masthead block, an eyebrow date off `dateModified`, an embedded `<style>`, a `::after { content }` rule on the hero or a foreign stylesheet link, stylesheet rules hiding the proof container, rows, list items, the collapsed summary or a hero ancestor, upper-case, inline, leading-dot-zero, `opacity`, `font-size` and `transform` hiding declarations -- of which every hero-anchored one, the inline `style` cases and the `hidden`, `inert` and `<dialog>` cases alike, is rejected structurally by the hero allowlist before the declaration model is consulted, a benign declaration on the same anchor being rejected identically, so the declaration model itself is exercised where it decides the verdict: on the primary-navigation link battery in `scripts/site_execution_evidence_test.py` and on the stylesheet and embedded-`<style>` rules above -- an unreviewed container or attribute inside the hero (a `popover`, a disabled `<fieldset>`, a custom element, a second disclosure level around the proof rows), an `unavailable` record whose page still renders proof rows, `lang="en"`, central summary drift) | `scripts/site_status_evidence_test.py` run by `scripts/test-check-site.sh` (Pages only; the name is deliberately not `test_*`) | must pass |
+| Re-collect in the same pull request as any status-page or status-record edit: `python3 scripts/collect_status_snapshot.py` against the current `origin/main` tip | agent convention | backed by the currency step above |
+
+The hero's visible summary is the record's capture time, subject SHA and
+conclusions; later merges are not covered until the snapshot is refreshed,
+and `all-Tier-1` means the listed jobs concluded `success` in that run, not
+release readiness. A head-SHA swap with an identical tree is undetectable
+offline; the record's `limitations` say so, and the collector is the
+trusted party for that one field, as D-230 already trusts it for
+`tested_commit`.
 
 ## Status-page freshness enforcement
 
@@ -794,8 +862,10 @@ The supported consumer contract is now explicit and enforced:
   manifest. Requiring the sum to fit makes each per-resource budget a real
   allocation and makes an over-budget failure name the document responsible,
   at the cost of no longer letting one document draw on another's unused
-  headroom. The current allocation leaves 4096 bytes of the ceiling
-  deliberately unallocated. Because the per-resource budgets now bind first by
+  headroom. The current allocation (278016 of 278528 bytes, after D-241
+  raised the Markdown landing's budget to 13824 bytes for the status
+  snapshot summary line) leaves 512 bytes of the ceiling deliberately
+  unallocated. Because the per-resource budgets now bind first by
   construction, the aggregate check is provably unreachable; it is knowingly
   retained as documented defense-in-depth, since it is the direct statement of
   the ceiling this contract publishes.

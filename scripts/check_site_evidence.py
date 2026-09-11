@@ -8,6 +8,8 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 import site_execution_evidence
+import site_status_evidence
+from site_status_evidence import require_exact_fields
 
 
 manifest_path = Path(sys.argv[1])
@@ -15,7 +17,7 @@ evidence_root = Path(sys.argv[2]).resolve()
 repo_root = Path(sys.argv[3]).resolve()
 site_dir = Path(sys.argv[4]).resolve()
 
-SCHEMA_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.1.0"
 EVIDENCE_STATES = [
     "all-Tier-1",
     "partial",
@@ -190,16 +192,6 @@ def fail(message):
     raise SystemExit(f"evidence-heroes.json: {message}")
 
 
-def require_exact_fields(value, expected, context):
-    if not isinstance(value, dict):
-        fail(f"{context} must be an object")
-    actual = set(value)
-    if actual != set(expected):
-        missing = sorted(set(expected) - actual)
-        extra = sorted(actual - set(expected))
-        fail(f"{context} fields drifted; missing={missing}, extra={extra}")
-
-
 def canonical_bytes(data):
     # The repository has no .gitattributes line-ending pin.  Match the existing
     # quick-start contract by hashing canonical LF bytes on Windows too.
@@ -285,6 +277,10 @@ for hero in heroes:
 
     if page_id in site_execution_evidence.SPECS:
         site_execution_evidence.validate(hero, evidence_root, repo_root)
+        continue
+
+    if page_id == "status" and hero["state"] != "unavailable":
+        site_status_evidence.validate(hero, evidence_root, repo_root)
         continue
 
     if page_id != "landing":
@@ -550,6 +546,12 @@ hero_by_page = {hero["page_id"]: hero for hero in heroes}
 for page_id, hero in hero_by_page.items():
     if page_id in site_execution_evidence.SPECS:
         site_execution_evidence.validate_projection(hero, repo_root, site_dir)
+    status_snapshot = page_id == "status" and hero["state"] != "unavailable"
+    if page_id == "status":
+        if hero["state"] == "unavailable":
+            site_status_evidence.validate_unavailable_projection(hero, repo_root, site_dir)
+        else:
+            site_status_evidence.validate_projection(hero, repo_root, site_dir)
     expected_tuple = (hero["evidence_id"], hero["kind"], hero["state"])
     html_projection = hero["projections"].get("html")
     if html_projection is not None:
@@ -643,7 +645,7 @@ for page_id, hero in hero_by_page.items():
         webpages = [node for node in graph if node.get("@type") == "WebPage"]
         if len(webpages) != 1:
             fail(f"hero {page_id!r} JSON-LD must carry exactly one WebPage")
-        if page_id in site_execution_evidence.SPECS and webpages[0].get("inLanguage") != "en-US":
+        if (page_id in site_execution_evidence.SPECS or status_snapshot) and webpages[0].get("inLanguage") != "en-US":
             fail(f"hero {page_id!r} JSON-LD inLanguage must be en-US")
         properties = webpages[0].get("additionalProperty")
         expected_properties = [
