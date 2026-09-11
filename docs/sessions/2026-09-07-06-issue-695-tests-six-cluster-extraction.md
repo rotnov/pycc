@@ -13,7 +13,7 @@ clusters were relocated verbatim into new sibling child modules under
 `crates/pycc_types/src/tests/`, following the sibling-`tests.rs`-plus-`tests/`
 layout (no `mod.rs`) that PR #995 established with `tests/constraints.rs`.
 
-`#695` stays open: at 24,765 lines the file is still far above the ~1,000-line
+`#695` stays open: at 24,766 lines the file is still far above the ~1,000-line
 decomposability threshold, so it is narrowed by comment after each merge rather
 than closed.
 
@@ -23,7 +23,7 @@ than closed.
 |---|---|---|
 | `crates/pycc_types/src/tests/typing_cast.rs` | 526 | 31 |
 | `crates/pycc_types/src/tests/pattern_matching.rs` | 559 | 43 |
-| `crates/pycc_types/src/tests/exception_handling.rs` | 341 | 26 |
+| `crates/pycc_types/src/tests/exception_handling.rs` | 342 | 26 |
 | `crates/pycc_types/src/tests/optional_narrowing.rs` | 559 | 36 |
 | `crates/pycc_types/src/tests/type_checking_marker.rs` | 125 | 6 |
 | `crates/pycc_types/src/tests/enum_unrolling.rs` | 115 | 5 |
@@ -37,7 +37,9 @@ one net line in the child-module comment, and one net line in the reworded
 parent (+39 lines: 36 test lines, one blank line, and the two further `mod`
 declarations) and, in the last round, moved the two `expect_top_level_*`
 helpers out of it (-18 lines net, against one line added by widening the
-child-module orientation comment), leaving 24,765. Its own `#[test]` count went
+child-module orientation comment), leaving 24,765. Merging `origin/main` then
+added one line to the parent (PR #1005's D-086 comment rewrap, unrelated to this
+extraction), so the file stands at 24,766. Its own `#[test]` count went
 1,192 → 1,045.
 
 The child-module declaration block in `tests.rs` gained `enum_unrolling`,
@@ -162,7 +164,7 @@ coverage gate after its three preparatory builds, each exiting 0, coverage at
 
 ## Follow-ups
 
-- `crates/pycc_types/src/tests.rs` is still 24,765 lines. #695 remains open for
+- `crates/pycc_types/src/tests.rs` is still 24,766 lines. #695 remains open for
   further cohesion-driven extractions; the next obvious candidates are the
   remaining large banner runs in the 13k–20k region.
 - The `// -- ` prose false positive at what was line 23745 (`// -- an
