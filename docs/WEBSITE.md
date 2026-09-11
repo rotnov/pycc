@@ -561,7 +561,7 @@ it does not expand the historical PEP 526 transcript's claim.
 
 ## Versioned evidence-hero contract
 
-`site/evidence-heroes.json` schema version `2.0.0` is the canonical ordered
+`site/evidence-heroes.json` schema version `2.1.0` is the canonical ordered
 inventory for the landing, language, diagnostics, performance, architecture,
 status, comparison, and provenance heroes. Every record has the same required
 field set and one allowlisted evidence kind. The state vocabulary is closed:
@@ -591,16 +591,20 @@ attestation, exact source/output projection and current-scope distinction.
 projection path for both new heroes, invoked by `check-site.sh` with the same
 path overrides. The public checker never runs the compiler or oracle.
 
-The other five records remain explicitly `unavailable`. Performance has no
-published route until #567 provides real artifacts. Architecture, Status,
+Status carries a checked-in required-check snapshot under
+[D-241](./decisions/D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md);
+see "Status snapshot record" below.
+
+The other four records remain explicitly `unavailable`. Performance has no
+published route until #567 provides real artifacts. Architecture,
 Comparison, and Provenance retain their
 useful explanatory pages, but the first screen now says that its unique
 commit-bound hero is unavailable and links to the responsible issue. This
 state does not invalidate the pages' separately owned semantic source
 contracts; it prevents those contracts from being mistaken for the unique
 fixture/run proof required by the evidence-first redesign. #566 owns the
-Architecture and Status artifacts, #563 coordinates the Comparison hero, and
-#217 owns the sanitized immutable Provenance record.
+Architecture artifact (Part 2, #1007), #563 coordinates the Comparison
+hero, and #217 owns the sanitized immutable Provenance record.
 
 The validator is hermetic. It reads only the checkout, the local Git object
 database, and the manifest; it never calls GitHub or another provider and
@@ -641,6 +645,59 @@ site gate. Accepting a child issue's hero requires filling its null fields,
 adding a reviewed immutable attestation tuple, projecting every required
 surface, updating D-186 through a superseding decision when the versioned
 contract changes, and extending both positive and negative mutations.
+
+### Status snapshot record
+
+The `status` record (D-241) is a point-in-time observation of the required
+checks for exactly one default-branch revision, not a live badge: nothing at
+build or deploy time contacts GitHub. Its shape, closed by
+`scripts/site_status_evidence.py`'s `expected_shape` and validated
+field-for-field, is:
+
+- `fixture`/`test`: the collector `scripts/collect_status_snapshot.py` and
+  its suite `scripts/test_check_status_snapshot.py`, pinned by canonical LF
+  SHA-256 with the ordered `test_*` names; editing either requires
+  re-collecting.
+- `command`: `python3 scripts/collect_status_snapshot.py --subject <sha>`
+  from the repository root, requiring only the authenticated read-only
+  `gh api` CLI.
+- `snapshot.subjects`: three rows -- `published-revision` (the merge commit
+  on `main` with its tree, parent count and merged pull request number,
+  head SHA and head tree), `post-merge-ci-gate` (`ci-gate` on that commit,
+  App id 15368) and `pre-merge-audit` (`audit` on the pull request head,
+  where D-172's workflow-policy check actually runs). Each check row
+  carries conclusion, `completed_at`, run id and immutable run/job URLs.
+- `repository`: the subject commit, its tree and the commit URL.
+- `attestation`: `collected_at`, `collection_method`, `sanitized`, the
+  `docs/ROADMAP.md` `**Current milestone:` line at the subject, and the
+  required-context names `ci-gate` and `audit`.
+- `environment.platforms`: the five Tier-1 jobs of the same `ci-gate` run
+  (runner, target triple, check-run name, conclusion, immutable job URL).
+- `state`: `all-Tier-1` only when every conclusion above is `success`;
+  otherwise `unavailable`. Unknown is never green: an absent, incomplete,
+  ambiguous or non-completed run makes the collector report why, exit
+  non-zero and leave the manifest untouched.
+- `limitations` and `stable_links` (commit, tree, merged pull request,
+  `ci-gate` run, `audit` run, five jobs) derive from the fields above.
+
+Validation layers, in gate-versus-convention terms:
+
+| Check | Where it runs | Gate or convention |
+|---|---|---|
+| Structural validation and every projection (visible proof rows inside the `data-evidence-role="hero"` element, immutable links, `<details>` rows, milestone line equal to `docs/ROADMAP.md` at `HEAD`, `en-US` locale, one exact summary line in `site/index.html.md` and `site/llms.txt`) | `scripts/check_site_evidence.py` via `scripts/check-site.sh` (Pages, push and pull request) | must pass; Pages is not a required context |
+| Subject-side Git checks: ancestor of `HEAD`, exactly one parent, recorded tree equals `git rev-parse <subject>^{tree}`; pull-request association proven record-internally (`merged_pull_request.head_tree == repository.tree`), never by fetching `refs/pull/*` | `scripts/check_status_snapshot.py --verify-git` via `scripts/check-site.sh` (full-history Pages checkout) | must pass |
+| Snapshot currency when `site/status/index.html` or the `status` record changes: subject is an ancestor of the pull request's base tip and at most 20 first-parent merges behind it | `scripts/check_status_snapshot.py --currency` as a `pages.yml` pull-request-leg step only (never on `push`) | Pages red on the pull request is the signal; not a merge gate |
+| Synthetic-repository and pure-function unit tests | `scripts/test_check_status_snapshot.py` in the depth-1 `governance` job | gate via `ci-gate` |
+| Public-CLI controls against the real record (nested-field mirror, stale milestone, non-ancestor subject, tree mismatch, two parents, non-success conclusions, hidden proof rows, softened limitation, mutable link, `lang="en"`, central summary drift) | `scripts/site_status_evidence_test.py` run by `scripts/test-check-site.sh` (Pages only; the name is deliberately not `test_*`) | must pass |
+| Re-collect in the same pull request as any status-page or status-record edit: `python3 scripts/collect_status_snapshot.py` against the current `origin/main` tip | agent convention | backed by the currency step above |
+
+The hero's visible summary is the record's capture time, subject SHA and
+conclusions; later merges are not covered until the snapshot is refreshed,
+and `all-Tier-1` means the listed jobs concluded `success` in that run, not
+release readiness. A head-SHA swap with an identical tree is undetectable
+offline; the record's `limitations` say so, and the collector is the
+trusted party for that one field, as D-230 already trusts it for
+`tested_commit`.
 
 ## Status-page freshness enforcement
 
@@ -794,8 +851,10 @@ The supported consumer contract is now explicit and enforced:
   manifest. Requiring the sum to fit makes each per-resource budget a real
   allocation and makes an over-budget failure name the document responsible,
   at the cost of no longer letting one document draw on another's unused
-  headroom. The current allocation leaves 4096 bytes of the ceiling
-  deliberately unallocated. Because the per-resource budgets now bind first by
+  headroom. The current allocation (278016 of 278528 bytes, after D-241
+  raised the Markdown landing's budget to 13824 bytes for the status
+  snapshot summary line) leaves 512 bytes of the ceiling deliberately
+  unallocated. Because the per-resource budgets now bind first by
   construction, the aggregate check is provably unreachable; it is knowingly
   retained as documented defense-in-depth, since it is the direct statement of
   the ceiling this contract publishes.

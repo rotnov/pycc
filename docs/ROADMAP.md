@@ -16,9 +16,12 @@ D-186/D-230): `site/evidence-heroes.json` binds the tested landing source, stdou
 test, exact commit, accepted five-target CI run, toolchains, limitations, and
 immutable links across HTML, Markdown, LLM, JSON-LD, and social projections.
 Language and Diagnostics now bind ordered executions from the preserved
-preparation tree and five successful Tier-1 jobs (D-230). The other five page
-kinds remain explicitly `unavailable` until their owner issues accept real
-artifacts; explanatory pages are not promoted into proof by their existence. This cross-cutting publication contract does not change the
+preparation tree and five successful Tier-1 jobs (D-230). Status binds a
+checked-in, offline-refreshed snapshot of the required checks (`ci-gate`,
+`audit`, five Tier-1 jobs) for exactly one default-branch revision (D-241).
+The other four page kinds remain explicitly `unavailable` until their owner
+issues accept real artifacts; explanatory pages are not promoted into proof
+by their existence. This cross-cutting publication contract does not change the
 current compiler milestone or any acceptance checklist below.
 
 The D-094 `--release` contract now has a focused semantic regression that
