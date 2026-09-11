@@ -514,8 +514,9 @@ fn pep_0585_set_int_matches_cpython_3_14_7_byte_for_byte() {
 // literal), so an entirely unannotated helper cannot have its parameter or
 // return type inferred as `Ty::Tuple` from real source today -- confirmed
 // empirically, and true for `list`/`dict`/`set` the same way, not a
-// tuple-specific gap. See `docs/DECISIONS.md`'s D-116 point 4 correction
-// note and `docs/ROADMAP.md`'s matching follow-up. Unlike `pep_0585_set_int.py`
+// tuple-specific gap. See the D-116 point 4 correction note in
+// `docs/decisions/D-116-tuple-v0-2-scope-int-bool-float-elements-only.md`
+// and `docs/ROADMAP.md`'s matching follow-up. Unlike `pep_0585_set_int.py`
 // above, this fixture's output is fully order-independent already -- tuples
 // have no iteration order question the way sets do -- so it asserts
 // byte-for-byte agreement like every other fixture in this file, not just
@@ -545,9 +546,10 @@ fn tuple_heterogeneous_matches_cpython_3_14_7_byte_for_byte() {
 // guarantee PEP 709 depends on instead -- a comprehension's own loop
 // variable does not leak into or clobber an enclosing same-named binding,
 // now genuinely exercised for the first time by D-117's synthesized-name
-// mechanism. See `docs/DECISIONS.md`'s D-120 entry for the full account of
-// why this fixture's exact shape was chosen and what CPython actually
-// prints for it.
+// mechanism. See the D-120 entry,
+// `docs/decisions/D-120-the-pep-709-fixture-demonstrates-loop-variable.md`,
+// for the full account of why this fixture's exact shape was chosen and
+// what CPython actually prints for it.
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn pep_0709_comp_inline_matches_cpython_3_14_7_byte_for_byte() {

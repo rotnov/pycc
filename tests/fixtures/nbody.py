@@ -29,10 +29,12 @@ def main() -> None:
     # Also deviation from the plan brief: every local variable below
     # dropped its `: float`/`: int` annotation. Verified empirically that
     # `pycc_hir` handles `Stmt::Assign` but has no `Stmt::AnnAssign` case
-    # (`x: float = 1.0` also produces a spanned C0001), matching
-    # `docs/DECISIONS.md`'s PR-9 scope note. Local annotations are inert
-    # under CPython for function-local variables (no `__annotations__`
-    # entry is created), so dropping them changes nothing observable.
+    # (`x: float = 1.0` also produces a spanned C0001), matching the PR-9
+    # scope note in
+    # `docs/decisions/D-088-correct-v0-2-s-acceptance-criteria-before-any-v0.md`.
+    # Local annotations are inert under CPython for function-local variables
+    # (no `__annotations__` entry is created), so dropping them changes
+    # nothing observable.
     sun_x = 0.0
     sun_y = 0.0
     sun_z = 0.0

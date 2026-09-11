@@ -1392,11 +1392,13 @@ fn growing_a_dict_from_inside_for_k_in_d_iterates_the_newly_added_key_too() {
     // changed size during iteration` for this exact program instead. This
     // test pins the actual, verified behavior (empirically confirmed by
     // running this exact source through the real `pycc build`/execute
-    // pipeline before writing the assertion below) so `docs/DECISIONS.md`'s
-    // D-123 Consequences note and `docs/RUNTIME.md`'s dict line describe
-    // enforced behavior, not an inference from a codegen comment. NOT a
-    // conformance fixture against CPython (this is the one documented
-    // point where pycc and CPython deliberately disagree).
+    // pipeline before writing the assertion below) so the D-123 Consequences
+    // note in
+    // `docs/decisions/D-123-dict-str-int-ships-a-d-k-v-insert-or-update.md`
+    // and `docs/RUNTIME.md`'s dict line describe enforced behavior, not an
+    // inference from a codegen comment. NOT a conformance fixture against
+    // CPython (this is the one documented point where pycc and CPython
+    // deliberately disagree).
     let source = "\
 d = {\"a\": 1}
 for k in d:
