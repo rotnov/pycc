@@ -67,6 +67,19 @@ Both limitations are published verbatim on every surface.
   this issue's scope, and documentation-only — nothing under `scripts/` reads
   that field. The adjacent `html.current_max_bytes` was corrected here because
   the plan named it.
+- `tests/fixtures/policy-successor-manifest.json` records a `sha256` per
+  listed target, and this change modifies two listed targets
+  (`tests/fixtures/pages-performance-budget.json` and
+  `tests/fixtures/pages-performance-manifest.json`), so both recorded digests
+  are now stale. Deliberately not refreshed: D-172 retired that exact-byte
+  gate, `.github/workflows/workflow-policy.yml` reads only the `path` and
+  `source_path` fields, and nothing under `scripts/` reads `sha256` at all —
+  refreshing it would read as re-arming a retired gate. Neither file is
+  renamed, deleted or moved, so no manifest update is required.
+- `docs/SPEC.md` was reviewed and needs no change: every document touched
+  here (`TESTING.md`, `WEBSITE.md`, `ROADMAP.md`, `decisions/`, `sessions/`)
+  is already mapped there, and this change adds no new specification
+  document, renames nothing, and changes no document's purpose.
 - The `llvm-ir` stage stays unevidenced until pycc grows an `--emit` flag.
   #566 remains open; this is Part 2 only.
 - `docs/DELIVERY_PLAN.md` was reviewed and needs no change: it stays at

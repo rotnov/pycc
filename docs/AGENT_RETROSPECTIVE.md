@@ -33,6 +33,51 @@ never a merge gate.
 
 ---
 
+## 2026-09-11 — An implementation plan directed an edit into a byte-pinned file, and a new hero shape broke 186 assertions in unrelated suites
+
+*(Relative order against the other 2026-09-11 entries in this file cannot be
+recovered from their content; this one describes work on issue #1007.)*
+
+**What happened.** Two avoidable fix rounds while implementing #1007
+(Architecture hero as a pipeline evidence trace).
+
+1. The authoritative plan directed the new manifest-facts test case into
+   `tests/site_evidence.rs`. That file is pinned byte-for-byte by the D-230
+   language and diagnostics evidence records at a preserved source blob, so
+   the edit made `sh scripts/check-site.sh` exit 1 with "language artifact
+   differs from preserved source blob". The case had to move to a new
+   `tests/architecture_manifest.rs`, and the deviation had to be recorded in
+   D-243, `docs/WEBSITE.md`, `docs/TESTING.md` and the test's own header.
+2. The new hero's `snapshot` carries a `trace` record plus ordered `stages`
+   instead of an `artifacts` list. The Part 1 public-CLI suites
+   (`scripts/site_execution_evidence_test.py`,
+   `scripts/site_status_evidence_test.py`) build their permitted-evidence
+   roots from `artifacts` only, so every one of their 186 mutation cases
+   failed with the same unrelated message — the architecture validator ran
+   first and masked whichever mutation each case was actually testing.
+
+**Root cause.** (1) Plans are written against a file's contents, not against
+the gates that pin it; nothing in the planning loop checks whether a file
+named as an edit target is itself hero-pinned. (2) A shared evidence contract
+gained a second snapshot shape, and the fixture-path collectors in sibling
+suites were written to the only shape that existed when they were authored.
+
+**What fixed it.** (1) A separate integration test file plus the recorded
+deviation. (2) A three-line addition to both suites' path collectors that also
+gathers `snapshot["trace"]["path"]` and each `stage["path"]`.
+
+**Lessons.**
+- Before writing a plan step that edits an existing file, grep
+  `site/evidence-heroes.json` for that path. A file listed there is pinned to
+  a preserved blob and cannot be edited without re-pinning; plan a new file
+  instead.
+- When adding a variant snapshot shape to a shared evidence contract, grep
+  every consumer for the old shape's key (here `["artifacts"]`) and extend
+  each one in the same change. A validator that fails first makes every other
+  suite's failure message a lie about what broke.
+
+---
+
 ## 2026-09-11 — A doc-comment fix dropped the qualifier that made it true and cost a fourth review round
 
 **What happened.** Extracting tests out of `crates/pycc_types/src/tests.rs`
