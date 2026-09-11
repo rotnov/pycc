@@ -1,7 +1,7 @@
 # pycc — ahead-of-time compiler for typed Python
 
 [![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
-[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)
+[![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)](./docs/TESTING.md)
 
 **A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into autonomous native deployment artifacts. Like `gcc`, but for Python.**
 
@@ -213,8 +213,8 @@ are especially important:
 all met on all five Tier-1 targets (Linux, macOS, Windows). v0.1 covers
 `fib`/`mandelbrot-ascii` matching CPython output on all five Tier-1
 targets, the throughput floor, diagnostic output matching the CLI spec,
-the native CI matrix, cross-host compilation, the 100% line/region coverage
-gate, and the coverage badge bound to CI thresholds. v0.2 adds
+the native CI matrix, cross-host compilation, 100% coverage of changed lines,
+and the coverage badge bound to CI thresholds. v0.2 adds
 the container/generics corpus and the `--release` speedup floor. v0.3 adds
 conformance, `T0030`/`T0031`, and `pycc explain` — classes, inheritance,
 `match` exhaustiveness, and structured exceptions ship; see
