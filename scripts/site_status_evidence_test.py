@@ -195,6 +195,8 @@ class StatusEvidenceTests(unittest.TestCase):
              "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="opacity: -0e0" class="hero-evidence-details">',
              "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
+            ('<details class="hero-evidence-details">', '<details style="--h: 0; opacity: var(--h)" class="hero-evidence-details">',
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="opacity: 0" class="hero-evidence-details">',
              "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
             ('<details class="hero-evidence-details">', '<details style="font-size: .0px" class="hero-evidence-details">',
@@ -258,6 +260,8 @@ class StatusEvidenceTests(unittest.TestCase):
                      ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }",
                      ".content-page { display: none; }", "#main-content { opacity: .0 }", "body { font-size: .0px }",
                      "main > .page-hero { transform: scale(.0) }", ".page-hero { opacity: -0 }", "#main-content { opacity: 0e0 }",
+                     ".page-hero { --hidden: 0; opacity: var(--hidden) }", "#main-content { font-size: clamp(0px, 1vw, 1rem) }",
+                     ".page-hero { transform: scale(var(--s)) }",
                      ".page-hero { transform: scale(1, 0) }", '[DATA-EVIDENCE-ROLE="hero"] { display: none; }',
                      '.page-meta span:first-child::after { content: " · ci-gate failure"; }', ".page-hero::before { content: attr(data-evidence-state) }"):
             with self.subTest(rule=rule):

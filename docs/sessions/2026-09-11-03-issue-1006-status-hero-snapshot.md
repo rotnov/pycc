@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T12:35:04Z. The record pins the collector's and its suite's
+  2026-09-11T13:07:02Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T12:35:04Z` after the suite changed.
+  `--collected-at 2026-09-11T13:07:02Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -299,6 +299,18 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     gains `workflow_path`/`event` per subject (null on the revision row) and
     the validator enforces the same table. Cases in all three suites,
     snapshot re-collected at `2026-09-11T12:35:04Z` with `--subject 4111208c`, pins rotated.
+21. External, on PR #1008, one Codex P2: the hiding-declaration match saw
+    only literal zeros, so `.page-hero { --hidden: 0; opacity: var(--hidden) }`
+    hid the proof while the scan passed. Resolved without modelling the
+    cascade (D-127 judgment, same closed-enumeration reasoning as rounds
+    9-14): a value the checker cannot resolve is never green. Any `var()`,
+    `calc()`, `env()`, `attr()`, `min()`, `max()` or `clamp()` call on the
+    six hiding-critical properties is now a hiding declaration wherever
+    the rule or inline style reaches the hero or its ancestors; the one
+    resolvable form, `font-size: clamp(<non-zero literal>, ...)`, stays
+    accepted because `clamp()` never returns less than its lower bound and
+    `site/styles.css` relies on it for headings. Cases in all three suites,
+    snapshot re-collected at `2026-09-11T13:07:02Z` with `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

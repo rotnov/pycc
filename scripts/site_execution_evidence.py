@@ -206,14 +206,24 @@ def summary(hero):
 # every one of which computes to zero.  Escaped identifiers (``d\\69 splay``)
 # are deliberate obfuscation in the repository's own reviewed CSS, outside the
 # accidental-hiding model this scan implements (docs/WEBSITE.md).
+# A value the checker cannot resolve is treated as hiding: ``opacity:
+# var(--hidden)``, ``calc()``, ``env()``, ``attr()``, ``min()``, ``max()`` and
+# ``clamp()`` on the hiding-critical properties compute at render time from
+# state this scan does not model (custom properties, the cascade, the viewport).
+# The one resolvable form is ``font-size: clamp(<non-zero>, ...)``, whose result
+# is never below its literal lower bound; the stylesheet uses it for headings.
 ZERO = r"[+-]?(?:0+(?:\.0*)?|\.0+)(?:e[+-]?\d+)?"
+COMPUTED = r"\b(?:var|calc|env|attr|min|max|clamp)\("
 HIDING_DECLARATION = re.compile(
     r"(?<![\w-])(?:display\s*:\s*none"
     r"|visibility\s*:\s*(?:hidden|collapse)"
     r"|opacity\s*:\s*" + ZERO + r"%?(?=\s*(?:;|!|$))"
     r"|content-visibility\s*:\s*hidden"
     r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
-    r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)])",
+    r"|transform\s*:[^;]*\bscale(?:[xyz]|3d)?\([^;)]*?(?<![\w.+-])" + ZERO + r"\s*[,)]"
+    r"|(?:display|visibility|opacity|content-visibility|transform)\s*:[^;]*" + COMPUTED +
+    r"|font-size\s*:[^;]*\b(?:var|calc|env|attr|min|max)\("
+    r"|font-size\s*:\s*clamp\(\s*" + ZERO + r"(?:[a-z]+|%)?\s*,)",
     re.I | re.M)
 
 
