@@ -401,7 +401,7 @@ def render_page(hero):
             f'{hero["repository"]["commit"][:8]} · ci-gate {subjects["post-merge-ci-gate"]["conclusion"]} · '
             f'audit {subjects["pre-merge-audit"]["conclusion"]} (PR #{merged["number"]}) · '
             f'captured {hero["attestation"]["collected_at"]}</span></div>'
-            f'<dl>{"".join(rows)}<dt>Tier-1 jobs</dt><dd>in the ci-gate run:</dd></dl><ul>{"".join(items)}</ul>'
+            f'<dl>{"".join(rows)}<dt>{status.TIER1_HEADING}</dt><dd>{status.TIER1_HEADING_ROW}</dd></dl><ul>{"".join(items)}</ul>'
             f'<p>{hero["attestation"]["milestone_line"]} {hero["limitations"]}</p></header></body></html>\n')
 
 
@@ -496,7 +496,9 @@ class ProjectionTests(SyntheticRepository):
         for rule in (".hero-row { display: none; }", "header dd { visibility: hidden; }", "body header li { display:none }",
                      "@media (max-width: 980px) { dl dt, .other { display: none; } }", "* { display: none; }",
                      "[data-evidence-role] { display: none; }", "header > dl > dd:nth-child(2) { display: none; }",
-                     "HEADER DD { DISPLAY: NONE; }", "dl dt { Visibility : Hidden }", ".page-meta span { display:NONE }"):
+                     "HEADER DD { DISPLAY: NONE; }", "dl dt { Visibility : Hidden }", ".page-meta span { display:NONE }",
+                     "header { opacity: 0; }", "dl { opacity: 0.0 }", "header dd { visibility: collapse }", "header { content-visibility: hidden }",
+                     "header li { font-size: 0 }", "header dl { transform: translateY(1px) scale(0) }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
                 (site / "styles.css").write_text(f"footer p {{ display: none; }}\n{rule}\n")
@@ -505,7 +507,8 @@ class ProjectionTests(SyntheticRepository):
                 self.assertIn("stylesheet must not hide the evidence hero", str(caught.exception))
         for rule in ("footer p { display: none; }", ".pipeline-step::after { display: none; }", "#elsewhere { display: none; }",
                      "/* header dd { display: none; } */", "header dd { color: red; }", "[hidden] { display: none; }",
-                     "body .other dd { display: none; }", ".site-nav a:not([aria-current]) { display: none; }"):
+                     "body .other dd { display: none; }", ".site-nav a:not([aria-current]) { display: none; }",
+                     "header { opacity: 0.9 }", "header dd { font-size: 0.76rem }", "header { transform: scale(0.5) }", "table { border-collapse: collapse }"):
             with self.subTest(rule=rule):
                 site = self.write_site(self.hero, page)
                 (site / "styles.css").write_text(rule + "\n")
@@ -545,13 +548,22 @@ class ProjectionTests(SyntheticRepository):
         with self.subTest(mutation="hidden row"):
             hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
             self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
-        for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none"):
+        for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none", "opacity: 0", "opacity:0.0 !important",
+                      "visibility: collapse", "content-visibility: hidden", "font-size: 0", "transform: scale(0)"):
             with self.subTest(mutation=f"row hidden inline by {style}"):
                 hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd style="{style}">', 1)
                 self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
         with self.subTest(mutation="summary hidden inline"):
             self.assert_page_rejected(page.replace("<span data-evidence-id=", '<span style="DISPLAY: NONE" data-evidence-id=', 1),
                                       "exactly one visible collapsed hero summary")
+        for name, extra in (("a contradicting labelled row", "<dt>Current gate result</dt><dd>ci-gate failure</dd>"),
+                            ("a harmless labelled row", "<dt>Note</dt><dd>see above</dd>")):
+            with self.subTest(mutation=name):
+                self.assert_page_rejected(page.replace("</dl>", extra + "</dl>", 1),
+                                          "proof rows must be exactly the three subject rows and the Tier-1 heading; unexpected: ")
+        with self.subTest(mutation="Tier-1 heading row drifted"):
+            self.assert_page_rejected(page.replace(status.TIER1_HEADING_ROW, "in the ci-gate run, all failure:", 1),
+                                      f"proof row for {status.TIER1_HEADING} must read exactly")
         with self.subTest(mutation="row without a label"):
             self.assert_page_rejected(page.replace(f'<dt>{gate["label"]}</dt>', "", 1),
                                       "must pair one visible label with one row each")

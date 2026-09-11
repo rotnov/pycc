@@ -384,6 +384,8 @@ def summary(hero):
 
 
 ROW_TAGS = {"dt", "dd", "li"}
+TIER1_HEADING = "Tier-1 jobs"
+TIER1_HEADING_ROW = "in the ci-gate run, all success:"
 HIDING_RULE = site_execution_evidence.HIDING_DECLARATION
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
@@ -538,6 +540,7 @@ def expected_rows(hero):
         rows[item["label"]] = (
             f"{item['check']} on {item['sha']} · App {APP_ID} · {item['conclusion']} · completed {item['completed_at']} · run {item['run_id']} · job",
             [item["run_url"], item["job_url"]])
+    rows[TIER1_HEADING] = (TIER1_HEADING_ROW, [])
     return rows
 
 
@@ -549,11 +552,15 @@ def platform_row_text(row):
 
 
 def check_subject_rows(hero, labelled):
-    for label, expected in expected_rows(hero).items():
+    expected_by_label = expected_rows(hero)
+    for label, expected in expected_by_label.items():
         if label not in labelled:
             fail(f"status proof row missing for {label}")
         if labelled[label] != expected:
             fail(f"status proof row for {label} must read exactly as that subject's own sha, check, conclusion, time and links")
+    surplus = [label for label in labelled if label not in expected_by_label]
+    if surplus:
+        fail("status proof rows must be exactly the three subject rows and the Tier-1 heading; unexpected: " + ", ".join(surplus))
 
 
 def check_platform_rows(hero, platforms):

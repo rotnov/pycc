@@ -171,6 +171,12 @@ class StatusEvidenceTests(unittest.TestCase):
              "visible proof row/limitation missing"),
             ("<dt>Pre-merge policy audit</dt>", '<dt style="DISPLAY:NONE">Pre-merge policy audit</dt>',
              "proof rows must pair one visible label with one row each"),
+            ("<dt>Tier-1 jobs</dt>", "<dt>Current gate result</dt><dd>ci-gate failure</dd><dt>Tier-1 jobs</dt>",
+             "proof rows must be exactly the three subject rows and the Tier-1 heading; unexpected: Current gate result"),
+            ("<dd>in the ci-gate run, all success:</dd>", "<dd>in the ci-gate run, all failure:</dd>",
+             "proof row for Tier-1 jobs must read exactly"),
+            ('<details class="hero-evidence-details">', '<details style="opacity: 0" class="hero-evidence-details">',
+             "visible proof row/limitation missing"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -206,7 +212,9 @@ class StatusEvidenceTests(unittest.TestCase):
 
     def test_stylesheet_hiding_the_proof_is_rejected(self):
         for rule in (".hero-evidence-details { display: none; }", "@media (max-width: 980px) { .page-hero dd { display: none; } }",
-                     "body details li { visibility: hidden; }", ".page-hero DD { DISPLAY: NONE; }", ".page-meta span { Visibility: Hidden }"):
+                     "body details li { visibility: hidden; }", ".page-hero DD { DISPLAY: NONE; }", ".page-meta span { Visibility: Hidden }",
+                     ".hero-evidence-details { opacity: 0; }", ".page-hero dl { font-size: 0 }", ".page-hero { transform: scale(0) }",
+                     ".page-hero dd { visibility: collapse }", ".page-hero { content-visibility: hidden }"):
             with self.subTest(rule=rule):
                 def mutate(doc, site, root, rule=rule):
                     path = site / "styles.css"

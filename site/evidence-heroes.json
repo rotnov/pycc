@@ -465,7 +465,7 @@
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "8f4a3d7fa132ea32e1a536342f2c6b2724b2cc3302682bc933086ebf8f5485cc",
+        "sha256": "2b3ff8a8875d2a0984ff651b718648ab26fa3a070a4176c99535bb8207661c6b",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
@@ -578,7 +578,7 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T07:43:45Z",
+        "collected_at": "2026-09-11T08:02:33Z",
         "collection_method": "gh api check-runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",

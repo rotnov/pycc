@@ -194,9 +194,22 @@ def summary(hero):
     return f"{hero['evidence_id']} — all-Tier-1: {executions}. {result} {hero['limitations']} [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc{hero['route']})."
 
 
-# CSS property names and keywords are case-insensitive, so an inline
-# ``style="DISPLAY: NONE"`` hides exactly as the lowercase form does.
-HIDING_DECLARATION = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+# The enumerated declarations that remove an element from view: ``display:
+# none``, ``visibility: hidden``/``collapse``, ``opacity: 0``,
+# ``content-visibility: hidden``, ``font-size: 0`` and a ``transform`` that
+# scales to zero.  CSS property names and keywords are case-insensitive, so
+# ``DISPLAY: NONE`` hides exactly as the lowercase form does.  Positioning an
+# element off-screen, covering it or painting it in the background colour is
+# outside this model and stays a review concern (docs/WEBSITE.md).
+ZERO = r"0+(?:\.0+)?"
+HIDING_DECLARATION = re.compile(
+    r"(?<![\w-])(?:display\s*:\s*none"
+    r"|visibility\s*:\s*(?:hidden|collapse)"
+    r"|opacity\s*:\s*" + ZERO + r"%?(?=\s*(?:;|!|$))"
+    r"|content-visibility\s*:\s*hidden"
+    r"|font-size\s*:\s*" + ZERO + r"(?:[a-z]+|%)?(?=\s*(?:;|!|$))"
+    r"|transform\s*:[^;]*\bscale[xy]?\(\s*" + ZERO + r"\s*[,)])",
+    re.I | re.M)
 
 
 class VisibleExecutionParser(HTMLParser):
