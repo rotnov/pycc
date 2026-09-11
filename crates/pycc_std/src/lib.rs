@@ -17,7 +17,7 @@
 //! this codebase and no concrete lowering slice in this PR's Task 4 scope.
 //! Recorded as a D-136 addendum in
 //! `docs/decisions/D-136-pycc-std-is-a-plain-data-crate-math-sys-symbols.md`
-//! rather than silently narrowing the ADR's own text. `math.floor`/`math.ceil`
+//! rather than silently narrowing the ADR's own text. `math.floor`/`math.pow`
 //! are likewise withheld from the registry for the same reason: D-136 (via
 //! D-088's established series precedent) requires that nothing
 //! type-checkable here be left unlowerable in `pycc_mir`/`pycc_codegen`, and

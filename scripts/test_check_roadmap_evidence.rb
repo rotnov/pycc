@@ -2080,7 +2080,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # shape except runs-on: ubuntu-latest and the macOS brew-based LLVM
   # install swapped for native-build-test's own already-reviewed
   # apt.llvm.org Linux install step) -- retained as reviewed audit
-  # evidence per D-112's own Consequences in
+  # evidence per D-112's own 2026-08-01 update note in
   # docs/decisions/D-112-move-frontend-perf-measure-frontend-perf-gate.md.
   def test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture
     assert_equal(
