@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T08:32:49Z. The record pins the collector's and its suite's
+  2026-09-11T09:17:02Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T08:32:49Z` after the suite changed.
+  `--collected-at 2026-09-11T09:17:02Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -221,6 +221,25 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     `LIMITATIONS` already is. Cases in the execution, synthetic (a `--no-ff`
     merge fixture) and public-CLI suites, snapshot re-collected at
     `2026-09-11T08:32:49Z`, pins rotated.
+15. External, on PR #1008, three Codex P2s: a `<dt>` whose row is hidden or
+    missing, or two consecutive `<dt>`s, never entered the labelled set, so a
+    dangling visible label such as `<dt>Current gate result: ci-gate
+    failure</dt>` passed; the page's own `<style>` elements were a third
+    hiding source the scan never read (the parser marks `style` hidden and
+    drops its text); and the closed prose enumeration still let the
+    `<details>` toggle or the closing paragraph disappear. Fixed: a pending
+    label on the next `<dt>` or at the end of the list fails; the parser keeps
+    every `<style>` body and every `<link rel="stylesheet">` href, the hiding
+    scan runs over `site/styles.css` plus the embedded CSS (any `@import` is a
+    hit), and a stylesheet link other than `site/styles.css` fails; the prose
+    check requires the toggle and the closing paragraph exactly once (the
+    masthead stays optional). Cases in the synthetic and public-CLI suites,
+    snapshot re-collected at `2026-09-11T09:17:02Z` with `--subject 4111208c`:
+    the branch merged `origin/main` (`747a5677`) through a second parent, so
+    the newer tip is not on the branch's own first-parent history and the
+    round-14 check rejects it locally (the pull-request merge ref CI checks out
+    has the base tip as its first parent); `docs/WEBSITE.md` records the
+    `--subject` route. Pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

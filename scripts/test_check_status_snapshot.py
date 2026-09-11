@@ -579,13 +579,14 @@ class ProjectionTests(ProjectionCase):
             self.assert_page_rejected(moved, f"proof row missing for {gate['label']}")
         with self.subTest(mutation="hidden row"):
             hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
-            self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
+            # A visible label whose row is hidden is a dangling label: the pairing check fires first.
+            self.assert_page_rejected(hidden, "must pair one visible label with one row each")
         for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none", "opacity: 0", "opacity:0.0 !important",
                       "visibility: collapse", "content-visibility: hidden", "font-size: 0", "transform: scale(0)",
                       "opacity: .0", "font-size: .0px", "transform: scale(.00)"):
             with self.subTest(mutation=f"row hidden inline by {style}"):
                 hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd style="{style}">', 1)
-                self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
+                self.assert_page_rejected(hidden, "must pair one visible label with one row each")
         with self.subTest(mutation="summary hidden inline"):
             self.assert_page_rejected(page.replace("<span data-evidence-id=", '<span style="DISPLAY: NONE" data-evidence-id=', 1),
                                       "exactly one visible collapsed hero summary")
@@ -600,6 +601,12 @@ class ProjectionTests(ProjectionCase):
         with self.subTest(mutation="closing paragraph contradicted beside the required literals"):
             self.assert_page_rejected(page.replace("(read-only gh api).", "(read-only gh api; ci-gate failure).", 1),
                                       "hero prose must be exactly the reviewed masthead")
+        for name, extra in (("a dangling contradicting label", "<dt>Current gate result: ci-gate failure</dt>"),
+                            ("a doubled label", f'<dt>Note</dt><dt>{status.TIER1_HEADING}</dt><dd>{status.TIER1_HEADING_ROW}</dd>')):
+            with self.subTest(mutation=name):
+                target = "</dl>" if name.startswith("a dangling") else f"<dt>{status.TIER1_HEADING}</dt><dd>{status.TIER1_HEADING_ROW}</dd>"
+                self.assert_page_rejected(page.replace(target, extra + ("</dl>" if target == "</dl>" else ""), 1),
+                                          "must pair one visible label with one row each")
         with self.subTest(mutation="row without a label"):
             self.assert_page_rejected(page.replace(f'<dt>{gate["label"]}</dt>', "", 1),
                                       "must pair one visible label with one row each")
@@ -637,6 +644,42 @@ class HeroProseTests(ProjectionCase):
                 self.assertIn(old, self.page)
                 self.reject(self.page.replace(old, new, 1),
                             "hero prose must be exactly the reviewed masthead, the details toggle and the record's closing paragraph; unexpected: ")
+
+    def test_details_toggle_and_closing_paragraph_are_mandatory(self):
+        for name, old, new in (
+            ("toggle hidden", "<summary>", "<summary hidden>"),
+            ("toggle hidden inline", "<summary>", '<summary style="opacity: .0">'),
+            ("toggle removed", f"<summary>{status.HERO_DETAILS_TOGGLE}</summary>", ""),
+            ("closing paragraph moved outside the hero", "</details></header>", "</details></header><p>" + status.expected_closing_paragraph(self.hero) + "</p>"),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, self.page)
+                mutated = self.page.replace(old, new, 1)
+                if name.startswith("closing paragraph"):
+                    mutated = mutated.replace("<p>" + status.expected_closing_paragraph(self.hero) + "</p></details>", "</details>", 1)
+                site = self.projection(self.hero, mutated)
+                with self.assertRaises(SystemExit) as caught:
+                    status.validate_projection(self.hero, self.repo, site)
+                self.assertIn("must render the visible details toggle and the record's closing paragraph exactly once",
+                              str(caught.exception))
+
+    def test_embedded_stylesheets_and_foreign_links_are_checked(self):
+        for name, old, new, expected in (
+            ("style in head", "</head>", "<style>.content-page { display: none }</style></head>", "stylesheet must not hide"),
+            ("style in the hero", "<details>", "<details><style>dl { opacity: .0 }</style>", "stylesheet must not hide"),
+            ("import", "</head>", "<style>@import url(other.css);</style></head>", "stylesheet must not hide the evidence hero or its proof rows: @import"),
+            ("foreign stylesheet link", "</head>", '<link rel="stylesheet" href="../other.css"></head>', "may link no stylesheet but site/styles.css: ../other.css"),
+        ):
+            with self.subTest(mutation=name):
+                self.assertIn(old, self.page)
+                self.reject(self.page.replace(old, new, 1), expected)
+        for name, old, new in (
+            ("harmless embedded style", "</head>", "<style>footer p { display: none }</style></head>"),
+            ("the site stylesheet linked", "</head>", '<link rel="stylesheet" href="../styles.css?v=2"></head>'),
+        ):
+            with self.subTest(mutation=name):
+                site = self.projection(self.hero, self.page.replace(old, new, 1))
+                self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
 
     def test_reviewed_prose_block_cannot_repeat(self):
         for old in ("<h1>What pycc can do <span>today.</span></h1>", '<p class="eyebrow">Evidence page · Updated 2026-01-01</p>'):

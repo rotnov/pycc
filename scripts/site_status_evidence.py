@@ -473,10 +473,16 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
         self.ancestor_hooks = set()
         self.prose = []
         self.block_depth = None
+        self.embedded_css = []
+        self.stylesheets = []
 
     def handle_starttag(self, tag, attrs):
         links_before = len(self.links)
         starts_hero = dict(attrs).get("data-evidence-role") == "hero"
+        if tag == "style":
+            self.embedded_css.append("")
+        if tag == "link" and "stylesheet" in dict(attrs).get("rel", "").lower().split():
+            self.stylesheets.append(dict(attrs).get("href", ""))
         if starts_hero:
             self.ancestor_hooks.update(*self.ancestry, set())
         super().handle_starttag(tag, attrs)
@@ -506,6 +512,8 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
 
     def handle_data(self, text):
         super().handle_data(text)
+        if self.stack and self.stack[-1][0] == "style":
+            self.embedded_css[-1] += text
         if not (self.stack and self.stack[-1][2] and not self.stack[-1][1]):
             return
         if self.row_depth is not None:
@@ -527,6 +535,8 @@ def hiding_rules(css, parser):
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     reachable = parser.hero_hooks | parser.ancestor_hooks
     found = []
+    if re.search(r"@import\b", css, re.I):
+        found.append("@import")
     for selectors, body in CSS_RULE.findall(css):
         if not HIDING_RULE.search(body):
             continue
@@ -551,6 +561,8 @@ def proof_rows(parser):
         if tag == "summary":
             summaries.append((text, links))
         elif tag == "dt":
+            if label is not None:
+                fail("status proof rows must pair one visible label with one row each")
             label = text
         elif tag == "dd":
             if label is None or label in labelled:
@@ -559,6 +571,8 @@ def proof_rows(parser):
             label = None
         else:
             platforms.append((text, links))
+    if label is not None:
+        fail("status proof rows must pair one visible label with one row each")
     return labelled, platforms, summaries
 
 
@@ -592,6 +606,8 @@ def check_prose_blocks(hero, prose):
         if match in seen:
             fail(f"status hero prose block rendered twice: {text}")
         seen.append(match)
+    if HERO_DETAILS_TOGGLE not in seen or allowed[-1] not in seen:
+        fail("status hero must render the visible details toggle and the record's closing paragraph exactly once")
 
 
 def check_summary_line(hero, summaries):
@@ -668,7 +684,14 @@ def validate_projection(hero, repo_root, site_dir):
             fail(f"status visible proof row/limitation missing: {literal}")
     check_subject_rows(hero, labelled)
     check_platform_rows(hero, platforms)
-    hidden_by = hiding_rules((site_dir / "styles.css").read_text(), parser)
+    page_dir = (site_dir / hero["page_path"].removeprefix("site/")).parent
+    stylesheet = (site_dir / "styles.css").resolve()
+    for href in parser.stylesheets:
+        if (page_dir / href.split("?", 1)[0].split("#", 1)[0]).resolve() != stylesheet:
+            fail(f"status page may link no stylesheet but site/styles.css: {href}")
+    # The stylesheet, every embedded <style> element and any @import are one
+    # scan: an embedded rule hides the hero exactly as a linked one does.
+    hidden_by = hiding_rules("\n".join([stylesheet.read_text(), *parser.embedded_css]), parser)
     if hidden_by:
         fail("status stylesheet must not hide the evidence hero or its proof rows: " + ", ".join(hidden_by))
     for surface in ("markdown", "llm"):
