@@ -19,9 +19,15 @@ Language and Diagnostics now bind ordered executions from the preserved
 preparation tree and five successful Tier-1 jobs (D-230). Status binds a
 checked-in, offline-refreshed snapshot of the required checks (`ci-gate`,
 `audit`, five Tier-1 jobs) for exactly one default-branch revision (D-241).
-The other four page kinds remain explicitly `unavailable` until their owner
-issues accept real artifacts; explanatory pages are not promoted into proof
-by their existence. This cross-cutting publication contract does not change the
+Architecture binds a checked-in, re-derivable compiler pipeline trace (D-243,
+Part 2 of #566): `tests/fixtures/quick_start.py` carried through parser, HIR,
+type checking, MIR and a native build to a 26-byte stdout, with each stage's
+bytes checked in and re-derived by `tests/architecture_trace.rs` on all five
+Tier-1 targets. Its state is `partial`, not `all-Tier-1`: pycc has no `--emit`
+flag, so the LLVM IR stage carries no artifact, and one fixture is not the
+language. The other three page kinds remain explicitly `unavailable` until
+their owner issues accept real artifacts; explanatory pages are not promoted
+into proof by their existence. This cross-cutting publication contract does not change the
 current compiler milestone or any acceptance checklist below.
 
 The D-094 `--release` contract now has a focused semantic regression that
