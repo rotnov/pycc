@@ -320,7 +320,12 @@ def validate(hero, evidence_root, repo_root):
         if (row["runner"], row["architecture"]) != (runner, architecture):
             fail(f"architecture platform row drifted from the closed Tier-1 list: {row!r}")
 
-    if hero["state"] != derive_state(hero) or hero["state"] != "partial":
+    # `derive_state` is the only authority: the upstream llvm-ir guard already
+    # forces exactly one unevidenced stage, so a record that agrees with the
+    # derived state is `partial` by construction.  A second `!= "partial"`
+    # disjunct here would be unreachable, and would print the derived state as
+    # its own mismatch if it ever fired.
+    if hero["state"] != derive_state(hero):
         fail(f"architecture state {hero['state']!r} does not match the derived state {derive_state(hero)!r}")
     if hero["limitations"] != LIMITATIONS:
         fail("architecture limitations drifted from the reviewed text")

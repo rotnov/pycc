@@ -250,6 +250,61 @@ class PipelineEvidenceTests(unittest.TestCase):
             page.write_text(source.replace(line, "\n        node_index: NodeIndex(None),\n", 1))
         self.run_case(mutate, "exact leading bytes of their artifacts, in stage order")
 
+    def test_page_locale_drift_is_rejected(self):
+        """Both halves of the locale claim: the `lang` attribute and the meta tag.
+
+        This record's page is the first architecture page the locale check ever
+        sees -- the `unavailable` projection never reached it -- so without these
+        cases the check would be satisfied by a page nobody ever mutated.
+        """
+        for old, new in (
+            ('<html lang="en-US">', '<html lang="en">'),
+            ('<meta property="og:locale" content="en_US">',
+             '<meta property="og:locale" content="en_GB">'),
+        ):
+            with self.subTest(mutation=new):
+                def mutate(doc, site, root, old=old, new=new):
+                    page = site / "architecture/index.html"
+                    source = page.read_text()
+                    self.assertIn(old, source)
+                    page.write_text(source.replace(old, new, 1))
+                self.run_case(mutate, "architecture locale must be en-US / en_US")
+
+    def test_json_ld_language_drift_is_rejected(self):
+        """The JSON-LD language is a separate claim from the page's own locale."""
+        def mutate(doc, site, root):
+            page = site / "architecture/index.html"
+            source = page.read_text()
+            self.assertIn('"inLanguage": "en-US",', source)
+            page.write_text(source.replace('"inLanguage": "en-US",', '"inLanguage": "en",', 1))
+        self.run_case(mutate, "hero 'architecture' JSON-LD inLanguage must be en-US")
+
+    def test_a_symlinked_artifact_is_rejected(self):
+        """An artifact must be a real file: a symlink is refused even when its
+        target holds the pinned bytes, so the digest cannot be satisfied by
+        something the evidence root only points at."""
+        def mutate(doc, site, root):
+            victim = root / "tests/fixtures/architecture-trace/trace.json"
+            twin = victim.with_suffix(".json.twin")
+            twin.write_bytes(victim.read_bytes())
+            victim.unlink()
+            victim.symlink_to(twin.name)
+        self.run_case(mutate, "architecture trace record file is missing or unsafe")
+
+    def test_an_artifact_reached_through_an_escaping_directory_is_rejected(self):
+        """The path is a real file and no link itself, but an ancestor directory
+        is a symlink out of the evidence root -- the case the resolved-path
+        containment clause exists for, which a leaf-only check would accept."""
+        outside = Path(tempfile.mkdtemp(prefix="site-pipeline-outside-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+
+        def mutate(doc, site, root):
+            directory = root / "tests/fixtures/architecture-trace"
+            escaped = outside / "architecture-trace"
+            shutil.move(str(directory), str(escaped))
+            directory.symlink_to(escaped)
+        self.run_case(mutate, "architecture trace record file is missing or unsafe")
+
     def test_moving_branch_link_is_rejected(self):
         def mutate(doc, site, root):
             commit = doc["heroes"][ARCHITECTURE]["repository"]["commit"]
