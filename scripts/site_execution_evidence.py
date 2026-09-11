@@ -194,6 +194,11 @@ def summary(hero):
     return f"{hero['evidence_id']} — all-Tier-1: {executions}. {result} {hero['limitations']} [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc{hero['route']})."
 
 
+# CSS property names and keywords are case-insensitive, so an inline
+# ``style="DISPLAY: NONE"`` hides exactly as the lowercase form does.
+HIDING_DECLARATION = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+
+
 class VisibleExecutionParser(HTMLParser):
     """Parse visible hero code and primary-navigation links independently."""
     VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -217,7 +222,7 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", attrs.get("style", "")))
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or attrs.get("aria-hidden") == "true" or bool(HIDING_DECLARATION.search(attrs.get("style", "")))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav

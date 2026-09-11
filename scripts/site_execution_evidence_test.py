@@ -211,8 +211,10 @@ class ExecutionEvidenceTests(unittest.TestCase):
             for original, wrong in [('data-execution="source"', 'hidden data-execution="source"'),
                                     ('<code data-execution="source">', '<code data-execution="source">\n'),
                                     ('data-execution="source"', 'data-execution="another-source"'),
-                                    ('data-evidence-role="hero"', 'hidden data-evidence-role="hero"')]:
-                with self.subTest(slug=slug, original=original):
+                                    ('data-evidence-role="hero"', 'hidden data-evidence-role="hero"'),
+                                    ('data-evidence-role="hero"', 'style="DISPLAY: NONE" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'style="Visibility:Hidden" data-execution="source"')]:
+                with self.subTest(slug=slug, original=original, wrong=wrong):
                     self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "visible H1" if original == 'data-evidence-role="hero"' else "visible ordered")
 
     def test_every_visible_execution_unit_rejects_byte_and_visibility_drift(self):

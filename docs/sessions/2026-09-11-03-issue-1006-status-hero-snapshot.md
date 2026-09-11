@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T07:16:10Z. The record pins the collector's and its suite's
+  2026-09-11T07:43:45Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T07:16:10Z` after the suite changed.
+  `--collected-at 2026-09-11T07:43:45Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -180,6 +180,14 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     exactly once; `HIDING_RULE` is case-insensitive. Cases in the synthetic,
     collector and public-CLI suites, gate row and record description
     updated, snapshot re-collected at `2026-09-11T07:16:10Z`, pins rotated.
+12. External, on PR #1008, one Codex P2: an inline `style="DISPLAY: NONE"`
+    on a proof container or row still counted as visible because the
+    inherited `VisibleExecutionParser` matched inline declarations
+    case-sensitively. Fixed: one shared case-insensitive
+    `site_execution_evidence.HIDING_DECLARATION` serves both the inline
+    visibility model and the stylesheet scan; upper- and mixed-case inline
+    cases in the execution, synthetic and public-CLI suites, snapshot
+    re-collected at `2026-09-11T07:43:45Z`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

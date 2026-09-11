@@ -545,6 +545,13 @@ class ProjectionTests(SyntheticRepository):
         with self.subTest(mutation="hidden row"):
             hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd hidden>', 1)
             self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
+        for style in ("DISPLAY: NONE", "Visibility:Hidden", "color: red; DISPLAY:none"):
+            with self.subTest(mutation=f"row hidden inline by {style}"):
+                hidden = page.replace(f'<dt>{gate["label"]}</dt><dd>', f'<dt>{gate["label"]}</dt><dd style="{style}">', 1)
+                self.assert_page_rejected(hidden, f"proof row missing for {gate['label']}")
+        with self.subTest(mutation="summary hidden inline"):
+            self.assert_page_rejected(page.replace("<span data-evidence-id=", '<span style="DISPLAY: NONE" data-evidence-id=', 1),
+                                      "exactly one visible collapsed hero summary")
         with self.subTest(mutation="row without a label"):
             self.assert_page_rejected(page.replace(f'<dt>{gate["label"]}</dt>', "", 1),
                                       "must pair one visible label with one row each")

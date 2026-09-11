@@ -384,7 +384,7 @@ def summary(hero):
 
 
 ROW_TAGS = {"dt", "dd", "li"}
-HIDING_RULE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+HIDING_RULE = site_execution_evidence.HIDING_DECLARATION
 CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")

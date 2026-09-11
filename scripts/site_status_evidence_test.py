@@ -165,6 +165,12 @@ class StatusEvidenceTests(unittest.TestCase):
              "collapsed hero summary must read exactly as the record's state, subject, conclusions, pull request and capture time"),
             ('<span\n            data-evidence-id="status-snapshot-v1"', '<span hidden\n            data-evidence-id="status-snapshot-v1"',
              "exactly one visible collapsed hero summary"),
+            ('<span\n            data-evidence-id="status-snapshot-v1"', '<span style="DISPLAY: NONE"\n            data-evidence-id="status-snapshot-v1"',
+             "exactly one visible collapsed hero summary"),
+            ('<details class="hero-evidence-details">', '<details style="Visibility: Hidden" class="hero-evidence-details">',
+             "visible proof row/limitation missing"),
+            ("<dt>Pre-merge policy audit</dt>", '<dt style="DISPLAY:NONE">Pre-merge policy audit</dt>',
+             "proof rows must pair one visible label with one row each"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
