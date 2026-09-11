@@ -376,9 +376,10 @@ class AlphaSkillEvalTests(unittest.TestCase):
     def test_issue_to_plan_eval_fails_when_a_loop_contract_phrase_is_missing(
         self,
     ) -> None:
-        # #261: each of the four step-7/Output pins is checked individually.
-        # A single-phrase test would pass while three of the four pins are
-        # bound to nothing, which is exactly the state this change repairs.
+        # #261: every step-7/Output pin is checked individually. A single-phrase
+        # test would pass while the remaining pins are bound to nothing, which
+        # is exactly the state this change repairs. Select the loop pins by name
+        # so adding a publish-gate pin cannot silently move the boundary.
         raw = evals.canonical_skill("claude", "issue-to-plan")
         normalized = " ".join(raw.split())
         case = next(
@@ -386,8 +387,10 @@ class AlphaSkillEvalTests(unittest.TestCase):
             for case in evals.load_cases("issue-to-plan")
             if case["runner"] == "clean-round-permits-publication"
         )
-        loop_phrases = tuple(evals.ISSUE_TO_PLAN_CONTRACT)[3:]
-        self.assertEqual(len(loop_phrases), 4)
+        loop_phrases = evals.ISSUE_TO_PLAN_LOOP_CONTRACT
+        self.assertEqual(
+            tuple(evals.ISSUE_TO_PLAN_CONTRACT)[-len(loop_phrases) :], loop_phrases
+        )
         for phrase in loop_phrases:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized)

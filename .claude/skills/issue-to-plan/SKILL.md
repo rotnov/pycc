@@ -224,8 +224,10 @@ ran out: a round that raised nothing is clean only when the reviewer actually re
 
 An impasse is the only other exit, and it forbids publishing: a fifth round that still produces a
 concrete edit, or the same finding surviving two genuine resolution attempts. Report the open
-disagreements and publish nothing. `issue-implement`'s deep-review loop carries a sibling rule for
-its own loop; that is a different loop, not this one, and neither governs the other.
+disagreements and publish nothing. An impasse outranks a clean round: a finding that has survived
+two genuine resolution attempts puts the loop at an impasse even when the latest round produced no
+concrete edit. `issue-implement`'s deep-review loop carries a sibling rule for its own loop; that
+is a different loop, not this one, and neither governs the other.
 
 If the reviewer contradicts primary-source evidence already gathered, do not silently switch:
 surface the conflict and reconcile it against the source. Record which state the loop ended in.

@@ -105,10 +105,9 @@ FEEDBACK_CONTRACT = (
 # literal substrings that must survive in the canonical skill text, so an edit
 # that silently drops the invariant these offline oracles encode is caught
 # here rather than only in a future authenticated model-response eval.
-ISSUE_TO_PLAN_CONTRACT = (
-    "shown to the user and explicitly approved before any write to GitHub",
-    "Approval is per payload",
-    "Delegated invocation is the one exception",
+# Step 7's review-loop invariants, named separately so tests can select exactly
+# these without depending on their position inside ISSUE_TO_PLAN_CONTRACT.
+ISSUE_TO_PLAN_LOOP_CONTRACT = (
     "A round is clean when it produced no concrete edit to the plan \u2014 either it "
     "raised no findings at all, or every finding it raised was resolved as "
     '"considered, no change, because X".',
@@ -116,9 +115,18 @@ ISSUE_TO_PLAN_CONTRACT = (
     "An impasse is the only other exit, and it forbids publishing: a fifth round "
     "that still produces a concrete edit, or the same finding surviving two genuine "
     "resolution attempts.",
+    "An impasse outranks a clean round: a finding that has survived two genuine "
+    "resolution attempts puts the loop at an impasse even when the latest round "
+    "produced no concrete edit.",
     "The summary also reports step 7's terminal state: clean, naming the clean "
     "round's number, or impasse, naming which arm fired.",
 )
+
+ISSUE_TO_PLAN_CONTRACT = (
+    "shown to the user and explicitly approved before any write to GitHub",
+    "Approval is per payload",
+    "Delegated invocation is the one exception",
+) + ISSUE_TO_PLAN_LOOP_CONTRACT
 ISSUE_IMPLEMENT_CONTRACT = (
     "Do not close",
     "touching another issue",
