@@ -1,6 +1,6 @@
 ---
 name: issue-to-plan
-description: Use this alpha project skill when the user wants a GitHub issue in this repository turned into a detailed, verified implementation plan for whoever picks the issue up next, or asks to plan, scope, or spec an issue before any code is written. Re-establish the current main and open pull requests first, verify every claim the issue makes against the tree instead of trusting it, run an adversarial review loop until a round changes nothing, and publish the plan as an issue comment only after showing the exact payload and receiving explicit approval for it.
+description: Use this alpha project skill when the user wants a GitHub issue in this repository turned into a detailed, verified implementation plan for whoever picks the issue up next, or asks to plan, scope, or spec an issue before any code is written. Re-establish the current main and open pull requests first, verify every claim the issue makes against the tree instead of trusting it, run an adversarial review loop until a round changes nothing or the loop reaches an impasse that forbids publishing, and publish the plan as an issue comment only after showing the exact payload and receiving explicit approval for it.
 ---
 
 # issue-to-plan (Alpha)
@@ -9,8 +9,9 @@ Turn one GitHub issue into an implementation plan a *different* session can exec
 re-deriving the repository's constraints. The plan is the deliverable; no implementation code is
 written under this skill.
 
-This project-local skill is alpha. It has no bound evaluation runners yet, so treat its output as
-a reviewed draft rather than a validated workflow.
+This project-local skill is alpha. It binds deterministic offline evaluation cases in
+`scripts/run_alpha_skill_evals.py`, but no authenticated model-response eval, so treat its
+output as a reviewed draft rather than a validated workflow.
 
 ## Scope
 
@@ -32,7 +33,9 @@ about the codebase. If the user wants the change made rather than planned, stop 
 3. **Publishing is gated.** The exact comment body is shown to the user and explicitly approved
    before any write to GitHub. Approval is per payload: an edit to the plan requires a fresh
    approval of the edited body. The one exception is delegated invocation by exactly
-   `issue-implement` — today's only qualifying delegate — see the Publish step.
+   `issue-implement` — today's only qualifying delegate — see the Publish step. That exception
+   waives the approval gate only. Publication is additionally gated on step 7's clean terminal
+   state, on every path including the delegated one.
 4. **No repository mutation is implied.** Drafts live in a scratch location outside the working
    tree. Committing a design document, opening a branch, or editing tracked files happens only
    when the user asks for it separately.
@@ -206,18 +209,30 @@ inferred.
 ### 7. Adversarial review loop
 
 Run the draft past an independent reviewer — the strongest available, in a context that has seen
-the work. Two or three rounds.
+the work. Two or three rounds is the expected length, not a terminal condition: never advance to
+Publish merely because a round count has elapsed.
 
-Each round must end in one of two states, recorded:
+Each finding a round raises must end in one of two states, recorded:
 
 - a concrete edit to the plan, or
 - an explicit "considered, no change, because X".
 
-A round that produces neither means the loop is finished. "Clean" means a round changed nothing —
-not that the ideas ran out. If the reviewer contradicts primary-source evidence already gathered,
-do not silently switch: surface the conflict and reconcile it against the source.
+A round is clean when it produced no concrete edit to the plan — either it raised no findings at
+all, or every finding it raised was resolved as "considered, no change, because X". The loop
+terminates on the first clean round. "Clean" means a round changed nothing — not that the ideas
+ran out: a round that raised nothing is clean only when the reviewer actually reviewed.
+
+An impasse is the only other exit, and it forbids publishing: a fifth round that still produces a
+concrete edit, or the same finding surviving two genuine resolution attempts. Report the open
+disagreements and publish nothing. `issue-implement`'s deep-review loop carries a sibling rule for
+its own loop; that is a different loop, not this one, and neither governs the other.
+
+If the reviewer contradicts primary-source evidence already gathered, do not silently switch:
+surface the conflict and reconcile it against the source. Record which state the loop ended in.
 
 ### 8. Publish
+
+This step is entered only from step 7's clean terminal state, never from an impasse.
 
 Re-fetch the remote default branch and re-check the open pull requests. If either moved in a way
 the plan depends on, fix the plan first.
@@ -244,12 +259,15 @@ its own "authorized writes" section.
 
 ## Stop conditions
 
-5 rounds of the adversarial review loop (step 7) without a clean round — one producing neither
-a concrete edit nor an explicit "considered, no change, because X" — is a stop condition: do
-not start a 6th round. Report the open disagreements rather than continuing indefinitely.
+An impasse in the adversarial review loop, exactly as step 7 defines one, is a stop condition:
+do not start a further round, and publish nothing. Step 7 owns that definition; it is not
+restated here.
 
 ## Output
 
 A single issue comment containing the plan, plus a short summary to the user covering: the
 baseline commit planned against, the corrections found in the issue, the number of review rounds
 and what each changed, and anything that could not be verified in this environment.
+
+The summary also reports step 7's terminal state: clean, naming the clean round's number, or
+impasse, naming which arm fired. An impasse terminal state means nothing was published.
