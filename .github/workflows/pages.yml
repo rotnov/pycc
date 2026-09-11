@@ -10,6 +10,11 @@ on:
       - "scripts/check_site_evidence.py"
       - "scripts/site_execution_evidence.py"
       - "scripts/site_execution_evidence_test.py"
+      - "scripts/site_status_evidence.py"
+      - "scripts/site_status_evidence_test.py"
+      - "scripts/check_status_snapshot.py"
+      - "scripts/test_check_status_snapshot.py"
+      - "scripts/collect_status_snapshot.py"
       - "tests/site_evidence.rs"
       - "tests/fixtures/pep_0526_var_annotations.py"
       - "tests/fixtures/pep_0526_var_annotations.expected.txt"
@@ -71,6 +76,11 @@ on:
       - "scripts/check_site_evidence.py"
       - "scripts/site_execution_evidence.py"
       - "scripts/site_execution_evidence_test.py"
+      - "scripts/site_status_evidence.py"
+      - "scripts/site_status_evidence_test.py"
+      - "scripts/check_status_snapshot.py"
+      - "scripts/test_check_status_snapshot.py"
+      - "scripts/collect_status_snapshot.py"
       - "tests/site_evidence.rs"
       - "tests/fixtures/pep_0526_var_annotations.py"
       - "tests/fixtures/pep_0526_var_annotations.expected.txt"
@@ -207,6 +217,26 @@ jobs:
             exit 0
           fi
           ruby scripts/check_site_pin_merge_currency.rb "${BASE_SHA}" "${HEAD_SHA}" .
+
+      - name: Check the status snapshot's currency against the pull request (issue #1006)
+        # Pull-request leg only: the status hero pins one default-branch
+        # commit, and this step bounds how far behind the pull request's base
+        # that commit may fall (first-parent distance) so a stale snapshot is
+        # refreshed before it is published rather than after. The push leg
+        # validates the committed record itself through the Validate website
+        # step above (scripts/check_status_snapshot.py --verify-git via
+        # scripts/check-site.sh). Full history is required (fetch-depth: 0).
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "Not a pull_request event (or no usable base revision); skipping."
+            exit 0
+          fi
+          python3 scripts/check_status_snapshot.py --currency --base "${BASE_SHA}" --head "${HEAD_SHA}" \
+            --max-first-parent-distance 20 site/evidence-heroes.json . .
 
       - name: Upload website
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
