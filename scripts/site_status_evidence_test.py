@@ -131,6 +131,14 @@ class StatusEvidenceTests(unittest.TestCase):
             doc.update(json.loads((site / "evidence-heroes.json").read_text()))
         self.run_case(mutate, "tree differs from the recorded tree")
 
+    def test_check_from_another_workflow_or_event_is_rejected(self):
+        for index, field, value in ((2, "workflow_path", ".github/workflows/ci.yml"), (2, "event", "pull_request"),
+                                    (1, "workflow_path", ".github/workflows/workflow-policy.yml"), (1, "event", "pull_request")):
+            with self.subTest(index=index, field=field):
+                self.run_case(lambda doc, site, root, i=index, f=field, v=value:
+                              doc["heroes"][STATUS]["snapshot"]["subjects"][i].__setitem__(f, v),
+                              "must be observed in run of .github/workflows/")
+
     def test_two_parent_subject_is_rejected(self):
         self.run_case(lambda doc, site, root: doc["heroes"][STATUS]["snapshot"]["subjects"][0].__setitem__("parent_count", 2),
                       "exactly one parent")

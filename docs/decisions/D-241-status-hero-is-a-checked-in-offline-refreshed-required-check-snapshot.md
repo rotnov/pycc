@@ -42,7 +42,12 @@ status: accepted
     at the subject and the required-context names.
   - Unknown is not green. `scripts/collect_status_snapshot.py` reads GitHub
     only through the read-only `gh api` endpoints (commits, pulls,
-    check-runs, paginated), writes only the enumerated fields, and never
+    check-runs, paginated, and the workflow run behind each check's job,
+    which must be the workflow file and trigger event bound to that
+    context -- `ci.yml` under `push`, `workflow-policy.yml` under
+    `pull_request_target` -- on the observed commit, since App 15368 is
+    GitHub Actions as a whole rather than one workflow), writes only the
+    enumerated fields, and never
     writes `success` for an absent, incomplete, ambiguous or non-completed
     run: any such answer makes the state `unavailable`, and the collector
     then exits non-zero and leaves the manifest untouched. The validator

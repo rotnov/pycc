@@ -71,10 +71,12 @@ def make_evidence_root(root):
 
 def record(commit, tree, head_sha="a" * 40):
     def check(identity, label, name, sha, run, job, completed):
+        path, event = status.EXPECTED_WORKFLOWS[name]
         return {
             "id": identity, "label": label, "sha": sha, "check": name, "app_id": status.APP_ID,
             "conclusion": "success", "completed_at": completed, "run_id": run,
             "run_url": f"{status.REPO}/actions/runs/{run}", "job_url": f"{status.REPO}/actions/runs/{run}/job/{job}",
+            "workflow_path": path, "event": event,
         }
     platforms = [
         {"runner": runner, "architecture": architecture, "check_run_name": name, "conclusion": "success",
@@ -94,7 +96,7 @@ def record(commit, tree, head_sha="a" * 40):
         "snapshot": {"subjects": [
             {"id": "published-revision", "label": "Published revision (default branch)", "sha": commit,
              "check": None, "app_id": None, "conclusion": None, "completed_at": None, "run_id": None,
-             "run_url": None, "job_url": None, "tree": tree, "parent_count": 1,
+             "run_url": None, "job_url": None, "workflow_path": None, "event": None, "tree": tree, "parent_count": 1,
              "merged_pull_request": {"number": 1005, "head_sha": head_sha, "head_tree": tree,
                                      "url": f"{status.REPO}/pull/1005", "merged_at": "2026-09-11T01:59:50Z"}},
             check("post-merge-ci-gate", "Post-merge CI gate", "ci-gate", commit, GATE_RUN, 103121414776, "2026-09-11T02:10:46Z"),
@@ -164,7 +166,8 @@ class RecordInvariantTests(SyntheticRepository):
             for key in sorted(shape[field]):
                 self.assert_rejected(lambda hero, f=field, k=key: hero[f].pop(k), "fields drifted")
             self.assert_rejected(lambda hero, f=field: hero[f].__setitem__("extra", 1), "fields drifted")
-        for index, key in [(0, "merged_pull_request"), (0, "tree"), (0, "parent_count"), (1, "run_url"), (2, "job_url")]:
+        for index, key in [(0, "merged_pull_request"), (0, "tree"), (0, "parent_count"), (1, "run_url"), (2, "job_url"),
+                           (1, "workflow_path"), (2, "event")]:
             self.assert_rejected(lambda hero, i=index, k=key: hero["snapshot"]["subjects"][i].pop(k), "fields drifted")
         for key in ("head_tree", "merged_at"):
             self.assert_rejected(lambda hero, k=key: hero["snapshot"]["subjects"][0]["merged_pull_request"].pop(k), "fields drifted")
@@ -181,6 +184,23 @@ class RecordInvariantTests(SyntheticRepository):
 
     def test_wrong_app_id_is_rejected(self):
         self.assert_rejected(lambda hero: hero["snapshot"]["subjects"][1].__setitem__("app_id", 1), "app_id must be 15368")
+
+    def test_checks_are_bound_to_their_workflow_file_and_event(self):
+        cases = [
+            (2, "workflow_path", ".github/workflows/ci.yml",
+             "pre-merge-audit must be observed in run of .github/workflows/workflow-policy.yml under pull_request_target, "
+             "not '.github/workflows/ci.yml' under 'pull_request_target'"),
+            (2, "event", "pull_request", "not '.github/workflows/workflow-policy.yml' under 'pull_request'"),
+            (1, "workflow_path", ".github/workflows/workflow-policy.yml",
+             "post-merge-ci-gate must be observed in run of .github/workflows/ci.yml under push"),
+            (1, "event", "pull_request", "not '.github/workflows/ci.yml' under 'pull_request'"),
+            (1, "event", None, "not '.github/workflows/ci.yml' under None"),
+            (0, "workflow_path", ".github/workflows/ci.yml", "published-revision workflow_path must be null"),
+            (0, "event", "push", "published-revision event must be null"),
+        ]
+        for index, field, value, fragment in cases:
+            with self.subTest(index=index, field=field, value=value):
+                self.assert_rejected(lambda hero, i=index, f=field, v=value: hero["snapshot"]["subjects"][i].__setitem__(f, v), fragment)
 
     def test_audit_must_predate_the_merge_and_the_gate_must_follow_it(self):
         merged = lambda hero: hero["snapshot"]["subjects"][0]["merged_pull_request"]

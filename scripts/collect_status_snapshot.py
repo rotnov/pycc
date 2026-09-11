@@ -1,12 +1,18 @@
 """Refresh the status hero's commit-bound required-check snapshot (D-241).
 
 Offline agent tool, never run in CI.  It reads GitHub through the
-authenticated ``gh api`` CLI (read-only endpoints only: commits, pulls and
-check-runs), builds the ``status`` record through
+authenticated ``gh api`` CLI (read-only endpoints only: commits, pulls,
+check-runs and actions/runs), builds the ``status`` record through
 ``site_status_evidence.expected_shape``/``derive_state`` and rewrites only that
 record in ``site/evidence-heroes.json``.  Anything missing, inaccessible,
 ambiguous or non-success makes the observation ``unavailable``: the collector
 then reports why, exits non-zero and leaves the manifest untouched.
+
+A check-run is identified by more than its name: the workflow run behind
+its job URL must be the one workflow file and trigger event
+``site_status_evidence.EXPECTED_WORKFLOWS`` binds that context to, on the
+observed commit.  App 15368 is GitHub Actions as a whole, so the name alone
+would accept a job called ``audit`` published by any other workflow.
 
 Sanitization: only the enumerated fields are written.  No tokens, actor logins
 or timestamps other than the provider's ``completed_at`` and ``merged_at`` and
@@ -110,8 +116,26 @@ def merged_pull_request(sha):
     return number, head_sha, merged_at
 
 
-def check_run(runs, name, sha):
-    """The single app-15368 check-run named ``name``, as sanitized fields."""
+def workflow_run(run_id, cache):
+    """``(path, event, head_sha)`` of workflow run ``run_id``, memoized per collection."""
+    if run_id not in cache:
+        _, body = gh_api(f"{API}/actions/runs/{run_id}")
+        try:
+            facts = (body["path"], body["event"], body["head_sha"])
+        except (KeyError, TypeError):
+            raise Unavailable(f"workflow-run payload for run {run_id} is malformed")
+        if not all(isinstance(value, str) for value in facts) or not status.SHA_RE.match(facts[2]):
+            raise Unavailable(f"workflow-run payload for run {run_id} is malformed")
+        cache[run_id] = facts
+    return cache[run_id]
+
+
+def check_run(runs, name, sha, cache):
+    """The single app-15368 check-run named ``name``, as sanitized fields.
+
+    A required context (``ci-gate``, ``audit``) is also bound to its workflow
+    file and trigger event through the run behind its job URL.
+    """
     matches = [run for run in runs if run.get("name") == name and (run.get("app") or {}).get("id") == status.APP_ID]
     if len(matches) != 1:
         raise Unavailable(f"check-run {name!r} on {sha} is missing or ambiguous ({len(matches)} found)")
@@ -119,6 +143,13 @@ def check_run(runs, name, sha):
     match = status.JOB_URL_RE.match(run.get("html_url") or "")
     if not match:
         raise Unavailable(f"check-run {name!r} on {sha} has no immutable job URL")
+    path, event, head_sha = workflow_run(int(match[1]), cache)
+    if head_sha != sha:
+        raise Unavailable(f"check-run {name!r} on {sha} belongs to run {match[1]}, which ran on {head_sha}")
+    expected = status.EXPECTED_WORKFLOWS.get(name)
+    if expected is not None and (path, event) != expected:
+        raise Unavailable(f"check-run {name!r} on {sha} comes from {path} under {event}, "
+                          f"not {expected[0]} under {expected[1]}")
     conclusion = run.get("conclusion") if run.get("status") == "completed" else None
     completed_at = run.get("completed_at") if conclusion is not None else None
     if completed_at is not None and not status.is_utc_instant(completed_at):
@@ -129,6 +160,8 @@ def check_run(runs, name, sha):
         "run_id": int(match[1]),
         "run_url": f"{status.REPO}/actions/runs/{match[1]}",
         "job_url": run["html_url"],
+        "workflow_path": path,
+        "event": event,
     }
 
 
@@ -152,8 +185,9 @@ def build_record(subject, repo_root, collected_at):
         raise Unavailable("merged pull request head equals the merge commit")
     main_runs = paginated_check_runs(commit)
     head_runs = paginated_check_runs(head_full)
-    gate = check_run(main_runs, "ci-gate", commit)
-    audit = check_run(head_runs, "audit", head_full)
+    workflow_runs = {}
+    gate = check_run(main_runs, "ci-gate", commit, workflow_runs)
+    audit = check_run(head_runs, "audit", head_full, workflow_runs)
     if audit["completed_at"] is not None and audit["completed_at"] > merged_at:
         raise Unavailable(f"audit on {head_full} completed at {audit['completed_at']}, after #{number} merged at {merged_at}; "
                           "a post-merge rerun is not the pre-merge audit")
@@ -161,7 +195,7 @@ def build_record(subject, repo_root, collected_at):
         raise Unavailable(f"ci-gate on {commit} completed at {gate['completed_at']}, before #{number} merged at {merged_at}")
     platforms = []
     for name, runner, architecture in status.TIER1:
-        row = check_run(main_runs, name, commit)
+        row = check_run(main_runs, name, commit, workflow_runs)
         if row["run_id"] != gate["run_id"]:
             raise Unavailable(f"Tier-1 job {name!r} belongs to run {row['run_id']}, not the ci-gate run {gate['run_id']}")
         platforms.append({"runner": runner, "architecture": architecture, "check_run_name": name,
@@ -180,7 +214,7 @@ def build_record(subject, repo_root, collected_at):
         "snapshot": {"subjects": [
             {"id": status.SUBJECTS[0][0], "label": status.SUBJECTS[0][1], "sha": commit, "check": None,
              "app_id": None, "conclusion": None, "completed_at": None, "run_id": None, "run_url": None,
-             "job_url": None, "tree": tree, "parent_count": parent_count,
+             "job_url": None, "workflow_path": None, "event": None, "tree": tree, "parent_count": parent_count,
              "merged_pull_request": {"number": number, "head_sha": head_full, "head_tree": head_tree,
                                      "url": f"{status.REPO}/pull/{number}", "merged_at": merged_at}},
             {"id": status.SUBJECTS[1][0], "label": status.SUBJECTS[1][1], "sha": commit,

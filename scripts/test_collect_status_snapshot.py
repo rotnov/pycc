@@ -58,10 +58,16 @@ def main_runs():
     return runs
 
 
+def workflow_run(path, event, head_sha):
+    return {"body": {"path": path, "event": event, "head_sha": head_sha, "name": "x", "actor": {"login": "someone"}}}
+
+
 def responses(commit, tree="d9d6b55888897921f3dba4b14868b9c78b61bb9f"):
     api = collector.API
     runs = main_runs()
     return {
+        f"{api}/actions/runs/{GATE_RUN}": workflow_run(".github/workflows/ci.yml", "push", commit),
+        f"{api}/actions/runs/{AUDIT_RUN}": workflow_run(".github/workflows/workflow-policy.yml", "pull_request_target", HEAD),
         f"{api}/commits/{commit}": {"body": {"sha": commit, "parents": [{"sha": "1" * 40}], "commit": {"tree": {"sha": tree}}}},
         f"{api}/commits/{HEAD}": {"body": {"sha": HEAD, "parents": [{"sha": "2" * 40}], "commit": {"tree": {"sha": tree}}}},
         f"{api}/commits/{commit}/pulls": {"body": [
@@ -169,6 +175,10 @@ class HappyPathTests(CollectorHarness):
         self.assertEqual(subjects[1]["run_id"], GATE_RUN)
         self.assertEqual(subjects[2]["run_id"], AUDIT_RUN)
         self.assertEqual(subjects[2]["completed_at"], "2026-09-11T01:50:30Z")
+        self.assertEqual((subjects[1]["workflow_path"], subjects[1]["event"]), (".github/workflows/ci.yml", "push"))
+        self.assertEqual((subjects[2]["workflow_path"], subjects[2]["event"]),
+                         (".github/workflows/workflow-policy.yml", "pull_request_target"))
+        self.assertEqual((subjects[0]["workflow_path"], subjects[0]["event"]), (None, None))
         self.assertEqual([row["runner"] for row in hero["environment"]["platforms"]], [row[1] for row in status.TIER1])
         self.assertEqual(set(hero["stable_links"]), {"commit", "tree", "merged_pull_request", "ci_gate_run", "audit_run",
                                                      *(f"job_{row[1]}" for row in status.TIER1)})
@@ -311,7 +321,41 @@ class UnavailableTests(CollectorHarness):
         path = self.api(f"commits/{self.commit}/check-runs?per_page=100&page=1")
         runs = self.responses[path]["body"]["check_runs"]
         runs[3] = check_run(status.TIER1[1][0], GATE_RUN + 1, 5)
+        self.responses[self.api(f"actions/runs/{GATE_RUN + 1}")] = workflow_run(".github/workflows/ci.yml", "push", self.commit)
         self.assert_unavailable("belongs to run")
+
+    def test_check_run_from_another_workflow_event_or_commit_is_unavailable(self):
+        audit = self.api(f"actions/runs/{AUDIT_RUN}")
+        self.responses[audit] = workflow_run(".github/workflows/ci.yml", "pull_request_target", HEAD)
+        self.assert_unavailable("check-run 'audit' on " + HEAD + " comes from .github/workflows/ci.yml under pull_request_target, "
+                                "not .github/workflows/workflow-policy.yml under pull_request_target")
+        self.responses[audit] = workflow_run(".github/workflows/workflow-policy.yml", "pull_request", HEAD)
+        self.assert_unavailable("under pull_request, not .github/workflows/workflow-policy.yml under pull_request_target")
+        self.responses[audit] = workflow_run(".github/workflows/workflow-policy.yml", "pull_request_target", self.commit)
+        self.assert_unavailable("check-run 'audit' on " + HEAD + " belongs to run " + str(AUDIT_RUN) + ", which ran on " + self.commit)
+        self.responses[audit] = workflow_run(".github/workflows/workflow-policy.yml", "pull_request_target", HEAD)
+        gate = self.api(f"actions/runs/{GATE_RUN}")
+        self.responses[gate] = workflow_run(".github/workflows/ci.yml", "pull_request", self.commit)
+        self.assert_unavailable("check-run 'ci-gate' on " + self.commit + " comes from .github/workflows/ci.yml under pull_request, "
+                                "not .github/workflows/ci.yml under push")
+        self.responses[gate] = {"body": {"path": ".github/workflows/ci.yml", "event": "push"}}
+        self.assert_unavailable("workflow-run payload for run " + str(GATE_RUN) + " is malformed")
+        self.responses[gate] = {"body": {"path": ".github/workflows/ci.yml", "event": "push", "head_sha": "short"}}
+        self.assert_unavailable("workflow-run payload for run " + str(GATE_RUN) + " is malformed")
+        self.responses[gate] = {"body": [1]}
+        self.assert_unavailable("workflow-run payload for run " + str(GATE_RUN) + " is malformed")
+        self.responses[gate] = {"exit": 1, "stderr": "HTTP 404: Not Found"}
+        self.assert_unavailable("gh api " + gate + " failed: HTTP 404")
+
+    def test_workflow_runs_are_queried_once_per_run(self):
+        # Six check-runs share the ci-gate run; the run endpoint must be read once for it and once for audit.
+        calls = []
+        original = collector.gh_api
+        with mock.patch.object(collector, "gh_api", side_effect=lambda path: (calls.append(path), original(path))[1]):
+            code, _, err = self.run_collector()
+        self.assertEqual(code, 0, err)
+        self.assertEqual([path for path in calls if "/actions/runs/" in path],
+                         [self.api(f"actions/runs/{GATE_RUN}"), self.api(f"actions/runs/{AUDIT_RUN}")])
 
     def test_missing_job_url_or_bad_timestamp_is_unavailable(self):
         path = self.api(f"commits/{self.commit}/check-runs?per_page=100&page=1")
@@ -332,6 +376,7 @@ class UnavailableTests(CollectorHarness):
             self.responses[path.replace(self.commit, subject)] = copy.deepcopy(value)
         self.responses[f"{collector.API}/commits/{subject}"]["body"]["sha"] = subject
         self.responses[f"{collector.API}/commits/{subject}/pulls"]["body"][0]["merge_commit_sha"] = subject
+        self.responses[f"{collector.API}/actions/runs/{GATE_RUN}"]["body"]["head_sha"] = subject
         before = self.manifest.read_text()
         code, _, err = self.run_collector(subject=subject)
         self.assertEqual(code, 1)
@@ -349,6 +394,7 @@ class UnavailableTests(CollectorHarness):
             self.responses[path.replace(self.commit, subject)] = copy.deepcopy(value)
         self.responses[f"{collector.API}/commits/{subject}"]["body"]["sha"] = subject
         self.responses[f"{collector.API}/commits/{subject}/pulls"]["body"][0]["merge_commit_sha"] = subject
+        self.responses[f"{collector.API}/actions/runs/{GATE_RUN}"]["body"]["head_sha"] = subject
         code, _, err = self.run_collector(subject=subject)
         self.assertEqual(code, 1)
         self.assertIn("cannot read docs/ROADMAP.md", err)

@@ -461,17 +461,18 @@
       "page_path": "site/status/index.html",
       "fixture": {
         "path": "scripts/collect_status_snapshot.py",
-        "sha256": "227a32d517e63636078546189cfd483822866c5e85c24fe8f0b7d8afee78d3f9"
+        "sha256": "b031a8bdc01e7fb792df5ab0b292be344b13532d5a58f36d304b0293ebeeca49"
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "c9ad218f0fc11ae8abccfb7d5c9b596f082a08139e7d1daa83016761488af365",
+        "sha256": "8b150355e77eefcd4d2b7ef7223b84716e4629523fb24ff6a4b51064f6e0c0d6",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
           "test_head_tree_mismatch_is_rejected",
           "test_another_pull_request_head_is_rejected_when_audit_stays_on_the_old_head",
           "test_wrong_app_id_is_rejected",
+          "test_checks_are_bound_to_their_workflow_file_and_event",
           "test_audit_must_predate_the_merge_and_the_gate_must_follow_it",
           "test_missing_merged_pull_request_is_rejected",
           "test_unequal_trees_are_rejected",
@@ -545,6 +546,8 @@
             "run_id": null,
             "run_url": null,
             "job_url": null,
+            "workflow_path": null,
+            "event": null,
             "tree": "d9d6b55888897921f3dba4b14868b9c78b61bb9f",
             "parent_count": 1,
             "merged_pull_request": {
@@ -565,7 +568,9 @@
             "completed_at": "2026-09-11T02:10:46Z",
             "run_id": 34552872912,
             "run_url": "https://github.com/rotnov/pycc/actions/runs/34552872912",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103121414776"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552872912/job/103121414776",
+            "workflow_path": ".github/workflows/ci.yml",
+            "event": "push"
           },
           {
             "id": "pre-merge-audit",
@@ -577,7 +582,9 @@
             "completed_at": "2026-09-11T01:50:30Z",
             "run_id": 34552229293,
             "run_url": "https://github.com/rotnov/pycc/actions/runs/34552229293",
-            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163"
+            "job_url": "https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163",
+            "workflow_path": ".github/workflows/workflow-policy.yml",
+            "event": "pull_request_target"
           }
         ]
       },
@@ -587,8 +594,8 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T11:54:15Z",
-        "collection_method": "gh api check-runs, commits, pulls (read-only)",
+        "collected_at": "2026-09-11T12:35:04Z",
+        "collection_method": "gh api check-runs, actions/runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",
         "required_contexts": [

@@ -25,9 +25,17 @@ OWNER_ISSUE = f"{REPO}/issues/566"
 KIND = "required-checks-snapshot"
 APP_ID = 15368
 REQUIRED_CONTEXTS = ["ci-gate", "audit"]
+# Each required context is bound to the one workflow file and trigger event
+# that may produce it: App 15368 is GitHub Actions as a whole, so a check-run
+# name alone would accept any workflow (or a pull request's own workflow YAML
+# under ``pull_request``) that happens to publish a job by that name.
+EXPECTED_WORKFLOWS = {
+    "ci-gate": (".github/workflows/ci.yml", "push"),
+    "audit": (".github/workflows/workflow-policy.yml", "pull_request_target"),
+}
 COLLECTOR = "scripts/collect_status_snapshot.py"
 TEST = "scripts/test_check_status_snapshot.py"
-COLLECTION_METHOD = "gh api check-runs, commits, pulls (read-only)"
+COLLECTION_METHOD = "gh api check-runs, actions/runs, commits, pulls (read-only)"
 REQUIRES = "gh auth (read-only), run offline by the refreshing agent; never in CI"
 MILESTONE_MARKER = "**Current milestone:"
 # Closed Tier-1 job list.  These are check-runs of the CI workflow run that
@@ -103,9 +111,9 @@ def expected_shape():
         "command": {"cwd", "argv", "requires"},
         "snapshot": {"subjects"},
         "subject": {"id", "label", "sha", "check", "app_id", "conclusion",
-                    "completed_at", "run_id", "run_url", "job_url"},
+                    "completed_at", "run_id", "run_url", "job_url", "workflow_path", "event"},
         "published-revision": {"id", "label", "sha", "check", "app_id", "conclusion",
-                               "completed_at", "run_id", "run_url", "job_url",
+                               "completed_at", "run_id", "run_url", "job_url", "workflow_path", "event",
                                "tree", "parent_count", "merged_pull_request"},
         "merged_pull_request": {"number", "head_sha", "head_tree", "url", "merged_at"},
         "repository": {"commit", "tree", "url"},
@@ -179,6 +187,10 @@ def check_run_fields(item, context):
     job = JOB_URL_RE.match(item["job_url"] or "")
     if not job or int(job[1]) != item["run_id"]:
         fail(f"{context} job_url must be an immutable job URL under run {item['run_id']}")
+    path, event = EXPECTED_WORKFLOWS[item["check"]]
+    if (item["workflow_path"], item["event"]) != (path, event):
+        fail(f"{context} must be observed in run of {path} under {event}, "
+             f"not {item['workflow_path']!r} under {item['event']!r}")
 
 
 def validate(hero, evidence_root, repo_root):
@@ -238,7 +250,7 @@ def validate(hero, evidence_root, repo_root):
             fail(f"status subject {identity} sha must be a full lowercase SHA")
         by_id[identity] = item
     revision = by_id["published-revision"]
-    for field in ("app_id", "conclusion", "completed_at", "run_id", "run_url", "job_url"):
+    for field in ("app_id", "conclusion", "completed_at", "run_id", "run_url", "job_url", "workflow_path", "event"):
         if revision[field] is not None:
             fail(f"status published-revision {field} must be null; a revision is not a check")
     if revision["sha"] != commit or revision["tree"] != tree:

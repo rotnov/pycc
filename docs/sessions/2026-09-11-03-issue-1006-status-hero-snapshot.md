@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T11:54:15Z. The record pins the collector's and its suite's
+  2026-09-11T12:35:04Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T11:54:15Z` after the suite changed.
+  `--collected-at 2026-09-11T12:35:04Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -287,6 +287,18 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
     `scaleY`/`scaleZ`/`scale3d` counts, and attribute-name hooks are
     lower-cased on the selector side. Cases in all three suites, snapshot
     re-collected at `2026-09-11T11:54:15Z` with `--subject 4111208c`, pins rotated.
+20. External, on PR #1008, one Codex P2: the collector bound `ci-gate` and
+    `audit` by check-run name and App 15368 only, and App 15368 is GitHub
+    Actions as a whole, so a job named `audit` from any other workflow
+    (including a pull request's own YAML under `pull_request`) would have
+    been published as the D-172 audit. Fixed: the collector reads the
+    workflow run behind each check's job URL (`actions/runs/<id>`, one
+    read per run) and requires the closed `EXPECTED_WORKFLOWS` binding --
+    `ci.yml` under `push` for `ci-gate`, `workflow-policy.yml` under
+    `pull_request_target` for `audit` -- on the observed commit; the record
+    gains `workflow_path`/`event` per subject (null on the revision row) and
+    the validator enforces the same table. Cases in all three suites,
+    snapshot re-collected at `2026-09-11T12:35:04Z` with `--subject 4111208c`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`
