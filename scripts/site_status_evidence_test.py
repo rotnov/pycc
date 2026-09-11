@@ -274,6 +274,43 @@ class StatusEvidenceTests(unittest.TestCase):
                     path.write_text(path.read_text() + "\n" + rule + "\n")
                 self.run_case(mutate, "stylesheet must not hide the evidence hero")
 
+    def test_unreviewed_containers_inside_the_hero_are_rejected_end_to_end(self):
+        """The published page, wrapped exactly as a hiding container would wrap it.
+
+        Both vectors pass every earlier rule: the rows are present, unhidden by any
+        denylisted attribute, and unhidden by any stylesheet declaration. They fail
+        because the hero's tags and attributes are an enumerated allowlist.
+        """
+        rows_open, rows_close = "          <dl>\n", "          </ul>\n"
+        details_open = '        <details class="hero-evidence-details">'
+        details_close = "        </details>\n      </header>"
+        for name, mutate_page, expected in (
+            ("a second disclosure level around the rows",
+             lambda source: source.replace(rows_open, "          <details><summary>more</summary>\n" + rows_open, 1)
+                                  .replace(rows_close, rows_close + "          </details>\n", 1),
+             "status visible proof row/limitation missing: 15368"),
+            ("a popover around the hero's own disclosure",
+             lambda source: source.replace(details_open, "        <div popover>" + details_open, 1)
+                                  .replace(details_close, "        </details></div>\n      </header>", 1),
+             "hero must render every reviewed masthead block, the details toggle and the record's closing paragraph exactly once"),
+            ("a disabled fieldset around the rows",
+             lambda source: source.replace(rows_open, "          <fieldset disabled>\n" + rows_open, 1)
+                                  .replace(rows_close, rows_close + "          </fieldset>\n", 1),
+             "status visible proof row/limitation missing: 15368"),
+            ("a custom element around the rows",
+             lambda source: source.replace(rows_open, "          <pycc-panel>\n" + rows_open, 1)
+                                  .replace(rows_close, rows_close + "          </pycc-panel>\n", 1),
+             "status visible proof row/limitation missing: 15368"),
+        ):
+            with self.subTest(wrapper=name):
+                def mutate(doc, site, root, mutate_page=mutate_page):
+                    path = site / "status/index.html"
+                    source = path.read_text()
+                    mutated = mutate_page(source)
+                    self.assertNotEqual(mutated, source)
+                    path.write_text(mutated)
+                self.run_case(mutate, expected)
+
     def test_stylesheet_left_open_is_rejected(self):
         for rule in ('.other { content: "unterminated }', ".other { color: red } /* unterminated"):
             with self.subTest(rule=rule):

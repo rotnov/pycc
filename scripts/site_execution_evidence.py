@@ -282,6 +282,42 @@ HIDING_DECLARATION = re.compile(
     re.I | re.M)
 
 
+# The container axis, closed the way the declaration axis above is closed.
+# Enumerating the elements and attributes that actually occur inside every
+# ``data-evidence-role="hero"`` subtree of every tracked page yields 22 tags and
+# 15 attributes, and that set is stable across the pages.  So the hero's
+# structure is an allowlist rather than a denylist of hiding containers: a start
+# tag outside HERO_TAGS, or any attribute outside HERO_ATTRS, hides its subtree
+# the same way ``hidden`` does.  A denylist had to be extended once per newly
+# discovered container (``hidden``, ``inert``, ``aria-hidden``, ``<dialog>``
+# without ``open``, then ``popover``, ``<fieldset disabled>``, ``<template>``,
+# custom elements, ...); an allowlist rejects the vector that has not been
+# invented yet, and a legitimate new element inside a hero is a one-line,
+# reviewed addition here.
+HERO_TAGS = frozenset({
+    "a", "br", "button", "code", "dd", "details", "div", "dl", "dt", "em", "h1", "h2", "h3",
+    "header", "li", "p", "pre", "section", "span", "strong", "summary", "ul",
+})
+HERO_ATTRS = frozenset({
+    "aria-hidden", "aria-label", "aria-labelledby", "class", "data-copy", "data-evidence-id",
+    "data-evidence-kind", "data-evidence-role", "data-evidence-state", "data-execution", "href",
+    "id", "role", "tabindex", "type",
+})
+
+
+def hero_structure_hides(tag, attrs, stack):
+    """Report whether ``tag`` hides its own subtree inside a hero.
+
+    Two rules: the structural allowlist above, and the single-disclosure rule.
+    The hero renders its proof rows behind exactly one ``<details>`` toggle, so
+    a ``<details>`` nested inside another one puts those rows a second click
+    away — visible to this parser, not to a reader — and contributes nothing.
+    """
+    if tag not in HERO_TAGS or any(name not in HERO_ATTRS for name in attrs):
+        return True
+    return tag == "details" and any(item[0] == "details" for item in stack)
+
+
 class VisibleExecutionParser(HTMLParser):
     """Parse visible hero code and primary-navigation links independently."""
     VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -312,8 +348,8 @@ class VisibleExecutionParser(HTMLParser):
             self.language = attrs.get("lang")
         if tag == "meta" and attrs.get("property") == "og:locale":
             self.locales.append(attrs.get("content"))
-        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", "")))) or unterminated_css(attrs.get("style", ""))
         in_hero = bool(self.stack and self.stack[-1][2]) or attrs.get("data-evidence-role") == "hero"
+        hidden = (self.stack and self.stack[-1][1]) or tag in {"head", "script", "style", "template", "noscript"} or "hidden" in attrs or "inert" in attrs or attrs.get("aria-hidden") == "true" or (tag == "dialog" and "open" not in attrs) or bool(HIDING_DECLARATION.search(plain_css(attrs.get("style", "")))) or unterminated_css(attrs.get("style", "")) or (in_hero and hero_structure_hides(tag, attrs, self.stack))
         starts_nav = tag == "nav" and "site-nav" in attrs.get("class", "").split()
         in_nav = bool(self.stack and self.stack[-1][4]) or starts_nav
         if starts_nav and not hidden:

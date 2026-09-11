@@ -687,6 +687,25 @@ def check_platform_rows(hero, platforms):
             fail(f"status Tier-1 row for {row['check_run_name']} must appear exactly once, reading exactly as its own runner, target, conclusion and job link")
 
 
+# A record that says "unavailable" while the page still renders all-Tier-1 proof
+# rows is exactly the contradiction this hero exists to make impossible, so the
+# unavailable state is checked rather than skipped.  ``build_record`` never emits
+# such a record — it raises ``Unavailable`` first — so the state can only reach
+# the manifest from an externally supplied or hand-edited file, which is the case
+# worth a gate.  These markers are what a proof row cannot be written without:
+# the App id every subject row repeats, the Tier-1 block's own heading, and the
+# immutable run link every subject and platform row carries.
+PROOF_ROW_MARKERS = (f"App {APP_ID}", TIER1_HEADING, "/actions/runs/")
+
+
+def validate_unavailable_projection(hero, repo_root, site_dir):
+    """An unavailable record must leave the page carrying no proof rows at all."""
+    page = (site_dir / hero["page_path"].removeprefix("site/")).read_text()
+    present = [marker for marker in PROOF_ROW_MARKERS if marker in page]
+    if present:
+        fail("status record is unavailable but the page still renders proof rows: " + ", ".join(present))
+
+
 def validate_projection(hero, repo_root, site_dir):
     """Visible proof rows bound to their subjects, immutable links, locale and the shared summaries."""
     parser = ProofRowParser()

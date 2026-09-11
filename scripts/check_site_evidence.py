@@ -547,8 +547,11 @@ for page_id, hero in hero_by_page.items():
     if page_id in site_execution_evidence.SPECS:
         site_execution_evidence.validate_projection(hero, repo_root, site_dir)
     status_snapshot = page_id == "status" and hero["state"] != "unavailable"
-    if status_snapshot:
-        site_status_evidence.validate_projection(hero, repo_root, site_dir)
+    if page_id == "status":
+        if hero["state"] == "unavailable":
+            site_status_evidence.validate_unavailable_projection(hero, repo_root, site_dir)
+        else:
+            site_status_evidence.validate_projection(hero, repo_root, site_dir)
     expected_tuple = (hero["evidence_id"], hero["kind"], hero["state"])
     html_projection = hero["projections"].get("html")
     if html_projection is not None:

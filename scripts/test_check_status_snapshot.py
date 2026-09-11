@@ -735,8 +735,48 @@ class HeroProseTests(ProjectionCase):
             with self.subTest(mutation=name):
                 self.assertIn(old, self.page)
                 self.reject(self.page.replace(old, new, 1), "repeats an attribute, which browsers and this checker would read differently: ")
-        opened = self.page.replace("<details>", "<dialog open><details>", 1).replace("</details>", "</details></dialog>", 1)
-        status.validate_projection(self.hero, self.repo, self.projection(self.hero, opened))
+        outside = self.page.replace("</header></main>", "</header><dialog open><p>note</p></dialog></main>", 1)
+        status.validate_projection(self.hero, self.repo, self.projection(self.hero, outside))
+
+    def test_unreviewed_containers_inside_the_hero_hide_what_they_wrap(self):
+        """The hero's structure is an allowlist, so an unnamed container hides its subtree.
+
+        Each wrapper below is a container a reader never sees through — a popover,
+        a disabled fieldset, a second disclosure level, an element the reviewed set
+        does not name at all. None of them is on a denylist; all of them are
+        rejected because the hero's tags and attributes are enumerated instead.
+        """
+        for name, opening, closing in (
+            ("a popover div", "<div popover>", "</div>"),
+            ("a popover on a reviewed tag", '<div popover="auto">', "</div>"),
+            ("a disabled fieldset", "<fieldset disabled>", "</fieldset>"),
+            ("an unreviewed tag", "<figure>", "</figure>"),
+            ("a custom element", "<pycc-panel>", "</pycc-panel>"),
+            ("a second disclosure level", "<details><summary>more</summary>", "</details>"),
+            ("an open second disclosure level", "<details open><summary>more</summary>", "</details>"),
+        ):
+            with self.subTest(wrapper=name):
+                wrapped = self.page.replace("<dl>", opening + "<dl>", 1).replace("</dl>", "</dl>" + closing, 1)
+                self.reject(wrapped, f"status visible proof row/limitation missing: {status.APP_ID}")
+        with self.subTest(wrapper="an unreviewed attribute on the hero root"):
+            self.reject(self.page.replace('<header data-evidence-role="hero"', '<header popover data-evidence-role="hero"', 1),
+                        "status must render exactly one visible evidence hero")
+        with self.subTest(wrapper="the one reviewed disclosure level"):
+            # The rule is nesting, not <details> itself: the hero's own toggle stays visible.
+            status.validate_projection(self.hero, self.repo, self.projection(self.hero, self.page))
+
+    def test_an_unavailable_record_must_leave_no_proof_rows_on_the_page(self):
+        """``build_record`` never emits an unavailable record, so this guards a hand-edited manifest."""
+        hero = copy.deepcopy(self.hero)
+        hero["state"] = "unavailable"
+        site = self.projection(self.hero, self.page)
+        with self.assertRaises(SystemExit) as caught:
+            status.validate_unavailable_projection(hero, self.repo, site)
+        self.assertIn("status record is unavailable but the page still renders proof rows: "
+                      f"App {status.APP_ID}, {status.TIER1_HEADING}, /actions/runs/", str(caught.exception))
+        stripped = self.page[:self.page.index("<details>")] + "</header></main></body></html>\n"
+        site = self.projection(self.hero, stripped)
+        self.assertIsNone(status.validate_unavailable_projection(hero, self.repo, site))
 
     def test_embedded_stylesheets_and_foreign_links_are_checked(self):
         for name, old, new, expected in (

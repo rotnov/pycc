@@ -212,41 +212,80 @@ class ExecutionEvidenceTests(unittest.TestCase):
                                     ('<code data-execution="source">', '<code data-execution="source">\n'),
                                     ('data-execution="source"', 'data-execution="another-source"'),
                                     ('data-evidence-role="hero"', 'hidden data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="DISPLAY: NONE" data-evidence-role="hero"'),
-                                    ('data-execution="source"', 'style="Visibility:Hidden" data-execution="source"'),
-                                    ('data-execution="source"', 'style="opacity: 0" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="font-size: 0" data-evidence-role="hero"'),
-                                    ('data-execution="source"', 'style="opacity: .0" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="transform: scale(.00)" data-evidence-role="hero"'),
-                                    ('data-execution="source"', 'style="opacity: -0" data-execution="source"'),
-                                    ('data-execution="source"', 'style="--h: 0; opacity: var(--h)" data-execution="source"'),
-                                    ('data-execution="source"', 'style="display: VAR(--d)" data-execution="source"'),
-                                    ('data-execution="source"', 'style="font-size: calc(1px - 1px)" data-execution="source"'),
-                                    ('data-execution="source"', 'style="font-size: clamp(0px, 1vw, 2px)" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="transform: scale(var(--s))" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="opacity: abs(0)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="font-size: round(0.4px, 1px)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="font-size: clamp(-5px, 10vw, -1px)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="font-size: clamp(0.0e1px, 1vw, 2px)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="transform: translate(calc(0px))" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="transform: var(--t)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="-webkit-transform: scale(1, 0)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="scale: 1 0" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="scale: var(--s)" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="--t: \'{\'; opacity: 0" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="--t: \'/*\'; opacity: 0" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="content: \'unterminated; color: red" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="opacity: /**/0" data-evidence-role="hero"'),
-                                    ('data-evidence-role="hero"', 'style="opacity: 0E0" data-evidence-role="hero"'),
-                                    ('data-execution="source"', 'style="font-size: +0.0e-1px" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="transform: scale(-.0e2)" data-evidence-role="hero"'),
                                     ('data-execution="source"', 'inert data-execution="source"'),
                                     ('data-evidence-role="hero"', 'inert data-evidence-role="hero"'),
-                                    ('data-execution="source"', 'style="transform: scale(1, 0)" data-execution="source"'),
-                                    ('data-evidence-role="hero"', 'style="transform: scale3d(1, 1, 0)" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'aria-hidden="true" data-execution="source"'),
                                     ('<code data-execution="source">', '<dialog><code data-execution="source">')]:
                 with self.subTest(slug=slug, original=original, wrong=wrong):
                     self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "visible H1" if original == 'data-evidence-role="hero"' else "visible ordered")
+
+    def test_unreviewed_attributes_and_containers_inside_a_hero_hide_what_they_wrap(self):
+        """A hero subtree admits only reviewed tags and attributes.
+
+        `style` is deliberately not among them, so an inline declaration inside a
+        hero is rejected structurally and never reaches `HIDING_DECLARATION`. The
+        cases below therefore carry declarations that hide nothing: what is under
+        test is the allowlist, not the declaration parser. The declaration parser
+        is exercised where it stays reachable -- see the primary-navigation test
+        below.
+        """
+        for slug in ("language-support", "diagnostics"):
+            for original, wrong in [('data-execution="source"', 'style="color: red" data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'style="color: red" data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'popover data-execution="source"'),
+                                    ('data-evidence-role="hero"', 'popover data-evidence-role="hero"'),
+                                    ('data-execution="source"', 'title="source" data-execution="source"'),
+                                    ('<code data-execution="source">', '<figure><code data-execution="source">'),
+                                    ('<code data-execution="source">', '<fieldset disabled><code data-execution="source">'),
+                                    ('<code data-execution="source">', '<pycc-panel><code data-execution="source">')]:
+                with self.subTest(slug=slug, original=original, wrong=wrong):
+                    self.run_case(lambda doc, site, root: self.edit(site, f"{slug}/index.html", original, wrong), "visible H1" if original == 'data-evidence-role="hero"' else "visible ordered")
+
+    # Every spelling the inline-CSS hiding parser must catch. These live on a
+    # primary-navigation link rather than inside a hero: the hero allowlist
+    # rejects `style` before any declaration is read, while the navigation is
+    # visibility-checked and sits outside every hero subtree, so this is where
+    # `HIDING_DECLARATION` and `unterminated_css` actually decide the verdict.
+    HIDING_DECLARATIONS = (
+        "DISPLAY: NONE",
+        "Visibility:Hidden",
+        "opacity: 0",
+        "font-size: 0",
+        "opacity: .0",
+        "opacity: -0",
+        "opacity: 0E0",
+        "opacity: /**/0",
+        "opacity: abs(0)",
+        "--h: 0; opacity: var(--h)",
+        "display: VAR(--d)",
+        "font-size: calc(1px - 1px)",
+        "font-size: clamp(0px, 1vw, 2px)",
+        "font-size: clamp(-5px, 10vw, -1px)",
+        "font-size: clamp(0.0e1px, 1vw, 2px)",
+        "font-size: round(0.4px, 1px)",
+        "font-size: +0.0e-1px",
+        "transform: scale(.00)",
+        "transform: scale(1, 0)",
+        "transform: scale3d(1, 1, 0)",
+        "transform: scale(-.0e2)",
+        "transform: scale(var(--s))",
+        "transform: translate(calc(0px))",
+        "transform: var(--t)",
+        "-webkit-transform: scale(1, 0)",
+        "scale: 1 0",
+        "scale: var(--s)",
+        "--t: '{'; opacity: 0",
+        "--t: '/*'; opacity: 0",
+        "content: 'unterminated; color: red",
+    )
+
+    def test_inline_css_hiding_is_rejected_on_the_primary_navigation(self):
+        link = '<a href="../">Home</a>'
+        for declaration in self.HIDING_DECLARATIONS:
+            with self.subTest(declaration=declaration):
+                wrong = f'<a style="{declaration}" href="../">Home</a>'
+                self.run_case(lambda doc, site, root, wrong=wrong: self.edit(site, "diagnostics/index.html", link, wrong),
+                              "primary navigation must visibly link every evidence route exactly once")
 
     def test_repeated_attributes_are_rejected_before_they_are_collapsed(self):
         for slug in ("language-support", "diagnostics"):
