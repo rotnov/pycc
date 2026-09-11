@@ -228,7 +228,8 @@ class PipelineEvidenceTests(unittest.TestCase):
             doc["heroes"][ARCHITECTURE]["limitations"] = "Everything is covered."
         self.run_case(mutate, "limitations drifted from the reviewed text")
 
-    def test_page_cannot_paraphrase_a_stage_excerpt(self):
+    def test_an_edited_stage_excerpt_is_rejected_by_its_row_text(self):
+        """Adding a token to an excerpt changes the collapsed row text first."""
         def mutate(doc, site, root):
             page = site / "architecture/index.html"
             source = page.read_text()
@@ -236,6 +237,18 @@ class PipelineEvidenceTests(unittest.TestCase):
             self.assertIn(marker, source)
             page.write_text(source.replace(marker, "ModModule { /* trimmed */", 1))
         self.run_case(mutate, "must read exactly as that stage's own path, identity, byte count")
+
+    def test_a_reindented_stage_excerpt_is_rejected_by_its_raw_bytes(self):
+        """The row comparison collapses whitespace; the excerpt comparison does
+        not. Reindenting one line keeps every token, so it survives the row
+        check and must be caught by the byte-exact excerpt check."""
+        def mutate(doc, site, root):
+            page = site / "architecture/index.html"
+            source = page.read_text()
+            line = "\n    node_index: NodeIndex(None),\n"
+            self.assertIn(line, source)
+            page.write_text(source.replace(line, "\n        node_index: NodeIndex(None),\n", 1))
+        self.run_case(mutate, "exact leading bytes of their artifacts, in stage order")
 
     def test_moving_branch_link_is_rejected(self):
         def mutate(doc, site, root):
