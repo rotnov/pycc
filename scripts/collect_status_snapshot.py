@@ -208,6 +208,8 @@ def parse_args(argv):
     args = parser.parse_args(argv)
     if args.collected_at is not None and not status.is_utc_instant(args.collected_at):
         parser.error("--collected-at must be a real RFC 3339 UTC instant such as 2026-09-11T00:00:00Z")
+    if args.collected_at is not None and args.collected_at > status.utc_now():
+        parser.error("--collected-at must not be later than the current time; a snapshot cannot be captured in the future")
     return args
 
 

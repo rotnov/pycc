@@ -369,6 +369,10 @@ class ArgumentTests(CollectorHarness):
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 collector.parse_args(["--collected-at", "2026-99-99T99:99:99Z"])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit):
+                collector.parse_args(["--collected-at", "2099-01-01T00:00:00Z"])
+        self.assertIn("must not be later than the current time", err.getvalue())
 
     def test_missing_manifest_and_missing_status_hero_fail(self):
         code, _, err = self.run_collector("--manifest", "site/absent.json")

@@ -59,6 +59,11 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
+def utc_now():
+    """The current instant in the record's own RFC 3339 UTC shape."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def is_utc_instant(value):
     """True when ``value`` is a real RFC 3339 UTC instant in the ``Z`` form.
 
@@ -269,6 +274,8 @@ def validate(hero, evidence_root, repo_root):
         fail("status attestation collected_at must be an RFC 3339 UTC timestamp")
     if any(attestation["collected_at"] < item["completed_at"] for item in (gate, audit)):
         fail("status attestation collected_at must be no earlier than every recorded completed_at")
+    if attestation["collected_at"] > utc_now():
+        fail("status attestation collected_at must not be later than the validation time")
     if attestation["collection_method"] != COLLECTION_METHOD or attestation["sanitized"] is not True:
         fail("status attestation collection_method/sanitized drifted")
     if attestation["required_contexts"] != REQUIRED_CONTEXTS:
@@ -371,6 +378,36 @@ def summary(hero):
 
 
 ROW_TAGS = {"dt", "dd", "li"}
+HIDING_RULE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden")
+CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
+PSEUDO = re.compile(r"::?[\w-]+(?:\([^)]*\))?")
+
+
+def selector_hooks(tag, attrs):
+    """The selector hooks one element offers: its type, classes, id and attribute names."""
+    hooks = {"*", f"tag:{tag}"}
+    hooks.update(f"class:{name}" for name in attrs.get("class", "").split())
+    if attrs.get("id"):
+        hooks.add(f"id:{attrs['id']}")
+    hooks.update(f"attr:{name}" for name in attrs)
+    return hooks
+
+
+def compound_hooks(compound):
+    """The hooks a CSS compound selector needs; None when it needs something unmodelled."""
+    compound = PSEUDO.sub("", compound)
+    hooks = set()
+    for kind, pattern in (("class", r"\.([\w-]+)"), ("id", r"#([\w-]+)"), ("attr", r"\[([\w-]+)")):
+        hooks.update(f"{kind}:{name}" for name in re.findall(pattern, compound))
+    rest = re.sub(r"\.[\w-]+|#[\w-]+|\[[^\]]*\]", "", compound).strip()
+    if rest == "*" or not rest:
+        hooks.add("*")
+    elif re.fullmatch(r"[A-Za-z][\w-]*", rest):
+        hooks.add(f"tag:{rest.lower()}")
+    else:
+        return None
+    return hooks
 
 
 class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
@@ -379,17 +416,30 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
     The flattened hero text proves that each literal is visible somewhere; the
     rows prove that a subject's sha, check, conclusion, completion time and run
     and job links sit in the same row as its label, so two subjects' evidence
-    cannot be swapped without the gate noticing.
+    cannot be swapped without the gate noticing.  The parser also records the
+    selector hooks of every element inside the hero and of the hero's
+    ancestors, so a stylesheet rule that could hide the proof is rejected.
     """
     def __init__(self):
         super().__init__()
         self.rows = []
         self.row_depth = None
+        self.ancestry = []
+        self.hero_hooks = set()
+        self.ancestor_hooks = set()
 
     def handle_starttag(self, tag, attrs):
         links_before = len(self.links)
+        starts_hero = dict(attrs).get("data-evidence-role") == "hero"
+        if starts_hero:
+            self.ancestor_hooks.update(*self.ancestry, set())
         super().handle_starttag(tag, attrs)
         entry = self.stack[-1] if self.stack and tag not in self.VOID else None
+        in_hero = starts_hero or bool(entry and entry[2]) or bool(self.stack and self.stack[-1][2] and tag in self.VOID)
+        if in_hero:
+            self.hero_hooks.update(selector_hooks(tag, dict(attrs)))
+        if entry is not None:
+            self.ancestry.append(selector_hooks(tag, dict(attrs)))
         if tag in ROW_TAGS and self.row_depth is None and entry is not None and entry[2] and not entry[1]:
             self.rows.append([tag, "", []])
             self.row_depth = len(self.stack)
@@ -398,6 +448,7 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
 
     def handle_endtag(self, tag):
         super().handle_endtag(tag)
+        del self.ancestry[len(self.stack):]
         if self.row_depth is not None and len(self.stack) < self.row_depth:
             self.row_depth = None
 
@@ -405,6 +456,27 @@ class ProofRowParser(site_execution_evidence.VisibleExecutionParser):
         super().handle_data(text)
         if self.row_depth is not None and self.stack and not self.stack[-1][1]:
             self.rows[-1][1] += text
+
+
+def hiding_rules(css, parser):
+    """Stylesheet rules that hide an element the hero renders: the subject compound can match a hero element and every earlier compound a hero element or ancestor."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    reachable = parser.hero_hooks | parser.ancestor_hooks
+    found = []
+    for selectors, body in CSS_RULE.findall(css):
+        if not HIDING_RULE.search(body):
+            continue
+        for selector in selectors.split(","):
+            selector = selector.strip()
+            if not selector or selector.startswith("@"):
+                continue
+            compounds = [compound_hooks(part) for part in COMBINATOR.split(selector) if part]
+            if not compounds or any(hooks is None for hooks in compounds):
+                found.append(selector)
+                continue
+            if compounds[-1] <= parser.hero_hooks and all(hooks <= reachable for hooks in compounds[:-1]):
+                found.append(selector)
+    return found
 
 
 def proof_rows(parser):
@@ -424,22 +496,34 @@ def proof_rows(parser):
     return labelled, platforms
 
 
-def check_subject_rows(hero, labelled):
+def expected_rows(hero):
+    """The exact visible text and links of every subject row, keyed by label."""
     revision = subject_by_id(hero)["published-revision"]
     merged = revision["merged_pull_request"]
-    expected = {
-        revision["label"]: ([revision["sha"], hero["repository"]["tree"], f"#{merged['number']}", merged["head_sha"]],
-                            [hero["stable_links"]["commit"], hero["stable_links"]["tree"], merged["url"]]),
-    }
+    links = hero["stable_links"]
+    rows = {revision["label"]: (
+        f"{revision['sha']} · one parent · tree {hero['repository']['tree']} · #{merged['number']} head {merged['head_sha']}, same tree",
+        [links["commit"], links["tree"], merged["url"]])}
     for item in hero["snapshot"]["subjects"][1:]:
-        expected[item["label"]] = ([item["check"], item["sha"], str(APP_ID), item["conclusion"], item["completed_at"]],
-                                   [item["run_url"], item["job_url"]])
-    for label, (literals, links) in expected.items():
+        rows[item["label"]] = (
+            f"{item['check']} on {item['sha']} · App {APP_ID} · {item['conclusion']} · completed {item['completed_at']} · run {item['run_id']} · job",
+            [item["run_url"], item["job_url"]])
+    return rows
+
+
+def platform_row_text(row):
+    """A platform row repeats the runner and target only when the job name does not already carry them."""
+    if row["runner"] in row["check_run_name"] and row["architecture"] in row["check_run_name"]:
+        return f"{row['check_run_name']} · {row['conclusion']}"
+    return f"{row['check_run_name']} · {row['runner']} · {row['architecture']} · {row['conclusion']}"
+
+
+def check_subject_rows(hero, labelled):
+    for label, expected in expected_rows(hero).items():
         if label not in labelled:
             fail(f"status proof row missing for {label}")
-        text, row_links = labelled[label]
-        if any(literal not in text for literal in literals) or row_links != links:
-            fail(f"status proof row for {label} must carry that subject's own sha, check, conclusion, time and links")
+        if labelled[label] != expected:
+            fail(f"status proof row for {label} must read exactly as that subject's own sha, check, conclusion, time and links")
 
 
 def check_platform_rows(hero, platforms):
@@ -447,12 +531,9 @@ def check_platform_rows(hero, platforms):
     if len(platforms) != len(rows):
         fail("status must render exactly one visible row per Tier-1 platform")
     for row in rows:
-        matches = [(text, links) for text, links in platforms if row["check_run_name"] in text]
-        if len(matches) != 1:
-            fail(f"status Tier-1 row for {row['check_run_name']} must appear exactly once")
-        text, links = matches[0]
-        if any(literal not in text for literal in (row["runner"], row["architecture"], row["conclusion"])) or links != [row["job_url"]]:
-            fail(f"status Tier-1 row for {row['check_run_name']} must carry its own runner, target, conclusion and job link")
+        expected = (platform_row_text(row), [row["job_url"]])
+        if platforms.count(expected) != 1:
+            fail(f"status Tier-1 row for {row['check_run_name']} must appear exactly once, reading exactly as its own runner, target, conclusion and job link")
 
 
 def validate_projection(hero, repo_root, site_dir):
@@ -475,6 +556,9 @@ def validate_projection(hero, repo_root, site_dir):
     labelled, platforms = proof_rows(parser)
     check_subject_rows(hero, labelled)
     check_platform_rows(hero, platforms)
+    hidden_by = hiding_rules((site_dir / "styles.css").read_text(), parser)
+    if hidden_by:
+        fail("status stylesheet must not hide the evidence hero or its proof rows: " + ", ".join(hidden_by))
     for surface in ("markdown", "llm"):
         text = (site_dir / hero["projections"][surface].removeprefix("site/")).read_text()
         if text.count(summary(hero)) != 1:

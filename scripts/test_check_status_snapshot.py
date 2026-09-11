@@ -252,6 +252,11 @@ class RecordInvariantTests(SyntheticRepository):
         for value in ("2000-01-01T00:00:00Z", "2026-09-11T01:50:29Z"):
             self.assert_rejected(lambda hero, v=value: hero["attestation"].__setitem__("collected_at", v), "no earlier than every recorded completed_at")
 
+    def test_capture_time_must_not_be_in_the_future(self):
+        for value in ("2099-01-01T00:00:00Z", "9999-12-31T23:59:59Z"):
+            self.assert_rejected(lambda hero, v=value: hero["attestation"].__setitem__("collected_at", v), "must not be later than the validation time")
+        self.assertRegex(status.utc_now(), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
     def test_platform_rows_must_link_distinct_jobs(self):
         def duplicate_row(hero):
             hero["environment"]["platforms"][1]["job_url"] = hero["environment"]["platforms"][0]["job_url"]
@@ -363,15 +368,15 @@ def render_page(hero):
     revision = subject_by_id["published-revision"]
     merged = revision["merged_pull_request"]
     links = hero["stable_links"]
-    rows = [f'<dt>{revision["label"]}</dt><dd><a href="{links["commit"]}">{revision["sha"]}</a> · '
-            f'<a href="{links["tree"]}">tree</a> {hero["repository"]["tree"]} · '
-            f'<a href="{merged["url"]}">#{merged["number"]}</a> head {merged["head_sha"]}</dd>']
+    rows = [f'<dt>{revision["label"]}</dt><dd><a href="{links["commit"]}">{revision["sha"]}</a> · one parent · '
+            f'<a href="{links["tree"]}">tree</a> <code>{hero["repository"]["tree"]}</code> · '
+            f'<a href="{merged["url"]}">#{merged["number"]}</a> head {merged["head_sha"]}, same tree</dd>']
     for item in (subjects["post-merge-ci-gate"], subjects["pre-merge-audit"]):
         rows.append(f'<dt>{item["label"]}</dt><dd>{item["check"]} on {item["sha"]} · App {status.APP_ID} · '
                     f'{item["conclusion"]} · completed {item["completed_at"]} · '
-                    f'<a href="{item["run_url"]}">run</a> · <a href="{item["job_url"]}">job</a></dd>')
-    items = [f'<li><a href="{row["job_url"]}">{row["check_run_name"]} · {row["runner"]} · {row["architecture"]} · '
-             f'{row["conclusion"]}</a></li>' for row in hero["environment"]["platforms"]]
+                    f'<a href="{item["run_url"]}">run {item["run_id"]}</a> · <a href="{item["job_url"]}">job</a></dd>')
+    items = [f'<li><a href="{row["job_url"]}">{status.platform_row_text(row)}</a></li>'
+             for row in hero["environment"]["platforms"]]
     return ('<html lang="en-US"><head><meta property="og:locale" content="en_US"></head><body>'
             f'<header data-evidence-role="hero">{hero["state"]} · captured {hero["attestation"]["collected_at"]}'
             f'<dl>{"".join(rows)}<dt>Tier-1 jobs</dt><dd>in the ci-gate run:</dd></dl><ul>{"".join(items)}</ul>'
@@ -385,6 +390,8 @@ class ProjectionTests(SyntheticRepository):
         (site / "status" / "index.html").write_text(page or render_page(hero))
         for name in ("index.html.md", "llms.txt"):
             (site / name).write_text(f"# central\n\n{status.summary(hero)}\n")
+        if not (site / "styles.css").exists():
+            (site / "styles.css").write_text(".unrelated { display: none; }\nfooter p { display: none; }\n")
         return site
 
     def swap(self, page, first, second):
@@ -405,7 +412,7 @@ class ProjectionTests(SyntheticRepository):
     def test_swapped_subject_evidence_is_rejected(self):
         page = render_page(self.hero)
         gate, audit = [subject for subject in self.hero["snapshot"]["subjects"][1:]]
-        rejected = "must carry that subject's own sha, check, conclusion, time and links"
+        rejected = "must read exactly as that subject's own sha, check, conclusion, time and links"
         for name, first, second in (
             ("run links", f'href="{gate["run_url"]}"', f'href="{audit["run_url"]}"'),
             ("job links", f'href="{gate["job_url"]}"', f'href="{audit["job_url"]}"'),
@@ -419,6 +426,11 @@ class ProjectionTests(SyntheticRepository):
         with self.subTest(swapped="published revision links"):
             first, second = self.hero["stable_links"]["commit"], self.hero["stable_links"]["tree"]
             self.assert_page_rejected(self.swap(page, f'href="{first}"', f'href="{second}"'), rejected)
+        with self.subTest(contradiction="conclusion"):
+            contradicted = page.replace(f'{gate["conclusion"]} · completed', f'failure (recorded {gate["conclusion"]}) · completed', 1)
+            self.assert_page_rejected(contradicted, rejected)
+        with self.subTest(contradiction="extra sha"):
+            self.assert_page_rejected(page.replace(f'on {gate["sha"]}', f'on {gate["sha"]} (was {audit["sha"]})', 1), rejected)
         with self.subTest(missing="audit row"):
             self.assert_page_rejected(page.replace(f'<dt>{audit["label"]}</dt>', "<dt>Audit</dt>", 1),
                                       f"proof row missing for {audit['label']}")
@@ -428,10 +440,14 @@ class ProjectionTests(SyntheticRepository):
         first, second = self.hero["environment"]["platforms"][:2]
         with self.subTest(swapped="job links"):
             self.assert_page_rejected(self.swap(page, f'href="{first["job_url"]}"', f'href="{second["job_url"]}"'),
-                                      "must carry its own runner, target, conclusion and job link")
+                                      "reading exactly as its own runner, target, conclusion and job link")
         with self.subTest(swapped="runner and target"):
-            self.assert_page_rejected(self.swap(page, f'· {first["runner"]} ·', f'· {second["runner"]} ·'),
-                                      "must carry its own runner, target, conclusion and job link")
+            self.assert_page_rejected(page.replace(f'· {first["runner"]} · {first["architecture"]} ·', f'· {first["runner"]} · {second["architecture"]} ·', 1),
+                                      "reading exactly as its own runner, target, conclusion and job link")
+        with self.subTest(contradiction="conclusion"):
+            self.assert_page_rejected(page.replace(f'{first["architecture"]} · {first["conclusion"]}',
+                                                   f'{first["architecture"]} · failure (recorded {first["conclusion"]})', 1),
+                                      "reading exactly as its own runner, target, conclusion and job link")
         with self.subTest(mutation="dropped row"):
             start = page.index("<li>")
             self.assert_page_rejected(page[:start] + page[page.index("</li>", start) + 5:],
@@ -447,6 +463,30 @@ class ProjectionTests(SyntheticRepository):
             second_end = page.index("</li>", second_start) + 5
             self.assert_page_rejected(page[:second_start] + page[start:end] + page[second_end:],
                                       f"Tier-1 row for {first['check_run_name']} must appear exactly once")
+
+    def test_platform_row_text_repeats_runner_and_target_only_when_the_job_name_lacks_them(self):
+        rows = self.hero["environment"]["platforms"]
+        self.assertEqual(status.platform_row_text(rows[0]), "build-test-coverage · macos-14 · aarch64-apple-darwin · success")
+        self.assertEqual(status.platform_row_text(rows[1]), "native-build-test (macos-15-intel, x86_64-apple-darwin) · success")
+
+    def test_stylesheet_rules_hiding_the_hero_are_rejected(self):
+        page = render_page(self.hero)
+        for rule in (".hero-row { display: none; }", "header dd { visibility: hidden; }", "body header li { display:none }",
+                     "@media (max-width: 980px) { dl dt, .other { display: none; } }", "* { display: none; }",
+                     "[data-evidence-role] { display: none; }", "header > dl > dd:nth-child(2) { display: none; }"):
+            with self.subTest(rule=rule):
+                site = self.write_site(self.hero, page.replace("<dl>", '<dl class="hero-row">', 1))
+                (site / "styles.css").write_text(f"footer p {{ display: none; }}\n{rule}\n")
+                with self.assertRaises(SystemExit) as caught:
+                    status.validate_projection(self.hero, self.repo, site)
+                self.assertIn("stylesheet must not hide the evidence hero", str(caught.exception))
+        for rule in ("footer p { display: none; }", ".pipeline-step::after { display: none; }", "#elsewhere { display: none; }",
+                     "/* header dd { display: none; } */", "header dd { color: red; }", "[hidden] { display: none; }",
+                     "body .other dd { display: none; }", ".site-nav a:not([aria-current]) { display: none; }"):
+            with self.subTest(rule=rule):
+                site = self.write_site(self.hero, page)
+                (site / "styles.css").write_text(rule + "\n")
+                self.assertIsNone(status.validate_projection(self.hero, self.repo, site))
 
     def test_rows_outside_or_hidden_inside_the_hero_do_not_count(self):
         page = render_page(self.hero)

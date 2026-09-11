@@ -461,11 +461,11 @@
       "page_path": "site/status/index.html",
       "fixture": {
         "path": "scripts/collect_status_snapshot.py",
-        "sha256": "5bcc4d4270b9898bf1c923b8942ea2db311fa27bf5bae637e3ccd9dcb6c6e275"
+        "sha256": "ad2d467ee9ee88f450f02dadeedfe49a6fd9185e29b94c660afc477cd4662955"
       },
       "test": {
         "path": "scripts/test_check_status_snapshot.py",
-        "sha256": "ff966f99e63701ffe72a8ea160fdc352a06d8a35014d4e4166f4c600945fc903",
+        "sha256": "79e4d1d6cc9848af9c057ffe8957dbf3267805fda83d3ec3e7b60e7c182aabf0",
         "names": [
           "test_consistent_record_is_accepted_and_verified_against_git",
           "test_every_nested_field_is_required",
@@ -484,6 +484,7 @@
           "test_non_immutable_links_are_rejected",
           "test_timestamps_must_be_rfc3339_utc",
           "test_capture_time_must_not_precede_check_completion",
+          "test_capture_time_must_not_be_in_the_future",
           "test_platform_rows_must_link_distinct_jobs",
           "test_audit_must_come_from_a_run_distinct_from_the_gate",
           "test_attestation_and_command_drift_are_rejected",
@@ -496,6 +497,8 @@
           "test_rendered_rows_bound_to_their_subjects_are_accepted",
           "test_swapped_subject_evidence_is_rejected",
           "test_platform_rows_are_bound_to_their_jobs",
+          "test_platform_row_text_repeats_runner_and_target_only_when_the_job_name_lacks_them",
+          "test_stylesheet_rules_hiding_the_hero_are_rejected",
           "test_rows_outside_or_hidden_inside_the_hero_do_not_count",
           "test_distance_twenty_is_accepted_and_twenty_one_is_rejected",
           "test_subject_outside_the_base_history_is_rejected",
@@ -572,7 +575,7 @@
         "url": "https://github.com/rotnov/pycc/commit/4111208c0910c0a7588408a6ac7d2b2bad20592c"
       },
       "attestation": {
-        "collected_at": "2026-09-11T06:25:14Z",
+        "collected_at": "2026-09-11T06:48:31Z",
         "collection_method": "gh api check-runs, commits, pulls (read-only)",
         "sanitized": true,
         "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",

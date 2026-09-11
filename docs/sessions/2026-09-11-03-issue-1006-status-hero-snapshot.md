@@ -30,9 +30,9 @@ deploy time contacts GitHub.
   same tree, one parent): `ci-gate` success (run `34552229293`, completed
   2026-09-11T02:10:46Z), `audit` success on the head (completed
   2026-09-11T01:50:30Z), five Tier-1 jobs success; captured
-  2026-09-11T06:25:14Z. The record pins the collector's and its suite's
+  2026-09-11T06:48:31Z. The record pins the collector's and its suite's
   canonical SHA-256, so it was re-collected with
-  `--collected-at 2026-09-11T06:25:14Z` after the suite changed.
+  `--collected-at 2026-09-11T06:48:31Z` after the suite changed.
 - Gate wiring: `scripts/check-site.sh` runs `check_status_snapshot.py
   --verify-git` after `check_site_evidence.py`; `scripts/test-check-site.sh`
   stages the two pinned scripts, retargets every status-as-`unavailable`
@@ -79,7 +79,7 @@ deploy time contacts GitHub.
 scripts/test-check-site.sh` ("Website validator self-tests passed.");
 `ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`
 (`site/status/index.html` 25,532 of 25,600 bytes); the `scripts/` unittest
-suite (1186 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
+suite (1189 tests, OK, 6 skipped); `scripts/site_status_evidence_test.py`
 (10 tests, 111 nested-field subtests, OK); `check_site_evidence.py`;
 `check_status_snapshot.py --verify-git` and `--currency --base origin/main
 --head HEAD` (0 first-parent merges behind); `check_ci_permissions.rb`
@@ -150,6 +150,20 @@ verdict is a row in `.harden/findings/issue-1006.jsonl`.
    and out-of-hero cases in the synthetic suite, swap cases in the public-CLI
    suite, gate row updated, snapshot re-collected at `2026-09-11T06:25:14Z`,
    pins rotated.
+10. External, on PR #1008, three more Codex P2s: a row could carry a
+    contradictory value beside the expected token (`failure (recorded
+    success)`) because the row check was substring presence; a stylesheet
+    rule such as `.hero-evidence-details { display: none }` could hide the
+    proof outside the parser's HTML-only visibility model; and a valid but
+    future `--collected-at` was accepted. Fixed: each subject and platform
+    row must equal its exact normalised text and link list
+    (`expected_rows`, `platform_row_text`); `hiding_rules` rejects any
+    `site/styles.css` rule setting `display: none`/`visibility: hidden`
+    whose subject compound can match a hero element through hero or
+    hero-ancestor compounds; `collected_at` must not be later than the
+    validating clock and the collector refuses a future override. Cases in
+    the synthetic, collector and public-CLI suites, gate row updated,
+    snapshot re-collected at `2026-09-11T06:48:31Z`, pins rotated.
 
 Harden batch over the pile: four classes, all recorded as open counters
 under `.harden/incidents/` in this pull request — `new-case-misses-branching-sites`

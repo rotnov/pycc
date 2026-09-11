@@ -152,7 +152,11 @@ class StatusEvidenceTests(unittest.TestCase):
             ("not release readiness.", "release readiness.", "visible proof row/limitation missing"),
             ("https://github.com/rotnov/pycc/actions/runs/34552229293/job/103117345163",
              "https://github.com/rotnov/pycc/actions/workflows/audit.yml",
-             "proof row for Pre-merge policy audit must carry that subject's own sha, check, conclusion, time and links"),
+             "proof row for Pre-merge policy audit must read exactly as that subject's own sha, check, conclusion, time and links"),
+            ("App 15368 · success · completed 2026-09-11T02:10:46Z", "App 15368 · failure (recorded success) · completed 2026-09-11T02:10:46Z",
+             "proof row for Post-merge CI gate must read exactly as that subject's own sha, check, conclusion, time and links"),
+            ("aarch64-apple-darwin · success</a>", "aarch64-apple-darwin · failure (recorded success)</a>",
+             "Tier-1 row for build-test-coverage must appear exactly once, reading exactly"),
             ('<html lang="en-US">', '<html lang="en">', "locale must be en-US"),
         ):
             with self.subTest(mutation=new):
@@ -166,7 +170,7 @@ class StatusEvidenceTests(unittest.TestCase):
     def test_swapped_proof_rows_are_rejected(self):
         gate_run = "https://github.com/rotnov/pycc/actions/runs/34552872912"
         audit_run = "https://github.com/rotnov/pycc/actions/runs/34552229293"
-        subject = "proof row for Post-merge CI gate must carry that subject's own sha, check, conclusion, time and links"
+        subject = "proof row for Post-merge CI gate must read exactly as that subject's own sha, check, conclusion, time and links"
         for name, first, second, expected in (
             ("run links", f'href="{gate_run}"', f'href="{audit_run}"', subject),
             ("job links", f'href="{gate_run}/job/103121414776"', f'href="{audit_run}/job/103117345163"', subject),
@@ -175,7 +179,7 @@ class StatusEvidenceTests(unittest.TestCase):
             ("completion times", "completed 2026-09-11T02:10:46Z", "completed 2026-09-11T01:50:30Z", subject),
             ("subject labels", "<dt>Post-merge CI gate</dt>", "<dt>Pre-merge policy audit</dt>", subject),
             ("platform job links", f'href="{gate_run}/job/103119276938"', f'href="{gate_run}/job/103119277030"',
-             "Tier-1 row for build-test-coverage must carry its own runner, target, conclusion and job link"),
+             "Tier-1 row for build-test-coverage must appear exactly once, reading exactly as its own runner, target, conclusion and job link"),
         ):
             with self.subTest(swapped=name):
                 def mutate(doc, site, root, first=first, second=second):
@@ -185,6 +189,15 @@ class StatusEvidenceTests(unittest.TestCase):
                     self.assertIn(second, source)
                     page.write_text(source.replace(first, "\0", 1).replace(second, first, 1).replace("\0", second, 1))
                 self.run_case(mutate, expected)
+
+    def test_stylesheet_hiding_the_proof_is_rejected(self):
+        for rule in (".hero-evidence-details { display: none; }", "@media (max-width: 980px) { .page-hero dd { display: none; } }",
+                     "body details li { visibility: hidden; }"):
+            with self.subTest(rule=rule):
+                def mutate(doc, site, root, rule=rule):
+                    path = site / "styles.css"
+                    path.write_text(path.read_text() + "\n" + rule + "\n")
+                self.run_case(mutate, "stylesheet must not hide the evidence hero")
 
     def test_central_summaries_cannot_drift(self):
         for relative in ("index.html.md", "llms.txt"):
