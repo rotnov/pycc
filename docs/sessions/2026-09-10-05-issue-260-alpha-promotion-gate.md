@@ -38,8 +38,8 @@ this file and the harden journal.
   `ALPHA_EVAL_RUNNERS`. It runs from `validate_skill_lock` before the
   lock-shape early return.
 - `scripts/test_validate_agent_assets.py`: promotion tests parametrised over
-  every table entry (absent, codex-only, claude-only, all present), the
-  non-HTTPS shape, a derivation-from-table proof via `mock.patch.dict`, a
+  every table entry (absent, codex-only, claude-only, all present,
+  non-HTTPS), a derivation-from-table proof via `mock.patch.dict`, a
   vendored-skill-ignored proof (`i-have-an-issue`), two exemption-invariant
   tests (the exemption naming an alpha skill; the exemption naming a skill
   outside the lock allowlist), six prose-guard tests (stale spelled-out

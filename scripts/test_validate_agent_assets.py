@@ -806,7 +806,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         self.assertEqual(failures, [])
 
-    ALPHA_PROMOTION_CANDIDATES = (
+    PINNED_ALPHA_EVAL_RUNNER_NAMES = (
         "issue-implement",
         "issue-select",
         "issue-to-plan",
@@ -880,29 +880,31 @@ class AgentAssetValidationTests(unittest.TestCase):
                 self.assertEqual(failures, [])
 
     def test_alpha_promotion_rejects_non_https_evidence(self) -> None:
-        evidence = {
-            "pycc": {
-                "codex": "http://example.test/codex-eval",
-                "claude": "https://example.test/claude-eval",
-            }
-        }
-        with mock.patch.object(
-            validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
-        ):
-            failures: list[str] = []
-            validator.validate_alpha_promotion_gate(
-                {"pycc": {"source": "future"}},
-                failures,
-            )
-        self.assertEqual(len(failures), 1)
-        self.assertIn("pycc cannot be promoted", failures[0])
+        for name in sorted(validator.ALPHA_EVAL_RUNNERS):
+            with self.subTest(skill=name):
+                evidence = {
+                    name: {
+                        "codex": "http://example.test/codex-eval",
+                        "claude": "https://example.test/claude-eval",
+                    }
+                }
+                with mock.patch.object(
+                    validator, "AUTHENTICATED_MODEL_EVAL_EVIDENCE", evidence
+                ):
+                    failures: list[str] = []
+                    validator.validate_alpha_promotion_gate(
+                        {name: {"source": "future"}},
+                        failures,
+                    )
+                self.assertEqual(len(failures), 1)
+                self.assertIn(f"{name} cannot be promoted", failures[0])
 
     def test_alpha_promotion_gate_covers_every_non_exempt_locked_skill(
         self,
     ) -> None:
         """Every locked skill outside the exemption is a candidate.
 
-        ``ALPHA_PROMOTION_CANDIDATES`` above is a test-side pin of the alpha
+        ``PINNED_ALPHA_EVAL_RUNNER_NAMES`` above is a test-side pin of the alpha
         inventory, not a second production copy: its only job is to turn an
         inventory change into a reviewable test diff, so it must be edited
         whenever a skill is added to or removed from ``ALPHA_EVAL_RUNNERS``.
@@ -914,7 +916,7 @@ class AgentAssetValidationTests(unittest.TestCase):
         """
         self.assertEqual(
             tuple(sorted(validator.ALPHA_EVAL_RUNNERS)),
-            self.ALPHA_PROMOTION_CANDIDATES,
+            self.PINNED_ALPHA_EVAL_RUNNER_NAMES,
         )
         locked = {"future-alpha-skill": {"source": "future"}}
 
