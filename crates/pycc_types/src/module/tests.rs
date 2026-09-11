@@ -119,7 +119,7 @@ fn attribute_redeclaration_module() -> HirModule {
 const T0052_REDECLARATION: &str = "attribute `v` is declared as `bool` in class `Derived` and as `int` in class `Base`, both in the method resolution order of class `Derived`";
 
 /// A module that passes every check phase and fails only in `monomorphize`
-/// (the input of `tests.rs`'s
+/// (the input of `tests/generic_method_instantiation.rs`'s
 /// `check_and_resolve_rejects_generic_class_instantiate_for_non_generic_class`):
 /// a `GenericClassInstantiate` of a non-generic class `D`.
 fn monomorphize_only_failure_module() -> HirModule {
