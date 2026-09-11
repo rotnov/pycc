@@ -1055,16 +1055,18 @@ class AgentAssetValidationTests(unittest.TestCase):
     def test_alpha_skill_count_prose_counts_only_adjacent_numerals(
         self,
     ) -> None:
-        # "two", "#260" and "255" are not counts: "two" and "255" sit more
-        # than two words from the phrase, "#260" is excluded by the `#`
-        # lookbehind. The
-        # two "one"s are counts, so they pass with a one-entry table and fail
-        # with a two-entry table while the others stay ignored.
+        # "two", "#260", "255" and the second "two" are not counts of alpha
+        # skills: "clients" and "landed" are not count qualifiers, "#260" is
+        # excluded by the `#` lookbehind, and "two clients support" counts
+        # clients. The two "one"s are counts, so they pass with a one-entry
+        # table and fail with a two-entry table while the others stay
+        # ignored.
         text = (
             "The two clients cover all one alpha skills.\n"
             "Issue #260 covers every alpha skill.\n"
             "PR 255 landed the evals of the one project-local alpha "
             "skill.\n"
+            "The two clients support alpha skills.\n"
         )
         failures: list[str] = []
         with mock.patch.dict(

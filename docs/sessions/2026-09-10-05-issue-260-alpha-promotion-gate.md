@@ -29,8 +29,10 @@ this file and the harden journal.
   `scripts/run_alpha_skill_evals.py` by hand; the code comment names that gap.
 - `validate_alpha_skill_count_prose` (the harden artefact): rejects a
   literal alpha-skill count in `docs/AGENT_TOOLING.md` that disagrees with
-  `len(ALPHA_EVAL_RUNNERS)` when at most two words separate the numeral
-  from a following "alpha skill(s)" (in that rule only, an issue number
+  `len(ALPHA_EVAL_RUNNERS)` when the numeral heads a phrase ending in
+  "alpha skill(s)" with at most two qualifiers ("project-local",
+  "remaining", "current", "existing", "listed", "tracked", "other",
+  "such") in between (in that rule only, an issue number
   such as `#260` never counts and a numeral after a bound phrase ("at
   least", "at most", "more than", "fewer than", "up to") is excluded) or it
   is immediately followed by "skill(s)", "alpha", "project-local", or "at
@@ -89,9 +91,13 @@ finding, including the external ones, is in
 
 External review on PR #1003 (Codex, P2) showed the prose guard's
 40-character window counting unrelated numerals ("the two clients cover all
-seven alpha skills", "#260 covers every alpha skill"); rule A now allows at
-most two words between the numeral and the phrase and skips `#`-prefixed
-numbers (`d7958fd5`). The same review (Codex, P1) showed the derived intersection
+seven alpha skills", "#260 covers every alpha skill"); rule A was first
+narrowed to at most two words between the numeral and the phrase and skips
+`#`-prefixed numbers (`d7958fd5`). A second P2 on the same rule ("the two
+clients support alpha skills" still matched) narrowed it to a count phrase:
+only a closed set of qualifiers may sit between the numeral and "alpha
+skill(s)", so a numeral counting something else is ignored (the fix commit
+is named by its pile row). The same review (Codex, P1) showed the derived intersection
 omits a skill promoted out of the table in the same change. The mechanism
 was replaced after an independent advisor round: every locked skill is a
 candidate unless a reviewed exemption asserts external origin

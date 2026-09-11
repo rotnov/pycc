@@ -593,18 +593,25 @@ _NUMERAL_WORDS = {
     )
 }
 _NUMERAL = r"\b(?P<numeral>\d+|" + "|".join(_NUMERAL_WORDS) + r")\b"
-# Rule A: the numeral is separated from "alpha skill(s)" by at most two
-# words ("seven alpha skills", "all seven project-local alpha skills"), is
-# not an issue or pull-request number ("#260 covers every alpha skill"), and
-# is not a floor or ceiling ("at least two evals ... alpha skill").
+# Rule A: the numeral heads a count phrase whose noun is "alpha skill(s)":
+# "seven alpha skills", "all seven project-local alpha skills". Only the
+# qualifiers below may sit between them, so "the two clients support alpha
+# skills" (a count of clients) does not match. The numeral is also not an
+# issue or pull-request number ("#260 covers every alpha skill") and not a
+# floor or ceiling ("at least two evals ... alpha skill").
 _NOT_A_BOUND = (
     r"(?<!at least )(?<!at most )(?<!more than )(?<!fewer than )(?<!up to )"
+)
+_COUNT_QUALIFIERS = (
+    r"(?:project-local|remaining|current|existing|listed|tracked|other|such)"
 )
 ALPHA_SKILL_COUNT_NEAR_PHRASE = re.compile(
     r"(?<!#)"
     + _NOT_A_BOUND
     + _NUMERAL
-    + r"(?=(?:\s+[A-Za-z][\w-]*){0,2}\s+alpha skills?\b)",
+    + r"(?=(?:\s+"
+    + _COUNT_QUALIFIERS
+    + r"){0,2}\s+alpha skills?\b)",
     re.IGNORECASE,
 )
 # Rule B: inside a sentence that names the runner table, the numeral is
@@ -627,8 +634,11 @@ def validate_alpha_skill_count_prose(text: str, failures: list[str]) -> None:
     """Reject a literal alpha-skill count that disagrees with the runner table.
 
     A spelled-out (``one``..``twelve``) or digit numeral counts the alpha
-    skills when at most two words separate it from a following
-    ``alpha skill(s)``, it is not an issue or pull-request number (``#260``),
+    skills when it is followed by ``alpha skill(s)`` with at most two
+    qualifiers (``project-local``, ``remaining``, ``current``, ``existing``,
+    ``listed``, ``tracked``, ``other``, ``such``) in between, so a numeral
+    that counts something else (``the two clients support alpha skills``)
+    is ignored, it is not an issue or pull-request number (``#260``),
     and it is not preceded by a bound phrase (``at least``, ``at most``,
     ``more than``, ``fewer than``, ``up to``), or when its sentence names
     ``ALPHA_EVAL_RUNNERS`` and the numeral is

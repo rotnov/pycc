@@ -296,10 +296,12 @@ agent-relevant pull request and every `main` push, regardless of what the
 lock contains. The same validator
 (`validate_alpha_skill_count_prose`) also rejects a literal alpha-skill
 count in this document that disagrees with the length of
-`ALPHA_EVAL_RUNNERS` whenever at most two words separate the count from a
-following "alpha skill(s)" (an issue or pull-request number such as `#260`
-never counts, and a count preceded by "at least", "at most", "more than",
-"fewer than", or "up to" is a bound rather than a count), or the count is
+`ALPHA_EVAL_RUNNERS` whenever the count heads a phrase ending in "alpha
+skill(s)" with at most two qualifiers such as "project-local" or
+"remaining" in between (a count of something else, as in "the two clients
+support alpha skills", is ignored; an issue or pull-request number such as
+`#260` never counts; and a count preceded by "at least", "at most", "more
+than", "fewer than", or "up to" is a bound rather than a count), or the count is
 immediately followed by "skill(s)", "alpha", "project-local", or "at the time
 of writing" inside a one-line sentence that mentions `ALPHA_EVAL_RUNNERS`, so
 a widened runner table cannot leave such prose stale. The separate
