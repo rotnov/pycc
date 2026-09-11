@@ -262,6 +262,18 @@ class RecordInvariantTests(SyntheticRepository):
         self.assert_rejected(duplicate_row, "distinct jobs")
         self.assert_rejected(reuse_gate_job, "distinct jobs")
 
+    def test_audit_must_come_from_a_run_distinct_from_the_gate(self):
+        def reuse_gate_run(hero):
+            gate, audit = hero["snapshot"]["subjects"][1], hero["snapshot"]["subjects"][2]
+            for key in ("run_id", "run_url", "job_url"):
+                audit[key] = gate[key]
+
+        def reuse_audit_job(hero):
+            hero["environment"]["platforms"][4]["job_url"] = hero["snapshot"]["subjects"][2]["job_url"]
+
+        self.assert_rejected(reuse_gate_run, "distinct from the ci-gate run")
+        self.assert_rejected(reuse_audit_job, "under the ci-gate run")
+
     def test_attestation_and_command_drift_are_rejected(self):
         self.assert_rejected(lambda hero: hero["attestation"].__setitem__("sanitized", "yes"), "collection_method/sanitized")
         self.assert_rejected(lambda hero: hero["attestation"].__setitem__("collection_method", "curl"), "collection_method/sanitized")

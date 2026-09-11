@@ -261,6 +261,8 @@ def validate(hero, evidence_root, repo_root):
         fail("status pre-merge-audit must be observed on the merged pull request head")
     check_run_fields(gate, "status post-merge-ci-gate")
     check_run_fields(audit, "status pre-merge-audit")
+    if audit["run_id"] == gate["run_id"]:
+        fail("status pre-merge-audit must be observed in a run distinct from the ci-gate run")
 
     attestation = hero["attestation"]
     if not is_utc_instant(attestation["collected_at"]):
@@ -286,9 +288,9 @@ def validate(hero, evidence_root, repo_root):
         job = JOB_URL_RE.match(row["job_url"] or "")
         if not job or int(job[1]) != gate["run_id"]:
             fail(f"status platform {runner} job_url must be an immutable job URL under the ci-gate run")
-    job_urls = [gate["job_url"], *(row["job_url"] for row in rows)]
+    job_urls = [gate["job_url"], audit["job_url"], *(row["job_url"] for row in rows)]
     if len(set(job_urls)) != len(job_urls):
-        fail("status platform job_url values must be distinct jobs, none of them the ci-gate job")
+        fail("status platform job_url values must be distinct jobs, none of them the ci-gate or audit job")
     if hero["state"] != derive_state(hero) or hero["state"] != "all-Tier-1":
         fail(f"status state {hero['state']!r} does not match the derived state {derive_state(hero)!r}")
     if hero["limitations"] != LIMITATIONS:
