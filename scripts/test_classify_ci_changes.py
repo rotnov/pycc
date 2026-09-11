@@ -131,8 +131,10 @@ class ClassifyPathsTests(unittest.TestCase):
 
     def test_compiler_and_performance_gate_scripts_select_compiler(self):
         for path in (
+            "scripts/check_diff_coverage.py",
             "scripts/check_frontend_throughput.rb",
             "scripts/check_replicated_paired_perf_regression.rb",
+            "scripts/test_check_diff_coverage.py",
             "scripts/test_check_replicated_paired_perf_regression.rb",
         ):
             with self.subTest(path=path):

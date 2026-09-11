@@ -127,8 +127,8 @@ A revision advertised for hook use must satisfy all of the following:
    with a supported Python source-encoding declaration.
 4. Syntax errors, current-version capability errors, unreadable inputs, and
    mixed failures produce the documented diagnostics and exit codes.
-5. The repository's normal build, tests, documentation, clippy, workflow
-   policy, and 100% line/region coverage gates pass.
+5. The repository's normal build, tests, documentation, clippy, and workflow
+   policy gates pass, and the diff-coverage gate passes.
 
 The checked-in integration tests enforce the manifest contents, execute the
 hook's valid-source fixtures through `pycc check`, and cover the CLI success,

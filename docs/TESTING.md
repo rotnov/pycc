@@ -402,13 +402,15 @@ which does not yet know the new identifier. Register first, with every
 roadmap checkbox that will cite it left unchecked; merge; only then open a
 second pull request that checks the box.
 
-The coverage evidence — `ci-build-test-coverage-100` (the legacy
-whole-workspace claim) and, since [D-242](decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md), `ci-diff-coverage-100`
-("Every compiler-relevant pull request keeps 100% line coverage of its added
-and modified Rust lines, and total line and region coverage is reported by
-CI.") together with `readme-diff-coverage-badge-bound` ("The README coverage
-badge percentage is bound to ci.yml's enforced --require-changed-lines
-threshold.") — requires all of the following named properties of
+The coverage evidence — `ci-diff-coverage-100` ("Every compiler-relevant
+pull request keeps 100% line coverage of its added and modified Rust lines,
+and total line and region coverage is reported by CI."), which under
+[D-242](decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md)
+replaces the retired whole-workspace identifier `ci-build-test-coverage-100`
+(still registered; no roadmap item cites it), together with
+`readme-diff-coverage-badge-bound` ("The README coverage badge percentage is
+bound to ci.yml's enforced --require-changed-lines threshold.") — requires
+all of the following named properties of
 `.github/workflows/ci.yml`, checked by `coverage_gate_present?`:
 
 - the exact claim text in the v0.1 checklist;
@@ -470,17 +472,15 @@ The README displays two badges at the top of the file:
    (`[![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)]`).
    It is bound to the `ci.yml` workflow and the `main` branch.
 2. **Coverage badge** — a Shields static badge
-   (`[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)]`).
-   Its percentage is bound to `ci.yml`'s `--fail-under-lines` and
-   `--fail-under-regions` thresholds.
+   (`[![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)]`).
+   Its percentage is bound to `ci.yml`'s `--require-changed-lines`
+   threshold (D-242).
 
 `scripts/check_readme_coverage_badge.rb` validates both badges locally
 without network access. It verifies:
 
 - the coverage badge's alt-text percentage and URL percentage agree with each
-  other and with ci.yml's `--fail-under-lines` threshold;
-- `--fail-under-lines` and `--fail-under-regions` agree (the badge binds to a
-  single threshold);
+  other and with ci.yml's `--require-changed-lines` threshold;
 - the coverage badge links to `./docs/TESTING.md`;
 - the CI badge references `actions/workflows/ci.yml` (not another workflow),
   uses `branch=main` (not another branch), and links to `rotnov/pycc`;
@@ -589,7 +589,7 @@ floor holds on every target, only that it holds. The
 `cli-spec-diagnostic-match` evidence instead binds
 the `cli_spec_example` diagnostic-snapshot test (`tests/diagnostics_test.rs`,
 D-083), which runs inside the same structurally required, 100%-coverage-gated
-`cargo test`/`cargo llvm-cov` step `ci-build-test-coverage-100`'s evidence
+`cargo test`/`cargo llvm-cov` step `ci-diff-coverage-100`'s evidence
 already requires -- none of these three add a second, evidence-ID-specific
 repository check beyond the roadmap claim/section binding every evidence ID
 gets, since the underlying capability proof is already exhaustively covered
@@ -1181,12 +1181,7 @@ region table (`run_isolated "$TRUSTED_COV" llvm-cov report
 never as a threshold. **What the diff gate cannot see:** coverage lost on
 *unchanged* lines — a deleted test that orphans an old path — never fails
 the gate; the `report` TOTAL row and the totals line are the only signal for
-that drift, and the D-068 review reads them. Until the activation pull
-request for #1010 lands, CI still enforces the whole-workspace
-`--fail-under-lines 100 --fail-under-regions 100` gate, so during that
-transitional window also run
-`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-locally: a diff-clean change that deletes a test can still fail CI. Locally:
+that drift, and the D-068 review reads them. Locally:
 
 ```
 cargo llvm-cov --workspace --lcov --output-path target/coverage.lcov
@@ -1204,13 +1199,6 @@ pathspec nor rename detection can shrink the measured line set), gate command
 line, threshold — not byte identity; a hostile edit placed
 between the required lines is caught by the D-068 full-diff review that
 precedes every merge, which is the compensating control.
-
-**Transitional state:** until the activation pull request for #1010 lands,
-`ci.yml` still runs the legacy whole-workspace
-`run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-gate described in the "Gate" bullet below, and the checker accepts both
-shapes; the activation pull request swaps the step and deletes this
-paragraph.
 
 **D-171 change-aware scheduling (active 2026-08-15):** The active workflow is
 validated by D-172's base-owned named-property audit rather than by equality to
@@ -1253,7 +1241,7 @@ still require both Pages gates and their existing budgets. `audit` and the
 fail-closed `ci-gate` remain required.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate (legacy shape, live until the #1010 activation pull request; the product-mode shape replaces only the `--fail-under-*` command line with the LCOV export, the `report` table, and `scripts/check_diff_coverage.py`, keeping everything else in this bullet): `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; no head-controlled policy step runs earlier in this coverage job, while the separate always-run governance job remains unprivileged. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
+- Gate (D-242 product-mode shape): `run_isolated "$TRUSTED_COV" llvm-cov --workspace --lcov --output-path "$ISOLATED_ROOT/coverage.lcov"` exports the whole-workspace LCOV, `run_isolated "$TRUSTED_COV" llvm-cov report "${WORKSPACE_PACKAGE_FLAGS[@]}"` prints the informational per-crate table, and `python3 -B scripts/check_diff_coverage.py --lcov "$ISOLATED_ROOT/coverage.lcov" --diff "$RUNNER_TEMP/coverage-changed.diff" --root "$GITHUB_WORKSPACE" --require-changed-lines 100` (run as the runner user, outside the sandbox, against the `git diff -U0 --no-color --no-renames "$COVERAGE_BASE_SHA" HEAD` the step wrote first) is the threshold; run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves the exact event base (`PR_BASE_SHA`/`PUSH_BASE_SHA`, validated as a full non-zero SHA and fetched by hash) and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker audits the job by named properties (setup steps, gate `env`, required gate lines in order, the `run_isolated` sandbox definition) rather than a byte-exact prefix; no head-controlled policy step runs earlier in this coverage job, while the separate always-run governance job remains unprivileged. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
 - Test code itself (`tests/`, `examples/`, `benches/`, `build.rs`, `tests.rs`, `<name>_tests.rs`, `<name>-tests.rs` — exactly the basename regex `^(tests\.rs|[0-9a-zA-Z_-]+[_-]tests\.rs)$` stated in the "Code coverage" section's file predicate) is excluded from the denominator automatically by cargo-llvm-cov's default exclusion (`src/report.rs:919-923` in 0.8.7), and `scripts/check_diff_coverage.py` applies the identical predicate to the diff — the gate measures product code exercised by tests, not tests covering themselves, and a test-only pull request has no changed source lines and passes.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 
