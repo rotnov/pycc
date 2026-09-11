@@ -30,14 +30,33 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ARCHITECTURE = 4
 
-# Fields whose absence is caught by a check that names the rule rather than the
-# field: the hero-order check sees a `None` page id, and the stable-links check
-# compares the whole closed set at once.  Every one of `stable_links`' keys
-# belongs here, including the three the rejection's own prose happens to name --
-# an assertion on "commit" would otherwise pass against a message that says
-# "commit" only because it lists all five keys, proving nothing about which one
-# was deleted.
+# A deleted field is normally caught by `require_exact_fields`, which names the
+# owning context *and* the missing key: `f"{context} fields drifted;
+# missing=['<field>'], extra=[]"`.  `expected_field_rejection` below derives
+# exactly that fragment from the trail, so every case asserts a substring that
+# is specific by construction.  A bare field name is not: every rejection is
+# wrapped as "evidence-heroes.json: {message}" (so "id", "json" and "evidence"
+# are satisfied by any failure at all) and almost every context begins with the
+# literal word "architecture" (so "architecture" is too).  The context half of
+# the fragment matters just as much as the key half -- `missing=['id']` alone is
+# emitted by all eight stage rows, and `missing=['path']` by the fixture, trace
+# and stage contexts, so without the context a case cannot tell which record
+# lost the field.
+#
+# `FIELD_REJECTIONS` holds the trails that reach a check which names a *rule*
+# instead of listing the drifted field, so no such fragment exists for them:
+# the hero-order check sees a `None` page id; the stable-links and projections
+# checks each compare a whole closed set at once; and the llvm-ir stage's
+# `evidence` key is caught by the deliberately earlier guard at
+# `site_pipeline_evidence.py:266-271` rather than by the field listing its seven
+# sibling stages reach.  Every key of such a family belongs here, including the
+# ones the rejection's own prose happens to name -- an assertion on "commit"
+# would otherwise pass against a message that says "commit" only because it
+# lists all five keys, proving nothing about which one was deleted.  These
+# family constants are therefore shared by construction: they are the one place
+# where sibling cases legitimately assert the same substring.
 STABLE_LINKS = "stable_links must be exactly the immutable commit"
+PROJECTIONS = "hero 'architecture' projections must be"
 FIELD_REJECTIONS = {
     ("page_id",): "hero page inventory/order must be exactly",
     ("stable_links", "owner"): STABLE_LINKS,
@@ -45,7 +64,41 @@ FIELD_REJECTIONS = {
     ("stable_links", "commit"): STABLE_LINKS,
     ("stable_links", "tree"): STABLE_LINKS,
     ("stable_links", "fixture"): STABLE_LINKS,
+    ("projections", "html"): PROJECTIONS,
+    ("projections", "markdown"): PROJECTIONS,
+    ("projections", "llm"): PROJECTIONS,
+    ("projections", "structured_data"): PROJECTIONS,
+    ("projections", "social"): PROJECTIONS,
+    ("snapshot", "stages", 5, "evidence"):
+        "architecture llvm-ir stage may not claim evidence",
 }
+
+
+def expected_field_rejection(hero, trail):
+    """The field-specific fragment `require_exact_fields` emits for `trail`.
+
+    `hero` is the architecture record itself, read for the list-row identities
+    the module's own context strings are built from (a stage's `id`, a
+    platform's `runner`), so a renamed row moves the expectation with it.
+    """
+    override = FIELD_REJECTIONS.get(trail)
+    if override is not None:
+        return override
+    parent, field = trail[:-1], trail[-1]
+    if not parent:
+        context = "hero 'architecture'"
+    elif parent[:2] == ("snapshot", "stages") and len(parent) == 3:
+        context = f"architecture stage {hero['snapshot']['stages'][parent[2]]['id']}"
+    elif parent[:2] == ("environment", "platforms") and len(parent) == 3:
+        runner = hero["environment"]["platforms"][parent[2]]["runner"]
+        context = f"architecture platform {runner}"
+    else:
+        # Every other container is addressed by dict keys alone.  A new list of
+        # records would need its own identity branch above, so refuse to guess
+        # rather than derive a context the module never emits.
+        assert all(isinstance(key, str) for key in parent), trail
+        context = "architecture " + " ".join(parent)
+    return f"{context} fields drifted; missing=['{field}']"
 
 
 def artifact_paths(document):
@@ -132,12 +185,17 @@ class PipelineEvidenceTests(unittest.TestCase):
                     for key in trail[:-1]:
                         value = value[key]
                     del value[trail[-1]]
-                # The deleted key's own name, not the universal
-                # "evidence-heroes.json:" prefix every rejection carries: the
-                # subTest has to prove that this field's absence is what was
-                # caught. Only dict keys are yielded, so the name is always the
-                # trail's last element.
-                self.run_case(mutate, FIELD_REJECTIONS.get(trail, trail[-1]))
+                # The context-qualified `missing=['<field>']` fragment the
+                # validator emits for this exact field, not the deleted key's
+                # bare name: the subTest has to prove that this field's absence
+                # in this record is what was caught, and a bare name is
+                # satisfied by the universal "evidence-heroes.json:" prefix or
+                # by a sibling row's identical drift.  See the comment above
+                # `FIELD_REJECTIONS` for the trails that have no such fragment.
+                self.run_case(
+                    mutate,
+                    expected_field_rejection(document["heroes"][ARCHITECTURE], trail),
+                )
 
     # -- artifact-identity negative controls --------------------------------
 
