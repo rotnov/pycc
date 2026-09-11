@@ -295,7 +295,9 @@ fn a_mutated_artifact_a_foreign_artifact_and_an_unevidenced_stage_are_all_reject
     );
     // 5. The regeneration override resolves to the fixture directory when the
     //    environment names one, and to the caller's scratch directory otherwise.
-    let fallback = repo_root().join("target");
+    // Any directory works here; D-183 forbids naming Cargo's target root in a
+    // Rust source literal, so this deliberately is not one.
+    let fallback = std::env::temp_dir().join("pycc-architecture-trace-fallback");
     assert_eq!(out_dir(None, &fallback), fallback);
     assert_eq!(
         out_dir(Some(std::ffi::OsString::from(TRACE_DIR)), &fallback),

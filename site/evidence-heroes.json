@@ -440,7 +440,7 @@
       },
       "test": {
         "path": "tests/architecture_trace.rs",
-        "sha256": "c1b9a1caad63b91f9f3a87b6a2ab9f6061eac7ff1e7b191391a47a07a5768f5d",
+        "sha256": "e5852ca51cf9835484cfb516d1b5f8dedaf679797beaa0bd78aa46104eafb941",
         "names": [
           "checked_in_stage_artifacts_are_what_the_compiler_produces_today",
           "regeneration_writes_exactly_the_checked_in_stage_artifacts",
@@ -753,7 +753,7 @@
         "collected_at": "2026-09-11T16:48:51Z",
         "collection_method": "gh api check-runs, actions/runs, commits, pulls (read-only)",
         "sanitized": true,
-        "milestone_line": "Current milestone: v0.3 \u2014 acceptance criteria met; v0.4 in progress.",
+        "milestone_line": "Current milestone: v0.3 — acceptance criteria met; v0.4 in progress.",
         "required_contexts": [
           "ci-gate",
           "audit"
