@@ -52,8 +52,10 @@ this file and the harden journal.
 - `docs/AGENT_TOOLING.md` and `docs/ROADMAP.md`: the promotion gate is
   described as covering every locked skill outside
   `EXTERNAL_ORIGIN_LOCKED_SKILLS`, without a literal count; the structural check's trigger is scoped to agent-relevant
-  pull requests and `main` pushes. No new decision entry: the change restores
-  the policy D-190 already documents. D-190 and the dated plan file under
+  pull requests and `main` pushes. No new decision entry, as the plan
+  called: the promotion requirement itself is unchanged and lives in
+  `docs/AGENT_TOOLING.md`; only the validator's way of enumerating the
+  gated set moved. D-190 and the dated plan file under
   `docs/superpowers/plans/` still name `PROJECT_ALPHA_SKILLS`; both are
   frozen records.
 
@@ -77,10 +79,13 @@ guard) and two wording ones (per-line scope, docstring formatting); rounds
 description or the code comment (pronoun antecedent, sentence granularity,
 "single owner", trigger scope); all were fixed in the commits listed
 above; round 8 clean. The rounds run after the external review
-(below) found only documentation and test-comment drift in this file, in
-`docs/AGENT_TOOLING.md`, and in the prose-guard test, each fixed in the
-commit its pile row names. Every finding, including the external ones, is
-in `.harden/findings/issue-260.jsonl` (all `fixed`).
+(below) found documentation, comment and test drift in this file, in
+`docs/AGENT_TOOLING.md`, in the gate's comment block (a round-6 note the
+gate inversion had dropped), and in the promotion and prose-guard tests,
+each fixed in the commit its pile row names; one control-flow item was
+refuted (the lock-shape early return already fails the run). Every
+finding, including the external ones, is in
+`.harden/findings/issue-260.jsonl`.
 
 External review on PR #1003 (Codex, P2) showed the prose guard's
 40-character window counting unrelated numerals ("the two clients cover all
