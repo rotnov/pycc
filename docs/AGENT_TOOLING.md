@@ -147,9 +147,9 @@ branch under D-021's preflight
 rather than in the orchestrating session's own context, so `issue-select`'s
 loop can carry many issues in one sitting instead of growing that session's
 context unboundedly after the first — detecting and executing the
-repository's established two-PR CI-digest stage-then-activate pattern when
-the change touches a workflow file and a `check_roadmap_evidence.rb` digest
-allowlist); loops the
+repository's checker-first two-PR rule when the base-owned `audit` must
+first learn a new evidence identifier, trusted setup command, or required
+gate line in `check_roadmap_evidence.rb`, per D-242 rule 2); loops the
 pinned D-068 deep review until a round reports no actionable findings,
 resuming the same dispatched implementer for its own fix rounds rather than
 fixing findings in the orchestrating session's own context; opens the pull

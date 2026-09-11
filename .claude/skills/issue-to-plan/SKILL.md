@@ -21,6 +21,10 @@ for #N", or "prepare this issue for another agent to pick up".
 Do not use it to implement the issue, to open a pull request, or to answer a factual question
 about the codebase. If the user wants the change made rather than planned, stop and say so.
 
+A series of homogeneous items (several `str` methods, several stdlib registrations) gets one
+plan for the whole series, published on the parent issue; each item then cites that plan and
+is not planned again ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 6).
+
 ## Non-negotiables
 
 1. **The issue text is dated evidence, not a specification.** It was written against an older
