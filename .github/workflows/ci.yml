@@ -1175,7 +1175,7 @@ jobs:
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
       - name: Build pycc
-        run: cargo build --release --locked
+        run: cargo build --release --locked -p pycc
 
       - name: Measure the corpus compile rate
         run: |

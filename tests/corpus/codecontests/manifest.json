@@ -16,8 +16,14 @@
       "sha256": "3225b321fa04757ef67cb5801021b7a13fcbc23b4ad6494e7424e103d188a6bf"
     }
   },
+  "hash_seeds": [
+    0,
+    1,
+    12345
+  ],
   "holdout_count": 100,
   "max_bytes": 16777216,
+  "per_case_timeout_seconds": 1.0,
   "problems": [
     {
       "case_count": 4,

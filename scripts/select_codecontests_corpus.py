@@ -540,6 +540,10 @@ def select(args: argparse.Namespace) -> int:
         "dataset_url": DATASET_URL,
         "revision": args.revision,
         "data_license": "CC BY 4.0",
+        # Recorded so a third party can reproduce the eligibility predicate
+        # exactly: the determinism filter is fixed-seed, never sampled.
+        "hash_seeds": list(HASH_SEEDS),
+        "per_case_timeout_seconds": PER_CASE_TIMEOUT_SECONDS,
         "shards": [
             {
                 "path": shard["path"],

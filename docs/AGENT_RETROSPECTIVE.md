@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A long gate run in the foreground silenced the session's output stream and the harness watchdog killed it with every artifact uncommitted
+
+**What happened.** An implementation session had produced a large body of work
+— several new scripts, a vendored data tree, and the documentation changes that
+went with them — without committing any of it. It then started a long
+`cargo`-based gate as an ordinary foreground command. That command produced no
+output for the whole of its run, so the session itself emitted nothing for ten
+minutes, and the harness watchdog terminated it. Nothing was in git at that
+moment, so the entire body of work came within one filesystem operation of
+being lost, and a successor session had to be briefed to recover it.
+
+**Root cause.** Two independent mistakes compounded. First, a long gate was run
+in the foreground: the watchdog watches the *session's* output stream, not the
+child process's, so a quiet command starves it even though the command is
+healthy. Second, the work was left uncommitted while gates were being run, so
+the failure mode of the first mistake was total loss rather than a lost gate
+result.
+
+**What fixed it.** The successor session committed the on-disk work as its very
+first action, before running any gate, then ran every long gate as a background
+command redirecting into a log file (`cmd > log 2>&1; echo "name=$?" >> log`)
+and polled the log between other work, so the session kept emitting output
+throughout.
+
+**Lesson.** Commit work before running gates, not after — a gate result is
+cheap to recompute and a lost implementation is not. And never run a gate that
+can go quiet for minutes in the foreground: start it in the background with its
+output redirected to a log, read the log's recorded exit status as the verdict,
+and do other visible work while it runs.
+
+
 ## 2026-09-12 — A date-pinned page was pushed inside the UTC midnight rollover window, failing the governance job on a checker that cannot guess
 
 **What happened.** A pull request touching a canonical website page was pushed
