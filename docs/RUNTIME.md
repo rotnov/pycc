@@ -5,7 +5,11 @@ and every future `deny`/`--pure` artifact are pure Rust with no libpython and
 no platform-visible behavior differences (cross-platform is a hard
 requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
 conditional companion runtime bundled only when a source import resolves to a
-CPython-backed dependency under the selected interop policy (D-128).
+CPython-backed dependency under the selected interop policy (D-128). The
+no-libpython guarantee is a property of the `native` executable mode; the
+planned hosted `ext` mode (a CPython extension module loaded by an external
+interpreter) explicitly resolves its CPython symbols from the host and does
+not carry it (D-244).
 
 ## Object model
 

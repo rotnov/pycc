@@ -19,6 +19,8 @@ Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan �
 | v0.9 async & packaging | `asyncio` subset on state machines, `--lib` C-ABI | v0.8 | ~4-5 |
 | v1.0 spec freeze | PYTHON_STANDARDS Python 3.0–3.14 matrix complete, semantics deviations doc, benchmarks published, diagnostics/JSON frozen semver | v0.9 | ~3-4 |
 
+Product sprint 1 ([#1014](https://github.com/rotnov/pycc/issues/1014), milestone `product-sprint-1`, due 2026-10-22) was redirected on 2026-09-12 from the competitive-programming corpus metric to the v0.7 interop core, pulled ahead of v0.5/v0.6 under [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md): a new hosted `ext` artifact mode — a CPython extension module with typed export wrappers, stable ABI, no libpython link ([#1025](https://github.com/rotnov/pycc/issues/1025)) — then foreign imports as opaque `object` through the C-API ([#1026](https://github.com/rotnov/pycc/issues/1026)), the buffer-protocol bridge ([#1027](https://github.com/rotnov/pycc/issues/1027)), and last the embedded-interpreter executable that is D-128's own bundled mode on the same bridge ([#1028](https://github.com/rotnov/pycc/issues/1028)). The v0.7 row above keeps its embedded-mode content; #1016, #1019, #1020, and #1022 were closed as not planned, and the sprint metric is now functions of the owner's reference annotated codebase compiling unchanged plus its hot loop's speedup when called from CPython.
+
 ## Environment baseline (verified, not assumed)
 
 Verified empirically on the primary dev host (macOS, aarch64-apple-darwin) before committing to any of the below:

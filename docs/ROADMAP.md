@@ -281,6 +281,12 @@ deployment control; the typed `I04xx` boundary, `unittest`/`logging`/`argparse`,
 and an optional low-level `pycc.interop.cpython` API remain part of the
 milestone (D-128).
 
+On 2026-09-12 the interop core was pulled forward into product sprint 1 with a
+second, hosted artifact mode: a CPython extension module loaded by an external
+interpreter, built on a C-API bridge shared with the embedded mode (D-244;
+#1025–#1028). The embedded mode this section describes stays as written and is
+#1028, sequenced after the hosted mode. Nothing of either mode is implemented yet.
+
 **Accept:** an unchanged CPython-compatible app using `import numpy as np`
 builds and runs on all Tier-1 targets without a separately installed Python;
 the package/runtime closure is pinned and reproducible; `auto` succeeds without
