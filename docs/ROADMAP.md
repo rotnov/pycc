@@ -260,13 +260,13 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 ## product-sprint-1 — real stdin/stdout programs compile unchanged
 
-Runs alongside the milestone chain, not in sequence with it: a time-boxed product bet on one niche — single-file competitive-programming Python that reads stdin and writes stdout. Decomposed into eight parts in [#1014](https://github.com/rotnov/pycc/issues/1014). Corpus and metric: `tests/corpus/codecontests/` and `scripts/check_corpus_compile_rate.py`, reported non-blocking by CI's `corpus-compile-rate` job.
+Runs alongside the milestone chain, not in sequence: a time-boxed bet on one niche, single-file competitive-programming Python that reads stdin and writes stdout. Decomposed into eight parts in [#1014](https://github.com/rotnov/pycc/issues/1014). Corpus and metric: `tests/corpus/codecontests/` and `scripts/check_corpus_compile_rate.py`, reported non-blocking by CI's `corpus-compile-rate` job.
 
 **Accept:**
 
 - [ ] at least 50% of the 200-problem steering corpus compiles unchanged
 - [ ] median speedup at least 5x over CPython across the problems that compile and match
-- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, read from two runs of the metric — one default run for the steering rate, one `--include-holdout` run whose merged rate yields the holdout rate by subtraction, since neither the report nor its JSON splits the denominator by set, and valid only when neither run reports `INCOMPLETE`: the manifest orders every steering record before every holdout one, so a truncated run loses holdout problems first and the subtraction would then be over two different evaluated subsets
+- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, by subtracting a default run's rate from an `--include-holdout` run's merged rate, since neither splits the denominator by set. Valid only if neither reports `INCOMPLETE`: the manifest orders all steering records first, so truncation drops holdout problems and skews the subtraction
 
 ## v0.5 — generators & ownership v1
 

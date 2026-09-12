@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A plan recorded a byte budget for the file being edited, and a later review round's fix blew through it because only the first edit was measured against it
+
+**What happened.** An implementation plan measured the headroom `docs/ROADMAP.md`
+had left inside its per-resource llms.txt context budget — 1,073 bytes — verified
+that the section the task needed to add would fit, and said so. The section was
+written and did fit. Four review rounds later, a reviewer note asked for a
+precondition clause on one acceptance item; the clause was written at the length
+the explanation wanted and committed with the full local gate set green. CI's
+`Pages` job then failed on the first push: the file was 177 bytes over its budget.
+
+**Root cause.** The budget was treated as a property of the one edit that was
+measured against it rather than of the file. Every later edit to that file — a
+review fix, a reworded bullet — spends from the same headroom, and none of them
+was measured. The local gate set compounded it: the budget is enforced by
+`scripts/check-site.sh`, which had been skipped as "no `site/` file is touched",
+which is true and irrelevant — that script also validates every llms.txt context
+document, and `docs/ROADMAP.md` is one.
+
+**What fixed it.** Condensing the branch's own additions by 208 bytes, which
+restored the file to 31 bytes of headroom, then running `bash scripts/check-site.sh`
+locally to confirm (exit 0) before re-pushing.
+
+**Lesson.** When a plan records a byte, line, or digest budget for a file, that
+budget is a gate on every subsequent edit to that file in the same branch, not
+just the first one: re-measure after each review round that touches it. And decide
+whether to run `scripts/check-site.sh` from the set of files the branch touches,
+never from whether any of them live under `site/` — a `docs/` file inside the
+llms.txt partition is exactly as much its business.
+
 ## 2026-09-12 — A long gate run in the foreground silenced the session's output stream and the harness watchdog killed it with every artifact uncommitted
 
 **What happened.** An implementation session had produced a large body of work
