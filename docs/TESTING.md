@@ -364,7 +364,10 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   on each problem's largest vendored case, best of three runs, and counts only
   problems whose CPython wall time reaches 200 ms — below that the ratio
   measures process startup, so those problems are reported as excluded rather
-  than folded in. `--json` writes the same data machine-readably. The script
+  than folded in. A matched problem whose timing runs disagree with the case is
+  reported as dropped, for the same reason: every matched problem is accounted
+  for in the report rather than quietly missing from the sample count.
+  `--json` writes the same data machine-readably. The script
   reads the corpus, writes nothing inside it, and performs no network I/O.
 - **Gate status: reporting only.** CI's `corpus-compile-rate` job is
   non-blocking by omission from `ci-gate`'s `needs`, not by
@@ -372,7 +375,8 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   including a zero compile rate and exhausting its own `--max-seconds` budget
   (which prints `INCOMPLETE: n of M evaluated`). It exits non-zero only when the
   harness is broken: a missing or corrupt manifest entry, an unreadable corpus,
-  a corpus over its own byte budget, or a missing `pycc` binary. A red job
+  a malformed `tests.json` payload, a corpus over its own byte budget, a missing
+  `pycc` binary, or an unwritable `--json` output path. A red job
   therefore means the measurement could not be taken, never that the score was
   low.
 

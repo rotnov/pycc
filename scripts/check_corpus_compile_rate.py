@@ -10,8 +10,9 @@ with the reason it is not higher.
 This is a reporting gate, not a merge gate.  Any measurement outcome -- a zero
 compile rate, no qualifying speedup sample, or exhausting ``--max-seconds``
 before the last problem -- exits 0.  Only a broken harness exits non-zero: a
-missing or corrupt manifest entry, an unreadable corpus, a corpus over its own
-byte budget, or a missing ``pycc`` binary.
+missing or corrupt manifest entry, an unreadable corpus, a malformed
+``tests.json`` payload, a corpus over its own byte budget, a missing ``pycc``
+binary, or an unwritable ``--json`` output path.
 
 The script performs no network I/O and deliberately imports nothing
 HTTP-capable: it reads only the vendored subset.  Downloading the dataset is
@@ -40,6 +41,11 @@ from pathlib import Path
 
 # `error[C0001]: <message>` is pycc's human diagnostic shape.
 DIAGNOSTIC_RE = re.compile(r"^error\[([A-Z][0-9]{4})\]: (.*)$")
+
+# One pinned seed is enough here: the selector only admits a solution whose
+# output is identical under every seed in its own HASH_SEEDS sweep, so at
+# measurement time the seed's only job is to stay constant across runs.
+HASH_SEED = 0
 
 DEFAULT_MAX_SECONDS = 1200.0
 BUILD_TIMEOUT_SECONDS = 120.0
@@ -122,6 +128,10 @@ def verify_corpus(corpus: Path, manifest: dict, include_holdout: bool) -> list[d
             total_bytes += verify_file(corpus, f"{problem['id']}/{filename}", entry)
         if problem.get("set") == "holdout" and not include_holdout:
             continue
+        # Validate the payload shape here rather than at first use: `load_cases`
+        # runs only for a problem `pycc build` already accepted, so at a low
+        # compile rate a malformed `tests.json` would stay latent for months.
+        load_cases(corpus, problem)
         selected.append(problem)
 
     budget = manifest.get("max_bytes")
@@ -220,6 +230,21 @@ def diagnostic_classes(text: str) -> list[str]:
     return classes
 
 
+def isolated_env() -> dict[str, str]:
+    """The environment a vendored solution is executed under.
+
+    Mirrors ``select_codecontests_corpus.py``'s ``run_case``: the corpus is
+    third-party data, so the interpreter that runs it gets none of the ambient
+    ``PYTHONPATH`` and a pinned hash seed.  Without this, the same file the
+    selector deliberately isolated would inherit the runner's whole import
+    surface here, and the timing would depend on it.
+    """
+    env = dict(os.environ)
+    env["PYTHONHASHSEED"] = str(HASH_SEED)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
 def run_program(argv: list[str], case: dict[str, str]) -> tuple[bool, float]:
     """Run one program on one case; return (output matched, wall seconds)."""
     started = time.monotonic()
@@ -229,6 +254,7 @@ def run_program(argv: list[str], case: dict[str, str]) -> tuple[bool, float]:
             input=case.get("input", "").encode(),
             capture_output=True,
             timeout=RUN_TIMEOUT_SECONDS,
+            env=isolated_env(),
             check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -270,6 +296,7 @@ def measure(
     any_tally: dict[str, int] = {}
     ratios: list[float] = []
     startup_excluded = 0
+    timing_dropped = 0
     incomplete = False
 
     for problem in problems:
@@ -297,6 +324,10 @@ def measure(
             cpython = best_of([args.python, str(source)], case)
             native = best_of([str(binary)], case)
             if cpython is None or native is None or native <= 0:
+                # A repeat run disagreed with the case, or the native time was
+                # unmeasurably small.  Counted so `matched` reconciles against
+                # the samples the report actually publishes.
+                timing_dropped += 1
                 continue
             if cpython < STARTUP_FLOOR_SECONDS:
                 startup_excluded += 1
@@ -312,6 +343,7 @@ def measure(
         "median_speedup": statistics.median(ratios) if ratios else None,
         "speedup_samples": len(ratios),
         "startup_dominated_excluded": startup_excluded,
+        "timing_dropped": timing_dropped,
         "include_holdout": bool(args.include_holdout),
         "first_diagnostic": dict(sorted(first_tally.items())),
         "any_diagnostic": dict(sorted(any_tally.items())),
@@ -327,13 +359,15 @@ def render(result: dict) -> str:
     if result["median_speedup"] is None:
         lines.append(
             "median speedup: n/a (0 qualifying) "
-            f"[startup-dominated, excluded: {result['startup_dominated_excluded']}]"
+            f"[startup-dominated, excluded: {result['startup_dominated_excluded']}; "
+            f"timing dropped: {result['timing_dropped']}]"
         )
     else:
         lines.append(
             f"median speedup: {result['median_speedup']:.2f}x "
             f"over {result['speedup_samples']} qualifying problems "
-            f"[startup-dominated, excluded: {result['startup_dominated_excluded']}]"
+            f"[startup-dominated, excluded: {result['startup_dominated_excluded']}; "
+            f"timing dropped: {result['timing_dropped']}]"
         )
     if result["incomplete"]:
         lines.append(

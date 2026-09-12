@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 METRIC_PATH = Path(__file__).with_name("check_corpus_compile_rate.py")
@@ -118,6 +119,17 @@ SLOW_SOLUTION = "# ok\nimport sys, time\ntime.sleep(0.25)\nsys.stdout.write(sys.
 WRONG_SOLUTION = "# ok\nprint('nope')\n"
 FAIL_SOLUTION = "# fail C0001|T0001\nprint(1)\n"
 ECHO_CASES = [{"input": "hello\n", "output": "hello\n"}]
+# Echoes correctly as a compiled binary but not as `solution.py`, so the binary
+# matches (the problem counts as matched) while the CPython timing leg then
+# disagrees with the case. That is the only way a timing sample is dropped.
+BINARY_ONLY_SOLUTION = (
+    "# ok\n"
+    "import os, sys\n"
+    'if os.path.basename(__file__) == "solution.py":\n'
+    '    sys.stdout.write("nope\\n")\n'
+    "else:\n"
+    "    sys.stdout.write(sys.stdin.read())\n"
+)
 
 
 class MetricHarness(unittest.TestCase):
@@ -269,6 +281,22 @@ class SpeedupTests(MetricHarness):
         self.assertEqual(code, 0, err)
         self.assertRegex(out, r"median speedup: \d+\.\d\dx over 1 qualifying problems")
 
+    def test_a_dropped_timing_sample_is_counted_not_silently_lost(self) -> None:
+        self.corpus.add(1, BINARY_ONLY_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric()
+        self.assertEqual(code, 0, err)
+        # The problem matched, so `matched` must reconcile against the published
+        # sample counts rather than losing the difference.
+        self.assertIn("matched 1/1", out)
+        self.assertIn("median speedup: n/a (0 qualifying)", out)
+        self.assertIn("timing dropped: 1", out)
+
+    def test_a_clean_run_reports_no_dropped_timing_samples(self) -> None:
+        self.corpus.add(1, SLOW_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric()
+        self.assertEqual(code, 0, err)
+        self.assertIn("timing dropped: 0", out)
+
     def test_the_startup_floor_is_two_hundred_milliseconds(self) -> None:
         self.assertEqual(METRIC.STARTUP_FLOOR_SECONDS, 0.200)
 
@@ -390,6 +418,12 @@ class BrokenHarnessTests(MetricHarness):
         self.corpus.write_manifest()
         self.assertIn("no cases", self.assert_broken())
 
+    def test_a_malformed_cases_payload_fails_before_anything_compiles(self) -> None:
+        # The eager check is the point: with a low compile rate `load_cases`
+        # would otherwise never run, so a malformed payload would stay latent.
+        self.corpus.add(1, FAIL_SOLUTION, [])
+        self.assertIn("no cases", self.assert_broken())
+
     def test_an_unwritable_json_target_is_a_broken_harness(self) -> None:
         self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
         self.assertIn(
@@ -451,6 +485,14 @@ class HelperTests(unittest.TestCase):
                 "C0002 expression kind not supported yet: a `lambda`",
             ],
         )
+
+    def test_the_solution_environment_is_isolated_like_the_selector_s(self) -> None:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = "/attacker/controlled"
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            isolated = METRIC.isolated_env()
+        self.assertNotIn("PYTHONPATH", isolated)
+        self.assertEqual(isolated["PYTHONHASHSEED"], str(METRIC.HASH_SEED))
 
     def test_non_diagnostic_output_yields_no_classes(self) -> None:
         self.assertEqual(METRIC.diagnostic_classes("warning: hmm\n"), [])
