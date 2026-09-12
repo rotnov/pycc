@@ -549,6 +549,44 @@ class BrokenHarnessTests(MetricHarness):
             "cannot write", self.assert_broken("--json", str(self.tmp / "absent" / "x.json"))
         )
 
+    def test_a_declared_set_count_that_disagrees_with_the_records_is_broken(self) -> None:
+        # The manifest declares its own split, so a record set that disagrees
+        # with it means the vendored tree is not the one the manifest
+        # describes -- the same class of defect as a digest mismatch.
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        path = self.corpus.write_manifest()
+        manifest = json.loads(path.read_text())
+        manifest["steering_count"] += 1
+        path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+        completed = subprocess.run(
+            [
+                sys.executable, "-B", str(METRIC_PATH),
+                "--corpus", str(self.corpus.root), "--pycc", str(self.pycc),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, METRIC.EXIT_BROKEN_HARNESS)
+        self.assertIn("declares steering_count 2 but holds 1", completed.stderr)
+
+    def test_an_unusable_runner_temp_is_a_broken_harness(self) -> None:
+        # `RUNNER_TEMP` is set by Actions and consumed as the scratch parent.
+        # A set-but-unusable value would otherwise raise `OSError` past the
+        # broken-harness handler, exiting 1 with a traceback instead of
+        # through the documented status.
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        self.corpus.write_manifest()
+        env = dict(os.environ)
+        env["RUNNER_TEMP"] = str(self.tmp / "absent-runner-temp")
+        completed = subprocess.run(
+            [
+                sys.executable, "-B", str(METRIC_PATH),
+                "--corpus", str(self.corpus.root), "--pycc", str(self.pycc),
+            ],
+            capture_output=True, text=True, check=False, env=env,
+        )
+        self.assertEqual(completed.returncode, METRIC.EXIT_BROKEN_HARNESS)
+        self.assertIn("cannot create a scratch directory", completed.stderr)
+
 
 class HelperTests(unittest.TestCase):
     def test_diagnostic_classes_keep_code_and_message_and_order(self) -> None:

@@ -136,6 +136,20 @@ def verify_corpus(corpus: Path, manifest: dict, include_holdout: bool) -> list[d
             continue
         selected.append(problem)
 
+    # The manifest declares its own split; a record set that disagrees with it
+    # means the vendored corpus is not the one the manifest describes, which is
+    # a broken harness in the same sense as a digest mismatch.
+    for key, label in (("steering_count", "steering"), ("holdout_count", "holdout")):
+        declared = manifest.get(key)
+        if not isinstance(declared, int):
+            continue
+        actual = sum(1 for p in manifest["problems"] if p.get("set") == label)
+        if actual != declared:
+            raise BrokenHarness(
+                f"the manifest declares {key} {declared} but holds {actual} "
+                f"{label} problem records"
+            )
+
     budget = manifest.get("max_bytes")
     if isinstance(budget, int) and total_bytes > budget:
         raise BrokenHarness(
@@ -479,9 +493,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = load_manifest(corpus)
         problems = verify_corpus(corpus, manifest, args.include_holdout)
-        with tempfile.TemporaryDirectory(
-            prefix="corpus-compile-rate-", dir=os.environ.get("RUNNER_TEMP") or None
-        ) as tmp:
+        scratch_parent = os.environ.get("RUNNER_TEMP") or None
+        try:
+            scratch = tempfile.TemporaryDirectory(
+                prefix="corpus-compile-rate-", dir=scratch_parent
+            )
+        except OSError as exc:
+            # An unusable scratch parent -- a `RUNNER_TEMP` pointing at a
+            # missing or unwritable path -- is a broken harness, not a
+            # measurement outcome, so it must exit with the documented status
+            # rather than as an unhandled traceback.
+            raise BrokenHarness(
+                f"cannot create a scratch directory under "
+                f"{scratch_parent or 'the default temporary directory'}: {exc}"
+            ) from exc
+        with scratch as tmp:
             result = measure(args, corpus, problems, Path(tmp))
     except BrokenHarness as exc:
         print(f"error: {exc}", file=sys.stderr)

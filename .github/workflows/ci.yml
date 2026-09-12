@@ -1149,12 +1149,16 @@ jobs:
     runs-on: ubuntu-latest
     # The cap is the sum of the bounds below it, not a guess: checkout plus
     # `rustup show` (well under a minute), the LLVM install (capped at 5), the
-    # release build (capped at 12), the measurement (capped at 10 by its own
-    # --max-seconds), and the upload.  Every long step carries its own bound, so
-    # this job-level cap is a backstop rather than the only thing standing
-    # between a wedged step and a killed job -- a job-level timeout runs no
-    # further steps, so `if: always()` on the upload would publish nothing.
-    timeout-minutes: 30
+    # release build (capped at 12), the measurement (capped at 12 -- a 600s
+    # --max-seconds budget plus at most one 120s build, the script's own
+    # BUILD_TIMEOUT_SECONDS, because the deadline is only checked at phase
+    # boundaries), and the upload.  That sums to 30.5, so 35 leaves the
+    # backstop above every bound rather than under one.  Every long step
+    # carries its own bound, so this job-level cap is a backstop rather than
+    # the only thing standing between a wedged step and a killed job -- a
+    # job-level timeout runs no further steps, so `if: always()` on the upload
+    # would publish nothing.
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
@@ -1194,15 +1198,18 @@ jobs:
         run: |
           # --max-seconds is set explicitly, below the script's own 1200s
           # default, so the measurement deadline stays inside this job's
-          # 30-minute cap once checkout, the LLVM install (capped at 5) and
+          # 35-minute cap once checkout, the LLVM install (capped at 5) and
           # the release build (capped at 12) have taken their share. The
           # script checks that deadline at every phase boundary, so it
-          # overshoots by at most one build rather than by a whole problem's
-          # worth of runs, which is what keeps this budget a real bound on the
-          # job. Its deadline then reports `INCOMPLETE: n of M evaluated` and
-          # still exits 0; an Actions timeout would instead kill the job and
-          # publish nothing, which is exactly what this reporting-only job must
-          # never do.
+          # overshoots by at most one build -- 120s, its own
+          # BUILD_TIMEOUT_SECONDS -- rather than by a whole problem's worth of
+          # runs, which is what keeps this step's worst case at 12 minutes and
+          # this budget a real bound on the job. That internal deadline is
+          # deliberately the only bound on this step: it reports `INCOMPLETE:
+          # n of M evaluated` and still exits 0, whereas a step-level
+          # `timeout-minutes` firing here would kill the step and publish
+          # nothing, which is exactly what this reporting-only job must never
+          # do.
           python3 -B scripts/check_corpus_compile_rate.py \
             --pycc target/release/pycc \
             --python python3 \

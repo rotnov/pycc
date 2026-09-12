@@ -381,8 +381,10 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   correctness verdict and counts its lost sample as dropped. It exits non-zero
   only when the harness is broken: a missing or corrupt manifest entry, an
   unreadable corpus, a malformed `tests.json` payload, a corpus over its own
-  byte budget, a `pycc` binary that is absent or not executable, or an
-  unwritable `--json` output path. A red job
+  byte budget, a declared `steering_count`/`holdout_count` that disagrees with
+  the manifest's own per-set records, a `pycc` binary that is absent or not
+  executable, a scratch directory that cannot be created under `RUNNER_TEMP`,
+  or an unwritable `--json` output path. A red job
   therefore means the measurement could not be taken, never that the score was
   low. Every long step in that job -- the LLVM install, the release build, the
   measurement itself -- carries its own bound, so the job-level

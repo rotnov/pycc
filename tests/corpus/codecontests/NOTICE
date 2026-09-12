@@ -38,11 +38,15 @@ Upstream acknowledgements
 DeepMind's dataset card records that CodeContests aggregates problems and
 solutions from several upstream sources:
 
-  * Codeforces (https://codeforces.com/), the origin of the problems in the
-    shards vendored here.  Codeforces states no licence for its problem
-    statements or user-submitted solutions; the CC BY 4.0 grant above is
-    DeepMind's grant over the dataset as assembled, and is not a statement
-    about the upstream rights in that underlying material.
+  * Codeforces (https://codeforces.com/), the origin of most of the problems
+    in the shards vendored here -- a minority carry the `pNNNNN` naming of the
+    two collections below instead, and the dataset does not record a per-problem
+    source, so the split is not restated here as a count.  Codeforces states no
+    licence for its problem statements or user-submitted solutions; the CC BY 4.0
+    grant above is DeepMind's grant over the dataset as assembled, and is not a
+    statement about the upstream rights in that underlying material.  That
+    reasoning is the same for every upstream source below, so it does not depend
+    on which one a given problem came from.
   * Description2Code (https://github.com/ethancaballero/description2code),
     MIT licence.
   * Project_CodeNet (https://github.com/IBM/Project_CodeNet),
