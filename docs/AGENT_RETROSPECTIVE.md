@@ -33,6 +33,40 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A green check rollup was read as merge readiness while conversation resolution was still blocking
+
+**What happened.** A pull request reported every required check passing, both
+required contexts green, and `mergeable: MERGEABLE`, yet `gh pr merge` kept
+failing with "the base branch policy prohibits the merge". The session
+diagnosed this as an artifact of an empty check rollup — a failure mode this
+repository has genuinely seen before — and spent a round of investigation on
+that hypothesis, including re-reading the branch-protection baseline for
+evidence of a rollup bug. The actual cause was eight unresolved review threads
+opened by an automated reviewer: branch protection carries
+`required_conversation_resolution: true`, which blocks a merge independently of
+every check's status.
+
+**Root cause.** Check status and conversation resolution are two separate merge
+preconditions, and the tool that reports the first says nothing about the
+second. `gh pr checks` enumerates contexts; it does not enumerate threads. A
+diagnosis built only from check output therefore cannot distinguish "a rollup
+artifact" from "a thread nobody resolved", and the familiar explanation won on
+familiarity rather than on evidence.
+
+**What fixed it.** Querying the threads directly —
+`reviewThreads(first:50){totalCount nodes{isResolved}}` on the pull request —
+which named all eight unresolved threads immediately. Each was replied to and,
+after confirming the author's `__typename` was `Bot`, resolved; the merge
+precondition cleared.
+
+**Lesson.** A green check rollup is not a merge-readiness signal when branch
+protection requires conversation resolution. Before concluding that a merge
+block is spurious, enumerate the pull request's review threads and read their
+resolution state — the block is far more often an unresolved thread than a
+platform artifact, and the enumeration is one query. Treat every non-check
+merge precondition the protection settings declare as its own item to verify,
+not as something a passing check set implies.
+
 ## 2026-09-12 — An acceptance criterion prescribed a computation that was never worked through on an example, and no gate evaluates an unchecked item
 
 **What happened.** A milestone acceptance item was written to say that one
