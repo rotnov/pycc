@@ -37,8 +37,9 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 
 1. **Standard Python in, autonomous deployment artifact out.** Native and
    `deny`/`--pure` builds produce a standalone native binary without CPython;
-   a permitted CPython-backed import produces a self-contained bundle with its
-   pinned runtime and dependency closure (planned v0.7, D-128). pycc never adds
+   in embedded mode a permitted CPython-backed import produces a self-contained
+   bundle with its pinned runtime and dependency closure (planned v0.7, D-128;
+   the hosted `ext` mode is D-244's exception). pycc never adds
    its own dialect or syntax. The v1.0 language level is exactly CPython 3.14;
    admitting a later standard Python language level requires its versioned
    roadmap gate and a superseding ADR.

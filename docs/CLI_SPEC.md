@@ -16,10 +16,38 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc version --verbose` | compiler, LLVM, target list |
 
 The current compiler and every future native or `deny`/`--pure` build write a
-native binary at `OUT`. Planned v0.7 builds with a permitted CPython-backed
-import instead use `OUT` as the deployment-artifact destination for an
-autonomous application bundle. D-128 deliberately defers the bundle's exact
-file layout until the v0.7 resolver and packaging plan is accepted.
+native binary at `OUT`. Planned v0.7 embedded-mode builds with a permitted
+CPython-backed import instead use `OUT` as the deployment-artifact destination
+for an autonomous application bundle. D-128 deliberately defers the bundle's
+exact file layout until the v0.7 resolver and packaging plan is accepted. The
+planned hosted `ext` mode is the exception to both (D-244 rule 1):
+`pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
+never an executable or a bundle. The recognized extension suffixes are the
+target platform's own `importlib.machinery.EXTENSION_SUFFIXES`, which CPython
+orders most-specific first: on Linux and macOS the version-and-platform-tagged
+suffix, then `.abi3.so`, then `.so`; on Windows the tagged suffix, then `.pyd`.
+When `OUT` names none of them, `.abi3.so` is appended on Linux and macOS and
+`.pyd` on Windows -- the stable-ABI spelling, since rule 1 builds against
+`Py_LIMITED_API`. An `OUT` already naming its platform's stable-ABI suffix is
+honored as written, but one naming the interpreter-specific tagged suffix
+(`m.cpython-314-x86_64-linux-gnu.so`, `m.cp314-win_amd64.pyd`) is **rejected**
+rather than honored: rule 1 builds one stable-ABI artifact per platform that
+every later GIL-enabled host is meant to load, and a version-tagged filename
+hides it from exactly those hosts, whose finders search their own tag, then
+`.abi3.so`, then `.so`, and never an earlier interpreter's tag. The module
+name is `OUT`'s basename with the **first matching** suffix from that ordered
+list removed, which is exactly how CPython's own finder derives a name from
+the same file: `m.abi3.so` yields `m`, never `m.abi3`. Stripping only the
+final `.so` would derive a name the finder never uses and emit a `PyInit_`
+symbol no host would look for. The derived name must be a valid **ASCII**
+Python identifier, and it is the `<mod>` in the exported `PyInit_<mod>`, so an
+artifact is importable only under the name its own output path spells. A
+non-ASCII identifier is rejected rather than encoded: CPython loads such a
+module through `PyInitU_<punycode>` with hyphens replaced by underscores --
+`mód` through `PyInitU_md_5ja`, verified against a live interpreter -- so
+emitting `PyInit_mód` would produce an artifact no host can import.
+D-128's `--interop-policy` and `--pure` do not apply in this mode (D-244
+rule 3) and are rejected alongside it, as is `--lib`.
 
 Every value after `pycc run`'s `--` is forwarded unchanged and in order as
 the generated program's own process arguments, including a value that
@@ -170,9 +198,14 @@ directory once project mode exists.
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable
+--ext               planned v0.7 hosted mode: emit a CPython extension module
+                    instead of an executable (D-244 rule 1; see the `OUT`
+                    contract above); conflicts with `--lib`,
+                    `--interop-policy`, and `--pure`
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
-                    planned v0.7 policy for CPython-backed imports (D-128);
+                    planned v0.7 embedded-mode policy for CPython-backed
+                    imports (D-128);
                     CLI value overrides `[interop].policy`
 --pure              planned v0.7 shorthand for `--interop-policy deny`;
                     conflicts with an explicit `--interop-policy`

@@ -5,7 +5,7 @@
 
 **A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into autonomous native deployment artifacts. Like `gcc`, but for Python.**
 
-`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, autonomous artifact. Native and `--pure` builds are standalone binaries without CPython; planned permitted interop dependencies are bundled with a pinned CPython runtime instead of requiring an installed interpreter or venv. There is no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
+`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, autonomous artifact. Native and `--pure` builds are standalone binaries without CPython; planned embedded interop dependencies are bundled with a pinned CPython runtime instead of requiring an installed interpreter or venv. There is no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
@@ -64,7 +64,7 @@ claim that pycc is ready to replace released tools:
 
 | | Enforces types at compile time | Native executable without CPython | Standard Python input |
 |---|---|---|---|
-| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ native/`--pure`; CPython bundled only for permitted interop | ✅ CPython 3.14 target |
+| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ native/`--pure`; CPython bundled only for embedded interop | ✅ CPython 3.14 target |
 | LPython | ✅ typed subset | ✅ AOT executable | ⚠️ CPython-compatible subset |
 | Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |
 | Nuitka | ❌ | ❌ packages CPython runtime components | ✅ compatibility-focused |
@@ -170,7 +170,7 @@ the exact contract and limitations.
 ```text
 .py source ──► parser ──► strict type checker ──► typed IR ──► LLVM ──► native binary + minimal pycc runtime
                                                                 │
-                                                                └─ planned permitted interop: autonomous bundle
+                                                                └─ planned embedded interop: autonomous bundle
                                                                    + pinned CPython/package/native-library closure
 ```
 
@@ -180,8 +180,8 @@ Design principles:
 - **Types are the contract.** Public functions must be annotated; annotations
   are verified, then used for static dispatch and unboxed native
   representations. Native pycc execution has no interpreter loop; only the
-  planned CPython-backed boundary executes package operations in its bundled
-  interpreter (D-128).
+  planned embedded CPython-backed boundary executes package operations in its
+  bundled interpreter (D-128).
 - **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`. Per-module parallel compilation and incremental caching are planned for v0.4.
 - **Ownership under the hood (planned v0.5).** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
 - **No pycc-wide GIL (planned v0.6).** Native pycc execution has no interpreter or GIL, and

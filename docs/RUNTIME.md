@@ -5,7 +5,11 @@ and every future `deny`/`--pure` artifact are pure Rust with no libpython and
 no platform-visible behavior differences (cross-platform is a hard
 requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
 conditional companion runtime bundled only when a source import resolves to a
-CPython-backed dependency under the selected interop policy (D-128).
+CPython-backed dependency under the selected interop policy (D-128). The
+no-libpython guarantee is a property of the `native` executable mode; the
+planned hosted `ext` mode (a CPython extension module loaded by an external
+interpreter) explicitly resolves its CPython symbols from the host and does
+not carry it (D-244).
 
 ## Object model
 
@@ -311,14 +315,15 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
 - mimalloc bundled on all Tier-1 targets; identical behavior everywhere.
 - Native and `deny`/`--pure` startup: `main()` runs directly with no
   interpreter boot. Target: `hello` binary < 2 MB, < 5 ms cold start. A
-  planned permitted interop artifact initializes its bundled CPython runtime
+  planned embedded interop artifact initializes its bundled CPython runtime
   only for the CPython-backed boundary (D-128).
 - Native module init: top-level code of native pycc modules runs once, in
   deterministic import order, at process start (statically scheduled — a
   native-module import cycle is a compile error `E0108`). Planned
-  CPython-backed modules instead use the bundled interpreter's normal import
-  initialization, caching, and cycle semantics inside the locked environment;
-  native `E0108` rules do not reject their dependency closure (D-128).
+  embedded-mode CPython-backed modules instead use the bundled interpreter's
+  normal import initialization, caching, and cycle semantics inside the locked
+  environment; native `E0108` rules do not reject their dependency closure
+  (D-128).
 
 ## Transparent CPython interop (planned v0.7; not implemented)
 
@@ -327,6 +332,13 @@ CPython-backed packages keep ordinary, CPython-compatible source imports:
 ```python
 import numpy as np
 ```
+
+The rest of this section describes the **embedded** interop mode (D-128), in
+which the artifact is an executable that carries its own interpreter. The hosted
+`ext` mode added by D-244 shares the import classification and the typed
+boundary but none of the bundling, policy, or GIL-ownership rules below: an
+`ext` artifact is loaded by an external CPython that owns the environment and
+the GIL, and #1025/#1026 specify its contract.
 
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge
