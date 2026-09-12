@@ -662,3 +662,75 @@ print(_pick())
         "{non_empty}"
     );
 }
+
+/// Review round 5, second finding: the pre-pass binder must keep D-040's
+/// sticky representation. `v = 5` then `v = True` leaves `v` an `int` for the
+/// checker -- a compatible reassignment returns without rebinding -- so the
+/// producer resolves `list[int]`. A binder that overwrote the recorded type
+/// resolved `list[bool]` instead and D-228 reported a `T0034` naming a type
+/// the source never mentions, for a program whose non-empty spelling
+/// compiles. Both spellings are asserted here, because the property is
+/// agreement, not a particular element type.
+#[test]
+fn a_compatible_reassignment_keeps_the_first_inferred_element_type() {
+    let output = check_build_and_run(
+        "sticky_reassignment_empty_list",
+        "\
+def f() -> int:
+    v = 5
+    v = True
+    xs = []
+    xs.append(v)
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"True\n");
+    let non_empty = check_build_and_run(
+        "sticky_reassignment_non_empty_list",
+        "\
+def f() -> int:
+    v = 5
+    v = True
+    xs = [v]
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(non_empty.status.success());
+    assert_eq!(non_empty.stdout, output.stdout);
+}
+
+/// Review round 5, third finding: a `def` that shadows an earlier value of
+/// the same name is callable from its own position onward (D-110), and the
+/// pre-pass's module-scope walk must record that in `def_rebound` as well as
+/// `defined_functions`. Seeding only the latter left the pre-pass's own
+/// callee gate treating `helper` as value-shadowed, so the producer's call
+/// did not infer and the container fell through to a spurious `T0003` -- for
+/// a program the checker itself accepts, as the non-empty spelling shows.
+#[test]
+fn a_def_shadowing_an_earlier_value_binding_resolves_a_producer_call() {
+    let output = check_build_and_run(
+        "def_rebound_producer_empty_list",
+        "\
+helper = 1
+
+
+def helper() -> int:
+    return 2
+
+
+def f() -> int:
+    xs = []
+    xs.append(helper())
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n");
+}

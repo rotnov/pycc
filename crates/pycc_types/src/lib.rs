@@ -754,7 +754,23 @@ pub(crate) fn bind_local_types_in_stmt(
         HirStmt::Assign { target, value } => {
             bind_named_expr_types_in_expr(env, local_names, value);
             if let Ok(ty) = infer_expr_in(env, local_names, value) {
-                env.bind(target.clone(), ty);
+                // #1021 review round 5: first assignment wins, mirroring
+                // D-040's sticky-representation rule in `check_assignment` --
+                // a compatible reassignment there returns without rebinding,
+                // so the *first* inferred type stays the name's recorded
+                // representation. Overwriting here made this binder disagree
+                // with the checker for the one compatible-but-narrower
+                // reassignment this type system has (`v = 5` then `v = True`),
+                // which is not a missed resolution but a wrong one: the
+                // empty-container pre-pass resolved `xs.append(v)` to
+                // `list[bool]` and D-228 then reported a `T0034` naming a type
+                // the source never mentions, for a program whose `xs = [v]`
+                // spelling compiles. An incompatible reassignment is rejected
+                // by the checker regardless, so keeping the first type can
+                // never admit a program the checker rejects.
+                if env.lookup_any(target).is_none() {
+                    env.bind(target.clone(), ty);
+                }
             }
         }
         HirStmt::AnnAssign {

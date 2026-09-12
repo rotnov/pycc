@@ -199,6 +199,14 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     for item in &hir.items {
         match item {
             HirItem::Function { name, .. } => {
+                // Both sets, exactly as `check_with_environment_all`'s pass 2
+                // does: `def_rebound` is what D-110's non-callable-binding
+                // gate consults, so a `def` that shadows an earlier value of
+                // the same name (`helper = 1` / `def helper() -> int:`) is
+                // callable from its own position onward here too. Seeding
+                // only `defined_functions` left that call uninferable and
+                // turned a resolvable producer into a spurious `T0003`.
+                module_env.def_rebound.insert(name.clone());
                 module_env.defined_functions.insert(name.clone());
             }
             HirItem::TopLevelStmt(stmt) => {
