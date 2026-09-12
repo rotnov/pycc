@@ -341,9 +341,23 @@ pub(crate) fn ext_link_args(platform: ExtLinkPlatform, libs: &Path) -> Vec<OsStr
             OsString::from("dynamic_lookup"),
         ],
         // ELF resolves undefined symbols lazily against the global scope
-        // the interpreter already occupies, so `-shared` alone is correct
-        // and a `-lpython` is actively wrong for the same reason as above.
-        ExtLinkPlatform::Linux => vec![OsString::from("-shared")],
+        // the interpreter already occupies, so `-shared` is correct here and
+        // a `-lpython` is actively wrong for the same reason as above.
+        //
+        // `-Bsymbolic` binds every reference this artifact makes to a symbol
+        // it defines itself, at link time. Without it, two pycc extension
+        // modules loaded with `RTLD_GLOBAL` interpose on each other: ELF
+        // resolves a defined global symbol through the *global* lookup
+        // scope, so the second module's `pycc_ext_module_exec` and
+        // `fnptr_<name>` references reach the first module's definitions and
+        // it executes the wrong module's body. CPython imports without
+        // `RTLD_GLOBAL` by default, but `sys.setdlopenflags` is public API
+        // and some extensions set it, so the artifact cannot rely on the
+        // loader's default. Mach-O and PE need no counterpart: a two-level
+        // namespace records the defining library per reference, and a PE
+        // exports only what `__declspec(dllexport)` names -- and both `ld64`
+        // and `link.exe` reject the flag, so it stays on this arm alone.
+        ExtLinkPlatform::Linux => vec![OsString::from("-shared"), OsString::from("-Wl,-Bsymbolic")],
         // Windows has no lazy global scope: every import must be bound at
         // link time through an import library. `python3.lib` is the
         // stable-ABI one, deliberately not the version-tagged
@@ -393,7 +407,7 @@ pub(crate) struct ExtExport {
 /// field would put hundreds of mechanically-updated non-test lines into the
 /// 100%-coverage denominator for no behavioural gain.
 pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<Diagnostic>> {
-    let mut exports = Vec::new();
+    let mut exports: Vec<ExtExport> = Vec::new();
     let mut gaps = Vec::new();
     for item in &module.items {
         let HirItem::Function {
@@ -412,10 +426,24 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             gaps.push(capability_gap(name, &offender));
             continue;
         }
-        exports.push(ExtExport {
+        let export = ExtExport {
             name: name.clone(),
             arity: params.len(),
-        });
+        };
+        // A module may rebind a public name -- two `def`s, or a `def` over an
+        // imported name. Codegen emits exactly one `fnptr_<name>` global and
+        // binds it to the *last* definition, so the wrapper table must carry
+        // exactly one entry per name, with that definition's arity: a second
+        // entry generates a second `pycc_ext_wrap_<name>` and the C compiler
+        // rejects the redefinition outright. Replacing in place rather than
+        // appending keeps the table in definition order, which is what the
+        // generated `.inc` fixtures assert. Cross-*module* collisions cannot
+        // reach here -- `pycc_hir`'s import closure rejects a name defined by
+        // two inputs with `C0001` first.
+        match exports.iter_mut().find(|held| held.name == export.name) {
+            Some(held) => *held = export,
+            None => exports.push(export),
+        }
     }
     if gaps.is_empty() {
         Ok(exports)

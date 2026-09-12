@@ -260,7 +260,29 @@ fn macos_links_a_bundle_with_deferred_symbol_lookup_and_no_libpython() {
 #[test]
 fn linux_links_a_plain_shared_object_with_no_libpython() {
     let args = ext_link_args(ExtLinkPlatform::Linux, Path::new("/unused"));
-    assert_eq!(args, vec![OsString::from("-shared")]);
+    assert_eq!(
+        args,
+        vec![OsString::from("-shared"), OsString::from("-Wl,-Bsymbolic")]
+    );
+}
+
+#[test]
+fn only_the_elf_arm_asks_the_linker_to_bind_its_own_symbols_first() {
+    // `-Bsymbolic` closes ELF's global-scope interposition, which is an ELF
+    // problem alone: Mach-O records the defining library per reference and a
+    // PE exports only what it declares. `ld64` and `link.exe` both reject
+    // the flag, so leaking it onto either arm would break those two hosts
+    // outright -- assert its absence rather than trusting the arms not to
+    // drift. Reachable from any host because the platform is a parameter.
+    for platform in [ExtLinkPlatform::MacOs, ExtLinkPlatform::Windows] {
+        let args = ext_link_args(platform, Path::new("/unused"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().contains("-Wl,")),
+            "{args:?}"
+        );
+    }
 }
 
 #[test]
@@ -332,6 +354,48 @@ fn the_windows_compile_args_omit_fpic() {
     );
 }
 
+/// The C shim maps a pending exception's type tag to a `PyExc_*` object
+/// with a `switch` over literal tag values, because it cannot see
+/// `pycc_hir::BUILTIN_EXCEPTION_CLASSES` from C. `pycc_rt`'s own
+/// `exception_type_tags_match_the_c_shims_hardcoded_switch` pins the flat
+/// seven against that crate's constants; this pins the *whole* array against
+/// the switch itself, so adding, removing, or reordering a builtin class --
+/// which renumbers every tag after it -- fails here instead of silently
+/// raising the wrong CPython class out of a built artifact.
+#[test]
+fn every_exception_tag_the_c_shim_switches_on_still_names_that_class() {
+    let mut pending: Option<usize> = None;
+    let mut seen = Vec::new();
+    for line in SHIM_C.lines().map(str::trim) {
+        // A later `switch` in the same file dispatches on named constants;
+        // only a decimal label belongs to the exception table.
+        if let Some(tag) = line
+            .strip_prefix("case ")
+            .and_then(|r| r.strip_suffix(':'))
+            .and_then(|r| r.parse().ok())
+        {
+            pending = Some(tag);
+        } else if let Some(class) = line
+            .strip_prefix("exc_type = PyExc_")
+            .and_then(|r| r.strip_suffix(';'))
+        {
+            // The `default:` arm sets `exc_type` too, and carries no tag.
+            if let Some(tag) = pending.take() {
+                assert_eq!(
+                    pycc_hir::BUILTIN_EXCEPTION_CLASSES.get(tag).copied(),
+                    Some(class),
+                    "src/ext/pycc_ext_module.c raises {class} for tag {tag}"
+                );
+                seen.push(tag);
+            }
+        }
+    }
+    // Tag 0 (`Exception`) reaches the same `PyExc_Exception` as the unnamed
+    // tags through `default:`, and 23..=24 stay there deliberately -- the
+    // shim's own comment carries why. Everything between is switched on.
+    assert_eq!(seen, (1..=22).collect::<Vec<_>>());
+}
+
 // ---------------------------------------------------------------- exports
 
 #[test]
@@ -384,6 +448,39 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
             name: "kept".to_string(),
             arity: 0
         }]
+    );
+}
+
+#[test]
+fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_arity() {
+    // Python rebinds rather than redeclares, and codegen follows it: one
+    // `fnptr_two` global, bound to the second `def`. A second table entry
+    // would emit `pycc_ext_wrap_two` twice and the C compiler would reject
+    // the redefinition, so the export set collapses the rebind here.
+    let hir = module(vec![
+        func("one", &[], Ty::Int),
+        func("two", &[("x", Ty::Int)], Ty::Int),
+        func("three", &[], Ty::Int),
+        func("two", &[("a", Ty::Int), ("b", Ty::Int)], Ty::Int),
+    ]);
+    assert_eq!(
+        collect_exports(&hir).expect("a rebind is not a capability gap"),
+        vec![
+            ExtExport {
+                name: "one".to_string(),
+                arity: 0
+            },
+            // Definition order, last definition's arity: the entry keeps the
+            // position the name first claimed.
+            ExtExport {
+                name: "two".to_string(),
+                arity: 2
+            },
+            ExtExport {
+                name: "three".to_string(),
+                arity: 0
+            },
+        ]
     );
 }
 

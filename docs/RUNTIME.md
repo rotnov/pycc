@@ -352,8 +352,20 @@ exports every public module-level function whose parameters and return are all
 rejects any other public signature at compile time as `C0003`. Per the D-244
 amendment of 2026-09-12 an `int` outside the inline range `[-2^62, 2^62-1]`
 raises `OverflowError` at the wrapper until [#1040](https://github.com/rotnov/pycc/issues/1040)
-gives `pycc_rt` a bigint boundary. Foreign imports, opaque objects, and the
-buffer protocol are Parts 2-4. That mode's typed boundary
+gives `pycc_rt` a bigint boundary. That guard covers the boundary only, not the
+interior: an exported function whose *intermediate* value leaves the inline
+range and is then consumed by a further operation (`(x * x) * 0`) reaches
+`require_inline_int`, whose `panic!` crosses a plain `extern "C"` frame and
+aborts the hosting interpreter rather than raising. Part 3 of #1025
+([#1038](https://github.com/rotnov/pycc/issues/1038)) removes those abort paths
+and is a blocker on #1025's closure; until it lands, an `ext` artifact is only
+as safe as the magnitudes its own arithmetic stays within. An exception that
+escapes an export is re-raised as the matching CPython class for the twenty-three
+builtin classes the bridge carries a tag for; a user-defined exception class and
+the two PEP 654 group classes reach the caller as `Exception` with the original
+message, because the bridge hands the shim a numeric tag and not the class name.
+Restoring that identity is part of #1038 as well. Foreign imports,
+opaque objects, and the buffer protocol are Parts 2-4. That mode's typed boundary
 additionally faces callers pycc does not compile, so what a typed export
 wrapper does with an argument that violates its annotation is D-244 rule 7 —
 the oracle is scoped to annotation-conforming calls and the wrapper raises

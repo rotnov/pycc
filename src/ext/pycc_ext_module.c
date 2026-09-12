@@ -73,10 +73,15 @@ extern long long pycc_ext_module_exec(void);
  * different conventions CPython imposes on them: a per-export wrapper then
  * returns NULL, and the `Py_mod_exec` slot returns -1.
  *
- * The tag values are `pycc_rt::exception`'s seven `EXCEPTION_TYPE_*`
- * constants, which this file cannot see from C. `ext_bridge`'s
- * `exception_type_tags_match_the_c_shims_hardcoded_switch` test is this
- * switch's drift guard.
+ * The tag values are fixed by `pycc_hir::exception`'s
+ * `BUILTIN_EXCEPTION_CLASSES` array order, which this file cannot see from
+ * C: tags 0..=6 are the flat seven, which `pycc_rt::exception` also names as
+ * `EXCEPTION_TYPE_*` constants, and tags 7..=22 are the PEP 3151 `OSError`
+ * family. Two tests are this switch's drift guard -- `ext_bridge`'s
+ * `exception_type_tags_match_the_c_shims_hardcoded_switch` for the seven
+ * constants, and `ext_build_tests`'
+ * `every_exception_tag_the_c_shim_switches_on_still_names_that_class` for
+ * the full array.
  */
 static int pycc_ext_raise_pending(void)
 {
@@ -108,11 +113,78 @@ static int pycc_ext_raise_pending(void)
     case 6:
         exc_type = PyExc_RuntimeError;
         break;
+    /*
+     * Tags 7..=22, the PEP 3151 `OSError` family, in
+     * `BUILTIN_EXCEPTION_CLASSES` order. Every one of them is reachable from
+     * an `int`-only exported function through a bare `raise`, so flattening
+     * them to `Exception` would make `except FileNotFoundError:` on the
+     * Python side silently stop matching. Each constructs from a single
+     * message argument, which is what `PyErr_SetObject` passes below.
+     */
+    case 7:
+        exc_type = PyExc_OSError;
+        break;
+    case 8:
+        exc_type = PyExc_BlockingIOError;
+        break;
+    case 9:
+        exc_type = PyExc_ChildProcessError;
+        break;
+    case 10:
+        exc_type = PyExc_ConnectionError;
+        break;
+    case 11:
+        exc_type = PyExc_FileExistsError;
+        break;
+    case 12:
+        exc_type = PyExc_FileNotFoundError;
+        break;
+    case 13:
+        exc_type = PyExc_InterruptedError;
+        break;
+    case 14:
+        exc_type = PyExc_IsADirectoryError;
+        break;
+    case 15:
+        exc_type = PyExc_NotADirectoryError;
+        break;
+    case 16:
+        exc_type = PyExc_PermissionError;
+        break;
+    case 17:
+        exc_type = PyExc_ProcessLookupError;
+        break;
+    case 18:
+        exc_type = PyExc_TimeoutError;
+        break;
+    case 19:
+        exc_type = PyExc_BrokenPipeError;
+        break;
+    case 20:
+        exc_type = PyExc_ConnectionAbortedError;
+        break;
+    case 21:
+        exc_type = PyExc_ConnectionRefusedError;
+        break;
+    case 22:
+        exc_type = PyExc_ConnectionResetError;
+        break;
     default:
         /*
-         * Tag 0 is `Exception`; a user-defined exception class carries a
-         * module-assigned tag this runtime knows nothing about, and the
-         * closest true statement about it is that it is an `Exception`.
+         * Tag 0 is `Exception`. So, deliberately, are the two remaining
+         * builtin tags and every user-defined class:
+         *
+         *  - tags 23..=24 are `BaseExceptionGroup`/`ExceptionGroup`. The C
+         *    API exposes no `PyExc_ExceptionGroup` at all, and the type it
+         *    does expose cannot be constructed from a lone message -- PEP
+         *    654 requires `(msg, exceptions)`, so `PyErr_SetObject` would
+         *    fail during normalization and surface a `TypeError` about the
+         *    constructor instead of the program's own error. `Exception`
+         *    with the right message is the more truthful of the two.
+         *  - a user-defined exception class carries a module-assigned tag
+         *    (25..=255) this shim knows nothing about; carrying its identity
+         *    across the boundary needs the class *name*, which the bridge
+         *    does not expose yet.
          */
         exc_type = PyExc_Exception;
         break;

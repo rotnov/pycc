@@ -32,7 +32,10 @@ mod exception_render;
 use exception_render::emit_exception_message;
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
+mod ext;
 mod target_machine;
+pub use ext::{CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL};
+use ext::{entry_fn_name, is_module_entry_symbol};
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -5258,67 +5261,6 @@ pub fn compile_to_object(
     )
 }
 
-/// Everything `compile_to_object` needs beyond the MIR and the output path.
-///
-/// Additive by construction: `compile_to_object` has hundreds of call sites
-/// across this crate's own tests and the workspace's integration targets, so
-/// `ext` (D-244's hosted CPython extension-module mode) arrives as a field on
-/// a `Default`-constructible struct behind a second entry point rather than
-/// as a new positional parameter on the existing one. `..Default::default()`
-/// then keeps a later mode from churning those call sites either.
-#[derive(Debug, Clone, Default)]
-pub struct CompileOptions {
-    /// `None` builds for the host's own default target; `Some(triple)`
-    /// cross-compiles. Owned rather than borrowed so the struct can be
-    /// stored and passed without threading a lifetime through every caller.
-    pub target_triple: Option<String>,
-    /// `true` runs LLVM's `"default<O3>"` pipeline (D-094).
-    pub release: bool,
-    /// `true` emits an object destined for a CPython extension-module
-    /// artifact rather than a native executable (D-244). Two things change,
-    /// both of them about *who calls the module body and what happens when
-    /// it raises*: the synthetic module-body entry point is named
-    /// [`EXT_MODULE_EXEC_SYMBOL`] instead of `main`, so the artifact exports
-    /// no stray `main` and the fixed C shim's `Py_mod_exec` slot has a
-    /// symbol to call; and an uncaught module-scope exception returns `-1`
-    /// after handing the pending state to the host (see
-    /// `pycc_rt_ext_pending_type`) instead of calling
-    /// `pycc_rt_exception_print_and_exit`, which would terminate the
-    /// interpreter process instead of failing the import.
-    pub ext: bool,
-}
-
-/// The symbol the module body is emitted under in `ext` mode: the fixed C
-/// shim's `Py_mod_exec` slot calls exactly this name, and it returns `0` on
-/// success or `-1` with the pending exception already handed to CPython.
-///
-/// Deliberately *not* `main`: a CPython extension module that exports `main`
-/// would collide with the host interpreter's own entry point.
-pub const EXT_MODULE_EXEC_SYMBOL: &str = "pycc_ext_module_exec";
-
-/// What [`EXT_MODULE_EXEC_SYMBOL`] returns when the module body raised: the
-/// `Py_mod_exec` slot's own failure convention (`-1` with the exception
-/// already set), which is *not* the per-export wrapper's (`NULL`).
-pub const EXT_MODULE_EXEC_FAILED: i64 = -1;
-
-/// The name the synthetic module-body entry point carries in each mode.
-/// One function so the `add_function` call and the `MirStmt::Return`
-/// invariant that pins the name can never drift apart.
-fn entry_fn_name(ext: bool) -> &'static str {
-    if ext { EXT_MODULE_EXEC_SYMBOL } else { "main" }
-}
-
-/// Whether `name` is the symbol the synthetic module-body entry point was
-/// emitted under, in *either* mode. The `MirStmt::Return` invariant below
-/// asks this rather than comparing against `main` directly: `ext` builds
-/// rename that entry point (see [`CompileOptions::ext`]), and an invariant
-/// that still only recognized `main` would stop firing there -- silently, and
-/// exactly in the mode where a module-level `return` reaching codegen would
-/// corrupt the `Py_mod_exec` slot's own return value.
-fn is_module_entry_symbol(name: &[u8]) -> bool {
-    name == b"main" || name == EXT_MODULE_EXEC_SYMBOL.as_bytes()
-}
-
 /// `compile_to_object` with the full option set (D-244's `ext` mode).
 pub fn compile_to_object_with_options(
     mir: &MirModule,
@@ -5642,8 +5584,16 @@ fn compile_to_object_with_observer(
     // `str` local's single exit point is program completion right here, so
     // this is where its accepted refcounting scope (D-061's Task 7
     // addendum) decrefs it exactly once, before `main` itself returns.
+    //
+    // `ext` mode has no such exit point. The entry function is D-244's
+    // `Py_mod_exec` slot, and the module object outlives it: every wrapper
+    // the host may call afterwards still reads these globals, so decrefing
+    // them here frees storage that stays reachable. `PyModuleDef.m_free` is
+    // NULL, so nothing ever tears the module down -- holding the reference
+    // for the process lifetime is the correct D-060 accounting, exactly as
+    // the exceptional exit below already assumes.
     for slot in module_globals.values() {
-        if slot.ty == pycc_mir::Ty::Str {
+        if slot.ty == pycc_mir::Ty::Str && !options.ext {
             let value = builder
                 .build_load(
                     context.ptr_type(inkwell::AddressSpace::default()),
