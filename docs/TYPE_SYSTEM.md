@@ -54,10 +54,13 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   inference (e.g. `def _first(): xs = [1]; return xs[0]` infers `int`). The
   carrier is never unified — `unify_terms` and `merge_inferred_types` are
   unchanged — and `dict`/`set`/`tuple` remain in the scalar-only gap.
-  A *resolved* empty container (`HirExpr::EmptyList`/`EmptyDict`, below) is
-  deliberately opaque to this solver: its constraint arm yields no term at
-  all, so an empty literal never widens a private helper's inferred
-  signature the way a populated list literal's carrier can.
+  A *resolved* empty list (`HirExpr::EmptyList`, below) produces the same
+  destructured carrier under the same `is_private_solver_scalar` gate, so
+  `xs = []; xs.append(1); return xs.pop()` infers exactly what the `xs = [1]`
+  spelling infers; an element type outside that gate (a nested list, a
+  `Ty::Param`) keeps the historical `Ok(None)`. A resolved empty dict
+  (`HirExpr::EmptyDict`) stays opaque, matching the `DictLiteral` arm, which
+  produces no term either.
 - Function-local names are classified before the body is checked. Parameters
   are local from entry; every assignment target and `for` target anywhere in
   the implemented nested control-flow grammar is local throughout that

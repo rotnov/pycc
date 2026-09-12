@@ -781,33 +781,51 @@ pub(crate) fn bind_local_types_in_stmt(
         } => {
             if let Some(val) = value {
                 bind_named_expr_types_in_expr(env, local_names, val);
-                // #1021 review round 1: when the value does not infer, fall
-                // back to the declared annotation rather than leaving the
-                // name unbound. The `value == None` branch below already
-                // seeds the annotation, and an `xs: list[int] = []` is
-                // exactly as informative about `xs`'s type -- but its raw
-                // empty literal cannot infer, so without this fallback the
-                // pre-pass environment never learned `xs: list[int]` and a
-                // later resolution derived from `xs` (`for x in xs:
-                // ys.append(x)`) found `x` unbound and fell through to
-                // `T0003`. The annotation is what the check phase will
-                // validate the value against anyway, so seeding it cannot
-                // introduce a binding the checked program does not have.
+                // #1021 review round 6: mirror `check_stmt_in_function`'s own
+                // `AnnAssign` arm exactly -- it binds the *annotation* through
+                // `check_assignment`, except for #380's protocol special case,
+                // where the concrete inferred type is bound instead. Binding
+                // the inferred type unconditionally made this binder disagree
+                // with the checker for a widening initializer (`v: int =
+                // True`): the pre-pass recorded `bool`, resolved
+                // `xs.append(v)` to `list[bool]`, and D-228 then reported a
+                // `T0034` naming a type the source never mentions, for a
+                // program whose `xs = [v]` spelling compiles. It is the same
+                // defect round 5 fixed in the `Assign` arm above, reached
+                // through the annotation instead of a reassignment.
                 //
-                // The fallback is deliberately broad rather than gated on the
-                // value being an empty literal. Round 2 of the #1021 review
-                // proposed that narrowing and it was refuted by running the
-                // compiler: a D-105-incompatible annotation (`list[str]`) is
-                // independently rejected with its own better-spanned `T0034`
-                // whether or not an empty literal precedes it, so narrowing
-                // fixes nothing there -- while for a compatible annotation it
-                // replaces the real defect (`xs: list[int] = undefined_name`
-                // reports the undefined name) with a spurious `T0003` about a
-                // container the program does in fact annotate. Pinned by
+                // Binding the annotation also subsumes round 1's fallback:
+                // `xs: list[int] = []`, whose raw empty literal cannot infer,
+                // still seeds `list[int]`, so a later resolution derived from
+                // `xs` (`for x in xs: ys.append(x)`) keeps resolving instead
+                // of falling through to `T0003`, and round 2's refutation
+                // still holds -- `xs: list[int] = undefined_name` reports the
+                // undefined name rather than a spurious `T0003`, pinned by
                 // `tests/diagnostics/t0021_annotated_broken_value_still_reports_the_real_defect`.
-                let ty =
-                    infer_expr_in(env, local_names, val).unwrap_or_else(|_| annotation.clone());
-                env.bind(target.clone(), ty);
+                // Only the protocol arm still needs that fallback, since an
+                // uninferable value leaves it nothing concrete to bind.
+                if matches!(annotation, Ty::Protocol(_)) {
+                    // #380/#953: a protocol annotation is a compile-time-only
+                    // interface, so the checker and `pycc_mir` both need the
+                    // concrete type for static dispatch. This arm also runs
+                    // over environments that already carry `Protocol(P)` for
+                    // the target -- `specialize_protocol_functions` clones one
+                    // -- so it overwrites rather than deferring to that
+                    // earlier binding: leaving `Protocol(P)` in place drops
+                    // the specialization and `pycc_mir` panics on the
+                    // unrecorded `$fn:C.same`
+                    // (`tests/issue_953_protocol_argument.rs`).
+                    let ty =
+                        infer_expr_in(env, local_names, val).unwrap_or_else(|_| annotation.clone());
+                    env.bind(target.clone(), ty);
+                } else if env.lookup_any(target).is_none() {
+                    // D-040 stickiness, for the same reason the `Assign` arm
+                    // above applies it: `check_assignment` keeps a name's
+                    // first recorded representation on a compatible rebind, so
+                    // `v = 5` then `v: bool = True` stays an `int` for the
+                    // checker and the producer must resolve `list[int]`.
+                    env.bind(target.clone(), annotation.clone());
+                }
             } else {
                 env.bind(target.clone(), annotation.clone());
             }

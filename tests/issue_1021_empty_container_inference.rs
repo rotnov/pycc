@@ -734,3 +734,152 @@ print(f())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"2\n");
 }
+
+/// Review round 6, first finding: an annotated assignment records the
+/// *annotation*, not the initializer's inferred type. `v: int = True` is a
+/// widening initializer the checker accepts, and `check_assignment` then keeps
+/// `int` as `v`'s representation; a binder that recorded `bool` resolved the
+/// producer to `list[bool]` and D-228 reported a `T0034` naming a type the
+/// source never mentions, for a program whose `xs = [v]` spelling compiles.
+/// The property asserted is agreement between the two spellings.
+#[test]
+fn a_widening_annotated_initializer_binds_the_declared_type() {
+    let output = check_build_and_run(
+        "annotated_widening_empty_list",
+        "\
+def f() -> int:
+    v: int = True
+    xs = []
+    xs.append(v)
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    let non_empty = check_build_and_run(
+        "annotated_widening_non_empty_list",
+        "\
+def f() -> int:
+    v: int = True
+    xs = [v]
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(non_empty.status.success());
+    assert_eq!(non_empty.stdout, output.stdout);
+}
+
+/// The #380 protocol carve-out of the same rule: `check_stmt_in_function`'s
+/// `AnnAssign` arm binds the concrete inferred type rather than the protocol
+/// annotation, so the pre-pass binder must too. Both spellings land outside
+/// D-228's admit set, so the property asserted is that they are rejected
+/// identically -- a binder that recorded `Drawable` would name a different
+/// element type in the empty spelling's `T0034`.
+#[test]
+fn a_protocol_annotated_producer_is_rejected_exactly_as_the_non_empty_spelling_is() {
+    let rendered = check_error(
+        "protocol_annotated_empty_list",
+        "\
+from typing import Protocol
+
+
+class Drawable(Protocol):
+    def draw(self) -> str:
+        ...
+
+
+class Circle:
+    def __init__(self) -> None:
+        self.x = 0
+
+    def draw(self) -> str:
+        return \"circle\"
+
+
+def f() -> str:
+    d: Drawable = Circle()
+    xs = []
+    xs.append(d)
+    return xs.pop().draw()
+
+print(f())
+",
+    );
+    assert!(
+        rendered.contains("error[T0034]: list[Circle] is not compiled yet"),
+        "{rendered}"
+    );
+    let non_empty = check_error(
+        "protocol_annotated_non_empty_list",
+        "\
+from typing import Protocol
+
+
+class Drawable(Protocol):
+    def draw(self) -> str:
+        ...
+
+
+class Circle:
+    def __init__(self) -> None:
+        self.x = 0
+
+    def draw(self) -> str:
+        return \"circle\"
+
+
+def f() -> str:
+    d: Drawable = Circle()
+    xs = [d]
+    return xs.pop().draw()
+
+print(f())
+",
+    );
+    assert!(
+        non_empty.contains("error[T0034]: list[Circle] is not compiled yet"),
+        "{non_empty}"
+    );
+}
+
+/// The other half of round 6's first finding: an annotated *re*-declaration
+/// does not replace a name's already-recorded representation either. `v = 5`
+/// then `v: bool = True` leaves `v` an `int` for the checker -- the widening
+/// is compatible, so `check_assignment` returns without rebinding -- so the
+/// producer must resolve `list[int]`. A binder that recorded `bool` here
+/// resolved `list[bool]` and D-228 reported a `T0034` for a program whose
+/// `xs = [v]` spelling compiles.
+#[test]
+fn an_annotated_redeclaration_keeps_the_first_recorded_element_type() {
+    let output = check_build_and_run(
+        "annotated_redeclaration_empty_list",
+        "\
+def f() -> int:
+    v = 5
+    v: bool = True
+    xs = []
+    xs.append(v)
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    let non_empty = check_build_and_run(
+        "annotated_redeclaration_non_empty_list",
+        "\
+def f() -> int:
+    v = 5
+    v: bool = True
+    xs = [v]
+    return xs.pop()
+
+print(f())
+",
+    );
+    assert!(non_empty.status.success());
+    assert_eq!(non_empty.stdout, output.stdout);
+}
