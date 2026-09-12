@@ -315,14 +315,15 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
 - mimalloc bundled on all Tier-1 targets; identical behavior everywhere.
 - Native and `deny`/`--pure` startup: `main()` runs directly with no
   interpreter boot. Target: `hello` binary < 2 MB, < 5 ms cold start. A
-  planned permitted interop artifact initializes its bundled CPython runtime
+  planned embedded interop artifact initializes its bundled CPython runtime
   only for the CPython-backed boundary (D-128).
 - Native module init: top-level code of native pycc modules runs once, in
   deterministic import order, at process start (statically scheduled — a
   native-module import cycle is a compile error `E0108`). Planned
-  CPython-backed modules instead use the bundled interpreter's normal import
-  initialization, caching, and cycle semantics inside the locked environment;
-  native `E0108` rules do not reject their dependency closure (D-128).
+  embedded-mode CPython-backed modules instead use the bundled interpreter's
+  normal import initialization, caching, and cycle semantics inside the locked
+  environment; native `E0108` rules do not reject their dependency closure
+  (D-128).
 
 ## Transparent CPython interop (planned v0.7; not implemented)
 

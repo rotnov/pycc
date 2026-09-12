@@ -36,9 +36,9 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native artifact (+ p
 D-128's conditional CPython/package closure is likewise a planned v0.7
 component, not part of the current pipeline. Native imports continue through
 the static pycc pipeline. A CPython-backed import keeps ordinary Python source
-syntax but adds a generated typed bridge and a pinned, target-specific runtime
-closure to the deployment artifact under `auto` or `allowlist`; `deny` and
-`--pure` retain the native-only artifact path.
+syntax but adds a generated typed bridge and, in embedded mode, a pinned,
+target-specific runtime closure to the deployment artifact under `auto` or
+`allowlist`; `deny` and `--pure` retain the native-only artifact path.
 
 ## Workspace crates (Rust 1.97+, edition 2024)
 

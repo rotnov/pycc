@@ -16,10 +16,11 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc version --verbose` | compiler, LLVM, target list |
 
 The current compiler and every future native or `deny`/`--pure` build write a
-native binary at `OUT`. Planned v0.7 builds with a permitted CPython-backed
-import instead use `OUT` as the deployment-artifact destination for an
-autonomous application bundle. D-128 deliberately defers the bundle's exact
-file layout until the v0.7 resolver and packaging plan is accepted.
+native binary at `OUT`. Planned v0.7 embedded-mode builds with a permitted
+CPython-backed import instead use `OUT` as the deployment-artifact destination
+for an autonomous application bundle. D-128 deliberately defers the bundle's
+exact file layout until the v0.7 resolver and packaging plan is accepted. The
+planned hosted `ext` mode is the exception to both (D-244).
 
 Every value after `pycc run`'s `--` is forwarded unchanged and in order as
 the generated program's own process arguments, including a value that
@@ -172,7 +173,8 @@ directory once project mode exists.
 --lib               emit C-ABI library + header instead of executable
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
-                    planned v0.7 policy for CPython-backed imports (D-128);
+                    planned v0.7 embedded-mode policy for CPython-backed
+                    imports (D-128);
                     CLI value overrides `[interop].policy`
 --pure              planned v0.7 shorthand for `--interop-policy deny`;
                     conflicts with an explicit `--interop-policy`
