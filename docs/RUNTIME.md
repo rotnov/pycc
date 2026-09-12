@@ -332,6 +332,13 @@ CPython-backed packages keep ordinary, CPython-compatible source imports:
 import numpy as np
 ```
 
+The rest of this section describes the **embedded** interop mode (D-128), in
+which the artifact is an executable that carries its own interpreter. The hosted
+`ext` mode added by D-244 shares the import classification and the typed
+boundary but none of the bundling, policy, or GIL-ownership rules below: an
+`ext` artifact is loaded by an external CPython that owns the environment and
+the GIL, and #1025/#1026 specify its contract.
+
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge
 without requiring a source rewrite to `pycc.interop`. The deployment artifact

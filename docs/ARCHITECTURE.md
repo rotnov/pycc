@@ -230,7 +230,7 @@ Rules:
 
 - Runtime has **zero** platform-conditional behavior visible to user code (path/OS specifics live in `pycc_std` behind `os`/`pathlib` just like CPython).
 - Cross-compilation: `pycc build --target <triple>` is currently proven for same-OS/cross-arch only (e.g. macOS x86_64⟷arm64, CI-gated) — cross-OS targets are not yet supported (see D-026). Linking goes through each host's own toolchain driver (system `cc`, or a bundled `clang` on Windows/Linux when a target is given), not a universally bundled linker.
-- Pure/native-only artifacts use static linking by default on Linux (musl optional), a self-contained `.exe` on Windows, and a notarization-friendly binary on macOS. Planned v0.7 interop artifacts instead form a self-contained application bundle containing their pinned CPython/package/native-library closure; they must not fall back to a target machine's Python installation (D-128).
+- Pure/native-only artifacts use static linking by default on Linux (musl optional), a self-contained `.exe` on Windows, and a notarization-friendly binary on macOS. Planned embedded interop artifacts (D-128) instead form a self-contained application bundle containing their pinned CPython/package/native-library closure; they must not fall back to a target machine's Python installation. The hosted `ext` artifact (D-244) is the deliberate exception: it is a CPython extension module loaded by, and resolving its C-API symbols from, whichever interpreter imports it.
 - CI matrix runs the full conformance suite on all Tier-1 targets; a PEP test only counts as passing when it passes everywhere.
 - Tier 2 (build, best-effort tests): `aarch64-pc-windows-msvc`, `x86_64-unknown-linux-musl`, `wasm32-wasi` (experiment).
 
