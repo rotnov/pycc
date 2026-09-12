@@ -79,6 +79,48 @@ the new case (defer it, and record the deferral where the narrowing is
 recorded). A round that extends the inventory by one more site is reproducing
 the defect, not closing it.
 
+## 2026-09-12 — A relative-path binary invocation verified review findings against a stale branch
+
+**What happened.** While reproducing a review finding on #1021, `./target/debug/pycc check -- <fixture>`
+was run after the shell's working directory had silently reverted to the main checkout, which sits on an
+unrelated branch that predates the work under review. The stale binary printed a plausible but entirely
+false diagnostic (`C0001: type annotation \`list\` is not supported yet`, and a `T0021` citing a decision
+number that has nothing to do with the case). The output looked like a legitimate reproduction and was
+within one step of being written into a fix.
+
+**Root cause.** A relative path resolves against whatever the working directory happens to be, and the
+working directory is not stable between tool calls. A second checkout of the same repository on a
+different branch makes the wrong binary both present and executable.
+
+**What fixed it.** Rebuilding inside the worktree and invoking the binary by absolute path. All findings
+then reproduced correctly.
+
+**Lesson.** When more than one checkout of a repository exists, never invoke a built artefact or a test
+fixture by a relative path. Resolve the working tree into a variable at the start of the call and use
+absolute paths for every binary and every input, so the command cannot silently bind to another branch's
+build.
+
+## 2026-09-12 — A dispatched agent's report is not a termination, and its last report is not its final state
+
+**What happened.** A dispatched fix agent returned a report ending "workspace test run is still in
+progress ... I'll pick up when the monitor fires" and never picked up. The orchestrating session treated
+that report as the agent's terminal state and began inspecting the tree while the agent was still listed
+as a live background task — so the first full gate set it ran was taken with two writers in the same
+worktree, and one gate (the `scripts/` unittest suite) failed spuriously. Re-run from a single-writer
+baseline after terminating the agent, the same suite passed.
+
+**Root cause.** Two distinct conflations: a returned report read as a termination, and a mid-run status
+line read as a final account of what was committed.
+
+**What fixed it.** Enumerating live background tasks and terminating the one sharing the worktree, then
+re-running the entire gate set — and reading `git log` / `git status` directly rather than trusting the
+report, which revealed the agent had in fact committed its work.
+
+**Lesson.** Before running any gate against a worktree a subagent was given, enumerate live background
+tasks and terminate any that share it; a report is not a termination. Verdicts collected during an
+overlap are void even when green, and a stopped agent's actual state is what `git log` and
+`git status` say, never what its last message said.
+
 ## 2026-09-12 — A green check rollup was read as merge readiness while conversation resolution was still blocking
 
 **What happened.** A pull request reported every required check passing, both
