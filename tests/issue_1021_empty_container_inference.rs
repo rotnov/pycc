@@ -883,3 +883,59 @@ print(f())
     assert!(non_empty.status.success());
     assert_eq!(non_empty.stdout, output.stdout);
 }
+
+/// #1021 review round 7: an unannotated private helper's parameter has no
+/// type yet when this pass runs -- the private-helper constraint solver, which
+/// resolves it, runs afterwards and never substitutes into a rewritten node.
+/// Freezing that `Ty::Infer` placeholder into `EmptyList` produced a `T0034`
+/// naming `list[<inferred>]`, a type the source never mentions, for a program
+/// the equivalent non-empty spelling compiles. The pass now declines to
+/// resolve, so the honest `T0003` is reported instead: a missed resolution,
+/// which this module permits, rather than a wrong one, which it does not.
+#[test]
+fn an_unresolved_parameter_producer_misses_rather_than_freezing_the_placeholder() {
+    let error = check_error(
+        "placeholder_producer_empty_list",
+        "\
+def _f(x) -> int:
+    xs = []
+    xs.append(x)
+    return 0
+
+print(_f(1))
+",
+    );
+    assert!(error.contains("T0003"), "{error}");
+    assert!(!error.contains("<inferred>"), "{error}");
+    let non_empty = check_build_and_run(
+        "placeholder_producer_non_empty_list",
+        "\
+def _f(x) -> int:
+    xs = [x]
+    xs.append(x)
+    return 0
+
+print(_f(1))
+",
+    );
+    assert!(non_empty.status.success());
+}
+
+/// The dict half of the same defect: a placeholder reaching either the key or
+/// the value position is discarded for the same reason.
+#[test]
+fn an_unresolved_parameter_producer_misses_for_a_dict_too() {
+    let error = check_error(
+        "placeholder_producer_empty_dict",
+        "\
+def _f(x) -> int:
+    d = {}
+    d[\"k\"] = x
+    return 0
+
+print(_f(1))
+",
+    );
+    assert!(error.contains("T0003"), "{error}");
+    assert!(!error.contains("<inferred>"), "{error}");
+}

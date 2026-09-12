@@ -49,10 +49,11 @@
 //! (D-040's sticky-representation rule included). Restricting source 2 to
 //! strictly-prior bindings could only turn some compilable programs into
 //! `T0003`; it could not change which accepted program is produced. The
-//! "only a fully concrete `Ty` is ever stored" invariant is likewise enforced
-//! at that downstream gate rather than here: this pass performs no
-//! `Ty::Infer` check of its own, and a resolved `Ty::Infer` cannot survive
-//! `check_container_ty` to reach MIR.
+//! "only a fully concrete `Ty` is ever stored" invariant is enforced here, by
+//! [`resolve`] discarding any resolution containing `Ty::Infer` -- the
+//! private-helper solver's placeholder, which this pass can observe because
+//! it runs before that solver and which nothing downstream substitutes into a
+//! rewritten node.
 //!
 //! The same completed-before-rewriting property is why
 //! `bind_local_types_in_stmt`'s `AnnAssign` arm seeds the declared annotation
@@ -364,11 +365,24 @@ fn rewrite_value(
     }
 }
 
-/// The three-source priority order. Note that a resolved type is *not*
-/// validated here: an inferred `list[str]` is stored and then rejected by
-/// `pycc_hir::check_container_ty` (`T0034`) in the check phase, exactly as a
-/// written `xs: list[str] = [1]` annotation is -- D-228's rule that a
+/// The three-source priority order. A resolved type is *not* validated for
+/// *admissibility* here: an inferred `list[str]` is stored and then rejected
+/// by `pycc_hir::check_container_ty` (`T0034`) in the check phase, exactly as
+/// a written `xs: list[str] = [1]` annotation is -- D-228's rule that a
 /// written annotation and an inferred literal share one gate.
+///
+/// It *is* validated for *concreteness*: a resolution containing `Ty::Infer`
+/// is discarded, so the literal stays a raw `ListLiteral`/`DictLiteral` and
+/// the check phase reports `T0003` against it. `Ty::Infer` is the private-
+/// helper solver's placeholder, and this pass runs before that solver, so a
+/// producer whose value is an unannotated helper parameter (`def _f(x): xs =
+/// []; xs.append(x)`) infers `Ty::Infer` here. Freezing it into the node was
+/// a *wrong* resolution, not a missed one: the solver never substitutes into
+/// a rewritten node, so `check_container_ty` then reported a `T0034` naming
+/// `list[<inferred>]` -- a type the source never mentions -- for a program
+/// whose `xs = [x]` spelling the solver accepts. `Ty::Param` is deliberately
+/// *not* discarded: both spellings already report the same `T0034` for it, so
+/// there is no asymmetry to repair and discarding it would introduce one.
 fn resolve(
     target: &str,
     annotation: Option<&Ty>,
@@ -377,16 +391,51 @@ fn resolve(
     local_names: &[&str],
 ) -> Option<Resolution> {
     if let Some(from_annotation) = annotation.and_then(from_container_ty) {
-        return Some(from_annotation);
+        return concrete(from_annotation);
     }
     if let Some(from_binding) = env
         .binding_state(target)
         .map(BindingState::ty)
         .and_then(from_container_ty)
     {
-        return Some(from_binding);
+        return concrete(from_binding);
     }
-    find_producer(producers, target, env, local_names)
+    find_producer(producers, target, env, local_names).and_then(concrete)
+}
+
+/// `Some(resolution)` when every type it carries is free of `Ty::Infer`,
+/// `None` otherwise -- see [`resolve`] for why that placeholder is discarded
+/// rather than stored.
+fn concrete(resolution: Resolution) -> Option<Resolution> {
+    let concrete = match &resolution {
+        Resolution::List(element) => !contains_infer(element),
+        Resolution::Dict(key, value) => !contains_infer(key) && !contains_infer(value),
+    };
+    concrete.then_some(resolution)
+}
+
+/// Whether `ty` is `Ty::Infer` or contains one anywhere inside it.
+///
+/// The recursion matters: a producer can yield a nested container whose
+/// *element* is the placeholder (`xs.append(ys)` where `ys` is an
+/// unannotated helper parameter's list), and a `list[list[<inferred>]]`
+/// stored in the node is the same wrong resolution a bare
+/// `list[<inferred>]` is.
+fn contains_infer(ty: &Ty) -> bool {
+    match ty {
+        Ty::Infer => true,
+        Ty::List(element) | Ty::Set(element) | Ty::Optional(element) => contains_infer(element),
+        Ty::Dict(pair) => contains_infer(&pair.0) || contains_infer(&pair.1),
+        Ty::Tuple(elements) => elements.iter().any(contains_infer),
+        Ty::Int
+        | Ty::Float
+        | Ty::Bool
+        | Ty::Str
+        | Ty::None
+        | Ty::Param(_)
+        | Ty::Instance(_)
+        | Ty::Protocol(_) => false,
+    }
 }
 
 fn from_container_ty(ty: &Ty) -> Option<Resolution> {
@@ -512,4 +561,71 @@ pub(crate) fn name_binding(
         diagnostic.label = Some(diagnostic.message.clone());
     }
     diagnostic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `contains_infer` is what keeps the private-helper solver's placeholder
+    /// out of a rewritten node (see [`resolve`]). Its recursive arms are
+    /// exercised directly here rather than through source: the placeholder
+    /// reaches this pass as a bare `Ty::Infer` from an unannotated parameter,
+    /// so the nested shapes have no compact spelling in a `.py` fixture, and
+    /// the guarantee they carry -- a placeholder anywhere inside a resolved
+    /// type is still a placeholder -- is worth pinning independently of
+    /// whether today's inference happens to produce one.
+    #[test]
+    fn contains_infer_finds_the_placeholder_at_every_depth() {
+        assert!(contains_infer(&Ty::Infer));
+        assert!(contains_infer(&Ty::List(Box::new(Ty::Infer))));
+        assert!(contains_infer(&Ty::Set(Box::new(Ty::Infer))));
+        assert!(contains_infer(&Ty::Optional(Box::new(Ty::Infer))));
+        assert!(contains_infer(&Ty::List(Box::new(Ty::List(Box::new(
+            Ty::Infer
+        ))))));
+        assert!(contains_infer(&Ty::Dict(Box::new((Ty::Str, Ty::Infer)))));
+        assert!(contains_infer(&Ty::Dict(Box::new((Ty::Infer, Ty::Int)))));
+        assert!(contains_infer(&Ty::Tuple(Box::new(vec![
+            Ty::Int,
+            Ty::Infer
+        ]))));
+    }
+
+    /// The complement: every fully concrete shape must pass, including the
+    /// `Ty::Param` one this check deliberately admits -- both spellings of a
+    /// generic element already report the same `T0034`, so discarding it
+    /// would introduce the asymmetry this check exists to remove.
+    #[test]
+    fn contains_infer_admits_every_fully_concrete_shape() {
+        for ty in [
+            Ty::Int,
+            Ty::Float,
+            Ty::Bool,
+            Ty::Str,
+            Ty::None,
+            Ty::Param(Box::new("T".to_string())),
+            Ty::Instance(Box::new("C".to_string())),
+            Ty::Protocol(Box::new("P".to_string())),
+            Ty::List(Box::new(Ty::Int)),
+            Ty::Set(Box::new(Ty::Int)),
+            Ty::Optional(Box::new(Ty::Int)),
+            Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
+        ] {
+            assert!(!contains_infer(&ty), "{ty:?} is fully concrete");
+        }
+    }
+
+    /// `concrete` applies that check to both halves of a dict resolution, not
+    /// just the value: a placeholder key is as unusable as a placeholder
+    /// value.
+    #[test]
+    fn concrete_discards_either_half_of_a_dict_resolution() {
+        assert!(concrete(Resolution::List(Ty::Int)).is_some());
+        assert!(concrete(Resolution::List(Ty::Infer)).is_none());
+        assert!(concrete(Resolution::Dict(Ty::Str, Ty::Int)).is_some());
+        assert!(concrete(Resolution::Dict(Ty::Str, Ty::Infer)).is_none());
+        assert!(concrete(Resolution::Dict(Ty::Infer, Ty::Int)).is_none());
+    }
 }

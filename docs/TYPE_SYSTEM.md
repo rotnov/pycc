@@ -189,6 +189,18 @@ element, and panics on an empty one.
   through `pycc_hir::check_container_ty` (D-228), so an inferred `list[str]` is
   `T0034` and an inferred `dict[int, int]` is `T0036`, exactly as the written
   annotations are.
+- **Only a fully concrete type is ever stored.** A resolution containing
+  `Ty::Infer` anywhere inside it is discarded and the literal is left alone.
+  `Ty::Infer` is the private-helper constraint solver's placeholder, and this
+  pass runs *before* that solver, so a producer whose value is an unannotated
+  helper parameter (`def _f(x): xs = []; xs.append(x)`) infers the placeholder
+  here. Nothing downstream substitutes into a rewritten node, so storing it
+  would report a `T0034` naming `list[<inferred>]` — a type the source never
+  mentions — for a program whose `xs = [x]` spelling the solver accepts. The
+  cost of declining is a `T0003`: a missed resolution, which this pass permits,
+  rather than a wrong one, which it does not. `Ty::Param` is deliberately not
+  discarded — both spellings of a generic element already report the same
+  `T0034`, so there is no asymmetry to repair there.
 - **No set path.** A set binding can only originate from an empty set literal,
   `{}` parses as a dict, and `set()` is rejected at HIR lowering with `C0001` —
   so `SetAdd` is a structurally dead producer and `set[T]` is untouched here.
