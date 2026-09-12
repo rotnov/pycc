@@ -22,14 +22,23 @@ for an autonomous application bundle. D-128 deliberately defers the bundle's
 exact file layout until the v0.7 resolver and packaging plan is accepted. The
 planned hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
-never an executable or a bundle. The platform extension is `.so` on Linux and
-macOS and `.pyd` on Windows, appended when `OUT` names none and honored as
-written when it names one. The module name is `OUT`'s basename with that
-platform extension removed -- the same name CPython's own finder derives from
-the file -- it must be a valid Python identifier, and it is the `<mod>` in the
-exported `PyInit_<mod>`, so an artifact is importable only under the name its
-own output path spells. D-128's `--interop-policy` and `--pure` do not apply in
-this mode (D-244 rule 3) and are rejected alongside it, as is `--lib`.
+never an executable or a bundle. The recognized extension suffixes are the
+target platform's own `importlib.machinery.EXTENSION_SUFFIXES`, which CPython
+orders most-specific first: on Linux and macOS the version-and-platform-tagged
+suffix, then `.abi3.so`, then `.so`; on Windows the tagged suffix, then `.pyd`.
+When `OUT` names none of them, `.abi3.so` is appended on Linux and macOS and
+`.pyd` on Windows -- the stable-ABI spelling, since rule 1 builds against
+`Py_LIMITED_API`. When `OUT` already names one, it is honored as written. The
+module name is `OUT`'s basename with the **first matching** suffix from that
+ordered list removed, which is exactly how CPython's own finder derives a name
+from the same file: `m.abi3.so` and `m.cpython-314-x86_64-linux-gnu.so` both
+yield `m`, never `m.abi3` or `m.cpython-314-x86_64-linux-gnu`. Stripping only
+the final `.so` would derive a name the finder never uses and emit a
+`PyInit_` symbol no host would look for. The derived name must be a valid
+Python identifier, and it is the `<mod>` in the exported `PyInit_<mod>`, so an
+artifact is importable only under the name its own output path spells.
+D-128's `--interop-policy` and `--pure` do not apply in this mode (D-244
+rule 3) and are rejected alongside it, as is `--lib`.
 
 Every value after `pycc run`'s `--` is forwarded unchanged and in order as
 the generated program's own process arguments, including a value that

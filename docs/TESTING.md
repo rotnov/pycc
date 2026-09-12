@@ -454,10 +454,17 @@ rule 6); only numbers are published.
   `-O2`. The pycc arm is built `--release`, the shipping profile. Every one of
   these versions is restated in the report, because a later run that changes one
   is a different experiment.
-- **Input.** The fixed workload D-244's Context records for the probe, at the
-  same size, generated once before the first arm and reused verbatim by all
-  three. Changing the workload is a change of protocol, recorded as such rather
-  than compared against an earlier number.
+- **Input.** Size alone does not pin this workload: the measured loop branches
+  on its data, so two evaluators who generate different inputs of the same size
+  can reach opposite verdicts on the same implementation. The workload is
+  therefore produced by a generator committed with the benchmark, from a fixed
+  integer seed, serialized to one file that all three arms read verbatim; the
+  run records the generator's path, the seed, and the SHA-256 of that file. Its
+  size is the one D-244's Context records for the probe. The first run under
+  this protocol fixes the digest, and D-244 rule 6's kill criterion is evaluated
+  only against runs reporting that same digest. A run that changes the
+  generator, the seed, or the digest is a different experiment: report it as a
+  protocol change, never as a comparison against an earlier ratio.
 - **Correctness precondition.** A timing is admissible only when the arm's
   output equals the CPython arm's output under the conformance harness's own
   comparison. An arm that is faster and wrong scores nothing: it is reported as
