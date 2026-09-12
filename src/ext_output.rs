@@ -241,12 +241,13 @@ fn has_tagged_suffix(basename: &str, platform: &ExtPlatform) -> bool {
     let Some((_, segment)) = rest.rsplit_once('.') else {
         return false;
     };
-    match platform {
-        ExtPlatform::Unix => segment.starts_with("cpython-"),
-        ExtPlatform::Windows => segment
-            .strip_prefix("cp")
-            .is_some_and(|tail| tail.starts_with(|c: char| c.is_ascii_digit())),
-    }
+    let tag_prefix = match platform {
+        ExtPlatform::Unix => "cpython-",
+        ExtPlatform::Windows => "cp",
+    };
+    segment
+        .strip_prefix(tag_prefix)
+        .is_some_and(|tail| tail.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// Whether `name` is a valid ASCII Python identifier. ASCII specifically:
@@ -270,12 +271,14 @@ mod ext_output_tests {
 
     /// Resolves `out` for `platform`, asserting success, and returns the
     /// artifact path and module name for comparison.
-    fn ok(out: &str, platform: &ExtPlatform) -> (String, String) {
+    ///
+    /// The path comes back as a [`PathBuf`], never as a rendered string: a
+    /// `Path`'s rendering carries the *host*'s separator, so `dist/m` renders
+    /// as `dist\\m` on Windows and a string comparison would assert the build
+    /// host rather than the contract.
+    fn ok(out: &str, platform: &ExtPlatform) -> (PathBuf, String) {
         let resolved = resolve(Path::new(out), platform).expect("expected a resolved ext output");
-        (
-            resolved.artifact.to_string_lossy().into_owned(),
-            resolved.module_name,
-        )
+        (resolved.artifact, resolved.module_name)
     }
 
     /// Resolves `out` for `platform`, asserting rejection, and returns the
@@ -288,7 +291,7 @@ mod ext_output_tests {
     fn unix_appends_the_stable_abi_suffix_when_out_names_none() {
         assert_eq!(
             ok("m", &ExtPlatform::Unix),
-            ("m.abi3.so".to_string(), "m".to_string())
+            (PathBuf::from("m.abi3.so"), "m".to_string())
         );
     }
 
@@ -305,7 +308,7 @@ mod ext_output_tests {
     fn unix_appends_beside_the_out_directory() {
         assert_eq!(
             ok("dist/m", &ExtPlatform::Unix),
-            ("dist/m.abi3.so".to_string(), "m".to_string())
+            (Path::new("dist").join("m.abi3.so"), "m".to_string())
         );
     }
 
@@ -313,7 +316,7 @@ mod ext_output_tests {
     fn unix_honors_a_bare_so_suffix_as_written() {
         assert_eq!(
             ok("m.so", &ExtPlatform::Unix),
-            ("m.so".to_string(), "m".to_string())
+            (PathBuf::from("m.so"), "m".to_string())
         );
     }
 
@@ -323,7 +326,7 @@ mod ext_output_tests {
         // -- what CPython's finder derives -- and never `m.abi3`.
         assert_eq!(
             ok("m.abi3.so", &ExtPlatform::Unix),
-            ("m.abi3.so".to_string(), "m".to_string())
+            (PathBuf::from("m.abi3.so"), "m".to_string())
         );
     }
 
@@ -331,7 +334,7 @@ mod ext_output_tests {
     fn unix_accepts_a_leading_underscore_name() {
         assert_eq!(
             ok("_m", &ExtPlatform::Unix),
-            ("_m.abi3.so".to_string(), "_m".to_string())
+            (PathBuf::from("_m.abi3.so"), "_m".to_string())
         );
     }
 
@@ -342,6 +345,18 @@ mod ext_output_tests {
             ExtOutputError::TaggedSuffix {
                 basename: "m.cpython-314-x86_64-linux-gnu.so".to_string(),
                 stable: ".abi3.so",
+            }
+        );
+    }
+
+    #[test]
+    fn unix_requires_version_digits_after_the_cpython_tag_prefix() {
+        // `cpython-` alone is not the tag shape; the dot in the derived name
+        // is the real defect, so the identifier rule reports it.
+        assert_eq!(
+            err("m.cpython-nightly.so", &ExtPlatform::Unix),
+            ExtOutputError::InvalidModuleName {
+                name: "m.cpython-nightly".to_string()
             }
         );
     }
@@ -423,7 +438,7 @@ mod ext_output_tests {
     fn windows_appends_pyd_when_out_names_none() {
         assert_eq!(
             ok("m", &ExtPlatform::Windows),
-            ("m.pyd".to_string(), "m".to_string())
+            (PathBuf::from("m.pyd"), "m".to_string())
         );
     }
 
@@ -431,7 +446,7 @@ mod ext_output_tests {
     fn windows_honors_a_pyd_suffix_as_written() {
         assert_eq!(
             ok("m.pyd", &ExtPlatform::Windows),
-            ("m.pyd".to_string(), "m".to_string())
+            (PathBuf::from("m.pyd"), "m".to_string())
         );
     }
 
