@@ -371,6 +371,28 @@ wrapper does with an argument that violates its annotation is D-244 rule 7 —
 the oracle is scoped to annotation-conforming calls and the wrapper raises
 `TypeError` outside them — and it is not restated here.
 
+Two properties of that `ext` boundary are deliberate narrowings rather than
+oversights, and a caller that relies on CPython's own behavior will see a
+difference. First, the boundary carries `int` *values*, not objects: an `int`
+subclass instance is accepted and decoded, so `int`-subclass identity does not
+survive a crossing and `echo(E.X) is E.X` is `False` where an equivalent CPython
+function gives `True`. Preserving it is not implementable over D-061/D-141's
+unboxed tagged word, and narrowing the accepted domain to exact `int` instead
+would reject `bool`, which CPython accepts and which the #1036 oracle asserts;
+[#1043](https://github.com/rotnov/pycc/issues/1043) tracks whether an
+object-carrying path is worth its cost once Part 2 widens the boundary. Second,
+an `ext` module's state is process-static — generated globals live in LLVM
+globals and the `METH_FASTCALL` wrappers ignore their module argument, with
+`m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not
+hold. A subinterpreter is refused outright
+(`Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED`), and `importlib.reload()` is
+unaffected because CPython does not re-run `Py_mod_exec` for an extension
+module; the one divergent path is deleting the `sys.modules` entry and
+importing again, which re-runs the module body and lets the second instance
+overwrite state the first instance's wrappers still read.
+[#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
+rejecting that second instance and allocating state per instance.
+
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge
 without requiring a source rewrite to `pycc.interop`. The deployment artifact
