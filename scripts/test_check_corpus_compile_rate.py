@@ -35,9 +35,15 @@ METRIC_SPEC.loader.exec_module(METRIC)
 # diagnostics taken from that marker line, so a test can script any tally.
 PYCC_SHIM = '''#!/usr/bin/env python3
 import os, stat, sys
-source, out = sys.argv[2], sys.argv[4]
+# Positional, so the shim fails loudly if the metric stops passing `--release`:
+# the report's speedup is only meaningful for the shipping profile.
+assert sys.argv[1:3] == ["build", "--release"], sys.argv
+source, out = sys.argv[3], sys.argv[5]
 lines = open(source).read().splitlines()
 marker = lines[0] if lines else ""
+if marker.startswith("# silent"):
+    print("something went wrong", file=sys.stderr)
+    sys.exit(1)
 if not marker.startswith("# ok"):
     for code in marker.removeprefix("# fail ").split("|"):
         print("error[" + code + "]: shim diagnostic", file=sys.stderr)
@@ -48,11 +54,18 @@ with open(out, "w") as handle:
 os.chmod(out, os.stat(out).st_mode | stat.S_IEXEC)
 '''
 
-# A shim that reports no recognizable diagnostic at all.
+# A shim that reports no recognizable diagnostic at all, for every problem.
 SILENT_SHIM = '''#!/usr/bin/env python3
 import sys
 print("something went wrong", file=sys.stderr)
 sys.exit(1)
+'''
+
+# A shim standing in for a broken environment: `docs/CLI_SPEC.md`'s exit 2.
+ENVIRONMENT_FAILURE_SHIM = '''#!/usr/bin/env python3
+import sys
+print("error: could not run the linker driver `cc`: not found", file=sys.stderr)
+sys.exit(2)
 '''
 
 
@@ -131,6 +144,8 @@ WRITES_A_MARKER_SOLUTION = (
     "sys.stdout.write(sys.stdin.read())\n"
 )
 FAIL_SOLUTION = "# fail C0001|T0001\nprint(1)\n"
+# Fails the build while emitting nothing that parses as a pycc diagnostic.
+SILENT_SOLUTION = "# silent\nprint(1)\n"
 ECHO_CASES = [{"input": "hello\n", "output": "hello\n"}]
 # Echoes correctly as a compiled binary but not as `solution.py`, so the binary
 # matches (the problem counts as matched) while the CPython timing leg then
@@ -273,11 +288,33 @@ class SuccessPathTests(MetricHarness):
         self.assertIn("compiled 0/1", out)
 
     def test_an_unrecognizable_diagnostic_is_tallied_not_dropped(self) -> None:
-        silent = write_executable(self.tmp / "silent", SILENT_SHIM)
-        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
-        code, out, err = self.run_metric(pycc=silent)
+        self.corpus.add(1, SILENT_SOLUTION, ECHO_CASES)
+        self.corpus.add(2, FAIL_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric()
         self.assertEqual(code, 0, err)
         self.assertIn("(no diagnostic code reported)", out)
+        self.assertIn("compiled 0/2", out)
+
+    def test_a_relative_corpus_path_survives_the_scratch_working_directory(
+        self,
+    ) -> None:
+        # The timing legs run CPython with `cwd` set to a scratch directory, so
+        # a relative `--corpus` -- which is what the default is -- must have
+        # been resolved before then or every sample is silently dropped.
+        self.corpus.add(1, SLOW_SOLUTION, ECHO_CASES)
+        self.corpus.write_manifest()
+        completed = subprocess.run(
+            [
+                sys.executable, "-B", str(METRIC_PATH),
+                "--corpus", "corpus",
+                "--pycc", str(self.pycc),
+                "--python", sys.executable,
+            ],
+            capture_output=True, text=True, check=False, cwd=str(self.tmp),
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("over 1 qualifying problems", completed.stdout)
+        self.assertIn("timing dropped: 0", completed.stdout)
 
 
 class SpeedupTests(MetricHarness):
@@ -524,10 +561,7 @@ class BrokenHarnessTests(MetricHarness):
         self.assertIn("not executable", self.assert_broken(pycc=self.tmp / "pycc-dir"))
 
     def test_a_problem_with_no_cases_is_a_broken_harness(self) -> None:
-        problem = self.corpus.add(1, OK_SOLUTION, [])
-        self.corpus.write_manifest()
-        del problem["files"]["tests.json"]
-        self.corpus.write_manifest()
+        self.corpus.add(1, OK_SOLUTION, [])
         self.assertIn("no cases", self.assert_broken())
 
     def test_a_malformed_holdout_payload_fails_without_include_holdout(self) -> None:
@@ -542,6 +576,49 @@ class BrokenHarnessTests(MetricHarness):
         # would otherwise never run, so a malformed payload would stay latent.
         self.corpus.add(1, FAIL_SOLUTION, [])
         self.assertIn("no cases", self.assert_broken())
+
+    def test_a_problem_without_a_tests_json_entry_is_a_broken_harness(self) -> None:
+        # Every correctness verdict and every timing case comes from that
+        # payload, so it must be digest-covered like the solution itself.
+        problem = self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        del problem["files"]["tests.json"]
+        self.assertIn("no tests.json manifest entry", self.assert_broken())
+
+    def test_a_case_that_is_not_an_object_is_a_broken_harness(self) -> None:
+        self.corpus.add(1, OK_SOLUTION, ["nope"])
+        self.assertIn("case 0 is not an object", self.assert_broken())
+
+    def test_a_case_without_string_fields_is_a_broken_harness(self) -> None:
+        # An empty case object would otherwise compare an empty input against an
+        # empty expectation and inflate `matched`.
+        self.corpus.add(1, OK_SOLUTION, [{}])
+        self.assertIn("case 0 has no string `input`", self.assert_broken())
+
+    def test_a_case_with_a_non_string_output_is_a_broken_harness(self) -> None:
+        self.corpus.add(1, OK_SOLUTION, [{"input": "a\n", "output": 3}])
+        self.assertIn("case 0 has no string `output`", self.assert_broken())
+
+    def test_an_environment_failure_from_pycc_is_a_broken_harness(self) -> None:
+        # `docs/CLI_SPEC.md` reserves exit 2 for an invalid invocation or a
+        # broken environment; this script's invocation is fixed, so exit 2 is
+        # the environment, and reporting it as a zero compile rate would publish
+        # a broken toolchain as a score.
+        broken = write_executable(self.tmp / "no-linker", ENVIRONMENT_FAILURE_SHIM)
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        self.assertIn(
+            "environment failure (exit 2)", self.assert_broken(pycc=broken)
+        )
+
+    def test_every_build_failing_undiagnosed_is_a_broken_harness(self) -> None:
+        # A linker driver that runs and then fails exits 1 with no diagnostic of
+        # pycc's own, so the exit-2 arm cannot see it; every evaluated problem
+        # failing that way is a toolchain that cannot build anything.
+        silent = write_executable(self.tmp / "silent", SILENT_SHIM)
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        self.corpus.add(2, OK_SOLUTION, ECHO_CASES)
+        self.assertIn(
+            "no problem produced a pycc diagnostic", self.assert_broken(pycc=silent)
+        )
 
     def test_an_unwritable_json_target_is_a_broken_harness(self) -> None:
         self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
@@ -666,9 +743,12 @@ class HelperTests(unittest.TestCase):
         self.assertNotEqual(METRIC.normalize_output("a b"), METRIC.normalize_output("a  b"))
         self.assertNotEqual(METRIC.normalize_output("1"), METRIC.normalize_output("1.0"))
 
-    def test_empty_output_normalizes_to_a_single_newline(self) -> None:
-        self.assertEqual(METRIC.normalize_output(""), b"\n")
+    def test_empty_output_is_not_a_blank_line(self) -> None:
+        # A program that printed nothing did not print a blank line; equating
+        # the two would report a real difference as a match.
+        self.assertEqual(METRIC.normalize_output(""), b"")
         self.assertEqual(METRIC.normalize_output("\n\n"), b"\n")
+        self.assertNotEqual(METRIC.normalize_output(""), METRIC.normalize_output("\n"))
 
     def test_largest_case_is_chosen_by_input_size(self) -> None:
         cases = [{"input": "a"}, {"input": "aaa"}, {"input": "aa"}]
@@ -681,6 +761,27 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(args.include_holdout)
         self.assertIsNone(args.json_path)
         self.assertEqual(args.max_seconds, METRIC.DEFAULT_MAX_SECONDS)
+
+    def test_the_build_invocation_selects_the_release_profile(self) -> None:
+        recorded: dict[str, list[str]] = {}
+
+        class Completed:
+            returncode = 1
+            stderr = b"error[C0001]: nope\n"
+            stdout = b""
+
+        def fake_run(argv, **kwargs):  # noqa: ANN001 - a subprocess.run stand-in
+            recorded["argv"] = argv
+            return Completed()
+
+        with unittest.mock.patch.object(METRIC.subprocess, "run", fake_run):
+            ok, text, status = METRIC.compile_problem(
+                "pycc", Path("s.py"), Path("out")
+            )
+        self.assertFalse(ok)
+        self.assertEqual(status, 1)
+        self.assertIn("C0001", text)
+        self.assertEqual(recorded["argv"][:3], ["pycc", "build", "--release"])
 
     def test_the_metric_imports_nothing_http_capable(self) -> None:
         source = METRIC_PATH.read_text(encoding="utf-8")

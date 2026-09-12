@@ -63,9 +63,21 @@ class BrokenHarness(Exception):
 
 
 def normalize_output(text: str) -> bytes:
-    """Normalize line endings and trailing newlines before comparing."""
+    """Normalize line endings and trailing newlines before comparing.
+
+    Deliberately not a byte-exact comparison. The dataset's recorded outputs and
+    a program's own final newline disagree about trailing whitespace often
+    enough that a byte-exact rule would report correct programs as mismatched,
+    so CRLF and CR become LF and a run of trailing newlines collapses to exactly
+    one. Everything else is compared byte for byte, and output that is empty
+    stays empty: a program that printed nothing did not print a blank line, and
+    equating those two would hide a real difference. ``docs/TESTING.md``'s
+    corpus Metric bullet is the canonical statement of this contract.
+    """
     unified = text.replace("\r\n", "\n").replace("\r", "\n")
-    return (unified.rstrip("\n") + "\n").encode() if unified.strip("\n") else b"\n"
+    if not unified:
+        return b""
+    return (unified.rstrip("\n") + "\n").encode()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -123,6 +135,12 @@ def verify_corpus(corpus: Path, manifest: dict, include_holdout: bool) -> list[d
         files = problem.get("files")
         if not isinstance(files, dict) or "solution.py" not in files:
             raise BrokenHarness(f"{problem['id']} has no solution.py manifest entry")
+        # `load_cases` reads `tests.json` for every problem, so an entry for it
+        # is as load-bearing as the solution's: without one the payload driving
+        # every correctness verdict and every timing case would be the only
+        # vendored file no digest covers.
+        if "tests.json" not in files:
+            raise BrokenHarness(f"{problem['id']} has no tests.json manifest entry")
         for filename, entry in sorted(files.items()):
             total_bytes += verify_file(corpus, f"{problem['id']}/{filename}", entry)
         # Validate the payload shape here rather than at first use, and for
@@ -167,6 +185,17 @@ def load_cases(corpus: Path, problem: dict) -> list[dict[str, str]]:
     cases = payload.get("cases") if isinstance(payload, dict) else None
     if not isinstance(cases, list) or not cases:
         raise BrokenHarness(f"{path} has no cases")
+    # Shape-check each case rather than trusting `dict.get` at use time: a case
+    # that is not an object, or whose `input`/`output` is not a string, would
+    # otherwise either inflate `matched` (an empty object compares an empty
+    # input against an empty expectation and passes) or raise an uncaught
+    # `AttributeError` mid-measurement instead of the documented exit 2.
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise BrokenHarness(f"{path} case {index} is not an object")
+        for field in ("input", "output"):
+            if not isinstance(case.get(field), str):
+                raise BrokenHarness(f"{path} case {index} has no string `{field}`")
     return cases
 
 
@@ -184,21 +213,36 @@ def resolve_pycc(raw: str) -> str:
     )
 
 
-def compile_problem(pycc: str, source: Path, output: Path) -> tuple[bool, str]:
-    """Run ``pycc build``; return (succeeded, combined diagnostic text)."""
+def compile_problem(
+    pycc: str, source: Path, output: Path
+) -> tuple[bool, str, int | None]:
+    """Run ``pycc build``; return (succeeded, diagnostic text, exit status).
+
+    ``--release`` is not optional here. The report's median speedup compares the
+    generated program against CPython, and `docs/ROADMAP.md`'s
+    `product-sprint-1` speedup criterion is stated for the shipping profile, so
+    timing an unoptimized build would measure something the criterion never
+    claimed. The exit status is returned because it is what separates a
+    compiler's rejection of the program from an environment that cannot build
+    anything -- see `measure`'s own use of it.
+    """
     try:
         completed = subprocess.run(
-            [pycc, "build", str(source), "-o", str(output)],
+            [pycc, "build", "--release", str(source), "-o", str(output)],
             capture_output=True,
             timeout=BUILD_TIMEOUT_SECONDS,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return False, "error[X0000]: pycc build timed out"
+        return False, "error[X0000]: pycc build timed out", None
     text = completed.stderr.decode("utf-8", "replace") + completed.stdout.decode(
         "utf-8", "replace"
     )
-    return completed.returncode == 0 and output.exists(), text
+    return (
+        completed.returncode == 0 and output.exists(),
+        text,
+        completed.returncode,
+    )
 
 
 # Diagnostic messages that name a symbol chosen by the corpus author rather than
@@ -356,6 +400,7 @@ def measure(
     ratios: list[float] = []
     startup_excluded = 0
     timing_dropped = 0
+    undiagnosed = 0
     incomplete = False
 
     # The deadline is re-checked at every phase boundary, not only between
@@ -371,11 +416,25 @@ def measure(
             break
         source = corpus / problem["id"] / "solution.py"
         binary = bindir / problem["id"].replace("/", "__")
-        ok, text = compile_problem(pycc, source, binary)
+        ok, text, status = compile_problem(pycc, source, binary)
         if not ok:
+            # `docs/CLI_SPEC.md` reserves exit 2 for an invalid invocation or a
+            # broken environment. This script's invocation is fixed, so exit 2
+            # can only be the environment -- a missing linker driver, an absent
+            # runtime library -- and tallying that as though the compiler had
+            # rejected the program would publish a zero compile rate as a score
+            # while the job stayed green.
+            if status == 2:
+                lines = text.strip().splitlines()
+                detail = lines[0] if lines else "no output"
+                raise BrokenHarness(
+                    "pycc reported an environment failure (exit 2) on "
+                    f"{problem['id']}: {detail}"
+                )
             evaluated += 1
             classes = diagnostic_classes(text)
             if not classes:
+                undiagnosed += 1
                 classes = ["(no diagnostic code reported)"]
             first_tally[classes[0]] = first_tally.get(classes[0], 0) + 1
             for name in dict.fromkeys(classes):
@@ -423,6 +482,18 @@ def measure(
             continue
         ratios.append(cpython / native)
 
+    # A build that fails while emitting no `error[CODE]` diagnostic at all is
+    # not a rejection: pycc neither accepted nor diagnosed the program. One such
+    # problem is a compiler defect worth tallying, but every evaluated problem
+    # failing that way is a toolchain that cannot build anything -- the failure
+    # mode the exit-2 arm above cannot see, because a linker driver that runs
+    # and then fails exits 1 with no diagnostic of pycc's own.
+    if evaluated and undiagnosed == evaluated:
+        raise BrokenHarness(
+            f"no problem produced a pycc diagnostic across all {evaluated} "
+            "evaluated builds -- the toolchain, not the corpus, is what failed"
+        )
+
     return {
         "problems": total,
         "evaluated": evaluated,
@@ -433,6 +504,7 @@ def measure(
         "speedup_samples": len(ratios),
         "startup_dominated_excluded": startup_excluded,
         "timing_dropped": timing_dropped,
+        "undiagnosed_build_failures": undiagnosed,
         "include_holdout": bool(args.include_holdout),
         "first_diagnostic": dict(sorted(first_tally.items())),
         "any_diagnostic": dict(sorted(any_tally.items())),
@@ -488,7 +560,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    corpus = Path(args.corpus)
+    # Resolved, not taken as given: `measure` runs both the compiled binary and
+    # CPython with `cwd` set to a scratch directory, so a relative `--corpus`
+    # (the default is one) would stop naming the corpus the moment a program is
+    # launched, and every timing leg would fail to find its own `solution.py`.
+    corpus = Path(args.corpus).resolve()
     try:
         manifest = load_manifest(corpus)
         problems = verify_corpus(corpus, manifest, args.include_holdout)
