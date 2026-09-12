@@ -117,6 +117,11 @@ OK_SOLUTION = "# ok\nimport sys\nsys.stdout.write(sys.stdin.read())\n"
 # Wall time, not CPU time, is what the speedup ratio measures, so a deliberate
 # sleep is the cheapest way to push a program past the 200ms startup floor.
 SLOW_SOLUTION = "# ok\nimport sys, time\ntime.sleep(0.25)\nsys.stdout.write(sys.stdin.read())\n"
+# Long enough that a 0.5s budget is certain to survive the build and the case
+# itself yet be spent by the time the timing legs would start.
+SLEEPY_SOLUTION = (
+    "# ok\nimport sys, time\ntime.sleep(0.6)\nsys.stdout.write(sys.stdin.read())\n"
+)
 WRONG_SOLUTION = "# ok\nprint('nope')\n"
 # Echoes correctly, but also writes a file next to wherever it happens to run.
 WRITES_A_MARKER_SOLUTION = (
@@ -358,6 +363,50 @@ class MaxSecondsTests(MetricHarness):
         self.assertEqual(code, 0, err)
         self.assertIn("INCOMPLETE: 0 of 3 evaluated", out)
 
+    def test_a_problem_abandoned_mid_correctness_is_not_counted(self) -> None:
+        # The budget expires while the cases of a problem that already compiled
+        # are still running. That problem must not reach the tallies at all --
+        # counting it as compiled while its correctness verdict is unknown would
+        # make `matched`'s denominator a number nothing was measured against.
+        # `measure` is called directly so the scratch tree survives the
+        # assertion: the compiled binary sitting in it is what distinguishes an
+        # abort inside the problem from one at the top of the loop, where no
+        # build would have run at all.
+        problem = self.corpus.add(1, SLOW_SOLUTION, ECHO_CASES + ECHO_CASES)
+        self.corpus.write_manifest()
+        manifest = json.loads((self.corpus.root / "manifest.json").read_text())
+        scratch = self.tmp / "scratch-abandoned"
+        scratch.mkdir()
+        args = argparse.Namespace(
+            pycc=str(self.pycc),
+            python=sys.executable,
+            max_seconds=0.1,
+            include_holdout=False,
+        )
+        result = METRIC.measure(args, self.corpus.root, manifest["problems"], scratch)
+        self.assertTrue(result["incomplete"])
+        self.assertEqual(result["evaluated"], 0)
+        self.assertEqual(result["compiled"], 0)
+        built = [
+            entry.name
+            for child in scratch.iterdir()
+            if child.name.startswith("bin-")
+            for entry in child.iterdir()
+        ]
+        self.assertEqual(built, [problem["id"].replace("/", "__")], built)
+
+    def test_a_budget_that_expires_before_timing_still_records_the_match(self) -> None:
+        # Correctness is settled by the time the budget runs out, so the problem
+        # is published as matched and the lost timing sample is accounted for as
+        # dropped rather than silently missing from the speedup denominator.
+        self.corpus.add(1, SLEEPY_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric("--max-seconds", "0.5")
+        self.assertEqual(code, 0, err)
+        self.assertIn("compiled 1/1", out)
+        self.assertIn("matched 1/1", out)
+        self.assertIn("timing dropped: 1", out)
+        self.assertIn("INCOMPLETE: 1 of 1 evaluated", out)
+
     def test_a_completed_run_does_not_claim_to_be_incomplete(self) -> None:
         self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
         code, out, err = self.run_metric()
@@ -455,7 +504,24 @@ class BrokenHarnessTests(MetricHarness):
 
     def test_a_missing_pycc_binary_is_a_broken_harness(self) -> None:
         self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
-        self.assertIn("not found", self.assert_broken(pycc=self.tmp / "absent"))
+        self.assertIn("not executable", self.assert_broken(pycc=self.tmp / "absent"))
+
+    def test_a_present_but_unexecutable_pycc_is_a_broken_harness(self) -> None:
+        # Existence is not enough: the build call catches a timeout and nothing
+        # else, so an unexecutable path would otherwise raise `OSError` past the
+        # broken-harness handler instead of exiting through it.
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        inert = self.tmp / "inert-pycc"
+        inert.write_text(PYCC_SHIM, encoding="utf-8")
+        inert.chmod(0o600)
+        self.assertIn("not executable", self.assert_broken(pycc=inert))
+
+    def test_a_directory_where_pycc_belongs_is_a_broken_harness(self) -> None:
+        # A directory is both existent and traversable (`os.X_OK` succeeds), so
+        # only the `is_file` half of the check rejects it.
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        (self.tmp / "pycc-dir").mkdir()
+        self.assertIn("not executable", self.assert_broken(pycc=self.tmp / "pycc-dir"))
 
     def test_a_problem_with_no_cases_is_a_broken_harness(self) -> None:
         problem = self.corpus.add(1, OK_SOLUTION, [])

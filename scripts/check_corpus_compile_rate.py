@@ -11,8 +11,8 @@ This is a reporting gate, not a merge gate.  Any measurement outcome -- a zero
 compile rate, no qualifying speedup sample, or exhausting ``--max-seconds``
 before the last problem -- exits 0.  Only a broken harness exits non-zero: a
 missing or corrupt manifest entry, an unreadable corpus, a malformed
-``tests.json`` payload, a corpus over its own byte budget, a missing ``pycc``
-binary, or an unwritable ``--json`` output path.
+``tests.json`` payload, a corpus over its own byte budget, a ``pycc`` binary
+that is absent or not executable, or an unwritable ``--json`` output path.
 
 The script performs no network I/O and deliberately imports nothing
 HTTP-capable: it reads only the vendored subset.  Downloading the dataset is
@@ -158,11 +158,16 @@ def load_cases(corpus: Path, problem: dict) -> list[dict[str, str]]:
 
 
 def resolve_pycc(raw: str) -> str:
+    # Executability, not mere existence: `compile_problem` catches a build
+    # timeout and nothing else, so a path that exists but cannot be executed
+    # would surface as an uncaught `OSError` instead of the clean broken-harness
+    # exit this script promises for a `pycc` it cannot run.
     path = Path(raw)
-    if path.exists():
+    if os.access(path, os.X_OK) and path.is_file():
         return str(path)
     raise BrokenHarness(
-        f"pycc binary {raw} not found -- build it first (cargo build --release)"
+        f"pycc binary {raw} not executable -- build it first "
+        "(cargo build --release)"
     )
 
 
@@ -326,6 +331,9 @@ def measure(
     bindir = Path(tempfile.mkdtemp(prefix="bin-", dir=scratch))
     deadline = time.monotonic() + args.max_seconds
 
+    def expired() -> bool:
+        return time.monotonic() >= deadline
+
     total = len(problems)
     evaluated = 0
     compiled = 0
@@ -337,15 +345,22 @@ def measure(
     timing_dropped = 0
     incomplete = False
 
+    # The deadline is re-checked at every phase boundary, not only between
+    # problems: one problem can hold the loop for a build plus a run per case
+    # plus both timing legs, which together far exceed the budget the CI job's
+    # own `timeout-minutes` relies on.  Checking per phase caps the overshoot at
+    # one build.  A problem abandoned before its outcome is final is not counted
+    # at all -- `evaluated` is committed once that outcome is known -- so the
+    # published tallies always reconcile against the problems behind them.
     for problem in problems:
-        if time.monotonic() >= deadline:
+        if expired():
             incomplete = True
             break
-        evaluated += 1
         source = corpus / problem["id"] / "solution.py"
         binary = bindir / problem["id"].replace("/", "__")
         ok, text = compile_problem(pycc, source, binary)
         if not ok:
+            evaluated += 1
             classes = diagnostic_classes(text)
             if not classes:
                 classes = ["(no diagnostic code reported)"]
@@ -353,24 +368,47 @@ def measure(
             for name in dict.fromkeys(classes):
                 any_tally[name] = any_tally.get(name, 0) + 1
             continue
-        compiled += 1
 
         cases = load_cases(corpus, problem)
-        if all(run_program([str(binary)], case, workdir)[0] for case in cases):
-            matched += 1
-            case = largest_case(cases)
-            cpython = best_of(cpython_argv(args.python, source), case, workdir)
-            native = best_of([str(binary)], case, workdir)
-            if cpython is None or native is None or native <= 0:
-                # A repeat run disagreed with the case, or the native time was
-                # unmeasurably small.  Counted so `matched` reconciles against
-                # the samples the report actually publishes.
-                timing_dropped += 1
-                continue
-            if cpython < STARTUP_FLOOR_SECONDS:
-                startup_excluded += 1
-                continue
-            ratios.append(cpython / native)
+        every_case_matched = True
+        abandoned = False
+        for case in cases:
+            if expired():
+                abandoned = True
+                break
+            if not run_program([str(binary)], case, workdir)[0]:
+                every_case_matched = False
+                break
+        if abandoned:
+            incomplete = True
+            break
+
+        evaluated += 1
+        compiled += 1
+        if not every_case_matched:
+            continue
+        matched += 1
+        case = largest_case(cases)
+        cpython = None if expired() else best_of(
+            cpython_argv(args.python, source), case, workdir
+        )
+        native = None if cpython is None or expired() else best_of(
+            [str(binary)], case, workdir
+        )
+        if cpython is None or native is None or native <= 0:
+            # A repeat run disagreed with the case, the native time was
+            # unmeasurably small, or the budget ran out between the legs.
+            # Counted so `matched` reconciles against the samples the report
+            # actually publishes.
+            timing_dropped += 1
+            if expired():
+                incomplete = True
+                break
+            continue
+        if cpython < STARTUP_FLOOR_SECONDS:
+            startup_excluded += 1
+            continue
+        ratios.append(cpython / native)
 
     return {
         "problems": total,

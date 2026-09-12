@@ -1182,7 +1182,10 @@ jobs:
           # --max-seconds is set explicitly, below the script's own 1200s
           # default, so the measurement deadline stays inside this job's
           # 25-minute cap once checkout, the LLVM install (capped at 5) and
-          # the release build have taken their share. The script's deadline
+          # the release build have taken their share. The script checks that
+          # deadline at every phase boundary, so it overshoots by at most one
+          # build rather than by a whole problem's worth of runs, which is what
+          # keeps this budget a real bound on the job. Its deadline then
           # reports `INCOMPLETE: n of M evaluated` and still exits 0; an
           # Actions timeout would instead kill the job and publish nothing,
           # which is exactly what this reporting-only job must never do.

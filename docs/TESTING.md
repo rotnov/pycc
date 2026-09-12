@@ -373,10 +373,16 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   non-blocking by omission from `ci-gate`'s `needs`, not by
   `continue-on-error`. The metric exits 0 for every measurement outcome,
   including a zero compile rate and exhausting its own `--max-seconds` budget
-  (which prints `INCOMPLETE: n of M evaluated`). It exits non-zero only when the
-  harness is broken: a missing or corrupt manifest entry, an unreadable corpus,
-  a malformed `tests.json` payload, a corpus over its own byte budget, a missing
-  `pycc` binary, or an unwritable `--json` output path. A red job
+  (which prints `INCOMPLETE: n of M evaluated`). That budget is checked at every
+  phase boundary, not only between problems, so the run overshoots it by at most
+  one build rather than by a whole problem's builds, case runs and timing legs;
+  a problem abandoned before its outcome is final is left out of the tallies
+  entirely, and one abandoned after its cases have been checked keeps its
+  correctness verdict and counts its lost sample as dropped. It exits non-zero
+  only when the harness is broken: a missing or corrupt manifest entry, an
+  unreadable corpus, a malformed `tests.json` payload, a corpus over its own
+  byte budget, a `pycc` binary that is absent or not executable, or an
+  unwritable `--json` output path. A red job
   therefore means the measurement could not be taken, never that the score was
   low.
 
