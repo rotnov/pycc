@@ -26,7 +26,9 @@
 //!    enclosing function -- not only one that precedes the literal;
 //! 3. a forward scan of the enclosing function body for the first
 //!    *producer* use of the target -- `xs.append(v)` or `d[k] = v`, in
-//!    statement position only (see [`find_producer`]).
+//!    statement position only (see [`find_producer`]). The scan descends into
+//!    every block statement the rewrite walk itself descends into, so the two
+//!    halves of the pass never disagree about which statements exist.
 //!
 //! Sources 2 and 3 are best-effort: they use the same
 //! `bind_local_types_in_body` pre-pass environment the protocol
@@ -69,9 +71,18 @@
 //!
 //! **Scope.** Function bodies only (class methods included: they lower to
 //! ordinary mangled `HirItem::Function` items). Module-level statements keep
-//! failing, now with `T0003`. Nested `match`/`try` bodies are not scanned for
-//! producers; an empty container that would need one resolves to `T0003`
-//! rather than silently to a wrong type.
+//! failing, now with `T0003`.
+//!
+//! Within a function body the pass walks *every* block statement this HIR has
+//! -- `if`/`else`, `while`, both `for` forms, every `match` case body, and
+//! every `try`/`except`/`except*`/`else`/`finally` suite (see
+//! [`nested_bodies`]) -- so sources 1 and 3 work identically at any nesting
+//! depth. Source 2 is the one that does not: the environment comes from
+//! `bind_local_types_in_body`, a pre-existing pass shared with protocol
+//! monomorphization whose own statement walk has no `match`/`try` arm, so a
+//! binding *created inside* such a suite is absent from it. That costs a
+//! missed resolution (`T0003`), never a wrong element type, and widening a
+//! shared pass belongs to its own change rather than to this one.
 
 use super::*;
 
@@ -165,14 +176,39 @@ fn body_has_empty_literal(body: &[HirStmt]) -> bool {
     })
 }
 
-/// The nested statement sequences of a block statement. `match`/`try` bodies
-/// are deliberately absent -- see this module's own doc comment.
+/// Every nested statement sequence of a block statement, for every block
+/// statement this HIR has. The inventory is derived from `HirStmt`'s own
+/// `Vec<HirStmt>` fields rather than from the cases a caller happened to
+/// think of: a block form missing here is invisible to the whole pass, so an
+/// annotated `xs: list[int] = []` inside it reports `T0003` even though the
+/// annotation source needs no environment at all (#1021 bot review round).
+/// `Try` and `TryStar` share one arm because their field shapes are
+/// identical; a future block form must be added here and in
+/// [`rewrite_body`]'s own match, which cannot share this borrow because it
+/// needs `&mut`.
 fn nested_bodies(stmt: &HirStmt) -> Vec<&[HirStmt]> {
     match stmt {
         HirStmt::If { body, orelse, .. } => vec![body, orelse],
         HirStmt::While { body, .. } => vec![body],
         HirStmt::ForRange { body, .. } => vec![body],
         HirStmt::ForList { body, .. } => vec![body],
+        HirStmt::Match { cases, .. } => cases.iter().map(|case| case.body.as_slice()).collect(),
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            let mut bodies: Vec<&[HirStmt]> = vec![body, orelse, finalbody];
+            bodies.extend(handlers.iter().map(|handler| handler.body.as_slice()));
+            bodies
+        }
         _ => Vec::new(),
     }
 }
@@ -203,6 +239,30 @@ fn rewrite_body(
             HirStmt::While { body, .. } => rewrite_body(body, producers, env, local_names),
             HirStmt::ForRange { body, .. } => rewrite_body(body, producers, env, local_names),
             HirStmt::ForList { body, .. } => rewrite_body(body, producers, env, local_names),
+            HirStmt::Match { cases, .. } => {
+                for case in cases.iter_mut() {
+                    rewrite_body(&mut case.body, producers, env, local_names);
+                }
+            }
+            HirStmt::Try {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            }
+            | HirStmt::TryStar {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+            } => {
+                rewrite_body(body, producers, env, local_names);
+                for handler in handlers.iter_mut() {
+                    rewrite_body(&mut handler.body, producers, env, local_names);
+                }
+                rewrite_body(orelse, producers, env, local_names);
+                rewrite_body(finalbody, producers, env, local_names);
+            }
             _ => {}
         }
     }
@@ -277,9 +337,11 @@ fn from_container_ty(ty: &Ty) -> Option<Resolution> {
 /// *not* a producer here, so `xs = []` followed only by `y = xs.append(1)`
 /// reports `T0003`. That restriction is deliberate and matches the rewrite
 /// side: `rewrite_body` and `body_has_empty_literal` likewise visit direct
-/// assignment values and block bodies, never nested expression positions, so
-/// the whole pass has one statable shape instead of a walker whose boundary
-/// moves with each nesting form. See D-245 item 8.
+/// assignment values and block bodies, never nested *expression* positions, so
+/// the whole pass has one statable shape. The boundary is between statement
+/// and expression nesting, not between one block form and another: every block
+/// form is walked, via the shared [`nested_bodies`] inventory. See D-245
+/// item 8.
 ///
 /// The scan returns the first *syntactic* producer occurrence for the name,
 /// not the first shape-compatible one: a `ListAppend` on a name later used as

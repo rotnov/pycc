@@ -168,6 +168,16 @@ element, and panics on an empty one.
   one reports `T0003`. The restriction mirrors the rewrite side, which visits
   direct assignment values and block bodies and never descends into nested
   expression positions.
+- **Every block statement is walked.** Both halves of the pass — the rewrite
+  and the producer scan — share one inventory of nested statement sequences
+  covering `if`/`else`, `while`, both `for` forms, every `match` case body, and
+  every `try`/`except`/`except*`/`else`/`finally` suite, so sources (1) and (3)
+  behave identically at any nesting depth. Source (2) is the exception, and it
+  is a narrowing rather than a contract: its environment comes from a
+  pre-existing pass shared with protocol monomorphization whose own statement
+  walk has no `match`/`try` arm, so a binding *created inside* one of those
+  suites is invisible to it. The cost is a missed resolution (`T0003`), never a
+  wrong element type.
 - **First-wins within a scope.** When two branches assign `[]` to the same
   name with different producers, both nodes take the first producer's type and
   the second branch's `append` reports the ordinary element-type mismatch. One

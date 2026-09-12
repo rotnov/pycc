@@ -342,3 +342,95 @@ print(f())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"1\n");
 }
+
+/// #1021 bot review round: the rewrite walk reaches every `try` suite. Before
+/// this, `nested_bodies` had no `Try` arm at all, so an annotated
+/// `xs: list[int] = []` inside a `try` body was never visited and reported
+/// `T0003` -- contradicting the contract that the annotation source is purely
+/// syntactic and always works. All four suites (`try`, `except`, `else`,
+/// `finally`) are exercised in one program; the `else` suite additionally
+/// uses an *unannotated* literal so the widened producer scan is pinned too.
+#[test]
+fn empty_literals_inside_every_try_suite_resolve() {
+    let output = check_build_and_run(
+        "try_suites",
+        "\
+def f() -> int:
+    total = 0
+    try:
+        xs: list[int] = []
+        xs.append(1)
+        total = total + len(xs)
+    except ValueError:
+        ys: list[int] = []
+        ys.append(2)
+        total = total + len(ys)
+    else:
+        zs = []
+        zs.append(3)
+        total = total + len(zs)
+    finally:
+        ws: list[int] = []
+        ws.append(4)
+        total = total + len(ws)
+    return total
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}
+
+/// The `match` half of the same defect: a `case` body is a nested statement
+/// sequence like any other, and both container shapes resolve inside one.
+#[test]
+fn empty_literals_inside_match_case_bodies_resolve() {
+    let output = check_build_and_run(
+        "match_cases",
+        "\
+def f(n: int) -> int:
+    match n:
+        case 1:
+            xs: list[int] = []
+            xs.append(1)
+            return len(xs)
+        case _:
+            d: dict[str, int] = {}
+            d[\"k\"] = 2
+            return len(d)
+
+print(f(1))
+print(f(9))
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n1\n");
+}
+
+/// `except*` is a separate `HirStmt` variant with the same field shape, so it
+/// shares one arm with `Try` -- and a fix that extended only `Try` would
+/// reproduce the defect here. Pinned separately from the `Try` case because
+/// the variant, not the arm, is what a future edit can miss.
+#[test]
+fn empty_literals_inside_an_except_star_suite_resolve() {
+    let output = check_build_and_run(
+        "try_star_suites",
+        "\
+def f() -> int:
+    total = 0
+    try:
+        xs: list[int] = []
+        xs.append(1)
+        total = total + len(xs)
+    except* ValueError:
+        ys: list[int] = []
+        total = total + len(ys)
+    return total
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
