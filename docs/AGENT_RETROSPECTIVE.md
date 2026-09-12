@@ -39,12 +39,14 @@ never a merge gate.
 contract: the project's artifact had always been described as a self-contained
 executable with no libpython, and the new mode is an extension module that
 resolves its symbols from a host. Correcting the documents that assert the old
-universal took six review rounds. A local grep found one more site; the pinned
-reviewer found two; two further external rounds found two more; and a tree-wide
-enumeration run only after all of those revealed roughly fourteen additional
-sites — three canonical pages, five pinned prose constants in a checker, nine
-mirror assertions in that checker's own test, a JSON model, and two more
-prose lines. One of those sites pinned, verbatim, a line the same change had
+universal took seven external review rounds and three pinned local ones. A
+local grep found one more site; the pinned reviewer found two; two further
+external rounds found two more; a tree-wide enumeration run only after all of
+those revealed a whole class of sites no earlier round had reached — three
+canonical pages, their Markdown projection, a JSON claims model, the prose
+constants one checker pins verbatim, and that checker's own mirror assertions;
+and a final pinned round still found one more, the specification that owns
+those pages. One of those sites pinned, verbatim, a line the same change had
 already edited in an earlier round, so the change was internally inconsistent
 while every round reported itself complete.
 
