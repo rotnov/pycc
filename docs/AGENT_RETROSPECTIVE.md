@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A date-pinned page was pushed inside the UTC midnight rollover window, failing the governance job on a checker that cannot guess
+
+**What happened.** A pull request touching a canonical website page was pushed
+with its four date pins reading the then-current UTC date. The `governance`
+job failed with `scripts/check_site_pin_merge_currency.rb`'s "prospective merge
+date is ambiguous" error rather than a stale-pin error, and the first hypothesis
+was the familiar stale-pin class — which sent the diagnosis at the wrong target
+until the failure was reproduced locally.
+
+**Root cause.** That checker predicts the merge date from the base revision's
+author-date UTC offset, and fails closed while the UTC date and the offset date
+disagree. Near UTC midnight those two dates straddle the boundary for as long as
+the offset is wide, so no pin value is verifiable — including the correct one.
+The pins had been chosen hours earlier, when both dates still agreed.
+
+**What fixed it.** Waiting out the window, then rotating every pin for the
+touched page to the now-unambiguous predicted date, and re-running the checker
+locally to see exit 0 before pushing again.
+
+**Lesson.** Before pushing a change that touches a date-pinned page, read the
+current UTC time and the base revision's author-date offset, and compute whether
+the two dates agree; if they do not, the window is open and any pin value will
+red the gate. The stable window is also bounded on the other side — once past the
+rollover, the predicted date holds only until the offset rolls to the next day,
+so treat that as a real merge deadline rather than pinning and walking away.
+Rotate pins line by line, never with a tree-wide date substitution: the same
+date string also appears as factual capture timestamps and in byte-pinned
+fixtures, where rewriting it manufactures unrelated failures.
+
+---
+
 ## 2026-09-11 — An implementation plan directed an edit into a byte-pinned file, a new hero shape broke 186 assertions in unrelated suites, and a repair round's own rewrite overstated the gate it described
 
 *(Relative order against the other 2026-09-11 entries in this file cannot be
