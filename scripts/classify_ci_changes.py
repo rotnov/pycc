@@ -28,9 +28,11 @@ EMPTY_SELECTION = Selection(False, False, False)
 # here. Other scripts are governance inputs and do not require a heavy gate.
 COMPILER_GATE_SCRIPTS = frozenset(
     {
+        "scripts/check_corpus_compile_rate.py",
         "scripts/check_diff_coverage.py",
         "scripts/check_frontend_throughput.rb",
         "scripts/check_replicated_paired_perf_regression.rb",
+        "scripts/test_check_corpus_compile_rate.py",
         "scripts/test_check_diff_coverage.py",
         "scripts/test_check_replicated_paired_perf_regression.rb",
     }

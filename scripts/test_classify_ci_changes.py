@@ -131,9 +131,11 @@ class ClassifyPathsTests(unittest.TestCase):
 
     def test_compiler_and_performance_gate_scripts_select_compiler(self):
         for path in (
+            "scripts/check_corpus_compile_rate.py",
             "scripts/check_diff_coverage.py",
             "scripts/check_frontend_throughput.rb",
             "scripts/check_replicated_paired_perf_regression.rb",
+            "scripts/test_check_corpus_compile_rate.py",
             "scripts/test_check_diff_coverage.py",
             "scripts/test_check_replicated_paired_perf_regression.rb",
         ):
@@ -141,6 +143,21 @@ class ClassifyPathsTests(unittest.TestCase):
                 self.assertEqual(
                     Selection(True, False, False),
                     classify_paths([path], event_name="pull_request"),
+                )
+
+    def test_vendored_corpus_paths_select_compiler_with_a_fresh_binary(self):
+        for path in (
+            "tests/corpus/codecontests/manifest.json",
+            "tests/corpus/codecontests/problems/001-a/solution.py",
+            "tests/corpus/codecontests/holdout/001-a/tests.json",
+            "tests/corpus/codecontests/NOTICE",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    Selection(True, False, True),
+                    classify_paths([path], event_name="pull_request"),
+                    f"{path} is corpus-compile-rate input under tests/, so it must"
+                    " select the compiler jobs and the fresh-binary agent evals",
                 )
 
     def test_site_and_every_pages_gate_input_select_pages(self):

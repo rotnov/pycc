@@ -336,7 +336,45 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Planned mechanics:
 - Per-project dashboard: % files compiled, % tests passed, RC-elision rate, binary size, speed vs CPython on the project's own benchmarks.
 - Regression vs previous release = release blocker.
 
-No corpus workflow, pinned corpus inputs, or pass-rate dashboard exists on current `main`.
+No open-source-package corpus workflow, pinned package inputs, or per-project pass-rate dashboard exists on current `main`. The separate competitive-programming corpus below is a different corpus with a different shape, and does exist.
+
+## Corpus: competitive-programming stdin/stdout programs (`product-sprint-1`)
+
+A second, narrower corpus, vendored and running today. It measures the product
+bet in `docs/ROADMAP.md`'s `product-sprint-1`: whether pycc compiles real
+single-file stdin/stdout Python unchanged and runs it faster than CPython.
+
+- **Inputs.** `tests/corpus/codecontests/` — a pinned subset of the DeepMind
+  CodeContests dataset (CC BY 4.0; see that directory's `NOTICE` and `LICENSE`),
+  checked in as plain files rather than a submodule so a clean clone measures
+  offline. 200 steering problems under `problems/`, 100 under `holdout/`. Each
+  problem is one PYTHON3 solution of at most 100 lines, importing only an
+  explicit stdlib allowlist, plus its public and private test cases packed into
+  one `tests.json`. Every vendored file's sha256 is in `manifest.json`.
+  Regenerate with `python3 scripts/select_codecontests_corpus.py` (needs
+  `pyarrow` and network access; deliberately not a repository dependency).
+- **Holdout discipline.** The holdout set is excluded from the default
+  denominator and reported only under `--include-holdout`. Do not read it when
+  deciding what to implement — it exists to show that gains on the steering set
+  generalise.
+- **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
+  `compiled N/M`, `matched K/N` (binary output byte-identical to the expected
+  output on every case), the median speedup against CPython, and the diagnostic
+  classes that stopped the failures, as a first/any tally. Speedup is measured
+  on each problem's largest vendored case, best of three runs, and counts only
+  problems whose CPython wall time reaches 200 ms — below that the ratio
+  measures process startup, so those problems are reported as excluded rather
+  than folded in. `--json` writes the same data machine-readably. The script
+  reads the corpus, writes nothing inside it, and performs no network I/O.
+- **Gate status: reporting only.** CI's `corpus-compile-rate` job is
+  non-blocking by omission from `ci-gate`'s `needs`, not by
+  `continue-on-error`. The metric exits 0 for every measurement outcome,
+  including a zero compile rate and exhausting its own `--max-seconds` budget
+  (which prints `INCOMPLETE: n of M evaluated`). It exits non-zero only when the
+  harness is broken: a missing or corrupt manifest entry, an unreadable corpus,
+  a corpus over its own byte budget, or a missing `pycc` binary. A red job
+  therefore means the measurement could not be taken, never that the score was
+  low.
 
 ## Planned CPython interop matrix (v0.7)
 

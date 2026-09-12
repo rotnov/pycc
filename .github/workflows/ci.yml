@@ -1133,6 +1133,66 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all -- --check
 
+  # Reporting only, and deliberately absent from ci-gate's `needs`: this job
+  # publishes how much of the vendored CodeContests corpus pycc compiles
+  # (#1015, Part 1 of #1014) and must never block a merge. Non-blocking by
+  # omission rather than `continue-on-error`, so a broken harness is still
+  # visible as a red job instead of a silently green one. The metric itself
+  # exits 0 for every measurement outcome, including exhausting its own
+  # --max-seconds budget; it exits non-zero only when the corpus or the
+  # toolchain is unusable. It reads only the checked-in corpus and performs no
+  # network I/O -- regenerating the subset is a local developer task
+  # (scripts/select_codecontests_corpus.py).
+  corpus-compile-rate:
+    needs: classify-changes
+    if: ${{ !cancelled() && needs.classify-changes.outputs.compiler == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        timeout-minutes: 5
+        run: |
+          # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+          # runners for hours with no failure signal (issue #614). Bound
+          # both the download itself and the whole step so a stalled mirror
+          # fails fast and the job can simply be re-run, instead of
+          # consuming CI capacity for hours.
+          wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+          # links it explicitly, so it must be installed separately here.
+          sudo apt-get install -y libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Build pycc
+        run: cargo build --release --locked
+
+      - name: Measure the corpus compile rate
+        run: |
+          python3 -B scripts/check_corpus_compile_rate.py \
+            --pycc target/release/pycc \
+            --python python3 \
+            --json "$RUNNER_TEMP/corpus-compile-rate.json"
+
+      - name: Upload the corpus compile-rate report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-compile-rate
+          path: ${{ runner.temp }}/corpus-compile-rate.json
+          if-no-files-found: warn
+          retention-days: 90
+
   ci-gate:
     needs:
       - classify-changes
