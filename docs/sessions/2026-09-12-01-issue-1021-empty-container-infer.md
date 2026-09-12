@@ -7,7 +7,7 @@ Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
 merge base and the remote default-branch tip re-resolved immediately before this
 file was committed. It carries `Fixes #1021`, and the
 `closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
-#1021 -- re-run after the last `gh pr edit`. Fourteen commits: the pass itself,
+#1021 -- re-run after the last `gh pr edit`. Fifteen commits: the pass itself,
 the review-round fixes, the retrospective entries below, and this snapshot, so
 the authoritative head is whatever `gh pr view 1035` reports once this file
 lands.
@@ -20,8 +20,10 @@ checks. Those checks re-run on every push; this snapshot's own commit moves the
 head, so the run that gates the merge is the one started after it, not any
 earlier green run.
 
-The full local gate set ran green from a single-writer baseline against the
-commit preceding this one: clippy (warnings denied), `cargo test --workspace`,
+The full local gate set ran green from a single-writer baseline against
+`1c796ad1`, the last commit that changes Rust sources -- every commit after it
+touches only `docs/`, which the changed-line coverage gate does not instrument:
+clippy (warnings denied), `cargo test --workspace`,
 `cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
 `scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
 `--check`, decision immutability, and site-pin merge currency all exit 0.

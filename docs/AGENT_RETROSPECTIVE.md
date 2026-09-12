@@ -79,6 +79,44 @@ the new case (defer it, and record the deferral where the narrowing is
 recorded). A round that extends the inventory by one more site is reproducing
 the defect, not closing it.
 
+## 2026-09-12 — A shared binder was changed as if it belonged to the issue, and the issue's own test file could not see the breakage
+
+**What happened.** The #1021 pre-pass needed `bind_local_types_in_stmt` to apply D-040's sticky
+representation to annotated assignments. The guard was written over the whole `AnnAssign` arm. The
+issue's own test file stayed green; `cargo test --workspace` did not — protocol monomorphization calls
+the same helper, and deferring to an already-recorded `Protocol(P)` binding dropped the specialization,
+so `pycc_mir` panicked on an unrecorded method symbol in an unrelated test.
+
+**Root cause.** The helper was read as part of the surface under change because the change needed it,
+not as the shared helper it is. Its other callers were never enumerated before editing it.
+
+**What fixed it.** Scoping the stickiness guard to the non-protocol arm, and instrumenting the cloned
+environment to confirm which binding was actually present at that point rather than reasoning about it.
+
+**Lesson.** Before editing a function a change did not introduce, list its callers and name what each
+one needs from it. When any caller is outside the change's own test surface, the workspace suite — not
+the issue's test file — is the gate that decides whether the edit is correct, so run it before treating
+the edit as done.
+
+## 2026-09-12 — A diff file generated before the last commits turned the changed-line coverage gate into a silent pass
+
+**What happened.** The local reproduction of CI's changed-line coverage gate reused a diff file
+generated earlier in the session. Later commits had added instrumentable lines that the stale diff did
+not contain, so the gate measured an old, smaller change set and reported 100%. The gate exited 0 and
+looked exactly like a real pass.
+
+**Root cause.** The gate takes its change set as an input file rather than deriving it, so a stale input
+narrows what is measured instead of failing. Nothing in the output distinguishes "all changed lines
+covered" from "the changed lines I was handed".
+
+**What fixed it.** Regenerating the diff from `git diff -U0 --no-color --no-renames "$(git merge-base
+origin/main HEAD)" HEAD` in the same shell call as the gate, and reading the reported changed-line count
+against the branch's actual diffstat.
+
+**Lesson.** Regenerate a gate's own inputs in the same invocation that runs it, and check the count it
+reports against an independently derived one. A gate whose scope is an argument can pass by measuring
+nothing; its exit status alone does not prove it measured the current tree.
+
 ## 2026-09-12 — A relative-path binary invocation verified review findings against a stale branch
 
 **What happened.** While reproducing a review finding on #1021, `./target/debug/pycc check -- <fixture>`
