@@ -601,16 +601,16 @@ class HelperTests(unittest.TestCase):
 
     def test_author_chosen_identifiers_collapse_into_one_class(self) -> None:
         text = (
-            "error[T0021]: parameter `a` of public function `egcd` needs a type annotation\n"
-            "error[T0021]: parameter `qty` of public function `solve` needs a type annotation\n"
-            "error[T0022]: public function `egcd` needs a return type annotation\n"
-            "error[T0022]: public function `main` needs a return type annotation\n"
+            "error[T0001]: parameter `a` of public function `egcd` needs a type annotation\n"
+            "error[T0001]: parameter `qty` of public function `solve` needs a type annotation\n"
+            "error[T0001]: public function `egcd` needs a return type annotation\n"
+            "error[T0001]: public function `main` needs a return type annotation\n"
         )
         self.assertEqual(
             sorted(set(METRIC.diagnostic_classes(text))),
             [
-                "T0021 parameter X of public function X needs a type annotation",
-                "T0022 public function X needs a return type annotation",
+                "T0001 parameter X of public function X needs a type annotation",
+                "T0001 public function X needs a return type annotation",
             ],
         )
 

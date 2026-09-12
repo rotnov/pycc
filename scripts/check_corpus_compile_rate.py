@@ -9,10 +9,9 @@ with the reason it is not higher.
 
 This is a reporting gate, not a merge gate.  Any measurement outcome -- a zero
 compile rate, no qualifying speedup sample, or exhausting ``--max-seconds``
-before the last problem -- exits 0.  Only a broken harness exits non-zero: a
-missing or corrupt manifest entry, an unreadable corpus, a malformed
-``tests.json`` payload, a corpus over its own byte budget, a ``pycc`` binary
-that is absent or not executable, or an unwritable ``--json`` output path.
+before the last problem -- exits 0.  Only a broken harness exits non-zero;
+``docs/TESTING.md``'s corpus gate-status bullet owns the enumeration of what
+counts as one, so this docstring does not restate it.
 
 The script performs no network I/O and deliberately imports nothing
 HTTP-capable: it reads only the vendored subset.  Downloading the dataset is

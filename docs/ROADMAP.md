@@ -266,7 +266,7 @@ Runs alongside the milestone chain, not in sequence with it: a time-boxed produc
 
 - [ ] at least 50% of the 200-problem steering corpus compiles unchanged
 - [ ] median speedup at least 5x over CPython across the problems that compile and match
-- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, read from two runs of the metric — one default run for the steering rate, one `--include-holdout` run whose merged rate yields the holdout rate by subtraction, since neither the report nor its JSON splits the denominator by set
+- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, read from two runs of the metric — one default run for the steering rate, one `--include-holdout` run whose merged rate yields the holdout rate by subtraction, since neither the report nor its JSON splits the denominator by set, and valid only when neither run reports `INCOMPLETE`: the manifest orders every steering record before every holdout one, so a truncated run loses holdout problems first and the subtraction would then be over two different evaluated subsets
 
 ## v0.5 — generators & ownership v1
 
