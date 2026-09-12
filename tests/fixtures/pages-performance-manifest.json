@@ -33,7 +33,7 @@
       "local_route": "/pycc/architecture/",
       "expected_http_status": 200,
       "source_artifact": "site/architecture/index.html",
-      "source_artifact_sha256": "3bb66696b5656cf9d57bc50a80635cc90cd66cd23ba5ec17db19246c83ee4b63",
+      "source_artifact_sha256": "a519283f97c04da156c80ef42ff5f3943ca8718418fb237dabd49364489625de",
       "expected_title": "pycc architecture — typed Python to LLVM native binaries",
       "expected_h1": "Python source to native code.",
       "canonical_url": "https://rotnov.github.io/pycc/architecture/",

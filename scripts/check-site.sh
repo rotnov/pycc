@@ -688,7 +688,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-09-11",
+        "date_modified": "2026-09-12",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
