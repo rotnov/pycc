@@ -142,7 +142,70 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     }) {
         return None;
     }
-    let module_env = concrete_function_environment(hir).unwrap_or_default();
+    // #1021 review round 5: build the module scope from the *annotated*
+    // functions rather than through `concrete_function_environment`, which
+    // refuses the whole module the moment any one signature still carries
+    // `Ty::Infer` -- true for essentially every program this pass exists to
+    // serve, since an unannotated private helper is exactly what the D-146
+    // solver is for. Its `unwrap_or_default()` therefore handed this pass an
+    // environment with no function table and no classes, so a module-level
+    // global initialized from an annotated helper (`VALUE = _base()`) failed
+    // to resolve a container that the equivalent non-empty literal
+    // (`xs = [VALUE]`) resolves fine. Registering only the concrete
+    // signatures is safe in the one direction that matters: an annotated
+    // signature is authoritative, so a partial table can fail to resolve a
+    // container but can never resolve one wrongly, and the D-228 container
+    // gate still runs downstream either way.
+    let mut module_env = annotated_function_environment(hir);
+    // #1021 review round 5: seed the module scope the way
+    // `check_with_environment_all` does before it checks any function body,
+    // so a producer that reads a module-level global resolves here exactly
+    // as the equivalent non-empty literal already does. Without this,
+    // `VALUE = 1` / `def f(): xs = []; xs.append(VALUE)` reported a
+    // diagnostic while `xs = [VALUE]` compiled -- an asymmetry introduced by
+    // this pass's own feature, and one that reappears one source further out
+    // for every module-level binding form, not just a plain `Assign`.
+    // `bind_local_types_in_body` is the same infallible binder the
+    // per-function loop below already uses: it handles `Assign`, `AnnAssign`
+    // and walrus targets uniformly and swallows every inference failure, so
+    // the pass stays infallible and a global whose own type does not infer
+    // simply leaves the container unresolved for the check phase to report.
+    // The alias table is seeded for env parity with
+    // `check_with_environment_all`, not for a defect reachable today: the
+    // registry's only aliasable `math` symbols are `sqrt`/`pi`, both
+    // `float`, and D-228's admit set is `list[int]`/`dict[str, int]`, so no
+    // aliased-std producer can currently yield an admitted element type.
+    // Parity is the property worth holding -- this pass must never see a
+    // narrower module scope than the checker that follows it -- and the line
+    // keeps that true as the registry grows.
+    module_env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
+    let top_level_stmts: Vec<HirStmt> = hir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            HirItem::TopLevelStmt(stmt) => Some(stmt.clone()),
+            HirItem::Function { .. } => None,
+        })
+        .collect();
+    let top_level_names = crate::function_local_names(&[], &top_level_stmts);
+    // Walk the items in source order rather than binding the collected
+    // statements in a batch: a `def` only becomes callable at its own
+    // position, and `infer_expr_in` rejects a call to a name that is not yet
+    // in `defined_functions` (`expr.rs`'s callee gate, issue #22). Mirroring
+    // `check_with_environment_all`'s pass 2 here is what lets `VALUE =
+    // _base()` infer, and it keeps a genuine forward reference unresolved in
+    // this pass exactly as the checker rejects it. Function bodies are
+    // unaffected either way: `child_for_function` re-seeds the whole set.
+    for item in &hir.items {
+        match item {
+            HirItem::Function { name, .. } => {
+                module_env.defined_functions.insert(name.clone());
+            }
+            HirItem::TopLevelStmt(stmt) => {
+                crate::bind_local_types_in_stmt(&mut module_env, &top_level_names, stmt);
+            }
+        }
+    }
     let local_names = crate::module::module_function_local_names(hir);
     let mut resolved = hir.clone();
     for (index, item) in resolved.items.iter_mut().enumerate() {

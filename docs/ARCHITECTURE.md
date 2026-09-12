@@ -152,8 +152,13 @@ call graph. Syntactically valid constructs outside that implemented HIR subset
 return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.
 `pycc_types::check_all` validates the lowered module against the
-inferred signature table without cloning HIR and reports one diagnostic per
-failing function (D-220). A pre-check failure (an incompatible
+inferred signature table and reports one diagnostic per failing function
+(D-220). It clones HIR only when the module actually contains an empty
+container literal: the D-245 pre-pass that resolves such a literal's element
+type runs ahead of both entry points and returns a rewritten module, and it
+returns nothing at all -- leaving the original HIR to be validated in place --
+for every module without one. That pre-pass also clones each top-level
+statement it walks while seeding its own module scope. A pre-check failure (an incompatible
 redefinition or attribute redeclaration) is reported alone. Otherwise, if
 the private-helper solver's list is module-level (a failure in its
 top-level walk or in a post-body phase such as
@@ -195,9 +200,13 @@ Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by o
 - Benchmarks in CI on every PR; >2% frontend regression blocks merge.
 
 The check-only frontend path validates the original HIR against its inferred
-signature table without materializing a resolved HIR clone. Compiler stages
-that need concrete private-helper signatures use `check_and_resolve` and pay
-for that returned clone; `pycc check` does not construct and discard it.
+signature table without materializing a *resolved-signature* HIR clone.
+Compiler stages that need concrete private-helper signatures use
+`check_and_resolve` and pay for that returned clone; `pycc check` does not
+construct and discard it. The separate D-245 empty-container pre-pass is the
+one clone both paths share, and it is taken only for a module that contains an
+empty container literal -- deliberately, so `check` and `build` can never
+disagree about a literal's element type.
 When every declared function signature is already concrete, the validation-only
 checker builds its function environment directly rather than materializing and
 then cloning an intermediate signature table; the constraint-collection walk

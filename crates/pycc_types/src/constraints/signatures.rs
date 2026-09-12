@@ -48,6 +48,31 @@ pub(crate) fn concrete_function_signatures(hir: &HirModule) -> Option<FunctionSi
 /// downstream consumer, so its overwhelmingly common concrete, valid path can
 /// validate with this registry directly.
 pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
+    if hir.items.iter().any(|item| match item {
+        HirItem::Function {
+            params, return_ty, ..
+        } => *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer),
+        HirItem::TopLevelStmt(_) => false,
+    }) {
+        return None;
+    }
+    Some(annotated_function_environment(hir))
+}
+
+/// The same registry [`concrete_function_environment`] builds, but registering
+/// only the functions whose signatures are already fully concrete instead of
+/// refusing the whole module when any one of them still carries `Ty::Infer`.
+///
+/// This is what the #1021 empty-container pre-pass needs: that pass runs
+/// before private-helper inference has resolved anything, so demanding a
+/// fully annotated module would leave it with an empty environment for
+/// exactly the programs it exists to serve -- and a module-level global
+/// initialized from an annotated helper (`VALUE = _base()`) would then fail
+/// to resolve a container the equivalent non-empty literal resolves fine.
+/// Registering a subset is safe in the only direction that matters: an
+/// annotated signature is authoritative, so a partial table can fail to
+/// resolve a container but can never resolve one wrongly.
+pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
     let mut functions = HashMap::new();
     let mut generics = HashMap::new();
     for item in &hir.items {
@@ -61,7 +86,7 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
             continue;
         };
         if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
-            return None;
+            continue;
         }
         if is_generic_signature(params, return_ty) {
             generics.insert(name.clone(), item.clone());
@@ -102,7 +127,7 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
     // are together the sole mutators of both tables precisely so that
     // invariant holds by construction.
     crate::class::bind_classes(&mut env, hir);
-    Some(env)
+    env
 }
 
 /// First-diagnostic view of [`infer_function_signatures_with_solver_all`],

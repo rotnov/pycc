@@ -539,3 +539,126 @@ print(_pick())
         "{rendered}"
     );
 }
+
+/// Review round 5: a producer that reads a module-level global. The pre-pass
+/// builds its own module environment, and before the fix that environment
+/// carried no module-level bindings at all -- so `xs.append(VALUE)` found
+/// `VALUE` unbound and the container stayed unresolved, while the equivalent
+/// `xs = [VALUE]` compiled. The pass now seeds the module scope exactly as
+/// `check_with_environment_all` does before it checks any function body.
+#[test]
+fn a_module_level_global_resolves_an_empty_list_producer() {
+    let output = check_build_and_run(
+        "global_producer_empty_list",
+        "\
+VALUE = 1
+
+
+def _pick() -> int:
+    xs = []
+    xs.append(VALUE)
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+/// The dict arm of the same seeding, through a global used as the key. `{}`
+/// carries two element types, and the key's own source is the module scope
+/// rather than the enclosing function.
+#[test]
+fn a_module_level_global_resolves_an_empty_dict_producer() {
+    let output = check_build_and_run(
+        "global_producer_empty_dict",
+        "\
+KEY = \"k\"
+
+
+def _pick() -> int:
+    d = {}
+    d[KEY] = 1
+    return d[KEY]
+
+print(_pick())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+/// A global initialized from an annotated helper. This is what forced the
+/// pre-pass off `concrete_function_environment`, which refuses the whole
+/// module the moment any signature carries `Ty::Infer` -- true here, because
+/// `_pick` is exactly the unannotated private helper the feature serves. The
+/// pass now registers the annotated signatures alone, in source order so a
+/// `def` is callable only from its own position onward.
+#[test]
+fn a_global_initialized_from_an_annotated_helper_resolves_an_empty_list() {
+    let output = check_build_and_run(
+        "global_call_producer_empty_list",
+        "\
+def _base() -> int:
+    return 3
+
+
+VALUE = _base()
+
+
+def _pick():
+    xs = []
+    xs.append(VALUE)
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}
+
+/// The rejection half of the same property. A `str` global resolves the
+/// container to `list[str]`, which D-228's shared element gate rejects with
+/// `T0034` -- byte for byte the diagnostic the equivalent `xs = [VALUE]`
+/// already produces. Seeding the module scope must make the two spellings
+/// agree on rejection, not only on success.
+#[test]
+fn a_str_global_producer_is_rejected_exactly_as_the_non_empty_spelling_is() {
+    let rendered = check_error(
+        "global_producer_str_element",
+        "\
+VALUE = \"s\"
+
+
+def _pick() -> str:
+    xs = []
+    xs.append(VALUE)
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(
+        rendered.contains("error[T0034]: list[str] is not compiled yet"),
+        "{rendered}"
+    );
+    let non_empty = check_error(
+        "global_producer_str_element_non_empty",
+        "\
+VALUE = \"s\"
+
+
+def _pick() -> str:
+    xs = [VALUE]
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(
+        non_empty.contains("error[T0034]: list[str] is not compiled yet"),
+        "{non_empty}"
+    );
+}
