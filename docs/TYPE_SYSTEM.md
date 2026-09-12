@@ -54,6 +54,10 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   inference (e.g. `def _first(): xs = [1]; return xs[0]` infers `int`). The
   carrier is never unified — `unify_terms` and `merge_inferred_types` are
   unchanged — and `dict`/`set`/`tuple` remain in the scalar-only gap.
+  A *resolved* empty container (`HirExpr::EmptyList`/`EmptyDict`, below) is
+  deliberately opaque to this solver: its constraint arm yields no term at
+  all, so an empty literal never widens a private helper's inferred
+  signature the way a populated list literal's carrier can.
 - Function-local names are classified before the body is checked. Parameters
   are local from entry; every assignment target and `for` target anywhere in
   the implemented nested control-flow grammar is local throughout that
@@ -86,7 +90,10 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   that may not exist (the validation pass's `T0041` remains the user-facing
   gate when an explicit annotation makes inference unnecessary).
 - The first assignment fixes a local variable's inferred type. Later
-  assignments must be compatible or produce `T0023`; assigning `bool` to an
+  assignments must be compatible or produce `T0023`; an empty `[]`/`{}`
+  re-assignment is the one shape that reads the *existing* binding rather
+  than fixing a new type (see "Empty container literals" below), and it
+  must keep that binding's representation, not merely its `Ty`; assigning `bool` to an
   `int` binding preserves the static `int` representation and, per D-141, the
   source object's runtime `False`/`True` identity. D-074/D-141 carry that
   decision through MIR and code generation at assignment, argument, return,
@@ -113,6 +120,57 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   mismatch (issue #245). This general-checker rule is independent of the
   private-helper solver's own separate, still-open limitation described
   above.
+
+### Empty container literals (#1021, [D-245](./decisions/D-245-resolve-empty-container-element-types-in-a-pre-check-hir-pass.md))
+
+An empty `[]` or `{}` carries no element type of its own, and this checker has
+no bidirectional inference to hand one down from context: `infer_expr_in` takes
+no expected type. Before #1021 every empty container literal was an error,
+including the annotated `xs: list[int] = []` form, because `AnnAssign` infers
+its value before comparing it with the annotation.
+
+A single infallible HIR-to-HIR pass (`pycc_types::empty_container`) now runs at
+the top of *both* entry points — `check_all_keyed` (`pycc check`) and
+`check_and_resolve_all_keyed` (`pycc build`) — before any checking, and
+rewrites each resolvable empty literal into a typed
+`HirExpr::EmptyList(Ty)` / `HirExpr::EmptyDict(Box<(Ty, Ty)>)` node carrying a
+fully concrete element type. Running before both entry points is what makes
+totality structural: `pycc check` cannot accept a program `pycc build` then
+panics on. The element type has to reach HIR (and from there MIR) because
+`pycc_mir` derives a container's type independently, from the literal's first
+element, and panics on an empty one.
+
+- **Three sources, in priority order.** (1) The annotation on an `AnnAssign`
+  target — purely syntactic, so this path needs no environment and always
+  works. (2) The target's existing binding, for a re-assignment such as
+  `xs = [1]; ...; xs = []`. (3) A forward scan of the enclosing function body
+  for the first *producer* use. Sources (2) and (3) are best-effort on a
+  rebuilt environment and degrade silently rather than failing.
+- **Producers, not consumers.** Only `xs.append(v)` and `d[k] = v` supply an
+  element type. `for x in xs`, `xs[0]`, `len(xs)` and `xs.pop()` *read* a type
+  that must already be known; in a single forward pass with no backward
+  unification they cannot produce one.
+- **First-wins within a scope.** When two branches assign `[]` to the same
+  name with different producers, both nodes take the first producer's type and
+  the second branch's `append` reports the ordinary element-type mismatch. One
+  binding cannot hold two element types.
+- **The same gate as a written annotation.** A resolved type still passes
+  through `pycc_hir::check_container_ty` (D-228), so an inferred `list[str]` is
+  `T0034` and an inferred `dict[int, int]` is `T0036`, exactly as the written
+  annotations are.
+- **No set path.** A set binding can only originate from an empty set literal,
+  `{}` parses as a dict, and `set()` is rejected at HIR lowering with `C0001` —
+  so `SetAdd` is a structurally dead producer and `set[T]` is untouched here.
+- **What is still an error, now `T0003`.** Any position with no inferable
+  element type: a call argument (`f([])`), a `return []`, a nested literal
+  (`[[]]`, `{"k": []}`), a module-level assignment, and a local whose only
+  later uses are consumers. An attribute target (`self.x = []`) and a
+  tuple-unpacking target (`L, R = [], []`) are *not* part of this: both are
+  rejected earlier with `C0001`, as they were before #1021. An empty tuple
+  `()` and `set()` are unchanged too: they still report `T0021` (citing #927)
+  and `C0001` respectively. Where a binding name is available the message names it;
+  otherwise it keeps a generic wording. `T0003` was registered for exactly this
+  meaning and never emitted before #1021.
 
 ## Types and representations
 
@@ -142,7 +200,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   1. **An `...` type argument is rejected first, with `T0053`.** This is its own step ahead of the arity check, and the order is load-bearing: `tuple[int, ...]` has a legal arity of two, so an arity check alone would accept it. Scanning for the ellipsis first is what produces the variadic-specific message instead of silently lowering a `tuple[int, EllipsisType]`. The advice differs by family: only `tuple` is told to write a fixed-arity `tuple`, since `list[...]`/`set[...]`/`dict[str, ...]` are not variadic spellings at all and are told to write that family's element type instead.
   2. **Arity is checked next, also with `T0053`.** `list`/`set` take exactly one type argument, `dict` exactly two, `tuple` at least one. `T0053` here also rejects the empty `tuple[()]`, the other legal-Python spelling this version's fixed-arity `Ty::Tuple` cannot represent. Checking arity before element types keeps a wrong-arity annotation from reporting a misleading element-type error.
   3. **A `Ty::Param` type argument is `T0042`**, with the annotation's own span. `substitute_ty` is not recursive, so `def f[T](xs: list[T])` would never have its `T` substituted at a call site; rejecting it at lowering is what keeps that from becoming a silent miscompile.
-  4. **The element restriction is unchanged and is now literally the same code.** A written annotation and an inferred literal share one gate (`pycc_hir::container`), so `list[int]`, `dict[str, int]`, `set[int]` and `int`/`bool`/`float` tuple elements are accepted, and everything else gets exactly the `T0034`/`T0036`/`T0038`/`T0039` it would have got from a literal -- now with a real caret at the annotation instead of the literal path's `1:1`.
+  4. **The element restriction is unchanged and is now literally the same code.** A written annotation and an inferred literal share one gate (`pycc_hir::container`), so `list[int]`, `dict[str, int]`, `set[int]` and `int`/`bool`/`float` tuple elements are accepted, and everything else gets exactly the `T0034`/`T0036`/`T0038`/`T0039` it would have got from a literal -- now with a real caret at the annotation instead of the literal path's `1:1`. Since #1021 (D-245) an element type *inferred* for an empty `[]`/`{}` goes through that same gate too, so an inferred `list[str]` is the same `T0034` a written `list[str]` is.
 
   Two positions deliberately still reject a container type. (Return position was a third through Part 1 and is no longer: [#925](https://github.com/rotnov/pycc/issues/925) added the codegen call-result arms that the Part-1 `C0001` was standing in for, and removed the gate.) A **protocol attribute's** type gets `C0001` because no class could ever satisfy it: every path by which a class establishes an attribute slot (`is_scalar_slot_type` in the annotated class-body attribute, the dataclass field and the hand-written `__init__`) restricts it to a scalar, so a container-typed protocol attribute is unsatisfiable rather than merely unimplemented. A protocol *method's* parameter is unaffected and does lower — a parameter type is a signature type, not an instance slot. A PEP 695 **class type argument** and a `cast()` target still accept scalars only (`type_arg_name_to_ty`, `cast_target_ty`), a recorded inconsistency rather than a decision. A **bare** `list`/`set`/`dict`/`tuple` gets its own `C0001` naming the parameterized form to write — but only in a parameter, a return annotation, a local or module-level `AnnAssign`, or a type alias, the positions that actually lower one. Every position that rejects the parameterized form (class attribute, dataclass field, container element, protocol attribute, PEP 695 class type argument, `cast()` target) keeps the generic unknown-name message, so the advice never names a form that fails too. `frozenset` and `type` keep the generic message everywhere, since neither has a `Ty` variant at all.
 - Code-size control: polymorphic-by-vtable fallback for cold generic code under `--opt-size` (compiler-internal, semantics unchanged).

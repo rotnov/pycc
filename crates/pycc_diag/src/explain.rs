@@ -217,15 +217,21 @@ def f(x: Any) -> int:
         severity: Severity::Error,
         summary: "untyped empty container needs annotation",
         explanation: "\
-T0003 is reserved for an empty list/dict/set literal (`[]`, `{}`, `set()`) \
-assigned to a name with no surrounding annotation to establish its element \
-type -- CPython accepts `x = []` and infers nothing about future element \
-types, but pycc's static checker needs a concrete element type before it \
-can type-check any later use of `x`. It is not currently emitted: pycc's \
-frontend does not yet reach an empty-container-literal code path that would \
-raise it (empty container literals are documented as future work; the \
-registry entry exists to reserve this code's meaning ahead of that \
-implementation).",
+T0003 reports an empty list or dict literal (`[]`, `{}`) whose element type \
+cannot be inferred from anywhere -- CPython accepts `x = []` and infers \
+nothing about future element types, but pycc's static checker needs a \
+concrete element type before it can type-check any later use of `x`. D-245's \
+pre-check pass resolves the common shapes before this code can fire: an \
+annotation on the assignment (`x: list[int] = []`), an existing binding for \
+the same name, or the first later use that *produces* an element type \
+(`x.append(1)`, `d[\"k\"] = 1`). T0003 is what remains once all three fail -- \
+including every position that binds no name at all, where there is nothing \
+to scan forward from: a call argument (`f([])`), a `return []`, a nested \
+literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An attribute \
+target (`self.x = []`) and a tuple-unpacking target (`L, R = [], []`) never \
+reach this check: both are rejected earlier with `C0001`. Where a binding \
+name *is* available it is named in the message. Give the binding an annotation, or use the container in a \
+way that fixes its element type.",
         example: "\
 def f() -> None:
     x = []  # element type not yet inferable from context

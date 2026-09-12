@@ -298,14 +298,19 @@ fn a_function_that_can_fall_through_a_container_return_is_rejected() {
 }
 
 #[test]
-fn an_empty_list_literal_return_is_still_the_issue_927_gap() {
-    // `-> list[int]: return []` is *not* something #925 fixes: inferring an
-    // empty literal's element type from the annotation is issue #927. Pinned
-    // here so the boundary between the two issues stays visible.
+fn an_empty_list_literal_return_has_no_inferable_element_type() {
+    // `-> list[int]: return []` is *not* something #925 fixes, and #1021's
+    // empty-container pre-pass deliberately does not reach it either: a return
+    // is a non-binding position, and `infer_expr_in` has no expected type to
+    // read the annotation from. It reports T0003 rather than T0021 now, with
+    // no binding name to name, and #927 is no longer the cited gap.
     let rendered = check_error(
         "empty_literal",
         "def f() -> list[int]:\n    return []\n\n\nprint(len(f()))\n",
     );
-    assert!(rendered.contains("error[T0021]"), "{rendered}");
-    assert!(rendered.contains("issue #927"), "{rendered}");
+    assert!(
+        rendered.contains("error[T0003]: an empty list literal has no inferable element type here"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("issue #927"), "{rendered}");
 }

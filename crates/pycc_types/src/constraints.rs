@@ -934,6 +934,15 @@ pub(crate) fn collect_expr_constraints(
         // check pass (`check_with_signatures_all`) that runs after this solver.
         // `unify_terms` and `merge_inferred_types` are unchanged -- the
         // carrier is destructured, never unified.
+        // #1021: a resolved empty `[]`/`{}` produces no term, exactly as
+        // `ListLiteral(vec![])`/`DictLiteral(vec![])` did before the
+        // empty-container pre-pass existed -- `homogeneous_private_solver_
+        // scalar_list_element` returns `None` for an empty element list, and
+        // the `DictLiteral` arm below never produces a term at all. Keeping
+        // `Ok(None)` here is what keeps a resolved container binding
+        // *opaque* to this scalar-only solver (D-146) rather than letting it
+        // start unifying as a scalar.
+        HirExpr::EmptyList(_) | HirExpr::EmptyDict(_) => Ok(None),
         HirExpr::ListLiteral(elements) => {
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
@@ -1185,6 +1194,8 @@ fn bind_named_expr_targets(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }

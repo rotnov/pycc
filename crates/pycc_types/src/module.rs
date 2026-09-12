@@ -151,6 +151,13 @@ pub fn check_and_resolve_all(hir: &HirModule) -> Result<HirModule, Vec<Diagnosti
 /// that owns it. The post-check phases' single diagnostic is keyed
 /// `Module`.
 pub fn check_and_resolve_all_keyed(hir: &HirModule) -> Result<HirModule, KeyedDiagnostics> {
+    // #1021 (D-245): the same pre-pass `check_all_keyed` runs, in the same
+    // place, over the same input -- which is precisely why `pycc check`
+    // cannot accept a program `pycc build` then panics on in
+    // `MirExpr::ty()`. The rewritten module is what everything downstream
+    // (checker, solver, `monomorphize`, MIR lowering, codegen) consumes.
+    let resolved = empty_container::resolve_empty_containers(hir);
+    let hir = resolved.as_ref().unwrap_or(hir);
     let function_local_names = module_function_local_names(hir);
     let signatures = checked_function_signatures_all(hir, &function_local_names)?;
 
@@ -390,6 +397,13 @@ pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
 /// driver maps a linked program's item index back to the file that owns
 /// it. A pre-check failure is keyed `Module`.
 pub fn check_all_keyed(hir: &HirModule) -> Result<(), KeyedDiagnostics> {
+    // #1021 (D-245): resolve every empty container literal *before* any
+    // checking, so the check path and the build path see the identical
+    // module. Returns `None` when the module has no empty container at all,
+    // which keeps this entry point's no-clone property for every other
+    // program. See `crate::empty_container`.
+    let resolved = empty_container::resolve_empty_containers(hir);
+    let hir = resolved.as_ref().unwrap_or(hir);
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path -- including a same-arity, `Ty::Infer`-

@@ -2818,6 +2818,28 @@ fn emit_expr_unchecked<'ctx>(
         // Python's `bool` is an `int` subtype, so widening is the correct
         // response to a `Scalar::Bool` element rather than an error -- and
         // its `Float`/`Str`/`List` arms already panic honestly.
+        // #1021: a resolved empty `[]`. Structurally `ListLiteral` with no
+        // elements -- the same `pycc_rt_int_list_new()` object, with no
+        // `append` calls after it. It is a separate arm only because the
+        // variant carries its element type instead of deriving one.
+        MirExpr::EmptyList(_) => Scalar::List(
+            builder
+                .build_call(rt.int_list_new, &[], "list_new")
+                .expect("build_call should not fail for a well-formed list construction")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_int_list_new returns a non-void pointer")
+                .into_pointer_value(),
+        ),
+        // #1021: a resolved empty `{}`, the dict counterpart of
+        // `EmptyList` immediately above.
+        MirExpr::EmptyDict(_) => Scalar::Dict(
+            builder
+                .build_call(rt.dict_new, &[], "dict_new")
+                .expect("build_call should not fail for a well-formed dict construction")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_dict_new returns a non-void pointer")
+                .into_pointer_value(),
+        ),
         MirExpr::ListLiteral(elements) => {
             let list_ptr = builder
                 .build_call(rt.int_list_new, &[], "list_new")
@@ -6456,10 +6478,13 @@ fn emit_stmt<'ctx>(
             // `list_targets_keep_the_last_element_and_ignore_body_reassignment`
             // in `tests/slice1_codegen_depth.rs`). `ForRange`'s third
             // property -- an empty sequence leaving the target unbound --
-            // holds here structurally for the same reason, but unlike
-            // `range(0)` it is unreachable from real source: `pycc_types`
-            // rejects an empty list literal (T0021, no inferable element
-            // type) and v0.2 has no `pop`/`del` to empty a list afterwards.
+            // holds here structurally for the same reason, and since #1021
+            // (D-245) it *is* reachable from real source: `xs: list[int] =
+            // []` now resolves its element type from the annotation instead
+            // of failing, so `for x in xs` over an empty list compiles and
+            // runs zero iterations (pinned by
+            // `iterating_an_inferred_empty_list_runs_zero_iterations` in
+            // `tests/issue_1021_empty_container_inference.rs`).
             let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
             let element = encoded_element;
             emit_assign(context, builder, rt, locals, var, Scalar::Int(element));

@@ -3912,9 +3912,12 @@ fn adding_an_int_and_a_float_promotes_to_float() {
 
 #[test]
 fn an_empty_list_literal_cannot_be_inferred() {
+    // Since #1021 (D-245) an empty literal that survives to the check
+    // phase is one the pre-pass found no evidence for, so it reports
+    // T0003 rather than borrowing T0021.
     let env = Environment::new();
     let err = infer_expr(&env, &HirExpr::ListLiteral(vec![])).unwrap_err();
-    assert_eq!(err.code, "T0021");
+    assert_eq!(err.code, "T0003");
     assert!(err.message.contains("empty list literal"));
 }
 
@@ -5746,9 +5749,12 @@ fn import_dunder_call_produces_c0001_not_t0021() {
 
 #[test]
 fn an_empty_dict_literal_cannot_be_inferred() {
+    // Since #1021 (D-245) an empty literal that survives to the check
+    // phase is one the pre-pass found no evidence for, so it reports
+    // T0003 rather than borrowing T0021.
     let env = Environment::new();
     let err = infer_expr(&env, &HirExpr::DictLiteral(vec![])).unwrap_err();
-    assert_eq!(err.code, "T0021");
+    assert_eq!(err.code, "T0003");
     assert!(err.message.contains("empty dict literal"));
 }
 

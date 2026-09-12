@@ -1,6 +1,7 @@
 mod binop;
 mod class;
 mod constraints;
+mod empty_container;
 mod enum_lower;
 mod env;
 mod exception;
@@ -500,6 +501,8 @@ fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mut Vec<&'a s
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
@@ -1036,6 +1039,8 @@ fn collect_named_expr_bindings(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
@@ -2752,7 +2757,13 @@ fn check_stmt_in_function(
             check_assignment(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))))
         }
         HirStmt::Assign { target, value } => {
-            let ty = infer_expr_in(env, local_names, value)?;
+            // #1021: `name_binding` is a no-op for every code but `T0003`,
+            // where it substitutes the binding's name into the message --
+            // the only locator a `T0003` gets, since `HirStmt::Assign`
+            // carries no span and every container diagnostic in this crate
+            // renders at `1:1`.
+            let ty = infer_expr_in(env, local_names, value)
+                .map_err(|d| empty_container::name_binding(d, target))?;
             check_assignment(env, target, ty)
         }
         HirStmt::AnnAssign {
@@ -2762,7 +2773,8 @@ fn check_stmt_in_function(
             is_final,
         } => {
             if let Some(value) = value {
-                let inferred = infer_expr_in(env, local_names, value)?;
+                let inferred = infer_expr_in(env, local_names, value)
+                    .map_err(|d| empty_container::name_binding(d, target))?;
                 if !class::is_assignable_env(env, &inferred, annotation) {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
@@ -3261,6 +3273,8 @@ fn reject_generic_calls_in_expr(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }

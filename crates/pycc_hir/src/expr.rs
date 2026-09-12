@@ -806,6 +806,8 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral => expr,
         // `callee` (a bare `String`, never an `HirExpr::Name`) is
         // deliberately left untouched even if it equals `from`: this HIR
@@ -946,6 +948,8 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::Super => false,

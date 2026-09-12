@@ -1173,3 +1173,93 @@ fn c0001_enum_class_call_no_args() {
 fn c0001_enum_class_call_value() {
     assert_diagnostic_matches_fixture("c0001_enum_class_call_value");
 }
+
+// #1021 (D-245): `T0003` is the code an empty `[]`/`{}` reports once the
+// pre-check resolution pass finds no annotation, no existing binding, and no
+// forward producer. Before #1021 it was registered but never emitted, and
+// these programs reported `T0021` citing #927 instead.
+
+/// A local with no annotation and no producer: the binding's name appears in
+/// the message, which is the only locator a `T0003` gets (`HirStmt::Assign`
+/// carries no span, so the render is at `1:1`).
+#[test]
+fn t0003_unresolved_local_list() {
+    assert_diagnostic_matches_fixture("t0003_unresolved_local_list");
+}
+
+/// The dict spelling of the same shape.
+#[test]
+fn t0003_unresolved_local_dict() {
+    assert_diagnostic_matches_fixture("t0003_unresolved_local_dict");
+}
+
+/// A non-binding position. `infer_expr_in` has no expected type and there is
+/// no name to scan forward from, so the message keeps its generic " here"
+/// wording rather than naming a binding.
+#[test]
+fn t0003_call_argument_has_no_binding() {
+    assert_diagnostic_matches_fixture("t0003_call_argument_has_no_binding");
+}
+
+/// `xs: list[int] = [[]]`: the outer literal is a non-empty `ListLiteral`, so
+/// the pass never looks at it; the inner `[]` is an element position with no
+/// annotation, no binding, and no producer of its own.
+#[test]
+fn t0003_nested_empty_list() {
+    assert_diagnostic_matches_fixture("t0003_nested_empty_list");
+}
+
+/// `xs: list[int] = {}`: the annotation resolves to a list shape while the
+/// literal is a dict. The pass refuses to rewrite `{}` into a typed empty
+/// list -- that would silently repair a program the user got wrong -- so the
+/// literal survives to the check phase and reports `T0003`.
+#[test]
+fn t0003_annotation_shape_does_not_match_the_literal() {
+    assert_diagnostic_matches_fixture("t0003_annotation_shape_does_not_match_the_literal");
+}
+
+/// `x: int = []`: an annotation that is neither a `list[...]` nor a
+/// `dict[...]` supplies no element type at all, so source (1) yields nothing
+/// and the literal falls through to `T0003`.
+#[test]
+fn t0003_scalar_annotation_supplies_no_element_type() {
+    assert_diagnostic_matches_fixture("t0003_scalar_annotation_supplies_no_element_type");
+}
+
+/// A syntactic producer whose own operands do not infer (`d[missing] = 1`)
+/// supplies no key/value types either: the producer scan swallows the
+/// inference failure rather than guessing, and the literal reports `T0003`.
+#[test]
+fn t0003_producer_value_does_not_infer() {
+    assert_diagnostic_matches_fixture("t0003_producer_value_does_not_infer");
+}
+
+/// Module-level statements are outside the pass's scope (it walks function
+/// bodies), so a module-level `xs = []` still reports `T0003`.
+#[test]
+fn t0003_module_level_empty_list() {
+    assert_diagnostic_matches_fixture("t0003_module_level_empty_list");
+}
+
+/// The producers-vs-consumers rule: `for x in xs` *reads* an element type
+/// that must already be known, so it cannot supply one. Only `append` and
+/// `d[k] = v` are producers.
+#[test]
+fn t0003_consumer_use_is_not_a_producer() {
+    assert_diagnostic_matches_fixture("t0003_consumer_use_is_not_a_producer");
+}
+
+/// D-228: an inferred element type passes through exactly the same
+/// `check_container_ty` gate a written annotation does, so an inferred
+/// `list[str]` is `T0034` (D-105), not a silently accepted list.
+#[test]
+fn t0034_inferred_list_str_is_not_compiled_yet() {
+    assert_diagnostic_matches_fixture("t0034_inferred_list_str_is_not_compiled_yet");
+}
+
+/// The dict half of the same gate: an inferred `dict[int, int]` is `T0036`
+/// (D-122).
+#[test]
+fn t0036_inferred_dict_int_int_is_not_compiled_yet() {
+    assert_diagnostic_matches_fixture("t0036_inferred_dict_int_int_is_not_compiled_yet");
+}
