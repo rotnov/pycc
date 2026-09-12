@@ -445,15 +445,26 @@ rule 6); only numbers are published.
   that edits the source to make it compile has failed rather than scored.
 - **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
   artifact. All three run back to back in one session on one machine, on the
-  same OS and power profile, with no other timed work on the box.
+  same OS and power profile, with no other timed work on the box. Which machine
+  that is, is committed alongside the generator, the seed, and the digest below
+  and restated in the report: a run whose arms were split across machines, or
+  whose machine was chosen after a result was seen, is inadmissible for the same
+  reason the **Input** bullet gives.
 - **Versions.** The interpreter is the conformance oracle's pinned CPython (see
   "Python 3.14.7 oracle transition" above), GIL-enabled, and it is both the
   baseline arm and the host that imports the `ext` artifact — the loader and the
   comparison are the same interpreter. Cython is pinned at 3.1.6, in
   pure-Python mode with `annotation_typing` enabled and its generated C compiled
-  `-O2`. The pycc arm is built `--release`, the shipping profile. Every one of
-  these versions is restated in the report, because a later run that changes one
-  is a different experiment.
+  `-O2`. The pycc arm is built `--release`, the shipping profile. The
+  interpreter arm is additionally an optimized, non-debug build: a
+  `--with-pydebug` or otherwise unoptimized CPython is slower by a multiple,
+  which inflates the ratio on its own and can manufacture a passing result out of
+  the baseline alone, so a timing taken against one is inadmissible whatever it
+  reports. The report carries `python3 -VV` and
+  `sysconfig.get_config_var('CONFIGURE_ARGS')` for the interpreter actually used,
+  so that build is checkable rather than asserted.
+  Every one of these versions is restated in the report, because a later run that
+  changes one is a different experiment.
 - **Input.** Size alone does not pin this workload: the measured loop branches
   on its data, so two evaluators who generate different inputs of the same size
   can reach opposite verdicts on the same implementation. The workload is
@@ -496,7 +507,14 @@ rule 6); only numbers are published.
   is a count, not a timing: how many of the reference codebase's annotated
   functions compile unchanged as part of an `ext` artifact, over how many were
   attempted. A function counts only with its source byte-identical to the
-  original; both numbers are published, never the ratio alone.
+  original; both numbers are published, never the ratio alone. The denominator is
+  fixed before the evaluation, not after it: the number of annotated functions to
+  be attempted and a digest over that exact set are committed **before** any
+  compile may be scored, on the same grounds the **Input** bullet gives for a
+  timing — otherwise an evaluator could attempt functions until the count reads
+  well and then designate those as the set. What is committed is that count and
+  that digest, never a list of function names: the reference codebase is
+  proprietary and only numbers are published (D-244 rule 6).
 
 ## Planned CPython interop matrix (v0.7)
 
