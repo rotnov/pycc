@@ -205,8 +205,14 @@ fn nested_bodies(stmt: &HirStmt) -> Vec<&[HirStmt]> {
             orelse,
             finalbody,
         } => {
-            let mut bodies: Vec<&[HirStmt]> = vec![body, orelse, finalbody];
+            // Source order, matching `rewrite_body`'s own traversal of the
+            // same variant: `find_producer` recurses through this inventory
+            // and documents that it returns the first *syntactic* producer,
+            // which is only true while the two orders agree.
+            let mut bodies: Vec<&[HirStmt]> = vec![body];
             bodies.extend(handlers.iter().map(|handler| handler.body.as_slice()));
+            bodies.push(orelse);
+            bodies.push(finalbody);
             bodies
         }
         _ => Vec::new(),

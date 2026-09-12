@@ -434,3 +434,59 @@ print(f())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"1\n");
 }
+
+/// Review round 4: `nested_bodies` and `rewrite_body` must enumerate a
+/// `try`'s suites in the same order, and that order must be source order,
+/// because `find_producer` recurses through the former while documenting that
+/// it returns the *first syntactic* producer. Both a handler and the `else`
+/// suite produce here, with different element types: source order picks the
+/// handler's `str` and the program is `T0034`. An inventory that returned
+/// `orelse` before the handlers would pick `int` and compile this instead, so
+/// the diagnostic is what pins the order.
+#[test]
+fn a_try_s_suites_are_scanned_for_producers_in_source_order() {
+    let rendered = check_error(
+        "try_suite_order",
+        "\
+def f(n: int) -> int:
+    xs = []
+    try:
+        n = n + 1
+    except ValueError:
+        xs.append(\"a\")
+    else:
+        xs.append(1)
+    return len(xs)
+
+print(f(1))
+",
+    );
+    assert!(
+        rendered.contains("error[T0034]: list[str] is not compiled yet"),
+        "{rendered}"
+    );
+}
+
+/// Review round 4: D-245's Consequences section argues that a producer-derived
+/// element type can be a `Ty::Param` inside a generic function, and that such
+/// a resolution can never reach codegen because `check_container_ty` rejects
+/// `list[T]` in the check phase, which runs before `monomorphize`. That is the
+/// argument; this is the fixture for it.
+#[test]
+fn a_producer_derived_type_parameter_element_is_rejected_in_the_check_phase() {
+    let rendered = check_error(
+        "generic_producer_param",
+        "\
+def f[T](x: T) -> int:
+    xs = []
+    xs.append(x)
+    return len(xs)
+
+print(f(1))
+",
+    );
+    assert!(
+        rendered.contains("error[T0034]: list[T] is not compiled yet"),
+        "{rendered}"
+    );
+}
