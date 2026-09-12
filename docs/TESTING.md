@@ -357,6 +357,18 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   denominator and reported only under `--include-holdout`. Do not read it when
   deciding what to implement — it exists to show that gains on the steering set
   generalise.
+- **Reading the holdout rate.** Neither the report nor its JSON splits the
+  denominator by set, so the holdout rate comes from two runs — one default, one
+  `--include-holdout`. Subtract their `compiled` **counts**, never their rates:
+  the default run's denominator is 200 and the merged run's is 300, so a
+  difference of rates is not the gap between the two sets at all. The holdout
+  rate is `(merged compiled − default compiled) / 100`, and the steering rate is
+  the default run's own. The method is valid only when neither run reports
+  `INCOMPLETE`: `manifest.json` orders all 200 steering records before all 100
+  holdout records, so a run that exhausts `--max-seconds` drops holdout problems
+  first, and the two runs would then cover different evaluated subsets.
+  `docs/ROADMAP.md`'s `product-sprint-1` holdout acceptance item is read this
+  way.
 - **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
   `compiled N/M`, `matched K/N` (binary output byte-identical to the expected
   output on every case), the median speedup against CPython, and the diagnostic

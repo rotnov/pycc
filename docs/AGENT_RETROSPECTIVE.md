@@ -33,6 +33,33 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — An acceptance criterion prescribed a computation that was never worked through on an example, and no gate evaluates an unchecked item
+
+**What happened.** A milestone acceptance item was written to say that one
+subset's rate is obtained by subtracting one measurement's rate from another's.
+Both measurements were real and both numbers were printed by the same script, so
+the sentence read as obviously true. It was not: the two runs report over
+different denominators, and the prescribed subtraction yields one third of the
+quantity the criterion means to bound — a review round caught it with a worked
+example in which the true gap is double the stated tolerance while the prescribed
+formula reports comfortably inside it.
+
+**Root cause.** The criterion was reasoned about in words ("subtract the
+rates") instead of on numbers. Nothing downstream would have caught it either:
+the checker that validates acceptance items inspects only *checked* ones, so an
+unchecked item carrying a wrong decision rule passes every gate until the day it
+is used to make the decision.
+
+**What fixed it.** Rewriting the method in terms of the `compiled` counts, whose
+difference *is* the subset's count, and stating both denominators explicitly so
+the error cannot be reintroduced by paraphrase.
+
+**Lesson.** An acceptance criterion that prescribes a computation is code
+without a test: substitute two concrete numbers and check the result before
+writing it down. Prefer a formula over counts to one over ratios whenever the
+denominators differ, and treat "no gate reads this yet" as a reason for more
+scrutiny rather than less.
+
 ## 2026-09-12 — A plan recorded a byte budget for the file being edited, and a later review round's fix blew through it because only the first edit was measured against it
 
 **What happened.** An implementation plan measured the headroom `docs/ROADMAP.md`
@@ -51,9 +78,12 @@ was measured. The local gate set compounded it: the budget is enforced by
 which is true and irrelevant — that script also validates every llms.txt context
 document, and `docs/ROADMAP.md` is one.
 
-**What fixed it.** Condensing the branch's own additions by 208 bytes, which
-restored the file to 31 bytes of headroom, then running `bash scripts/check-site.sh`
-locally to confirm (exit 0) before re-pushing.
+**What fixed it.** Condensing the branch's own additions, then running
+`bash scripts/check-site.sh` locally to confirm (exit 0) before re-pushing. The
+clause that overran was ultimately moved out of the roadmap entirely — the full
+method now lives in `docs/TESTING.md`, which carries no llms.txt budget and
+already owns the corpus gate, and the roadmap item cross-references it, which is
+what the canonical-statement rule wanted in the first place.
 
 **Lesson.** When a plan records a byte, line, or digest budget for a file, that
 budget is a gate on every subsequent edit to that file in the same branch, not

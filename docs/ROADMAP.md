@@ -260,13 +260,13 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 ## product-sprint-1 — real stdin/stdout programs compile unchanged
 
-Runs alongside the milestone chain, not in sequence: a time-boxed bet on one niche, single-file competitive-programming Python that reads stdin and writes stdout. Decomposed into eight parts in [#1014](https://github.com/rotnov/pycc/issues/1014). Corpus and metric: `tests/corpus/codecontests/` and `scripts/check_corpus_compile_rate.py`, reported non-blocking by CI's `corpus-compile-rate` job.
+Runs alongside the milestone chain, not in sequence: a time-boxed bet on one niche, single-file competitive-programming Python reading stdin and writing stdout. Decomposed into eight parts in [#1014](https://github.com/rotnov/pycc/issues/1014). Corpus and metric: `tests/corpus/codecontests/` and `scripts/check_corpus_compile_rate.py`, reported non-blocking by CI's `corpus-compile-rate` job.
 
 **Accept:**
 
 - [ ] at least 50% of the 200-problem steering corpus compiles unchanged
 - [ ] median speedup at least 5x over CPython across the problems that compile and match
-- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, by subtracting a default run's rate from an `--include-holdout` run's merged rate, since neither splits the denominator by set. Valid only if neither reports `INCOMPLETE`: the manifest orders all steering records first, so truncation drops holdout problems and skews the subtraction
+- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, read from two runs of the metric by the count-subtraction method — and its `INCOMPLETE` precondition — that [TESTING.md](./TESTING.md) specifies
 
 ## v0.5 — generators & ownership v1
 
