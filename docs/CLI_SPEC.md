@@ -211,7 +211,7 @@ directory once project mode exists.
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable
---ext               planned v0.7 hosted mode: emit a CPython extension module
+--ext               planned hosted mode: emit a CPython extension module
                     instead of an executable (D-244 rule 1; see the `OUT`
                     contract above); conflicts with `--lib`,
                     `--interop-policy`, and `--pure`
