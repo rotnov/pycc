@@ -1099,8 +1099,16 @@ mod ext_build_wiring_tests {
         assert_eq!(shim, ext_build::SHIM_C);
 
         // The artifact is the resolved output, not `OUT` as given: comparing
-        // `PathBuf`s built with `Path::join`, never rendered strings.
-        assert_eq!(plan.artifact, dir.join("fastmath.abi3.so"));
+        // `PathBuf`s built with `Path::join`, never rendered strings. This
+        // call passes no target, so the suffix follows the *build host* --
+        // two legal values, enumerated rather than branched on, so the
+        // assertion holds on every Tier-1 host without a `cfg` arm that only
+        // one of them ever executes.
+        assert!(
+            [dir.join("fastmath.abi3.so"), dir.join("fastmath.pyd")].contains(&plan.artifact),
+            "{:?}",
+            plan.artifact
+        );
         assert!(plan.compile_args.contains(&std::ffi::OsString::from("-I")));
         assert!(!plan.link_args.is_empty());
     }

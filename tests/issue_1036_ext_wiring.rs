@@ -116,7 +116,17 @@ fn an_ext_output_path_that_names_no_module_is_an_invocation_failure() {
 fn an_ext_output_path_with_an_interpreter_specific_suffix_is_rejected() {
     let dir = ScratchDir::new("ext_cli_tagged").expect("scratch");
     let src = write(&dir, "def f() -> int:\n    return 1\n");
-    let out = dir.join("m.cpython-314-x86_64-linux-gnu.so");
+    // "Interpreter-specific" is a property of the *host's own* suffix family:
+    // the rejection fires when the name already ends in that family's tagged
+    // tail. A Linux-tagged `.so` name is not tagged at all on Windows, where
+    // the family's tail is `.pyd` -- there it would simply gain a `.pyd` and
+    // build. Pick the name the running host actually recognizes.
+    let tagged = if cfg!(windows) {
+        "m.cp313-win_amd64.pyd"
+    } else {
+        "m.cpython-314-x86_64-linux-gnu.so"
+    };
+    let out = dir.join(tagged);
     let output = header_less_build(&dir, &src, &out);
     assert_eq!(output.status.code(), Some(2));
     assert!(

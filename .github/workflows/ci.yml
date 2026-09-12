@@ -596,6 +596,16 @@ jobs:
           python3 --version
           python3 -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
           python3 -c "import os, sysconfig, sys; h = os.path.join(sysconfig.get_path('include'), 'Python.h'); sys.exit(0 if os.path.isfile(h) else 'missing ' + h)"
+          # Windows binds every `Py*` reference at link time through an import
+          # library, so the headers alone are not enough there. `src/ext_build.rs`
+          # derives that directory exactly as this line does, and asks for the
+          # stable-ABI `python3.lib` rather than the version-tagged one. Assert
+          # it here, where a missing or differently-named file fails in seconds
+          # with its own message instead of as a linker error minutes into
+          # `cargo test`.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python3 -c "import os, sys; p = os.path.join(sys.base_prefix, 'libs', 'python3.lib'); sys.exit(0 if os.path.isfile(p) else 'missing ' + p)"
+          fi
 
       # No separate `cargo build --workspace` step here (removed by #631,
       # part 3 of #20): pycc_codegen/build.rs now runs `cargo build -p
