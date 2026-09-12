@@ -47,6 +47,18 @@ non-ASCII identifier is rejected rather than encoded: CPython loads such a
 module through `PyInitU_<punycode>` with hyphens replaced by underscores --
 `mód` through `PyInitU_md_5ja`, verified against a live interpreter -- so
 emitting `PyInit_mód` would produce an artifact no host can import.
+A basename that reduces to `__init__` is a valid ASCII identifier, so
+that rule admits it, and it is **rejected** separately: CPython's finder
+discovers `pkg/__init__.abi3.so` as the module `pkg` -- the name comes
+from the parent directory, and the spec it builds carries that directory
+as `submodule_search_locations`, verified against a live interpreter --
+and then looks for `PyInit_pkg`, a name this contract derives from the
+file rather than from the directory holding it. The rejection is a scope
+boundary, not a limitation of the host: rule 1 specifies one extension
+module per artifact, and a package `__init__` is a packaging shape `ext`
+mode does not claim. Deriving `<mod>` from the parent directory is the
+wider rule and stays available later, since widening a rejection
+supersedes nothing.
 D-128's `--interop-policy` and `--pure` do not apply in this mode (D-244
 rule 3) and are rejected alongside it, as is `--lib`.
 
