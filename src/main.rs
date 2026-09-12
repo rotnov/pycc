@@ -1,4 +1,5 @@
 mod cli;
+mod ext_build;
 mod ext_output;
 mod frontend;
 mod modules;
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
             out,
             target,
             release,
+            ext,
         } => {
             // Resolved here, not inside `try_build`: this consumption point
             // (a neighboring `pycc.toml`'s `[build] opt = "release"` as a
@@ -55,12 +57,19 @@ fn main() -> ExitCode {
                 Ok(scratch) => scratch,
                 Err(code) => return code,
             };
+            // The toolchain is read from the environment here, in the
+            // command arm, for the same reason `release` is resolved here:
+            // `try_build` takes it by injection so a test can supply one
+            // without setting a process-wide environment variable, which
+            // would race every other test in this binary.
+            let toolchain = ext.then(ext_build::ExtToolchain::from_env);
             match try_build(
                 &path,
                 &out,
                 target.as_deref(),
                 release,
                 &scratch.join("main.o"),
+                toolchain.as_ref(),
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
@@ -257,12 +266,32 @@ fn try_build(
     target: Option<&str>,
     release: bool,
     obj_path: &Path,
+    ext: Option<&ext_build::ExtToolchain>,
 ) -> Result<(), ExitCode> {
     let typed_hir =
         resolve_frontend(path).map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
+    // Everything `--ext` needs that can fail on the program itself or on
+    // the host toolchain is resolved here, before codegen runs: a `C0003`
+    // capability gap and a missing `Python.h` are both cheaper to report
+    // than to discover after LLVM has emitted an object nobody can link.
+    let ext_plan = match ext {
+        Some(toolchain) => Some(plan_ext(
+            path, out, target, &typed_hir, toolchain, obj_path,
+        )?),
+        None => None,
+    };
     let mir = pycc_mir::build(&typed_hir);
 
-    pycc_codegen::compile_to_object(&mir, obj_path, target, release).map_err(|e| {
+    pycc_codegen::compile_to_object_with_options(
+        &mir,
+        obj_path,
+        &pycc_codegen::CompileOptions {
+            target_triple: target.map(str::to_string),
+            release,
+            ext: ext.is_some(),
+        },
+    )
+    .map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
     })?;
@@ -271,16 +300,26 @@ fn try_build(
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
+    // One link site for both modes (#1036): `ext` contributes extra
+    // arguments and a different output path, but the spawn, the
+    // spawn-failure message and the exit-status mapping below stay shared,
+    // so neither mode can drift into its own untested tail.
+    let link_out: &Path = ext_plan
+        .as_ref()
+        .map_or(out, |plan| plan.artifact.as_path());
     let mut cmd = linker_command(target);
     if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
+    }
+    if let Some(plan) = &ext_plan {
+        cmd.args(&plan.compile_args).args(&plan.link_args);
     }
     cmd.arg(obj_path)
         .arg("-L")
         .arg(&rt_lib_dir)
         .arg("-lpycc_rt")
         .arg("-o")
-        .arg(out);
+        .arg(link_out);
     add_windows_system_libs(&mut cmd);
     add_linux_system_libs(&mut cmd);
     // #250: failing to *start* the driver (missing `cc`/`clang`, an
@@ -307,6 +346,88 @@ fn try_build(
     } else {
         Err(ExitCode::from(1))
     }
+}
+
+/// Everything `try_build`'s link step needs that is specific to `--ext`.
+///
+/// `artifact` replaces `OUT` as the linker's `-o`: `ext_output::resolve`
+/// may have appended the platform's stable-ABI suffix to it, and CPython's
+/// finder will only import a file whose name it recognizes.
+#[derive(Debug)]
+struct ExtPlan {
+    artifact: std::path::PathBuf,
+    compile_args: Vec<std::ffi::OsString>,
+    link_args: Vec<std::ffi::OsString>,
+}
+
+/// Resolves the `--ext` output, export set and host toolchain, and writes
+/// the two C files the link step compiles alongside the emitted object.
+///
+/// Ordered failure-cheapest-first, and every failure here happens before
+/// codegen: the output contract and the `C0003` export gaps are properties
+/// of the invocation and the program, the header probe is a property of the
+/// host, and none of them becomes more informative for having run LLVM.
+///
+/// The C files are written next to `obj_path`, which the caller already
+/// owns as a `pycc_scratch::ScratchDir` whose `Drop` removes the whole
+/// directory on every exit path (#783). Nothing here writes beside the
+/// user's `-o`, which stays the single persistent output.
+fn plan_ext(
+    source_path: &Path,
+    out: &Path,
+    target: Option<&str>,
+    typed_hir: &pycc_hir::HirModule,
+    toolchain: &ext_build::ExtToolchain,
+    obj_path: &Path,
+) -> Result<ExtPlan, ExitCode> {
+    let platform = ext_build::ExtLinkPlatform::resolve(target);
+    let output = ext_output::resolve(out, &platform.suffix_platform()).map_err(|e| {
+        eprintln!("error: {}", e.message());
+        ExitCode::from(2)
+    })?;
+    let exports = ext_build::collect_exports(typed_hir).map_err(|gaps| {
+        // Span-less `C0003`s (a lowered `HirItem::Function` carries no
+        // source range), so the empty source text below is never read:
+        // `pycc_diag::render_human` renders a span-less diagnostic as
+        // exactly `error[C0003]: <message>`.
+        ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
+            &source_path.display().to_string(),
+            "",
+            gaps,
+        )))
+    })?;
+    let probe = toolchain.probe().map_err(|e| {
+        eprintln!("error: {e}");
+        ExitCode::from(2)
+    })?;
+    let shim = obj_path.with_file_name(ext_build::SHIM_C_NAME);
+    let inc = obj_path.with_file_name(ext_build::EXPORTS_INC_NAME);
+    // Rendered into a binding first so the call below fits one line: a
+    // multi-line `foo(\n  ..\n)?;` puts the `?`'s early-return arm on a
+    // line of its own, which no passing build ever executes and which
+    // `scripts/check_diff_coverage.py` then reports as an uncovered
+    // changed line (D-242 rule 1).
+    let inc_body = ext_build::generate_exports_inc(&output.module_name, &exports);
+    write_ext_source(&shim, ext_build::SHIM_C)?;
+    write_ext_source(&inc, &inc_body)?;
+    Ok(ExtPlan {
+        compile_args: ext_build::ext_compile_args(&probe.include, &shim),
+        link_args: ext_build::ext_link_args(platform, &probe.libs),
+        artifact: output.artifact,
+    })
+}
+
+/// Writes one generated C file into the caller-owned scratch directory.
+/// A failure here is an environment failure (an unwritable scratch), not a
+/// pycc invariant -- reported at exit 2 like `create_scratch`'s own.
+fn write_ext_source(path: &Path, contents: &str) -> Result<(), ExitCode> {
+    std::fs::write(path, contents).map_err(|e| {
+        eprintln!(
+            "error: could not write the --ext build source `{}`: {e}",
+            pycc_diag::display_path(&path.to_string_lossy())
+        );
+        ExitCode::from(2)
+    })
 }
 
 /// Resolves `pycc build`'s effective release/debug profile -- called only
@@ -504,7 +625,7 @@ fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
         Err(code) => return code,
     };
     let out = scratch.join("out");
-    if let Err(code) = try_build(path, &out, None, false, &scratch.join("main.o")) {
+    if let Err(code) = try_build(path, &out, None, false, &scratch.join("main.o"), None) {
         return code;
     }
     ExitCode::from(run_built_binary(&out, args))
@@ -878,7 +999,7 @@ mod try_build_release_isolation_tests {
         let obj_path = dir.join("obj.o");
 
         // Exactly what `run()` does: `release: false` straight through.
-        try_build(&src, &out, None, false, &obj_path).expect("try_build should succeed");
+        try_build(&src, &out, None, false, &obj_path, None).expect("try_build should succeed");
 
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
@@ -914,5 +1035,199 @@ mod try_build_release_isolation_tests {
         let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
         let result = pycc_types::check_and_resolve(&hir);
         assert!(result.is_ok(), "match with Maybe binding should type-check");
+    }
+}
+
+#[cfg(test)]
+mod ext_build_wiring_tests {
+    use super::*;
+    use ext_build::{ExtProbe, ExtToolchain};
+    use pycc_scratch::ScratchDir;
+
+    /// A toolchain whose headers are `dir` itself: a real, existing
+    /// directory that contains no `Python.h`. Every step up to and including
+    /// the compiler spawn then runs for real, and the build fails
+    /// deterministically inside `cc` on any host, with no CPython installed
+    /// and nothing `#[ignore]`d. That is the only way the ext branch's
+    /// effectful tail earns coverage: `.github/workflows/ci.yml`'s coverage
+    /// job runs `llvm-cov` without `--include-ignored`.
+    fn header_less_toolchain(dir: &Path) -> ExtToolchain {
+        ExtToolchain::with_probe(
+            "pycc-unused-interpreter",
+            ExtProbe {
+                version: ext_build::MIN_PYTHON,
+                include: dir.to_path_buf(),
+                libs: dir.join("libs"),
+            },
+        )
+    }
+
+    fn write_source(dir: &Path, body: &str) -> std::path::PathBuf {
+        let src = dir.join("m.py");
+        std::fs::write(&src, body).expect("write source");
+        src
+    }
+
+    fn typed(src: &Path) -> pycc_hir::HirModule {
+        resolve_frontend(src).unwrap_or_else(|_| panic!("the fixture must type-check"))
+    }
+
+    #[test]
+    fn a_planned_ext_build_writes_both_c_files_beside_the_object() {
+        let dir = ScratchDir::new("ext_plan").expect("scratch");
+        let src = write_source(&dir, "def square(x: int) -> int:\n    return x * x\n");
+        let obj = dir.join("main.o");
+        let plan = plan_ext(
+            &src,
+            &dir.join("fastmath"),
+            None,
+            &typed(&src),
+            &header_less_toolchain(&dir),
+            &obj,
+        )
+        .expect("an int-only program plans cleanly");
+
+        let inc = std::fs::read_to_string(dir.join(ext_build::EXPORTS_INC_NAME))
+            .expect("the generated companion is written next to the object");
+        assert!(
+            inc.contains("#define PYCC_EXT_MODULE_NAME fastmath\n"),
+            "{inc}"
+        );
+        assert!(inc.contains("fnptr_square"), "{inc}");
+        let shim = std::fs::read_to_string(dir.join(ext_build::SHIM_C_NAME))
+            .expect("the fixed shim is written next to the object");
+        assert_eq!(shim, ext_build::SHIM_C);
+
+        // The artifact is the resolved output, not `OUT` as given: comparing
+        // `PathBuf`s built with `Path::join`, never rendered strings.
+        assert_eq!(plan.artifact, dir.join("fastmath.abi3.so"));
+        assert!(plan.compile_args.contains(&std::ffi::OsString::from("-I")));
+        assert!(!plan.link_args.is_empty());
+    }
+
+    #[test]
+    fn a_windows_target_plans_a_pyd_from_this_host() {
+        let dir = ScratchDir::new("ext_plan_win").expect("scratch");
+        let src = write_source(&dir, "def f() -> int:\n    return 1\n");
+        let plan = plan_ext(
+            &src,
+            &dir.join("m"),
+            Some("x86_64-pc-windows-msvc"),
+            &typed(&src),
+            &header_less_toolchain(&dir),
+            &dir.join("main.o"),
+        )
+        .expect("a cross-target plan needs nothing from this host");
+        assert_eq!(plan.artifact, dir.join("m.pyd"));
+        assert!(
+            plan.link_args
+                .contains(&std::ffi::OsString::from("-lpython3"))
+        );
+    }
+
+    #[test]
+    fn an_output_path_the_ext_contract_rejects_fails_before_the_export_scan() {
+        let dir = ScratchDir::new("ext_plan_out").expect("scratch");
+        let src = write_source(&dir, "def f() -> int:\n    return 1\n");
+        let code = plan_ext(
+            &src,
+            Path::new("/"),
+            None,
+            &typed(&src),
+            &header_less_toolchain(&dir),
+            &dir.join("main.o"),
+        )
+        .expect_err("`/` names no module");
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn a_public_function_the_boundary_cannot_carry_fails_the_build_with_a_diagnostic() {
+        let dir = ScratchDir::new("ext_plan_gap").expect("scratch");
+        let src = write_source(&dir, "def scale(x: float) -> float:\n    return x\n");
+        let code = plan_ext(
+            &src,
+            &dir.join("m"),
+            None,
+            &typed(&src),
+            &header_less_toolchain(&dir),
+            &dir.join("main.o"),
+        )
+        .expect_err("float is not bridged in Part 1");
+        assert_eq!(code, ExitCode::from(1));
+    }
+
+    #[test]
+    fn an_unusable_cpython_toolchain_fails_before_codegen() {
+        let dir = ScratchDir::new("ext_plan_probe").expect("scratch");
+        let src = write_source(&dir, "def f() -> int:\n    return 1\n");
+        let toolchain = ExtToolchain::with_probe(
+            "pycc-unused-interpreter",
+            ExtProbe {
+                version: ext_build::MIN_PYTHON,
+                include: dir.join("no-such-include"),
+                libs: dir.join("libs"),
+            },
+        );
+        let code = plan_ext(
+            &src,
+            &dir.join("m"),
+            None,
+            &typed(&src),
+            &toolchain,
+            &dir.join("main.o"),
+        )
+        .expect_err("a missing header directory is an environment failure");
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn a_scratch_directory_that_cannot_be_written_is_an_environment_failure() {
+        let dir = ScratchDir::new("ext_plan_write").expect("scratch");
+        let src = write_source(&dir, "def f() -> int:\n    return 1\n");
+        // An object path inside a directory that does not exist: the C
+        // files land beside it, so writing them is what fails.
+        let code = plan_ext(
+            &src,
+            &dir.join("m"),
+            None,
+            &typed(&src),
+            &header_less_toolchain(&dir),
+            &dir.join("no-such-dir").join("main.o"),
+        )
+        .expect_err("an unwritable scratch is an environment failure");
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    /// The whole `--ext` tail, end to end: output resolution, export scan,
+    /// toolchain probe, both C writes, codegen through
+    /// `CompileOptions { ext: true, .. }`, the runtime-library lookup, the
+    /// platform link argv, and the shared spawn. It fails inside `cc`,
+    /// because the include directory this test supplies holds no `Python.h`
+    /// -- which is exactly the point: every one of those steps ran.
+    #[test]
+    fn an_ext_build_runs_the_whole_tail_and_fails_in_the_compiler_without_python_headers() {
+        let dir = ScratchDir::new("ext_try_build").expect("scratch");
+        let src = write_source(&dir, "def square(x: int) -> int:\n    return x * x\n");
+        let obj = dir.join("main.o");
+        let code = try_build(
+            &src,
+            &dir.join("fastmath"),
+            None,
+            false,
+            &obj,
+            Some(&header_less_toolchain(&dir)),
+        )
+        .expect_err("no Python.h means the compiler rejects the shim");
+        assert_eq!(code, ExitCode::from(1));
+        // Codegen really ran under `ext: true`, and really emitted the
+        // module-body symbol the shim calls instead of `main`.
+        let object = std::fs::read(&obj).expect("the object was emitted before the link");
+        assert!(
+            object
+                .windows(pycc_codegen::EXT_MODULE_EXEC_SYMBOL.len())
+                .any(|window| window == pycc_codegen::EXT_MODULE_EXEC_SYMBOL.as_bytes()),
+            "the ext object must export the module-body symbol"
+        );
     }
 }

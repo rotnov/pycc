@@ -7,9 +7,14 @@ requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
 conditional companion runtime bundled only when a source import resolves to a
 CPython-backed dependency under the selected interop policy (D-128). The
 no-libpython guarantee is a property of the `native` executable mode; the
-planned hosted `ext` mode (a CPython extension module loaded by an external
-interpreter) explicitly resolves its CPython symbols from the host and does
-not carry it (D-244).
+hosted `ext` mode (a CPython extension module loaded by an external
+interpreter, `pycc build --ext`) explicitly resolves its CPython symbols from
+the host and does not carry it (D-244). `pycc_rt` itself stays libpython-free
+even there: it owns only the pure encode/decode/classify half of D-244 rule
+2's boundary (`crates/pycc_rt/src/ext_bridge.rs`), and the `PyObject*` moves
+live in the fixed C shim the driver compiles beside the generated object, so
+linking `libpycc_rt.a` into a `native` executable never pulls a CPython
+symbol in.
 
 ## Object model
 
@@ -325,7 +330,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   environment; native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (planned v0.7; not implemented)
+## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the `int` boundary)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -338,7 +343,17 @@ which the artifact is an executable that carries its own interpreter. The hosted
 `ext` mode added by D-244 shares the import classification and the typed
 boundary but none of the bundling, policy, or GIL-ownership rules below: an
 `ext` artifact is loaded by an external CPython that owns the environment and
-the GIL, and #1025/#1026 specify its contract. That mode's typed boundary
+the GIL, and #1025/#1026 specify its contract. Part 1 of #1025 ([#1036](https://github.com/rotnov/pycc/issues/1036))
+implements that mode for the `int` boundary only: `pycc build PATH -o OUT --ext`
+compiles against `Py_LIMITED_API 0x030D0000` (stable-ABI floor CPython 3.13),
+exports every public module-level function whose parameters and return are all
+`int` as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
+`Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
+rejects any other public signature at compile time as `C0003`. Per the D-244
+amendment of 2026-09-12 an `int` outside the inline range `[-2^62, 2^62-1]`
+raises `OverflowError` at the wrapper until [#1040](https://github.com/rotnov/pycc/issues/1040)
+gives `pycc_rt` a bigint boundary. Foreign imports, opaque objects, and the
+buffer protocol are Parts 2-4. That mode's typed boundary
 additionally faces callers pycc does not compile, so what a typed export
 wrapper does with an argument that violates its annotation is D-244 rule 7 —
 the oracle is scoped to annotation-conforming calls and the wrapper raises

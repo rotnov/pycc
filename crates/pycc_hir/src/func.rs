@@ -49,7 +49,7 @@ pub(crate) fn lower_function(
             }
         },
     };
-    let is_public = !def.name.as_str().starts_with('_'); // D-038
+    let is_public = crate::is_public_name(def.name.as_str()); // D-038
     let params = lower_params(
         &def.parameters,
         is_public,

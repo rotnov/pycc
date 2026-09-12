@@ -546,6 +546,52 @@ jobs:
             exit 1
           }
 
+      # D-244's hosted `ext` artifact is built against `Py_LIMITED_API
+      # 0x030D0000`, whose stable-ABI floor is CPython 3.13, so the one test
+      # that actually compiles an extension module and imports it
+      # (`tests/issue_1036_ext_wiring.rs`, #1036) must run against that floor
+      # rather than against the 3.14.7 conformance oracle. Installing 3.13
+      # here makes it the `python3` that `pycc build --ext` probes and that
+      # the test imports through, while `tests/conformance.rs` keeps using
+      # the hardcoded `python3.14` name and is unaffected.
+      #
+      # Ordering is load-bearing: actions/setup-python repoints
+      # $pythonLocation and prepends its own directory to PATH, and the
+      # Windows `python3.14.exe` alias step above copies out of exactly that
+      # directory, so this step must come after it, never between it and the
+      # 3.14.7 install.
+      - name: Set up CPython 3.13 as the hosted ext stable-ABI floor
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      # Same gap as the `python3.14` alias above, one name over:
+      # actions/setup-python's Windows install produces only a plain
+      # `python.exe`, never a `python3.exe`. Without this copy, `python3`
+      # on the Windows leg either fails to resolve or silently resolves to
+      # some other preinstalled interpreter later on PATH -- not the 3.13
+      # just installed, which is the whole point of the step above. Both
+      # `pycc build --ext`'s default probe and the hosted smoke test in
+      # `tests/issue_1036_ext_wiring.rs` look up exactly that one name.
+      - name: Alias python3 (Windows lacks an unversioned python binary)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY_DIR="$(cygpath -u "$pythonLocation")"
+          cp "$PY_DIR/python.exe" "$PY_DIR/python3.exe"
+
+      # Fails fast and unambiguously when the floor interpreter or its
+      # development headers are missing, rather than letting the `--ext`
+      # build inside `cargo test --workspace` below fail later inside `cc`.
+      # `cargo test --workspace -- --include-ignored` then runs the hosted
+      # smoke test itself, as it already does for the D-078 oracle tests.
+      - name: Verify the hosted ext floor interpreter and its headers
+        shell: bash
+        run: |
+          python3 --version
+          python3 -c "import sys; assert sys.version_info[:2] == (3, 13), sys.version"
+          python3 -c "import os, sysconfig, sys; h = os.path.join(sysconfig.get_path('include'), 'Python.h'); sys.exit(0 if os.path.isfile(h) else 'missing ' + h)"
+
       # No separate `cargo build --workspace` step here (removed by #631,
       # part 3 of #20): pycc_codegen/build.rs now runs `cargo build -p
       # pycc_rt` itself as a real build dependency, so the plain `cargo

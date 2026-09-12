@@ -45,6 +45,26 @@ pub use typecheck::{
     is_abc_base_name, is_builtin_type_name, is_enum_base_name, is_protocol_base_name,
 };
 
+/// D-038's visibility predicate: a name is public unless it begins with an
+/// underscore.
+///
+/// One canonical home for a rule four call sites used to spell inline
+/// (`func.rs`, `class.rs`, and twice in `class/protocol.rs`). It is `pub`
+/// because the rule now has a consumer outside HIR lowering as well: D-244
+/// rule 1 exports *every public module-level function* of an `--ext` build,
+/// and the driver derives that export set from the same predicate the
+/// frontend's own `T0001` annotation requirement uses -- so "public" can only
+/// ever mean one thing across the compiler.
+///
+/// The name is the whole input on purpose. This is a *visibility* predicate
+/// over a source-level identifier, unrelated to `pycc_types`'
+/// `is_private_solver_scalar`, which is a `Ty`-shape predicate that happens
+/// to carry "private" in its name.
+#[must_use]
+pub fn is_public_name(name: &str) -> bool {
+    !name.starts_with('_')
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     Int,

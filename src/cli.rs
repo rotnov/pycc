@@ -45,6 +45,15 @@ pub enum Command {
         /// otherwise.
         #[arg(long)]
         release: bool,
+        /// Build a hosted CPython extension module (D-244) instead of a
+        /// native executable: every public module-level function becomes a
+        /// callable of one stable-ABI artifact that a CPython interpreter
+        /// imports. `-o` names that artifact; `docs/CLI_SPEC.md:23-63` is
+        /// the canonical statement of how its suffix and module name are
+        /// derived. Part 1 of #1025 supports `int` parameters and results
+        /// only; any other public signature is a `C0003` capability gap.
+        #[arg(long)]
+        ext: bool,
     },
     Run {
         path: PathBuf,
