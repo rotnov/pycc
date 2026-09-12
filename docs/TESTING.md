@@ -384,7 +384,11 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   byte budget, a `pycc` binary that is absent or not executable, or an
   unwritable `--json` output path. A red job
   therefore means the measurement could not be taken, never that the score was
-  low.
+  low. Every long step in that job -- the LLVM install, the release build, the
+  measurement itself -- carries its own bound, so the job-level
+  `timeout-minutes` is a backstop rather than the first thing to fire: a
+  job-level timeout runs no further steps, which would skip the report upload
+  even though it is guarded by `if: always()`.
 
 ## Planned CPython interop matrix (v0.7)
 

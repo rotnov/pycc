@@ -1145,9 +1145,16 @@ jobs:
   # (scripts/select_codecontests_corpus.py).
   corpus-compile-rate:
     needs: classify-changes
-    if: ${{ !cancelled() && needs.classify-changes.outputs.compiler == 'true' }}
+    if: needs.classify-changes.outputs.compiler == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The cap is the sum of the bounds below it, not a guess: checkout plus
+    # `rustup show` (well under a minute), the LLVM install (capped at 5), the
+    # release build (capped at 12), the measurement (capped at 10 by its own
+    # --max-seconds), and the upload.  Every long step carries its own bound, so
+    # this job-level cap is a backstop rather than the only thing standing
+    # between a wedged step and a killed job -- a job-level timeout runs no
+    # further steps, so `if: always()` on the upload would publish nothing.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -1175,20 +1182,27 @@ jobs:
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
       - name: Build pycc
+        # A cold release build of `pycc` measures around 4 minutes on
+        # ubuntu-latest, so 12 is generous headroom while still being a real
+        # bound: without it, a wedged build would consume the whole job cap and
+        # the job-level timeout would then kill the run before the upload step,
+        # publishing nothing at all.  Same reasoning as the LLVM install above.
+        timeout-minutes: 12
         run: cargo build --release --locked -p pycc
 
       - name: Measure the corpus compile rate
         run: |
           # --max-seconds is set explicitly, below the script's own 1200s
           # default, so the measurement deadline stays inside this job's
-          # 25-minute cap once checkout, the LLVM install (capped at 5) and
-          # the release build have taken their share. The script checks that
-          # deadline at every phase boundary, so it overshoots by at most one
-          # build rather than by a whole problem's worth of runs, which is what
-          # keeps this budget a real bound on the job. Its deadline then
-          # reports `INCOMPLETE: n of M evaluated` and still exits 0; an
-          # Actions timeout would instead kill the job and publish nothing,
-          # which is exactly what this reporting-only job must never do.
+          # 30-minute cap once checkout, the LLVM install (capped at 5) and
+          # the release build (capped at 12) have taken their share. The
+          # script checks that deadline at every phase boundary, so it
+          # overshoots by at most one build rather than by a whole problem's
+          # worth of runs, which is what keeps this budget a real bound on the
+          # job. Its deadline then reports `INCOMPLETE: n of M evaluated` and
+          # still exits 0; an Actions timeout would instead kill the job and
+          # publish nothing, which is exactly what this reporting-only job must
+          # never do.
           python3 -B scripts/check_corpus_compile_rate.py \
             --pycc target/release/pycc \
             --python python3 \
