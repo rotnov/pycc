@@ -219,10 +219,8 @@ def compile_problem(
     """Run ``pycc build``; return (succeeded, diagnostic text, exit status).
 
     ``--release`` is not optional here. The report's median speedup compares the
-    generated program against CPython, and `docs/ROADMAP.md`'s
-    `product-sprint-1` speedup criterion is stated for the shipping profile, so
-    timing an unoptimized build would measure something the criterion never
-    claimed. The exit status is returned because it is what separates a
+    generated program against CPython under the shipping profile, so timing an
+    unoptimized build would measure something this report never claims. The exit status is returned because it is what separates a
     compiler's rejection of the program from an environment that cannot build
     anything -- see `measure`'s own use of it.
     """

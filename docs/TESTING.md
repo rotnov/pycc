@@ -378,9 +378,9 @@ as a statement of what the sprint must achieve.
 - **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
   `compiled N/M`, `matched K/N`, the median speedup against CPython, and the
   diagnostic classes that stopped the failures, as a first/any tally. Each
-  problem is built with `pycc build --release`: the speedup criterion below is
-  stated for the shipping profile, so timing an unoptimized build would measure
-  something that criterion never claimed. `matched` compares the binary's output
+  problem is built with `pycc build --release`: the reported speedup is a
+  statement about the shipping profile, so timing an unoptimized build would
+  measure something this report never claims. `matched` compares the binary's output
   against the expected output on every case after one narrow normalization and
   byte for byte otherwise — CRLF and CR become LF, and a run of trailing
   newlines collapses to exactly one, because the dataset's recorded outputs and
