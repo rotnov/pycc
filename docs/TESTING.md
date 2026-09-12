@@ -460,11 +460,16 @@ rule 6); only numbers are published.
   therefore produced by a generator committed with the benchmark, from a fixed
   integer seed, serialized to one file that all three arms read verbatim; the
   run records the generator's path, the seed, and the SHA-256 of that file. Its
-  size is the one D-244's Context records for the probe. The first run under
-  this protocol fixes the digest, and D-244 rule 6's kill criterion is evaluated
-  only against runs reporting that same digest. A run that changes the
-  generator, the seed, or the digest is a different experiment: report it as a
-  protocol change, never as a comparison against an earlier ratio.
+  size is the one D-244's Context records for the probe. The generator, the
+  seed, and the resulting digest are committed **before** any run may be
+  scored, and a timing whose inputs were not already committed when it ran is
+  inadmissible -- otherwise an evaluator could try workloads until one clears
+  5x and then designate that one as the protocol's first run, which is input
+  selection after the result rather than before it. D-244 rule 6's kill
+  criterion is evaluated only against runs reporting that committed digest. A
+  run that changes the generator, the seed, or the digest is a different
+  experiment: report it as a protocol change, never as a comparison against an
+  earlier ratio.
 - **Correctness precondition.** A timing is admissible only when the arm's
   output equals the CPython arm's output under the conformance harness's own
   comparison. An arm that is faster and wrong scores nothing: it is reported as

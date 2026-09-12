@@ -28,15 +28,24 @@ orders most-specific first: on Linux and macOS the version-and-platform-tagged
 suffix, then `.abi3.so`, then `.so`; on Windows the tagged suffix, then `.pyd`.
 When `OUT` names none of them, `.abi3.so` is appended on Linux and macOS and
 `.pyd` on Windows -- the stable-ABI spelling, since rule 1 builds against
-`Py_LIMITED_API`. When `OUT` already names one, it is honored as written. The
-module name is `OUT`'s basename with the **first matching** suffix from that
-ordered list removed, which is exactly how CPython's own finder derives a name
-from the same file: `m.abi3.so` and `m.cpython-314-x86_64-linux-gnu.so` both
-yield `m`, never `m.abi3` or `m.cpython-314-x86_64-linux-gnu`. Stripping only
-the final `.so` would derive a name the finder never uses and emit a
-`PyInit_` symbol no host would look for. The derived name must be a valid
+`Py_LIMITED_API`. An `OUT` already naming its platform's stable-ABI suffix is
+honored as written, but one naming the interpreter-specific tagged suffix
+(`m.cpython-314-x86_64-linux-gnu.so`, `m.cp314-win_amd64.pyd`) is **rejected**
+rather than honored: rule 1 builds one stable-ABI artifact per platform that
+every later GIL-enabled host is meant to load, and a version-tagged filename
+hides it from exactly those hosts, whose finders search their own tag, then
+`.abi3.so`, then `.so`, and never an earlier interpreter's tag. The module
+name is `OUT`'s basename with the **first matching** suffix from that ordered
+list removed, which is exactly how CPython's own finder derives a name from
+the same file: `m.abi3.so` yields `m`, never `m.abi3`. Stripping only the
+final `.so` would derive a name the finder never uses and emit a `PyInit_`
+symbol no host would look for. The derived name must be a valid **ASCII**
 Python identifier, and it is the `<mod>` in the exported `PyInit_<mod>`, so an
-artifact is importable only under the name its own output path spells.
+artifact is importable only under the name its own output path spells. A
+non-ASCII identifier is rejected rather than encoded: CPython loads such a
+module through `PyInitU_<punycode>` with hyphens replaced by underscores --
+`mód` through `PyInitU_md_5ja`, verified against a live interpreter -- so
+emitting `PyInit_mód` would produce an artifact no host can import.
 D-128's `--interop-policy` and `--pure` do not apply in this mode (D-244
 rule 3) and are rejected alongside it, as is `--lib`.
 
