@@ -142,10 +142,22 @@ element, and panics on an empty one.
 
 - **Three sources, in priority order.** (1) The annotation on an `AnnAssign`
   target — purely syntactic, so this path needs no environment and always
-  works. (2) The target's existing binding, for a re-assignment such as
-  `xs = [1]; ...; xs = []`. (3) A forward scan of the enclosing function body
-  for the first *producer* use. Sources (2) and (3) are best-effort on a
-  rebuilt environment and degrade silently rather than failing.
+  works. (2) *Any* successfully-inferred binding for that name anywhere in the
+  enclosing function, not only one that precedes the empty literal: the
+  environment is built by one whole-function forward pass that completes
+  *before* any rewriting, so `xs = [1]; ...; xs = []` and
+  `xs = []; xs = [1]; ...` both resolve from `list[int]`. (3) A forward scan of
+  the enclosing function body for the first *producer* use. Sources (2) and (3)
+  are best-effort on a rebuilt environment and degrade silently rather than
+  failing.
+- **Why order-insensitivity is safe.** The pass resolves; it never accepts.
+  `check_container_ty` admits only `list[int]` and `dict[str, int]`, so a
+  resolution is either the one element type the program could have compiled
+  with or a `T0034`/`T0036` — and the check phase then re-validates the whole
+  function in true program order, including D-040's sticky-representation rule.
+  A restriction to strictly-prior bindings would only turn some compilable
+  programs into `T0003`; it could not turn an accepted program into a
+  different one.
 - **Producers, not consumers.** Only `xs.append(v)` and `d[k] = v` supply an
   element type. `for x in xs`, `xs[0]`, `len(xs)` and `xs.pop()` *read* a type
   that must already be known; in a single forward pass with no backward
@@ -168,9 +180,12 @@ element, and panics on an empty one.
   tuple-unpacking target (`L, R = [], []`) are *not* part of this: both are
   rejected earlier with `C0001`, as they were before #1021. An empty tuple
   `()` and `set()` are unchanged too: they still report `T0021` (citing #927)
-  and `C0001` respectively. Where a binding name is available the message names it;
-  otherwise it keeps a generic wording. `T0003` was registered for exactly this
-  meaning and never emitted before #1021.
+  and `C0001` respectively. The message names the binding only when the failing
+  empty literal *is* the directly-assigned value (`xs = []`, `d = {}`); a
+  `T0003` raised from a nested element position such as `xs: list[int] = [[]]`
+  keeps the generic wording, because the unresolvable node there is the inner
+  `[]` and not the validly-annotated outer binding. `T0003` was registered for
+  exactly this meaning and never emitted before #1021.
 
 ## Types and representations
 

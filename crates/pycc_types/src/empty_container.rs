@@ -22,7 +22,8 @@
 //!
 //! 1. the annotation on an `AnnAssign` target (`xs: list[int] = []`) --
 //!    purely syntactic, needing no environment at all;
-//! 2. the target's existing binding (`xs = [1]; ...; xs = []`);
+//! 2. *any* successfully-inferred binding for the target anywhere in the
+//!    enclosing function -- not only one that precedes the literal;
 //! 3. a forward scan of the enclosing function body for the first
 //!    *producer* use of the target -- `xs.append(v)` or `d[k] = v`.
 //!
@@ -32,6 +33,30 @@
 //! failures exactly as that function does. A container this pass cannot
 //! resolve is left as the empty literal it was, and the check phase then
 //! reports `T0003`.
+//!
+//! **Source 2 is order-insensitive, not a backward scan.** The whole-function
+//! environment is built by a single forward `bind_local_types_in_body` pass
+//! that completes *before* any rewriting, and is then reused for every
+//! occurrence regardless of position, so `xs = [1]; ...; xs = []` and
+//! `xs = []; xs = [1]; ...` resolve identically. That is safe because this
+//! pass resolves but never accepts: `pycc_hir::check_container_ty` admits
+//! only `list[int]` and `dict[str, int]`, so a resolution is either the one
+//! element type the program could have compiled with or a `T0034`/`T0036`,
+//! and the check phase re-validates the function in true program order
+//! (D-040's sticky-representation rule included). Restricting source 2 to
+//! strictly-prior bindings could only turn some compilable programs into
+//! `T0003`; it could not change which accepted program is produced. The
+//! "only a fully concrete `Ty` is ever stored" invariant is likewise enforced
+//! at that downstream gate rather than here: this pass performs no
+//! `Ty::Infer` check of its own, and a resolved `Ty::Infer` cannot survive
+//! `check_container_ty` to reach MIR.
+//!
+//! The same completed-before-rewriting property is why
+//! `bind_local_types_in_stmt`'s `AnnAssign` arm seeds the declared annotation
+//! when the value does not infer: `xs: list[int] = []`'s raw literal is not
+//! yet rewritten when the environment is built, so without that fallback the
+//! environment never learned `xs: list[int]` and a resolution derived from
+//! `xs` (`for x in xs: ys.append(x)`) reported a spurious `T0003`.
 //!
 //! **Producers, not consumers.** `for x in xs`, `xs[0]`, `len(xs)` and
 //! `xs.pop()` *read* an element type that is already known; in a single
@@ -306,11 +331,23 @@ pub(crate) fn unresolved_dict() -> Diagnostic {
 }
 
 /// Names the binding in a `T0003` raised while checking `target`'s assigned
-/// value. `T0003`'s span is the `Span::new(0, 0)` every container diagnostic
+/// `value`. `T0003`'s span is the `Span::new(0, 0)` every container diagnostic
 /// in this crate uses (`HirStmt::Assign` carries no span at all), so the
 /// binding's name in the message is the only locator a user gets.
-pub(crate) fn name_binding(mut diagnostic: Diagnostic, target: &str) -> Diagnostic {
-    if diagnostic.code == "T0003" {
+///
+/// The substitution is gated on `value` *itself* being the empty literal that
+/// failed (#1021 review round 1). A `T0003` also propagates out of a nested
+/// element position -- `xs: list[int] = [[]]` fails on the inner `[]` while
+/// `xs` is validly annotated -- and naming `xs` there points the user at the
+/// wrong node. Such a diagnostic keeps `unresolved_list`/`unresolved_dict`'s
+/// generic `" here"` wording, which is the only honest locator available when
+/// the failing node is not the assigned value.
+pub(crate) fn name_binding(
+    mut diagnostic: Diagnostic,
+    target: &str,
+    value: &HirExpr,
+) -> Diagnostic {
+    if diagnostic.code == "T0003" && empty_literal(value).is_some() {
         diagnostic.message = diagnostic
             .message
             .replace(" here", &format!(" for `{target}`"));

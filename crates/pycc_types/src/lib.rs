@@ -765,9 +765,21 @@ pub(crate) fn bind_local_types_in_stmt(
         } => {
             if let Some(val) = value {
                 bind_named_expr_types_in_expr(env, local_names, val);
-                if let Ok(ty) = infer_expr_in(env, local_names, val) {
-                    env.bind(target.clone(), ty);
-                }
+                // #1021 review round 1: when the value does not infer, fall
+                // back to the declared annotation rather than leaving the
+                // name unbound. The `value == None` branch below already
+                // seeds the annotation, and an `xs: list[int] = []` is
+                // exactly as informative about `xs`'s type -- but its raw
+                // empty literal cannot infer, so without this fallback the
+                // pre-pass environment never learned `xs: list[int]` and a
+                // later resolution derived from `xs` (`for x in xs:
+                // ys.append(x)`) found `x` unbound and fell through to
+                // `T0003`. The annotation is what the check phase will
+                // validate the value against anyway, so seeding it cannot
+                // introduce a binding the checked program does not have.
+                let ty =
+                    infer_expr_in(env, local_names, val).unwrap_or_else(|_| annotation.clone());
+                env.bind(target.clone(), ty);
             } else {
                 env.bind(target.clone(), annotation.clone());
             }
@@ -2758,12 +2770,14 @@ fn check_stmt_in_function(
         }
         HirStmt::Assign { target, value } => {
             // #1021: `name_binding` is a no-op for every code but `T0003`,
-            // where it substitutes the binding's name into the message --
-            // the only locator a `T0003` gets, since `HirStmt::Assign`
-            // carries no span and every container diagnostic in this crate
-            // renders at `1:1`.
+            // and for a `T0003` it substitutes the binding's name only when
+            // `value` is itself the empty literal that failed -- the only
+            // locator a `T0003` gets, since `HirStmt::Assign` carries no span
+            // and every container diagnostic in this crate renders at `1:1`.
+            // A `T0003` from a nested element position (`[[]]`) keeps the
+            // generic wording; see `name_binding`'s own documentation.
             let ty = infer_expr_in(env, local_names, value)
-                .map_err(|d| empty_container::name_binding(d, target))?;
+                .map_err(|d| empty_container::name_binding(d, target, value))?;
             check_assignment(env, target, ty)
         }
         HirStmt::AnnAssign {
@@ -2774,7 +2788,7 @@ fn check_stmt_in_function(
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)
-                    .map_err(|d| empty_container::name_binding(d, target))?;
+                    .map_err(|d| empty_container::name_binding(d, target, value))?;
                 if !class::is_assignable_env(env, &inferred, annotation) {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.

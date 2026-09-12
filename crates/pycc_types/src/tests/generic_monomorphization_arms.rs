@@ -462,8 +462,14 @@ fn bind_local_types_in_stmt_skips_assign_when_inference_fails() {
     assert_eq!(env.lookup("x"), None);
 }
 
+/// #1021 review round 1: an `AnnAssign` whose *value* does not infer still
+/// seeds the declared annotation, exactly as the valueless
+/// `x: int` form already did. Leaving the name unbound made
+/// `xs: list[int] = []` invisible to the empty-container pre-pass
+/// environment -- the raw literal cannot infer before the pass rewrites it --
+/// so a later resolution derived from `xs` reported a spurious `T0003`.
 #[test]
-fn bind_local_types_in_stmt_skips_annassign_when_inference_fails() {
+fn bind_local_types_in_stmt_annassign_falls_back_to_the_annotation() {
     let mut env = Environment::new();
     let local_names = ["x"];
     let stmt = HirStmt::AnnAssign {
@@ -473,7 +479,7 @@ fn bind_local_types_in_stmt_skips_annassign_when_inference_fails() {
         is_final: false,
     };
     bind_local_types_in_stmt(&mut env, &local_names, &stmt);
-    assert_eq!(env.lookup("x"), None);
+    assert_eq!(env.lookup("x"), Some(Ty::Int));
 }
 
 #[test]

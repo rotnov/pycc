@@ -167,10 +167,11 @@ print(f())
     assert_eq!(output.stdout, b"5\n");
 }
 
-/// Backward resolution: the name already has a binding when the empty literal
-/// re-assigns it, so the existing binding supplies the element type. D-040's
-/// sticky-representation rule (`T0023`) still applies -- the re-assignment
-/// keeps the same representation, not merely the same `Ty`.
+/// Resolution from another binding of the same name: the environment already
+/// holds `list[int]` for `xs` when the empty literal re-assigns it, so that
+/// binding supplies the element type. D-040's sticky-representation rule
+/// (`T0023`) still applies -- the re-assignment keeps the same
+/// representation, not merely the same `Ty`.
 #[test]
 fn an_empty_list_reassignment_resolves_from_the_existing_binding() {
     let output = check_build_and_run(
@@ -290,4 +291,54 @@ print(f())
     );
     assert!(output.status.success());
     assert_eq!(output.stdout, b"4\n");
+}
+
+/// Source 2 is *order-insensitive*, not a backward scan: the whole-function
+/// environment is completed before any rewriting, so a binding that appears
+/// *after* the empty literal resolves it just as one before it would. This is
+/// safe rather than merely convenient -- `check_container_ty` admits only
+/// `list[int]`/`dict[str, int]`, and the check phase re-validates in true
+/// program order -- and is pinned here because the module doc and D-245 now
+/// describe exactly this behaviour.
+#[test]
+fn an_empty_list_resolves_from_a_later_binding_of_the_same_name() {
+    let output = check_build_and_run(
+        "later_binding",
+        "\
+def f() -> int:
+    xs = []
+    xs = [1]
+    return xs[0]
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+/// #1021 review round 1: an annotated empty container seeds the pre-pass
+/// environment from its *annotation*. `ys`'s element type comes from `x`,
+/// whose own type comes from `xs`'s binding -- and before the fix
+/// `xs: list[int] = []` left `xs` unbound (its raw literal cannot infer
+/// before the pass rewrites it), so `x` was unbound too and `ys = []` fell
+/// through to a spurious `T0003`.
+#[test]
+fn an_annotated_empty_list_seeds_the_environment_for_a_dependent_resolution() {
+    let output = check_build_and_run(
+        "annotation_seeds_env",
+        "\
+def f() -> int:
+    xs: list[int] = []
+    xs.append(7)
+    ys = []
+    for x in xs:
+        ys.append(x)
+    return len(ys)
+
+print(f())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
 }

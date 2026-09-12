@@ -1203,7 +1203,10 @@ fn t0003_call_argument_has_no_binding() {
 
 /// `xs: list[int] = [[]]`: the outer literal is a non-empty `ListLiteral`, so
 /// the pass never looks at it; the inner `[]` is an element position with no
-/// annotation, no binding, and no producer of its own.
+/// annotation, no binding, and no producer of its own. The message therefore
+/// keeps the generic `" here"` wording rather than naming `xs`: `xs` itself is
+/// validly annotated, and the unresolvable node is the inner literal
+/// (#1021 review round 1).
 #[test]
 fn t0003_nested_empty_list() {
     assert_diagnostic_matches_fixture("t0003_nested_empty_list");
