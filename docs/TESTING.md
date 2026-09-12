@@ -336,7 +336,90 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Planned mechanics:
 - Per-project dashboard: % files compiled, % tests passed, RC-elision rate, binary size, speed vs CPython on the project's own benchmarks.
 - Regression vs previous release = release blocker.
 
-No corpus workflow, pinned corpus inputs, or pass-rate dashboard exists on current `main`.
+No open-source-package corpus workflow, pinned package inputs, or per-project pass-rate dashboard exists on current `main`. The separate competitive-programming corpus below is a different corpus with a different shape, and does exist.
+
+## Corpus: competitive-programming stdin/stdout programs (`product-sprint-1`)
+
+A second, narrower corpus, vendored and running today. It measures the product
+bet in `docs/ROADMAP.md`'s `product-sprint-1`: whether pycc compiles real
+single-file stdin/stdout Python unchanged and runs it faster than CPython.
+
+- **Inputs.** `tests/corpus/codecontests/` — a pinned subset of the DeepMind
+  CodeContests dataset (CC BY 4.0; see that directory's `NOTICE` and `LICENSE`),
+  checked in as plain files rather than a submodule so a clean clone measures
+  offline. 200 steering problems under `problems/`, 100 under `holdout/`. Each
+  problem is one PYTHON3 solution of at most 100 lines, importing only an
+  explicit stdlib allowlist, plus its public and private test cases packed into
+  one `tests.json`. Every vendored file's sha256 is in `manifest.json`.
+  Regenerate with `python3 scripts/select_codecontests_corpus.py` (needs
+  `pyarrow` and network access; deliberately not a repository dependency).
+- **Holdout discipline.** The holdout set is excluded from the default
+  denominator and reported only under `--include-holdout`. Do not read it when
+  deciding what to implement — it exists to show that gains on the steering set
+  generalise.
+- **Reading the holdout rate.** Neither the report nor its JSON splits the
+  denominator by set, so the holdout rate comes from two runs — one default, one
+  `--include-holdout`. Subtract their `compiled` **counts**, never their rates:
+  the default run's denominator is 200 and the merged run's is 300, so a
+  difference of rates is not the gap between the two sets at all. The holdout
+  rate is `(merged compiled − default compiled) / 100`, and the steering rate is
+  the default run's own. The method is valid only when neither run reports
+  `INCOMPLETE`: `manifest.json` orders all 200 steering records before all 100
+  holdout records, so a run that exhausts `--max-seconds` drops holdout problems
+  first, and the two runs would then cover different evaluated subsets.
+  `docs/ROADMAP.md`'s `product-sprint-1` holdout acceptance item is read this
+  way.
+- **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
+  `compiled N/M`, `matched K/N`, the median speedup against CPython, and the
+  diagnostic classes that stopped the failures, as a first/any tally. Each
+  problem is built with `pycc build --release`: the speedup criterion below is
+  stated for the shipping profile, so timing an unoptimized build would measure
+  something that criterion never claimed. `matched` compares the binary's output
+  against the expected output on every case after one narrow normalization and
+  byte for byte otherwise — CRLF and CR become LF, and a run of trailing
+  newlines collapses to exactly one, because the dataset's recorded outputs and
+  a program's own final newline disagree about trailing whitespace often enough
+  that a byte-exact rule would report correct programs as mismatched. Output
+  that is empty stays empty and does not match a blank line. Speedup is measured
+  on each problem's largest vendored case, best of three runs, and counts only
+  problems whose CPython wall time reaches 200 ms — below that the ratio
+  measures process startup, so those problems are reported as excluded rather
+  than folded in. A matched problem whose timing runs disagree with the case is
+  reported as dropped, for the same reason: every matched problem is accounted
+  for in the report rather than quietly missing from the sample count.
+  `--json` writes the same data machine-readably. The script
+  reads the corpus, writes nothing inside it, and performs no network I/O.
+- **Gate status: reporting only.** CI's `corpus-compile-rate` job is
+  non-blocking by omission from `ci-gate`'s `needs`, not by
+  `continue-on-error`. The metric exits 0 for every measurement outcome,
+  including a zero compile rate and exhausting its own `--max-seconds` budget
+  (which prints `INCOMPLETE: n of M evaluated`). That budget is checked at every
+  phase boundary, not only between problems, so the run overshoots it by at most
+  one build rather than by a whole problem's builds, case runs and timing legs;
+  a problem abandoned before its outcome is final is left out of the tallies
+  entirely, and one abandoned after its cases have been checked keeps its
+  correctness verdict and counts its lost sample as dropped. It exits non-zero
+  only when the harness is broken: a missing or corrupt manifest entry, a
+  problem with no `solution.py` or no `tests.json` manifest entry, an unreadable
+  corpus, a malformed `tests.json` payload — including a case that is not an
+  object or whose `input`/`output` is not a string — a corpus over its own byte
+  budget, a declared `steering_count`/`holdout_count` that disagrees with the
+  manifest's own per-set records, a `pycc` binary that is absent or not
+  executable, a scratch directory that cannot be created under `RUNNER_TEMP`,
+  an unwritable `--json` output path, or either of the two ways a toolchain
+  rather than a program can be what failed: a build that exits 2, which
+  `docs/CLI_SPEC.md` reserves for an invalid invocation or a broken environment
+  and which this script's own fixed invocation therefore narrows to the
+  environment, and every evaluated build failing while emitting no
+  `error[CODE]` diagnostic at all, which is what a linker driver that runs and
+  then fails looks like. A single undiagnosed failure stays a tallied failure
+  class, since one such problem is a compiler defect worth reporting. A red job
+  therefore means the measurement could not be taken, never that the score was
+  low. Every long step in that job -- the LLVM install, the release build, the
+  measurement itself -- carries its own bound, so the job-level
+  `timeout-minutes` is a backstop rather than the first thing to fire: a
+  job-level timeout runs no further steps, which would skip the report upload
+  even though it is guarded by `if: always()`.
 
 ## Planned CPython interop matrix (v0.7)
 

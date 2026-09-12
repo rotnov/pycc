@@ -14,7 +14,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [CLI_SPEC.md](./CLI_SPEC.md) | Commands, flags, `pycc.toml`, planned interop policies, exit codes, diagnostic formats | `pycc` driver |
 | [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
-| [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
+| [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, both corpora, corpus bot | CI, `pycc_testkit` |
 | [CI feedback routing design](./superpowers/specs/2026-08-15-ci-feedback-routing-design.md) | Fail-closed change classification, required-gate topology, cancellation, and the protected three-merge activation sequence | `scripts/classify_ci_changes.py`, CI workflow, D-103 policy successors |
 | [ROADMAP.md](./ROADMAP.md) | Delivery status for the repository tree in the containing commit plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
 | [decisions/](./decisions/README.md) | ADR log, one file per decision — see the generated index for the full list | irreversible calls |

@@ -1133,6 +1133,98 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all -- --check
 
+  # Reporting only, and deliberately absent from ci-gate's `needs`: this job
+  # publishes how much of the vendored CodeContests corpus pycc compiles
+  # (#1015, Part 1 of #1014) and must never block a merge. Non-blocking by
+  # omission rather than `continue-on-error`, so a broken harness is still
+  # visible as a red job instead of a silently green one. The metric itself
+  # exits 0 for every measurement outcome, including exhausting its own
+  # --max-seconds budget; it exits non-zero only when the corpus or the
+  # toolchain is unusable. It reads only the checked-in corpus and performs no
+  # network I/O -- regenerating the subset is a local developer task
+  # (scripts/select_codecontests_corpus.py).
+  corpus-compile-rate:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.compiler == 'true'
+    runs-on: ubuntu-latest
+    # The cap is the sum of the bounds below it, not a guess: checkout plus
+    # `rustup show` (well under a minute), the LLVM install (capped at 5), the
+    # release build (capped at 12), the measurement (capped at 12 -- a 600s
+    # --max-seconds budget plus at most one 120s build, the script's own
+    # BUILD_TIMEOUT_SECONDS, because the deadline is only checked at phase
+    # boundaries), and the upload.  That sums to 30.5, so 35 leaves the
+    # backstop above every bound rather than under one.  Every long step
+    # carries its own bound, so this job-level cap is a backstop rather than
+    # the only thing standing between a wedged step and a killed job -- a
+    # job-level timeout runs no further steps, so `if: always()` on the upload
+    # would publish nothing.
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        timeout-minutes: 5
+        run: |
+          # apt.llvm.org has been observed to wedge ubuntu-latest (x86_64)
+          # runners for hours with no failure signal (issue #614). Bound
+          # both the download itself and the whole step so a stalled mirror
+          # fails fast and the job can simply be re-run, instead of
+          # consuming CI capacity for hours.
+          wget --timeout=30 --tries=3 https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+          # links it explicitly, so it must be installed separately here.
+          sudo apt-get install -y libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Build pycc
+        # A cold release build of `pycc` measures around 4 minutes on
+        # ubuntu-latest, so 12 is generous headroom while still being a real
+        # bound: without it, a wedged build would consume the whole job cap and
+        # the job-level timeout would then kill the run before the upload step,
+        # publishing nothing at all.  Same reasoning as the LLVM install above.
+        timeout-minutes: 12
+        run: cargo build --release --locked -p pycc
+
+      - name: Measure the corpus compile rate
+        run: |
+          # --max-seconds is set explicitly, below the script's own 1200s
+          # default, so the measurement deadline stays inside this job's
+          # 35-minute cap once checkout, the LLVM install (capped at 5) and
+          # the release build (capped at 12) have taken their share. The
+          # script checks that deadline at every phase boundary, so it
+          # overshoots by at most one build -- 120s, its own
+          # BUILD_TIMEOUT_SECONDS -- rather than by a whole problem's worth of
+          # runs, which is what keeps this step's worst case at 12 minutes and
+          # this budget a real bound on the job. That internal deadline is
+          # deliberately the only bound on this step: it reports `INCOMPLETE:
+          # n of M evaluated` and still exits 0, whereas a step-level
+          # `timeout-minutes` firing here would kill the step and publish
+          # nothing, which is exactly what this reporting-only job must never
+          # do.
+          python3 -B scripts/check_corpus_compile_rate.py \
+            --pycc target/release/pycc \
+            --python python3 \
+            --max-seconds 600 \
+            --json "$RUNNER_TEMP/corpus-compile-rate.json"
+
+      - name: Upload the corpus compile-rate report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: corpus-compile-rate
+          path: ${{ runner.temp }}/corpus-compile-rate.json
+          if-no-files-found: warn
+          retention-days: 90
+
   ci-gate:
     needs:
       - classify-changes

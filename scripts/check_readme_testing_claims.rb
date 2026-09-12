@@ -9,7 +9,10 @@
 #
 #   1. Conformance suite  — current, backed by tests/conformance.rs and
 #      ci.yml's conformance oracle steps.
-#   2. Real-world corpus  — planned, no corpus workflow or directory.
+#   2. Real-world corpus  — planned, no open-source-package corpus
+#      workflow or directory.  The separate competitive-programming
+#      corpus under tests/corpus/ is a different mechanism and is not
+#      evidence for this one.
 #   3. Ecosystem bot      — planned, no scheduled bot workflow.
 #
 # This validator goes beyond text-pattern matching (check_readme_claims.rb
@@ -65,9 +68,11 @@ MECHANISMS = [
     label: "real-world corpus",
     status: :planned,
     # Evidence that would make it current — none of these should exist.
-    evidence_paths: [
-      REPO_ROOT / "tests" / "corpus",
-    ],
+    # tests/corpus/ is deliberately absent from this list: it holds the
+    # separate competitive-programming corpus, which is a different mechanism
+    # with a different shape, so its existence says nothing about whether the
+    # open-source-package corpus this entry describes is live.
+    evidence_paths: [],
     evidence_workflow_glob: "corpus*.yml",
     # Present-tense verbs that are forbidden because no evidence exists.
     present_tense_verbs: [
