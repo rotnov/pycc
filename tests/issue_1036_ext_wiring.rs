@@ -177,6 +177,63 @@ fn a_native_build_of_the_same_source_is_unaffected_by_the_new_flag() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
 }
 
+/// The three review findings whose symptoms only exist in a *loaded*
+/// artifact, in one build so they cost one compile between them.
+///
+/// `#[ignore]`d for the same reason as the oracle below -- it needs a
+/// CPython with development headers -- and, like it, run on every Tier-1
+/// `native-build-test` leg through that job's `--include-ignored`.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_built_ext_module_keeps_its_globals_collapses_a_rebind_and_preserves_oserror() {
+    let dir = ScratchDir::new("ext_oracle_review").expect("scratch");
+    let src = write(
+        &dir,
+        // A module-level `str` read back through an export. Native mode
+        // decrefs these globals when `main` returns; `Py_mod_exec` is not a
+        // process exit, so doing it here freed storage the wrappers still
+        // read -- a segfault under a checking allocator and a wrong answer
+        // under the ordinary one, which is what the second call catches.
+        "greeting = \"hello world\"\n\n\
+         def size() -> int:\n    t = greeting\n    if t == \"hello world\":\n        return 1\n    return 0\n\n\
+         def twice(x: int) -> int:\n    return x\n\n\
+         def twice(x: int) -> int:\n    return x * 2\n\n\
+         def boom(n: int) -> int:\n    if n == 0:\n        raise FileNotFoundError(\"no such probe\")\n    return n\n",
+    );
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("pycc_oracle_review"))
+        .arg("--ext")
+        // The rebind above used to reach the C compiler as a duplicate
+        // `pycc_ext_wrap_twice`, so this build failed outright.
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let script = "import pycc_oracle_review as m\n\
+                  assert m.size() == 1, m.size()\n\
+                  assert m.size() == 1, 'the module global did not survive the first call'\n\
+                  assert m.twice(21) == 42, m.twice(21)\n\
+                  try:\n    m.boom(0)\n\
+                  except FileNotFoundError as e:\n    assert str(e) == 'no such probe', str(e)\n\
+                  else:\n    raise AssertionError('the OSError-family class did not cross')\n\
+                  print('ok')\n";
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(script)
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        stderr_of(&run)
+    );
+}
+
 /// The real artifact, against a real interpreter: builds an extension
 /// module and asks CPython to import it and call it.
 ///
