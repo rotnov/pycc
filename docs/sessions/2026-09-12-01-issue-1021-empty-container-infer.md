@@ -7,13 +7,13 @@ Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
 merge base and the remote default-branch tip re-resolved immediately before this
 file was committed. It carries `Fixes #1021`, and the
 `closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
-#1021 -- re-run after the last `gh pr edit`. Fifteen commits: the pass itself,
+#1021 -- re-run after the last `gh pr edit`. Seventeen commits: the pass itself,
 the review-round fixes, the retrospective entries below, and this snapshot, so
 the authoritative head is whatever `gh pr view 1035` reports once this file
 lands.
 
-Seven review threads exist, every one opened by the `chatgpt-codex-connector`
-bot across six rounds, and all seven are resolved -- each answered with a reply
+Eight review threads exist, every one opened by the `chatgpt-codex-connector`
+bot across seven rounds, and all eight are resolved -- each answered with a reply
 citing the commit that fixed it. `required_conversation_resolution` is on, so
 that state is a merge precondition, alongside the required `audit` and `ci-gate`
 checks. Those checks re-run on every push; this snapshot's own commit moves the
@@ -21,14 +21,23 @@ head, so the run that gates the merge is the one started after it, not any
 earlier green run.
 
 The full local gate set ran green from a single-writer baseline against
-`1c796ad1`, the last commit that changes Rust sources -- every commit after it
-touches only `docs/`, which the changed-line coverage gate does not instrument:
-clippy (warnings denied), `cargo test --workspace`,
+`636a5719`, the last commit that changes Rust sources -- this snapshot is the
+only commit after it, and it touches only `docs/`, which the changed-line
+coverage gate does not instrument. The coverage diff was regenerated in the same
+invocation that ran the gate: clippy (warnings denied), `cargo test --workspace`,
 `cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
 `scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
 `--check`, decision immutability, and site-pin merge currency all exit 0.
-Changed-line coverage is 305 of 305 (100.00%); workspace total is 37581/37615
+Changed-line coverage is 359 of 359 (100.00%); workspace total is 37635/37669
 (99.91%), reported and not enforced.
+
+One local flake is worth naming so a future run does not mistake it for a
+regression: `test_check_corpus_compile_rate.MaxSecondsTests.test_a_budget_that_expires_before_timing_still_records_the_match`
+failed once when the `scripts/` suite ran concurrently with
+`cargo llvm-cov --workspace`, and passed in isolation and on a second full run
+of the suite. The test asserts on a wall-clock compile budget, so it is
+load-sensitive; the file is owned by #1024/#1030 on `main` and is untouched by
+this branch.
 
 ## Why this snapshot exists
 
