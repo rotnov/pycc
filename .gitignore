@@ -20,6 +20,10 @@ target
 target/
 # pycc cache
 .pycc/
+# Corpus regeneration's download cache (scripts/select_codecontests_corpus.py's
+# --cache-dir default): several hundred megabytes of pinned dataset shards, not
+# tracked evidence.
+.cache/
 # Python tooling caches
 __pycache__/
 *.py[cod]

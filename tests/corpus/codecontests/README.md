@@ -49,6 +49,8 @@ python3 scripts/select_codecontests_corpus.py
 ```
 
 Re-running it against the same pinned revision rewrites the same bytes, so a
-regeneration that changes nothing leaves the working tree clean. The selector
-fails loudly with a per-filter rejection histogram rather than silently
-shrinking the corpus.
+regeneration that changes nothing leaves the working tree clean. The pinned
+shards themselves are downloaded into `--cache-dir` (`.cache/codecontests` by
+default, several hundred megabytes), which `.gitignore` excludes: the cache is
+a local download, never tracked evidence. The selector fails loudly with a
+per-filter rejection histogram rather than silently shrinking the corpus.
