@@ -565,20 +565,25 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Same gap as the `python3.14` alias above, one name over:
-      # actions/setup-python's Windows install produces only a plain
-      # `python.exe`, never a `python3.exe`. Without this copy, `python3`
-      # on the Windows leg either fails to resolve or silently resolves to
-      # some other preinstalled interpreter later on PATH -- not the 3.13
-      # just installed, which is the whole point of the step above. Both
-      # `pycc build --ext`'s default probe and the hosted smoke test in
-      # `tests/issue_1036_ext_wiring.rs` look up exactly that one name.
-      - name: Alias python3 (Windows lacks an unversioned python binary)
+      # Both `pycc build --ext`'s default probe and the hosted smoke test in
+      # `tests/issue_1036_ext_wiring.rs` look up exactly the name `python3`,
+      # which must resolve to the 3.13 installed above rather than to some
+      # other preinstalled interpreter later on PATH. Whether
+      # actions/setup-python's Windows install already provides that name is
+      # not a property to assume in either direction: the current image ships
+      # `python3.exe` as a hard link beside `python.exe` (an unguarded `cp`
+      # fails there with "are the same file"), while the same step is a real
+      # need on an image that ships only `python.exe`. So test, then copy.
+      - name: Alias python3 when the Windows install lacks that name
         if: runner.os == 'Windows'
         shell: bash
         run: |
           PY_DIR="$(cygpath -u "$pythonLocation")"
-          cp "$PY_DIR/python.exe" "$PY_DIR/python3.exe"
+          if [ -e "$PY_DIR/python3.exe" ]; then
+            echo "python3.exe already present in $PY_DIR"
+          else
+            cp "$PY_DIR/python.exe" "$PY_DIR/python3.exe"
+          fi
 
       # Fails fast and unambiguously when the floor interpreter or its
       # development headers are missing, rather than letting the `--ext`
