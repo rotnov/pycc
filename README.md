@@ -64,7 +64,7 @@ claim that pycc is ready to replace released tools:
 
 | | Enforces types at compile time | Native executable without CPython | Standard Python input |
 |---|---|---|---|
-| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ native/`--pure`; CPython bundled only for permitted interop | ✅ CPython 3.14 target |
+| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ native/`--pure`; CPython bundled only for embedded interop | ✅ CPython 3.14 target |
 | LPython | ✅ typed subset | ✅ AOT executable | ⚠️ CPython-compatible subset |
 | Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |
 | Nuitka | ❌ | ❌ packages CPython runtime components | ✅ compatibility-focused |

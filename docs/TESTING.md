@@ -347,10 +347,9 @@ telemetry, not a contract. It carried `product-sprint-1`'s acceptance until the
 2026-09-12 redirection
 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md));
 `docs/ROADMAP.md`'s `product-sprint-1` section now owns that sprint's
-acceptance, and the benchmark protocol for the hosted `ext` artifact is
-specified there and in this document when that artifact lands
-([#1025](https://github.com/rotnov/pycc/issues/1025)). Do not read this section
-as a statement of what the sprint must achieve.
+acceptance, and "Hosted `ext` benchmark protocol" below is the methodology that
+measures it. Do not read this section as a statement of what the sprint must
+achieve.
 
 - **Inputs.** `tests/corpus/codecontests/` — a pinned subset of the DeepMind
   CodeContests dataset (CC BY 4.0; see that directory's `NOTICE` and `LICENSE`),
@@ -380,8 +379,9 @@ as a statement of what the sprint must achieve.
   diagnostic classes that stopped the failures, as a first/any tally. Each
   problem is built with `pycc build --release`: the reported speedup is a
   statement about the shipping profile, so timing an unoptimized build would
-  measure something this report never claims. `matched` compares the binary's output
-  against the expected output on every case after one narrow normalization and
+  measure something this report never claims. `matched` compares the binary's
+  output against the expected output on every case after one narrow
+  normalization and
   byte for byte otherwise — CRLF and CR become LF, and a run of trailing
   newlines collapses to exactly one, because the dataset's recorded outputs and
   a program's own final newline disagree about trailing whitespace often enough
@@ -426,6 +426,65 @@ as a statement of what the sprint must achieve.
   `timeout-minutes` is a backstop rather than the first thing to fire: a
   job-level timeout runs no further steps, which would skip the report upload
   even though it is guarded by `if: always()`.
+
+## Hosted `ext` benchmark protocol (product-sprint-1)
+
+`docs/ROADMAP.md`'s `product-sprint-1` acceptance turns on one measured ratio,
+and
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6 states that ratio's threshold and its publication rule. This section
+fixes the methodology only. It is written before the artifact exists on
+purpose: a protocol chosen after a result is seen decides the bet instead of
+measuring it, and the same implementation can otherwise pass or fail depending
+on how it was timed. The reference codebase is proprietary, so nothing here or
+in the report names it or reproduces its source ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6); only numbers are published.
+
+- **Subject.** One function — the reference codebase's hot loop — byte-identical
+  across all three arms. Compiling unchanged is part of the claim, so an arm
+  that edits the source to make it compile has failed rather than scored.
+- **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
+  artifact. All three run back to back in one session on one machine, on the
+  same OS and power profile, with no other timed work on the box.
+- **Versions.** The interpreter is the conformance oracle's pinned CPython (see
+  "Python 3.14.7 oracle transition" above), GIL-enabled, and it is both the
+  baseline arm and the host that imports the `ext` artifact — the loader and the
+  comparison are the same interpreter. Cython is pinned at 3.1.6, in
+  pure-Python mode with `annotation_typing` enabled and its generated C compiled
+  `-O2`. The pycc arm is built `--release`, the shipping profile. Every one of
+  these versions is restated in the report, because a later run that changes one
+  is a different experiment.
+- **Input.** The fixed workload D-244's Context records for the probe, at the
+  same size, generated once before the first arm and reused verbatim by all
+  three. Changing the workload is a change of protocol, recorded as such rather
+  than compared against an earlier number.
+- **Correctness precondition.** A timing is admissible only when the arm's
+  output equals the CPython arm's output under the conformance harness's own
+  comparison. An arm that is faster and wrong scores nothing: it is reported as
+  a failure, never as a ratio.
+- **Warm-up.** One untimed full run per arm before any timed run, so page
+  faults, dynamic-loader work, and the interpreter's own caches are paid outside
+  the measurement. For the `ext` arm that untimed run also pays the import and
+  the first call through each export wrapper.
+- **Replicates and statistic.** Seven timed runs per arm; the arm's figure is
+  the median of its seven, and each speedup is a ratio of medians. Report the
+  per-arm minimum and maximum alongside it. Never a mean — one descheduled run
+  moves a mean and leaves a median where it was.
+- **Timing boundary.** The clock runs inside the host interpreter:
+  `time.perf_counter_ns()` immediately before the call into the function under
+  test and immediately after it returns. The export wrappers' argument unpacking
+  and result packing are therefore inside the boundary, because a caller pays
+  them, while import, module load, argument construction, and building the
+  artifact are outside it for every arm.
+- **Reporting.** The report publishes the three medians, their minima and
+  maxima, both ratios (versus CPython and versus Cython), the replicate count,
+  the machine and OS, and the pinned versions above. The threshold those numbers
+  are judged against is D-244 rule 6's and is not restated here.
+- **The compile-unchanged count.** `product-sprint-1`'s second acceptance item
+  is a count, not a timing: how many of the reference codebase's annotated
+  functions compile unchanged as part of an `ext` artifact, over how many were
+  attempted. A function counts only with its source byte-identical to the
+  original; both numbers are published, never the ratio alone.
 
 ## Planned CPython interop matrix (v0.7)
 

@@ -20,7 +20,16 @@ native binary at `OUT`. Planned v0.7 embedded-mode builds with a permitted
 CPython-backed import instead use `OUT` as the deployment-artifact destination
 for an autonomous application bundle. D-128 deliberately defers the bundle's
 exact file layout until the v0.7 resolver and packaging plan is accepted. The
-planned hosted `ext` mode is the exception to both (D-244).
+planned hosted `ext` mode is the exception to both (D-244 rule 1):
+`pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
+never an executable or a bundle. The platform extension is `.so` on Linux and
+macOS and `.pyd` on Windows, appended when `OUT` names none and honored as
+written when it names one. The module name is `OUT`'s basename with that
+platform extension removed -- the same name CPython's own finder derives from
+the file -- it must be a valid Python identifier, and it is the `<mod>` in the
+exported `PyInit_<mod>`, so an artifact is importable only under the name its
+own output path spells. D-128's `--interop-policy` and `--pure` do not apply in
+this mode (D-244 rule 3) and are rejected alongside it, as is `--lib`.
 
 Every value after `pycc run`'s `--` is forwarded unchanged and in order as
 the generated program's own process arguments, including a value that
@@ -171,6 +180,10 @@ directory once project mode exists.
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable
+--ext               planned v0.7 hosted mode: emit a CPython extension module
+                    instead of an executable (D-244 rule 1; see the `OUT`
+                    contract above); conflicts with `--lib`,
+                    `--interop-policy`, and `--pure`
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
                     planned v0.7 embedded-mode policy for CPython-backed
