@@ -338,7 +338,11 @@ which the artifact is an executable that carries its own interpreter. The hosted
 `ext` mode added by D-244 shares the import classification and the typed
 boundary but none of the bundling, policy, or GIL-ownership rules below: an
 `ext` artifact is loaded by an external CPython that owns the environment and
-the GIL, and #1025/#1026 specify its contract.
+the GIL, and #1025/#1026 specify its contract. That mode's typed boundary
+additionally faces callers pycc does not compile, so what a typed export
+wrapper does with an argument that violates its annotation is D-244 rule 7 —
+the oracle is scoped to annotation-conforming calls and the wrapper raises
+`TypeError` outside them — and it is not restated here.
 
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge
