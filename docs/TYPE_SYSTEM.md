@@ -162,6 +162,12 @@ element, and panics on an empty one.
   element type. `for x in xs`, `xs[0]`, `len(xs)` and `xs.pop()` *read* a type
   that must already be known; in a single forward pass with no backward
   unification they cannot produce one.
+- **Producers in statement position only.** `xs.append(v)` is also a valid
+  *expression* (`y = xs.append(v)` binds `None`), and that form does not
+  resolve an empty literal — `xs = []` whose only `append` is a value-position
+  one reports `T0003`. The restriction mirrors the rewrite side, which visits
+  direct assignment values and block bodies and never descends into nested
+  expression positions.
 - **First-wins within a scope.** When two branches assign `[]` to the same
   name with different producers, both nodes take the first producer's type and
   the second branch's `append` reports the ordinary element-type mismatch. One

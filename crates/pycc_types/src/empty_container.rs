@@ -25,7 +25,8 @@
 //! 2. *any* successfully-inferred binding for the target anywhere in the
 //!    enclosing function -- not only one that precedes the literal;
 //! 3. a forward scan of the enclosing function body for the first
-//!    *producer* use of the target -- `xs.append(v)` or `d[k] = v`.
+//!    *producer* use of the target -- `xs.append(v)` or `d[k] = v`, in
+//!    statement position only (see [`find_producer`]).
 //!
 //! Sources 2 and 3 are best-effort: they use the same
 //! `bind_local_types_in_body` pre-pass environment the protocol
@@ -269,6 +270,24 @@ fn from_container_ty(ty: &Ty) -> Option<Resolution> {
 /// second branch's `append` then fails with the ordinary element-type
 /// mismatch. A name-keyed resolution cannot represent two different types
 /// for one binding, and neither can the binding itself.
+///
+/// A producer is recognized only in **statement position** -- a bare
+/// `xs.append(v)` or `d[k] = v`. `HirExpr::ListAppend` is also a valid value
+/// expression (`y = xs.append(v)` binds `None`), and such an occurrence is
+/// *not* a producer here, so `xs = []` followed only by `y = xs.append(1)`
+/// reports `T0003`. That restriction is deliberate and matches the rewrite
+/// side: `rewrite_body` and `body_has_empty_literal` likewise visit direct
+/// assignment values and block bodies, never nested expression positions, so
+/// the whole pass has one statable shape instead of a walker whose boundary
+/// moves with each nesting form. See D-245 item 8.
+///
+/// The scan returns the first *syntactic* producer occurrence for the name,
+/// not the first shape-compatible one: a `ListAppend` on a name later used as
+/// a dict ends the scan with a `Resolution::List`. `Resolution::matches`
+/// discards a resolution of the wrong shape at the rewrite site, so a
+/// cross-shape hit costs a missed resolution (`T0003`) and never yields a
+/// wrong element type. Such a program fails type-checking on its own terms
+/// anyway.
 fn find_producer(
     body: &[HirStmt],
     target: &str,

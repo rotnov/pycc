@@ -1252,6 +1252,18 @@ fn t0003_consumer_use_is_not_a_producer() {
     assert_diagnostic_matches_fixture("t0003_consumer_use_is_not_a_producer");
 }
 
+/// #1021 review round 3: a producer is recognized only in statement position.
+/// `y = xs.append(1)` is a valid value expression that binds `None`, and it
+/// compiles when the list's element type is already known -- but it does not
+/// resolve an empty literal, so this program reports `T0003`. The exclusion is
+/// deliberate (D-245 item 8): the rewrite side is direct-assignment-only too,
+/// and a generic expression walker would move the boundary rather than remove
+/// it. This fixture is what keeps the documented exclusion honest.
+#[test]
+fn t0003_value_position_append_is_not_a_producer() {
+    assert_diagnostic_matches_fixture("t0003_value_position_append_is_not_a_producer");
+}
+
 /// #1021 review round 2: `bind_local_types_in_stmt`'s `AnnAssign` fallback is
 /// deliberately broad -- it seeds the declared annotation on *any* inference
 /// failure, not only on an empty literal. That is what lets an earlier
