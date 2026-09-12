@@ -411,7 +411,7 @@ fn plan_ext(
     write_ext_source(&shim, ext_build::SHIM_C)?;
     write_ext_source(&inc, &inc_body)?;
     Ok(ExtPlan {
-        compile_args: ext_build::ext_compile_args(&probe.include, &shim),
+        compile_args: ext_build::ext_compile_args(platform, &probe.include, &shim),
         link_args: ext_build::ext_link_args(platform, &probe.libs),
         artifact: output.artifact,
     })

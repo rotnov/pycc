@@ -281,10 +281,47 @@ fn windows_links_against_the_stable_abi_import_library_in_the_probed_directory()
 }
 
 #[test]
-fn the_compile_args_name_the_include_directory_and_the_shim() {
+fn the_elf_compile_args_name_the_include_directory_the_shim_and_fpic() {
     let include = Path::new("inc").join("python3.13");
     let shim = Path::new("scratch").join(SHIM_C_NAME);
-    let args = ext_compile_args(&include, &shim);
+    let args = ext_compile_args(ExtLinkPlatform::Linux, &include, &shim);
+    assert_eq!(
+        args,
+        vec![
+            OsString::from("-I"),
+            include.as_os_str().to_os_string(),
+            OsString::from("-fPIC"),
+            shim.as_os_str().to_os_string(),
+        ]
+    );
+}
+
+/// The Mach-O arm states `-fPIC` too. clang already defaults to it there,
+/// so this pins the flag as a property of the artifact rather than one
+/// inherited from whichever host happened to build it.
+#[test]
+fn the_mach_o_compile_args_state_fpic_rather_than_inherit_it() {
+    let include = Path::new("inc").join("python3.13");
+    let shim = Path::new("scratch").join(SHIM_C_NAME);
+    let args = ext_compile_args(ExtLinkPlatform::MacOs, &include, &shim);
+    assert_eq!(
+        args,
+        vec![
+            OsString::from("-I"),
+            include.as_os_str().to_os_string(),
+            OsString::from("-fPIC"),
+            shim.as_os_str().to_os_string(),
+        ]
+    );
+}
+
+/// PE/COFF is position independent by construction and its drivers warn
+/// that `-fPIC` is ignored, so the Windows arm must not emit it.
+#[test]
+fn the_windows_compile_args_omit_fpic() {
+    let include = Path::new("inc").join("python3.13");
+    let shim = Path::new("scratch").join(SHIM_C_NAME);
+    let args = ext_compile_args(ExtLinkPlatform::Windows, &include, &shim);
     assert_eq!(
         args,
         vec![

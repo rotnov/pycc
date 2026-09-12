@@ -316,14 +316,15 @@ impl ExtLinkPlatform {
 /// Windows target's library directory with `/` when cross-building from
 /// macOS. (PR 1a's only CI failure was a test asserting a rendered path.)
 ///
-/// No position-independent-code work is needed to pull `libpycc_rt.a` into
-/// a shared object: none of the five Tier-1 target specs sets
-/// `relocation-model`, so all five take `rustc`'s own default, `pic`
-/// (checked with `rustc --print target-spec-json --target <triple>` for
-/// each triple in [`ARCHITECTURE.md`]'s Tier-1 table). `pycc_rt` therefore
-/// keeps `crate-type = ["staticlib", "rlib"]` and gains no `cdylib`: the
-/// artifact is one shared object holding the compiled module *and* the
-/// runtime, not two linked against each other.
+/// No position-independent-code work is needed on the *Rust* side to pull
+/// `libpycc_rt.a` into a shared object: none of the five Tier-1 target
+/// specs sets `relocation-model`, so all five take `rustc`'s own default,
+/// `pic` (checked with `rustc --print target-spec-json --target <triple>`
+/// for each triple in [`ARCHITECTURE.md`]'s Tier-1 table). `pycc_rt`
+/// therefore keeps `crate-type = ["staticlib", "rlib"]` and gains no
+/// `cdylib`: the artifact is one shared object holding the compiled module
+/// *and* the runtime, not two linked against each other. The C shim is the
+/// one piece that does need an explicit flag -- see [`ext_compile_args`].
 ///
 /// [`ARCHITECTURE.md`]: https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md
 pub(crate) fn ext_link_args(platform: ExtLinkPlatform, libs: &Path) -> Vec<OsString> {
@@ -572,15 +573,32 @@ fn wrapper_for(export: &ExtExport) -> String {
     out
 }
 
-/// The `-I` and source arguments shared by every platform, in driver order.
-/// Split out from [`ext_link_args`] so the platform arms stay purely about
-/// what makes the output loadable.
-pub(crate) fn ext_compile_args(include: &Path, shim: &Path) -> Vec<OsString> {
-    vec![
-        OsString::from("-I"),
-        include.as_os_str().to_os_string(),
-        shim.as_os_str().to_os_string(),
-    ]
+/// The `-I`, code-model and source arguments for the shim, in driver order.
+/// Split out from [`ext_link_args`] so the platform arms there stay purely
+/// about what makes the output loadable.
+///
+/// The ELF arm must pass `-fPIC` explicitly. GCC on Linux compiles to
+/// position-dependent code by default, and the shim's references to
+/// CPython's exception objects (`PyExc_ValueError`, `PyExc_ImportError`)
+/// are undefined symbols resolved by the host at load time, so a
+/// position-dependent `R_X86_64_PC32` relocation against them makes the
+/// `-shared` link fail outright. It is emitted on the Mach-O arm too,
+/// where clang already defaults to PIC, so the flag is a stated property
+/// of the artifact rather than an inherited host default -- the same
+/// reason this module takes its platform from the target triple and never
+/// from `cfg!`. The Windows arm omits it: a PE/COFF target is position
+/// independent by construction and its drivers warn the flag is ignored.
+pub(crate) fn ext_compile_args(
+    platform: ExtLinkPlatform,
+    include: &Path,
+    shim: &Path,
+) -> Vec<OsString> {
+    let mut args = vec![OsString::from("-I"), include.as_os_str().to_os_string()];
+    if matches!(platform, ExtLinkPlatform::Linux | ExtLinkPlatform::MacOs) {
+        args.push(OsString::from("-fPIC"));
+    }
+    args.push(shim.as_os_str().to_os_string());
+    args
 }
 
 /// Borrowed view used only to keep [`ExtToolchain::interpreter`] observable
