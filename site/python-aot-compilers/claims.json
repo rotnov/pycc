@@ -162,7 +162,7 @@
         },
         "native_executable": {
           "verdict": "yes",
-          "text": "native/--pure; CPython bundled only for permitted interop"
+          "text": "native/--pure; CPython bundled only for embedded interop"
         },
         "standard_python": {
           "verdict": "yes",

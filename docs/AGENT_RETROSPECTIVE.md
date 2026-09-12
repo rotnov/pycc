@@ -33,6 +33,52 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A universal claim was corrected one review round at a time, because each round enumerated only the sites the previous finding named
+
+**What happened.** A decision record narrowed an accepted, universally-stated
+contract: the project's artifact had always been described as a self-contained
+executable with no libpython, and the new mode is an extension module that
+resolves its symbols from a host. Correcting the documents that assert the old
+universal took repeated external and pinned review rounds. A local grep found
+one more site; the pinned reviewer found two; further external rounds found
+more; a tree-wide enumeration run only after all of those revealed a whole
+class of sites no earlier round had reached — three canonical pages, their
+Markdown projection, a JSON claims model, the prose constants one checker pins
+verbatim, and that checker's own mirror assertions; and later pinned rounds
+still found more, because every sweep so far had searched one vocabulary — the
+*bundling* family — while the same claim was also asserted in an *autonomy*
+family ("autonomous", "standalone", "no libpython") that no grep for the first
+one reaches. One of those sites pinned, verbatim, a line the same change had
+already edited in an earlier round, so the change was internally inconsistent
+while every round reported itself complete.
+
+**Root cause.** Each round's enumeration was scoped to the finding that
+prompted it rather than to the claim itself. Answering a counter-example
+leaves every other arm exactly as wrong as before, and the rounds therefore
+converged one site at a time instead of once. The already-edited site was
+missed for the same reason: a file touched earlier in the change reads as
+handled, when in fact it may assert the same claim in a second place, or pin
+the first place's text.
+
+**What fixed it.** A single tree-wide search for every vocabulary family that
+can express the claim -- not the one phrase the last finding used -- run before
+any further edit, plus a search for the *checkers* that pin that wording. That search also settled the scope question the rounds had been
+arguing: sites that describe the other arm correctly are incomplete rather
+than false, and belong in the follow-up issue that owns them, while sites
+whose wording makes the claim universal belong in the change that narrows it.
+
+**Lesson.** Before the first fix to a universally-stated claim, enumerate
+every site asserting it across the whole tree -- keyed on what the claim
+*means*, sweeping each distinct vocabulary that can assert it, since a grep for
+one family silently returns a complete-looking result while another family's
+sites stand untouched -- including sites already edited for that same claim in
+the same change, and including the checkers and test fixtures that pin those
+sites' text verbatim. Then split the inventory by
+whether each site states the claim universally (fix it here) or merely omits
+the new case (defer it, and record the deferral where the narrowing is
+recorded). A round that extends the inventory by one more site is reproducing
+the defect, not closing it.
+
 ## 2026-09-12 — A green check rollup was read as merge readiness while conversation resolution was still blocking
 
 **What happened.** A pull request reported every required check passing, both

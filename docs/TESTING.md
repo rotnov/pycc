@@ -338,11 +338,18 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Planned mechanics:
 
 No open-source-package corpus workflow, pinned package inputs, or per-project pass-rate dashboard exists on current `main`. The separate competitive-programming corpus below is a different corpus with a different shape, and does exist.
 
-## Corpus: competitive-programming stdin/stdout programs (`product-sprint-1`)
+## Corpus: competitive-programming stdin/stdout programs (informational)
 
-A second, narrower corpus, vendored and running today. It measures the product
-bet in `docs/ROADMAP.md`'s `product-sprint-1`: whether pycc compiles real
-single-file stdin/stdout Python unchanged and runs it faster than CPython.
+A second, narrower corpus, vendored and running today. It measures one thing:
+how much real single-file stdin/stdout Python compiles unchanged, and how fast
+the result runs against CPython. That measurement is retained informational
+telemetry, not a contract. It carried `product-sprint-1`'s acceptance until the
+2026-09-12 redirection
+([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md));
+`docs/ROADMAP.md`'s `product-sprint-1` section now owns that sprint's
+acceptance, and "Hosted `ext` benchmark protocol" below is the methodology that
+measures it. Do not read this section as a statement of what the sprint must
+achieve.
 
 - **Inputs.** `tests/corpus/codecontests/` — a pinned subset of the DeepMind
   CodeContests dataset (CC BY 4.0; see that directory's `NOTICE` and `LICENSE`),
@@ -367,15 +374,14 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   `INCOMPLETE`: `manifest.json` orders all 200 steering records before all 100
   holdout records, so a run that exhausts `--max-seconds` drops holdout problems
   first, and the two runs would then cover different evaluated subsets.
-  `docs/ROADMAP.md`'s `product-sprint-1` holdout acceptance item is read this
-  way.
 - **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
   `compiled N/M`, `matched K/N`, the median speedup against CPython, and the
   diagnostic classes that stopped the failures, as a first/any tally. Each
-  problem is built with `pycc build --release`: the speedup criterion below is
-  stated for the shipping profile, so timing an unoptimized build would measure
-  something that criterion never claimed. `matched` compares the binary's output
-  against the expected output on every case after one narrow normalization and
+  problem is built with `pycc build --release`: the reported speedup is a
+  statement about the shipping profile, so timing an unoptimized build would
+  measure something this report never claims. `matched` compares the binary's
+  output against the expected output on every case after one narrow
+  normalization and
   byte for byte otherwise — CRLF and CR become LF, and a run of trailing
   newlines collapses to exactly one, because the dataset's recorded outputs and
   a program's own final newline disagree about trailing whitespace often enough
@@ -420,6 +426,114 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   `timeout-minutes` is a backstop rather than the first thing to fire: a
   job-level timeout runs no further steps, which would skip the report upload
   even though it is guarded by `if: always()`.
+
+## Hosted `ext` benchmark protocol (product-sprint-1)
+
+`docs/ROADMAP.md`'s `product-sprint-1` acceptance turns on one measured ratio,
+and
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6 states that ratio's threshold and its publication rule. This section
+fixes the methodology only. It is written before the artifact exists on
+purpose: a protocol chosen after a result is seen decides the bet instead of
+measuring it, and the same implementation can otherwise pass or fail depending
+on how it was timed. The reference codebase is proprietary, so nothing here or
+in the report names it or reproduces its source ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6); only numbers are published.
+
+- **Subject.** One function — the reference codebase's hot loop — byte-identical
+  across all three arms. Compiling unchanged is part of the claim, so an arm
+  that edits the source to make it compile has failed rather than scored.
+- **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
+  artifact. All three run back to back in one session on one machine, on the
+  same OS and power profile, with no other timed work on the box. Which machine
+  that is, is committed alongside the generator, the seed, and the digest below
+  and restated in the report: a run whose arms were split across machines, or
+  whose machine was chosen after a result was seen, is inadmissible for the same
+  reason the **Input** bullet gives.
+- **Versions.** The interpreter is the conformance oracle's pinned CPython (see
+  "Python 3.14.7 oracle transition" above), GIL-enabled, and it is both the
+  baseline arm and the host that imports the `ext` artifact — the loader and the
+  comparison are the same interpreter. Cython is pinned at 3.1.6, in
+  pure-Python mode with `annotation_typing` enabled and its generated C compiled
+  `-O2`. The pycc arm is built `--release`, the shipping profile. The
+  interpreter arm is additionally an optimized, non-debug build: a
+  `--with-pydebug` or otherwise unoptimized CPython is slower by a multiple,
+  which inflates the ratio on its own and can manufacture a passing result out of
+  the baseline alone, so a timing taken against one is inadmissible whatever it
+  reports. The report carries `python3 -VV` and
+  `sysconfig.get_config_var('CONFIGURE_ARGS')` for the interpreter actually used,
+  so that build is checkable rather than asserted.
+  Every one of these versions is restated in the report, because a later run that
+  changes one is a different experiment.
+- **Input.** Size alone does not pin this workload: the measured loop branches
+  on its data, so two evaluators who generate different inputs of the same size
+  can reach opposite verdicts on the same implementation. The workload is
+  therefore produced by a generator committed with the benchmark, from a fixed
+  integer seed, serialized to one file that all three arms read verbatim; the
+  run records the generator's path, the seed, and the SHA-256 of that file. Its
+  size is the one D-244's Context records for the probe. The generator, the
+  seed, and the resulting digest are committed **before** any run may be
+  scored, and a timing whose inputs were not already committed when it ran is
+  inadmissible -- otherwise an evaluator could try workloads until one clears
+  5x and then designate that one as the protocol's first run, which is input
+  selection after the result rather than before it. D-244 rule 6's kill
+  criterion is evaluated only against runs reporting that committed digest. A
+  run that changes the generator, the seed, or the digest is a different
+  experiment: report it as a protocol change, never as a comparison against an
+  earlier ratio.
+- **Correctness precondition.** An arm that is faster and wrong scores nothing:
+  it is reported as a failure, never as a ratio. The conformance harness's
+  comparison is not the one that decides that here --
+  `run_conformance_fixture_with_profile` in `tests/conformance.rs` builds and
+  runs whole programs, requires both processes to exit successfully, and diffs
+  their stdout, so it cannot see a value returned to a caller and cannot tell
+  two exception types apart; an arm that returned a wrong number or raised the
+  wrong error would pass it unchanged. The comparison is instead made in the
+  host interpreter, where all three arms already return a Python object on the
+  same committed input, and it sits outside the **Timing boundary** below
+  because the clock stops when the call returns. Against the CPython arm, each
+  arm must return the same type; integer and boolean results must be equal
+  exactly, with no tolerance; a float result must agree within a tolerance
+  committed alongside the generator, the seed, and the digest **before** any run
+  may be scored, on the same grounds the **Input** bullet gives -- a tolerance
+  chosen after the difference is seen is selection after the result, and the
+  arms are not bit-comparable in principle, since `-O2` on the Cython arm and
+  LLVM on the `--release` pycc arm may both contract `a*b - c*d` to an FMA where
+  the interpreter does not. A divergence beyond that committed tolerance is a
+  failure, not a ratio. An arm that raises where the CPython arm returns, or
+  raises a different exception type, has failed. The arguments must also be
+  unchanged after the call, or changed exactly as the CPython arm changes them,
+  so that an arm cannot be faster for having clobbered the committed input.
+- **Warm-up.** One untimed full run per arm before any timed run, so page
+  faults, dynamic-loader work, and the interpreter's own caches are paid outside
+  the measurement. For the `ext` arm that untimed run also pays the import and
+  the first call through each export wrapper.
+- **Replicates and statistic.** Seven timed runs per arm; the arm's figure is
+  the median of its seven, and each speedup is a ratio of medians. Report the
+  per-arm minimum and maximum alongside it. Never a mean — one descheduled run
+  moves a mean and leaves a median where it was.
+- **Timing boundary.** The clock runs inside the host interpreter:
+  `time.perf_counter_ns()` immediately before the call into the function under
+  test and immediately after it returns. The export wrappers' argument unpacking
+  and result packing are therefore inside the boundary, because a caller pays
+  them, while import, module load, argument construction, and building the
+  artifact are outside it for every arm.
+- **Reporting.** The report publishes the three medians, their minima and
+  maxima, both ratios (versus CPython and versus Cython), the replicate count,
+  the machine and OS, and the pinned versions above. The threshold those numbers
+  are judged against is D-244 rule 6's and is not restated here.
+- **The compile-unchanged count.** `product-sprint-1`'s second acceptance item
+  is a count, not a timing: how many of the reference codebase's annotated
+  functions compile unchanged as part of an `ext` artifact, over how many were
+  attempted. A function counts only with its source byte-identical to the
+  original; both numbers are published, never the ratio alone. The denominator is
+  fixed before the evaluation, not after it: the number of annotated functions to
+  be attempted and a digest over that exact set are committed **before** any
+  compile may be scored, on the same grounds the **Input** bullet gives for a
+  timing — otherwise an evaluator could attempt functions until the count reads
+  well and then designate those as the set. What is committed is that count and
+  that digest, never a list of function names: the reference codebase is
+  proprietary and only numbers are published (D-244 rule 6).
 
 ## Planned CPython interop matrix (v0.7)
 

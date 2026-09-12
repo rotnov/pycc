@@ -258,15 +258,14 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 **[#977](https://github.com/rotnov/pycc/issues/977) — string conversion of a non-dataclass, non-exception instance or of a protocol-typed value is `C0001` ([D-237](./decisions/D-237-reject-string-conversion-of-a-non-dataclass-non-exception.md)):** `print(x)` and `f"{x}"` reach `pycc_codegen`'s `to_str` past only the dataclass `__repr__` and caught-builtin-exception rewrites, and `pycc_types` guarded neither site, so a plain class instance, an `Enum` member, a non-dataclass subclass of a dataclass, a protocol-typed parameter and a user exception class all passed `pycc check` and panicked in `pycc build`. A fail-closed predicate, `pycc_types::string_conversion::reject_unrenderable`, now runs on every f-string interpolation and `print()` argument (looking through an erased `cast(...)`), deciding the 25 builtin exception names by provenance and every other name by `is_dataclass`, and rejecting `Ty::Protocol`. A monomorphized generic `@dataclass` stays a dataclass. Fixed by: `crates/pycc_types/src/string_conversion.rs`, `crates/pycc_types/src/monomorphize.rs`, `crates/pycc_types/src/expr.rs`, and `tests/issue_977_instance_string_conversion.rs`. Remaining gaps are recorded in D-237 and the session file.
 
-## product-sprint-1 — real stdin/stdout programs compile unchanged
+## product-sprint-1 — annotated code callable from CPython
 
-Runs alongside the milestone chain, not in sequence: a time-boxed bet on one niche, single-file competitive-programming Python reading stdin and writing stdout. Decomposed into eight parts in [#1014](https://github.com/rotnov/pycc/issues/1014). Corpus and metric: `tests/corpus/codecontests/` and `scripts/check_corpus_compile_rate.py`, reported non-blocking by CI's `corpus-compile-rate` job.
+A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core: the hosted `ext` artifact, foreign imports, a buffer-protocol bridge and an embedded executable, as #1025-#1028 under parent #1014, with #1017 (containers) and #1018 (statements and expressions) also in the sprint as blockers of the first acceptance item below; `docs/DELIVERY_PLAN.md` owns the six-issue closure condition. The corpus metric (CI's non-blocking `corpus-compile-rate` job) stays a report, not the contract.
 
 **Accept:**
 
-- [ ] at least 50% of the 200-problem steering corpus compiles unchanged
-- [ ] median speedup at least 5x over CPython across the problems that compile and match
-- [ ] the 100-problem holdout set's compile rate is within 10 points of the steering set's, read from two runs of the metric by the count-subtraction method — and its `INCOMPLETE` precondition — that [TESTING.md](./TESTING.md) specifies
+- [ ] the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython
+- [ ] the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers
 
 ## v0.5 — generators & ownership v1
 
@@ -283,13 +282,14 @@ Generators/`yield from` as state machines, iterator protocol, `itertools`/`funct
 ## v0.7 — transparent CPython interop
 
 This milestone is planned and **not implemented** in the current compiler.
-Ordinary standard-Python imports such as `import numpy as np` automatically
-classify CPython-backed packages and bundle a pinned CPython 3.14/package/native
-dependency closure without requiring pycc-specific source rewrites. The
-planned `auto` (default), `allowlist`, and `deny` policies plus `--pure` provide
-deployment control; the typed `I04xx` boundary, `unittest`/`logging`/`argparse`,
-and an optional low-level `pycc.interop.cpython` API remain part of the
-milestone (D-128).
+Ordinary standard-Python imports such as `import numpy as np` are classified
+without pycc-specific source rewrites. The **embedded** mode bundles a pinned
+CPython 3.14/package/native dependency closure, and the planned `auto`
+(default), `allowlist`, and `deny` policies plus `--pure` control deployment
+(D-128); the hosted `ext` mode bundles nothing and applies no policy (D-244
+rule 3). The typed `I04xx` boundary,
+`unittest`/`logging`/`argparse`, and an optional low-level
+`pycc.interop.cpython` API remain part of the milestone.
 
 **Accept:** an unchanged CPython-compatible app using `import numpy as np`
 builds and runs on all Tier-1 targets without a separately installed Python;

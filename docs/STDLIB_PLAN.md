@@ -36,11 +36,13 @@ Excluded by design: `eval`, `exec`, `compile`, `globals`, `locals`, `vars`, `set
 Everything else (`numpy`, `tkinter`, `multiprocessing`, `ctypes`, …) remains
 ordinary standard-Python source (`import numpy`, not a required
 `pycc.interop` rewrite). Planned v0.7 classifies these imports as
-CPython-backed, bundles their pinned runtime/package closure, and keeps values
-typed at the generated boundary according to [RUNTIME.md](./RUNTIME.md) and
-D-128. Runtime inclusion is automatic under the default `auto` policy but
-never invisible in build metadata or `pycc.lock`; `allowlist` and
-`deny`/`--pure` provide stricter deployment policies.
+CPython-backed and keeps values typed at the generated boundary according to
+[RUNTIME.md](./RUNTIME.md). In embedded mode it also bundles their pinned
+runtime/package closure (D-128): runtime inclusion is automatic under the
+default `auto` policy but never invisible in build metadata or `pycc.lock`,
+while `allowlist` and `deny`/`--pure` provide stricter deployment policies.
+The planned hosted `ext` mode is the exception to that bundling and to those
+policies (D-244).
 
 ## Compatibility policy
 
