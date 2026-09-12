@@ -934,15 +934,30 @@ pub(crate) fn collect_expr_constraints(
         // check pass (`check_with_signatures_all`) that runs after this solver.
         // `unify_terms` and `merge_inferred_types` are unchanged -- the
         // carrier is destructured, never unified.
-        // #1021: a resolved empty `[]`/`{}` produces no term, exactly as
-        // `ListLiteral(vec![])`/`DictLiteral(vec![])` did before the
-        // empty-container pre-pass existed -- `homogeneous_private_solver_
-        // scalar_list_element` returns `None` for an empty element list, and
-        // the `DictLiteral` arm below never produces a term at all. Keeping
-        // `Ok(None)` here is what keeps a resolved container binding
-        // *opaque* to this scalar-only solver (D-146) rather than letting it
-        // start unifying as a scalar.
-        HirExpr::EmptyList(_) | HirExpr::EmptyDict(_) => Ok(None),
+        // #1021: the empty-container pre-pass rewrites a resolvable `[]`
+        // into `EmptyList(element_ty)`, so this arm carries the same
+        // destructured element-type carrier the `ListLiteral` arm below
+        // produces for the equivalent `[v]`. Without it, an unannotated
+        // private helper writing `xs = []; xs.append(1); return xs.pop()`
+        // leaves its return type unconstrained and reports `T0021`, while
+        // the `xs = [1]` spelling infers cleanly -- an asymmetry introduced
+        // by #1021's own feature. The `is_private_solver_scalar` gate is the
+        // same one `homogeneous_private_solver_scalar_list_element` applies:
+        // `EmptyList` hands over its element `Ty` directly, with no element
+        // terms to check, so a nested `list[list[int]]` or a `Ty::Param`
+        // element -- both of which reach this solver before the D-228
+        // element gate fires -- must keep the historical `Ok(None)`. The
+        // carrier is destructured by the `Subscript`/`ListPop` arms, never
+        // unified. `EmptyDict` stays `Ok(None)` because the `DictLiteral`
+        // arm below never produces a term either.
+        HirExpr::EmptyList(element_ty) => {
+            if is_private_solver_scalar(element_ty) {
+                Ok(Some(Ok(Ty::List(Box::new(element_ty.clone())))))
+            } else {
+                Ok(None)
+            }
+        }
+        HirExpr::EmptyDict(_) => Ok(None),
         HirExpr::ListLiteral(elements) => {
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {

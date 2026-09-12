@@ -490,3 +490,52 @@ print(f(1))
         "{rendered}"
     );
 }
+
+/// Review round 5 (Codex bot, P2): the empty-container pre-pass rewrites
+/// `xs = []` into `EmptyList(Int)`, which the D-146 private-helper constraint
+/// solver must carry as the same destructured element-type carrier it already
+/// produces for the equivalent `xs = [1]`. Before the fix, the `EmptyList`
+/// arm returned no term, `ListPop` found no `Ty::List` to destructure, and
+/// this unannotated helper reported `T0021` -- an asymmetry introduced by
+/// #1021's own feature, since only the non-empty spelling compiled.
+#[test]
+fn an_empty_list_in_an_unannotated_private_helper_infers_its_return_type() {
+    let output = check_build_and_run(
+        "private_helper_empty_list",
+        "\
+def _pick():
+    xs = []
+    xs.append(7)
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"7\n");
+}
+
+/// The carrier above is gated on `is_private_solver_scalar`, exactly as
+/// `homogeneous_private_solver_scalar_list_element` gates the `ListLiteral`
+/// arm. `EmptyList` hands its element `Ty` over directly with no element terms
+/// to check, so a nested `list[list[int]]` element -- which reaches the solver
+/// before the D-228 element gate fires -- must keep the historical `Ok(None)`
+/// rather than becoming a carrier this scalar-only solver cannot represent.
+/// The D-228 gate then reports `T0034` for the annotation itself.
+#[test]
+fn a_nested_empty_list_element_is_not_carried_by_the_private_helper_solver() {
+    let rendered = check_error(
+        "private_helper_nested_empty_list",
+        "\
+def _pick():
+    xs: list[list[int]] = []
+    return xs.pop()
+
+print(_pick())
+",
+    );
+    assert!(
+        rendered.contains("error[T0034]: list[list[int]] is not compiled yet"),
+        "{rendered}"
+    );
+}
