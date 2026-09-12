@@ -3,22 +3,30 @@
 ## Status
 
 Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
-`main` at `8de39312c95485823198914b168d467d06ada388`, carrying `Fixes #1021`
-(`closingIssuesReferences.totalCount` is 1 and names only #1021, confirmed by the
-GraphQL query immediately after the pull request was opened). Six commits: the
-pass itself, three review-round commits, the retrospective entries below, and
-this snapshot -- so the head recorded above advances by one when this file
-lands, and the authoritative head is whatever `gh pr view 1035` reports.
-No review threads exist. CI has not yet reported at the time this file was
-written; the merge is gated on `audit` and `ci-gate` plus resolved
-conversations, exactly as branch protection requires.
+`main` at `1ede16ff72bfdc09dc0c469136ba72b5e6dce9cb`, which is both the branch's
+merge base and the remote default-branch tip re-resolved immediately before this
+file was committed. It carries `Fixes #1021`, and the
+`closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
+#1021 -- re-run after the last `gh pr edit`. Fourteen commits: the pass itself,
+the review-round fixes, the retrospective entries below, and this snapshot, so
+the authoritative head is whatever `gh pr view 1035` reports once this file
+lands.
 
-The full local gate set was re-run from a single-writer baseline after the
-rebase onto `8de39312c95485823198914b168d467d06ada388`: fmt, clippy (warnings denied), `cargo test --workspace`,
-`cargo doc`, the `scripts/` unittest suite, both agent validators, the
-decisions index `--check`, decision immutability, roadmap evidence, CI
-permissions, and site-pin currency all exit 0. Changed-line coverage is 267 of
-267 (100.00%), workspace 37234/37263 (99.92%).
+Seven review threads exist, every one opened by the `chatgpt-codex-connector`
+bot across six rounds, and all seven are resolved -- each answered with a reply
+citing the commit that fixed it. `required_conversation_resolution` is on, so
+that state is a merge precondition, alongside the required `audit` and `ci-gate`
+checks. Those checks re-run on every push; this snapshot's own commit moves the
+head, so the run that gates the merge is the one started after it, not any
+earlier green run.
+
+The full local gate set ran green from a single-writer baseline against the
+commit preceding this one: clippy (warnings denied), `cargo test --workspace`,
+`cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
+`scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
+`--check`, decision immutability, and site-pin merge currency all exit 0.
+Changed-line coverage is 305 of 305 (100.00%); workspace total is 37581/37615
+(99.91%), reported and not enforced.
 
 ## Why this snapshot exists
 
