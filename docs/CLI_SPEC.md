@@ -215,7 +215,10 @@ directory once project mode exists.
                     an executable (D-244 rule 1; see the `OUT` contract
                     above). Implemented for public module-level functions
                     whose parameters and return are all `int` (#1036); any
-                    other public signature is rejected as `C0003`. Will
+                    other public signature is rejected as `C0003`; the
+                    export set is the whole linked program -- the entry file
+                    and its import closure (D-222) -- so a public function
+                    in an imported project module is exported too. Will
                     conflict with `--lib`, `--interop-policy`, and `--pure`
                     once those flags exist.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)

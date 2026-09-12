@@ -368,7 +368,11 @@ pub(crate) struct ExtExport {
 }
 
 /// Derives the export set from the typed program, per D-244 rule 1: every
-/// public module-level function is exported.
+/// public module-level function is exported. "The compiled module" there is
+/// the linked program D-222 produces -- the entry file plus its whole import
+/// closure -- so a public function defined in an imported project module is
+/// exported too, and renaming it private is how a project keeps it off the
+/// artifact's CPython surface.
 ///
 /// "Public" is D-038's predicate, `pycc_hir::is_public_name`. Two further
 /// exclusions are not policy but representation: a method reaches
