@@ -184,8 +184,11 @@ element, and panics on an empty one.
   empty literal *is* the directly-assigned value (`xs = []`, `d = {}`); a
   `T0003` raised from a nested element position such as `xs: list[int] = [[]]`
   keeps the generic wording, because the unresolvable node there is the inner
-  `[]` and not the validly-annotated outer binding. `T0003` was registered for
-  exactly this meaning and never emitted before #1021.
+  `[]` and not the validly-annotated outer binding. The substitution is wired
+  into the function-scope assignment seams only, so a module-level `xs = []`
+  keeps the generic wording even though it *is* a directly-assigned value.
+  `T0003` was registered for exactly this meaning and never emitted before
+  #1021.
 
 ## Types and representations
 

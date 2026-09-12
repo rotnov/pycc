@@ -230,7 +230,10 @@ to scan forward from: a call argument (`f([])`), a `return []`, a nested \
 literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An attribute \
 target (`self.x = []`) and a tuple-unpacking target (`L, R = [], []`) never \
 reach this check: both are rejected earlier with `C0001`. Where a binding \
-name *is* available it is named in the message. Give the binding an annotation, or use the container in a \
+name *is* available at a function-scope assignment it is named in the \
+message; a module-level assignment keeps the generic wording, because the \
+substitution is wired into the function-scope seams only. Give the binding \
+an annotation, or use the container in a \
 way that fixes its element type.",
         example: "\
 def f() -> None:

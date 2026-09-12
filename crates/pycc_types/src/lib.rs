@@ -777,6 +777,18 @@ pub(crate) fn bind_local_types_in_stmt(
                 // `T0003`. The annotation is what the check phase will
                 // validate the value against anyway, so seeding it cannot
                 // introduce a binding the checked program does not have.
+                //
+                // The fallback is deliberately broad rather than gated on the
+                // value being an empty literal. Round 2 of the #1021 review
+                // proposed that narrowing and it was refuted by running the
+                // compiler: a D-105-incompatible annotation (`list[str]`) is
+                // independently rejected with its own better-spanned `T0034`
+                // whether or not an empty literal precedes it, so narrowing
+                // fixes nothing there -- while for a compatible annotation it
+                // replaces the real defect (`xs: list[int] = undefined_name`
+                // reports the undefined name) with a spurious `T0003` about a
+                // container the program does in fact annotate. Pinned by
+                // `tests/diagnostics/t0021_annotated_broken_value_still_reports_the_real_defect`.
                 let ty =
                     infer_expr_in(env, local_names, val).unwrap_or_else(|_| annotation.clone());
                 env.bind(target.clone(), ty);

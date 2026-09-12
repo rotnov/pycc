@@ -1252,6 +1252,22 @@ fn t0003_consumer_use_is_not_a_producer() {
     assert_diagnostic_matches_fixture("t0003_consumer_use_is_not_a_producer");
 }
 
+/// #1021 review round 2: `bind_local_types_in_stmt`'s `AnnAssign` fallback is
+/// deliberately broad -- it seeds the declared annotation on *any* inference
+/// failure, not only on an empty literal. That is what lets an earlier
+/// `xs = []` resolve from the later annotation, so checking reaches and
+/// reports the real defect (`undefined_name`) instead of stopping at a
+/// `T0003` about a container the program does in fact annotate. Narrowing the
+/// fallback to the empty-literal shape was considered in round 2 and refuted:
+/// it replaces this message with a spurious `T0003` and fixes nothing, since
+/// a D-105-incompatible annotation such as `list[str]` is independently
+/// rejected with its own better-spanned `T0034` whether or not any empty
+/// literal precedes it.
+#[test]
+fn t0021_annotated_broken_value_still_reports_the_real_defect() {
+    assert_diagnostic_matches_fixture("t0021_annotated_broken_value_still_reports_the_real_defect");
+}
+
 /// D-228: an inferred element type passes through exactly the same
 /// `check_container_ty` gate a written annotation does, so an inferred
 /// `list[str]` is `T0034` (D-105), not a silently accepted list.
