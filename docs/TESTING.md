@@ -481,10 +481,29 @@ rule 6); only numbers are published.
   run that changes the generator, the seed, or the digest is a different
   experiment: report it as a protocol change, never as a comparison against an
   earlier ratio.
-- **Correctness precondition.** A timing is admissible only when the arm's
-  output equals the CPython arm's output under the conformance harness's own
-  comparison. An arm that is faster and wrong scores nothing: it is reported as
-  a failure, never as a ratio.
+- **Correctness precondition.** An arm that is faster and wrong scores nothing:
+  it is reported as a failure, never as a ratio. The conformance harness's
+  comparison is not the one that decides that here --
+  `run_conformance_fixture_with_profile` in `tests/conformance.rs` builds and
+  runs whole programs, requires both processes to exit successfully, and diffs
+  their stdout, so it cannot see a value returned to a caller and cannot tell
+  two exception types apart; an arm that returned a wrong number or raised the
+  wrong error would pass it unchanged. The comparison is instead made in the
+  host interpreter, where all three arms already return a Python object on the
+  same committed input, and it sits outside the **Timing boundary** below
+  because the clock stops when the call returns. Against the CPython arm, each
+  arm must return the same type; integer and boolean results must be equal
+  exactly, with no tolerance; a float result must agree within a tolerance
+  committed alongside the generator, the seed, and the digest **before** any run
+  may be scored, on the same grounds the **Input** bullet gives -- a tolerance
+  chosen after the difference is seen is selection after the result, and the
+  arms are not bit-comparable in principle, since `-O2` on the Cython arm and
+  LLVM on the `--release` pycc arm may both contract `a*b - c*d` to an FMA where
+  the interpreter does not. A divergence beyond that committed tolerance is a
+  failure, not a ratio. An arm that raises where the CPython arm returns, or
+  raises a different exception type, has failed. The arguments must also be
+  unchanged after the call, or changed exactly as the CPython arm changes them,
+  so that an arm cannot be faster for having clobbered the committed input.
 - **Warm-up.** One untimed full run per arm before any timed run, so page
   faults, dynamic-loader work, and the interpreter's own caches are paid outside
   the measurement. For the `ext` arm that untimed run also pays the import and
