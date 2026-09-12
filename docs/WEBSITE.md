@@ -947,7 +947,13 @@ The supported consumer contract is now explicit and enforced:
   line; D-243 raised it again to 15360 bytes for the architecture
   pipeline-trace summary line and took the 1536 bytes from
   `docs/PYTHON_STANDARDS.md` (43008 -> 41472), which carried the largest
-  slack of any document in the manifest. D-227 rejected raising `budget_kib`
+  slack of any document in the manifest. #1021 then raised
+  `docs/ROADMAP.md` to 173568 bytes for the empty-container inference note,
+  drawing 512 bytes each from `README.md`, `docs/ARCHITECTURE.md` and
+  `docs/PYTHON_STANDARDS.md` -- spread across the three rather than taken
+  from one, because `docs/ROADMAP.md` is the document that grows every
+  milestone and a single donor would have become the next binding
+  constraint. D-227 rejected raising `budget_kib`
   a third time, so growth is absorbed by reallocation between documents
   rather than by a larger ceiling, and the 512 unallocated bytes are
   preserved across every such reallocation. Because the per-resource budgets now bind first by
