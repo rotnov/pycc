@@ -264,10 +264,18 @@ def run_program(
 ) -> tuple[bool, float]:
     """Run one program on one case; return (output matched, wall seconds).
 
-    ``cwd`` is an empty scratch directory, never the corpus and never the
-    caller's directory: a solution needs no import to reach the filesystem, so
-    a static import allowlist cannot be the only thing standing between
-    third-party source and the tree it is measured in.
+    ``cwd`` is a scratch directory, never the corpus and never the caller's
+    directory: a solution needs no import to reach the filesystem, so a static
+    import allowlist cannot be the only thing standing between third-party
+    source and the tree it is measured in.
+
+    This bounds an unqualified relative filename, which is what an ordinary
+    competitive-programming solution would write; it is not a filesystem
+    sandbox, and an absolute path or ``../`` escapes it. Two things carry that
+    weight instead: every vendored byte is digest-verified against the manifest
+    before anything executes, and the sibling directory holding the compiled
+    binaries is randomly named, so no fixed relative path reaches it and
+    enumerating it needs a module the selector's allowlist does not admit.
     """
     started = time.monotonic()
     try:
@@ -309,10 +317,13 @@ def measure(
     args: argparse.Namespace, corpus: Path, problems: list[dict], scratch: Path
 ) -> dict:
     pycc = resolve_pycc(args.pycc)
-    # Separate from the directory holding the compiled binaries, so a solution
-    # that writes a file cannot land on one of them.
-    workdir = scratch / "run"
-    workdir.mkdir(parents=True, exist_ok=True)
+    # Two randomly named siblings rather than fixed names: a solution executes
+    # in one of them, and the other holds the compiled binaries -- including
+    # those of problems not yet reached. A fixed layout would make each of
+    # those output paths a derivable `../<name>` away from a program that is,
+    # by construction, third-party code.
+    workdir = Path(tempfile.mkdtemp(prefix="run-", dir=scratch))
+    bindir = Path(tempfile.mkdtemp(prefix="bin-", dir=scratch))
     deadline = time.monotonic() + args.max_seconds
 
     total = len(problems)
@@ -332,7 +343,7 @@ def measure(
             break
         evaluated += 1
         source = corpus / problem["id"] / "solution.py"
-        binary = scratch / problem["id"].replace("/", "__")
+        binary = bindir / problem["id"].replace("/", "__")
         ok, text = compile_problem(pycc, source, binary)
         if not ok:
             classes = diagnostic_classes(text)

@@ -11,6 +11,7 @@ outcome exits 0 (including a zero compile rate, no qualifying speedup sample and
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -306,6 +307,35 @@ class SpeedupTests(MetricHarness):
         # a subdirectory of it; neither may receive the marker.
         self.assertFalse((self.tmp / "marker").exists())
         self.assertEqual(list(self.corpus.root.rglob("marker")), [])
+
+    def test_neither_scratch_directory_carries_a_derivable_name(self) -> None:
+        # A solution executes with `cwd` inside the scratch tree, so a fixed
+        # name for either child would put every compiled binary -- including
+        # those of problems not yet reached -- a derivable `../<name>` away.
+        problem = self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        self.corpus.write_manifest()
+        manifest = json.loads((self.corpus.root / "manifest.json").read_text())
+        scratch = self.tmp / "scratch"
+        scratch.mkdir()
+        args = argparse.Namespace(
+            pycc=str(self.pycc),
+            python=sys.executable,
+            max_seconds=600.0,
+            include_holdout=False,
+        )
+        result = METRIC.measure(
+            args, self.corpus.root, manifest["problems"], scratch
+        )
+        self.assertEqual(result["compiled"], 1)
+        children = sorted(child.name for child in scratch.iterdir())
+        self.assertEqual(len(children), 2, children)
+        for name in children:
+            self.assertNotIn(name, {"run", "bin", problem["id"].replace("/", "__")})
+        self.assertTrue(
+            any(name.startswith("run-") for name in children)
+            and any(name.startswith("bin-") for name in children),
+            children,
+        )
 
     def test_a_clean_run_reports_no_dropped_timing_samples(self) -> None:
         self.corpus.add(1, SLOW_SOLUTION, ECHO_CASES)
