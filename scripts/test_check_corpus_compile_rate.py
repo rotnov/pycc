@@ -423,6 +423,20 @@ class HelperTests(unittest.TestCase):
             ],
         )
 
+    def test_class_subject_elided_but_unresolved_base_kept(self) -> None:
+        text = (
+            "error[C0001]: class `Tree` inherits from unknown class `object` -- base classes must be defined earlier in the same module\n"
+            "error[C0001]: class `Node` inherits from unknown class `object` -- base classes must be defined earlier in the same module\n"
+            "error[C0001]: class `Solver` inherits from unknown class `math` -- base classes must be defined earlier in the same module\n"
+        )
+        self.assertEqual(
+            sorted(set(METRIC.diagnostic_classes(text))),
+            [
+                "C0001 class X inherits from unknown class `math` -- base classes must be defined earlier in the same module",
+                "C0001 class X inherits from unknown class `object` -- base classes must be defined earlier in the same module",
+            ],
+        )
+
     def test_construct_naming_backticks_are_never_elided(self) -> None:
         text = (
             "error[C0001]: import of module `sys` is not supported yet\n"

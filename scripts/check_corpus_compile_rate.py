@@ -189,6 +189,14 @@ IDENTIFIER_ELISIONS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"^public function `[^`]*` (needs a return type annotation)$"),
         r"public function X \1",
     ),
+    # Only the *subject* class name is author-chosen here. The base class the
+    # compiler could not resolve stays verbatim: it is the actionable signal,
+    # and it is frequently a builtin or a stdlib name (`object`, `math`) rather
+    # than anything the corpus author invented.
+    (
+        re.compile(r"^class `[^`]*` (inherits from unknown class `.*)$"),
+        r"class X \1",
+    ),
 )
 
 
