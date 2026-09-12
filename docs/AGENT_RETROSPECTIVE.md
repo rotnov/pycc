@@ -33,6 +33,130 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A green check rollup was read as merge readiness while conversation resolution was still blocking
+
+**What happened.** A pull request reported every required check passing, both
+required contexts green, and `mergeable: MERGEABLE`, yet `gh pr merge` kept
+failing with "the base branch policy prohibits the merge". The session
+diagnosed this as an artifact of an empty check rollup — a failure mode this
+repository has genuinely seen before — and spent a round of investigation on
+that hypothesis, including re-reading the branch-protection baseline for
+evidence of a rollup bug. The actual cause was eight unresolved review threads
+opened by an automated reviewer: branch protection carries
+`required_conversation_resolution: true`, which blocks a merge independently of
+every check's status.
+
+**Root cause.** Check status and conversation resolution are two separate merge
+preconditions, and the tool that reports the first says nothing about the
+second. `gh pr checks` enumerates contexts; it does not enumerate threads. A
+diagnosis built only from check output therefore cannot distinguish "a rollup
+artifact" from "a thread nobody resolved", and the familiar explanation won on
+familiarity rather than on evidence.
+
+**What fixed it.** Querying the threads directly —
+`reviewThreads(first:50){totalCount nodes{isResolved}}` on the pull request —
+which named all eight unresolved threads immediately. Each was replied to and,
+after confirming the author's `__typename` was `Bot`, resolved; the merge
+precondition cleared.
+
+**Lesson.** A green check rollup is not a merge-readiness signal when branch
+protection requires conversation resolution. Before concluding that a merge
+block is spurious, enumerate the pull request's review threads and read their
+resolution state — the block is far more often an unresolved thread than a
+platform artifact, and the enumeration is one query. Treat every non-check
+merge precondition the protection settings declare as its own item to verify,
+not as something a passing check set implies.
+
+## 2026-09-12 — An acceptance criterion prescribed a computation that was never worked through on an example, and no gate evaluates an unchecked item
+
+**What happened.** A milestone acceptance item was written to say that one
+subset's rate is obtained by subtracting one measurement's rate from another's.
+Both measurements were real and both numbers were printed by the same script, so
+the sentence read as obviously true. It was not: the two runs report over
+different denominators, and the prescribed subtraction yields one third of the
+quantity the criterion means to bound — a review round caught it with a worked
+example in which the true gap is double the stated tolerance while the prescribed
+formula reports comfortably inside it.
+
+**Root cause.** The criterion was reasoned about in words ("subtract the
+rates") instead of on numbers. Nothing downstream would have caught it either:
+the checker that validates acceptance items inspects only *checked* ones, so an
+unchecked item carrying a wrong decision rule passes every gate until the day it
+is used to make the decision.
+
+**What fixed it.** Rewriting the method in terms of the `compiled` counts, whose
+difference *is* the subset's count, and stating both denominators explicitly so
+the error cannot be reintroduced by paraphrase.
+
+**Lesson.** An acceptance criterion that prescribes a computation is code
+without a test: substitute two concrete numbers and check the result before
+writing it down. Prefer a formula over counts to one over ratios whenever the
+denominators differ, and treat "no gate reads this yet" as a reason for more
+scrutiny rather than less.
+
+## 2026-09-12 — A plan recorded a byte budget for the file being edited, and a later review round's fix blew through it because only the first edit was measured against it
+
+**What happened.** An implementation plan measured the headroom `docs/ROADMAP.md`
+had left inside its per-resource llms.txt context budget — 1,073 bytes — verified
+that the section the task needed to add would fit, and said so. The section was
+written and did fit. Four review rounds later, a reviewer note asked for a
+precondition clause on one acceptance item; the clause was written at the length
+the explanation wanted and committed with the full local gate set green. CI's
+`Pages` job then failed on the first push: the file was 177 bytes over its budget.
+
+**Root cause.** The budget was treated as a property of the one edit that was
+measured against it rather than of the file. Every later edit to that file — a
+review fix, a reworded bullet — spends from the same headroom, and none of them
+was measured. The local gate set compounded it: the budget is enforced by
+`scripts/check-site.sh`, which had been skipped as "no `site/` file is touched",
+which is true and irrelevant — that script also validates every llms.txt context
+document, and `docs/ROADMAP.md` is one.
+
+**What fixed it.** Condensing the branch's own additions, then running
+`bash scripts/check-site.sh` locally to confirm (exit 0) before re-pushing. The
+clause that overran was ultimately moved out of the roadmap entirely — the full
+method now lives in `docs/TESTING.md`, which carries no llms.txt budget and
+already owns the corpus gate, and the roadmap item cross-references it, which is
+what the canonical-statement rule wanted in the first place.
+
+**Lesson.** When a plan records a byte, line, or digest budget for a file, that
+budget is a gate on every subsequent edit to that file in the same branch, not
+just the first one: re-measure after each review round that touches it. And decide
+whether to run `scripts/check-site.sh` from the set of files the branch touches,
+never from whether any of them live under `site/` — a `docs/` file inside the
+llms.txt partition is exactly as much its business.
+
+## 2026-09-12 — A long gate run in the foreground silenced the session's output stream and the harness watchdog killed it with every artifact uncommitted
+
+**What happened.** An implementation session had produced a large body of work
+— several new scripts, a vendored data tree, and the documentation changes that
+went with them — without committing any of it. It then started a long
+`cargo`-based gate as an ordinary foreground command. That command produced no
+output for the whole of its run, so the session itself emitted nothing for ten
+minutes, and the harness watchdog terminated it. Nothing was in git at that
+moment, so the entire body of work came within one filesystem operation of
+being lost, and a successor session had to be briefed to recover it.
+
+**Root cause.** Two independent mistakes compounded. First, a long gate was run
+in the foreground: the watchdog watches the *session's* output stream, not the
+child process's, so a quiet command starves it even though the command is
+healthy. Second, the work was left uncommitted while gates were being run, so
+the failure mode of the first mistake was total loss rather than a lost gate
+result.
+
+**What fixed it.** The successor session committed the on-disk work as its very
+first action, before running any gate, then ran every long gate as a background
+command redirecting into a log file (`cmd > log 2>&1; echo "name=$?" >> log`)
+and polled the log between other work, so the session kept emitting output
+throughout.
+
+**Lesson.** Commit work before running gates, not after — a gate result is
+cheap to recompute and a lost implementation is not. And never run a gate that
+can go quiet for minutes in the foreground: start it in the background with its
+output redirected to a log, read the log's recorded exit status as the verdict,
+and do other visible work while it runs.
+
+
 ## 2026-09-12 — A date-pinned page was pushed inside the UTC midnight rollover window, failing the governance job on a checker that cannot guess
 
 **What happened.** A pull request touching a canonical website page was pushed
