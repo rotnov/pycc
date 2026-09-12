@@ -260,7 +260,7 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 ## product-sprint-1 — annotated code callable from CPython
 
-A time-boxed bet due 2026-10-22, redirected on 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core, pulled ahead of v0.5/v0.6: hosted `ext` artifact ([#1025](https://github.com/rotnov/pycc/issues/1025)), foreign imports ([#1026](https://github.com/rotnov/pycc/issues/1026)), buffer-protocol bridge ([#1027](https://github.com/rotnov/pycc/issues/1027)), embedded executable ([#1028](https://github.com/rotnov/pycc/issues/1028)); parent [#1014](https://github.com/rotnov/pycc/issues/1014). The earlier corpus metric (CI's non-blocking `corpus-compile-rate` job) stays a report, not the contract.
+A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core, pulled ahead of v0.5/v0.6: the hosted `ext` artifact, foreign imports, a buffer-protocol bridge and an embedded executable, decomposed as [#1025](https://github.com/rotnov/pycc/issues/1025)-[#1028](https://github.com/rotnov/pycc/issues/1028) under parent [#1014](https://github.com/rotnov/pycc/issues/1014). The earlier corpus metric (CI's non-blocking `corpus-compile-rate` job) stays a report, not the contract.
 
 **Accept:**
 
@@ -282,13 +282,14 @@ Generators/`yield from` as state machines, iterator protocol, `itertools`/`funct
 ## v0.7 — transparent CPython interop
 
 This milestone is planned and **not implemented** in the current compiler.
-Ordinary standard-Python imports such as `import numpy as np` automatically
-classify CPython-backed packages and bundle a pinned CPython 3.14/package/native
-dependency closure without requiring pycc-specific source rewrites. The
-planned `auto` (default), `allowlist`, and `deny` policies plus `--pure` provide
-deployment control; the typed `I04xx` boundary, `unittest`/`logging`/`argparse`,
-and an optional low-level `pycc.interop.cpython` API remain part of the
-milestone (D-128).
+Ordinary standard-Python imports such as `import numpy as np` are classified
+without pycc-specific source rewrites. The **embedded** mode bundles a pinned
+CPython 3.14/package/native dependency closure, and the planned `auto`
+(default), `allowlist`, and `deny` policies plus `--pure` control deployment
+(D-128); the hosted `ext` mode bundles nothing and applies no policy (D-244
+rule 3). The typed `I04xx` boundary,
+`unittest`/`logging`/`argparse`, and an optional low-level
+`pycc.interop.cpython` API remain part of the milestone.
 
 **Accept:** an unchanged CPython-compatible app using `import numpy as np`
 builds and runs on all Tier-1 targets without a separately installed Python;

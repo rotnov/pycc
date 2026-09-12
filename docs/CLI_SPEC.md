@@ -28,10 +28,11 @@ orders most-specific first: on Linux and macOS the version-and-platform-tagged
 suffix, then `.abi3.so`, then `.so`; on Windows the tagged suffix, then `.pyd`.
 When `OUT` names none of them, `.abi3.so` is appended on Linux and macOS and
 `.pyd` on Windows -- the stable-ABI spelling, since rule 1 builds against
-`Py_LIMITED_API`. An `OUT` already naming its platform's stable-ABI suffix is
-honored as written, but one naming the interpreter-specific tagged suffix
-(`m.cpython-314-x86_64-linux-gnu.so`, `m.cp314-win_amd64.pyd`) is **rejected**
-rather than honored: rule 1 builds one stable-ABI artifact per platform that
+`Py_LIMITED_API`. A recognized suffix already on `OUT` is honored as
+written when it is version-agnostic -- `.abi3.so` or `.so` on Linux and macOS,
+`.pyd` on Windows, each of which every host's finder searches -- while the
+interpreter-specific tagged suffix (`m.cpython-314-x86_64-linux-gnu.so`,
+`m.cp314-win_amd64.pyd`) is **rejected** rather than honored: rule 1 builds one stable-ABI artifact per platform that
 every later GIL-enabled host is meant to load, and a version-tagged filename
 hides it from exactly those hosts, whose finders search their own tag, then
 `.abi3.so`, then `.so`, and never an earlier interpreter's tag. The module
@@ -332,7 +333,10 @@ paths = ["tests/"]
 ```
 
 The `[interop]` table and both interop CLI flags are a **planned v0.7
-contract**, not current compiler behavior. The current v0.1 TOML parser accepts
+contract**, not current compiler behavior, and everything in this section
+describes the **embedded** mode only: an `--ext` build ignores the table
+entirely and rejects both flags (D-244 rule 3, mirrored from `RUNTIME.md`'s
+canonical statement). The current v0.1 TOML parser accepts
 and ignores unmodeled future sections, and the current frontend rejects every
 `import` before policy evaluation. When v0.7 implements this schema:
 

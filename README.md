@@ -3,9 +3,9 @@
 [![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
 [![diff coverage: 100%](https://img.shields.io/badge/diff%20coverage-100%25-brightgreen)](./docs/TESTING.md)
 
-**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into autonomous native deployment artifacts. Like `gcc`, but for Python.**
+**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into native deployment artifacts -- an autonomous binary, or a module a CPython host imports. Like `gcc`, but for Python.**
 
-`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, autonomous artifact. Native and `--pure` builds are standalone binaries without CPython; planned embedded interop dependencies are bundled with a pinned CPython runtime instead of requiring an installed interpreter or venv. There is no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
+`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast native artifact. Native and `--pure` builds are standalone binaries without CPython; planned embedded interop dependencies are bundled with a pinned CPython runtime instead of requiring an installed interpreter or venv; the planned hosted `ext` module bundles nothing and is loaded by a CPython the host already has. There is no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
