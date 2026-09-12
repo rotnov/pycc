@@ -7,37 +7,33 @@ Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
 merge base and the remote default-branch tip re-resolved immediately before this
 file was committed. It carries `Fixes #1021`, and the
 `closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
-#1021 -- re-run after the last `gh pr edit`. Seventeen commits: the pass itself,
-the review-round fixes, the retrospective entries below, and this snapshot, so
-the authoritative head is whatever `gh pr view 1035` reports once this file
-lands.
+#1021 -- re-run after the last `gh pr edit`. The branch carries the pass itself,
+one commit per review round, the retrospective entries below, and this snapshot,
+so the authoritative head is whatever `gh pr view 1035` reports once this file
+lands; count the commits there rather than here.
 
-Eight review threads exist, every one opened by the `chatgpt-codex-connector`
-bot across seven rounds, and all eight are resolved -- each answered with a reply
-citing the commit that fixed it. `required_conversation_resolution` is on, so
-that state is a merge precondition, alongside the required `audit` and `ci-gate`
-checks. Those checks re-run on every push; this snapshot's own commit moves the
-head, so the run that gates the merge is the one started after it, not any
-earlier green run.
+Every review thread on the pull request was opened by the
+`chatgpt-codex-connector` bot, and every thread opened to date is resolved --
+each answered with a reply citing the commit that fixed it. Deliberately no
+count is written here: this figure was corrected twice as further rounds
+arrived, so read the current one from
+`reviewThreads(first:50){totalCount nodes{isResolved}}` instead of trusting a
+number in this file. `required_conversation_resolution` is on, so that state is
+a merge precondition, alongside the required `audit` and `ci-gate` checks. Those
+checks re-run on every push; this snapshot's own commit moves the head, so the
+run that gates the merge is the one started after it, not any earlier green
+run.
 
-The full local gate set ran green from a single-writer baseline against
-`636a5719`, the last commit that changes Rust sources -- this snapshot is the
-only commit after it, and it touches only `docs/`, which the changed-line
-coverage gate does not instrument. The coverage diff was regenerated in the same
+The full local gate set ran green from a single-writer baseline against the
+branch's last Rust-source commit, with this snapshot and the documentation
+commits after it touching only `docs/`, which the changed-line coverage gate
+does not instrument. The coverage diff was regenerated in the same
 invocation that ran the gate: clippy (warnings denied), `cargo test --workspace`,
 `cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
 `scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
 `--check`, decision immutability, and site-pin merge currency all exit 0.
 Changed-line coverage is 359 of 359 (100.00%); workspace total is 37635/37669
 (99.91%), reported and not enforced.
-
-One local flake is worth naming so a future run does not mistake it for a
-regression: `test_check_corpus_compile_rate.MaxSecondsTests.test_a_budget_that_expires_before_timing_still_records_the_match`
-failed once when the `scripts/` suite ran concurrently with
-`cargo llvm-cov --workspace`, and passed in isolation and on a second full run
-of the suite. The test asserts on a wall-clock compile budget, so it is
-load-sensitive; the file is owned by #1024/#1030 on `main` and is untouched by
-this branch.
 
 ## Why this snapshot exists
 
@@ -51,6 +47,11 @@ written up in `docs/AGENT_RETROSPECTIVE.md` rather than repeated here:
 2. A dispatched agent's report was read as its termination, so the first full
    gate set ran with two writers in the same worktree and one suite failed
    spuriously. Every verdict taken in that window was void, green ones included.
+   Its retrospective entry generalizes that one to the class it belongs to --
+   a gate's verdict is a property of the code *and* the machine state the gate
+   observed -- and names the other two occurrences of the same pattern on this
+   branch: a coverage diff generated before the branch's last commits, and a
+   wall-clock-sensitive suite run concurrently with `cargo llvm-cov`.
 
 ## What the change is
 

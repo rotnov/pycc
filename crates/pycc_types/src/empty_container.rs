@@ -383,6 +383,22 @@ fn rewrite_value(
 /// whose `xs = [x]` spelling the solver accepts. `Ty::Param` is deliberately
 /// *not* discarded: both spellings already report the same `T0034` for it, so
 /// there is no asymmetry to repair and discarding it would introduce one.
+///
+/// The two *inferred* sources -- the binding and the producer -- are validated
+/// once more, for *flow independence*: a resolution containing `Ty::Optional`
+/// is discarded. Both read the flat whole-function `Environment`, whose
+/// narrowing overlay is empty, while the check phase resolves the same name
+/// inside a narrowed branch. Narrowing here is exclusively `Optional`
+/// narrowing (`crate::narrow::narrowing_target` recognizes only a
+/// `name is None` / `name is not None` test against an `Ty::Optional`
+/// binding), so an `Optional`-carrying inferred resolution is exactly the set
+/// this pass can get wrong: for `if x is not None: xs = []; xs.append(x)` the
+/// flat environment yields `Optional[int]` and `check_container_ty` reports a
+/// `T0034` naming `list[int | None]`, while the `xs = [x]` spelling compiles.
+/// That is a *wrong* resolution, not a missed one. The annotation source is
+/// deliberately *not* filtered: `xs: list[int | None] = []` says so in
+/// source, no narrowing is involved, and its `T0034` names the real D-105 gap
+/// where `T0003` would be the worse diagnostic.
 fn resolve(
     target: &str,
     annotation: Option<&Ty>,
@@ -398,20 +414,35 @@ fn resolve(
         .map(BindingState::ty)
         .and_then(from_container_ty)
     {
-        return concrete(from_binding);
+        return inferred(from_binding);
     }
-    find_producer(producers, target, env, local_names).and_then(concrete)
+    find_producer(producers, target, env, local_names).and_then(inferred)
 }
 
 /// `Some(resolution)` when every type it carries is free of `Ty::Infer`,
 /// `None` otherwise -- see [`resolve`] for why that placeholder is discarded
-/// rather than stored.
+/// rather than stored. This is the gate the *annotation* source passes
+/// through.
 fn concrete(resolution: Resolution) -> Option<Resolution> {
-    let concrete = match &resolution {
-        Resolution::List(element) => !contains_infer(element),
-        Resolution::Dict(key, value) => !contains_infer(key) && !contains_infer(value),
+    free_of(resolution, contains_infer)
+}
+
+/// The gate the two *inferred* sources pass through: [`concrete`], and then
+/// additionally free of `Ty::Optional` -- see [`resolve`] for why a
+/// narrowable type read from the flat environment is discarded rather than
+/// stored.
+fn inferred(resolution: Resolution) -> Option<Resolution> {
+    free_of(concrete(resolution)?, contains_optional)
+}
+
+/// `Some(resolution)` when `rejected` holds for none of the types it carries.
+/// Both halves of a dict resolution are checked, not just the value.
+fn free_of(resolution: Resolution, rejected: fn(&Ty) -> bool) -> Option<Resolution> {
+    let accepted = match &resolution {
+        Resolution::List(element) => !rejected(element),
+        Resolution::Dict(key, value) => !rejected(key) && !rejected(value),
     };
-    concrete.then_some(resolution)
+    accepted.then_some(resolution)
 }
 
 /// Whether `ty` is `Ty::Infer` or contains one anywhere inside it.
@@ -432,6 +463,31 @@ fn contains_infer(ty: &Ty) -> bool {
         | Ty::Bool
         | Ty::Str
         | Ty::None
+        | Ty::Param(_)
+        | Ty::Instance(_)
+        | Ty::Protocol(_) => false,
+    }
+}
+
+/// Whether `ty` is `Ty::Optional` or contains one anywhere inside it.
+///
+/// The node itself answers `true` without recursing: it is the `Optional`
+/// *wrapper* the check phase may have narrowed away, not anything inside it.
+/// The recursion still matters for the nested shapes -- a producer can yield
+/// `list[int | None]`, and freezing that into an element position is the same
+/// wrong resolution a bare `int | None` is.
+fn contains_optional(ty: &Ty) -> bool {
+    match ty {
+        Ty::Optional(_) => true,
+        Ty::List(element) | Ty::Set(element) => contains_optional(element),
+        Ty::Dict(pair) => contains_optional(&pair.0) || contains_optional(&pair.1),
+        Ty::Tuple(elements) => elements.iter().any(contains_optional),
+        Ty::Int
+        | Ty::Float
+        | Ty::Bool
+        | Ty::Str
+        | Ty::None
+        | Ty::Infer
         | Ty::Param(_)
         | Ty::Instance(_)
         | Ty::Protocol(_) => false,
@@ -627,5 +683,72 @@ mod tests {
         assert!(concrete(Resolution::Dict(Ty::Str, Ty::Int)).is_some());
         assert!(concrete(Resolution::Dict(Ty::Str, Ty::Infer)).is_none());
         assert!(concrete(Resolution::Dict(Ty::Infer, Ty::Int)).is_none());
+    }
+
+    /// `contains_optional` is what keeps a flow-narrowable type out of a
+    /// rewritten node (see [`resolve`]). The wrapper answers at the node, and
+    /// every nested position recurses.
+    #[test]
+    fn contains_optional_finds_the_wrapper_at_every_depth() {
+        assert!(contains_optional(&Ty::Optional(Box::new(Ty::Int))));
+        assert!(contains_optional(&Ty::List(Box::new(Ty::Optional(
+            Box::new(Ty::Int)
+        )))));
+        assert!(contains_optional(&Ty::Set(Box::new(Ty::Optional(
+            Box::new(Ty::Int)
+        )))));
+        assert!(contains_optional(&Ty::List(Box::new(Ty::List(Box::new(
+            Ty::Optional(Box::new(Ty::Int))
+        ))))));
+        assert!(contains_optional(&Ty::Dict(Box::new((
+            Ty::Str,
+            Ty::Optional(Box::new(Ty::Int))
+        )))));
+        assert!(contains_optional(&Ty::Dict(Box::new((
+            Ty::Optional(Box::new(Ty::Str)),
+            Ty::Int
+        )))));
+        assert!(contains_optional(&Ty::Tuple(Box::new(vec![
+            Ty::Int,
+            Ty::Optional(Box::new(Ty::Int))
+        ]))));
+    }
+
+    /// The complement: every shape with no `Optional` wrapper anywhere must
+    /// pass, `Ty::Infer` included -- [`concrete`] is what rejects that one,
+    /// and this check must not silently duplicate its job.
+    #[test]
+    fn contains_optional_admits_every_shape_without_a_wrapper() {
+        for ty in [
+            Ty::Int,
+            Ty::Float,
+            Ty::Bool,
+            Ty::Str,
+            Ty::None,
+            Ty::Infer,
+            Ty::Param(Box::new("T".to_string())),
+            Ty::Instance(Box::new("C".to_string())),
+            Ty::Protocol(Box::new("P".to_string())),
+            Ty::List(Box::new(Ty::Int)),
+            Ty::Set(Box::new(Ty::Int)),
+            Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
+        ] {
+            assert!(!contains_optional(&ty), "{ty:?} carries no wrapper");
+        }
+    }
+
+    /// `inferred` is `concrete` *plus* the wrapper check, on either half of a
+    /// dict resolution -- and `concrete` alone still admits what only the
+    /// annotation source is allowed to store.
+    #[test]
+    fn inferred_discards_what_concrete_alone_admits() {
+        assert!(inferred(Resolution::List(Ty::Int)).is_some());
+        assert!(inferred(Resolution::List(Ty::Infer)).is_none());
+        assert!(inferred(Resolution::List(Ty::Optional(Box::new(Ty::Int)))).is_none());
+        assert!(concrete(Resolution::List(Ty::Optional(Box::new(Ty::Int)))).is_some());
+        assert!(inferred(Resolution::Dict(Ty::Str, Ty::Int)).is_some());
+        assert!(inferred(Resolution::Dict(Ty::Str, Ty::Optional(Box::new(Ty::Int)))).is_none());
+        assert!(inferred(Resolution::Dict(Ty::Optional(Box::new(Ty::Str)), Ty::Int)).is_none());
     }
 }

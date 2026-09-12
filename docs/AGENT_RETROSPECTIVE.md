@@ -33,6 +33,40 @@ never a merge gate.
 
 ---
 
+## 2026-09-13 — A gate's verdict is only valid on a machine running nothing else that competes for it
+
+**What happened.** Three separate green-or-red verdicts taken during #1021's
+delivery were void for the same structural reason, and each was noticed only
+after acting on it. A dispatched agent's returned report was read as its
+termination, so the first full gate set ran with two writers in the same
+worktree and one suite failed spuriously. A coverage diff was generated before
+the branch's last commits, so the gate measured a diff that no longer described
+the tree. And the `scripts/` unittest suite was run concurrently with
+`cargo llvm-cov --workspace`, where
+`test_check_corpus_compile_rate.MaxSecondsTests.test_a_budget_that_expires_before_timing_still_records_the_match`
+-- which asserts on a wall-clock compile budget -- failed under the load and
+passed in isolation and on a second full run.
+
+**Root cause.** All three treat a gate's exit status as a property of the code,
+when it is a property of the code *and* the machine state the gate observed.
+Two writers, a stale input, and a loaded CPU are three ways for that state to
+differ from the one the verdict is being attributed to; none of them announces
+itself in the exit status, and a green result under any of them looks exactly
+like a valid one.
+
+**What fixed it.** Re-running the full gate set from a single-writer baseline,
+with the coverage diff regenerated inside the gate's own invocation, and with
+the wall-clock-sensitive suite run while no coverage build was in flight.
+
+**Lesson.** Before reading a gate's verdict, state what else was running: other
+writers in the worktree, inputs generated at an earlier commit, and other
+heavy jobs on the same machine. If any of the three is true, the verdict is
+void — green included — and the gate is re-run, not interpreted. Do not file
+the load-sensitive test as a flake to be fixed; the defect is running a
+timing-sensitive assertion under a competing build.
+
+---
+
 ## 2026-09-12 — A universal claim was corrected one review round at a time, because each round enumerated only the sites the previous finding named
 
 **What happened.** A decision record narrowed an accepted, universally-stated

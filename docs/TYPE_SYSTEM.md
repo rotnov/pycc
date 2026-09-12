@@ -201,6 +201,21 @@ element, and panics on an empty one.
   rather than a wrong one, which it does not. `Ty::Param` is deliberately not
   discarded — both spellings of a generic element already report the same
   `T0034`, so there is no asymmetry to repair there.
+- **The two inferred sources decline a narrowable type.** A resolution
+  containing `Ty::Optional` anywhere inside it is discarded on the binding and
+  producer sources — but *not* on the annotation source. Both inferred sources
+  read the flat whole-function environment, whose narrowing overlay is empty,
+  while the check phase resolves the same name inside a narrowed branch.
+  Narrowing here is exclusively `Optional` narrowing (`narrow.rs` recognizes
+  only a `name is None` / `name is not None` test against an `Optional`
+  binding), so an `Optional`-carrying inferred resolution is exactly the set
+  this pass can get wrong: for `if x is not None: xs = []; xs.append(x)` the
+  flat environment yields `Optional[int]`, and storing it reports a `T0034`
+  naming `list[int | None]` for a program whose `xs = [x]` spelling compiles
+  and runs. The cost of declining is again a `T0003`. A written
+  `xs: list[int | None] = []` keeps its `T0034`: the type is stated in source,
+  no narrowing is involved, and that diagnostic names the real D-105 gap where
+  a miss would be the worse answer.
 - **No set path.** A set binding can only originate from an empty set literal,
   `{}` parses as a dict, and `set()` is rejected at HIR lowering with `C0001` —
   so `SetAdd` is a structurally dead producer and `set[T]` is untouched here.

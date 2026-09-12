@@ -939,3 +939,101 @@ print(_f(1))
     assert!(error.contains("T0003"), "{error}");
     assert!(!error.contains("<inferred>"), "{error}");
 }
+
+/// Round 8. The two inferred sources read the flat whole-function
+/// environment, whose narrowing overlay is empty, so a producer inside a
+/// narrowed branch resolved the *un*-narrowed `Optional` and froze it into
+/// the node: `check_container_ty` then reported a `T0034` naming
+/// `list[int | None]` for a program whose `xs = [x]` spelling compiles and
+/// runs. A resolution carrying `Ty::Optional` is discarded on those sources,
+/// so the miss is a `T0003` instead. The non-empty control is what makes this
+/// an asymmetry test rather than merely "it reports something".
+#[test]
+fn a_producer_inside_a_narrowed_branch_misses_rather_than_freezing_the_wrapper() {
+    let error = check_error(
+        "narrowed_producer_empty_list",
+        "\
+def f(x: int | None) -> int:
+    if x is not None:
+        xs = []
+        xs.append(x)
+        return len(xs)
+    return 0
+
+print(f(1))
+",
+    );
+    assert!(error.contains("T0003"), "{error}");
+    assert!(!error.contains("T0034"), "{error}");
+    let non_empty = check_build_and_run(
+        "narrowed_producer_non_empty_list",
+        "\
+def f(x: int | None) -> int:
+    if x is not None:
+        xs = [x]
+        xs.append(x)
+        return len(xs)
+    return 0
+
+print(f(1))
+",
+    );
+    assert!(non_empty.status.success());
+    assert_eq!(String::from_utf8_lossy(&non_empty.stdout), "2\n");
+}
+
+/// The dict half of the same defect, with the same control: the wrapper
+/// reaching either the key or the value position is discarded alike.
+#[test]
+fn a_narrowed_producer_misses_for_a_dict_too() {
+    let error = check_error(
+        "narrowed_producer_empty_dict",
+        "\
+def f(x: int | None) -> int:
+    if x is not None:
+        d = {}
+        d[\"j\"] = x
+        return len(d)
+    return 0
+
+print(f(1))
+",
+    );
+    assert!(error.contains("T0003"), "{error}");
+    assert!(!error.contains("T0036"), "{error}");
+    let non_empty = check_build_and_run(
+        "narrowed_producer_non_empty_dict",
+        "\
+def f(x: int | None) -> int:
+    if x is not None:
+        d = {\"k\": x}
+        d[\"j\"] = x
+        return len(d)
+    return 0
+
+print(f(1))
+",
+    );
+    assert!(non_empty.status.success());
+    assert_eq!(String::from_utf8_lossy(&non_empty.stdout), "2\n");
+}
+
+/// The annotation source keeps its `Optional` resolutions: the type is
+/// written in source, no narrowing is involved, and `T0034` names the real
+/// D-105 gap where a `T0003` miss would be the worse diagnostic.
+#[test]
+fn a_written_optional_annotation_still_reports_the_container_gap() {
+    let error = check_error(
+        "annotated_optional_empty_list",
+        "\
+def f(x: int | None) -> int:
+    xs: list[int | None] = []
+    xs.append(x)
+    return len(xs)
+
+print(f(1))
+",
+    );
+    assert!(error.contains("T0034"), "{error}");
+    assert!(error.contains("list[int | None]"), "{error}");
+}
