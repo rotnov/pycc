@@ -338,11 +338,19 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Planned mechanics:
 
 No open-source-package corpus workflow, pinned package inputs, or per-project pass-rate dashboard exists on current `main`. The separate competitive-programming corpus below is a different corpus with a different shape, and does exist.
 
-## Corpus: competitive-programming stdin/stdout programs (`product-sprint-1`)
+## Corpus: competitive-programming stdin/stdout programs (informational)
 
-A second, narrower corpus, vendored and running today. It measures the product
-bet in `docs/ROADMAP.md`'s `product-sprint-1`: whether pycc compiles real
-single-file stdin/stdout Python unchanged and runs it faster than CPython.
+A second, narrower corpus, vendored and running today. It measures one thing:
+how much real single-file stdin/stdout Python compiles unchanged, and how fast
+the result runs against CPython. That measurement is retained informational
+telemetry, not a contract. It carried `product-sprint-1`'s acceptance until the
+2026-09-12 redirection
+([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md));
+`docs/ROADMAP.md`'s `product-sprint-1` section now owns that sprint's
+acceptance, and the benchmark protocol for the hosted `ext` artifact is
+specified there and in this document when that artifact lands
+([#1025](https://github.com/rotnov/pycc/issues/1025)). Do not read this section
+as a statement of what the sprint must achieve.
 
 - **Inputs.** `tests/corpus/codecontests/` — a pinned subset of the DeepMind
   CodeContests dataset (CC BY 4.0; see that directory's `NOTICE` and `LICENSE`),
@@ -367,8 +375,6 @@ single-file stdin/stdout Python unchanged and runs it faster than CPython.
   `INCOMPLETE`: `manifest.json` orders all 200 steering records before all 100
   holdout records, so a run that exhausts `--max-seconds` drops holdout problems
   first, and the two runs would then cover different evaluated subsets.
-  `docs/ROADMAP.md`'s `product-sprint-1` holdout acceptance item is read this
-  way.
 - **Metric.** `python3 scripts/check_corpus_compile_rate.py` reports
   `compiled N/M`, `matched K/N`, the median speedup against CPython, and the
   diagnostic classes that stopped the failures, as a first/any tally. Each
