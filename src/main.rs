@@ -1,4 +1,5 @@
 mod cli;
+mod ext_output;
 mod frontend;
 mod modules;
 mod project_config;
