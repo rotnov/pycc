@@ -36,6 +36,15 @@ class StatusEvidenceTests(unittest.TestCase):
                     # The landing snapshot is one file; the status snapshot holds subjects.
                     artifacts = [hero["snapshot"]] if "path" in hero["snapshot"] else []
                 paths.update(item["path"] for item in artifacts)
+                # Issue #1007: the architecture record's snapshot holds a trace
+                # record plus ordered stages rather than an `artifacts` list.
+                # Without these the architecture validator fails first and masks
+                # whichever mutation this case is actually testing.
+                trace = hero["snapshot"].get("trace")
+                if trace is not None:
+                    paths.add(trace["path"])
+                paths.update(stage["path"] for stage in hero["snapshot"].get("stages", [])
+                             if stage.get("path"))
             for relative in paths:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +73,7 @@ class StatusEvidenceTests(unittest.TestCase):
 
     def test_published_status_record(self):
         manifest = json.loads((ROOT / "site/evidence-heroes.json").read_text())
-        self.assertEqual(manifest["schema_version"], "2.1.0")
+        self.assertEqual(manifest["schema_version"], "2.2.0")
         hero = manifest["heroes"][STATUS]
         self.assertEqual(hero["page_id"], "status")
         self.assertEqual(hero["state"], "all-Tier-1")

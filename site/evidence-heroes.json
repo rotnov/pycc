@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.1.0",
+  "schema_version": "2.2.0",
   "evidence_states": [
     "all-Tier-1",
     "partial",
@@ -433,17 +433,171 @@
       "kind": "compiler-pipeline-trace",
       "route": "/architecture/",
       "page_path": "site/architecture/index.html",
-      "fixture": null,
-      "test": null,
-      "command": null,
-      "snapshot": null,
-      "repository": null,
-      "attestation": null,
-      "environment": null,
-      "state": "unavailable",
-      "limitations": "The explanatory architecture page is live, but no fixture-derived end-to-end hero trace has been accepted. Issue #566 owns that projection.",
+      "fixture": {
+        "path": "tests/fixtures/quick_start.py",
+        "sha256": "09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043",
+        "bytes": 143
+      },
+      "test": {
+        "path": "tests/architecture_trace.rs",
+        "sha256": "b3d7a0c05cbff29145d8ee854c8ef3a4b9ec698ed155c173620355b803716717",
+        "names": [
+          "checked_in_stage_artifacts_are_what_the_compiler_produces_today",
+          "regeneration_writes_exactly_the_checked_in_stage_artifacts",
+          "the_pinned_byte_counts_in_trace_json_describe_the_checked_in_artifacts",
+          "type_checking_returns_hir_byte_identical_to_the_finalized_hir",
+          "the_page_excerpts_are_exact_prefixes_of_the_artifacts",
+          "the_fixture_builds_a_native_executable_whose_stdout_is_the_published_transcript",
+          "a_mutated_artifact_and_a_substituted_stage_artifact_are_both_rejected"
+        ]
+      },
+      "command": {
+        "cwd": "repository-root",
+        "argv": [
+          "cargo",
+          "test",
+          "--test",
+          "architecture_trace"
+        ],
+        "requires": "a host LLVM 22 toolchain and linker; no network"
+      },
+      "snapshot": {
+        "trace": {
+          "path": "tests/fixtures/architecture-trace/trace.json",
+          "sha256": "23614d5d8c1c527d75b733ce8afed97ea4ec5ad555748cabaf7e15769a29de12",
+          "bytes": 1377
+        },
+        "stages": [
+          {
+            "id": "source",
+            "label": "01 Source",
+            "api": "tests/fixtures/quick_start.py",
+            "evidence": "artifact",
+            "path": "tests/fixtures/quick_start.py",
+            "sha256": "09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043",
+            "bytes": 143,
+            "note": "The one production fixture every later stage is derived from."
+          },
+          {
+            "id": "parser",
+            "label": "02 Parser",
+            "api": "pycc_parser::parse_all",
+            "evidence": "artifact",
+            "path": "tests/fixtures/architecture-trace/parser-ast.txt",
+            "sha256": "e3bab36a048cba708813e94e39a0301cc4dc4934bd14d9b8fc7101a5028cf45e",
+            "bytes": 19360,
+            "note": "Debug rendering of the returned ModModule."
+          },
+          {
+            "id": "hir",
+            "label": "03 HIR",
+            "api": "pycc_hir::lower_module, link, finalize",
+            "evidence": "artifact",
+            "path": "tests/fixtures/architecture-trace/hir-module.txt",
+            "sha256": "8e92d002b5438d4cf8b41d2390ad1f37679a4d43c76bc1e357963ded2594c84c",
+            "bytes": 3977,
+            "note": "Debug rendering of the linked and finalized HirModule."
+          },
+          {
+            "id": "type-check",
+            "label": "04 Type checking",
+            "api": "pycc_types::check_and_resolve_all_keyed",
+            "evidence": "identity",
+            "path": "tests/fixtures/architecture-trace/hir-module.txt",
+            "sha256": "8e92d002b5438d4cf8b41d2390ad1f37679a4d43c76bc1e357963ded2594c84c",
+            "bytes": 3977,
+            "note": "Accepted without rewriting a node: the returned HIR is byte-identical to stage 03, so the two stages share one SHA-256."
+          },
+          {
+            "id": "mir",
+            "label": "05 MIR",
+            "api": "pycc_mir::build",
+            "evidence": "artifact",
+            "path": "tests/fixtures/architecture-trace/mir-items.txt",
+            "sha256": "dc6b710e2975df6b718f2fb30d48cef4b2738d3544fecdf4b50ba826320f3d7e",
+            "bytes": 3521,
+            "note": "Debug rendering of each item of the public mir.items field; MirModule itself derives no Debug."
+          },
+          {
+            "id": "llvm-ir",
+            "label": "06 LLVM IR",
+            "api": "pycc_codegen",
+            "evidence": "none",
+            "path": null,
+            "sha256": null,
+            "bytes": null,
+            "note": "No artifact: pycc has no --emit flag, so LLVM IR cannot be captured through the public CLI. This stage is unavailable, which is why the hero is partial."
+          },
+          {
+            "id": "native",
+            "label": "07 Native executable",
+            "api": "pycc build",
+            "evidence": "exit-status",
+            "path": null,
+            "sha256": null,
+            "bytes": null,
+            "note": "pycc build tests/fixtures/quick_start.py -o <scratch>/quick_start exits 0. No SHA-256: a linked binary is not reproducible across hosts."
+          },
+          {
+            "id": "stdout",
+            "label": "08 Program stdout",
+            "api": "the linked executable",
+            "evidence": "inline",
+            "path": null,
+            "sha256": null,
+            "bytes": null,
+            "note": "26 bytes, the first eleven Fibonacci numbers one per line, exit 0 and empty stderr."
+          }
+        ]
+      },
+      "repository": {
+        "commit": "b606062313e71f915d0a377acb548ce80c787940",
+        "tree": "bc0b823ac9e06ff4285fb05d39c19da8a4ee0538",
+        "url": "https://github.com/rotnov/pycc/commit/b606062313e71f915d0a377acb548ce80c787940"
+      },
+      "attestation": {
+        "collected_at": "2026-09-11T17:34:06Z",
+        "collection_method": "cargo test --test architecture_trace (offline, host toolchain)",
+        "sanitized": true,
+        "compiler_commit": "b606062313e71f915d0a377acb548ce80c787940",
+        "verification_test": "tests/architecture_trace.rs"
+      },
+      "environment": {
+        "rust": "1.97.1",
+        "llvm": "22",
+        "profile": "debug",
+        "capture_host": "macos-26.5.1 / aarch64-apple-darwin",
+        "platforms": [
+          {
+            "runner": "macos-14",
+            "architecture": "aarch64-apple-darwin"
+          },
+          {
+            "runner": "macos-15-intel",
+            "architecture": "x86_64-apple-darwin"
+          },
+          {
+            "runner": "ubuntu-latest",
+            "architecture": "x86_64-unknown-linux-gnu"
+          },
+          {
+            "runner": "ubuntu-24.04-arm",
+            "architecture": "aarch64-unknown-linux-gnu"
+          },
+          {
+            "runner": "windows-latest",
+            "architecture": "x86_64-pc-windows-msvc"
+          }
+        ]
+      },
+      "state": "partial",
+      "limitations": "One fixture is not the language. The LLVM IR stage carries no artifact at all, because pycc has no --emit flag, so this trace is partial and never all-Tier-1. The parser, HIR and MIR artifacts are Rust Debug renderings: a developer-facing format with no stability guarantee, so their SHA-256 identities change whenever those types change. The native build and its stdout were observed on one host; tests/architecture_trace.rs re-derives every stage wherever cargo test --workspace runs.",
       "stable_links": {
-        "owner": "https://github.com/rotnov/pycc/issues/566"
+        "commit": "https://github.com/rotnov/pycc/commit/b606062313e71f915d0a377acb548ce80c787940",
+        "tree": "https://github.com/rotnov/pycc/tree/b606062313e71f915d0a377acb548ce80c787940",
+        "fixture": "https://github.com/rotnov/pycc/blob/b606062313e71f915d0a377acb548ce80c787940/tests/fixtures/quick_start.py",
+        "owner": "https://github.com/rotnov/pycc/issues/566",
+        "part": "https://github.com/rotnov/pycc/issues/1007"
       },
       "projections": {
         "html": "site/architecture/index.html",

@@ -9,7 +9,7 @@
       "section": "Project",
       "representation": "markdown",
       "local_path": "site/index.html.md",
-      "budget_bytes": 13824
+      "budget_bytes": 15360
     },
     {
       "label": "README",
@@ -41,7 +41,7 @@
       "section": "Specifications",
       "representation": "markdown",
       "local_path": "docs/PYTHON_STANDARDS.md",
-      "budget_bytes": 43008
+      "budget_bytes": 41472
     },
     {
       "label": "Roadmap",

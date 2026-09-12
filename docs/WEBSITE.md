@@ -561,7 +561,7 @@ it does not expand the historical PEP 526 transcript's claim.
 
 ## Versioned evidence-hero contract
 
-`site/evidence-heroes.json` schema version `2.1.0` is the canonical ordered
+`site/evidence-heroes.json` schema version `2.2.0` is the canonical ordered
 inventory for the landing, language, diagnostics, performance, architecture,
 status, comparison, and provenance heroes. Every record has the same required
 field set and one allowlisted evidence kind. The state vocabulary is closed:
@@ -595,16 +595,20 @@ Status carries a checked-in required-check snapshot under
 [D-241](./decisions/D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md);
 see "Status snapshot record" below.
 
-The other four records remain explicitly `unavailable`. Performance has no
-published route until #567 provides real artifacts. Architecture,
-Comparison, and Provenance retain their
-useful explanatory pages, but the first screen now says that its unique
-commit-bound hero is unavailable and links to the responsible issue. This
-state does not invalidate the pages' separately owned semantic source
+Architecture carries a checked-in compiler pipeline trace under
+[D-243](./decisions/D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md);
+see "Architecture pipeline-trace record" below. Its state is `partial`, not
+`all-Tier-1`, and schema `2.2.0` is the version that adds the record shape and
+the `compiler-pipeline-trace` kind.
+
+The other three records remain explicitly `unavailable`. Performance has no
+published route until #567 provides real artifacts. Comparison and Provenance
+retain their useful explanatory pages, but the first screen now says that its
+unique commit-bound hero is unavailable and links to the responsible issue.
+This state does not invalidate the pages' separately owned semantic source
 contracts; it prevents those contracts from being mistaken for the unique
-fixture/run proof required by the evidence-first redesign. #566 owns the
-Architecture artifact (Part 2, #1007), #563 coordinates the Comparison
-hero, and #217 owns the sanitized immutable Provenance record.
+fixture/run proof required by the evidence-first redesign. #563 coordinates
+the Comparison hero and #217 owns the sanitized immutable Provenance record.
 
 The validator is hermetic. It reads only the checkout, the local Git object
 database, and the manifest; it never calls GitHub or another provider and
@@ -709,6 +713,81 @@ release readiness. A head-SHA swap with an identical tree is undetectable
 offline; the record's `limitations` say so, and the collector is the
 trusted party for that one field, as D-230 already trusts it for
 `tested_commit`.
+
+### Architecture pipeline-trace record
+
+The `architecture` record ([D-243](./decisions/D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md),
+Part 2 of #566) is one production fixture carried through every implemented
+compiler stage, with the bytes each stage produced checked into the repository.
+It is not a diagram and not a live build: nothing at build or deploy time runs
+the compiler. Its shape, closed by `scripts/site_pipeline_evidence.py`'s
+`expected_shape` and validated field-for-field, is:
+
+- `fixture`/`test`: the traced program `tests/fixtures/quick_start.py` and the
+  re-deriving integration test `tests/architecture_trace.rs`, pinned by
+  canonical LF SHA-256 with the ordered `#[test]` names. Editing either
+  requires regenerating the artifacts.
+- `command`: `cargo test --test architecture_trace` from the repository root,
+  requiring a host LLVM 22 toolchain and linker and no network.
+- `snapshot.trace`: the pinned trace record
+  `tests/fixtures/architecture-trace/trace.json`, which names the compiler
+  commit and tree the artifacts were produced by, the native `argv` and exit
+  status, the exact stdout text and byte count, and the excerpt line count the
+  page may publish.
+- `snapshot.stages`: eight ordered rows -- `source`, `parser`, `hir`,
+  `type-check`, `mir`, `llvm-ir`, `native`, `stdout` -- each carrying its
+  label, the public API that produces it, its evidence kind (`artifact`,
+  `identity`, `exit-status`, `inline` or `none`), its artifact path and
+  SHA-256 where it has one, and a reviewed note. The stage list is closed:
+  a stage cannot be added, removed, relabelled or rebound to another API
+  without changing the module.
+- `repository`: the compiler commit whose pipeline produced the bytes, its
+  tree, and the commit URL.
+- `attestation`: `collected_at`, `collection_method`, `sanitized`, the pinned
+  `compiler_commit` and the `verification_test` path.
+- `environment`: Rust and LLVM versions, the build profile, the one capture
+  host of the native build, and the five Tier-1 platforms the test re-runs on.
+- `state`: derived by a closed mapping from the stage evidence kinds --
+  `all-Tier-1` only if no stage carries `none`, `partial` while any does, and
+  `unavailable` for a broken or absent stage list. There is deliberately no
+  path to `all-Tier-1` today: the `llvm-ir` stage cannot be evidenced without
+  an `--emit` flag pycc does not have, so the record stays `partial` and says
+  so on every surface.
+- `limitations` and `stable_links` (commit, tree, fixture, owner issue #566,
+  part issue #1007) derive from the fields above.
+
+Validation layers, in gate-versus-convention terms:
+
+| Check | Where it runs | Gate or convention |
+|---|---|---|
+| Structural validation and every projection: the closed field sets above; each artifact's canonical LF SHA-256 and byte count against the working tree's bytes; the `#[test]` names against the ones actually registered in the test source; the trace record's compiler revision, excerpt line count, stdout text/bytes and zero exit status against the record; the collapsed hero summary and every visible stage row inside the `data-evidence-role="hero"` element reading exactly as its own stage label, API, evidence kind, artifact path and SHA-256, with the three published excerpts required to be the exact leading `EXCERPT_LINES` bytes of their artifacts rather than paraphrases; the reviewed masthead, `<details>` toggle and closing paragraph each rendered exactly once, with the eyebrow date bound to the page's single JSON-LD `dateModified`; the same stylesheet, embedded-`<style>`, inline-`style` and hero-allowlist visibility model Part 1 established, so a stage row cannot be hidden rather than removed; immutable commit/tree/fixture/issue links with no moving `main` ref; `en-US` locale; and one exact summary line in `site/index.html.md` and `site/llms.txt` | `scripts/check_site_evidence.py` via `scripts/check-site.sh` (Pages, push and pull request) | must pass; Pages is not a required context |
+| Re-derivation of every stage from today's compiler through the public crate APIs, byte-compared against the checked-in artifacts, plus the native build's exit status and exact stdout, plus a mutated-artifact and substituted-stage-artifact negative control | `tests/architecture_trace.rs` under `cargo test --workspace` | gate via `ci-gate` on all five Tier-1 targets |
+| Per-hero manifest facts (state, kind, page path, stable links, required-field presence) without re-running the pipeline -- in their own integration test, because the D-230 language and diagnostics records pin `tests/site_evidence.rs` byte-for-byte to a preserved source blob and adding a case there fails the site gate | `tests/architecture_manifest.rs` | gate via `ci-gate` |
+| Pure-function, record-internal and wiring controls (derived state in every direction, closed field sets, artifact identities, excerpt prefixes, immutable links, the published summary, the Pages path filters, the shell-harness invocation and the checker's dispatch) | `scripts/test_site_pipeline_wiring.py` in the depth-1 `governance` job | gate via `ci-gate` |
+| Public-CLI controls against the real record (nested-field mirror, corrupted or missing stage artifact, missing trace record, rewritten verification test, drifted test names, drifted verification command, state overstated and understated in the record and on the page, drifted Markdown and LLM markers, softened limitations, a paraphrased excerpt, a moving branch link, a future attestation timestamp, a drifted environment field, a recorded tree that is not the commit's own, a hiding rule in the stylesheet and in an embedded `<style>` block, an inline `style` attribute inside the hero with a benign declaration on the same anchor rejected identically, and the positive control that the shipped record is accepted) | `scripts/site_pipeline_evidence_test.py` run by `scripts/test-check-site.sh` (Pages only; the name is deliberately not `test_*`) | must pass |
+| Regenerate the artifacts in the same pull request as any change to the traced pipeline's public types or output | agent convention | backed by the byte comparison in `tests/architecture_trace.rs`, which fails the moment they drift |
+
+Two limitations are structural rather than incidental, and the record states
+both. One fixture is not the language: this trace proves that these stages run
+end to end on this program, not that the compiler is complete. The parser, HIR
+and MIR artifacts are Rust `Debug` renderings, a developer-facing format with
+no stability guarantee, so their SHA-256 identities change whenever those types
+change -- the artifacts are expected to churn, and the regeneration command
+below is the documented way to absorb that churn rather than a recovery
+procedure.
+
+To regenerate every pinned artifact from the current working tree, run from the
+repository root:
+
+```sh
+PYCC_ARCHITECTURE_TRACE_OUT=tests/fixtures/architecture-trace \
+  cargo test --test architecture_trace regeneration
+```
+
+Then refresh the record's SHA-256 identities and byte counts in
+`site/evidence-heroes.json` and the excerpts on `site/architecture/index.html`,
+and rotate the page's four date pins as any site edit requires. The site gate
+fails until all of those agree, so a partial regeneration cannot merge.
 
 ## Status-page freshness enforcement
 
@@ -862,10 +941,16 @@ The supported consumer contract is now explicit and enforced:
   manifest. Requiring the sum to fit makes each per-resource budget a real
   allocation and makes an over-budget failure name the document responsible,
   at the cost of no longer letting one document draw on another's unused
-  headroom. The current allocation (278016 of 278528 bytes, after D-241
-  raised the Markdown landing's budget to 13824 bytes for the status
-  snapshot summary line) leaves 512 bytes of the ceiling deliberately
-  unallocated. Because the per-resource budgets now bind first by
+  headroom. The current allocation (278016 of 278528 bytes) leaves
+  512 bytes of the ceiling deliberately unallocated. D-241 first raised the
+  Markdown landing's budget to 13824 bytes for the status snapshot summary
+  line; D-243 raised it again to 15360 bytes for the architecture
+  pipeline-trace summary line and took the 1536 bytes from
+  `docs/PYTHON_STANDARDS.md` (43008 -> 41472), which carried the largest
+  slack of any document in the manifest. D-227 rejected raising `budget_kib`
+  a third time, so growth is absorbed by reallocation between documents
+  rather than by a larger ceiling, and the 512 unallocated bytes are
+  preserved across every such reallocation. Because the per-resource budgets now bind first by
   construction, the aggregate check is provably unreachable; it is knowingly
   retained as documented defense-in-depth, since it is the direct statement of
   the ceiling this contract publishes.

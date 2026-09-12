@@ -286,6 +286,44 @@ gaps and partial PEP 563 acceptance boundaries after integrating issues #919 and
 CLI mutations also reject each new hero's limitations or source transcript
 wrapped in `noscript`: evidence must be visible with JavaScript enabled too.
 
+The Architecture hero adds a third per-page contract module under
+[D-243](./decisions/D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md)
+(Part 2 of #566). `tests/architecture_trace.rs` is the only party that
+re-derives the pipeline: it drives `tests/fixtures/quick_start.py` through the
+public crate APIs (`pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`) and a
+native build, byte-compares every stage against the artifacts checked in under
+`tests/fixtures/architecture-trace/`, asserts the native exit status and exact
+stdout, and carries a negative control that rejects both a byte-mutated
+artifact and one stage's artifact substituted for another's. It runs under
+`cargo test --workspace` on all five Tier-1 targets. The separate guarantee
+that a stage carrying no evidence may not be presented as implemented is a
+record-level property owned by the validator, not by re-derivation, and is
+proved through the public CLI by `scripts/site_pipeline_evidence_test.py`
+described below. `scripts/site_pipeline_evidence.py` owns the record shape, the closed
+eight-stage vocabulary, the derived state and the visible projection, and never
+runs the compiler. Its controls are split by cost: the fast pure-function,
+record-internal and wiring cases live in `scripts/test_site_pipeline_wiring.py`
+and are discovered by `unittest discover -s scripts -p 'test_*.py'` in the
+depth-1 `governance` job, while the slow public-CLI mutation battery lives in
+`scripts/site_pipeline_evidence_test.py`, is invoked explicitly by
+`scripts/test-check-site.sh` beside its Part 1 siblings, and is deliberately
+not named `test_*`. Every rejection there is paired with a positive control
+against the shipped record, so a mutation cannot pass for the wrong reason.
+The Pages push and pull-request path filters enumerate
+`scripts/site_pipeline_evidence.py`,
+`scripts/site_pipeline_evidence_test.py`,
+`scripts/test_site_pipeline_wiring.py`, `tests/architecture_trace.rs`,
+`tests/architecture_manifest.rs` and `tests/fixtures/architecture-trace/**`
+exactly once per event; the wiring
+controls reject independent removals and duplicates. Regenerate the artifacts
+with `PYCC_ARCHITECTURE_TRACE_OUT=tests/fixtures/architecture-trace cargo test
+--test architecture_trace regeneration`; the parser, HIR and MIR artifacts are
+Rust `Debug` renderings and are expected to churn whenever those types change. `tests/architecture_manifest.rs` carries the Rust-side manifest facts
+(state, kind, page path, stable links, required-field presence) and re-runs
+nothing; it is a separate integration test because the D-230 language and
+diagnostics records pin `tests/site_evidence.rs` byte-for-byte to a preserved
+source blob, so a case added there fails the site gate.
+
 ## Differential fuzzing (planned)
 
 A generator would produce well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. This would run continuously on a dedicated runner. No fuzzing harness exists on current `main`.

@@ -33,6 +33,99 @@ never a merge gate.
 
 ---
 
+## 2026-09-12 — A date-pinned page was pushed inside the UTC midnight rollover window, failing the governance job on a checker that cannot guess
+
+**What happened.** A pull request touching a canonical website page was pushed
+with its four date pins reading the then-current UTC date. The `governance`
+job failed with `scripts/check_site_pin_merge_currency.rb`'s "prospective merge
+date is ambiguous" error rather than a stale-pin error, and the first hypothesis
+was the familiar stale-pin class — which sent the diagnosis at the wrong target
+until the failure was reproduced locally.
+
+**Root cause.** That checker predicts the merge date from the base revision's
+author-date UTC offset, and fails closed while the UTC date and the offset date
+disagree. Near UTC midnight those two dates straddle the boundary for as long as
+the offset is wide, so no pin value is verifiable — including the correct one.
+The pins had been chosen hours earlier, when both dates still agreed.
+
+**What fixed it.** Waiting out the window, then rotating every pin for the
+touched page to the now-unambiguous predicted date, and re-running the checker
+locally to see exit 0 before pushing again.
+
+**Lesson.** Before pushing a change that touches a date-pinned page, read the
+current UTC time and the base revision's author-date offset, and compute whether
+the two dates agree; if they do not, the window is open and any pin value will
+red the gate. The stable window is also bounded on the other side — once past the
+rollover, the predicted date holds only until the offset rolls to the next day,
+so treat that as a real merge deadline rather than pinning and walking away.
+Rotate pins line by line, never with a tree-wide date substitution: the same
+date string also appears as factual capture timestamps and in byte-pinned
+fixtures, where rewriting it manufactures unrelated failures.
+
+---
+
+## 2026-09-11 — An implementation plan directed an edit into a byte-pinned file, a new hero shape broke 186 assertions in unrelated suites, and a repair round's own rewrite overstated the gate it described
+
+*(Relative order against the other 2026-09-11 entries in this file cannot be
+recovered from their content; this one describes work on issue #1007.)*
+
+**What happened.** Three avoidable fix rounds while implementing #1007
+(Architecture hero as a pipeline evidence trace).
+
+1. The authoritative plan directed the new manifest-facts test case into
+   `tests/site_evidence.rs`. That file is pinned byte-for-byte by the D-230
+   language and diagnostics evidence records at a preserved source blob, so
+   the edit made `sh scripts/check-site.sh` exit 1 with "language artifact
+   differs from preserved source blob". The case had to move to a new
+   `tests/architecture_manifest.rs`, and the deviation had to be recorded in
+   D-243, `docs/WEBSITE.md`, `docs/TESTING.md` and the test's own header.
+2. The new hero's `snapshot` carries a `trace` record plus ordered `stages`
+   instead of an `artifacts` list. The Part 1 public-CLI suites
+   (`scripts/site_execution_evidence_test.py`,
+   `scripts/site_status_evidence_test.py`) build their permitted-evidence
+   roots from `artifacts` only, so every one of their 186 mutation cases
+   failed with the same unrelated message — the architecture validator ran
+   first and masked whichever mutation each case was actually testing.
+
+3. Round 1 deleted a negative-control test case; round 2 found four documents
+   still describing it and rewrote their clauses; round 3 then found that one
+   of those very rewrites, in `docs/TESTING.md`, had attached the
+   `cargo test --workspace` Tier-1 clause to the Python public-CLI battery,
+   which runs only in the non-required Pages leg. The repair round's own edit
+   became the next round's finding.
+
+**Root cause.** (1) Plans are written against a file's contents, not against
+the gates that pin it; nothing in the planning loop checks whether a file
+named as an edit target is itself hero-pinned. (2) A shared evidence contract
+gained a second snapshot shape, and the fixture-path collectors in sibling
+suites were written to the only shape that existed when they were authored.
+(3) A documentation clause repaired under review pressure was checked against
+the deleted case it had to stop describing, not against the workflow that
+actually runs the suite the repaired clause now named.
+
+**What fixed it.** (1) A separate integration test file plus the recorded
+deviation. (2) A three-line addition to both suites' path collectors that also
+gathers `snapshot["trace"]["path"]` and each `stage["path"]`. (3) Round 3
+re-derived the clause from the workflow definitions instead of from the prose
+it was replacing.
+
+**Lessons.**
+- Before writing a plan step that edits an existing file, grep
+  `site/evidence-heroes.json` for that path. A file listed there is pinned to
+  a preserved blob and cannot be edited without re-pinning; plan a new file
+  instead.
+- When adding a variant snapshot shape to a shared evidence contract, grep
+  every consumer for the old shape's key (here `["artifacts"]`) and extend
+  each one in the same change. A validator that fails first makes every other
+  suite's failure message a lie about what broke.
+- A documentation clause rewritten to stop describing something deleted is a
+  new claim, not a deletion: verify it against the mechanism it now names —
+  the workflow, the gate, the suite — before committing the repair. A review
+  round's own edits enter the next round's diff, and an unverified repair is
+  the cheapest way to spend one.
+
+---
+
 ## 2026-09-11 — A doc-comment fix dropped the qualifier that made it true and cost a fourth review round
 
 **What happened.** Extracting tests out of `crates/pycc_types/src/tests.rs`

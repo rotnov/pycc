@@ -252,3 +252,4 @@ current.
 | [D-240](./D-240-accepted-decision-files-are-insert-only-and-ci-enforces-it.md) | Accepted decision files are insert-only, and CI enforces it | accepted |
 | [D-241](./D-241-status-hero-is-a-checked-in-offline-refreshed-required-check-snapshot.md) | Status hero is a checked-in, offline-refreshed required-check snapshot bound to one default-branch revision | accepted |
 | [D-242](./D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) | Product mode: the delivery process informs rather than blocks | accepted |
+| [D-243](./D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md) | Architecture hero is a checked-in, re-derivable compiler pipeline trace | accepted |
