@@ -408,6 +408,36 @@ class HelperTests(unittest.TestCase):
             ],
         )
 
+    def test_author_chosen_identifiers_collapse_into_one_class(self) -> None:
+        text = (
+            "error[T0021]: parameter `a` of public function `egcd` needs a type annotation\n"
+            "error[T0021]: parameter `qty` of public function `solve` needs a type annotation\n"
+            "error[T0022]: public function `egcd` needs a return type annotation\n"
+            "error[T0022]: public function `main` needs a return type annotation\n"
+        )
+        self.assertEqual(
+            sorted(set(METRIC.diagnostic_classes(text))),
+            [
+                "T0021 parameter X of public function X needs a type annotation",
+                "T0022 public function X needs a return type annotation",
+            ],
+        )
+
+    def test_construct_naming_backticks_are_never_elided(self) -> None:
+        text = (
+            "error[C0001]: import of module `sys` is not supported yet\n"
+            "error[C0001]: import of module `heapq` is not supported yet\n"
+            "error[C0002]: expression kind not supported yet: a `lambda`\n"
+        )
+        self.assertEqual(
+            METRIC.diagnostic_classes(text),
+            [
+                "C0001 import of module `sys` is not supported yet",
+                "C0001 import of module `heapq` is not supported yet",
+                "C0002 expression kind not supported yet: a `lambda`",
+            ],
+        )
+
     def test_non_diagnostic_output_yields_no_classes(self) -> None:
         self.assertEqual(METRIC.diagnostic_classes("warning: hmm\n"), [])
 

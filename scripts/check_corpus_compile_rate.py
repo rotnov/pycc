@@ -171,13 +171,44 @@ def compile_problem(pycc: str, source: Path, output: Path) -> tuple[bool, str]:
     return completed.returncode == 0 and output.exists(), text
 
 
+# Diagnostic messages that name a symbol chosen by the corpus author rather than
+# a Python construct. Collapsing those names to `X` is what makes the tally a
+# tally of *classes*: without it every distinct parameter name in the corpus
+# reports as its own failure class, and the result cannot be compared against a
+# previously recorded class breakdown. Deliberately narrow — a backtick span is
+# left verbatim everywhere else, because elsewhere it names the construct or
+# module that is the whole signal (`import of module `sys``, `expression kind
+# not supported yet: a `lambda``), and merging those would destroy the ordering
+# that says which gap to close next.
+IDENTIFIER_ELISIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"^parameter `[^`]*` of public function `[^`]*` (needs .*)$"),
+        r"parameter X of public function X \1",
+    ),
+    (
+        re.compile(r"^public function `[^`]*` (needs a return type annotation)$"),
+        r"public function X \1",
+    ),
+)
+
+
+def normalize_diagnostic_message(message: str) -> str:
+    """Collapse author-chosen identifiers so messages aggregate into classes."""
+    for pattern, replacement in IDENTIFIER_ELISIONS:
+        normalized, count = pattern.subn(replacement, message)
+        if count:
+            return normalized
+    return message
+
+
 def diagnostic_classes(text: str) -> list[str]:
     """Extract the ordered diagnostic classes from pycc's output."""
     classes: list[str] = []
     for line in text.splitlines():
         match = DIAGNOSTIC_RE.match(line.strip())
         if match:
-            classes.append(f"{match.group(1)} {match.group(2)}")
+            message = normalize_diagnostic_message(match.group(2))
+            classes.append(f"{match.group(1)} {message}")
     return classes
 
 
