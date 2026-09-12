@@ -117,6 +117,13 @@ OK_SOLUTION = "# ok\nimport sys\nsys.stdout.write(sys.stdin.read())\n"
 # sleep is the cheapest way to push a program past the 200ms startup floor.
 SLOW_SOLUTION = "# ok\nimport sys, time\ntime.sleep(0.25)\nsys.stdout.write(sys.stdin.read())\n"
 WRONG_SOLUTION = "# ok\nprint('nope')\n"
+# Echoes correctly, but also writes a file next to wherever it happens to run.
+WRITES_A_MARKER_SOLUTION = (
+    "# ok\n"
+    "import sys\n"
+    'open("marker", "w").write("x")\n'
+    "sys.stdout.write(sys.stdin.read())\n"
+)
 FAIL_SOLUTION = "# fail C0001|T0001\nprint(1)\n"
 ECHO_CASES = [{"input": "hello\n", "output": "hello\n"}]
 # Echoes correctly as a compiled binary but not as `solution.py`, so the binary
@@ -291,6 +298,15 @@ class SpeedupTests(MetricHarness):
         self.assertIn("median speedup: n/a (0 qualifying)", out)
         self.assertIn("timing dropped: 1", out)
 
+    def test_a_solution_cannot_write_into_the_invoking_directory(self) -> None:
+        self.corpus.add(1, WRITES_A_MARKER_SOLUTION, ECHO_CASES)
+        code, _, err = self.run_metric()
+        self.assertEqual(code, 0, err)
+        # `run_metric` invokes the script with cwd=self.tmp, and the corpus is
+        # a subdirectory of it; neither may receive the marker.
+        self.assertFalse((self.tmp / "marker").exists())
+        self.assertEqual(list(self.corpus.root.rglob("marker")), [])
+
     def test_a_clean_run_reports_no_dropped_timing_samples(self) -> None:
         self.corpus.add(1, SLOW_SOLUTION, ECHO_CASES)
         code, out, err = self.run_metric()
@@ -418,6 +434,13 @@ class BrokenHarnessTests(MetricHarness):
         self.corpus.write_manifest()
         self.assertIn("no cases", self.assert_broken())
 
+    def test_a_malformed_holdout_payload_fails_without_include_holdout(self) -> None:
+        # CI never passes --include-holdout, so a check that ran only for the
+        # selected problems would leave half the vendored corpus unvalidated.
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        self.corpus.add(2, OK_SOLUTION, [], set_name="holdout")
+        self.assertIn("no cases", self.assert_broken())
+
     def test_a_malformed_cases_payload_fails_before_anything_compiles(self) -> None:
         # The eager check is the point: with a low compile rate `load_cases`
         # would otherwise never run, so a malformed payload would stay latent.
@@ -485,6 +508,10 @@ class HelperTests(unittest.TestCase):
                 "C0002 expression kind not supported yet: a `lambda`",
             ],
         )
+
+    def test_cpython_runs_the_solution_under_an_isolated_interpreter(self) -> None:
+        argv = METRIC.cpython_argv("/usr/bin/python3", Path("/corpus/x/solution.py"))
+        self.assertEqual(argv, ["/usr/bin/python3", "-I", "/corpus/x/solution.py"])
 
     def test_the_solution_environment_is_isolated_like_the_selector_s(self) -> None:
         env = dict(os.environ)

@@ -126,12 +126,14 @@ def verify_corpus(corpus: Path, manifest: dict, include_holdout: bool) -> list[d
             raise BrokenHarness(f"{problem['id']} has no solution.py manifest entry")
         for filename, entry in sorted(files.items()):
             total_bytes += verify_file(corpus, f"{problem['id']}/{filename}", entry)
+        # Validate the payload shape here rather than at first use, and for
+        # every vendored problem rather than only the selected ones:
+        # `load_cases` runs only for a problem `pycc build` already accepted,
+        # and CI never passes `--include-holdout`, so anything checked after
+        # the skip below would stay latent for months on half the corpus.
+        load_cases(corpus, problem)
         if problem.get("set") == "holdout" and not include_holdout:
             continue
-        # Validate the payload shape here rather than at first use: `load_cases`
-        # runs only for a problem `pycc build` already accepted, so at a low
-        # compile rate a malformed `tests.json` would stay latent for months.
-        load_cases(corpus, problem)
         selected.append(problem)
 
     budget = manifest.get("max_bytes")
@@ -245,8 +247,28 @@ def isolated_env() -> dict[str, str]:
     return env
 
 
-def run_program(argv: list[str], case: dict[str, str]) -> tuple[bool, float]:
-    """Run one program on one case; return (output matched, wall seconds)."""
+def cpython_argv(python: str, source: Path) -> list[str]:
+    """How a vendored solution is handed to CPython.
+
+    ``-I`` is the other half of ``isolated_env``: it drops the user site
+    directory and the remaining ``PYTHON*`` variables, and keeps the script's
+    own directory -- inside ``--corpus`` -- off ``sys.path``.  The selector
+    admitted every one of these solutions under exactly this flag, so it also
+    keeps the measurement faithful to what was validated.
+    """
+    return [python, "-I", str(source)]
+
+
+def run_program(
+    argv: list[str], case: dict[str, str], cwd: Path
+) -> tuple[bool, float]:
+    """Run one program on one case; return (output matched, wall seconds).
+
+    ``cwd`` is an empty scratch directory, never the corpus and never the
+    caller's directory: a solution needs no import to reach the filesystem, so
+    a static import allowlist cannot be the only thing standing between
+    third-party source and the tree it is measured in.
+    """
     started = time.monotonic()
     try:
         completed = subprocess.run(
@@ -255,6 +277,7 @@ def run_program(argv: list[str], case: dict[str, str]) -> tuple[bool, float]:
             capture_output=True,
             timeout=RUN_TIMEOUT_SECONDS,
             env=isolated_env(),
+            cwd=str(cwd),
             check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -267,11 +290,11 @@ def run_program(argv: list[str], case: dict[str, str]) -> tuple[bool, float]:
     return expected == actual, elapsed
 
 
-def best_of(argv: list[str], case: dict[str, str]) -> float | None:
+def best_of(argv: list[str], case: dict[str, str], cwd: Path) -> float | None:
     """Best of ``TIMING_REPEATS`` wall times, or None if a run misbehaved."""
     best: float | None = None
     for _ in range(TIMING_REPEATS):
-        matched, elapsed = run_program(argv, case)
+        matched, elapsed = run_program(argv, case, cwd)
         if not matched:
             return None
         best = elapsed if best is None else min(best, elapsed)
@@ -286,6 +309,10 @@ def measure(
     args: argparse.Namespace, corpus: Path, problems: list[dict], scratch: Path
 ) -> dict:
     pycc = resolve_pycc(args.pycc)
+    # Separate from the directory holding the compiled binaries, so a solution
+    # that writes a file cannot land on one of them.
+    workdir = scratch / "run"
+    workdir.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + args.max_seconds
 
     total = len(problems)
@@ -318,11 +345,11 @@ def measure(
         compiled += 1
 
         cases = load_cases(corpus, problem)
-        if all(run_program([str(binary)], case)[0] for case in cases):
+        if all(run_program([str(binary)], case, workdir)[0] for case in cases):
             matched += 1
             case = largest_case(cases)
-            cpython = best_of([args.python, str(source)], case)
-            native = best_of([str(binary)], case)
+            cpython = best_of(cpython_argv(args.python, source), case, workdir)
+            native = best_of([str(binary)], case, workdir)
             if cpython is None or native is None or native <= 0:
                 # A repeat run disagreed with the case, or the native time was
                 # unmeasurably small.  Counted so `matched` reconciles against
