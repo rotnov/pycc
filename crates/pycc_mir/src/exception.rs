@@ -157,7 +157,7 @@ pub(super) fn lower_exception_value(
 /// fallback below resolves both of the latter two identically.
 ///
 /// Name-first resolution is also why the checker's string-conversion gate
-/// (#977, D-237, `pycc_types::string_conversion`) decides the 25 builtin
+/// (#977, D-237, `pycc_types::string_conversion`) decides the 26 builtin
 /// exception names by *provenance* rather than by name or shape: a user
 /// class -- plain or `@dataclass` -- declared under one of the flat seven
 /// names resolves here by name whatever its shape, and a user exception

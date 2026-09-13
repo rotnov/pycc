@@ -304,9 +304,10 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
     // Part 3 of #382 (#542, PEP 654, D-202) added `ExceptionGroup` and
     // `BaseExceptionGroup` to `BUILTIN_EXCEPTION_CLASSES`, shrinking the
-    // remaining per-module user-exception tag budget from 233 to 231.
+    // remaining per-module user-exception tag budget from 233 to 231; Part A
+    // of #1038 (#1063) appended `OverflowError`, shrinking it again to 230.
     assert!(
-        text.contains("at most 231"),
+        text.contains("at most 230"),
         "unexpected diagnostic: {text}"
     );
 }

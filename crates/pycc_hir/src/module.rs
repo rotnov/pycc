@@ -186,13 +186,13 @@ pub fn lower_module(
     // (`class MyError(ValueError):`) exactly as it inherits from a user
     // base. Two gates, both of which must pass:
     //
-    // * The module must actually *reference* one of the 25 names. Every
+    // * The module must actually *reference* one of the 26 names. Every
     //   entry in `class_defs` costs the per-item work below (the projected
     //   class slice, the name-collision checks) and the per-function class
     //   binding in `pycc_types`, and a module that never names a builtin
     //   exception cannot observe the difference -- see
     //   `exception::module_references_builtin_exception_name`.
-    // * The module's own top level must not *bind* any of the 25 names.
+    // * The module's own top level must not *bind* any of the 26 names.
     //   That gate is all-or-nothing, so every existing name-collision check
     //   below applies to the synthetic definitions with no exemption -- see
     //   `exception::shadowed_builtin_exception_name`. Both gates are

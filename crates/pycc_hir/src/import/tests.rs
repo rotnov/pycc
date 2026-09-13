@@ -208,7 +208,7 @@ fn a_not_found_answer_is_reported_verbatim_at_the_statement_span() {
 
 #[test]
 fn a_synthetic_builtin_exception_class_is_not_importable() {
-    // The dependency raises, so HIR lowering seeded the 25 builtin
+    // The dependency raises, so HIR lowering seeded the 26 builtin
     // exception classes into its class table; they are not definitions the
     // module can re-export.
     let fixture = Fixture::new("def f() -> int:\n    raise ValueError\n");

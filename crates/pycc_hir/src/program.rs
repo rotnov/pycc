@@ -42,7 +42,7 @@ pub struct LinkInput {
 /// set is appended at the back iff any input seeded, keeping the
 /// single-module invariant (`seeded_builtin_exception_classes` identifies
 /// the trailing entries exactly). That invariant also requires that no
-/// linked module binds one of the 25 names at its top level: un-seeding
+/// linked module binds one of the 26 names at its top level: un-seeding
 /// the program would leave the seeded module's `class MyError(ValueError)`
 /// resolving a base the table no longer holds, and keeping the seed would
 /// let the shadowing module's definition collide with the synthetic one --
@@ -178,7 +178,7 @@ pub fn finalize(mut hir: HirModule) -> Result<HirModule, Vec<Diagnostic>> {
         //
         // A class is raisable when its MRO reaches one of the seeded builtin
         // exception classes. The seed's shadow gate guarantees no user class
-        // carries one of the 25 names, so `is_builtin_exception_class` on
+        // carries one of the 26 names, so `is_builtin_exception_class` on
         // the entry's own name identifies the synthetic entries exactly and
         // this loop never mistakes a user class named `Exception` for the
         // builtin one.

@@ -29,16 +29,16 @@ fn user_exception_classes_are_tagged_in_source_order_from_seven() {
     assert_eq!(
         tags[..3].to_vec(),
         vec![
-            ("AppError".to_string(), Some(25)),
-            ("DatabaseError".to_string(), Some(26)),
-            ("ConfigError".to_string(), Some(27)),
+            ("AppError".to_string(), Some(26)),
+            ("DatabaseError".to_string(), Some(27)),
+            ("ConfigError".to_string(), Some(28)),
         ]
     );
 }
 
 #[test]
 fn the_first_user_tag_sits_immediately_above_the_builtin_range() {
-    assert_eq!(FIRST_USER_EXCEPTION_TYPE_TAG, 25);
+    assert_eq!(FIRST_USER_EXCEPTION_TYPE_TAG, 26);
     let tags = tags_of(
         "class AppError(Exception):\n    pass\n\n\n\
          def main() -> None:\n    raise AppError(\"x\")\n",
@@ -95,7 +95,7 @@ fn a_class_outside_the_exception_hierarchy_is_not_tagged() {
          def main() -> None:\n    raise AppError(\"x\")\n",
     );
     assert_eq!(tags[0], ("Point".to_string(), None));
-    assert_eq!(tags[1].1, Some(25));
+    assert_eq!(tags[1].1, Some(26));
 }
 
 #[test]
@@ -120,14 +120,14 @@ fn many_exception_classes(count: usize) -> String {
 
 #[test]
 fn the_maximum_number_of_user_exception_classes_still_lowers() {
-    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 231);
+    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 230);
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES));
-    let lowered = lower_checked(&module).expect("231 exception classes must lower");
+    let lowered = lower_checked(&module).expect("230 exception classes must lower");
     let last = lowered
         .class_defs
         .iter()
-        .find(|(name, _)| name == "E230")
+        .find(|(name, _)| name == "E229")
         .expect("the last class must be present");
     assert_eq!(last.1.exception_type_tag, Some(u8::MAX));
 }
@@ -136,10 +136,10 @@ fn the_maximum_number_of_user_exception_classes_still_lowers() {
 fn one_exception_class_past_the_maximum_is_rejected() {
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES + 1));
-    let diagnostic = lower_checked(&module).expect_err("232 exception classes must be rejected");
+    let diagnostic = lower_checked(&module).expect_err("231 exception classes must be rejected");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("at most 231"),
+        diagnostic.message.contains("at most 230"),
         "unexpected message: {}",
         diagnostic.message
     );

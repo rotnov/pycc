@@ -181,10 +181,17 @@ static int pycc_ext_raise_pending(void)
     case 22:
         exc_type = PyExc_ConnectionResetError;
         break;
+    /* Part A of #1038 (#1063): `OverflowError`, appended past the PEP 654
+     * groups so every earlier tag keeps its value. Unlike those two it has a
+     * `PyExc_*` object that a lone message constructs, so it is switched on. */
+    case 25:
+        exc_type = PyExc_OverflowError;
+        break;
     default:
         /*
          * Tag 0 is `Exception`. So, deliberately, are the two remaining
-         * builtin tags and every user-defined class:
+         * builtin tags -- a hole in the otherwise contiguous switched range,
+         * since tag 25 above sits past them -- and every user-defined class:
          *
          *  - tags 23..=24 are `BaseExceptionGroup`/`ExceptionGroup`. The C
          *    API exposes no `PyExc_ExceptionGroup` at all, and the type it
@@ -194,7 +201,7 @@ static int pycc_ext_raise_pending(void)
          *    constructor instead of the program's own error. `Exception`
          *    with the right message is the more truthful of the two.
          *  - a user-defined exception class carries a module-assigned tag
-         *    (25..=255) this shim knows nothing about; carrying its identity
+         *    (26..=255) this shim knows nothing about; carrying its identity
          *    across the boundary needs the class *name*, which the bridge
          *    does not expose yet.
          */
