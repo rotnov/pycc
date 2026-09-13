@@ -143,6 +143,14 @@ pub enum MirExpr {
     /// correct on its own terms, and correct automatically if that gate is
     /// ever relaxed, without requiring a matching `pycc_mir` change.
     ListLiteral(Vec<MirExpr>),
+    /// A resolved empty `[]` (mirrors [`pycc_hir::HirExpr::EmptyList`],
+    /// #1021, D-245). The carried `Ty` is the *element* type, so `ty()`
+    /// returns `Ty::List(element)` without deriving anything from the
+    /// (absent) elements -- which is the whole point of the variant:
+    /// `ListLiteral`'s own `ty()` arm has nothing to derive from and panics.
+    /// Codegen emits the same `pycc_rt_int_list_new()` object
+    /// `ListLiteral(vec![])` would, with no `append` calls after it.
+    EmptyList(Ty),
     /// `base[index]`, read-only (mirrors `HirExpr::Subscript`, D-105).
     /// `ty()` below derives its result from `base.ty()`'s element type
     /// (mirroring `pycc_types::infer_expr_in`'s own `Subscript` arm), for
@@ -170,6 +178,11 @@ pub enum MirExpr {
     /// than baking in an assumption this crate has no way to verify
     /// independently.
     DictLiteral(Vec<(MirExpr, MirExpr)>),
+    /// A resolved empty `{}` (mirrors [`pycc_hir::HirExpr::EmptyDict`],
+    /// #1021, D-245). The dict counterpart of [`MirExpr::EmptyList`]: the
+    /// carried pair is the key/value type, `ty()` returns `Ty::Dict(pair)`,
+    /// and codegen emits a bare `pycc_rt_dict_new()` with no `set` calls.
+    EmptyDict(Box<(Ty, Ty)>),
     /// `dict[key]`, read-only (mirrors `HirExpr::Subscript` on a
     /// dict-typed base -- see `lower_expr`'s own `HirExpr::Subscript` arm
     /// for why a dict-typed base is routed here instead of into
@@ -361,6 +374,8 @@ impl MirExpr {
             | MirExpr::BinOp { ty, .. }
             | MirExpr::Compare { ty, .. } => ty.clone(),
             MirExpr::Not(_) => Ty::Bool,
+            MirExpr::EmptyList(element) => Ty::List(Box::new(element.clone())),
+            MirExpr::EmptyDict(pair) => Ty::Dict(pair.clone()),
             MirExpr::ListLiteral(elements) => {
                 let elem_ty = elements.first().map(|e| e.ty()).unwrap_or_else(|| {
                     panic!(
@@ -500,6 +515,8 @@ impl MirExpr {
             | MirExpr::FloatLiteral(_)
             | MirExpr::BoolLiteral(_)
             | MirExpr::StringLiteral(_)
+            | MirExpr::EmptyList(_)
+            | MirExpr::EmptyDict(_)
             | MirExpr::NoneLiteral
             | MirExpr::Name { .. }
             | MirExpr::ListPop { .. }

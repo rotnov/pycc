@@ -254,3 +254,4 @@ current.
 | [D-242](./D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) | Product mode: the delivery process informs rather than blocks | accepted |
 | [D-243](./D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md) | Architecture hero is a checked-in, re-derivable compiler pipeline trace | accepted |
 | [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) | Add a hosted CPython extension-module artifact mode and pull the C-API interop core ahead of v0.5/v0.6 | accepted |
+| [D-245](./D-245-resolve-empty-container-element-types-in-a-pre-check-hir-pass.md) | Resolve empty-container element types in a pre-check HIR pass | accepted |

@@ -33,6 +33,77 @@ never a merge gate.
 
 ---
 
+## 2026-09-13 — A commit SHA typed from memory instead of read from `git rev-parse`
+
+**What happened.** A reply published to a review thread on pull request #1035
+cited the commit that fixed the finding as
+`95329461ee1c4f2a4b83c2def9a02fbe1d1fd0dd`. The real commit is
+`95329461e659e57bc3b3cbabf3928537948fadc9`. The two share only their first
+eight characters: everything after them was invented. The reply was already
+public, and editing an existing comment was outside this session's authorized
+writes, so the correction had to be a second reply on the same thread rather
+than a fix in place.
+
+**Root cause.** The SHA was produced by writing out forty hexadecimal
+characters from working memory, having seen the short form. A hash has no
+redundancy — there is no internal structure that makes a wrong continuation
+look wrong — so nothing in the act of writing it flagged the error, and the
+usual defence of re-reading what was written cannot catch it either.
+
+**What fixed it.** Comparing the published reply against
+`git rev-parse HEAD`, then posting a correction reply citing the real SHA.
+
+**Lesson.** Never transcribe a commit hash, a digest, or any other opaque
+identifier from memory into a durable artifact. Substitute the command that
+produces it — `"$(git rev-parse HEAD)"` inside the command that consumes it,
+or a captured variable — so the value reaches the artifact without ever
+passing through a sentence. The same rule already governs
+`gh pr merge --match-head-commit`; it applies identically to prose. Where an
+identifier must appear as literal text, paste it from a command's output in
+the same turn and verify it against the source afterwards.
+
+## 2026-09-13 — A gate's verdict is only valid on a machine running nothing else that competes for it
+
+**What happened.** Three separate green-or-red verdicts taken during #1021's
+delivery were void for the same structural reason, and each was noticed only
+after acting on it. A dispatched agent's returned report was read as its
+termination, so the first full gate set ran with two writers in the same
+worktree and one suite failed spuriously. A coverage diff was generated before
+the branch's last commits, so the gate measured a diff that no longer described
+the tree. And the `scripts/` unittest suite was run concurrently with
+`cargo llvm-cov --workspace`, where
+`test_check_corpus_compile_rate.MaxSecondsTests.test_a_budget_that_expires_before_timing_still_records_the_match`
+-- which asserts on a wall-clock compile budget -- failed under the load and
+passed in isolation and on a second full run.
+
+**Root cause.** All three treat a gate's exit status as a property of the code,
+when it is a property of the code *and* the machine state the gate observed.
+Two writers, a stale input, and a loaded CPU are three ways for that state to
+differ from the one the verdict is being attributed to; none of them announces
+itself in the exit status, and a green result under any of them looks exactly
+like a valid one.
+
+**What fixed it.** Re-running the full gate set from a single-writer baseline,
+with the coverage diff regenerated inside the gate's own invocation, and with
+the wall-clock-sensitive suite run while no coverage build was in flight.
+
+**Lesson.** Before reading a gate's verdict, state what else was running: other
+writers in the worktree, inputs generated at an earlier commit, and other
+heavy jobs on the same machine. If any of the three is true, the verdict is
+void — green included — and the gate is re-run, not interpreted. Do not file
+the load-sensitive test as a flake to be fixed; the defect is running a
+timing-sensitive assertion under a competing build.
+
+A fourth form of the same thing is an inherited environment value: on this
+machine `TMPDIR` ends in a slash, so an isolated directory built as
+`"$TMPDIR/<tag>.XXXXXX"` carries a doubled separator into every path derived
+from it, and `tests/issue_934_protocol_return.rs` fails on the resulting
+path spelling while the code under test is correct. Strip the inherited
+value's trailing slashes before composing a path from it
+(`BASETMP=$(printf '%s' "${TMPDIR:-/tmp}" | sed 's:/*$::')`).
+
+---
+
 ## 2026-09-13 — A review round was spent on a diff artifact captured before the branch's last commit
 
 **What happened.** The deep reviewer for PR #1052 was handed a diff file
@@ -141,6 +212,86 @@ whether each site states the claim universally (fix it here) or merely omits
 the new case (defer it, and record the deferral where the narrowing is
 recorded). A round that extends the inventory by one more site is reproducing
 the defect, not closing it.
+
+## 2026-09-12 — A shared binder was changed as if it belonged to the issue, and the issue's own test file could not see the breakage
+
+**What happened.** The #1021 pre-pass needed `bind_local_types_in_stmt` to apply D-040's sticky
+representation to annotated assignments. The guard was written over the whole `AnnAssign` arm. The
+issue's own test file stayed green; `cargo test --workspace` did not — protocol monomorphization calls
+the same helper, and deferring to an already-recorded `Protocol(P)` binding dropped the specialization,
+so `pycc_mir` panicked on an unrecorded method symbol in an unrelated test.
+
+**Root cause.** The helper was read as part of the surface under change because the change needed it,
+not as the shared helper it is. Its other callers were never enumerated before editing it.
+
+**What fixed it.** Scoping the stickiness guard to the non-protocol arm, and instrumenting the cloned
+environment to confirm which binding was actually present at that point rather than reasoning about it.
+
+**Lesson.** Before editing a function a change did not introduce, list its callers and name what each
+one needs from it. When any caller is outside the change's own test surface, the workspace suite — not
+the issue's test file — is the gate that decides whether the edit is correct, so run it before treating
+the edit as done.
+
+## 2026-09-12 — A diff file generated before the last commits turned the changed-line coverage gate into a silent pass
+
+**What happened.** The local reproduction of CI's changed-line coverage gate reused a diff file
+generated earlier in the session. Later commits had added instrumentable lines that the stale diff did
+not contain, so the gate measured an old, smaller change set and reported 100%. The gate exited 0 and
+looked exactly like a real pass.
+
+**Root cause.** The gate takes its change set as an input file rather than deriving it, so a stale input
+narrows what is measured instead of failing. Nothing in the output distinguishes "all changed lines
+covered" from "the changed lines I was handed".
+
+**What fixed it.** Regenerating the diff from `git diff -U0 --no-color --no-renames "$(git merge-base
+origin/main HEAD)" HEAD` in the same shell call as the gate, and reading the reported changed-line count
+against the branch's actual diffstat.
+
+**Lesson.** Regenerate a gate's own inputs in the same invocation that runs it, and check the count it
+reports against an independently derived one. A gate whose scope is an argument can pass by measuring
+nothing; its exit status alone does not prove it measured the current tree.
+
+## 2026-09-12 — A relative-path binary invocation verified review findings against a stale branch
+
+**What happened.** While reproducing a review finding on #1021, `./target/debug/pycc check -- <fixture>`
+was run after the shell's working directory had silently reverted to the main checkout, which sits on an
+unrelated branch that predates the work under review. The stale binary printed a plausible but entirely
+false diagnostic (`C0001: type annotation \`list\` is not supported yet`, and a `T0021` citing a decision
+number that has nothing to do with the case). The output looked like a legitimate reproduction and was
+within one step of being written into a fix.
+
+**Root cause.** A relative path resolves against whatever the working directory happens to be, and the
+working directory is not stable between tool calls. A second checkout of the same repository on a
+different branch makes the wrong binary both present and executable.
+
+**What fixed it.** Rebuilding inside the worktree and invoking the binary by absolute path. All findings
+then reproduced correctly.
+
+**Lesson.** When more than one checkout of a repository exists, never invoke a built artefact or a test
+fixture by a relative path. Resolve the working tree into a variable at the start of the call and use
+absolute paths for every binary and every input, so the command cannot silently bind to another branch's
+build.
+
+## 2026-09-12 — A dispatched agent's report is not a termination, and its last report is not its final state
+
+**What happened.** A dispatched fix agent returned a report ending "workspace test run is still in
+progress ... I'll pick up when the monitor fires" and never picked up. The orchestrating session treated
+that report as the agent's terminal state and began inspecting the tree while the agent was still listed
+as a live background task — so the first full gate set it ran was taken with two writers in the same
+worktree, and one gate (the `scripts/` unittest suite) failed spuriously. Re-run from a single-writer
+baseline after terminating the agent, the same suite passed.
+
+**Root cause.** Two distinct conflations: a returned report read as a termination, and a mid-run status
+line read as a final account of what was committed.
+
+**What fixed it.** Enumerating live background tasks and terminating the one sharing the worktree, then
+re-running the entire gate set — and reading `git log` / `git status` directly rather than trusting the
+report, which revealed the agent had in fact committed its work.
+
+**Lesson.** Before running any gate against a worktree a subagent was given, enumerate live background
+tasks and terminate any that share it; a report is not a termination. Verdicts collected during an
+overlap are void even when green, and a stopped agent's actual state is what `git log` and
+`git status` say, never what its last message said.
 
 ## 2026-09-12 — A green check rollup was read as merge readiness while conversation resolution was still blocking
 

@@ -616,19 +616,36 @@ pub(crate) fn infer_expr_in(
             }
             Ok(return_ty.clone())
         }
+        // #1021: an empty `[]`/`{}` whose element type the empty-container
+        // pre-pass resolved before this walk started. The resolved type is
+        // *not* trusted blindly: it goes through the same
+        // `pycc_hir::check_container_ty` gate a written annotation does
+        // (D-228), so an inferred `list[str]` is `T0034` and an inferred
+        // `dict[int, int]` is `T0036`, exactly as the written forms are.
+        HirExpr::EmptyList(element) => {
+            let list_ty = Ty::List(Box::new(element.clone()));
+            pycc_hir::check_container_ty(&list_ty, Span::new(0, 0))?;
+            Ok(list_ty)
+        }
+        HirExpr::EmptyDict(pair) => {
+            let dict_ty = Ty::Dict(pair.clone());
+            pycc_hir::check_container_ty(&dict_ty, Span::new(0, 0))?;
+            Ok(dict_ty)
+        }
         HirExpr::ListLiteral(elements) => {
-            // D-105: an empty list literal has no element to infer a type
-            // from, and v0.2 has no `list[T]` annotation syntax to recover
-            // it from instead -- reject plainly rather than letting
-            // `Ty::Infer` leak into codegen. Reuses T0021 (an unconstrained
-            // variable with no way to determine its type), not a new code
-            // -- this is that same failure shape, not a distinct one.
+            // #1021: reaching this arm with no elements means the
+            // empty-container pre-pass (`crate::empty_container`) found no
+            // evidence for an element type -- no annotation, no existing
+            // binding, no `.append()` producer -- or the literal is in a
+            // position that has no binding to resolve against at all
+            // (`f([])`, `return []`, `[[]]`). Every resolvable case was
+            // already rewritten into `HirExpr::EmptyList` above. `T0003`
+            // ("untyped empty container needs annotation") is the code
+            // registered for exactly this, so this no longer borrows
+            // `T0021`, and it no longer points at #927: the annotated form
+            // is handled now.
             if elements.is_empty() {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    "an empty list literal's element type cannot be inferred from the literal alone -- inferring it from a `list[T]` annotation is not supported yet (issue #927)".to_string(),
-                    Span::new(0, 0),
-                ));
+                return Err(crate::empty_container::unresolved_list(env.in_function_body));
             }
             let mut elem_ty: Option<Ty> = None;
             for element in elements {
@@ -676,12 +693,12 @@ pub(crate) fn infer_expr_in(
         // int]`-only gate mirroring `ListLiteral`'s own `T0034` gate
         // (D-122: "exactly one combination gets real codegen").
         HirExpr::DictLiteral(pairs) => {
+            // #1021: same reasoning as `ListLiteral`'s own empty arm above --
+            // the pre-pass already rewrote every resolvable `{}` into
+            // `HirExpr::EmptyDict`, so reaching here means no evidence
+            // exists.
             let Some((first_key, first_value)) = pairs.first() else {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    "an empty dict literal's key/value types cannot be inferred from the literal alone -- inferring them from a `dict[K, V]` annotation is not supported yet (issue #927)".to_string(),
-                    Span::new(0, 0),
-                ));
+                return Err(crate::empty_container::unresolved_dict(env.in_function_body));
             };
             let key_ty = infer_expr_in(env, local_names, first_key)?;
             let val_ty = infer_expr_in(env, local_names, first_value)?;

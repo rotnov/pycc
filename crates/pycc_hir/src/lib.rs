@@ -305,6 +305,24 @@ pub enum HirExpr {
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
     /// lowering step's -- HIR only records the syntactic shape (D-105).
     ListLiteral(Vec<HirExpr>),
+    /// An empty `[]` whose element type was resolved by `pycc_types`'
+    /// empty-container pre-pass (#1021, D-245).
+    ///
+    /// **Construction invariant:** this variant is *never* built by
+    /// `pycc_hir` lowering. `lower_expr` always produces
+    /// `ListLiteral(vec![])` for an empty list literal; the only
+    /// construction site in the workspace is
+    /// `pycc_types::empty_container::resolve_empty_containers`, which
+    /// rewrites the module before either `check_all_keyed` or
+    /// `check_and_resolve_all_keyed` walks it. The carried `Ty` is always
+    /// fully concrete -- never `Ty::Infer` -- and is the *element* type, so
+    /// the expression's own type is `Ty::List(element)`.
+    ///
+    /// It exists because `pycc_mir` derives a container's type from the
+    /// literal's first element and has nothing to derive from when the
+    /// literal is empty (`MirExpr::ty()`); carrying the resolved type on the
+    /// node itself is what lets a resolved `[]` survive into MIR and codegen.
+    EmptyList(Ty),
     /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
     /// handling below special-cases an `Expr::Subscript` target on a bare
     /// name into a dedicated `HirStmt::DictSet` node instead of ever
@@ -380,6 +398,13 @@ pub enum HirExpr {
     /// rather than represented here, since this variant has no shape for
     /// it.
     DictLiteral(Vec<(HirExpr, HirExpr)>),
+    /// An empty `{}` whose key/value types were resolved by `pycc_types`'
+    /// empty-container pre-pass (#1021, D-245). The dict counterpart of
+    /// [`HirExpr::EmptyList`], and it carries that variant's construction
+    /// invariant verbatim: never built by `pycc_hir` lowering, always a
+    /// fully concrete key/value pair, so the expression's own type is
+    /// `Ty::Dict(pair)`.
+    EmptyDict(Box<(Ty, Ty)>),
     /// `{e1, e2, ...}`. Element homogeneity and the `set[int]`-only codegen
     /// gate are `pycc_types`' job, not this lowering step's -- HIR only
     /// records the syntactic shape (mirrors `ListLiteral`/`DictLiteral`

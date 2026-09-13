@@ -48,6 +48,63 @@ pub(crate) fn concrete_function_signatures(hir: &HirModule) -> Option<FunctionSi
 /// downstream consumer, so its overwhelmingly common concrete, valid path can
 /// validate with this registry directly.
 pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
+    if hir.items.iter().any(|item| match item {
+        HirItem::Function {
+            params, return_ty, ..
+        } => *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer),
+        HirItem::TopLevelStmt(_) => false,
+    }) {
+        return None;
+    }
+    Some(annotated_function_environment(hir))
+}
+
+/// The same registry [`concrete_function_environment`] builds, but for *any*
+/// module: instead of refusing the whole module when one signature still
+/// carries `Ty::Infer`, it registers every function, an inferred signature
+/// included, with whatever type that signature currently has. The registry
+/// invariant below requires exactly that -- skipping such a function would
+/// abort the class resolvers -- so do not narrow this to the concrete
+/// signatures.
+///
+/// This is what the #1021 empty-container pre-pass needs: that pass runs
+/// before private-helper inference has resolved anything, so demanding a
+/// fully annotated module would leave it with an empty environment for
+/// exactly the programs it exists to serve -- and a module-level global
+/// initialized from an annotated helper (`VALUE = _base()`) would then fail
+/// to resolve a container the equivalent non-empty literal resolves fine.
+///
+/// # Registry invariant
+///
+/// **Every mangled name any bound class's `methods`, `properties` (getter
+/// and setter), `static_methods` or `class_methods` table carries resolves
+/// through [`Environment::lookup_function`].** The trailing
+/// [`crate::class::bind_classes`] call records every class member
+/// unconditionally, and the class resolvers (`resolve_method_call`,
+/// `resolve_attr_get`'s property arm, `resolve_static_call`,
+/// `resolve_class_method_call`, `resolve_instantiation`) *panic* when a
+/// table entry has no ordinary-function registration. So the registry may
+/// not be a subset of the class tables, and a function whose signature
+/// still carries `Ty::Infer` is registered with that `Ty::Infer` rather
+/// than skipped.
+///
+/// Dropping such an entry instead would be unsound, not merely lossy: an
+/// unannotated override (`class A(Base): def _one(self): ...`) removed from
+/// `A`'s table lets the MRO walk fall through to `Base._one` and resolve the
+/// call to the *base* class's return type -- wrong, not missed. Registering
+/// the `Ty::Infer` signature keeps the override authoritative; the call then
+/// yields `Ty::Infer`, and [`crate::empty_container`]'s own `concrete`
+/// acceptance guard rejects any resolution containing one. That is what
+/// preserves this pass's contract: an unresolved container is a recoverable
+/// inference miss reported as `T0003`, never a wrong element type and never
+/// an abort.
+///
+/// An annotated signature is still authoritative, so the registry can fail
+/// to resolve a container but can never resolve one wrongly. On
+/// [`concrete_function_environment`]'s path this is a provable no-op: that
+/// caller returns `None` for any module carrying a `Ty::Infer` signature, so
+/// every entry it reaches here is already concrete.
+pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
     let mut functions = HashMap::new();
     let mut generics = HashMap::new();
     for item in &hir.items {
@@ -60,10 +117,17 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
         else {
             continue;
         };
-        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
-            return None;
-        }
-        if is_generic_signature(params, return_ty) {
+        // The generics table keeps its old membership exactly. A partially
+        // annotated signature *can* satisfy both predicates at once -- a
+        // private method of a PEP 695 generic class can carry `Ty::Param` in
+        // its return type and `Ty::Infer` in a parameter -- and an entry whose
+        // parameters are not yet known is of no use to
+        // `instantiate_generic_call`, so registering the signature in
+        // `functions` (which is what the class tables require) deliberately
+        // does not extend `generics`.
+        let carries_infer =
+            *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer);
+        if !carries_infer && is_generic_signature(params, return_ty) {
             generics.insert(name.clone(), item.clone());
         }
         functions.insert(
@@ -102,7 +166,7 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
     // are together the sole mutators of both tables precisely so that
     // invariant holds by construction.
     crate::class::bind_classes(&mut env, hir);
-    Some(env)
+    env
 }
 
 /// First-diagnostic view of [`infer_function_signatures_with_solver_all`],

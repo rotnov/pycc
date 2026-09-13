@@ -53,8 +53,10 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::Compare { .. }
         | MirExpr::FString(_)
         | MirExpr::ListLiteral(_)
+        | MirExpr::EmptyList(_)
         | MirExpr::ListAppend { .. }
         | MirExpr::DictLiteral(_)
+        | MirExpr::EmptyDict(_)
         | MirExpr::SetLiteral(_)
         | MirExpr::TupleLiteral(_)
         | MirExpr::Slice { .. }

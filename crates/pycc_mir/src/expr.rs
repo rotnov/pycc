@@ -28,6 +28,12 @@ pub(super) fn lower_expr(
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
         HirExpr::NoneLiteral => MirExpr::NoneLiteral,
+        // #1021: a `[]`/`{}` whose element type `pycc_types`'
+        // empty-container pre-pass resolved. The carried `Ty` crosses
+        // straight into MIR, because MIR has nothing to derive it from --
+        // see `MirExpr::EmptyList`'s own doc comment.
+        HirExpr::EmptyList(element) => MirExpr::EmptyList(element.clone()),
+        HirExpr::EmptyDict(pair) => MirExpr::EmptyDict(pair.clone()),
         // D-136: `math.pi` (a `pycc_hir`-qualified stdlib constant name --
         // real Python identifiers never contain `.`, see
         // `pycc_types::std_qualified_symbol`'s own doc comment for the
@@ -1141,6 +1147,8 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
+        | HirExpr::EmptyList(_)
+        | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
