@@ -314,13 +314,23 @@ fn int_pow(base: i64, exp: i64) -> i64 {
     let _ = require_inline_int(base, "exponentiating");
     let mut exp = require_inline_int(exp, "exponentiating");
     if exp < 0 {
-        panic!(
-            "pycc_rt: negative exponent for `int ** int` is not supported \
+        // Part A of #1038 (#1063): a D-173 raise, not an abort. `RuntimeError`
+        // rather than a CPython-conformant class because there is no
+        // conformant class to name -- CPython computes `2 ** -1` as `0.5` and
+        // raises nothing. The deviation is the pre-existing
+        // `pycc_types::numeric_result_type` simplification recorded in the
+        // message, not a new one; it is only now observable as an exception
+        // instead of a process abort. See D-244's 2026-09-13 amendment.
+        raise_builtin(
+            EXCEPTION_TYPE_RUNTIME_ERROR,
+            "RuntimeError",
+            "negative exponent for `int ** int` is not supported \
              (the real result would need to be `float`, matching CPython's \
-             own `int ** int` rule -- a pre-existing pycc_types simplification, \
-             not a new PR-5 gap: pycc_types::numeric_result_type always types \
-             `**` as `int`-returning)"
+             own `int ** int` rule -- a pre-existing pycc_types simplification: \
+             pycc_types::numeric_result_type always types `**` as \
+             `int`-returning)",
         );
+        return tag_smallint(0);
     }
     let mut result = tag_smallint(1);
     let mut base = base;
@@ -693,9 +703,14 @@ pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
 /// zero raised to a negative power (`ZeroDivisionError`), a negative base
 /// raised to a non-integer power (a complex result -- `pycc` has no
 /// complex type), and a finite base/exponent pair whose true result
-/// overflows `float` range (`OverflowError`). Each is an honest panic
-/// instead of a silently wrong `inf`/`NaN`, matching this crate's
-/// division-by-zero convention above.
+/// overflows `float` range (`OverflowError`). Part A of #1038 (#1063) turns
+/// each into a D-173 raise instead of a panic, matching this crate's
+/// division-by-zero convention above; every raising arm returns `0.0` as its
+/// sentinel, which generated code never observes because the next checkpoint
+/// sees the pending exception first. The sentinel `return` is load-bearing
+/// rather than cosmetic: without it the zero-base arm would fall through to
+/// `powf`, produce `inf`, and have its `ZeroDivisionError` immediately
+/// relabelled `OverflowError` by the third arm in the same call.
 fn float_pow(a: f64, b: f64) -> f64 {
     // CPython delegates non-finite exponent/base domains to libm: for
     // example, `(-1.0) ** inf == 1.0`, `0.0 ** -inf == inf`, and
@@ -704,17 +719,36 @@ fn float_pow(a: f64, b: f64) -> f64 {
     // exponent and would otherwise misclassify those ordinary real results.
     if b.is_finite() {
         if a == 0.0 && b < 0.0 {
-            panic!("pycc_rt: 0.0 cannot be raised to a negative power");
+            // Conformant: CPython raises `ZeroDivisionError` here, with this
+            // exact sentence.
+            raise_builtin(
+                EXCEPTION_TYPE_ZERO_DIV_ERROR,
+                "ZeroDivisionError",
+                "0.0 cannot be raised to a negative power",
+            );
+            return 0.0;
         }
         if a.is_finite() && a < 0.0 && b.fract() != 0.0 {
-            panic!(
-                "pycc_rt: a negative float raised to a non-integer power is not supported yet (would require a complex result)"
+            // A deliberate deviation: CPython returns a `complex` here, and
+            // pycc has no complex type, so there is no conformant class to
+            // name. See D-244's 2026-09-13 amendment.
+            raise_builtin(
+                EXCEPTION_TYPE_RUNTIME_ERROR,
+                "RuntimeError",
+                "a negative float raised to a non-integer power is not supported yet (would require a complex result)",
             );
+            return 0.0;
         }
     }
     let result = a.powf(b);
     if result.is_infinite() && a.is_finite() && b.is_finite() {
-        panic!("pycc_rt: float power overflowed (result too large to represent)");
+        // Conformant: CPython raises `OverflowError` here.
+        raise_builtin(
+            EXCEPTION_TYPE_OVERFLOW_ERROR,
+            "OverflowError",
+            "float power overflowed (result too large to represent)",
+        );
+        return 0.0;
     }
     result
 }
@@ -2154,10 +2188,38 @@ mod tests {
         );
     }
 
+    /// Part A of #1038 (#1063): the pending exception's tag and message, for
+    /// the converted `**` abort paths. The state is thread-local and
+    /// `cargo test` runs in parallel, so every caller clears before raising
+    /// and after asserting; a message left pending would otherwise be read by
+    /// whatever test the harness schedules next on this thread.
+    fn pending_tag_and_message() -> (u8, String) {
+        assert_eq!(pycc_rt_exception_active(), 1);
+        let obj = exception::pycc_rt_exception_value();
+        let tag = unsafe { (*obj).type_tag };
+        let mut len = 0usize;
+        let bytes = unsafe { exception::pycc_rt_ext_pending_message(&mut len) };
+        assert!(!bytes.is_null());
+        let message = String::from_utf8(unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec())
+            .expect("the message is UTF-8");
+        (tag, message)
+    }
+
     #[test]
-    #[should_panic(expected = "negative exponent")]
-    fn pycc_rt_int_pow_with_a_negative_exponent_panics() {
-        int_pow(tag_smallint(2), tag_smallint(-1));
+    fn pycc_rt_int_pow_with_a_negative_exponent_raises_runtime_error() {
+        // Part A of #1038 (#1063): was `#[should_panic]`. `RuntimeError`
+        // rather than a conformant class because CPython raises nothing at
+        // all here -- it computes `2 ** -1` as `0.5`. Calls the private
+        // `int_pow`, not the aborting `extern "C"` wrapper, following this
+        // module's established convention.
+        pycc_rt_exception_clear();
+        let result = int_pow(tag_smallint(2), tag_smallint(-1));
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        assert!(message.contains("negative exponent"), "{message}");
+        assert!(!message.contains("pycc_rt: "), "{message}");
+        assert_eq!(result, tag_smallint(0)); // sentinel value
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -2626,45 +2688,90 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "0.0 cannot be raised to a negative power")]
-    fn float_pow_rejects_zero_raised_to_a_negative_power() {
+    fn float_pow_raises_zero_division_error_for_zero_to_a_negative_power() {
         // Verified against `python3.13`: `0.0 ** -1.0` raises
         // `ZeroDivisionError: 0.0 cannot be raised to a negative power`,
-        // while `f64::powf` alone silently returns `inf`. Calls the
-        // private `float_pow` directly, not the public `extern "C"`
-        // wrapper -- the wrapper is a plain (non-unwinding) `extern "C" fn`,
-        // so a panic crossing it aborts the whole test binary (`SIGABRT`)
-        // instead of being caught by `#[should_panic]` (same convention as
-        // `int_mul`/`float_div` above).
-        float_pow(0.0, -1.0);
+        // while `f64::powf` alone silently returns `inf`. Part A of #1038
+        // (#1063) turned the former `panic!` into this D-173 raise. Calls the
+        // private `float_pow` directly, not the public `extern "C"` wrapper,
+        // keeping this module's convention for the passing arms; the raise
+        // itself would now cross the wrapper safely.
+        pycc_rt_exception_clear();
+        let result = float_pow(0.0, -1.0);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_ZERO_DIV_ERROR);
+        // CPython's own sentence, verbatim -- the `pycc_rt: ` prefix the
+        // panic carried is gone, since a raised message is user-visible.
+        assert_eq!(message, "0.0 cannot be raised to a negative power");
+        assert_eq!(result, 0.0); // sentinel value
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "0.0 cannot be raised to a negative power")]
-    fn float_pow_rejects_negative_zero_raised_to_a_negative_power() {
+    fn float_pow_raises_zero_division_error_for_negative_zero_to_a_negative_power() {
         // `-0.0 == 0.0` under IEEE-754, and `python3.13` raises the same
         // `ZeroDivisionError` for `(-0.0) ** -1.0` as for `0.0 ** -1.0`.
-        float_pow(-0.0, -1.0);
+        pycc_rt_exception_clear();
+        let result = float_pow(-0.0, -1.0);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_ZERO_DIV_ERROR);
+        assert_eq!(message, "0.0 cannot be raised to a negative power");
+        assert_eq!(result, 0.0);
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(
-        expected = "a negative float raised to a non-integer power is not supported yet"
-    )]
-    fn float_pow_rejects_a_negative_base_raised_to_a_non_integer_power() {
+    fn float_pow_raises_runtime_error_for_a_negative_base_and_a_non_integer_power() {
         // Verified against `python3.13`: `(-2.0) ** 3.5` returns a complex
-        // number (`pycc` has no complex type in v0.1), while `f64::powf`
-        // alone silently returns `NaN`.
-        float_pow(-2.0, 3.5);
+        // number (`pycc` has no complex type), while `f64::powf` alone
+        // silently returns `NaN`. `RuntimeError` is the deliberate deviation
+        // -- there is no conformant class, because CPython raises nothing.
+        pycc_rt_exception_clear();
+        let result = float_pow(-2.0, 3.5);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        assert_eq!(
+            message,
+            "a negative float raised to a non-integer power is not supported yet (would require a complex result)"
+        );
+        assert_eq!(result, 0.0);
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "float power overflowed")]
-    fn float_pow_rejects_a_finite_result_that_overflows_float_range() {
+    fn float_pow_raises_overflow_error_for_a_finite_result_outside_float_range() {
         // Verified against `python3.13`: `2.0 ** 1024.0` raises
-        // `OverflowError: (34, 'Result too large')`, while `f64::powf`
-        // alone silently returns `inf`.
-        float_pow(2.0, 1024.0);
+        // `OverflowError: (34, 'Result too large')`, while `f64::powf` alone
+        // silently returns `inf`. This is the arm the new tag exists for.
+        pycc_rt_exception_clear();
+        let result = float_pow(2.0, 1024.0);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_OVERFLOW_ERROR);
+        assert_eq!(
+            message,
+            "float power overflowed (result too large to represent)"
+        );
+        assert_eq!(result, 0.0);
+        pycc_rt_exception_clear();
+    }
+
+    /// Part A of #1038 (#1063), §4b-bis: `raise_builtin` installs pending
+    /// state unconditionally, so a later raise on the same thread relabels an
+    /// earlier one rather than being suppressed by it. The zero-base arm's
+    /// `return` is what keeps that from happening *inside* one `float_pow`
+    /// call -- without it, `0.0 ** -1.0` would fall through to `powf`,
+    /// produce `inf`, and have its `ZeroDivisionError` overwritten by the
+    /// overflow arm. Generated code observes each raise at the next
+    /// checkpoint, so the relabelling is unreachable there; this pins the
+    /// property at the runtime level.
+    #[test]
+    fn a_later_pow_raise_relabels_an_earlier_one_but_never_within_one_call() {
+        pycc_rt_exception_clear();
+        assert_eq!(float_pow(0.0, -1.0), 0.0);
+        assert_eq!(pending_tag_and_message().0, EXCEPTION_TYPE_ZERO_DIV_ERROR);
+        assert_eq!(float_pow(2.0, 1024.0), 0.0);
+        assert_eq!(pending_tag_and_message().0, EXCEPTION_TYPE_OVERFLOW_ERROR);
+        pycc_rt_exception_clear();
     }
 
     #[test]
