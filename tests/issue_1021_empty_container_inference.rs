@@ -1681,7 +1681,7 @@ print(go(False))
 /// program aborts in the runtime's int decoding -- a D-040 sticky-
 /// representation defect in a branch-divergent `bool`/`int` binding that
 /// reproduces with no empty container anywhere in the program, so it is
-/// outside this pass and tracked separately.
+/// outside this pass and tracked as issue #1057.
 #[test]
 fn the_reference_spelling_of_the_cross_branch_program_still_checks() {
     let (_dir, path) = write_source(
