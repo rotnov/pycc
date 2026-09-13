@@ -33,6 +33,39 @@ never a merge gate.
 
 ---
 
+## 2026-09-13 — A review round was spent on a diff artifact captured before the branch's last commit
+
+**What happened.** The deep reviewer for PR #1052 was handed a diff file
+captured at an earlier head than the branch actually had: two commits had
+landed between the capture and the dispatch. Its highest-severity finding
+described a defect that no longer existed in the tree, and settling that
+took re-reading the current files and a second full review round. The
+round produced one finding about the dispatch itself and none about the
+code it was supposed to review.
+
+**Root cause.** The diff was written to a scratch file at one point in the
+session and the dispatch happened later, with no step in between that
+re-derived it or compared its base against `HEAD`. Nothing in the brief
+told the reviewer which commit the diff was supposed to describe, so it
+had no way to notice the mismatch either — from inside a fresh context, a
+stale diff and a current one are indistinguishable.
+
+**What fixed it.** Regenerating the diff immediately before the dispatch,
+and adding two lines to the brief: the exact head commit the diff was
+captured at, with an instruction to confirm `HEAD` matches it before
+starting, and a rule that the on-disk files win wherever they and the
+diff disagree.
+
+**Lesson.** A diff handed to a reviewer is a snapshot with an expiry, not
+a description of the branch. Regenerate it in the same step that
+dispatches the review, and state the head commit inside the brief so the
+reviewer can fail loudly on a mismatch instead of reviewing a tree that no
+longer exists. The same applies to any artifact passed into a fresh
+context — a captured gate log, a copied file listing, a pasted test
+output.
+
+---
+
 ## 2026-09-12 — A blind `sed -i` deleted half of a multi-line Rust attribute and left the file uncompilable
 
 **What happened.** While wiring `--ext` (#1036), a crate-level
