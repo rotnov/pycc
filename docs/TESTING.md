@@ -13,6 +13,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
+| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs` and `tests/issue_1066_ext_user_exceptions.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
@@ -426,6 +427,54 @@ achieve.
   `timeout-minutes` is a backstop rather than the first thing to fire: a
   job-level timeout runs no further steps, which would skip the report upload
   even though it is guarded by `if: always()`.
+
+## Hosted `ext` boundary conformance harness (NEG-004, #1067)
+
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+names NEG-004 as the CPython-driven conformance harness for the hosted `ext`
+mode. It is `tests/issue_1067_neg004_ext_conformance.rs`: one `--ext` artifact,
+built through the public CLI, then every refusal shape the host call boundary
+can produce, plus the properties a single refusal cannot show on its own --
+that a refused call left no partial effect behind, that the export is still
+correct on the next conforming call, and that a call with two non-conforming
+arguments names argument 1.
+
+- **Scope.** [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+  rule 7 is what this harness checks. Rule 4's pinned CPython oracle is *not*
+  involved: it scopes to conforming calls -- what a compiled function computes
+  -- while a refusal is pycc's own contract at the boundary. There is no
+  oracle comparison anywhere in this file, and `### CPython oracle exception
+  list` above gains no row from it.
+- **Loader, not oracle.** The interpreter here only has to import the artifact,
+  so it is any CPython at or above rule 1's stable-ABI floor. `PYCC_PYTHON`
+  selects it and defaults to `python3`. Both supported versions must agree on
+  every message asserted, so the harness is expected to pass unchanged under
+  `PYCC_PYTHON=python3.14`; a shape on which they disagree does not belong in
+  it as an exact assertion.
+- **`PYCC_PYTHON` is read twice.** `src/ext_build.rs` probes it at build time
+  for the development headers, and every `ext` test reads it at run time as the
+  loader. Building against one version and loading on another is
+  `PYCC_PYTHON_INCLUDE`'s job; `PYCC_PYTHON` cannot express that split.
+- **Assertion convention.** Text pycc authors is asserted **exactly**. Text
+  CPython authors is asserted by exception *type* plus a substring both
+  supported versions share, with a comment naming which half authored it --
+  pinning CPython's own wording would make a pycc test fail on a CPython patch
+  release. Exactly two shapes are CPython-authored today: the keyword-argument
+  refusal, which `METH_FASTCALL` dispatch emits before the generated wrapper is
+  entered (and which qualifies the name with the module), and the lone-surrogate
+  `UnicodeEncodeError` from `PyUnicode_AsUTF8AndSize`.
+- **Where it runs.** Every test in the file is
+  `#[ignore = "requires a CPython 3.13+ with development headers on PATH"]`,
+  because an installed CPython with headers is a property of the machine. CI
+  runs it on the Tier-1 `native-build-test` legs, which run the suite with
+  `-- --include-ignored`, and never in the coverage job, which runs `llvm-cov`
+  without that flag. It therefore earns no line coverage by construction: the
+  closed-set completeness guard that *is* inside
+  `scripts/check_diff_coverage.py`'s denominator is
+  `src/ext_build_tests/refusal_completeness.rs`, which is not `#[ignore]`d.
+- **Cost.** Each `#[test]` in the file costs one full `pycc build` on every
+  Tier-1 leg, so the shapes share a single artifact and a single script rather
+  than taking one test each.
 
 ## Hosted `ext` benchmark protocol (product-sprint-1)
 
