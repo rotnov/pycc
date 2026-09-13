@@ -482,7 +482,11 @@ packer reads a sentinel. The residual is the same accepted one as Parts A and
 B: `Mul`, `Pow` and `Compare` are not `expression_can_set_exception`
 checkpoints, so `print(big * 2)` writes the `0` sentinel before the exception
 is reported, while `print(big // 2)` -- `FloorDiv` *is* a checkpoint -- writes
-nothing. An `ext` artifact whose arithmetic leaves the inline range now reports
+nothing. `Add` and `Sub` join that list in their float-typed form only: a
+mixed-operand `BinOp` whose result type is `Float` converts *both* operands
+through `pycc_rt_int_to_float` before it dispatches on the operator, so
+`print(big + 1.5)` writes `1.5` -- the `0.0` sentinel plus the literal --
+before the same `OverflowError` is reported. An `ext` artifact whose arithmetic leaves the inline range now reports
 a catchable `OverflowError` to its host rather than killing the interpreter;
 what it still does not do is compute the bigint result, which is #1040.
 Separately, D-141's own runtime `int` boundary

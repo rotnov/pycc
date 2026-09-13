@@ -72,10 +72,11 @@ fn build_and_run(tag: &str, source: &str) -> (bool, String, String) {
     )
 }
 
-/// All six compiler-reachable converted sites are catchable with an ordinary `try`/`except
-/// OverflowError`, in one program. Every one of them aborted the process with
-/// `SIGABRT` before this change, so none of these `except` suites could have
-/// run at all.
+/// Five of the six compiler-reachable converted sites are catchable with an
+/// ordinary `try`/`except OverflowError`, in one program; the sixth,
+/// `int_cmp`, is reached by `no_converted_message_carries_the_pycc_rt_panic_prefix`
+/// below. Every one of them aborted the process with `SIGABRT` before this
+/// change, so none of these `except` suites could have run at all.
 ///
 /// `set.add()` is deliberately *absent*: codegen emits a
 /// `pycc_rt_int_untag_checked` element validation (`set_validate_added`,
@@ -282,6 +283,11 @@ fn the_multiply_sentinel_is_printed_but_the_floordiv_sentinel_is_not() {
 /// host interpreter, not pycc, owns the process, so a `SIGABRT` there took the
 /// whole interpreter down. This is the reproduction recipe from the parent
 /// plan's section 11, which measured exit `-6` before this change.
+///
+/// Every bigint here is produced *inside* the compiled function, never passed
+/// in: the generated wrapper's own argument unpacker rejects a bigint argument
+/// with its own `OverflowError` (the #1040 boundary) before the body runs, so
+/// `m.divide(6, 2 ** 62)` would never reach `int_floordiv` at all.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_bigint_intermediate_reaches_a_cpython_host_as_a_catchable_overflow_error() {
@@ -291,6 +297,8 @@ fn a_bigint_intermediate_reaches_a_cpython_host_as_a_catchable_overflow_error() 
         "m.py",
         "def square_then_zero(x: int) -> int:\n\
          \x20   return (x * x) * 0\n\n\
+         def square_then_divide(x: int, d: int) -> int:\n\
+         \x20   return (x * x) // d\n\n\
          def divide(a: int, b: int) -> int:\n\
          \x20   return a // b\n\n\
          def ok(x: int) -> int:\n\
@@ -316,7 +324,7 @@ fn a_bigint_intermediate_reaches_a_cpython_host_as_a_catchable_overflow_error() 
          except OverflowError as e:\n\
          \x20   assert 'multiplying' in str(e), str(e)\n\
          try:\n\
-         \x20   m.divide(6, 2 ** 62)\n\
+         \x20   m.square_then_divide((2 ** 62) - 1, 2)\n\
          \x20   raise AssertionError('expected OverflowError')\n\
          except OverflowError as e:\n\
          \x20   assert 'dividing' in str(e), str(e)\n\
