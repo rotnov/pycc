@@ -388,16 +388,42 @@ fn int_pow(base: i64, exp: i64) -> i64 {
         return tag_smallint(0);
     }
     let mut result = tag_smallint(1);
+    // Both variables are released unconditionally below, with no ownership
+    // flag: `result` starts as a smallint and `base` was just proved inline by
+    // `decode_inline_or_raise`, so a word that classifies as a bigint in either
+    // one can only be an object `int_mul` freshly allocated here and this
+    // function therefore owns. `bigint_release` is a no-op on every inline
+    // kind, so releasing the caller's own untouched word is well defined.
+    //
+    // Retiring them matters only since Part C of #1038 (#1065) replaced the
+    // abort with a raise: before it, the aborting process reclaimed everything.
+    // This is not the general temporary-ownership model -- unbound arithmetic
+    // temporaries still leak, which stays #146 Part 2 (#625).
     let mut base = base;
     while exp > 0 {
         if exp & 1 == 1 {
-            result = int_mul(result, base);
+            let next = int_mul(result, base);
+            // `int_mul` reads its operands without consuming them, so the
+            // previous word is still this function's to release.
+            bigint_release(result);
+            result = next;
         }
         exp >>= 1;
         if exp > 0 {
-            base = int_mul(base, base);
+            let next = int_mul(base, base);
+            bigint_release(base);
+            base = next;
+        }
+        // A promoted operand makes the *next* `int_mul` raise. Stop there
+        // rather than squaring on and installing the same `OverflowError`
+        // again, and retire both temporaries before returning the sentinel.
+        if pycc_rt_exception_active() != 0 {
+            bigint_release(result);
+            bigint_release(base);
+            return tag_smallint(0);
         }
     }
+    bigint_release(base);
     result
 }
 
@@ -2133,6 +2159,55 @@ mod tests {
         assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
         pycc_rt_bigint_release(word);
         assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before + 1);
+    }
+
+    /// Part C of #1038 (#1065): `int_pow` squares the *encoded* word through
+    /// `int_mul`, so an inline base can promote to a heap bigint that only
+    /// `int_pow` itself holds. The very next `int_mul` then raises
+    /// `OverflowError` and returns a sentinel. Before Part C the aborting
+    /// process reclaimed that object; now a program can catch the exception in
+    /// a loop, so `int_pow` must retire its own temporaries on the raising
+    /// exit. `BIGINT_DROPS` is the only way a test can observe the free.
+    #[test]
+    fn int_pow_frees_its_own_promoted_temporaries_when_the_squaring_overflows() {
+        for (name, base, exp) in [
+            // Promotes `result` first: at the final set bit `int_mul` sees a
+            // bigint `base` and raises.
+            ("2 ** 100", 2i64, 100i64),
+            // Promotes `base` twice in a row, so the raising call is the
+            // squaring itself rather than the accumulation.
+            ("(2 ** 21) ** 7", 1i64 << 21, 7i64),
+        ] {
+            pycc_rt_exception_clear();
+            let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+            assert_eq!(
+                int_pow(tag_smallint(base), tag_smallint(exp)),
+                tag_smallint(0),
+                "`{name}` must return the zero sentinel once it raises"
+            );
+            assert_eq!(
+                pycc_rt_exception_active(),
+                1,
+                "`{name}` must leave the `OverflowError` pending"
+            );
+            assert!(
+                int_encoding::BIGINT_DROPS.with(|c| c.get()) > before,
+                "`{name}` leaked the bigint it promoted internally"
+            );
+            pycc_rt_exception_clear();
+        }
+    }
+
+    /// The success path: every operand stays inline, so both releases are the
+    /// no-ops `bigint_release` documents and the result is exact.
+    #[test]
+    fn int_pow_returns_an_inline_result_without_freeing_anything() {
+        pycc_rt_exception_clear();
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        assert_eq!(int_pow(tag_smallint(3), tag_smallint(4)), tag_smallint(81));
+        assert_eq!(int_pow(tag_smallint(-7), tag_smallint(1)), tag_smallint(-7));
+        assert_eq!(pycc_rt_exception_active(), 0);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
     }
 
     #[test]

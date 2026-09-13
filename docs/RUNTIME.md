@@ -476,7 +476,7 @@ computed `1`. `int_pow`'s own two checks do not cover its loop: `int_mul`
 promotes an overflowing product to a heap bigint, so `(2 ** 40) ** 2` raises with
 the `multiplying` context even though its only operator is `**` -- pre-existing
 in kind (the retired `panic!` said the same) and now observable because the
-abort became a returning raise. Part C needed no codegen change, because the `ext` wrapper
+abort became a returning raise. That promotion also makes `int_pow` the one caller in the list with heap temporaries of its own, so it releases both its accumulator and its squared base and stops on the pending exception instead of squaring on: before Part C the aborting process reclaimed them, whereas a host that catches the `OverflowError` in a loop would otherwise leak one `BigIntObj` per attempt. Both releases are unconditional and need no ownership flag -- the accumulator starts as a smallint and the base was already proved inline, so a bigint in either can only be one `int_mul` allocated here, and `bigint_release` no-ops on every inline kind. This is not a general temporary-ownership model: unbound arithmetic temporaries elsewhere still leak, which stays #146 Part 2 ([#625](https://github.com/rotnov/pycc/issues/625)). Part C needed no codegen change, because the `ext` wrapper
 already emits its pending-exception check ahead of every return arm, so no
 packer reads a sentinel. The residual is the same accepted one as Parts A and
 B: `Mul`, `Pow` and `Compare` are not `expression_can_set_exception`
