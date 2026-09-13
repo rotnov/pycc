@@ -62,4 +62,5 @@ fn probe(version: (u32, u32), include: &Path) -> ExtProbe {
 
 mod exports;
 mod generated_c;
+mod refusal_completeness;
 mod toolchain;
