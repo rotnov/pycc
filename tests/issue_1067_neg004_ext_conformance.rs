@@ -74,6 +74,18 @@ def take_str(s: str) -> str:
     return s
 
 
+def take_float(x: float) -> float:
+    return x + 1.0
+
+
+def take_bool(b: bool) -> bool:
+    return b
+
+
+def take_tuple_fb(t: tuple[float, bool]) -> float:
+    return t[0]
+
+
 def join(a: str, b: str) -> str:
     return a + b
 
@@ -102,6 +114,10 @@ class SubStr(str):
 
 
 class SubTuple(tuple):
+    pass
+
+
+class SubFloat(float):
     pass
 
 
@@ -200,6 +216,42 @@ else:
 assert m.size() == before, m.size()
 assert m.bump(9) == before + 1
 assert m.size() == before + 1, m.size()
+
+# Shapes 18-19: a wrong type at a `float` parameter. `PyFloat_Check` with
+# no fallback converter, so an `int` is refused rather than widened.
+# pycc-authored text.
+refuse(m.take_float, (1,), {}, TypeError,
+       "take_float() argument 1: 'int' object cannot be interpreted as a float",
+       True, (1.5,), 2.5)
+refuse(m.take_float, (None,), {}, TypeError,
+       "take_float() argument 1: 'NoneType' object cannot be interpreted as a float",
+       True, (1.5,), 2.5)
+
+# Shape 20: a wrong type at a `bool` parameter. `PyBool_Check`, never
+# `PyObject_IsTrue`: rule 7's boundary is closed, so `1` is not `True`.
+# pycc-authored text.
+refuse(m.take_bool, (1,), {}, TypeError,
+       "take_bool() argument 1: 'int' object cannot be interpreted as a bool",
+       True, (True,), True)
+
+# Shapes 21-22: the `_at` element helpers for the other two D-116 element
+# types, each naming its own 1-based element index. pycc-authored text.
+refuse(m.take_tuple_fb, ((1, True),), {}, TypeError,
+       "take_tuple_fb() argument 1, element 1: 'int' object cannot be "
+       "interpreted as a float",
+       True, ((1.5, True),), 1.5)
+refuse(m.take_tuple_fb, ((1.5, 1),), {}, TypeError,
+       "take_tuple_fb() argument 1, element 2: 'int' object cannot be "
+       "interpreted as a bool",
+       True, ((1.5, True),), 1.5)
+
+# Shapes 23-24: `float` conformance is by protocol too, at a scalar and at
+# an element position -- `PyFloat_Check` is subtype-aware -- and what comes
+# back is the base type. `bool` has no counterpart: it cannot be subclassed.
+back = m.take_float(SubFloat(1.5))
+assert back == 2.5, back
+assert type(back) is float, type(back)
+assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
 
 # Refusal ordering: with two simultaneously non-conforming arguments, the
 # message names argument 1. Arguments are unpacked left to right and the
