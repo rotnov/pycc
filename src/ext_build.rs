@@ -419,8 +419,11 @@ pub(crate) struct ExtExport {
 /// carries the `0gen_` prefix and has no `fnptr_` global to call through
 /// (codegen dispatches those directly).
 ///
-/// The boundary carries `int`, `float` and `bool` in either direction, and
-/// `None` as a return type only (#1036, #1048). Every other
+/// The boundary carries `int`, `float`, `bool` and `str` in either
+/// direction, and `None` as a return type only (#1036, #1048, #1049).
+/// `docs/RUNTIME.md`'s admissibility matrix is the canonical statement of
+/// that set, including the narrowings each admitted type carries. Every
+/// other
 /// public signature is a [`EXT_CAPABILITY_CODE`] capability gap, and *all*
 /// of them are collected before returning -- one `--ext` build should not
 /// have to be re-run once per unsupported function.
@@ -477,7 +480,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     }
 }
 
-/// The C type and `pycc_ext_*` helper suffix one admissible boundary scalar
+/// The C type and `pycc_ext_*` helper suffix one type the boundary admits
 /// uses inside a generated wrapper, or `None` when this pycc version's
 /// boundary cannot carry `ty` in either position.
 ///
@@ -489,11 +492,18 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
 /// return one -- hence `char`, and deliberately not `int` or `_Bool`. A
 /// width that disagrees with the callee is a silent miscompile here, never
 /// a compile error.
-fn boundary_scalar(ty: &Ty) -> Option<(&'static str, &'static str)> {
+///
+/// `Ty::Str` is the one entry that is not a scalar -- hence this function's
+/// name, which #1049 widened from `boundary_scalar`. `ty_to_basic_type`
+/// gives it an opaque pointer, so the C type is `void *` in both positions
+/// and the wrapper never reads through it: `pycc_ext_unpack_str` produces
+/// the `PyStrObj` and `pycc_ext_pack_str` consumes it.
+fn boundary_carrier(ty: &Ty) -> Option<(&'static str, &'static str)> {
     match ty {
         Ty::Int => Some(("long long", "int")),
         Ty::Float => Some(("double", "float")),
         Ty::Bool => Some(("char", "bool")),
+        Ty::Str => Some(("void *", "str")),
         _ => None,
     }
 }
@@ -502,7 +512,7 @@ fn boundary_scalar(ty: &Ty) -> Option<(&'static str, &'static str)> {
 /// carry `ty` as a parameter. `Ty::None` is deliberately absent: a `None`
 /// parameter stays a capability gap, gated on #1047's call-argument ICE.
 fn param_c_type(ty: &Ty) -> Option<&'static str> {
-    boundary_scalar(ty).map(|(c_type, _)| c_type)
+    boundary_carrier(ty).map(|(c_type, _)| c_type)
 }
 
 /// The C return type of a wrapper's indirect call, or `None` when the
@@ -565,7 +575,8 @@ fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         message: format!(
             "--ext cannot export the public function `{name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float` or `bool`, and a return type must be one of those or `None` (D-244 rule \
+             `float`, `bool` or `str`, and a return type must be one of those or `None` \
+             (D-244 rule \
              1 exports every public module-level function, so there is no way to opt one \
              out) -- rename it to `_{name}` to keep it out of the export set, or build \
              without --ext"
@@ -631,7 +642,7 @@ fn wrapper_for(export: &ExtExport) -> String {
     let slots: Vec<(&'static str, &'static str)> = export
         .params
         .iter()
-        .map(|ty| boundary_scalar(ty).expect("collect_exports admits only carriable parameters"))
+        .map(|ty| boundary_carrier(ty).expect("collect_exports admits only carriable parameters"))
         .collect();
     let return_c = return_c_type(&export.return_ty).expect("a carriable return type");
     let returns_none = export.return_ty == Ty::None;
@@ -658,9 +669,22 @@ fn wrapper_for(export: &ExtExport) -> String {
         plural = if arity == 1 { "" } else { "s" },
     ));
     for (index, (_, helper)) in slots.iter().enumerate() {
+        // Each `str` argument already unpacked holds a fresh reference that
+        // only the compiled function's own parameter slot ever consumes, and
+        // this branch bails before the call -- so release them here, or a
+        // `TypeError` on argument 2 would leak argument 1's `PyStrObj` on
+        // every raising call. Emitted inline rather than behind a shared
+        // `goto` label: the cleanup differs per argument index, and the
+        // wrapper has no other exit that owes anything.
+        let cleanup: String = slots[..index]
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, earlier_helper))| *earlier_helper == "str")
+            .map(|(earlier, _)| format!("        pycc_rt_str_decref(a{earlier});\n"))
+            .collect();
         out.push_str(&format!(
             "    if (pycc_ext_unpack_{helper}(args[{index}], \"{name}\", {index}, &a{index}) != 0) \
-             {{\n        return NULL;\n    }}\n"
+             {{\n{cleanup}        return NULL;\n    }}\n"
         ));
     }
     let params = if arity == 0 {
@@ -694,14 +718,18 @@ fn wrapper_for(export: &ExtExport) -> String {
     );
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
-        // `pack_int` is the one packer that can fail, and its message names
-        // the function: D-141's bigint egress (#1040). `PyFloat_FromDouble`
-        // and `PyBool_FromLong` cannot fail on a value, so they take none.
+        // `pack_int` is the one packer whose failure is a property of the
+        // *value*, and the only one whose message therefore names the
+        // function: D-141's bigint egress (#1040). `PyFloat_FromDouble` and
+        // `PyBool_FromLong` cannot fail at all, and `pack_str` can only fail
+        // the way any allocation can -- it refuses no `str` -- so none of
+        // the three take a name. Arity is uniform across them, so every
+        // packer but `int` shares the generic arm below.
         Ty::Int => out.push_str(&format!(
             "    return pycc_ext_pack_int(\"{name}\", result);\n}}\n\n"
         )),
         ty => {
-            let (_, helper) = boundary_scalar(ty).expect("a carriable return type");
+            let (_, helper) = boundary_carrier(ty).expect("a carriable return type");
             out.push_str(&format!(
                 "    return pycc_ext_pack_{helper}(result);\n}}\n\n"
             ));
@@ -748,5 +776,5 @@ impl ExtToolchain {
 }
 
 #[cfg(test)]
-#[path = "ext_build_tests.rs"]
+#[path = "ext_build_tests/mod.rs"]
 mod ext_build_tests;

@@ -782,8 +782,18 @@ fn new_pystr(bytes: &[u8]) -> *mut PyStrObj {
     }))
 }
 
-/// Builds a `str` object from a compile-time literal's bytes
-/// (`pycc_codegen`'s `MirExpr::StringLiteral` codegen, Task 7). Unlike every
+/// Builds a `str` object from UTF-8 bytes the caller already holds.
+///
+/// Two callers pass through here. `pycc_codegen`'s `MirExpr::StringLiteral`
+/// codegen (Task 7) hands it a compile-time literal's own constant global,
+/// which is where the name comes from; the D-244 hosted `ext` shim's
+/// `pycc_ext_unpack_str` hands it the borrowed UTF-8 buffer
+/// `PyUnicode_AsUTF8AndSize` returned for an incoming CPython `str`. The
+/// bytes therefore need not come from a compiled literal at all -- the only
+/// standing requirement is the safety one below, plus that they be valid
+/// UTF-8, which both callers already guarantee.
+///
+/// Unlike every
 /// `pycc_rt_int_*` arithmetic/comparison function, this has no failure mode
 /// to guard against (allocation failure aborts via Rust's global allocator
 /// rather than unwinding) -- so, per this crate's established convention
@@ -796,7 +806,10 @@ fn new_pystr(bytes: &[u8]) -> *mut PyStrObj {
 /// # Safety
 /// `ptr` must point to at least `len` readable bytes -- true for every
 /// `pycc_codegen`-emitted call site, which always passes a compile-time
-/// string literal's own constant global and byte length together.
+/// string literal's own constant global and byte length together, and for
+/// the `ext` shim, which passes the pointer and length
+/// `PyUnicode_AsUTF8AndSize` wrote out together. The bytes are copied here,
+/// so neither caller has to keep them alive past the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_str_from_literal(ptr: *const u8, len: i64) -> *mut PyStrObj {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
@@ -940,6 +953,35 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
     } else {
         unsafe { &*s }.rc.set(new_rc);
     }
+}
+
+/// A `str` object's UTF-8 bytes, writing its length through `len`.
+///
+/// This is the `str` egress half of the D-244 hosted `ext` boundary: the
+/// generated wrapper's `pycc_ext_pack_str` copies these bytes into a CPython
+/// `str` with `PyUnicode_FromStringAndSize`, then releases the object. It
+/// exists because [`PyStrObj`]'s payload is deliberately opaque -- the inline
+/// and heap arms of `PyStrPayload` are not a layout the C shim may read --
+/// and it mirrors [`crate::exception::pycc_rt_ext_pending_message`], which
+/// hands the shim an exception message the same way.
+///
+/// The returned pointer borrows `s`'s own storage, so it stays valid exactly
+/// as long as `s` does. The length is written out separately rather than
+/// implied by a NUL terminator because a pycc `str` may contain embedded NUL
+/// bytes, and the empty string is a legitimate value.
+///
+/// The `ext` shim never calls this with a null `s` (it guards first, where
+/// nothing is instrumented), so there is no null arm here.
+///
+/// # Safety
+///
+/// `s` must be a live `PyStrObj` pointer, and `len` must be non-null and
+/// point to a writable, aligned `usize`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_ext_str_bytes(s: *mut PyStrObj, len: *mut usize) -> *const u8 {
+    let bytes = unsafe { &*s }.bytes();
+    unsafe { *len = bytes.len() };
+    bytes.as_ptr()
 }
 
 // --- Implementation note / deviation from the task brief -------------
@@ -2648,6 +2690,38 @@ mod tests {
             let s = pycc_rt_str_from_literal(long.as_ptr(), long.len() as i64);
             assert_eq!((*s).bytes(), long.as_bytes());
             pycc_rt_str_decref(s);
+        }
+    }
+
+    #[test]
+    fn the_ext_str_accessor_exposes_the_bytes_of_both_payload_representations() {
+        // The D-244 hosted `ext` shim reads a returned `str` only through
+        // this accessor, so it has to see through both arms of the D-059
+        // inline/heap split -- the shim has no way to tell them apart and
+        // must not care. An embedded NUL and the empty string are covered
+        // here too, because the accessor's length-out contract is what makes
+        // both round-trip on the boundary instead of truncating at `strlen`.
+        unsafe {
+            let mut len = usize::MAX;
+
+            let inline = pycc_rt_str_from_literal(b"hi\0there".as_ptr(), 8);
+            let ptr = pycc_rt_ext_str_bytes(inline, &raw mut len);
+            assert_eq!(len, 8);
+            assert_eq!(std::slice::from_raw_parts(ptr, len), b"hi\0there");
+            pycc_rt_str_decref(inline);
+
+            let long = "x".repeat(23); // one byte past the 22-byte inline cap (D-059)
+            let heap = pycc_rt_str_from_literal(long.as_ptr(), long.len() as i64);
+            let ptr = pycc_rt_ext_str_bytes(heap, &raw mut len);
+            assert_eq!(len, 23);
+            assert_eq!(std::slice::from_raw_parts(ptr, len), long.as_bytes());
+            pycc_rt_str_decref(heap);
+
+            let empty = pycc_rt_str_from_literal(b"".as_ptr(), 0);
+            let ptr = pycc_rt_ext_str_bytes(empty, &raw mut len);
+            assert_eq!(len, 0);
+            assert!(!ptr.is_null());
+            pycc_rt_str_decref(empty);
         }
     }
 

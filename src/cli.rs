@@ -50,9 +50,9 @@ pub enum Command {
         /// callable of one stable-ABI artifact that a CPython interpreter
         /// imports. `-o` names that artifact; `docs/CLI_SPEC.md:23-63` is
         /// the canonical statement of how its suffix and module name are
-        /// derived. The boundary carries `int`, `float` and `bool` in
-        /// either direction and `None` as a return type only; any other
-        /// public signature is a `C0003` capability gap.
+        /// derived. `docs/RUNTIME.md`'s `ext` boundary section is the
+        /// canonical admissibility matrix for what the boundary carries;
+        /// any signature outside it is a `C0003` capability gap.
         #[arg(long)]
         ext: bool,
     },
