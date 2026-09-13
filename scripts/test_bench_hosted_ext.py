@@ -260,5 +260,75 @@ class PreRegistrationTest(unittest.TestCase):
         self.assertRegex(record["compile_unchanged_set_sha256"], r"\A[0-9a-f]{64}\Z")
 
 
+
+
+    def test_accepts_a_divergence_within_the_relative_tolerance(self) -> None:
+        reference = RUNNER.ArmOutcome(1e6, None, "digest")
+        candidate = RUNNER.ArmOutcome(1e6 + 1e-4, None, "digest")
+
+        RUNNER.compare_outcomes(reference, candidate, 1e-9)
+
+    def test_rejects_a_divergence_beyond_the_relative_tolerance(self) -> None:
+        reference = RUNNER.ArmOutcome(1e6, None, "digest")
+        candidate = RUNNER.ArmOutcome(1e6 + 1.0, None, "digest")
+
+        with self.assertRaises(BenchmarkError):
+            RUNNER.compare_outcomes(reference, candidate, 1e-9)
+
+
+class TimingBoundaryTest(unittest.TestCase):
+    """`time_call` and `run_arm` are the timing boundary itself."""
+
+    def test_times_the_call_and_reports_its_value(self) -> None:
+        elapsed, outcome = RUNNER.time_call(lambda left, right: left + right, 2, 3)
+
+        self.assertGreaterEqual(elapsed, 0)
+        self.assertEqual(outcome.value, 5)
+        self.assertIsNone(outcome.exception)
+        self.assertEqual(
+            outcome.arguments_digest,
+            hashlib.sha256(repr((2, 3)).encode("utf-8")).hexdigest(),
+        )
+
+    def test_records_the_exception_type_instead_of_propagating_it(self) -> None:
+        def raises(value: int) -> int:
+            raise ZeroDivisionError("arm failed")
+
+        elapsed, outcome = RUNNER.time_call(raises, 7)
+
+        self.assertGreaterEqual(elapsed, 0)
+        self.assertIsNone(outcome.value)
+        self.assertEqual(outcome.exception, "ZeroDivisionError")
+        self.assertEqual(
+            outcome.arguments_digest,
+            hashlib.sha256(repr((7,)).encode("utf-8")).hexdigest(),
+        )
+
+    def test_runs_one_untimed_warm_up_and_seven_timed_replicates(self) -> None:
+        calls: list[int] = []
+
+        def counted(value: int) -> int:
+            calls.append(value)
+            return len(calls)
+
+        summary, outcome = RUNNER.run_arm("ext", counted, 1)
+
+        self.assertEqual(len(calls), RUNNER.WARMUP_RUNS + RUNNER.REPLICATES)
+        self.assertEqual(summary["arm"], "ext")
+        self.assertEqual(summary["replicates"], RUNNER.REPLICATES)
+        # The correctness datum comes from the warm-up, which no reported
+        # timing contains.
+        self.assertEqual(outcome.value, RUNNER.WARMUP_RUNS)
+
+    def test_refuses_to_run_an_arm_without_a_warm_up(self) -> None:
+        original = RUNNER.WARMUP_RUNS
+        RUNNER.WARMUP_RUNS = 0
+        try:
+            with self.assertRaises(BenchmarkError):
+                RUNNER.run_arm("ext", lambda value: value, 1)
+        finally:
+            RUNNER.WARMUP_RUNS = original
+
+
 if __name__ == "__main__":
     unittest.main()

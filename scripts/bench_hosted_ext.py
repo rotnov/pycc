@@ -21,6 +21,12 @@ The pre-registration record `scripts/bench_hosted_ext_precommit.json` supplies
 the seed, the input digest, the float tolerance and the machine identity; a run
 whose input does not digest to the committed value aborts before timing
 anything.
+
+`main` is the protocol's gate, not its driver: it resolves and checks the
+interpreter, the subject and the input, and stops. Constructing the three arms
+-- interpreter, Cython extension, `ext` artifact -- belongs to the run that
+publishes the numbers, which calls `run_arm` once per arm and
+`compare_outcomes` between them.
 """
 
 from __future__ import annotations
@@ -196,6 +202,29 @@ def time_call(call, *args) -> tuple[int, ArmOutcome]:
             value, None, hashlib.sha256(repr(args).encode("utf-8")).hexdigest()
         )
     return finished - started, outcome
+
+
+def run_arm(arm: str, call, *args) -> tuple[dict, ArmOutcome]:
+    """Warm one arm up untimed, then time `REPLICATES` calls of it.
+
+    The warm-up is discarded because it pays one-off costs -- first-touch page
+    faults, lazy imports inside the callee, cold caches -- that the protocol
+    does not attribute to the arm. Its outcome is what the correctness
+    precondition is compared on, so that comparison never sits inside a
+    reported timing.
+
+    Building the three arms is not this function's business: it takes an
+    already-callable arm, so the same code times the interpreter, the Cython
+    extension and the `ext` artifact.
+    """
+
+    outcome: ArmOutcome | None = None
+    for _ in range(WARMUP_RUNS):
+        _, outcome = time_call(call, *args)
+    if outcome is None:
+        raise BenchmarkError("an arm must be warmed up at least once before it is timed")
+    timings = [time_call(call, *args)[0] for _ in range(REPLICATES)]
+    return summarize(arm, timings), outcome
 
 
 def interpreter_facts(interpreter: str) -> tuple[str, str | None]:

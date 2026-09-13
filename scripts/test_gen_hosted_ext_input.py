@@ -16,6 +16,7 @@ import importlib.util
 import os
 from pathlib import Path
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,12 +30,14 @@ GENERATOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GENERATOR)
 
 
-def generate_in_subprocess(output: Path, count: int, hash_seed: str) -> None:
+def generate_in_subprocess(
+    output: Path, count: int, hash_seed: str, interpreter: str | None = None
+) -> None:
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = hash_seed
     subprocess.run(
         [
-            sys.executable,
+            interpreter or sys.executable,
             "-B",
             str(MODULE_PATH),
             "--output",
@@ -59,6 +62,28 @@ class DeterminismTest(unittest.TestCase):
             generate_in_subprocess(second, 64, "12345")
 
             self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_the_pinned_interpreter_series_produces_the_same_bytes(self) -> None:
+        """The committed digest is only meaningful across interpreters.
+
+        The pre-registration record was produced on one interpreter and the run
+        that is scored against it uses the pinned one, so a byte stream that
+        drifted between the two would abort every run for a reason that is not
+        the compiler's.
+        """
+
+        pinned = shutil.which("python3.14")
+        if pinned is None:
+            self.skipTest("the pinned interpreter series is not installed on this host")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            here = root / "here.bin"
+            there = root / "there.bin"
+
+            generate_in_subprocess(here, 64, "0")
+            generate_in_subprocess(there, 64, "0", interpreter=pinned)
+
+            self.assertEqual(here.read_bytes(), there.read_bytes())
 
     def test_a_different_seed_produces_different_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

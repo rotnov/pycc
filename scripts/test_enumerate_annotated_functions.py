@@ -152,6 +152,76 @@ class DigestRuleTest(unittest.TestCase):
         )
 
 
+
+class SubtreeRestrictionTest(unittest.TestCase):
+    """The denominator counts first-party source, not everything on disk.
+
+    A tree that vendors third-party checkouts and carries its own test suite
+    would otherwise contribute functions that are nobody's idea of "the
+    reference codebase's annotated functions", so the enumerated subtrees are
+    named explicitly and recorded in the pre-registration record.
+    """
+
+    def test_restricts_enumeration_to_the_named_subtrees(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(
+                root,
+                {
+                    "src/alpha.py": "def one(value: int) -> int:\n    return value\n",
+                    "tests/beta.py": "def two(value: int) -> int:\n    return value\n",
+                    "third/gamma.py": "def three(value: int) -> int:\n    return value\n",
+                },
+            )
+
+            names = ENUMERATOR.collect_annotated_functions(root, ["src"])
+
+            self.assertEqual(names, ["src.alpha.one"])
+
+    def test_enumerating_without_subtrees_walks_the_whole_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(
+                root,
+                {
+                    "src/alpha.py": "def one(value: int) -> int:\n    return value\n",
+                    "tests/beta.py": "def two(value: int) -> int:\n    return value\n",
+                },
+            )
+
+            names = ENUMERATOR.collect_annotated_functions(root)
+
+            self.assertEqual(names, ["src.alpha.one", "tests.beta.two"])
+
+    def test_rejects_a_subtree_that_is_not_a_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {"src/alpha.py": "def one(value: int) -> int:\n    return value\n"})
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["absent"])
+
+    def test_rejects_a_subtree_that_escapes_the_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {"src/alpha.py": "def one(value: int) -> int:\n    return value\n"})
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["../elsewhere"])
+
+    def test_pre_registration_records_the_subtrees_that_were_enumerated(self) -> None:
+        record = ENUMERATOR.read_pre_registration(
+            Path(__file__).with_name("bench_hosted_ext_precommit.json")
+        )
+
+        subtrees = record["compile_unchanged_subtrees"]
+        self.assertIsInstance(subtrees, list)
+        self.assertTrue(subtrees)
+        for subtree in subtrees:
+            with self.subTest(subtree=subtree):
+                self.assertIsInstance(subtree, str)
+
+
 class ReportTest(unittest.TestCase):
     def test_report_publishes_only_the_count_and_the_digest(self) -> None:
         names = ["private.alpha", "private.beta"]

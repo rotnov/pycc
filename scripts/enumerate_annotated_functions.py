@@ -11,7 +11,17 @@ committed, alongside the numbers, in
 
 The enumeration predicate, in full:
 
-* every file whose name ends in `.py` under the given root, skipping any
+* enumeration covers the subtrees of the root named by `--subtree`, and the
+  whole root when none is named. The denominator is meant to count the
+  reference codebase's *own* source: a tree that vendors third-party checkouts
+  or carries its own test suite would otherwise contribute functions nobody
+  would call "the reference codebase's annotated functions", and an inflated
+  denominator makes the compile-unchanged fraction meaningless. Which subtrees
+  were enumerated is therefore recorded in
+  `scripts/bench_hosted_ext_precommit.json` alongside the digest, and a
+  qualified name stays relative to the root rather than to the subtree, so the
+  set is re-derivable from those two facts;
+* every file whose name ends in `.py` under each enumerated subtree, skipping any
   directory whose name begins with `.` or is one of `ENUMERATION_SKIP_DIRS`
   (virtual environments, caches and build output are not source);
 * a file that does not parse is skipped rather than failing the walk, because
@@ -80,9 +90,22 @@ def _module_path(root: Path, path: Path) -> str:
     return ".".join(parts)
 
 
-def _source_files(root: Path) -> list[Path]:
+def _enumeration_starts(root: Path, subtrees: list[str] | None) -> list[Path]:
+    if not subtrees:
+        return [root]
+    starts: list[Path] = []
+    resolved_root = root.resolve()
+    for subtree in subtrees:
+        start = (resolved_root / subtree).resolve()
+        if not start.is_dir() or resolved_root not in start.parents:
+            raise ValueError("each subtree must be an existing directory inside the root")
+        starts.append(start)
+    return starts
+
+
+def _source_files(root: Path, subtrees: list[str] | None = None) -> list[Path]:
     found: list[Path] = []
-    stack = [root]
+    stack = _enumeration_starts(root, subtrees)
     while stack:
         directory = stack.pop()
         for entry in sorted(directory.iterdir()):
@@ -97,11 +120,12 @@ def _source_files(root: Path) -> list[Path]:
     return found
 
 
-def collect_annotated_functions(root: Path) -> list[str]:
+def collect_annotated_functions(root: Path, subtrees: list[str] | None = None) -> list[str]:
     """Return the qualified names the predicate above selects, sorted."""
 
     names: list[str] = []
-    for path in _source_files(root):
+    root = root.resolve()
+    for path in _source_files(root, subtrees):
         try:
             with warnings.catch_warnings():
                 # A tree that is not ours may carry escape-sequence warnings;
@@ -138,12 +162,23 @@ def read_pre_registration(path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("root", type=Path, help="source tree to enumerate")
+    parser.add_argument(
+        "--subtree",
+        action="append",
+        default=[],
+        help="restrict enumeration to this subtree of the root; repeatable",
+    )
     arguments = parser.parse_args(argv)
     root = arguments.root.resolve()
     if not root.is_dir():
         print("the given root is not a directory", file=sys.stderr)
         return 2
-    print(format_report(collect_annotated_functions(root)))
+    try:
+        names = collect_annotated_functions(root, arguments.subtree)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(format_report(names))
     return 0
 
 

@@ -15,8 +15,10 @@
     "os": "macOS 26.5.1 (build 25F80)",
     "power_profile": "AC power, pmset powermode 0 (automatic), Low Power Mode off"
   },
-  "compile_unchanged_denominator": 2825,
-  "compile_unchanged_set_sha256": "5d2682fd7516f8f43a2c9ff68ce696efeb7174ef16314c36b6d98d67697bf417",
+  "compile_unchanged_denominator": 133,
+  "compile_unchanged_set_sha256": "2464174c089a2287c0414fd4004ef7cb83fc9f6fe5b4820f885d595343761b7d",
+  "compile_unchanged_subtrees": ["src"],
+  "compile_unchanged_subtrees_rationale": "The denominator counts the reference codebase's own library source. Walking the whole checkout instead would add its test suite and the third-party checkouts it vendors, neither of which is a reference function, and would make the compile-unchanged fraction a statement about somebody else's code.",
   "compile_unchanged_set_digest_rule": "SHA-256 over the fully-qualified function names, sorted byte-wise ascending, joined by a single \\n, UTF-8, no trailing newline",
   "compile_unchanged_set_enumerator": "scripts/enumerate_annotated_functions.py, whose module docstring states the enumeration predicate in full"
 }
