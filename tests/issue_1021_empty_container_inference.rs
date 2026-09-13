@@ -1112,3 +1112,77 @@ print(plain())
     assert!(run.status.success());
     assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n5\n");
 }
+
+/// The rest of `resolve_super_method_call`'s environment assumptions, swept
+/// after round 11 rather than left at the one arm the counter-example named.
+/// Past the `current_class().unwrap()` the function calls `expect_class` and
+/// unwraps the class's own position in its MRO, so a multiple-inheritance
+/// hierarchy exercises the class table and the C3 order this pass's
+/// environment carries: `annotated_function_environment` ends in
+/// `bind_classes`, so the table is the checker's own. `D`'s MRO is
+/// `[D, B, C, A]`, so `super()` inside `D.go` resolves to `B.value`.
+#[test]
+fn a_super_call_producer_resolves_through_a_multiple_inheritance_mro() {
+    let run = check_build_and_run(
+        "super_producer_diamond",
+        "\
+class A:
+    def value(self) -> int:
+        return 1
+
+
+class B(A):
+    def value(self) -> int:
+        return 2
+
+
+class C(A):
+    def value(self) -> int:
+        return 3
+
+
+class D(B, C):
+    def go(self) -> int:
+        xs = []
+        xs.append(super().value())
+        return xs[0]
+
+
+d = D()
+print(d.go())
+",
+    );
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+}
+
+/// The non-call `super()` form, which reaches `resolve_super_attr_get` --
+/// a sibling function with its own `current_class().unwrap()` and its own
+/// `expect_class`. A base-class `@property` is one of the two members #915
+/// leaves reachable this way, so it pins the same seeding through the other
+/// entry point.
+#[test]
+fn a_super_attribute_producer_resolves_against_the_enclosing_class() {
+    let run = check_build_and_run(
+        "super_producer_attr",
+        "\
+class A:
+    @property
+    def value(self) -> int:
+        return 4
+
+
+class B(A):
+    def go(self) -> int:
+        xs = []
+        xs.append(super().value)
+        return xs[0]
+
+
+b = B()
+print(b.go())
+",
+    );
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n");
+}
