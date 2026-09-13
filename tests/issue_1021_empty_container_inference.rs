@@ -83,6 +83,23 @@ fn check_error(label: &str, source: &str) -> String {
     String::from_utf8(output.stdout).expect("diagnostics are UTF-8")
 }
 
+/// The JSON rendering of `pycc check`'s diagnostics for `source`. The human
+/// renderer prints code, message and label but not `help`, so a test about
+/// help text has to read this surface rather than [`check_error`]'s.
+fn check_error_json(label: &str, source: &str) -> String {
+    let (_dir, path) = write_source(label, source);
+    let output = Command::new(pycc_bin())
+        .args(["check", "--error-format", "json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{label} should be a compile error"
+    );
+    String::from_utf8(output.stdout).expect("diagnostics are UTF-8")
+}
+
 /// The motivating case of #927/#1021: the annotation on the assignment is the
 /// element type. This path needs no environment at all -- it is purely
 /// syntactic -- which is why it works even in a module whose signatures
@@ -1185,4 +1202,237 @@ print(b.go())
     );
     assert!(run.status.success());
     assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n");
+}
+
+/// Review round 12: a producer whose callee is an *unannotated private
+/// member* must report `T0003`, not abort. The pre-pass is the only caller
+/// that builds an environment from a module whose signatures are not all
+/// concrete, and its class table records every member unconditionally -- so
+/// a registry that skipped `Ty::Infer` signatures made the class resolvers'
+/// registration assertion fire and `pycc check` exit on a panic.
+///
+/// One case per mangled-name-bearing table the resolvers consult, since a
+/// fix that answers only the arm the review named leaves the others exactly
+/// as they were.
+#[test]
+fn an_unannotated_private_member_producer_reports_t0003_rather_than_aborting() {
+    for (label, member, producer) in [
+        (
+            "method",
+            "def _source(self):\n        return 1",
+            "self._source()",
+        ),
+        (
+            "property",
+            "@property\n    def _source(self):\n        return 1",
+            "self._source",
+        ),
+        (
+            "staticmethod",
+            "@staticmethod\n    def _source():\n        return 1",
+            "A._source()",
+        ),
+        (
+            "classmethod",
+            "@classmethod\n    def _source(cls):\n        return 1",
+            "A._source()",
+        ),
+    ] {
+        let rendered = check_error(
+            &format!("unannotated_private_{label}"),
+            &format!(
+                "\
+class A:
+    {member}
+
+    def go(self) -> int:
+        xs = []
+        xs.append({producer})
+        return xs[0]
+
+
+a = A()
+print(a.go())
+"
+            ),
+        );
+        assert!(
+            rendered.contains("T0003"),
+            "the {label} producer must report T0003, got: {rendered}",
+        );
+    }
+}
+
+/// The same round's soundness half. `A._one` overrides an annotated
+/// `Base._one`, so dropping the unannotated override from `A`'s method table
+/// -- the other candidate fix -- would let the MRO walk resolve the producer
+/// against `Base._one` and freeze `list[str]` into a list of `int`. Missing
+/// the inference is correct here; resolving it is not.
+#[test]
+fn an_unannotated_override_producer_misses_rather_than_resolving_to_the_base_class() {
+    let rendered = check_error(
+        "unannotated_override_producer",
+        "\
+class Base:
+    def _one(self) -> str:
+        return \"a\"
+
+
+class A(Base):
+    def _one(self):
+        return 1
+
+    def go(self) -> int:
+        xs = []
+        xs.append(self._one())
+        return len(xs)
+
+
+a = A()
+print(a.go())
+",
+    );
+    assert!(
+        rendered.contains("T0003"),
+        "the override producer must miss, got: {rendered}",
+    );
+}
+
+/// #1021 bot review round 14: `bind_local_types_in_body` records every target
+/// it walks as `Definitely` bound, including one bound only inside an `if`
+/// branch, while the checker joins such a name back as `Maybe` and reports
+/// `T0041` on a read of it. The producer source therefore resolved
+/// `list[str]` from a binding the checker refuses to read, and the resolved
+/// container then reported `T0034` -- masking the `T0041` the same program
+/// reports in its `xs = [v]` spelling, which is pinned below as the
+/// discriminator. Declining the producer restores the contract: a miss
+/// (`T0003`), never a resolution the checker would not have made.
+#[test]
+fn a_producer_reading_a_maybe_bound_name_is_declined_rather_than_resolved() {
+    let rendered = check_error(
+        "maybe_bound_producer",
+        "\
+def go(flag: bool) -> None:
+    if flag:
+        v = \"s\"
+    xs = []
+    xs.append(v)
+    print(xs[0])
+
+
+go(True)
+",
+    );
+    assert!(
+        rendered.contains("T0003"),
+        "a maybe-bound producer must miss, got: {rendered}",
+    );
+    // The same program written with a non-empty literal, which is the
+    // spelling whose diagnostic the resolution was masking.
+    let reference = check_error(
+        "maybe_bound_reference",
+        "\
+def go(flag: bool) -> None:
+    if flag:
+        v = \"s\"
+    xs = [v]
+    print(xs[0])
+
+
+go(True)
+",
+    );
+    assert!(
+        reference.contains("T0041"),
+        "the reference spelling must report the possibly-unbound read, got: {reference}",
+    );
+}
+
+/// The other half of the same rule: a name bound inside an `if` branch *is*
+/// readable at a producer inside that same branch, so the demotion above must
+/// be undone as the producer scan descends into a nested body. Without the
+/// per-body restoration this program reported `T0003` even though the read is
+/// perfectly well-defined, which is a capability regression, not a repair.
+#[test]
+fn a_producer_inside_the_branch_that_binds_its_value_still_resolves() {
+    let output = check_build_and_run(
+        "maybe_bound_in_scope",
+        "\
+def go(flag: bool) -> int:
+    xs = []
+    if flag:
+        v = 3
+        xs.append(v)
+    return len(xs)
+
+
+print(go(True))
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+/// #1021 bot review round 14: `T0003`'s help suggested annotating the
+/// assignment target, but D-245 item 8 puts module-level statements outside
+/// this pass's scope entirely -- the suggested `xs: list[int] = []` reports
+/// the *same* `T0003` at module level, so the help sent the reader in a
+/// circle. Both container shapes carry the position-aware wording, and the
+/// in-function wording is unchanged. The help text is only rendered on the
+/// JSON surface, which is why this reads that one.
+#[test]
+fn the_t0003_help_names_a_remedy_that_works_in_the_position_it_is_raised() {
+    let list_at_module_level =
+        check_error_json("t0003_help_module_list", "xs = []\nprint(len(xs))\n");
+    assert!(
+        list_at_module_level.contains("move this binding into a function body"),
+        "module-level list help must not suggest the annotation, got: {list_at_module_level}",
+    );
+    // The remedy the old help named really does still fail in this position,
+    // which is what made naming it a circle rather than merely terse.
+    let annotated_at_module_level = check_error(
+        "t0003_help_module_annotated",
+        "xs: list[int] = []\nprint(len(xs))\n",
+    );
+    assert!(
+        annotated_at_module_level.contains("T0003"),
+        "the suggested annotation really does still fail at module level, got: \
+         {annotated_at_module_level}",
+    );
+    let dict_at_module_level =
+        check_error_json("t0003_help_module_dict", "d = {}\nprint(len(d))\n");
+    assert!(
+        dict_at_module_level.contains("move this binding into a function body"),
+        "module-level dict help must not suggest the annotation, got: {dict_at_module_level}",
+    );
+    let list_in_function = check_error_json(
+        "t0003_help_function_list",
+        "\
+def f() -> int:
+    xs = []
+    return len(xs)
+
+
+print(f())
+",
+    );
+    assert!(
+        list_in_function.contains("annotate the assignment target"),
+        "the in-function help is unchanged, got: {list_in_function}",
+    );
+    let dict_in_function = check_error_json(
+        "t0003_help_function_dict",
+        "\
+def f() -> int:
+    d = {}
+    return len(d)
+
+
+print(f())
+",
+    );
+    assert!(
+        dict_in_function.contains("annotate the assignment target"),
+        "the in-function dict help is unchanged, got: {dict_in_function}",
+    );
 }

@@ -645,7 +645,7 @@ pub(crate) fn infer_expr_in(
             // `T0021`, and it no longer points at #927: the annotated form
             // is handled now.
             if elements.is_empty() {
-                return Err(crate::empty_container::unresolved_list());
+                return Err(crate::empty_container::unresolved_list(env.in_function_body));
             }
             let mut elem_ty: Option<Ty> = None;
             for element in elements {
@@ -698,7 +698,7 @@ pub(crate) fn infer_expr_in(
             // `HirExpr::EmptyDict`, so reaching here means no evidence
             // exists.
             let Some((first_key, first_value)) = pairs.first() else {
-                return Err(crate::empty_container::unresolved_dict());
+                return Err(crate::empty_container::unresolved_dict(env.in_function_body));
             };
             let key_ty = infer_expr_in(env, local_names, first_key)?;
             let val_ty = infer_expr_in(env, local_names, first_value)?;

@@ -224,6 +224,22 @@ element, and panics on an empty one.
   `xs: list[int | None] = []` keeps its `T0034`: the type is stated in source,
   no narrowing is involved, and that diagnostic names the real D-105 gap where
   a miss would be the worse answer.
+- **The producer source declines a maybe-bound name.** The flat whole-function
+  binder records every assignment target as definitely bound, including one
+  assigned only inside an `if` branch or a loop body; the check phase joins
+  such a name back as *maybe* bound and reports `T0041` on a read. A producer
+  whose value is such a name would therefore resolve an element type out of a
+  binding the checker itself refuses to read, and the resulting `T0034` would
+  mask the `T0041` the `xs = [v]` spelling reports for the same program. The
+  pass demotes those bindings before the scan, re-promoting per nested body the
+  construct's own loop target and that body's top-level definite names -- a
+  name is definite inside the body that binds it and only maybe-bound after it.
+  A demoted binding makes `Environment::lookup` return `None`, so the producer
+  source declines itself with no separate expression walk. The binding source
+  reads the assignment target's own recorded type rather than a value
+  expression, and is deliberately unaffected. The cost is once more a `T0003`,
+  and the definite set is deliberately under-approximated: this pass can only
+  decline to resolve, it can never make the checker report a different code.
 - **No set path.** A set binding can only originate from an empty set literal,
   `{}` parses as a dict, and `set()` is rejected at HIR lowering with `C0001` —
   so `SetAdd` is a structurally dead producer and `set[T]` is untouched here.
@@ -243,6 +259,14 @@ element, and panics on an empty one.
   keeps the generic wording even though it *is* a directly-assigned value.
   `T0003` was registered for exactly this meaning and never emitted before
   #1021.
+- **The help text depends on the position.** `T0003` carries a `help` (visible
+  on the `--error-format json` surface, and repeated by `pycc explain T0003`)
+  chosen from `Environment::in_function_body`: inside a function body it asks
+  for an annotation on the binding or a use that fixes the element type, while
+  at module level it says neither works -- the pass does not run there at all,
+  so `x: list[int] = []` reports this same code -- and points at moving the
+  binding into a function body. A single wording would be circular at one of
+  the two positions.
 
 ## Types and representations
 

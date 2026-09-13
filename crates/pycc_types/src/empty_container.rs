@@ -170,11 +170,23 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     // environment with no function table and no classes, so a module-level
     // global initialized from an annotated helper (`VALUE = _base()`) failed
     // to resolve a container that the equivalent non-empty literal
-    // (`xs = [VALUE]`) resolves fine. Registering only the concrete
-    // signatures is safe in the one direction that matters: an annotated
-    // signature is authoritative, so a partial table can fail to resolve a
-    // container but can never resolve one wrongly, and the D-228 container
-    // gate still runs downstream either way.
+    // (`xs = [VALUE]`) resolves fine.
+    //
+    // #1021 review round 13 refuted this call's original rationale, which
+    // read that a *partial* table is safe because an annotated signature is
+    // authoritative. `annotated_function_environment` does not build a
+    // partial table: it registers every signature, `Ty::Infer` included, and
+    // must, because its own `bind_classes` call records every class member
+    // unconditionally and the class resolvers panic on a member with no
+    // ordinary-function registration. That function's `# Registry invariant`
+    // section is the canonical statement of what it guarantees and why
+    // dropping an entry would be unsound rather than merely lossy; this call
+    // site relies on it rather than restating it. What holds here is the
+    // narrower property the pass actually needs: an `Ty::Infer` signature
+    // yields `Ty::Infer` at the call, which `resolve`'s `concrete` gate
+    // discards, so such a call costs a missed resolution and never a wrong
+    // element type -- and the D-228 container gate still runs downstream
+    // either way.
     let mut module_env = annotated_function_environment(hir);
     // #1021 review round 5: seed the module scope the way
     // `check_with_environment_all` does before it checks any function body,
@@ -261,10 +273,142 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
             env.bind(param_name.clone(), param_ty.clone());
         }
         crate::bind_local_types_in_body(&mut env, names, body);
+        demote_conditional_bindings(&mut env, params, names, body);
         let producers = body.clone();
         rewrite_body(body, &producers, &env, names);
     }
     Some(resolved)
+}
+
+/// Demotes every binding `bind_local_types_in_body` recorded that the check
+/// phase would treat as only *maybe* bound, so the producer source cannot
+/// resolve a container from evidence the checker itself refuses to read.
+///
+/// `bind_local_types_in_body` is a flat forward binder: it records every
+/// target it walks as [`BindingState::Definitely`], including one bound only
+/// inside an `if` branch or a loop body. The checker does not -- a name
+/// assigned on some paths but not all joins back as [`BindingState::Maybe`],
+/// and reading it is `T0041` (see [`crate::env::BindingState`]'s own join
+/// lattice). Without this demotion `if flag: v = "s"` / `xs = []` /
+/// `xs.append(v)` resolved `list[str]` from `v` and the check phase reported
+/// `T0034` against the resolved container, masking the `T0041` the same
+/// program reports in its `xs = [v]` spelling. That is a *wrong* resolution
+/// in exactly the sense D-245's invariant forbids: the pass manufactured a
+/// resolution from a binding the checker is not entitled to read. It is the
+/// same failure shape the `Ty::Infer` and `Ty::Optional` filters in
+/// [`resolve`] already repair, reached through boundness rather than through
+/// the resolved type.
+///
+/// The repair is `bind_maybe` rather than removal, and it is deliberately
+/// asymmetric between the two inferred sources. `Environment::lookup` --
+/// which is what `infer_expr_in` consults for a name read, and therefore what
+/// [`find_producer`] goes through -- returns `None` for a `Maybe` binding, so
+/// the producer's value simply fails to infer and the scan declines it.
+/// Source 2 reads `binding_state` directly and is unaffected, which is
+/// correct: it reads the *assignment target's* own recorded type, not a value
+/// expression, and the target is being assigned at the site being rewritten.
+///
+/// The demotion is undone as [`find_producer`] descends: a name bound inside
+/// an `if` branch or a loop body *is* readable at a producer inside that same
+/// body, so each nested scope re-promotes the names its own construct binds
+/// (see [`scoped_for_body`]). Only a producer that reads such a name from
+/// *outside* its binding construct is declined, which is exactly the shape
+/// the check phase reports `T0041` for.
+///
+/// The definite set is deliberately under-approximated: only an `Assign`, an
+/// `AnnAssign` carrying a value, and a walrus in a test or expression
+/// statement count as binding at a scope's own top level. An `if`/`else`
+/// binding the same name in *both* arms really does join to `Definitely`
+/// afterwards, and this demotes it anyway. That costs a missed resolution
+/// (`T0003`), never a wrong element type, which is the direction this pass's
+/// invariant requires; computing the true join would mean reimplementing the
+/// checker's own statement walk ahead of it, in a pass whose design
+/// justification is that it is infallible and pure.
+fn demote_conditional_bindings(
+    env: &mut Environment,
+    params: &[(String, Ty)],
+    names: &[&str],
+    body: &[HirStmt],
+) {
+    let mut definite: Vec<&str> = params.iter().map(|(name, _)| name.as_str()).collect();
+    collect_definite_top_level_names(body, &mut definite);
+    let demoted: Vec<(String, Ty)> = names
+        .iter()
+        .filter(|name| !definite.contains(*name))
+        .filter_map(|name| {
+            env.binding_state(name)
+                .map(|state| ((*name).to_string(), state.ty().clone()))
+        })
+        .collect();
+    for (name, ty) in demoted {
+        env.bind_maybe(name, ty);
+    }
+}
+
+/// The names a *top-level* statement of `body` binds on every path reaching
+/// the end of `body`. Nested bodies are deliberately not walked: a binding
+/// inside one is exactly what [`demote_conditional_bindings`] demotes. A
+/// `ForRange`/`ForList` target is likewise absent, because a loop body may
+/// execute zero times and its target is `Maybe` afterwards -- inside that
+/// body it is bound, and [`scoped_for_body`] is what restores it there.
+fn collect_definite_top_level_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, .. } => names.push(target),
+            // A value-less `AnnAssign` (`x: int`) declares without binding,
+            // matching `Environment::declared`'s own "declared, not yet
+            // assigned" state.
+            HirStmt::AnnAssign { target, value, .. } if value.is_some() => names.push(target),
+            // A walrus in an `if`/`while` test or a bare expression statement
+            // is evaluated before the block is entered at all, so its target
+            // is bound on every path -- the three placements
+            // `violates_walrus_placement` permits.
+            HirStmt::ExprStmt(expr)
+            | HirStmt::If { test: expr, .. }
+            | HirStmt::While { test: expr, .. } => {
+                crate::collect_named_expr_names_in_expr(expr, names)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The environment a producer scan of `body` -- one nested body of `stmt` --
+/// should read, given the environment of the scope enclosing `stmt`.
+///
+/// [`demote_conditional_bindings`] demoted every binding a nested body
+/// establishes, because none of them is readable *after* the construct
+/// finishes. Inside the body they are readable, so this restores exactly
+/// those: the names that body's own top-level statements bind, plus the loop
+/// target of a `for`, which the loop itself binds on every iteration. The
+/// restoration is per *body*, not per statement, so an `if`'s two arms never
+/// see each other's bindings.
+///
+/// `None` means nothing needed restoring and the caller can keep reading the
+/// enclosing environment, which is the common case and avoids cloning an
+/// `Environment` for every block statement in every function.
+fn scoped_for_body(stmt: &HirStmt, body: &[HirStmt], env: &Environment) -> Option<Environment> {
+    let mut restored: Vec<&str> = Vec::new();
+    match stmt {
+        HirStmt::ForRange { var, .. } | HirStmt::ForList { var, .. } => restored.push(var),
+        _ => {}
+    }
+    collect_definite_top_level_names(body, &mut restored);
+    let promotions: Vec<(String, Ty)> = restored
+        .iter()
+        .filter_map(|name| match env.binding_state(name) {
+            Some(BindingState::Maybe(ty)) => Some(((*name).to_string(), ty.clone())),
+            _ => None,
+        })
+        .collect();
+    if promotions.is_empty() {
+        return None;
+    }
+    let mut scoped = env.clone();
+    for (name, ty) in promotions {
+        scoped.bind(name, ty);
+    }
+    Some(scoped)
 }
 
 fn body_has_empty_literal(body: &[HirStmt]) -> bool {
@@ -594,7 +738,9 @@ fn find_producer(
             return found;
         }
         for nested in nested_bodies(stmt) {
-            if let Some(resolution) = find_producer(nested, target, env, local_names) {
+            let scoped = scoped_for_body(stmt, nested, env);
+            let inner = scoped.as_ref().unwrap_or(env);
+            if let Some(resolution) = find_producer(nested, target, inner, local_names) {
                 return Some(resolution);
             }
         }
@@ -603,28 +749,51 @@ fn find_producer(
 }
 
 /// `T0003` for an empty list literal no source of evidence could type.
-pub(crate) fn unresolved_list() -> Diagnostic {
+pub(crate) fn unresolved_list(in_function_body: bool) -> Diagnostic {
     Diagnostic::error(
         "T0003",
         "an empty list literal has no inferable element type here".to_string(),
         Span::new(0, 0),
     )
-    .with_help(
-        "annotate the assignment target (`xs: list[int] = []`) or append a value to it".to_string(),
-    )
+    .with_help(help_for_position(
+        in_function_body,
+        "annotate the assignment target (`xs: list[int] = []`) or append a value to it",
+        "move this binding into a function body, where `xs: list[int] = []` or a later \
+         `xs.append(...)` can type it",
+    ))
 }
 
 /// `T0003` for an empty dict literal no source of evidence could type.
-pub(crate) fn unresolved_dict() -> Diagnostic {
+pub(crate) fn unresolved_dict(in_function_body: bool) -> Diagnostic {
     Diagnostic::error(
         "T0003",
         "an empty dict literal has no inferable key/value types here".to_string(),
         Span::new(0, 0),
     )
-    .with_help(
-        "annotate the assignment target (`d: dict[str, int] = {}`) or assign an entry into it"
-            .to_string(),
-    )
+    .with_help(help_for_position(
+        in_function_body,
+        "annotate the assignment target (`d: dict[str, int] = {}`) or assign an entry into it",
+        "move this binding into a function body, where `d: dict[str, int] = {}` or a later \
+         `d[k] = v` can type it",
+    ))
+}
+
+/// Picks between the two remedies a `T0003` can honestly suggest.
+///
+/// Both of the in-function remedies are real: the annotation source is purely
+/// syntactic and the producer scan runs over every block statement a function
+/// body has. Neither works at module level, because D-245 item 8 puts
+/// module-level statements outside this pass's scope entirely -- `VALUE: list[int] = []`
+/// at module level reports the *same* `T0003` as the bare `VALUE = []` it is
+/// offered as the fix for, so suggesting it there sends the reader in a
+/// circle. The module-level wording names the one thing that does work, and
+/// states the position as the reason rather than leaving it to be discovered.
+fn help_for_position(in_function_body: bool, in_function: &str, at_module_level: &str) -> String {
+    if in_function_body {
+        in_function.to_string()
+    } else {
+        at_module_level.to_string()
+    }
 }
 
 /// Names the binding in a `T0003` raised while checking `target`'s assigned

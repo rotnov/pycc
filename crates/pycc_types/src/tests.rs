@@ -22,6 +22,7 @@ use crate::binop::numeric_result_type;
 // `Optional[T]`-narrowing, pattern-matching, protocol-argument,
 // `typing.TYPE_CHECKING`-marker and `typing.cast` clusters.
 mod constraints;
+mod empty_container_registry;
 mod enum_unrolling;
 mod exception_handling;
 mod generic_class_instantiation;

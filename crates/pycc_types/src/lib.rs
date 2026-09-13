@@ -489,7 +489,7 @@ fn function_local_names<'a>(params: &'a [(String, Ty)], body: &'a [HirStmt]) -> 
 /// inside a nested function/comprehension scope), so this walk does not need
 /// to worry about crossing a scope boundary the way a general free-variable
 /// analysis would.
-fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mut Vec<&'a str>) {
+pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mut Vec<&'a str>) {
     match expr {
         HirExpr::NamedExpr { name, value } => {
             collect_named_expr_names_in_expr(value, names);

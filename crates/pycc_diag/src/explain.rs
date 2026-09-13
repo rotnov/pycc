@@ -255,9 +255,12 @@ target (`self.x = []`) and a tuple-unpacking target (`L, R = [], []`) never \
 reach this check: both are rejected earlier with `C0001`. Where a binding \
 name *is* available at a function-scope assignment it is named in the \
 message; a module-level assignment keeps the generic wording, because the \
-substitution is wired into the function-scope seams only. Give the binding \
-an annotation, or use the container in a \
-way that fixes its element type.",
+substitution is wired into the function-scope seams only. Inside a function \
+body, give the binding an annotation or use the container in a way that \
+fixes its element type. At module level neither works -- the pass does not \
+run there at all, so `x: list[int] = []` reports this same code -- and the \
+remedy is to move the binding into a function body; the `help` on the \
+diagnostic itself says whichever of the two applies.",
         example: "\
 def f() -> None:
     x = []  # element type not yet inferable from context

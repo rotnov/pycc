@@ -34,10 +34,10 @@ denied), `cargo llvm-cov --workspace` (which runs the workspace test suite),
 `cargo doc --workspace --no-deps`, the `scripts/` unittest suite, both agent
 validators, `scripts/check-site.sh`, roadmap evidence, CI permissions, the
 decisions index `--check`, decision immutability, and site-pin merge currency
-all exit 0. Changed-line coverage is 430 of 430 (100.00%); workspace total is
-38375/38411 (99.91%), reported and not enforced. Those figures move with every
-further round, and every earlier round's own figures in this file were
-corrected rather than kept -- re-run the gate rather than citing them.
+all exit 0. No coverage figure is written here. Changed-line coverage and the
+reported workspace total move with every further round, and every figure this
+file carried was corrected rather than kept -- read them from the gate's own
+output, never from this snapshot.
 
 ## Why this snapshot exists
 
