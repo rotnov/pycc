@@ -47,6 +47,12 @@ extern void pycc_rt_exception_clear(void);
 /* D-180 rule 6: a compiled function's return value arrives retained, so a
  * heap-bigint result this boundary refuses still has to be released. */
 extern void pycc_rt_bigint_release(long long word);
+/* The `str` boundary (Part 2 of #1037, #1049). `pycc_rt`'s own `i64` length
+ * is `long long` here and its `usize` is `size_t`; `PyStrObj` stays an opaque
+ * `void *` on this side, exactly as it is in the generated wrapper. */
+extern void *pycc_rt_str_from_literal(const unsigned char *ptr, long long len);
+extern void pycc_rt_str_decref(void *s);
+extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
 
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
@@ -385,6 +391,90 @@ static PyObject *pycc_ext_pack_float(double value)
 static PyObject *pycc_ext_pack_bool(char value)
 {
     return PyBool_FromLong(value != 0);
+}
+
+/*
+ * Unpacks one argument at a `str` parameter. Returns 0, or -1 with a
+ * CPython exception set.
+ *
+ * `PyUnicode_Check` before the converter, and no fallback, for the same
+ * reason `pycc_ext_unpack_float` refuses an `int`: D-244 rule 7 defers to
+ * `docs/TYPE_SYSTEM.md` rule 4 (D-086), so nothing that merely knows how to
+ * become a `str` -- `__str__`, `os.PathLike`, a buffer -- is admitted here.
+ * `PyUnicode_Check` does accept a `str` subclass, which is flattened to a
+ * plain pycc `str` by the copy below; `docs/RUNTIME.md` records that
+ * narrowing.
+ *
+ * `PyUnicode_AsUTF8AndSize` is in the limited API from `Py_LIMITED_API`
+ * 0x030D0000, this shim's floor. It fails on a string holding a lone
+ * surrogate, which has no UTF-8 encoding; the resulting `UnicodeEncodeError`
+ * is propagated verbatim rather than translated, per the D-244 amendment.
+ * The length is carried explicitly, never re-derived with `strlen`, because
+ * a Python `str` may contain embedded NUL bytes.
+ *
+ * The bytes belong to `obj` and are copied by `pycc_rt_str_from_literal`, so
+ * the caller need not keep them alive. That call hands back a fresh
+ * reference with refcount 1, which becomes the compiled function's own
+ * parameter slot.
+ */
+static int pycc_ext_unpack_str(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                               void **out)
+{
+    PyObject *type_name;
+    const char *utf8;
+    Py_ssize_t size;
+
+    if (!PyUnicode_Check(obj)) {
+        type_name = PyType_GetName(Py_TYPE(obj));
+        if (type_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a str");
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() argument %zd: '%U' object cannot be interpreted as a str",
+                         fn_name, index + 1, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(obj, &size);
+    if (utf8 == NULL) {
+        return -1;
+    }
+    *out = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)size);
+    return 0;
+}
+
+/*
+ * Packs a `str`-typed result. No function name, like `pycc_ext_pack_float`:
+ * there is no value this has to refuse, and a `PyStrObj` provably cannot
+ * hold invalid UTF-8 (every constructor takes already-valid Rust input).
+ *
+ * The reference is released unconditionally before returning, including on
+ * the `PyUnicode_FromStringAndSize` failure path: the compiled function's
+ * return hands this boundary a retained `str` (D-180 rule 6, the same
+ * ownership `pycc_ext_pack_int`'s bigint arm releases), and the CPython
+ * object is an independent copy, so identity does not survive the crossing
+ * (#1043).
+ *
+ * `result` is never NULL on this path -- the generated wrapper checks for a
+ * pending pycc exception first, and that branch returns the `NULL` carrier
+ * without reaching here -- but the guard costs nothing in C and keeps the
+ * accessor's own no-null-arm contract honest.
+ */
+static PyObject *pycc_ext_pack_str(void *result)
+{
+    const unsigned char *bytes;
+    size_t len = 0;
+    PyObject *packed;
+
+    if (result == NULL) {
+        PyErr_SetString(PyExc_SystemError, "str result was NULL");
+        return NULL;
+    }
+    bytes = pycc_rt_ext_str_bytes(result, &len);
+    packed = PyUnicode_FromStringAndSize((const char *)bytes, (Py_ssize_t)len);
+    pycc_rt_str_decref(result);
+    return packed;
 }
 
 /* Generated companion: module name macros, per-export wrappers, method table. */

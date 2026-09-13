@@ -9,9 +9,9 @@
 //!
 //! They are deliberately *not* where the generator's line coverage comes
 //! from -- the coverage job runs `llvm-cov` without `--include-ignored`, so
-//! an ignored test earns none. `src/ext_build_tests.rs` covers the emitted
-//! text; this file covers what only a loaded artifact can show: that the
-//! generated C compiles, that each C type agrees with the compiled
+//! an ignored test earns none. `src/ext_build_tests/generated_c.rs` covers
+//! the emitted text; this file covers what only a loaded artifact can show:
+//! that the generated C compiles, that each C type agrees with the compiled
 //! function's own ABI slot across the unchecked `void *fnptr_` cast, and
 //! that D-244 rule 7's admissibility matrix holds at the wrapper.
 

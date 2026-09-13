@@ -58,9 +58,13 @@ fn header_less_build(dir: &Path, src: &Path, out: &Path) -> Output {
 #[test]
 fn ext_rejects_a_public_function_the_boundary_cannot_carry_with_c0003() {
     let dir = ScratchDir::new("ext_cli_gap").expect("scratch");
-    // `str` is still outside the boundary after #1048 widened it to the
-    // scalars; #1049 is the part that carries it.
-    let src = write(&dir, "def greet(who: str) -> str:\n    return who\n");
+    // `list[int]` is still outside the boundary after #1048 widened it to
+    // the scalars and #1049 added `str`; #1050 is the part that carries the
+    // containers.
+    let src = write(
+        &dir,
+        "def greet(who: list[int]) -> list[int]:\n    return who\n",
+    );
     let output = header_less_build(&dir, &src, &dir.join("m"));
     assert_eq!(output.status.code(), Some(1));
     let stderr = stderr_of(&output);
@@ -76,7 +80,8 @@ fn ext_reports_every_capability_gap_in_one_build() {
     let dir = ScratchDir::new("ext_cli_gaps").expect("scratch");
     let src = write(
         &dir,
-        "def a(x: str) -> int:\n    return 1\n\ndef b(y: int) -> str:\n    return \"s\"\n",
+        "def a(x: list[int]) -> int:\n    return 1\n\n\
+         def b(y: int) -> list[int]:\n    return [1]\n",
     );
     let output = header_less_build(&dir, &src, &dir.join("m"));
     assert_eq!(output.status.code(), Some(1));
@@ -92,8 +97,9 @@ fn a_private_function_is_not_in_the_export_set_and_raises_no_gap() {
         &dir,
         // The fixture must name a type the boundary still cannot carry:
         // with a carriable one the assertion below holds whether or not
-        // D-038's opt-out is honoured, and the test proves nothing.
-        "def _greet(who: str) -> str:\n    return who\n\n\
+        // D-038's opt-out is honoured, and the test proves nothing. `str`
+        // stopped serving that role at #1049, so this is a container.
+        "def _greet(who: list[int]) -> list[int]:\n    return who\n\n\
          def twice(x: int) -> int:\n    return x * 2\n",
     );
     let output = header_less_build(&dir, &src, &dir.join("m"));
