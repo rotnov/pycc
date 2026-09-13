@@ -63,6 +63,28 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
     }
 }
 
+/// The text of the one call an export's wrapper makes into compiled code.
+///
+/// Two spellings, because #1050 gave a `tuple`-carrying signature a thunk:
+/// a scalar-only export calls through the `fnptr_<name>` global cast to a
+/// function-pointer type, and every other one calls the thunk symbol
+/// directly. Both are matched up to their opening parenthesis, which is
+/// what makes the position below the call's and not a declaration's --
+/// the `extern` declaration of either spells its parameter *types* there,
+/// never `a0`.
+fn call_site(name: &str, params: &[(&str, Ty)], return_ty: &Ty) -> String {
+    let types: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();
+    let first = match boundary_carrier(&types[0]).expect("an admitted argument type") {
+        BoundaryCarrier::Scalar(..) => "a0".to_string(),
+        BoundaryCarrier::Tuple(_) => "a0_0".to_string(),
+    };
+    if pycc_codegen::ext_thunk_required(name, &types, return_ty) {
+        format!("{}({first}", pycc_codegen::ext_thunk_symbol(name))
+    } else {
+        format!(")fnptr_{name})({first}")
+    }
+}
+
 /// Asserts that `arm` appears in `inc` and that the block it opens returns
 /// `NULL` before it closes -- a refusal arm that fell through to the call
 /// would contain the arm text just the same.
@@ -114,6 +136,19 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
                 assert_arm_refuses(&inc, &arm);
             }
         }
+        // Rule 7's "before the compiled body runs" is an ordering claim
+        // about the *last* argument, not only the first: an export whose
+        // argument 1 conforms and whose argument 2 does not must still
+        // never reach the call. Asserting that each arm exists and returns
+        // leaves that unstated -- the call moved up between two arms
+        // satisfies every assertion above -- so pin the call itself behind
+        // the last unpack the wrapper emits.
+        let call = call_site(name, &params, &Ty::Int);
+        let call_at = inc.find(&call).expect("the compiled call");
+        let last_unpack = inc
+            .rfind("pycc_ext_unpack_")
+            .expect("at least one refusal arm");
+        assert!(last_unpack < call_at, "{inc}");
         // Rule 7 refuses a non-conforming call "before the compiled body
         // runs", and a wrong argument *count* is the one shape that cannot
         // be diagnosed per slot: reading `args[1]` of a one-argument call

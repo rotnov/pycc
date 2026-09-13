@@ -98,6 +98,11 @@ def bump(x: int) -> int:
     return len(_log)
 
 
+def bump2(x: int, y: int) -> int:
+    _log.append(x)
+    return y
+
+
 def size() -> int:
     return len(_log)
 "#;
@@ -218,6 +223,16 @@ else:
     raise AssertionError('bump was not refused')
 assert m.size() == before, m.size()
 assert m.bump(9) == before + 1
+assert m.size() == before + 1, m.size()
+
+# ...and the same holds when the non-conforming argument is not the first
+# one. `bump2` conforms at argument 1 and is refused at argument 2, so a
+# call that reached the compiled body would append to `_log` before
+# raising: the counter is what says it never got there.
+before = m.size()
+refuse(m.bump2, (1, 'x'), {}, TypeError,
+       "bump2() argument 2: 'str' object cannot be interpreted as an integer",
+       True, (1, 7), 7)
 assert m.size() == before + 1, m.size()
 
 # Shapes 18-19: a wrong type at a `float` parameter. `PyFloat_Check` with
