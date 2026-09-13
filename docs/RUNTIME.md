@@ -73,15 +73,16 @@ than through the original seven's name-based `match`
 presence gates below, which now differ between the two groups.
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
-class whose MRO reaches one of those 25 builtins is raisable and catchable.
-HIR lowering assigns it a type tag from `25..=255` in module source order and
-records it on `HirClassDef::exception_type_tag`; the 25 builtins (the
+class whose MRO reaches one of those 26 builtins is raisable and catchable.
+HIR lowering assigns it a type tag from `26..=255` in module source order and
+records it on `HirClassDef::exception_type_tag`; the 26 builtins (the
 original 23 plus `ExceptionGroup`/`BaseExceptionGroup`, Part 3 of #382, #542,
-PEP 654, D-202) keep `0..=24` and either carry `None` there (the flat seven,
+PEP 654, D-202, plus `OverflowError`, Part A of #1038, #1063) keep `0..=25`
+and either carry `None` there (the flat seven,
 resolved by name), their own fixed tag (the 16-member `OSError` family), or a
 fixed tag (`ExceptionGroup`/`BaseExceptionGroup`, always reconstructed with
 that fixed tag regardless of the original raised object's dynamic subclass --
-see D-202). A module declaring more than 231 such classes is rejected with
+see D-202). A module declaring more than 230 such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -408,8 +409,9 @@ aborts the hosting interpreter rather than raising. Part 3 of #1025
 ([#1038](https://github.com/rotnov/pycc/issues/1038)) removes those abort paths
 and is a blocker on #1025's closure; until it lands, an `ext` artifact is only
 as safe as the magnitudes its own arithmetic stays within. An exception that
-escapes an export is re-raised as the matching CPython class for the twenty-three
-builtin classes the bridge carries a tag for; a user-defined exception class and
+escapes an export is re-raised as the matching CPython class for the twenty-four
+builtin classes the bridge carries a tag for (the original twenty-three plus
+`OverflowError`, Part A of #1038, #1063); a user-defined exception class and
 the two PEP 654 group classes reach the caller as `Exception` with the original
 message, because the bridge hands the shim a numeric tag and not the class name.
 Restoring that identity is part of #1038 as well. Foreign imports,

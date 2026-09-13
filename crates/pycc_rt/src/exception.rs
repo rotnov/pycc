@@ -16,6 +16,15 @@ pub const EXCEPTION_TYPE_KEY_ERROR: u8 = 3;
 pub const EXCEPTION_TYPE_INDEX_ERROR: u8 = 4;
 pub const EXCEPTION_TYPE_ZERO_DIV_ERROR: u8 = 5;
 pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
+/// Part A of #1038 (#1063): `OverflowError`'s tag. Tags 7..=24 belong to the
+/// PEP 3151 `OSError` family and the PEP 654 exception groups, which this
+/// crate never raises by name, so it declares no constants for them. This
+/// crate has no `[dependencies]` and cannot see
+/// `pycc_hir::BUILTIN_EXCEPTION_CLASSES`, so the literal is hand-copied and
+/// pinned against the array by `ext_bridge`'s
+/// `exception_type_tags_match_the_c_shims_hardcoded_switch` and by
+/// `src/ext_build_tests/toolchain.rs`.
+pub const EXCEPTION_TYPE_OVERFLOW_ERROR: u8 = 25;
 
 /// Heap-allocated builtin exception object. Exception lifetime management is
 /// intentionally leak-only in this first implementation: clearing a pending

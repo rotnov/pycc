@@ -51,7 +51,7 @@ pub(super) fn rewrite_instance_to_repr(
     // argument and f-string interpolation that neither this rewrite nor
     // `rewrite_exception_to_message` renders -- a conservative
     // under-approximation, stricter than MIR's own resolution for a user
-    // class (plain or `@dataclass`) declared under any of the 25 builtin
+    // class (plain or `@dataclass`) declared under any of the 26 builtin
     // exception names and for a tagged user exception class instantiated
     // as a value -- so a widening here must widen the checker first, or
     // the widened shape can never reach this function.

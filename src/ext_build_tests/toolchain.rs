@@ -373,7 +373,13 @@ fn every_exception_tag_the_c_shim_switches_on_still_names_that_class() {
         }
     }
     // Tag 0 (`Exception`) reaches the same `PyExc_Exception` as the unnamed
-    // tags through `default:`, and 23..=24 stay there deliberately -- the
-    // shim's own comment carries why. Everything between is switched on.
-    assert_eq!(seen, (1..=22).collect::<Vec<_>>());
+    // tags through `default:`, and 23..=24 (`BaseExceptionGroup`/
+    // `ExceptionGroup`) stay there deliberately -- the shim's own comment
+    // carries why. The expected set is therefore non-contiguous: 1..=22 plus
+    // Part A of #1038 (#1063)'s `OverflowError` at 25, with the 23..=24 hole
+    // in between. Widening this to `1..=25` would swallow that hole and stop
+    // detecting a group tag that drifted into the switch.
+    let mut expected = (1..=22).collect::<Vec<_>>();
+    expected.push(25);
+    assert_eq!(seen, expected);
 }

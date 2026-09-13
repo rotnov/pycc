@@ -54,7 +54,7 @@ impl StringConversionSite {
 ///
 /// The `Ty::Instance` arm's verdict, in the order it is decided:
 ///
-/// 1. One of the 25 builtin exception names (`pycc_hir::is_builtin_exception_class`)
+/// 1. One of the 26 builtin exception names (`pycc_hir::is_builtin_exception_class`)
 ///    is decided by *provenance*, never by the class's shape:
 ///    - seeded by HIR lowering (`env.is_synthetic_class`): accept.
 ///      `rewrite_exception_to_message` renders it -- the flat seven by name
