@@ -236,11 +236,27 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     let local_names = crate::module::module_function_local_names(hir);
     let mut resolved = hir.clone();
     for (index, item) in resolved.items.iter_mut().enumerate() {
-        let HirItem::Function { params, body, .. } = item else {
+        let HirItem::Function {
+            name, params, body, ..
+        } = item
+        else {
             continue;
         };
         let names = &local_names[index];
         let mut env = module_env.child_for_function(names);
+        // #433, mirroring `check_function_in`: extract the class name from a
+        // mangled `<ClassName>.<method>` name so producer inference can
+        // resolve `super()`. Without it `resolve_super_method_call` reaches
+        // its `env.current_class().unwrap()` with `self` bound (the loop
+        // below binds every parameter) and no class, and aborts the
+        // compiler on `xs = []` / `xs.append(super().m())`. A top-level
+        // function name contains no `.`, so this leaves `current_class`
+        // `None` for those exactly as the checker does.
+        env.current_class = name
+            .split('.')
+            .next()
+            .filter(|prefix| *prefix != name.as_str())
+            .map(String::from);
         for (param_name, param_ty) in params.iter() {
             env.bind(param_name.clone(), param_ty.clone());
         }

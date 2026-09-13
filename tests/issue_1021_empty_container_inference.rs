@@ -1037,3 +1037,78 @@ print(f(1))
     assert!(error.contains("T0034"), "{error}");
     assert!(error.contains("list[int | None]"), "{error}");
 }
+
+/// A producer inside a method may call `super()`, and resolving that call
+/// needs the enclosing class -- which `check_function_in` derives from the
+/// mangled `<Class>.<method>` name (#433). This pass builds its own child
+/// environment and binds every parameter, so `self` is present; without the
+/// same class seeding, `resolve_super_method_call` reached its
+/// `current_class().unwrap()` with no class and aborted the compiler
+/// (review round 11 on #1035). The resolution itself must also be the real
+/// one: `super().value()` is `A`'s, not `B`'s override.
+#[test]
+fn a_super_call_producer_resolves_against_the_enclosing_class() {
+    let run = check_build_and_run(
+        "super_producer_empty_list",
+        "\
+class A:
+    def value(self) -> int:
+        return 1
+
+
+class B(A):
+    def value(self) -> int:
+        return 2
+
+    def go(self) -> int:
+        xs = []
+        xs.append(super().value())
+        return xs[0]
+
+
+b = B()
+print(b.go())
+",
+    );
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+}
+
+/// The dict half, and the control that fixes the class seeding as the cause:
+/// a top-level function's name carries no `.`, so it must keep
+/// `current_class` unset exactly as the checker leaves it, and an empty
+/// container there still resolves from its own producer.
+#[test]
+fn a_super_call_producer_resolves_for_a_dict_and_leaves_top_level_alone() {
+    let run = check_build_and_run(
+        "super_producer_empty_dict",
+        "\
+class A:
+    def value(self) -> int:
+        return 7
+
+
+class B(A):
+    def value(self) -> int:
+        return 9
+
+    def go(self) -> int:
+        d = {}
+        d[\"k\"] = super().value()
+        return d[\"k\"]
+
+
+def plain() -> int:
+    xs = []
+    xs.append(5)
+    return xs[0]
+
+
+b = B()
+print(b.go())
+print(plain())
+",
+    );
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n5\n");
+}
