@@ -248,8 +248,9 @@ pub(super) fn lower_expr(
         // * `int`/`bool` become `0 - x` / `0 + x`. `pycc_rt`'s `int_sub`
         //   and `int_add` both handle an already-promoted bigint operand
         //   and the smallint boundary, so negation inherits arbitrary
-        //   precision for free. `x * -1` would *not*: `int_mul` calls
-        //   `require_inline_int` and aborts on a bigint.
+        //   precision for free. `x * -1` would *not*: `int_mul` decodes
+        //   its operands inline and raises `OverflowError` on a bigint
+        //   (Part C of #1038).
         // * `float` becomes `x * -1.0` / `x * 1.0`, a plain LLVM `fmul`.
         //   `0.0 - x` would be wrong for `-0.0` (it yields `+0.0`), and
         //   multiplication is exact for infinities and NaN too.

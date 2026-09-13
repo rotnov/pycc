@@ -164,8 +164,9 @@ fn negating_an_attribute_negates_the_attribute_value() {
 }
 
 /// The `0 - x` rewrite (rather than `x * -1`) is what makes this work:
-/// `pycc_rt`'s `int_mul` calls `require_inline_int` and aborts on an operand
-/// that has already been promoted to a bigint, while `int_sub` handles it.
+/// `pycc_rt`'s `int_mul` raises `OverflowError` (Part C of #1038; formerly an
+/// abort) on an operand that has already been promoted to a bigint, while
+/// `int_sub` handles it.
 #[test]
 fn negating_a_bigint_keeps_arbitrary_precision() {
     assert_eq!(

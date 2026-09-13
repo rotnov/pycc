@@ -27,6 +27,11 @@
 //!   #148 they were unreachable from a literal, so their current behavior is
 //!   pinned here too. None of these are D-141 boundary *positions* (they are
 //!   ordinary arithmetic/comparison operators), so #618 does not touch them.
+//!   Part C of #1038
+//!   ([#1065](https://github.com/rotnov/pycc/issues/1065)) changed *how* they
+//!   fail, not *that* they fail: each now raises a catchable `OverflowError`
+//!   (D-173) instead of aborting the process, so the seven cases below moved
+//!   from `assert_runtime_abort` to `assert_uncaught_overflow_error`.
 
 use pycc_scratch::ScratchDir;
 use std::io::Write;
@@ -49,7 +54,9 @@ fn pycc_bin() -> std::path::PathBuf {
 /// `pycc_rt`'s panic unwinds across an `extern "C"` boundary and becomes a
 /// non-unwinding process abort, so the raw child is killed by a signal and
 /// reports no exit code at all. The `101` in `docs/CLI_SPEC.md`'s boundary
-/// list is the driver's own mapping of that abort.
+/// list is the driver's own mapping of that abort -- and, as
+/// `assert_uncaught_overflow_error` below relies on, of any other non-zero
+/// child exit.
 fn assert_runtime_abort(case: &str, source: &str, message: &str) {
     let dir = ScratchDir::new(&format!("issue148_{case}")).expect("failed to create scratch dir");
     let src = dir.join("case.py");
@@ -85,6 +92,18 @@ fn assert_runtime_abort(case: &str, source: &str, message: &str) {
         stderr.contains(message),
         "{case} should report {message:?}, got: {stderr}"
     );
+}
+
+/// Part C of #1038 (#1065): the same `pycc run` exit `101`, but reached by an
+/// uncaught D-173 `OverflowError` rather than by a process abort. The class
+/// name is asserted alongside the message precisely because the exit code no
+/// longer distinguishes the two -- `pycc run` reports `101` for *any*
+/// non-zero child exit, and an uncaught raise exits `1`.
+///
+/// The message must not carry the retired `pycc_rt: ` panic prefix: a raised
+/// exception's message is user-facing Python text.
+fn assert_uncaught_overflow_error(case: &str, source: &str, message: &str) {
+    assert_runtime_abort(case, source, &format!("OverflowError: {message}"));
 }
 
 // ---------------------------------------------------------------------------
@@ -243,40 +262,40 @@ fn bigint_operations_unreachable_before_issue_148_keep_their_accepted_boundaries
         (
             "compare",
             format!("{OVERSIZED} > 0"),
-            "pycc_rt: comparing a bigint-valued `int` is not supported yet",
+            "comparing a bigint-valued `int` is not supported yet",
         ),
         (
             "multiply",
             format!("{OVERSIZED} * 2"),
-            "pycc_rt: multiplying a bigint-valued `int` is not supported yet",
+            "multiplying a bigint-valued `int` is not supported yet",
         ),
         (
             "floordiv",
             format!("{OVERSIZED} // 2"),
-            "pycc_rt: dividing a bigint-valued `int` is not supported yet",
+            "dividing a bigint-valued `int` is not supported yet",
         ),
         (
             "modulo",
             format!("{OVERSIZED} % 2"),
-            "pycc_rt: computing the modulo of a bigint-valued `int` is not supported yet",
+            "computing the modulo of a bigint-valued `int` is not supported yet",
         ),
         (
             "power",
             format!("{OVERSIZED} ** 2"),
-            "pycc_rt: exponentiating a bigint-valued `int` is not supported yet",
+            "exponentiating a bigint-valued `int` is not supported yet",
         ),
         (
             "truediv",
             format!("{OVERSIZED} / 2"),
-            "pycc_rt: converting a bigint-valued `int` is not supported yet",
+            "converting a bigint-valued `int` is not supported yet",
         ),
         (
             "mixed_float",
             format!("{OVERSIZED} + 1.5"),
-            "pycc_rt: converting a bigint-valued `int` is not supported yet",
+            "converting a bigint-valued `int` is not supported yet",
         ),
     ] {
-        assert_runtime_abort(case, &format!("print({expr})\n"), message);
+        assert_uncaught_overflow_error(case, &format!("print({expr})\n"), message);
     }
 }
 

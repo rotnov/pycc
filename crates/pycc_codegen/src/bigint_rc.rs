@@ -1605,8 +1605,9 @@ mod tests {
         assert_eq!((retains, releases), (4, 5), "got {calls:?}");
     }
 
-    /// #146 Part 2 (D-181). `int_cmp` aborts on a bigint operand
-    /// (`require_inline_int`), so a comparison's operand releases can never
+    /// #146 Part 2 (D-181). `int_cmp` raises `OverflowError` and returns
+    /// its `0` sentinel on a bigint operand (Part C of #1038, formerly an
+    /// abort), so a comparison's operand releases can never
     /// be reached with a real heap word from a compiled program -- this is
     /// the only place the emitted shape is observable at all.
     ///
