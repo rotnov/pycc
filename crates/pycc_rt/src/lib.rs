@@ -2170,13 +2170,16 @@ mod tests {
     /// exit. `BIGINT_DROPS` is the only way a test can observe the free.
     #[test]
     fn int_pow_frees_its_own_promoted_temporaries_when_the_squaring_overflows() {
-        for (name, base, exp) in [
-            // Promotes `result` first: at the final set bit `int_mul` sees a
-            // bigint `base` and raises.
-            ("2 ** 100", 2i64, 100i64),
-            // Promotes `base` twice in a row, so the raising call is the
-            // squaring itself rather than the accumulation.
-            ("(2 ** 21) ** 7", 1i64 << 21, 7i64),
+        for (name, base, exp, freed) in [
+            // Promotes `base` at the last squaring; the final set bit's
+            // `int_mul` then sees it and raises, so that one object is the
+            // only temporary to retire.
+            ("2 ** 100", 2i64, 100i64, 1),
+            // Promotes the accumulator *and* the base before raising, so both
+            // releases have real work to do. An exact count, not `> before`:
+            // a regression that retires one of the two and leaks the other
+            // must fail here.
+            ("(2 ** 21) ** 7", 1i64 << 21, 7i64, 2),
         ] {
             pycc_rt_exception_clear();
             let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
@@ -2190,9 +2193,10 @@ mod tests {
                 1,
                 "`{name}` must leave the `OverflowError` pending"
             );
-            assert!(
-                int_encoding::BIGINT_DROPS.with(|c| c.get()) > before,
-                "`{name}` leaked the bigint it promoted internally"
+            assert_eq!(
+                int_encoding::BIGINT_DROPS.with(|c| c.get()),
+                before + freed,
+                "`{name}` must free exactly the {freed} bigint(s) it promoted"
             );
             pycc_rt_exception_clear();
         }
@@ -2208,6 +2212,34 @@ mod tests {
         assert_eq!(int_pow(tag_smallint(-7), tag_smallint(1)), tag_smallint(-7));
         assert_eq!(pycc_rt_exception_active(), 0);
         assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+    }
+
+    /// The other non-raising exit: the accumulator promotes mid-loop and the
+    /// loop still runs out of exponent bits, so `int_pow` hands the caller a
+    /// live heap bigint. Without this case the releases added around that exit
+    /// are only ever executed on the raising path, and an over-release of
+    /// `result` -- handing back a freed word -- would pass every other test
+    /// and the coverage gate alike, since the same lines are already hit.
+    #[test]
+    fn int_pow_hands_back_an_accumulator_that_promoted_mid_loop() {
+        pycc_rt_exception_clear();
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        // `(2 ** 21) ** 3` is `2 ** 63`: one past `i64`, so `int_mul` promotes
+        // it, and no operand is ever a bigint, so nothing raises.
+        let word = int_pow(tag_smallint(1 << 21), tag_smallint(3));
+        assert_eq!(pycc_rt_exception_active(), 0);
+        assert_eq!(
+            int_encoding::BIGINT_DROPS.with(|c| c.get()),
+            before,
+            "the returned reference is the caller's; nothing may be freed yet"
+        );
+        assert_eq!(
+            to_sign_and_magnitude(word),
+            (false, vec![0, 0x8000_0000]),
+            "`(2 ** 21) ** 3` must read back as `2 ** 63`"
+        );
+        bigint_release(word);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before + 1);
     }
 
     #[test]
