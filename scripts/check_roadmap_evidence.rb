@@ -32,7 +32,11 @@ EVIDENCE_CLAIMS = {
   "ci-diff-coverage-100" =>
     "Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI.",
   "readme-diff-coverage-badge-bound" =>
-    "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold."
+    "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold.",
+  "sprint1-ext-hot-function-5x" =>
+    "the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython",
+  "sprint1-ext-numbers-published" =>
+    "the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers"
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -74,6 +78,14 @@ EVIDENCE_SECTIONS = {
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
+  ],
+  "sprint1-ext-hot-function-5x" => [
+    "pycc Roadmap",
+    "product-sprint-1 — annotated code callable from CPython"
+  ],
+  "sprint1-ext-numbers-published" => [
+    "pycc Roadmap",
+    "product-sprint-1 — annotated code callable from CPython"
   ]
 }.freeze
 # Historical audit-fixture digest. The public policy no longer accepts it.

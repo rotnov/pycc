@@ -593,6 +593,17 @@ rule 6); only numbers are published.
   well and then designate those as the set. What is committed is that count and
   that digest, never a list of function names: the reference codebase is
   proprietary and only numbers are published (D-244 rule 6).
+- **Implementation.** `scripts/bench_hosted_ext.py` runs this protocol and
+  enforces the refusals above; `scripts/gen_hosted_ext_input.py` is the
+  committed generator; `scripts/bench_hosted_ext_precommit.json` is the
+  pre-registration record the **Input**, **Arms** and **Correctness
+  precondition** bullets require; and `scripts/enumerate_annotated_functions.py`
+  derives the compile-unchanged denominator and its digest, stating its
+  enumeration predicate in full. Two environment variables configure a run, and
+  are defined here rather than in [CLI_SPEC.md](./CLI_SPEC.md) because neither
+  is a `pycc` command-line variable: `PYCC_BENCH_SUBJECT` is the path to the
+  subject function's module, outside this repository, and `PYCC_BENCH_PYTHON`
+  is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 ## Planned CPython interop matrix (v0.7)
 

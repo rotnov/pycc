@@ -1,0 +1,22 @@
+{
+  "protocol": "docs/TESTING.md, \"Hosted `ext` benchmark protocol (product-sprint-1)\"",
+  "purpose": "Pre-registration. It carries the inputs a later run is scored against and no result of any kind.",
+  "generator_path": "scripts/gen_hosted_ext_input.py",
+  "seed": 20260913,
+  "triangles": 2000000,
+  "input_sha256": "7e389bc4c05d956d94e76a5b5ad9d7db493fb9ac968abd6d0d0a6f9029e5bb93",
+  "float_tolerance": 1e-09,
+  "float_tolerance_rationale": "Relative to the baseline's own magnitude, with an absolute floor of one. The arms are not bit-comparable in principle: -O2 on the Cython arm and LLVM on the --release pycc arm may both contract a*b - c*d to an FMA where the interpreter does not, so a few ulps of divergence is expected and anything larger is a defect.",
+  "machine": {
+    "model_identifier": "Mac15,9",
+    "cpu": "Apple M3 Max",
+    "cores": 16,
+    "memory_bytes": 137438953472,
+    "os": "macOS 26.5.1 (build 25F80)",
+    "power_profile": "AC power, pmset powermode 0 (automatic), Low Power Mode off"
+  },
+  "compile_unchanged_denominator": 2825,
+  "compile_unchanged_set_sha256": "5d2682fd7516f8f43a2c9ff68ce696efeb7174ef16314c36b6d98d67697bf417",
+  "compile_unchanged_set_digest_rule": "SHA-256 over the fully-qualified function names, sorted byte-wise ascending, joined by a single \\n, UTF-8, no trailing newline",
+  "compile_unchanged_set_enumerator": "scripts/enumerate_annotated_functions.py, whose module docstring states the enumeration predicate in full"
+}

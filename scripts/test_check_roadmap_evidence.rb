@@ -5231,4 +5231,77 @@ class RoadmapEvidenceCliTest < Minitest::Test
       assert_includes stderr, "must appear under the expected roadmap section", evidence_id
     end
   end
+
+  # product-sprint-1 evidence identifiers, registered ahead of the pull
+  # request that checks the boxes citing them (mirrors the
+  # ci-diff-coverage-100 tests).
+
+  def test_accepts_product_sprint_1_hosted_ext_evidence
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [ ] an unrelated unchecked item
+
+      ## product-sprint-1 — annotated code callable from CPython
+
+      **Accept:**
+
+      - [x] the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython <!-- roadmap-evidence: sprint1-ext-hot-function-5x -->
+      - [x] the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers <!-- roadmap-evidence: sprint1-ext-numbers-published -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_product_sprint_1_evidence_with_the_wrong_claim
+    {
+      "sprint1-ext-hot-function-5x" => "The hot function is fast enough.",
+      "sprint1-ext-numbers-published" => "The numbers are published."
+    }.each do |evidence_id, claim|
+      roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## product-sprint-1 — annotated code callable from CPython
+
+        - [x] #{claim} <!-- roadmap-evidence: #{evidence_id} -->
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+      refute status.success?, evidence_id
+      assert_includes stderr, "does not prove this roadmap claim", evidence_id
+    end
+  end
+
+  def test_rejects_product_sprint_1_evidence_outside_its_milestone_section
+    {
+      "sprint1-ext-hot-function-5x" =>
+        "the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython",
+      "sprint1-ext-numbers-published" =>
+        "the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers"
+    }.each do |evidence_id, claim|
+      roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## Current delivery status
+
+        ### v0.1 acceptance checklist
+
+        - [x] #{claim} <!-- roadmap-evidence: #{evidence_id} -->
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+      refute status.success?, evidence_id
+      assert_includes stderr, "must appear under the expected roadmap section", evidence_id
+    end
+  end
 end
