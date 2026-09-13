@@ -130,8 +130,10 @@ fn a_program_with_no_public_function_exports_nothing_rather_than_failing() {
 #[test]
 fn a_parameter_the_boundary_cannot_carry_is_a_capability_gap_naming_it() {
     // `list[int]` rather than `str`: #1049 made `str` carriable, so the
-    // original fixture would no longer produce a gap at all. A container is
-    // the nearest still-unadmitted parameter type (#1050).
+    // original fixture would no longer produce a gap at all. `list` is the
+    // nearest still-unadmitted parameter type now that #1050 admits
+    // `tuple` -- and it stays unadmitted because it is a mutable object
+    // with no by-value crossing, not merely an unimplemented one.
     let hir = module(vec![func(
         "greet",
         &[("who", Ty::List(Box::new(Ty::Int)))],
@@ -210,6 +212,119 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
             return_ty: Ty::Str,
         }]
     );
+}
+
+#[test]
+fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
+    // Part 3 of #1037 (#1050): a `tuple` of carriable scalars is admissible
+    // at a parameter and as a return type. The export entry records the
+    // declared `Ty` unchanged -- the flattening into scalar slots is the
+    // wrapper's and the thunk's business, and `collect_exports` stays a
+    // statement about the Python signature.
+    let hir = module(vec![func(
+        "swap",
+        &[("t", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float])))],
+        Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
+    )]);
+    let exports = collect_exports(&hir).expect("tuple is carried by #1050");
+    assert_eq!(
+        exports,
+        vec![ExtExport {
+            name: "swap".to_string(),
+            params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
+            return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
+        }]
+    );
+}
+
+#[test]
+fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
+    // The element type is what fails, but the message names the parameter's
+    // own declared type: `render_ty` renders a `tuple` as the bare word, and
+    // the reader's fix is to change the signature, not to reason about which
+    // element the boundary refused. `tuple[list[int]]` is reachable today
+    // only from hand-built HIR -- T0039 refuses it at the type checker --
+    // so this is the defensive arm, kept because `boundary_carrier` recurses
+    // and a recursion that cannot fail is a claim, not a fact.
+    let hir = module(vec![func(
+        "boxes",
+        &[("t", Ty::Tuple(Box::new(vec![Ty::List(Box::new(Ty::Int))])))],
+        Ty::Int,
+    )]);
+    let gaps = collect_exports(&hir).expect_err("a list element is not carriable");
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
+    let message = &gaps[0].message;
+    assert!(message.contains("`t: tuple`"), "{message}");
+    // The remediation enumerates what the boundary *does* carry, and Part 3
+    // of #1037 (#1050) put `tuple` into that list. A reader who reaches this
+    // message through a `tuple` gap has to be told which tuples are carried,
+    // not shown a scalar-only list that reads as "no tuple at all".
+    assert!(
+        message.contains(
+            "a parameter must be `int`, `float`, `bool`, `str` or a `tuple` of \
+             `int`/`float`/`bool`, and a return type must be one of those or `None`"
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_str_element_is_a_capability_gap_even_though_str_itself_is_carried() {
+    // The one element type that is a scalar at a top-level position and
+    // still not carriable inside a tuple. #1049 gave `str` its own C slot
+    // and `pycc_ext_unpack_str`, but the element shims are the `_at`
+    // variants, which exist only for D-116's three element types. Were
+    // this admitted, the wrapper would render a call to an undeclared
+    // `pycc_ext_unpack_str_at` and the artifact would die in clang rather
+    // than as a `C0003` gap -- so the narrowing lives in
+    // `boundary_carrier`'s tuple arm and not in `into_scalar`, which
+    // passes every scalar through. Reachable today only from hand-built
+    // HIR: `T0039` refuses `tuple[int, str]` at the type checker.
+    let hir = module(vec![func(
+        "label",
+        &[("t", Ty::Tuple(Box::new(vec![Ty::Str, Ty::Int])))],
+        Ty::Int,
+    )]);
+    let gaps = collect_exports(&hir).expect_err("a str element is not carriable");
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
+    let message = &gaps[0].message;
+    assert!(message.contains("`t: tuple`"), "{message}");
+}
+
+#[test]
+fn a_nested_tuple_return_is_a_capability_gap_rather_than_a_flattening() {
+    // The one arm that would be silently wrong if it were admitted: a
+    // nested tuple has no single scalar slot, and flattening it would make
+    // `tuple[tuple[int, int], int]` and `tuple[int, int, int]` indis-
+    // tinguishable at the seam -- the wrapper would then re-pack three
+    // elements into a two-element Python tuple. D-116 gives a tuple type a
+    // fixed arity of scalar elements, and the boundary carries exactly that.
+    let hir = module(vec![func(
+        "nest",
+        &[("x", Ty::Int)],
+        Ty::Tuple(Box::new(vec![Ty::Tuple(Box::new(vec![Ty::Int])), Ty::Int])),
+    )]);
+    let gaps = collect_exports(&hir).expect_err("a nested tuple is not carriable");
+    assert_eq!(gaps.len(), 1);
+    let message = &gaps[0].message;
+    assert!(message.contains("`-> tuple`"), "{message}");
+}
+
+#[test]
+fn a_private_name_carrying_a_tuple_is_neither_exported_nor_gapped() {
+    // The D-038 name filter runs before the type admissibility question, so
+    // an underscore-prefixed helper is invisible to the boundary whatever it
+    // carries. This is the same set `pycc_codegen`'s `is_ext_exportable_name`
+    // decides thunk emission from: a name excluded here gets no wrapper, so
+    // a thunk for it would advertise a symbol nothing calls.
+    let hir = module(vec![func(
+        "_scratch",
+        &[("t", Ty::Tuple(Box::new(vec![Ty::List(Box::new(Ty::Int))])))],
+        Ty::Tuple(Box::new(vec![Ty::Int])),
+    )]);
+    assert_eq!(collect_exports(&hir).expect("not an error"), Vec::new());
 }
 
 #[test]

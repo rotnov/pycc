@@ -33,8 +33,13 @@ use exception_render::emit_exception_message;
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
+mod ext_thunk;
 mod target_machine;
-pub use ext::{CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL};
+pub use ext::{
+    CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
+    ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
+    ext_thunk_symbol, is_ext_exportable_name,
+};
 use ext::{entry_fn_name, is_module_entry_symbol};
 #[cfg(test)]
 mod tests;
@@ -2888,8 +2893,13 @@ fn emit_expr_unchecked<'ctx>(
             // `base.ty()` just read, so the two cannot disagree -- this
             // holds on its own, without relying on that arm's
             // `debug_assert_eq!`, which is compiled out in release), and a
-            // `Ty::Tuple`-typed `Call` panics at the container catch-all in
-            // this same function before it can return anything at all.
+            // `Ty::Tuple`-typed `Call` returns one from its own arm as
+            // well, since #925 gave the container return annotations their
+            // codegen call-result arms -- that arm dispatches on the same
+            // declared return type `base.ty()` reports, so the two cannot
+            // disagree there either. (Before #925 the case was vacuous for
+            // a different reason: such a `Call` panicked at the container
+            // catch-all in this same function.)
             // Pairing the two instead lets that impossible
             // combination fall into the list path's already-covered
             // `expect_list_pointer` check, adding no new branch that no
@@ -3875,47 +3885,11 @@ fn build_call_to_with_leading_args<'ctx>(
             .build_call(*direct_value, &arg_values, "call_user_fn")
             .expect("build_call should not fail for a well-formed direct call");
     }
-    let fn_ptr_global = user_function
-        .fn_ptr_global
-        .as_ref()
-        .expect("non-monomorphized user function has a fn_ptr_global");
-    let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-    let fn_ptr = builder
-        .build_load(fn_ptr_type, fn_ptr_global.as_pointer_value(), "load_fnptr")
-        .expect("build_load should not fail for a global function-pointer slot")
-        .into_pointer_value();
-    let null_ptr = fn_ptr_type.const_null();
-    let is_null = builder
-        .build_int_compare(IntPredicate::EQ, fn_ptr, null_ptr, "fnptr_is_null")
-        .expect("build_int_compare should not fail for a null check");
-    let current_fn = builder
-        .get_insert_block()
-        .expect("builder is always positioned in a block during call emission")
-        .get_parent()
-        .expect("every block has a parent function");
-    let not_null_block = context.append_basic_block(current_fn, "fnptr_not_null");
-    let is_null_block = context.append_basic_block(current_fn, "fnptr_is_null");
-    builder
-        .build_conditional_branch(is_null, is_null_block, not_null_block)
-        .expect("build_conditional_branch should not fail for a null-check dispatch");
-    // Null path: call pycc_rt_name_error with the function name as a C
-    // string, then unreachable (name_error never returns). The name
-    // global was created once per function name in the declaration pass
-    // and is reused at every call site.
-    builder.position_at_end(is_null_block);
-    let name_global = user_function
-        .name_global
-        .as_ref()
-        .expect("non-monomorphized user function has a name_global");
-    let name_ptr = name_global.as_pointer_value();
-    builder
-        .build_call(rt.name_error, &[name_ptr.into()], "name_error")
-        .expect("build_call should not fail for a well-formed runtime error call");
-    builder
-        .build_unreachable()
-        .expect("build_unreachable terminates the null-pointer path");
-    // Non-null path: indirect call through the loaded pointer.
-    builder.position_at_end(not_null_block);
+    // The load, the null check and its `NameError` path are shared with
+    // #1050's `ext` export thunks, which dispatch through the same slot:
+    // see `ext_thunk::emit_fnptr_dispatch_guard`. It returns with the
+    // builder positioned on the non-null path.
+    let fn_ptr = ext_thunk::emit_fnptr_dispatch_guard(context, builder, rt, user_function);
     builder
         .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
         .expect("build_indirect_call should not fail for a well-formed indirect call")
@@ -5500,6 +5474,16 @@ fn compile_to_object_with_observer(
                 }
             });
         }
+    }
+
+    // #1050: an `ext` artifact's generated C reaches an export whose
+    // signature carries a `tuple` through a scalar-only thunk rather than
+    // through `fnptr_<name>` directly, because pycc's aggregate calling
+    // convention is not the platform C struct ABI. Emit those thunks now
+    // that every callee's `fn_type` and `fnptr_` slot exist, and before the
+    // builder is positioned in the module entry point below.
+    if options.ext {
+        ext_thunk::emit_export_thunks(&context, &builder, &module, &rt, mir, &user_functions);
     }
 
     // Module bindings need process-wide storage because generated functions

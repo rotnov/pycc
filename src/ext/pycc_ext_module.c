@@ -44,8 +44,14 @@ extern long long pycc_rt_ext_int_decode(long long encoded);
 extern int pycc_rt_ext_pending_type(void);
 extern const unsigned char *pycc_rt_ext_pending_message(size_t *len);
 extern void pycc_rt_exception_clear(void);
-/* D-180 rule 6: a compiled function's return value arrives retained, so a
- * heap-bigint result this boundary refuses still has to be released. */
+/* D-180 rule 6: a compiled function's scalar return value arrives retained,
+ * so a heap-bigint result this boundary refuses still has to be released.
+ * A *tuple* element does not arrive retained -- the aggregate return path
+ * takes no per-field retain -- so a tuple egress takes its own reference
+ * with `pycc_rt_bigint_retain` before handing the word to the packer that
+ * discharges one. Both are no-ops for a smallint, a bool marker, and the
+ * word `0`, so the pairing stays balanced on every classification. */
+extern void pycc_rt_bigint_retain(long long word);
 extern void pycc_rt_bigint_release(long long word);
 /* The `str` boundary (Part 2 of #1037, #1049). `pycc_rt`'s own `i64` length
  * is `long long` here and its `usize` is `size_t`; `PyStrObj` stays an opaque
@@ -211,6 +217,86 @@ static int pycc_ext_raise_pending(void)
 }
 
 /*
+ * The longest `, element %zd` clause `pycc_ext_element_clause` can produce.
+ * `Py_ssize_t` is 64-bit on every target this shim builds for, so the widest
+ * rendering is `, element -9223372036854775808` at 30 bytes including the
+ * terminator; 48 leaves room and is still a stack buffer.
+ */
+#define PYCC_EXT_ELEMENT_CLAUSE_MAX 48
+
+/*
+ * Renders the `, element N` half of an argument-position clause into `buf`,
+ * or the empty string when `element` is negative -- the "this value is the
+ * argument itself, not one of its tuple elements" sentinel every scalar
+ * entry point below passes.
+ *
+ * Returned rather than written in place so an error arm can splice it into
+ * `PyErr_Format` with a single `%s` and pay for it only when it raises. The
+ * function name is *not* folded in here: it is an arbitrary-length Python
+ * identifier and a fixed buffer would truncate it, so it stays its own `%s`.
+ *
+ * Both indices are rendered one-based, matching the argument index the
+ * scalar messages already use (CPython's own convention, `f() argument 1`).
+ * `element 2` is therefore `t[1]`; the alternative -- a one-based argument
+ * beside a zero-based element in the same sentence -- reads as a typo.
+ */
+static const char *pycc_ext_element_clause(char *buf, size_t cap, Py_ssize_t element)
+{
+    if (element < 0) {
+        return "";
+    }
+    PyOS_snprintf(buf, cap, ", element %zd", element + 1);
+    return buf;
+}
+
+/*
+ * Checks that one argument is a `tuple` of exactly `arity` elements.
+ * Returns 0, or -1 with a CPython exception set. The elements themselves
+ * are unpacked by the `_at` entry points below, one per declared element
+ * type.
+ *
+ * `PyTuple_Check` and not `PyTuple_CheckExact`: a `tuple` subclass *is* a
+ * tuple, and D-244 rule 7's boundary is closed against duck typing, not
+ * against subtyping -- the same reading that lets `pycc_ext_unpack_str`
+ * accept a `str` subclass. The elements are copied out by value, so the
+ * subclass identity does not survive the crossing; `docs/RUNTIME.md` records
+ * that narrowing alongside `str`'s.
+ *
+ * The arity check is what makes `PyTuple_GetItem` infallible at every call
+ * site the generated wrapper emits afterwards, so it is never skipped: D-116
+ * fixes a tuple type's arity, and a shorter tuple would otherwise reach a
+ * `GetItem` that returns NULL with an `IndexError` the caller does not test
+ * for.
+ */
+static int pycc_ext_unpack_tuple(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                 Py_ssize_t arity)
+{
+    PyObject *type_name;
+    Py_ssize_t size;
+
+    if (!PyTuple_Check(obj)) {
+        type_name = PyType_GetName(Py_TYPE(obj));
+        if (type_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a tuple");
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() argument %zd: '%U' object cannot be interpreted as a tuple",
+                         fn_name, index + 1, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    size = PyTuple_Size(obj);
+    if (size != arity) {
+        PyErr_Format(PyExc_TypeError,
+                     "%s() argument %zd: expected a tuple of length %zd, got %zd",
+                     fn_name, index + 1, arity, size);
+        return -1;
+    }
+    return 0;
+}
+
+/*
  * Unpacks one argument at an `int` parameter into a D-141 encoded word.
  * Returns 0, or -1 with a CPython exception set.
  *
@@ -231,12 +317,13 @@ static int pycc_ext_raise_pending(void)
  *    conforming call -- and the compiled body would then abort the process
  *    on it. See D-244's dated amendment and #1040.
  */
-static int pycc_ext_unpack_int(PyObject *obj, const char *fn_name, Py_ssize_t index,
-                               long long *out)
+static int pycc_ext_unpack_int_at(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                  Py_ssize_t element, long long *out)
 {
     long long raw;
     int overflow = 0;
     PyObject *type_name;
+    char where[PYCC_EXT_ELEMENT_CLAUSE_MAX];
 
     if (PyBool_Check(obj)) {
         *out = pycc_rt_ext_bool_encode(obj == Py_True);
@@ -250,8 +337,9 @@ static int pycc_ext_unpack_int(PyObject *obj, const char *fn_name, Py_ssize_t in
         } else {
             /* CPython's own wording for a non-int at an int converter. */
             PyErr_Format(PyExc_TypeError,
-                         "%s() argument %zd: '%U' object cannot be interpreted as an integer",
-                         fn_name, index + 1, type_name);
+                         "%s() argument %zd%s: '%U' object cannot be interpreted as an integer",
+                         fn_name, index + 1,
+                         pycc_ext_element_clause(where, sizeof where, element), type_name);
             Py_DECREF(type_name);
         }
         return -1;
@@ -262,13 +350,28 @@ static int pycc_ext_unpack_int(PyObject *obj, const char *fn_name, Py_ssize_t in
     }
     if (overflow != 0 || pycc_rt_ext_int_encode(raw, out) != 0) {
         PyErr_Format(PyExc_OverflowError,
-                     "%s() argument %zd: int is outside the inline-integer range "
+                     "%s() argument %zd%s: int is outside the inline-integer range "
                      "[-2**62, 2**62-1] this pycc version's `ext` boundary supports "
                      "(see #1040)",
-                     fn_name, index + 1);
+                     fn_name, index + 1,
+                     pycc_ext_element_clause(where, sizeof where, element));
         return -1;
     }
     return 0;
+}
+
+/*
+ * The plain-argument entry point for a `int` parameter: the same check,
+ * with no tuple-element clause in its message. Kept as its own symbol rather
+ * than folded into the caller because a scalar parameter is by far the
+ * common case and its generated call site should say what it means -- and
+ * because the `.inc` fixtures that pin the scalar boundary predate #1050 and
+ * stay byte-for-byte unchanged by it.
+ */
+static int pycc_ext_unpack_int(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                               long long *out)
+{
+    return pycc_ext_unpack_int_at(obj, fn_name, index, -1, out);
 }
 
 /*
@@ -317,10 +420,11 @@ static PyObject *pycc_ext_pack_int(const char *fn_name, long long encoded)
  * for conformance. So `f(1)` at a `float` parameter is a `TypeError` here,
  * deliberately unlike every C-API converter's habit.
  */
-static int pycc_ext_unpack_float(PyObject *obj, const char *fn_name, Py_ssize_t index,
-                                 double *out)
+static int pycc_ext_unpack_float_at(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                    Py_ssize_t element, double *out)
 {
     PyObject *type_name;
+    char where[PYCC_EXT_ELEMENT_CLAUSE_MAX];
 
     if (!PyFloat_Check(obj)) {
         type_name = PyType_GetName(Py_TYPE(obj));
@@ -328,14 +432,29 @@ static int pycc_ext_unpack_float(PyObject *obj, const char *fn_name, Py_ssize_t 
             PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a float");
         } else {
             PyErr_Format(PyExc_TypeError,
-                         "%s() argument %zd: '%U' object cannot be interpreted as a float",
-                         fn_name, index + 1, type_name);
+                         "%s() argument %zd%s: '%U' object cannot be interpreted as a float",
+                         fn_name, index + 1,
+                         pycc_ext_element_clause(where, sizeof where, element), type_name);
             Py_DECREF(type_name);
         }
         return -1;
     }
     *out = PyFloat_AsDouble(obj);
     return 0;
+}
+
+/*
+ * The plain-argument entry point for a `float` parameter: the same check,
+ * with no tuple-element clause in its message. Kept as its own symbol rather
+ * than folded into the caller because a scalar parameter is by far the
+ * common case and its generated call site should say what it means -- and
+ * because the `.inc` fixtures that pin the scalar boundary predate #1050 and
+ * stay byte-for-byte unchanged by it.
+ */
+static int pycc_ext_unpack_float(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                               double *out)
+{
+    return pycc_ext_unpack_float_at(obj, fn_name, index, -1, out);
 }
 
 /*
@@ -352,10 +471,11 @@ static int pycc_ext_unpack_float(PyObject *obj, const char *fn_name, Py_ssize_t 
  * own ABI slot is an `i8` holding 0/1 (`ty_to_basic_type`), and the
  * generated wrapper reaches it through an unchecked `void *` cast.
  */
-static int pycc_ext_unpack_bool(PyObject *obj, const char *fn_name, Py_ssize_t index,
-                                char *out)
+static int pycc_ext_unpack_bool_at(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                   Py_ssize_t element, char *out)
 {
     PyObject *type_name;
+    char where[PYCC_EXT_ELEMENT_CLAUSE_MAX];
 
     if (!PyBool_Check(obj)) {
         type_name = PyType_GetName(Py_TYPE(obj));
@@ -363,14 +483,29 @@ static int pycc_ext_unpack_bool(PyObject *obj, const char *fn_name, Py_ssize_t i
             PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a bool");
         } else {
             PyErr_Format(PyExc_TypeError,
-                         "%s() argument %zd: '%U' object cannot be interpreted as a bool",
-                         fn_name, index + 1, type_name);
+                         "%s() argument %zd%s: '%U' object cannot be interpreted as a bool",
+                         fn_name, index + 1,
+                         pycc_ext_element_clause(where, sizeof where, element), type_name);
             Py_DECREF(type_name);
         }
         return -1;
     }
     *out = (char)(obj == Py_True);
     return 0;
+}
+
+/*
+ * The plain-argument entry point for a `bool` parameter: the same check,
+ * with no tuple-element clause in its message. Kept as its own symbol rather
+ * than folded into the caller because a scalar parameter is by far the
+ * common case and its generated call site should say what it means -- and
+ * because the `.inc` fixtures that pin the scalar boundary predate #1050 and
+ * stay byte-for-byte unchanged by it.
+ */
+static int pycc_ext_unpack_bool(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                               char *out)
+{
+    return pycc_ext_unpack_bool_at(obj, fn_name, index, -1, out);
 }
 
 /*

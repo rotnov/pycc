@@ -10,6 +10,16 @@
 //! together so the naming invariant cannot drift across a 9000-line file
 //! (AGENTS.md's "Keep source files decomposable"; the tracker for the rest
 //! of `lib.rs` is #545).
+//!
+//! #1050 added a second, closely related question -- *what shape does a
+//! public export present to the generated C wrapper* -- and the answer is
+//! the `pycc_ext_thunk_<name>` convention below. It lives here rather than
+//! in `ext_thunk.rs` because the driver (`src/ext_build.rs`) renders C
+//! against exactly this convention and must agree with it symbol for symbol
+//! and width for width, while `ext_thunk.rs` is the LLVM emission that
+//! implements it.
+
+use pycc_mir::Ty;
 
 /// Everything `compile_to_object` needs beyond the MIR and the output path.
 ///
@@ -70,4 +80,98 @@ pub(crate) fn entry_fn_name(ext: bool) -> &'static str {
 /// corrupt the `Py_mod_exec` slot's own return value.
 pub(crate) fn is_module_entry_symbol(name: &[u8]) -> bool {
     name == b"main" || name == EXT_MODULE_EXEC_SYMBOL.as_bytes()
+}
+
+/// The prefix every scalar-only `ext` export thunk's symbol carries.
+///
+/// Kept beside [`EXT_MODULE_EXEC_SYMBOL`] for the same reason: the driver's
+/// generated C declares this symbol by name, and a prefix spelled twice is a
+/// link-time-deferred crash rather than a compile error (the `--ext` link
+/// passes `-undefined dynamic_lookup` on Mach-O and `-Bsymbolic` on ELF, so
+/// an undefined thunk resolves to nothing and dies at call time).
+pub const EXT_THUNK_PREFIX: &str = "pycc_ext_thunk_";
+
+/// The external symbol `name`'s scalar-only `ext` export thunk is emitted
+/// under.
+#[must_use]
+pub fn ext_thunk_symbol(name: &str) -> String {
+    format!("{EXT_THUNK_PREFIX}{name}")
+}
+
+/// Whether `name` is a name D-244 rule 1 can export at all, disregarding
+/// its signature.
+///
+/// The three tests are exactly `pycc::ext_build::collect_exports`' own, and
+/// this is their one canonical home so the two sides of the seam cannot
+/// drift: a wrapper generated for a name codegen declined to emit a thunk
+/// for links cleanly and crashes on the first call.
+///
+/// The first test is D-038's public-name predicate, spelled out rather than
+/// delegated to `pycc_hir::is_public_name` because this crate deliberately
+/// does not depend on `pycc_hir` -- it sees only `pycc_mir`'s re-export of
+/// `Ty`. The body there is `!name.starts_with('_')` and nothing else; if it
+/// ever grows a case, this copy must grow with it. The other two are not
+/// policy but representation: a method reaches MIR under its `Class.method`
+/// name, and a monomorphized generic specialization carries the `0gen_`
+/// prefix and has no `fnptr_` global to dispatch through.
+#[must_use]
+pub fn is_ext_exportable_name(name: &str) -> bool {
+    !name.starts_with('_') && !name.contains('.') && !name.starts_with("0gen_")
+}
+
+/// The boundary slots a value of type `ty` occupies when it crosses the
+/// `ext` seam: a `tuple`'s elements, in order, or the type itself.
+///
+/// D-116 fixes a tuple's arity and restricts its elements to `int`, `bool`
+/// and `float` (`pycc_hir`'s `check_tuple_element_ty` rejects anything else
+/// with `T0039`, and `tuple[int, ...]`/`tuple[()]` with `T0053`), so the
+/// returned slice is always non-empty and never itself contains a tuple.
+#[must_use]
+pub fn ext_boundary_slots(ty: &Ty) -> &[Ty] {
+    match ty {
+        Ty::Tuple(elems) => elems.as_slice(),
+        _ => std::slice::from_ref(ty),
+    }
+}
+
+/// The thunk's own parameter list: every declared parameter flattened in
+/// place to the scalars it occupies.
+#[must_use]
+pub fn ext_thunk_param_tys(param_tys: &[Ty]) -> Vec<Ty> {
+    param_tys
+        .iter()
+        .flat_map(|ty| ext_boundary_slots(ty).iter().cloned())
+        .collect()
+}
+
+/// The element types a `tuple` return is handed back through, one trailing
+/// out-pointer each, appended after every flattened parameter. Empty for
+/// every other return type, which stays a real return value.
+///
+/// Returning a tuple *by value* is not an option: pycc's own aggregate
+/// calling convention is not the platform C struct ABI. Measured on
+/// aarch64-apple-darwin, a pycc function returning `tuple[int, int, int,
+/// int, int]` hands the five words back in `x0`-`x4` where clang's C ABI
+/// would pass a hidden `sret` pointer -- so a C declaration of the compiled
+/// function would disagree with it silently. The thunk exists precisely to
+/// keep every aggregate on the LLVM side of the seam.
+#[must_use]
+pub fn ext_thunk_out_tys(return_ty: &Ty) -> &[Ty] {
+    match return_ty {
+        Ty::Tuple(elems) => elems.as_slice(),
+        _ => &[],
+    }
+}
+
+/// Whether a function needs a scalar-only export thunk emitted for it.
+///
+/// Only a signature that actually carries an aggregate does: a scalar-only
+/// export's generated wrapper still reaches the compiled function through
+/// the `fnptr_<name>` global directly, and emitting a thunk it would never
+/// call would be dead weight in every artifact.
+#[must_use]
+pub fn ext_thunk_required(name: &str, param_tys: &[Ty], return_ty: &Ty) -> bool {
+    is_ext_exportable_name(name)
+        && (param_tys.iter().any(|ty| matches!(ty, Ty::Tuple(_)))
+            || matches!(return_ty, Ty::Tuple(_)))
 }

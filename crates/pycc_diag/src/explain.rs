@@ -145,8 +145,11 @@ the export set -- or to build without `--ext`.",
         // The example has to name a signature the boundary still refuses
         // *and* that `native` mode compiles, since the explanation above
         // rests on exactly that contrast. It must be re-pointed whenever
-        // the matrix widens: `str` was admitted by #1049, and a container
-        // is the nearest remaining gap (#1050). The element type is
+        // the matrix widens: `str` was admitted by #1049 and a scalar-
+        // element `tuple` by #1050, which leaves `list` as the nearest
+        // remaining gap -- and a durable one, since a `list` is a mutable
+        // object with no by-value crossing rather than an unimplemented
+        // spelling. The element type is
         // `int` because `pycc_hir::container::check_container_ty` rejects
         // every other `list[T]` with `T0034` before the `--ext` capability
         // scan ever runs -- `list[str]` would be a `T0034` example wearing

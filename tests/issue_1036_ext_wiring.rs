@@ -59,8 +59,9 @@ fn header_less_build(dir: &Path, src: &Path, out: &Path) -> Output {
 fn ext_rejects_a_public_function_the_boundary_cannot_carry_with_c0003() {
     let dir = ScratchDir::new("ext_cli_gap").expect("scratch");
     // `list[int]` is still outside the boundary after #1048 widened it to
-    // the scalars and #1049 added `str`; #1050 is the part that carries the
-    // containers.
+    // the scalars, #1049 added `str` and #1050 added a scalar-element
+    // `tuple`. It is not merely the next part's work: a `tuple` crosses by
+    // value into one slot per element, and a `list` has no such crossing.
     let src = write(
         &dir,
         "def greet(who: list[int]) -> list[int]:\n    return who\n",
