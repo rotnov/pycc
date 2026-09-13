@@ -344,10 +344,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  # Writes `docs/roadmap/<name>.md` for each entry in `roadmap_files` (a
-  # Hash of relative filename => content) instead of a single
-  # `docs/ROADMAP.md`, exercising the dual-layout `docs/roadmap/**/*.md`
-  # resolution path.
   # Like `run_checker`, plus arbitrary extra files (a published benchmark
   # report, a pre-registration record) written at their repository-relative
   # paths under the same temporary root.
@@ -367,6 +363,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  # Writes `docs/roadmap/<name>.md` for each entry in `roadmap_files` (a
+  # Hash of relative filename => content) instead of a single
+  # `docs/ROADMAP.md`, exercising the dual-layout `docs/roadmap/**/*.md`
+  # resolution path.
   def run_checker_with_roadmap_dir(roadmap_files:, workflow:)
     Dir.mktmpdir do |directory|
       root = Pathname(directory)

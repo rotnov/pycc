@@ -175,6 +175,20 @@ class InputDigestTest(unittest.TestCase):
 
             RUNNER.verify_input_digest(path, hashlib.sha256(b"payload").hexdigest())
 
+    def test_refuses_an_unreadable_input_without_echoing_the_path(self) -> None:
+        # A directory makes the read itself fail (`IsADirectoryError`, an
+        # `OSError`) on every supported host, without depending on the ambient
+        # user's privileges the way a permission bit would.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.bin"
+            path.mkdir()
+
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.verify_input_digest(path, "0" * 64)
+
+            self.assertNotIn(str(path), str(raised.exception))
+            self.assertIn("--input", str(raised.exception))
+
     def test_refuses_a_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input.bin"
@@ -269,6 +283,19 @@ class CorrectnessPreconditionTest(unittest.TestCase):
                     )
                 self.assertIn("non-finite", str(raised.exception))
 
+    def test_accepts_a_divergence_within_the_relative_tolerance(self) -> None:
+        reference = RUNNER.ArmOutcome(1e6, None, "digest")
+        candidate = RUNNER.ArmOutcome(1e6 + 1e-4, None, "digest")
+
+        RUNNER.compare_outcomes(reference, candidate, 1e-9)
+
+    def test_rejects_a_divergence_beyond_the_relative_tolerance(self) -> None:
+        reference = RUNNER.ArmOutcome(1e6, None, "digest")
+        candidate = RUNNER.ArmOutcome(1e6 + 1.0, None, "digest")
+
+        with self.assertRaises(BenchmarkError):
+            RUNNER.compare_outcomes(reference, candidate, 1e-9)
+
     def test_refuses_two_non_finite_floats_that_compare_equal(self) -> None:
         for value in (float("nan"), float("inf")):
             with self.subTest(value=value):
@@ -356,20 +383,6 @@ class PreRegistrationTest(unittest.TestCase):
         self.assertRegex(record["compile_unchanged_set_sha256"], r"\A[0-9a-f]{64}\Z")
 
 
-
-
-    def test_accepts_a_divergence_within_the_relative_tolerance(self) -> None:
-        reference = RUNNER.ArmOutcome(1e6, None, "digest")
-        candidate = RUNNER.ArmOutcome(1e6 + 1e-4, None, "digest")
-
-        RUNNER.compare_outcomes(reference, candidate, 1e-9)
-
-    def test_rejects_a_divergence_beyond_the_relative_tolerance(self) -> None:
-        reference = RUNNER.ArmOutcome(1e6, None, "digest")
-        candidate = RUNNER.ArmOutcome(1e6 + 1.0, None, "digest")
-
-        with self.assertRaises(BenchmarkError):
-            RUNNER.compare_outcomes(reference, candidate, 1e-9)
 
 
 class TimingBoundaryTest(unittest.TestCase):
@@ -589,6 +602,19 @@ class CommittedRecordTest(unittest.TestCase):
 
             self.assertEqual(RUNNER.read_pre_registration(target, root), {"seed": 1})
 
+    def test_refuses_a_record_that_cannot_be_read(self) -> None:
+        # Unreadable is not "absent": without this the read raises a bare
+        # `OSError` past `main`'s `BenchmarkError` handler.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / RUNNER.PRE_REGISTRATION_RELATIVE_PATH
+            target.mkdir(parents=True)
+
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.read_pre_registration(target, root)
+
+            self.assertIn("pre-registration record", str(raised.exception))
+
     def init_repository(self, root: Path) -> None:
         """A hermetic repository, never the ambient worktree."""
 
@@ -735,6 +761,23 @@ class SubjectDigestTest(unittest.TestCase):
                     with self.assertRaises(BenchmarkError) as raised:
                         RUNNER.read_subject_source(subject, expected)
                     self.assertIn("subject_sha256", str(raised.exception))
+
+    def test_refuses_an_unreadable_subject_without_echoing_the_path(self) -> None:
+        # The read can fail after `resolve_subject` saw a file -- a permission
+        # change, or the path becoming a directory. An uncaught `OSError` would
+        # print the proprietary path, so the refusal is raised here instead. A
+        # directory reproduces that failure without touching the ambient host's
+        # privileges.
+        with tempfile.TemporaryDirectory() as directory:
+            subject = Path(directory) / "proprietary_hot_loop.py"
+            subject.mkdir()
+
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.read_subject_source(subject, hashlib.sha256(self.SOURCE).hexdigest())
+
+            self.assertNotIn(str(subject), str(raised.exception))
+            self.assertNotIn("proprietary_hot_loop", str(raised.exception))
+            self.assertIn("PYCC_BENCH_SUBJECT", str(raised.exception))
 
     def test_no_refusal_echoes_the_proprietary_path_or_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

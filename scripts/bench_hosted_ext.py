@@ -221,7 +221,18 @@ def read_subject_source(subject: Path, expected: object) -> bytes:
             "the pre-registration record does not register a subject_sha256, so the "
             "subject is not bound to the reference source and no run is admissible"
         )
-    source = subject.read_bytes()
+    try:
+        source = subject.read_bytes()
+    except OSError:
+        # `OSError.__str__` embeds the filename, and the subject's path names
+        # the proprietary reference codebase (D-244 rule 6). The refusal is
+        # therefore written here rather than allowed to propagate: the read can
+        # fail on a permission denial, or because the subject became a
+        # directory after `resolve_subject` saw a file.
+        raise BenchmarkError(
+            "the subject named by PYCC_BENCH_SUBJECT could not be read, so it cannot be "
+            "shown to be the pre-registered reference source"
+        ) from None
     actual = hashlib.sha256(source).hexdigest()
     if actual != expected:
         raise BenchmarkError(
@@ -332,9 +343,18 @@ def compare_machine(observed: dict, committed: object) -> None:
 
 def verify_input_digest(path: Path, expected: str) -> None:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
+    try:
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+    except OSError:
+        # Path-free for the same reason as `read_subject_source`: the generated
+        # input lives outside this repository beside the proprietary reference
+        # codebase, and `OSError`'s own message would print its path.
+        raise BenchmarkError(
+            "the input file named by --input could not be read, so it cannot be shown to "
+            "digest to the committed input_sha256"
+        ) from None
     actual = digest.hexdigest()
     if actual != expected:
         raise BenchmarkError(
@@ -420,7 +440,13 @@ def ratio_of_medians(baseline: dict, candidate: dict) -> float:
 def read_pre_registration(path: Path, root: Path, read_blob=read_committed_blob) -> dict:
     """Read the record only after proving it is the committed one."""
 
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raise BenchmarkError(
+            f"the pre-registration record {path.name} could not be read, so this run "
+            "cannot be shown to have been pre-registered"
+        ) from None
     assert_record_is_committed(raw, read_blob(root, PRE_REGISTRATION_RELATIVE_PATH))
     return json.loads(raw.decode("utf-8"))
 
