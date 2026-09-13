@@ -1712,3 +1712,60 @@ print(go(False))
         String::from_utf8_lossy(&output.stdout),
     );
 }
+
+/// The decline counts binding *sites*, not divergent *types*, so a name bound
+/// by two loops over `range(...)` -- both of them unambiguously `int` -- is
+/// declined exactly like a genuinely branch-divergent one, and the container it
+/// would have resolved reports `T0003` instead.
+///
+/// That coarseness is deliberate, not an oversight: counting sites needs no
+/// environment at all, while proving two sites agree needs per-site type
+/// evidence the flat binder does not record. It stays inside D-245's invariant
+/// for this pass -- never wrong, only missed -- and this test pins it so a
+/// later narrowing has to change the assertion on purpose. Issue #1058 tracks
+/// that narrowing for the loop-target case specifically.
+#[test]
+fn a_name_bound_by_two_loops_is_declined_even_though_both_sites_are_int() {
+    let diagnostics = check_error(
+        "repeated_same_type_sites",
+        "\
+def go() -> int:
+    xs = []
+    for i in range(3):
+        xs.append(i)
+    for i in range(2):
+        print(i)
+    return len(xs)
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "two same-type sites are declined like divergent ones, got: {diagnostics}",
+    );
+}
+
+/// The same program with the second loop deleted: one binding site, so the
+/// promotion happens and the producer resolves `xs` to `list[int]`. This is the
+/// control for the test above -- without it, a future change that broke
+/// single-site promotion entirely would leave that test still passing.
+#[test]
+fn the_single_loop_spelling_of_that_program_compiles_and_runs() {
+    let output = check_build_and_run(
+        "repeated_same_type_sites_control",
+        "\
+def go() -> int:
+    xs = []
+    for i in range(3):
+        xs.append(i)
+    return len(xs)
+
+
+print(go())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}

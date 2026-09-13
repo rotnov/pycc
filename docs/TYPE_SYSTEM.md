@@ -215,7 +215,9 @@ element, and panics on an empty one.
   `xs = [v]` spelling sees the branch-local `int` and compiles. Reconstructing
   each body's own bindings would reimplement the checker's statement walk ahead
   of it, so the evidence is declined instead, and two sites carrying the *same*
-  type are declined with it. The cost is again a `T0003`.
+  type are declined with it. The cost is again a `T0003`; issue #1058 tracks
+  narrowing that coarseness for loop targets, whose type is `int` at every site
+  without consulting any environment.
 - **The same gate as a written annotation.** A resolved type still passes
   through `pycc_hir::check_container_ty` (D-228), so an inferred `list[str]` is
   `T0034` and an inferred `dict[int, int]` is `T0036`, exactly as the written

@@ -4,11 +4,12 @@
 
 Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
 `main`. The branch was opened from `1ede16ff72bfdc09dc0c469136ba72b5e6dce9cb`
-and later merged the default branch's own tip
-`f043eb06326f544304d2cef6e38f7495c9d4c12b` (PR #1042, `build --ext`) into
-itself, so that commit is the current merge base -- resolve it again before
-merging rather than trusting either SHA here, since `strict: true` requires the
-branch be up to date at the merge instant. It carries `Fixes #1021`, and the
+and has twice merged the default branch's own tip into itself since -- first
+`f043eb06326f544304d2cef6e38f7495c9d4c12b` (PR #1042, `build --ext`), then
+`3cd871f05036a6314c99cdc0f102e1439b2f33af`, which is the merge base as this
+snapshot is written. Resolve it again before merging rather than trusting any
+SHA here, since `strict: true` requires the branch be up to date at the merge
+instant. It carries `Fixes #1021`, and the
 `closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
 #1021 -- re-run after the last `gh pr edit`. The branch carries the pass itself,
 one commit per review round, the retrospective entries below, and this snapshot,
@@ -76,6 +77,16 @@ the alternatives, including the two the review rounds raised and rejected.
   at `1:1` (`HirStmt::Assign` carries no span, deliberately, today).
 
 Both need a milestone at filing under D-192.
+
+Three defects found while building this pass are filed and stay open, none of
+them in this pull request's scope: [#1053](https://github.com/rotnov/pycc/issues/1053)
+(the shared flat binder has no `Try`/`TryStar`/`Match` arm),
+[#1057](https://github.com/rotnov/pycc/issues/1057) (a `bool`-then-`int`
+cross-branch local binding type-checks and then miscompiles, reproduced on
+`3cd871f0` with no empty container anywhere), and
+[#1058](https://github.com/rotnov/pycc/issues/1058) (the round-16 decline counts
+binding sites rather than divergent types, so a name bound by two loops over
+`range(...)` is declined along with the genuinely divergent ones).
 
 ## Where to resume
 
