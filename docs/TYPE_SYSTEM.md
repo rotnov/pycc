@@ -160,7 +160,11 @@ element, and panics on an empty one.
   function in true program order, including D-040's sticky-representation rule.
   A restriction to strictly-prior bindings would only turn some compilable
   programs into `T0003`; it could not turn an accepted program into a
-  different one.
+  different one. That argument holds only while the rebuilt environment records
+  the *same* representation the checker will: the binder must apply D-040
+  stickiness on every rebinding form, a value-less `v: bool` after `v = 1`
+  included, or a resolution can name a type the program never produces and the
+  re-validation reports it as a real `T0034`.
 - **Producers, not consumers.** Only `xs.append(v)` and `d[k] = v` supply an
   element type. `for x in xs`, `xs[0]`, `len(xs)` and `xs.pop()` *read* a type
   that must already be known; in a single forward pass with no backward

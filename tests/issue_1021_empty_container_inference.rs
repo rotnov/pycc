@@ -1769,3 +1769,116 @@ print(go())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"3\n");
 }
+
+/// A value-less annotation reaches the checker as `Environment::declare`, which
+/// keeps a name's existing runtime binding rather than replacing it, so `v` is
+/// still an `int` here and the program is valid -- its `xs = [v]` spelling,
+/// below, is what proves that independently of this pass.
+///
+/// The shared flat binder applied D-040 stickiness only on the *valued*
+/// `AnnAssign` arm, so this spelling recorded `bool`, resolved the producer to
+/// `list[bool]` and reported `T0034` for a type the program never produces.
+/// Wrong, not missed -- the outcome D-245's invariant forbids.
+#[test]
+fn a_value_less_annotation_does_not_replace_the_first_recorded_representation() {
+    let output = check_build_and_run(
+        "value_less_annotation_sticky",
+        "\
+def go() -> int:
+    v = 1
+    v: bool
+    xs = []
+    xs.append(v)
+    return len(xs)
+
+
+print(go())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+/// The reference spelling of the program above, which carries no empty literal
+/// and so never reaches this pass at all. It is the oracle for the test above:
+/// `pycc check` accepting it is what makes the empty spelling's former `T0034`
+/// a wrong resolution rather than a limitation both spellings share.
+#[test]
+fn the_reference_spelling_of_the_value_less_annotation_program_checks() {
+    let (_dir, path) = write_source(
+        "value_less_annotation_sticky_ref",
+        "\
+def go() -> int:
+    v = 1
+    v: bool
+    xs = [v]
+    return len(xs)
+
+
+print(go())
+",
+    );
+    let output = Command::new(pycc_bin())
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the reference spelling must check: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// `scoped_for_body` promotes every name a body's own top-level statements
+/// bind, without regard to whether the binding precedes the producer that reads
+/// it, so a producer here is scanned against a type contributed by a *later*
+/// statement. That cannot produce a wrong resolution: reading a name before its
+/// only binding is itself an error, and the checker reports it as `T0021` for
+/// both spellings, so the two never disagree.
+///
+/// This fixture holds that reasoning to the tree rather than to prose -- if a
+/// future change let one spelling past `T0021`, the ordering would start to
+/// matter and this test is where that shows up.
+#[test]
+fn a_producer_reading_a_later_binding_reports_the_unbound_local_in_both_spellings() {
+    let empty = check_error(
+        "forward_binding_empty",
+        "\
+def go(flag: bool) -> int:
+    total = 0
+    if flag:
+        xs = []
+        xs.append(w)
+        w = True
+        total = len(xs)
+    return total
+
+
+print(go(False))
+",
+    );
+    let reference = check_error(
+        "forward_binding_reference",
+        "\
+def go(flag: bool) -> int:
+    total = 0
+    if flag:
+        xs = [w]
+        w = True
+        total = len(xs)
+    return total
+
+
+print(go(False))
+",
+    );
+    assert!(
+        empty.contains("T0021"),
+        "the empty spelling must report the unbound local, got: {empty}",
+    );
+    assert!(
+        reference.contains("T0021"),
+        "the reference spelling must report the unbound local, got: {reference}",
+    );
+}

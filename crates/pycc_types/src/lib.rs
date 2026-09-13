@@ -826,7 +826,18 @@ pub(crate) fn bind_local_types_in_stmt(
                     // checker and the producer must resolve `list[int]`.
                     env.bind(target.clone(), annotation.clone());
                 }
-            } else {
+            } else if env.lookup_any(target).is_none() {
+                // #1021 review round 17: the same D-040 stickiness the valued
+                // arm above applies, for the same reason and with the same
+                // failure when it is omitted. A value-less annotation reaches
+                // the checker as `Environment::declare`, which keeps an
+                // existing runtime binding rather than replacing it, so for
+                // `v = 1; v: bool; xs = []; xs.append(v)` the checker still
+                // sees `v` as `int` -- and the `xs = [v]` spelling of that
+                // program checks clean. Binding `bool` here resolved the
+                // producer to `list[bool]` and D-228 reported a `T0034`
+                // naming a type the program never produces: wrong, not
+                // missed, which is exactly what D-245's invariant forbids.
                 env.bind(target.clone(), annotation.clone());
             }
         }
