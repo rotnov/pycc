@@ -1044,14 +1044,26 @@ mod ext_build_wiring_tests {
     use ext_build::{ExtProbe, ExtToolchain};
     use pycc_scratch::ScratchDir;
 
-    /// A toolchain whose headers are `dir` itself: a real, existing
-    /// directory that contains no `Python.h`. Every step up to and including
+    /// A toolchain whose headers are `dir` itself, holding a `Python.h` that
+    /// is not one: a single `#error` line. Every step up to and including
     /// the compiler spawn then runs for real, and the build fails
     /// deterministically inside `cc` on any host, with no CPython installed
     /// and nothing `#[ignore]`d. That is the only way the ext branch's
     /// effectful tail earns coverage: `.github/workflows/ci.yml`'s coverage
     /// job runs `llvm-cov` without `--include-ignored`.
+    ///
+    /// The stub file is what keeps that reachable. The probe now rejects a
+    /// header directory with no `Python.h` as an environment failure, so an
+    /// empty directory would stop the build two steps earlier and leave the
+    /// whole tail uncovered -- the failure has to come from the *contents*
+    /// of a header, which is a compile error, not from its absence, which is
+    /// a broken build environment.
     fn header_less_toolchain(dir: &Path) -> ExtToolchain {
+        std::fs::write(
+            dir.join("Python.h"),
+            "#error pycc test fixture: not a real Python.h\n",
+        )
+        .expect("write the stub header");
         ExtToolchain::with_probe(
             "pycc-unused-interpreter",
             ExtProbe {

@@ -159,6 +159,14 @@ impl ExtToolchain {
     /// override built from `PYCC_PYTHON_INCLUDE` carries [`MIN_PYTHON`] as
     /// its asserted version, so the floor is a real gate only for a probe
     /// that actually ran (or a test-supplied one).
+    ///
+    /// The directory existing is not enough: `Python.h` itself must be in it.
+    /// An interpreter installed without its development package reports a
+    /// header directory that is absent or empty, and letting that through
+    /// would surface the failure inside the C compiler instead -- which
+    /// `docs/CLI_SPEC.md` classifies as a compile error at exit 1, when a
+    /// broken CPython development environment is an environment failure at
+    /// exit 2.
     pub(crate) fn probe(&self) -> Result<ExtProbe, String> {
         let probe = match &self.probe_override {
             Some(probe) => probe.clone(),
@@ -170,6 +178,15 @@ impl ExtToolchain {
                 "CPython header directory `{}` does not exist; --ext compiles against \
                  `Python.h` from the interpreter named by PYCC_PYTHON (default `python3`), \
                  or from PYCC_PYTHON_INCLUDE when that is set",
+                probe.include.display()
+            ));
+        }
+        if !probe.include.join("Python.h").is_file() {
+            return Err(format!(
+                "CPython header directory `{}` contains no `Python.h`; --ext compiles \
+                 against that header, so an interpreter without its development package \
+                 installed cannot serve it -- install that package, or set \
+                 PYCC_PYTHON_INCLUDE to the directory that does hold `Python.h`",
                 probe.include.display()
             ));
         }

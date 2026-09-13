@@ -101,6 +101,8 @@ fn a_truncated_or_empty_probe_is_rejected_rather_than_half_believed() {
 #[test]
 fn an_override_answers_without_running_any_interpreter() {
     let dir = pycc_scratch::ScratchDir::new("ext-probe").expect("scratch");
+    // The probe insists on the header itself, not just the directory.
+    std::fs::write(dir.join("Python.h"), "").expect("the fixture header");
     let toolchain =
         ExtToolchain::with_probe("definitely-not-an-interpreter-1036", probe((3, 14), &dir));
     let resolved = toolchain.probe().expect("an override skips the spawn");
@@ -128,6 +130,22 @@ fn a_header_directory_that_does_not_exist_is_reported_before_the_compiler_sees_i
     let message = toolchain
         .probe()
         .expect_err("a missing include dir is an error");
+    assert!(message.contains("PYCC_PYTHON_INCLUDE"), "{message}");
+}
+
+/// The directory exists and holds files, but not the one that matters. This
+/// is what an interpreter installed without its development package reports,
+/// and catching it here is what keeps it an environment failure (exit 2)
+/// instead of a C compiler error the shared tail reports at exit 1.
+#[test]
+fn a_header_directory_without_python_h_is_an_environment_failure_not_a_compile_error() {
+    let dir = pycc_scratch::ScratchDir::new("ext-probe-headerless").expect("scratch");
+    std::fs::write(dir.join("pyconfig.h"), "").expect("a decoy header");
+    let toolchain = ExtToolchain::with_probe("python3", probe((3, 13), &dir));
+    let message = toolchain
+        .probe()
+        .expect_err("a directory without Python.h is an error");
+    assert!(message.contains("Python.h"), "{message}");
     assert!(message.contains("PYCC_PYTHON_INCLUDE"), "{message}");
 }
 

@@ -347,6 +347,14 @@ the CPython headers the artifact compiles against:
   are not fail later in the C compiler rather than in `pycc`. It outranks
   `PYCC_PYTHON`, which is still recorded and still named in diagnostics.
 
+Whichever variable supplies it, the resolved header directory is checked
+before anything is compiled: it must exist and it must contain `Python.h`.
+A directory that is missing, or that exists but holds no header, is an
+environment failure at exit 2 — an interpreter installed without its
+development package is a broken build environment, not a defect in the
+source being compiled, and reporting it as one would misclassify it as a
+compile error.
+
 Neither variable has any effect without `--ext`.
 
 ## `pycc.toml`

@@ -40,7 +40,9 @@ fn stderr_of(output: &Output) -> String {
 }
 
 /// An include directory that exists but holds no `Python.h`, so the build
-/// reaches the compiler and fails there deterministically on any host.
+/// fails deterministically on any host -- in the toolchain probe, which
+/// rejects a header directory without the header rather than letting the C
+/// compiler report a broken CPython installation as a compile error.
 fn header_less_build(dir: &Path, src: &Path, out: &Path) -> Output {
     pycc()
         .arg("build")
@@ -95,8 +97,10 @@ fn a_private_function_is_not_in_the_export_set_and_raises_no_gap() {
     let output = header_less_build(&dir, &src, &dir.join("m"));
     let stderr = stderr_of(&output);
     assert!(!stderr.contains("C0003"), "{stderr}");
-    // It got past the export scan and died in the compiler instead, which is
-    // the expected end of the road without CPython headers.
+    // It got past the export scan and died in the toolchain probe instead,
+    // which is the expected end of the road without CPython headers -- and an
+    // environment failure, not a compile error.
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("Python.h"), "{stderr}");
 }
 
