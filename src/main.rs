@@ -1164,7 +1164,9 @@ mod ext_build_wiring_tests {
     #[test]
     fn a_public_function_the_boundary_cannot_carry_fails_the_build_with_a_diagnostic() {
         let dir = ScratchDir::new("ext_plan_gap").expect("scratch");
-        let src = write_source(&dir, "def greet(x: str) -> str:\n    return x\n");
+        // `list[int]`, not `str`: #1049 made `str` carriable in both
+        // positions, so the old fixture no longer reaches a gap.
+        let src = write_source(&dir, "def greet(x: list[int]) -> int:\n    return 1\n");
         let code = plan_ext(
             &src,
             &dir.join("m"),
@@ -1173,7 +1175,7 @@ mod ext_build_wiring_tests {
             &header_less_toolchain(&dir),
             &dir.join("main.o"),
         )
-        .expect_err("str is not bridged by #1048");
+        .expect_err("list is not bridged");
         assert_eq!(code, ExitCode::from(1));
     }
 

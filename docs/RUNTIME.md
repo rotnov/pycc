@@ -330,7 +330,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   environment; native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the scalar boundary)
+## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the scalar boundary and `str`)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -346,7 +346,9 @@ boundary but none of the bundling, policy, or GIL-ownership rules below: an
 the GIL, and #1025/#1026 specify its contract. Part 1 of #1025 ([#1036](https://github.com/rotnov/pycc/issues/1036))
 implemented that mode for the `int` boundary, and Part 1 of #1037
 ([#1048](https://github.com/rotnov/pycc/issues/1048)) widened it to the
-remaining scalars: `pycc build PATH -o OUT --ext`
+remaining scalars. Part 2 of #1037
+([#1049](https://github.com/rotnov/pycc/issues/1049)) added `str` in both
+directions: `pycc build PATH -o OUT --ext`
 compiles against `Py_LIMITED_API 0x030D0000` (stable-ABI floor CPython 3.13),
 exports every public module-level function whose signature that boundary can
 carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
@@ -364,16 +366,17 @@ restating it.
 | `float` | carried; accepts `float` **only** — an `int`, a `bool` or any `__float__` duck type raises `TypeError` | carried |
 | `bool` | carried; accepts `bool` **only** — an `int` or any other truthy object raises `TypeError` | carried, and identity survives: `PyBool_FromLong` returns the interned singleton |
 | `None` | **not carried**: `C0003`, gated on [#1047](https://github.com/rotnov/pycc/issues/1047)'s call-argument ICE | carried, as `Py_RETURN_NONE` |
-| `str`, `tuple[...]`, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
+| `str` | carried; accepts `str` **only** — no `__str__`, `os.PathLike` or buffer duck type. A lone surrogate raises CPython's own `UnicodeEncodeError`, propagated verbatim | carried |
+| `tuple[...]`, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
 
 `float` and `bool` refusing an `int` is not a local choice: it is
 `docs/TYPE_SYSTEM.md` rule 4 (D-086), no implicit numeric narrowing *or*
 widening at an annotated boundary, which rule 7 defers to for conformance. It
 is a deliberate divergence from `PyFloat_AsDouble` and from the C-API
-converters' habit of accepting anything convertible. `str` is Part 2 of #1037
-([#1049](https://github.com/rotnov/pycc/issues/1049)) and `tuple[...]` is
-Part 3 ([#1050](https://github.com/rotnov/pycc/issues/1050)); until they land,
-each is a `C0003` capability gap. Per the D-244
+converters' habit of accepting anything convertible; the `str` row refuses
+duck types for exactly that reason. `tuple[...]` is Part 3 of #1037
+([#1050](https://github.com/rotnov/pycc/issues/1050)); until it lands, it and
+every other container are a `C0003` capability gap. Per the D-244
 amendment of 2026-09-12 an `int` outside the inline range `[-2^62, 2^62-1]`
 raises `OverflowError` at the wrapper until [#1040](https://github.com/rotnov/pycc/issues/1040)
 gives `pycc_rt` a bigint boundary. That guard covers the boundary only, not the
@@ -408,7 +411,12 @@ object-carrying path is worth its cost. #1048 added a second instance of that
 same question rather than a new one: the `float` parameter's `PyFloat_Check`
 likewise accepts a `float` subclass and flattens it to a `double`, so
 `float`-subclass identity does not survive either. `bool` is exempt, being
-unsubclassable. Second,
+unsubclassable. #1049 extends the same narrowing to `str`, and widens it: a
+`str` subclass is accepted by `PyUnicode_Check` and flattened to a plain pycc
+`str`, and identity does not survive *even for an exact `str`* — the boundary
+copies the UTF-8 bytes in each direction, so `m.echo(s) is s` is `False` where
+an equivalent CPython function gives `True`. That makes #1043 a question about
+the `str` boundary too, not only the numeric one. Second,
 an `ext` module's state is process-static — generated globals live in LLVM
 globals and the `METH_FASTCALL` wrappers ignore their module argument, with
 `m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not
