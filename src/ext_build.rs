@@ -86,7 +86,7 @@ pub(crate) struct ExtProbe {
 /// The CPython installation an `ext` build compiles against.
 ///
 /// Constructed from the environment in production ([`ExtToolchain::from_env`])
-/// and directly in tests ([`ExtToolchain::with_probe`]) -- never by a test
+/// and directly in tests (`ExtToolchain::with_probe`) -- never by a test
 /// setting a process-wide environment variable, which races every other test
 /// in the same binary.
 #[derive(Debug, Clone)]
@@ -421,14 +421,21 @@ pub(crate) struct ExtExport {
 /// carries the `0gen_` prefix and has no `fnptr_` global to call through
 /// (codegen dispatches those directly).
 ///
-/// The boundary carries `int`, `float`, `bool` and `str` in either
-/// direction, and `None` as a return type only (#1036, #1048, #1049).
-/// `docs/RUNTIME.md`'s admissibility matrix is the canonical statement of
-/// that set, including the narrowings each admitted type carries. Every
-/// other
-/// public signature is a [`EXT_CAPABILITY_CODE`] capability gap, and *all*
-/// of them are collected before returning -- one `--ext` build should not
-/// have to be re-run once per unsupported function.
+/// The boundary carries `int`, `float`, `bool`, `str` and a `tuple` of
+/// those scalars in either direction, and `None` as a return type only
+/// (#1036, #1048, #1049, #1050). `docs/RUNTIME.md`'s admissibility matrix
+/// is the canonical statement of that set, including the narrowings each
+/// admitted type carries. Every other public signature is a
+/// [`EXT_CAPABILITY_CODE`] capability gap, and *all* of them are collected
+/// before returning -- one `--ext` build should not have to be re-run once
+/// per unsupported function.
+///
+/// A `tuple` is admitted by its elements and not by its own name: the
+/// boundary carries it by spreading it into one scalar slot per element
+/// (see [`boundary_carrier`]), so a nested or container-carrying `tuple`
+/// stays a gap. That is a restatement of D-116's model -- a tuple type has
+/// a fixed arity of `int`/`bool`/`float` elements -- and not a second
+/// admissibility rule.
 ///
 /// The export set is derived here, in the driver, rather than carried as a
 /// new field on `HirItem::Function`/`MirItem::Function`: those two patterns
@@ -482,50 +489,136 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     }
 }
 
-/// The C type and `pycc_ext_*` helper suffix one type the boundary admits
-/// uses inside a generated wrapper, or `None` when this pycc version's
-/// boundary cannot carry `ty` in either position.
+/// What one `Ty` the boundary admits occupies at a generated wrapper's
+/// parameter or result position.
+///
+/// A scalar occupies one C slot. A `tuple` occupies one slot per element
+/// and never a slot of its own (#1050): C cannot spell a pycc aggregate,
+/// because pycc's own convention for passing and returning one is not the
+/// platform C struct ABI. An enum rather than a `Vec` that happens to hold
+/// one entry, so every consumer has to say which case it is handling --
+/// this table is the entire seam between the driver's C and codegen's
+/// LLVM, and a width or a slot count that disagrees with the callee is a
+/// silent miscompile, never a compile error on either side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BoundaryCarrier {
+    /// One C slot: its C type, and the `pycc_ext_*` helper suffix that
+    /// unpacks and packs a value of it.
+    Scalar(&'static str, &'static str),
+    /// A `tuple`, as one `Scalar`'s payload per element in declaration
+    /// order. D-116 fixes a tuple type's arity, so this is exactly its
+    /// element list and never a run-time length.
+    Tuple(Vec<(&'static str, &'static str)>),
+}
+
+impl BoundaryCarrier {
+    /// The single C slot this carrier occupies, or `None` for a `tuple`,
+    /// which occupies several.
+    fn into_scalar(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            BoundaryCarrier::Scalar(c_type, helper) => Some((c_type, helper)),
+            BoundaryCarrier::Tuple(_) => None,
+        }
+    }
+}
+
+/// The C slots one type the boundary admits uses inside a generated
+/// wrapper, or `None` when this pycc version's boundary cannot carry `ty`
+/// in either position.
 ///
 /// Each C type is chosen to match exactly what `pycc_codegen`'s
 /// `ty_to_basic_type` gives the compiled function, because the wrapper
-/// reaches that function through a `void *fnptr_` cast no compiler can
-/// check: `Ty::Int` is `i64`, `Ty::Float` is `f64`, and `Ty::Bool` is a
-/// one-byte `i8` holding `0`/`1` at the parameter position as well as the
-/// return one -- hence `char`, and deliberately not `int` or `_Bool`. A
-/// width that disagrees with the callee is a silent miscompile here, never
-/// a compile error.
+/// reaches that function through a seam no compiler can check: `Ty::Int`
+/// is `i64`, `Ty::Float` is `f64`, and `Ty::Bool` is a one-byte `i8`
+/// holding `0`/`1` at the parameter position as well as the return one --
+/// hence `char`, and deliberately not `int` or `_Bool`. A width that
+/// disagrees with the callee is a silent miscompile here, never a compile
+/// error.
 ///
-/// `Ty::Str` is the one entry that is not a scalar -- hence this function's
-/// name, which #1049 widened from `boundary_scalar`. `ty_to_basic_type`
-/// gives it an opaque pointer, so the C type is `void *` in both positions
-/// and the wrapper never reads through it: `pycc_ext_unpack_str` produces
-/// the `PyStrObj` and `pycc_ext_pack_str` consumes it.
-fn boundary_carrier(ty: &Ty) -> Option<(&'static str, &'static str)> {
+/// `Ty::Str` is the one scalar entry that is not a number -- hence this
+/// function's name, which #1049 widened from `boundary_scalar`.
+/// `ty_to_basic_type` gives it an opaque pointer, so the C type is
+/// `void *` in both positions and the wrapper never reads through it:
+/// `pycc_ext_unpack_str` produces the `PyStrObj` and `pycc_ext_pack_str`
+/// consumes it.
+///
+/// `Ty::Tuple` (#1050) is the one entry that is not a single slot at all.
+/// Its elements are looked up through this same function, so their widths
+/// come from the same table rather than a parallel one, but only D-116's
+/// three element types are admitted: a tuple carrying anything else -- a
+/// nested tuple, `tuple[list[int]]`, or `tuple[str, int]`, none of which
+/// a `T0039`-checked program can express -- answers `None` exactly as any
+/// other uncarriable type does.
+fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
     match ty {
-        Ty::Int => Some(("long long", "int")),
-        Ty::Float => Some(("double", "float")),
-        Ty::Bool => Some(("char", "bool")),
-        Ty::Str => Some(("void *", "str")),
+        Ty::Int => Some(BoundaryCarrier::Scalar("long long", "int")),
+        Ty::Float => Some(BoundaryCarrier::Scalar("double", "float")),
+        Ty::Bool => Some(BoundaryCarrier::Scalar("char", "bool")),
+        Ty::Str => Some(BoundaryCarrier::Scalar("void *", "str")),
+        Ty::Tuple(elements) => elements
+            .iter()
+            .map(|element| match element {
+                // The one type the two admissibility questions answer
+                // differently, and so the one arm `into_scalar` cannot
+                // decide. `str` occupies a single C slot at a top-level
+                // position (#1049), so it would pass `into_scalar`
+                // unchanged -- but the element shims are the `_at`
+                // variants, which take an element index and exist only
+                // for D-116's three element types. Admitting
+                // `tuple[str, int]` here would render C naming an
+                // undeclared `pycc_ext_unpack_str_at`: a clang error on
+                // the generated artifact instead of the `C0003`
+                // capability gap every other uncarriable shape gets.
+                // Unreachable from source today, exactly as
+                // `tuple[list[int]]` is -- `T0039` refuses the
+                // annotation -- which is why it is stated rather than
+                // left to a recursion that happens to work.
+                Ty::Str => None,
+                // Every other element goes through this same function,
+                // so its width comes from the table above rather than a
+                // parallel one, and a `list` element (no carrier at all)
+                // or a nested tuple (a carrier, but not a single slot)
+                // answers `None` on its own.
+                _ => boundary_carrier(element).and_then(BoundaryCarrier::into_scalar),
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(BoundaryCarrier::Tuple),
         _ => None,
     }
 }
 
-/// The C type of one parameter slot, or `None` when the boundary cannot
-/// carry `ty` as a parameter. `Ty::None` is deliberately absent: a `None`
-/// parameter stays a capability gap, gated on #1047's call-argument ICE.
-fn param_c_type(ty: &Ty) -> Option<&'static str> {
-    boundary_carrier(ty).map(|(c_type, _)| c_type)
+/// Whether the boundary can carry `ty` at a parameter position.
+///
+/// `Ty::None` is deliberately not admitted: a `None` parameter stays a
+/// capability gap, gated on #1047's call-argument ICE. Everything else the
+/// boundary carries at all, it carries in both directions, so this is
+/// [`boundary_carrier`] with no further narrowing -- the asymmetry lives
+/// entirely in [`return_c_type`].
+fn carries_param(ty: &Ty) -> bool {
+    boundary_carrier(ty).is_some()
 }
 
-/// The C return type of a wrapper's indirect call, or `None` when the
-/// boundary cannot carry `ty` as a return type. This is the one position
-/// `Ty::None` is admissible in -- codegen emits a `None` return as LLVM
-/// `void`, so the cast declares `void` and the wrapper's egress becomes
-/// `Py_RETURN_NONE`.
+/// The C return type of a wrapper's call into the compiled function, or
+/// `None` when the boundary cannot carry `ty` as a return type.
+///
+/// Two types answer `void`, for different reasons. Codegen emits a `None`
+/// return as LLVM `void`, so there is nothing to receive at all and the
+/// wrapper's egress becomes `Py_RETURN_NONE`. A `tuple` return does carry
+/// values, but they leave through `pycc_ext_thunk_<name>`'s trailing
+/// out-pointers rather than as a return value (#1050), so the call itself
+/// is still `void` and the elements are read out of the wrapper's own
+/// locals afterwards.
 fn return_c_type(ty: &Ty) -> Option<&'static str> {
     match ty {
         Ty::None => Some("void"),
-        _ => param_c_type(ty),
+        // Still asked of `boundary_carrier`: `tuple[list[int]]` is a tuple
+        // whose element the boundary cannot carry, and answering `void`
+        // for it unconditionally would admit a signature no wrapper can
+        // unpack.
+        Ty::Tuple(_) => boundary_carrier(ty).map(|_| "void"),
+        _ => boundary_carrier(ty)
+            .and_then(BoundaryCarrier::into_scalar)
+            .map(|(c_type, _)| c_type),
     }
 }
 
@@ -535,9 +628,9 @@ fn return_c_type(ty: &Ty) -> Option<&'static str> {
 ///
 /// Parameters and the return type are asked separately because the two
 /// admissible sets genuinely differ rather than sharing one widened list:
-/// see [`param_c_type`] and [`return_c_type`].
+/// see [`carries_param`] and [`return_c_type`].
 fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<String> {
-    if let Some((name, ty)) = params.iter().find(|(_, ty)| param_c_type(ty).is_none()) {
+    if let Some((name, ty)) = params.iter().find(|(_, ty)| !carries_param(ty)) {
         return Some(format!("parameter `{name}: {}`", render_ty(ty)));
     }
     if return_c_type(return_ty).is_none() {
@@ -547,8 +640,15 @@ fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<St
 }
 
 /// A short Python-facing spelling of a `Ty`, for the `C0003` message only.
-/// Deliberately coarse: a container's element type adds nothing to "this
-/// boundary carries scalars only".
+///
+/// Deliberately coarse: the reader's fix is to change the signature, and
+/// the element type of the container that was refused adds nothing to that.
+/// The `Ty::Tuple(_)` arm survives #1050 rather than becoming dead, because
+/// a `tuple` is admitted by its elements: `tuple[list[int]]` and a nested
+/// `tuple[tuple[int], int]` still reach this function, and both are named
+/// `tuple` -- the element that failed is the same one D-116 already forbids
+/// spelling in a type annotation (T0039), so naming it would point at a
+/// program that cannot be written.
 fn render_ty(ty: &Ty) -> &'static str {
     match ty {
         Ty::Int => "int",
@@ -577,7 +677,8 @@ fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         message: format!(
             "--ext cannot export the public function `{name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float`, `bool` or `str`, and a return type must be one of those or `None` \
+             `float`, `bool`, `str` or a `tuple` of `int`/`float`/`bool`, and a return type \
+             must be one of those or `None` \
              (D-244 rule \
              1 exports every public module-level function, so there is no way to opt one \
              out) -- rename it to `_{name}` to keep it out of the export set, or build \
@@ -627,29 +728,65 @@ pub(crate) fn generate_exports_inc(module_name: &str, exports: &[ExtExport]) -> 
 /// exactly D-244 rule 7's closed boundary for free -- a `METH_VARARGS`
 /// wrapper would silently accept `f(x=1)` at the C level.
 ///
-/// The call goes through `fnptr_<name>`, the module-level function-pointer
-/// global codegen emits for each `def`'s binding, and *not* through the
-/// compiled function's own symbol. That is what makes a rebound name
-/// (`f = g` at module level) call what Python says it calls.
+/// A scalar-only signature's call goes through `fnptr_<name>`, the
+/// module-level function-pointer global codegen emits for each `def`'s
+/// binding, and *not* through the compiled function's own symbol. That is
+/// what makes a rebound name (`f = g` at module level) call what Python
+/// says it calls.
+///
+/// A signature carrying a `tuple` calls `pycc_ext_thunk_<name>` instead
+/// (#1050), which dispatches through that same global one LLVM frame
+/// further in and so keeps the rebinding property. The indirection exists
+/// because C cannot spell a pycc aggregate: pycc's own convention for
+/// passing and returning one is not the platform C struct ABI, so the thunk
+/// presents the signature as scalars and out-pointers and every aggregate
+/// stays on the LLVM side. That declaration is a real `extern` *function*
+/// declaration and the call is direct -- deliberately not the scalar path's
+/// `void *` global cast to a function-pointer type. The cast form was
+/// measured to fault (SIGBUS) on aarch64-apple-darwin for an out-pointer
+/// signature, and it is also the only one of the two that no C compiler can
+/// type-check at all.
 fn wrapper_for(export: &ExtExport) -> String {
     let name = &export.name;
     let arity = export.params.len();
-    // Every local, unpack helper and cast slot below is a function of the
+    // Every local, unpack helper and call slot below is a function of the
     // declared type alone and never of the object that arrives: `def
     // f(x: int)` gets `long long a0` and `pycc_ext_unpack_int` even though
     // that helper also accepts `True`, because widening the accepted object
     // set is the helper's business and never narrows the local.
     // `collect_exports` refused every type these two lookups cannot name, so
     // an export in hand always has both.
-    let slots: Vec<(&'static str, &'static str)> = export
+    let slots: Vec<BoundaryCarrier> = export
         .params
         .iter()
         .map(|ty| boundary_carrier(ty).expect("collect_exports admits only carriable parameters"))
         .collect();
     let return_c = return_c_type(&export.return_ty).expect("a carriable return type");
     let returns_none = export.return_ty == Ty::None;
+    // One entry per element of a returned `tuple`, and empty for every
+    // other return type: these become trailing out-pointer arguments, not
+    // a return value.
+    let out_slots: Vec<(&'static str, &'static str)> = match boundary_carrier(&export.return_ty) {
+        Some(BoundaryCarrier::Tuple(elements)) => elements,
+        _ => Vec::new(),
+    };
+    // #1050 keeps two index spaces apart on purpose. `arity` and every
+    // `a{index}` below are per *Python argument* -- what `nargs` counts,
+    // what the arity message names, and what an unpack failure has to clean
+    // up after -- while the C call's own argument list is the flattened
+    // one, built only at the call expression further down. Renumbering
+    // `a{index}` to follow the flattened list would make
+    // `def f(t: tuple[int, int])` report "takes exactly 2 arguments" for a
+    // one-argument function.
+    let use_thunk = pycc_codegen::ext_thunk_required(name, &export.params, &export.return_ty);
+    let thunk = pycc_codegen::ext_thunk_symbol(name);
+    let params = c_param_list(&slots, &out_slots);
     let mut out = String::new();
-    out.push_str(&format!("extern void *fnptr_{name};\n"));
+    if use_thunk {
+        out.push_str(&format!("extern {return_c} {thunk}({params});\n"));
+    } else {
+        out.push_str(&format!("extern void *fnptr_{name};\n"));
+    }
     out.push_str(&format!(
         "static PyObject *pycc_ext_wrap_{name}(PyObject *self, PyObject *const *args, \
          Py_ssize_t nargs)\n{{\n"
@@ -658,11 +795,29 @@ fn wrapper_for(export: &ExtExport) -> String {
     out.push_str("    (void)args;\n");
     // A `-> None` export has no result to hold: codegen emits its return as
     // LLVM `void`, so a result local would be a C type error, not a waste.
-    if !returns_none {
+    // A `tuple` return has no single result either -- its elements arrive
+    // in the `r{index}` locals below, through the thunk's out-pointers.
+    if !returns_none && out_slots.is_empty() {
         out.push_str(&format!("    {return_c} result;\n"));
     }
-    for (index, (c_type, _)) in slots.iter().enumerate() {
-        out.push_str(&format!("    {c_type} a{index};\n"));
+    for (index, (c_type, _)) in out_slots.iter().enumerate() {
+        out.push_str(&format!("    {c_type} r{index};\n"));
+        out.push_str(&format!("    PyObject *e{index};\n"));
+    }
+    if !out_slots.is_empty() {
+        out.push_str("    PyObject *packed;\n");
+    }
+    for (index, slot) in slots.iter().enumerate() {
+        match slot {
+            BoundaryCarrier::Scalar(c_type, _) => {
+                out.push_str(&format!("    {c_type} a{index};\n"));
+            }
+            BoundaryCarrier::Tuple(elements) => {
+                for (element, (c_type, _)) in elements.iter().enumerate() {
+                    out.push_str(&format!("    {c_type} a{index}_{element};\n"));
+                }
+            }
+        }
     }
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
@@ -670,43 +825,70 @@ fn wrapper_for(export: &ExtExport) -> String {
          return NULL;\n    }}\n",
         plural = if arity == 1 { "" } else { "s" },
     ));
-    for (index, (_, helper)) in slots.iter().enumerate() {
+    for (index, slot) in slots.iter().enumerate() {
         // Each `str` argument already unpacked holds a fresh reference that
         // only the compiled function's own parameter slot ever consumes, and
         // this branch bails before the call -- so release them here, or a
         // `TypeError` on argument 2 would leak argument 1's `PyStrObj` on
         // every raising call. Emitted inline rather than behind a shared
         // `goto` label: the cleanup differs per argument index, and the
-        // wrapper has no other exit that owes anything.
+        // wrapper has no other exit that owes anything. A `tuple` argument
+        // owes nothing: its elements are copied out by value.
         let cleanup: String = slots[..index]
             .iter()
             .enumerate()
-            .filter(|(_, (_, earlier_helper))| *earlier_helper == "str")
+            .filter(|(_, earlier)| matches!(earlier, BoundaryCarrier::Scalar(_, "str")))
             .map(|(earlier, _)| format!("        pycc_rt_str_decref(a{earlier});\n"))
             .collect();
+        match slot {
+            BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
+                "    if (pycc_ext_unpack_{helper}(args[{index}], \"{name}\", {index}, &a{index}) \
+                 != 0) {{\n{cleanup}        return NULL;\n    }}\n"
+            )),
+            BoundaryCarrier::Tuple(elements) => {
+                let elements_len = elements.len();
+                out.push_str(&format!(
+                    "    if (pycc_ext_unpack_tuple(args[{index}], \"{name}\", {index}, \
+                     {elements_len}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
+                ));
+                for (element, (_, helper)) in elements.iter().enumerate() {
+                    // `PyTuple_GetItem` cannot fail at this call: the check
+                    // just emitted refused every non-tuple and every length
+                    // but this one, so the index is always in range.
+                    out.push_str(&format!(
+                        "    if (pycc_ext_unpack_{helper}_at(PyTuple_GetItem(args[{index}], \
+                         {element}), \"{name}\", {index}, {element}, &a{index}_{element}) != 0) \
+                         {{\n{cleanup}        return NULL;\n    }}\n"
+                    ));
+                }
+            }
+        }
+    }
+    let mut call_args: Vec<String> = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        match slot {
+            BoundaryCarrier::Scalar(..) => call_args.push(format!("a{index}")),
+            BoundaryCarrier::Tuple(elements) => {
+                call_args.extend((0..elements.len()).map(|element| format!("a{index}_{element}")))
+            }
+        }
+    }
+    call_args.extend((0..out_slots.len()).map(|index| format!("&r{index}")));
+    let call_args = call_args.join(", ");
+    // Nothing is assigned on the `-> None` arm (a `void` call has no value)
+    // nor on the `tuple` arm (its elements arrive through the out-pointers).
+    let assign = if returns_none || !out_slots.is_empty() {
+        ""
+    } else {
+        "result = "
+    };
+    if use_thunk {
+        out.push_str(&format!("    {assign}{thunk}({call_args});\n"));
+    } else {
         out.push_str(&format!(
-            "    if (pycc_ext_unpack_{helper}(args[{index}], \"{name}\", {index}, &a{index}) != 0) \
-             {{\n{cleanup}        return NULL;\n    }}\n"
+            "    {assign}(({return_c} (*)({params}))fnptr_{name})({call_args});\n"
         ));
     }
-    let params = if arity == 0 {
-        "void".to_string()
-    } else {
-        slots
-            .iter()
-            .map(|(c_type, _)| *c_type)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let call_args = (0..arity)
-        .map(|index| format!("a{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Nothing is assigned on the `-> None` arm: a `void` call has no value.
-    let assign = if returns_none { "" } else { "result = " };
-    out.push_str(&format!(
-        "    {assign}(({return_c} (*)({params}))fnptr_{name})({call_args});\n"
-    ));
     // A compiled function that raised returns a neutral carrier and leaves
     // the runtime's thread-local flag set (see `pycc_codegen`'s
     // `exception_exit` block), so the carrier must never be packed: the
@@ -714,12 +896,19 @@ fn wrapper_for(export: &ExtExport) -> String {
     // This reads no part of the call's return value, so it stands unchanged
     // on the `-> None` arm -- where it is the only thing between a raised
     // exception and a fabricated `None`.
+    //
+    // #1050: its *position*, before the pack below, is load-bearing for a
+    // `tuple` return in a way it is not for a scalar one. A raising call
+    // leaves every `r{index}` out-pointer local exactly as uninitialized as
+    // it found it, so a pack that ran first would read indeterminate
+    // storage -- undefined behaviour, not merely a wrong value.
     out.push_str(
         "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
          return NULL;\n    }\n",
     );
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
+        Ty::Tuple(_) => out.push_str(&pack_tuple_return(name, &out_slots)),
         // `pack_int` is the one packer whose failure is a property of the
         // *value*, and the only one whose message therefore names the
         // function: D-141's bigint egress (#1040). `PyFloat_FromDouble` and
@@ -731,12 +920,102 @@ fn wrapper_for(export: &ExtExport) -> String {
             "    return pycc_ext_pack_int(\"{name}\", result);\n}}\n\n"
         )),
         ty => {
-            let (_, helper) = boundary_carrier(ty).expect("a carriable return type");
+            let (_, helper) = boundary_carrier(ty)
+                .and_then(BoundaryCarrier::into_scalar)
+                .expect("a carriable scalar return type");
             out.push_str(&format!(
                 "    return pycc_ext_pack_{helper}(result);\n}}\n\n"
             ));
         }
     }
+    out
+}
+
+/// The C parameter-type list of the call a wrapper makes into the compiled
+/// program: every declared parameter flattened to the slots it occupies,
+/// then one out-pointer per element of a returned `tuple`.
+///
+/// `"void"` and not `""` for the empty list, because an empty C parameter
+/// list means "unspecified", not "none". The rule applies to the *combined*
+/// list: only a nullary export with no `tuple` return has one.
+fn c_param_list(slots: &[BoundaryCarrier], out_slots: &[(&'static str, &'static str)]) -> String {
+    let mut types: Vec<String> = Vec::new();
+    for slot in slots {
+        match slot {
+            BoundaryCarrier::Scalar(c_type, _) => types.push((*c_type).to_string()),
+            BoundaryCarrier::Tuple(elements) => {
+                types.extend(elements.iter().map(|(c_type, _)| (*c_type).to_string()));
+            }
+        }
+    }
+    types.extend(out_slots.iter().map(|(c_type, _)| format!("{c_type} *")));
+    if types.is_empty() {
+        "void".to_string()
+    } else {
+        types.join(", ")
+    }
+}
+
+/// The egress of a `tuple`-returning wrapper (#1050): pack every element,
+/// then build the tuple.
+///
+/// Every element is packed *unconditionally*, before any failure is acted
+/// on, and that ordering is the refcount discipline rather than a style
+/// choice. Each `r{index}` arrives retained (D-180 rule 6), and it is the
+/// matching `pycc_ext_pack_*` call that discharges the ownership -- the
+/// `int` packer releases a bigint word on its own `OverflowError` path.
+/// Bailing out at the first failing element would leave every later
+/// element's word undischarged, leaking one `BigIntObj` per call on exactly
+/// the path that already raises.
+///
+/// The cost is that when two `int` elements both overflow, the second
+/// `PyErr_Format` replaces the first. Both carry the same message text and
+/// the same exception type, so the observable difference is nil, and
+/// replacing a pending exception is well-defined in CPython -- unlike
+/// dropping an owned word.
+///
+/// `PyTuple_New` is reached only once every element is packed, so its own
+/// failure path has a fixed, fully-owned set to release.
+fn pack_tuple_return(name: &str, out_slots: &[(&'static str, &'static str)]) -> String {
+    let mut out = String::new();
+    for (index, (_, helper)) in out_slots.iter().enumerate() {
+        let argument = if *helper == "int" {
+            format!("\"{name}\", r{index}")
+        } else {
+            format!("r{index}")
+        };
+        out.push_str(&format!(
+            "    e{index} = pycc_ext_pack_{helper}({argument});\n"
+        ));
+    }
+    let arity = out_slots.len();
+    let any_null = (0..arity)
+        .map(|index| format!("e{index} == NULL"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let x_release: String = (0..arity)
+        .map(|index| format!("        Py_XDECREF(e{index});\n"))
+        .collect();
+    out.push_str(&format!(
+        "    if ({any_null}) {{\n{x_release}        return NULL;\n    }}\n"
+    ));
+    let release: String = (0..arity)
+        .map(|index| format!("        Py_DECREF(e{index});\n"))
+        .collect();
+    out.push_str(&format!(
+        "    packed = PyTuple_New({arity});\n    if (packed == NULL) {{\n{release}        \
+         return NULL;\n    }}\n"
+    ));
+    out.push_str(
+        "    /* Every index is in range and `packed` is a fresh tuple, so each\n       \
+         PyTuple_SetItem succeeds and steals its element reference. */\n",
+    );
+    for index in 0..arity {
+        out.push_str(&format!(
+            "    PyTuple_SetItem(packed, {index}, e{index});\n"
+        ));
+    }
+    out.push_str("    return packed;\n}\n\n");
     out
 }
 
