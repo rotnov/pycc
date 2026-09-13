@@ -283,16 +283,38 @@ class CorrectnessPreconditionTest(unittest.TestCase):
     def test_refuses_a_differing_exception_type(self) -> None:
         with self.assertRaises(BenchmarkError):
             RUNNER.compare_outcomes(
-                self.reference(value=None, exception="ValueError"),
-                self.reference(value=None, exception="TypeError"),
+                self.reference(value=None, exception=ValueError),
+                self.reference(value=None, exception=TypeError),
                 tolerance=1e-12,
             )
+
+    def test_refuses_two_namesake_exception_classes(self) -> None:
+        # A name is not an identity: an arm that defines its own `ValueError`
+        # must not satisfy the precondition by raising a namesake of the one
+        # the baseline raised.
+        namesake = type("ValueError", (Exception,), {})
+
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.compare_outcomes(
+                self.reference(value=None, exception=ValueError),
+                self.reference(value=None, exception=namesake),
+                tolerance=1e-12,
+            )
+
+        self.assertIn("builtins.ValueError", str(raised.exception))
+
+    def test_accepts_two_arms_that_raised_the_same_exception(self) -> None:
+        RUNNER.compare_outcomes(
+            self.reference(value=None, exception=ValueError),
+            self.reference(value=None, exception=ValueError),
+            tolerance=1e-12,
+        )
 
     def test_refuses_an_arm_that_raises_where_the_baseline_returned(self) -> None:
         with self.assertRaises(BenchmarkError):
             RUNNER.compare_outcomes(
                 self.reference(),
-                self.reference(value=None, exception="ValueError"),
+                self.reference(value=None, exception=ValueError),
                 tolerance=1e-12,
             )
 
@@ -307,9 +329,9 @@ class CorrectnessPreconditionTest(unittest.TestCase):
         # arguments are the only thing left that can catch this arm.
         with self.assertRaises(BenchmarkError) as raised:
             RUNNER.compare_outcomes(
-                self.reference(value=None, exception="ValueError"),
+                self.reference(value=None, exception=ValueError),
                 self.reference(
-                    value=None, exception="ValueError", arguments_digest="b"
+                    value=None, exception=ValueError, arguments_digest="b"
                 ),
                 tolerance=1e-12,
             )
@@ -408,6 +430,42 @@ class PreRegistrationTest(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, record)
 
+    # `json.loads` turns `1e999` into infinity, and `compare_outcomes` tests
+    # `difference > allowed`: a tolerance that is not a finite, non-negative
+    # number bounds nothing, so the record is refused rather than scored.
+    def test_accepts_the_committed_float_tolerance(self) -> None:
+        self.assertEqual(
+            RUNNER.read_float_tolerance(committed_record()),
+            committed_record()["float_tolerance"],
+        )
+
+    def test_refuses_an_infinite_float_tolerance(self) -> None:
+        record = committed_record() | {"float_tolerance": json.loads("1e999")}
+
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.read_float_tolerance(record)
+
+        self.assertIn("finite", str(raised.exception))
+
+    def test_refuses_a_negative_float_tolerance(self) -> None:
+        with self.assertRaises(BenchmarkError):
+            RUNNER.read_float_tolerance(committed_record() | {"float_tolerance": -1e-09})
+
+    def test_refuses_a_float_tolerance_that_is_not_a_number(self) -> None:
+        for value in ("1e-09", None, True):
+            with self.subTest(value=value):
+                with self.assertRaises(BenchmarkError) as raised:
+                    RUNNER.read_float_tolerance(committed_record() | {"float_tolerance": value})
+
+                self.assertIn("number", str(raised.exception))
+
+    def test_refuses_a_record_with_no_float_tolerance(self) -> None:
+        record = committed_record()
+        del record["float_tolerance"]
+
+        with self.assertRaises(BenchmarkError):
+            RUNNER.read_float_tolerance(record)
+
     def test_record_carries_no_result(self) -> None:
         record = committed_record()
 
@@ -453,7 +511,7 @@ class TimingBoundaryTest(unittest.TestCase):
 
         self.assertGreaterEqual(elapsed, 0)
         self.assertIsNone(outcome.value)
-        self.assertEqual(outcome.exception, "ZeroDivisionError")
+        self.assertIs(outcome.exception, ZeroDivisionError)
         self.assertEqual(
             outcome.arguments_digest,
             hashlib.sha256(repr((7,)).encode("utf-8")).hexdigest(),

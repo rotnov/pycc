@@ -610,7 +610,12 @@ rule 6); only numbers are published.
   either arm -- is a failure too, never an agreement: a tolerance comparison
   against a NaN is false whatever the difference, so a silently non-finite arm
   would otherwise pass the precondition by arithmetic rather than by agreeing. An arm that raises where the CPython arm returns, or
-  raises a different exception type, has failed. This precondition applies to
+  raises a different exception type, has failed. The two exception types are
+  compared as classes rather than by name, so an arm that raises its own
+  namesake of the class the CPython arm raised has failed as well. The
+  committed tolerance itself must be a finite, non-negative number: JSON admits
+  `1e999`, which would parse as an infinity that admits every divergence, so a
+  record whose tolerance cannot bound anything is refused before any arm runs. This precondition applies to
   every call whose duration is reported, not only to the warm-up: each timed
   invocation's outcome and its post-call argument state are validated against
   that arm's own warm-up under the same committed tolerance before the duration

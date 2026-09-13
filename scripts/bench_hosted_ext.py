@@ -113,7 +113,10 @@ class ArmOutcome:
     """What one arm produced on the committed input, outside the clock."""
 
     value: object
-    exception: str | None
+    #: The exception's own class, not its name: two distinct classes can share
+    #: a `__name__`, and `docs/TESTING.md`'s "Correctness precondition" bullet
+    #: requires the arms to raise the same exception, not a namesake of it.
+    exception: type[BaseException] | None
     arguments_digest: str
 
 
@@ -389,7 +392,8 @@ def compare_outcomes(
         if reference.exception != candidate.exception:
             raise BenchmarkError(
                 f"{subject} and {against} disagree on the exception raised: "
-                f"{reference.exception!r} against {candidate.exception!r}"
+                f"{exception_identity(reference.exception)} against "
+                f"{exception_identity(candidate.exception)}"
             )
         return
     if type(reference.value) is not type(candidate.value):
@@ -414,6 +418,42 @@ def compare_outcomes(
             )
     elif reference.value != candidate.value:
         raise BenchmarkError(f"{subject} and {against} returned different values")
+
+
+def exception_identity(exception: type[BaseException] | None) -> str:
+    """Name an exception class unambiguously in a refusal message."""
+
+    if exception is None:
+        return "no exception"
+    return f"{exception.__module__}.{exception.__qualname__}"
+
+
+def read_float_tolerance(record: dict) -> float:
+    """The committed float tolerance, refused unless it can actually bound anything.
+
+    `json.loads` accepts `1e999` and `-1e999` as floats and turns them into
+    infinities, and `compare_outcomes` tests `difference > allowed`: an infinite
+    tolerance admits every divergence, a negative one refuses every agreement,
+    and a boolean is an `int` that means neither. `docs/TESTING.md`'s
+    "Correctness precondition" bullet makes the committed tolerance the bound on
+    a real divergence, so the record is refused here rather than scoring a run
+    whose bound bounds nothing.
+    """
+
+    tolerance = record.get("float_tolerance")
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
+        raise BenchmarkError(
+            "the pre-registered float_tolerance must be a number, so a divergence "
+            "has a bound to be compared against"
+        )
+    tolerance = float(tolerance)
+    if not math.isfinite(tolerance) or tolerance < 0.0:
+        raise BenchmarkError(
+            "the pre-registered float_tolerance must be finite and not negative: "
+            "an infinite tolerance admits every divergence and a negative one "
+            "refuses every agreement"
+        )
+    return tolerance
 
 
 def median_ns(timings: list[int]) -> int:
@@ -471,7 +511,7 @@ def time_call(call, *args) -> tuple[int, ArmOutcome]:
         # arm that mutates its arguments and then raises would otherwise carry
         # the pre-call digest and compare equal to the baseline's.
         finished = time.perf_counter_ns()
-        outcome = ArmOutcome(None, type(error).__name__, digest_arguments(args))
+        outcome = ArmOutcome(None, type(error), digest_arguments(args))
     else:
         finished = time.perf_counter_ns()
         outcome = ArmOutcome(value, None, digest_arguments(args))
@@ -627,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parent.parent
     try:
         record = read_pre_registration(arguments.pre_registration, root)
+        read_float_tolerance(record)
         compare_machine(observe_machine(), record.get("machine"))
         interpreter = resolve_interpreter(dict(os.environ))
         assert_hosts_the_arms(interpreter_identity(interpreter), host_identity())
