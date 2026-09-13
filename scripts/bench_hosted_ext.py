@@ -34,7 +34,10 @@ exactly; `power_profile` is not derivable from any of them and stays an
 operator assertion, restated in the report rather than verified here.
 
 `main` is the protocol's gate, not its driver: it resolves and checks the
-interpreter, the subject and the input, and stops. Constructing the three arms
+interpreter, the subject and the input, and stops. It refuses rather than
+repairs, so a run launched under the wrong interpreter is rejected instead of
+re-executed: the arms are timed in this process, and the interpreter guards
+describe it only because the configured interpreter is checked to be it. Constructing the three arms
 -- interpreter, Cython extension, `ext` artifact -- belongs to the run that
 publishes the numbers, which calls `run_arm` once per arm and
 `compare_outcomes` between them.
@@ -531,6 +534,52 @@ def run_arm(arm: str, call, make_arguments, tolerance: float) -> tuple[dict, Arm
     return summarize(arm, timings), outcome
 
 
+def interpreter_identity(interpreter: str) -> str:
+    """Ask `interpreter` which executable it actually is, resolved through links.
+
+    A configured name is not an identity: it may be a bare name found on `PATH`,
+    a relative path, a symbolic link, or a virtual environment's own launcher.
+    Only the interpreter itself can say, so it is asked, and the answer is
+    compared against the same fact about this process.
+    """
+
+    return subprocess.run(
+        [interpreter, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def host_identity() -> str:
+    """The same fact about the process that will execute the arms."""
+
+    return os.path.realpath(sys.executable)
+
+
+def assert_hosts_the_arms(configured_identity: str, this_identity: str) -> None:
+    """Refuse unless the configured interpreter is the process running this script.
+
+    `docs/TESTING.md`'s "Versions" bullet makes the pinned interpreter both the
+    baseline arm and the host that imports the `ext` artifact. `run_arm` times
+    callables in *this* process, so every other guard here -- the version, the
+    GIL, the optimized build -- describes the host only once this holds; without
+    it a run launched under some other interpreter would print that its
+    preconditions are satisfied while timing the arms on an unpinned one.
+
+    The comparison is between two resolved executables, so a virtual environment
+    is its own interpreter rather than the base it was created from: both sides
+    must name the same one.
+    """
+
+    if not configured_identity or configured_identity != this_identity:
+        raise BenchmarkError(
+            "the pinned interpreter must be the one running this script: launch the "
+            "benchmark with the interpreter PYCC_BENCH_PYTHON (or PYCC_PYTHON) names, "
+            "since the arms are timed in this process"
+        )
+
+
 def interpreter_facts(interpreter: str) -> tuple[str, str | None]:
     version_output = subprocess.run(
         [interpreter, "-VV"], check=True, capture_output=True, text=True
@@ -567,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         record = read_pre_registration(arguments.pre_registration, root)
         compare_machine(observe_machine(), record.get("machine"))
         interpreter = resolve_interpreter(dict(os.environ))
+        assert_hosts_the_arms(interpreter_identity(interpreter), host_identity())
         version_output, configure_args = interpreter_facts(interpreter)
         assert_pinned_version(version_output)
         assert_gil_enabled(version_output)

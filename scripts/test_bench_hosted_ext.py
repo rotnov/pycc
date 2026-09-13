@@ -59,6 +59,24 @@ class InterpreterGuardTest(unittest.TestCase):
 
         self.assertIn("PYCC_BENCH_PYTHON", str(raised.exception))
 
+    # `docs/TESTING.md`'s "Versions" bullet makes the pinned interpreter both
+    # the baseline arm and the host that imports the `ext` artifact, and
+    # `run_arm` times its callables in this process. Both directions below
+    # compare two injected identities, so nothing here reads the ambient
+    # interpreter and the test says the same thing on macOS and on Linux CI.
+    def test_accepts_the_configured_interpreter_that_is_this_process(self) -> None:
+        RUNNER.assert_hosts_the_arms("/opt/pinned/bin/python3.14", "/opt/pinned/bin/python3.14")
+
+    def test_refuses_a_configured_interpreter_that_is_not_this_process(self) -> None:
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.assert_hosts_the_arms("/opt/pinned/bin/python3.14", "/usr/bin/python3.11")
+
+        self.assertIn("PYCC_BENCH_PYTHON", str(raised.exception))
+
+    def test_refuses_an_interpreter_that_reported_no_identity(self) -> None:
+        with self.assertRaises(BenchmarkError):
+            RUNNER.assert_hosts_the_arms("", "/usr/bin/python3.11")
+
     def test_accepts_the_pinned_version(self) -> None:
         RUNNER.assert_pinned_version("Python 3.14.7 (main, Sep 1 2026, 00:00:00) [Clang]")
 

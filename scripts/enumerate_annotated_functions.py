@@ -20,15 +20,18 @@ The enumeration predicate, in full:
   were enumerated is therefore recorded in
   `scripts/bench_hosted_ext_precommit.json` alongside the digest, and a
   qualified name stays relative to the root rather than to the subtree, so the
-  set is re-derivable from those two facts;
+  set is re-derivable from those two facts. No named subtree, and no directory
+  leading to one, may be a symbolic link, and no two named subtrees may repeat
+  or contain one another: either would walk the same files twice;
 * every file whose name ends in `.py` under each enumerated subtree, skipping any
   directory whose name begins with `.` or is one of `ENUMERATION_SKIP_DIRS`
   (virtual environments, caches and build output are not source);
 * a symbolic link is never followed and never enumerated, whether it names a
-  file or a directory. A link is not the tree's own source: following one lets
-  the same file be counted twice under two names, or pull a whole tree in from
-  outside the enumerated subtrees, and either moves the digest without the
-  codebase having changed;
+  file or a directory, and whether it is met during the walk or named as a
+  subtree root. A link is not the tree's own source: following one lets the same
+  file be counted twice under two names, or pull a whole tree in from outside
+  the enumerated subtrees, and either moves the digest without the codebase
+  having changed;
 * a file that does not parse is skipped rather than failing the walk, because
   a tree may legitimately carry fixtures for syntax errors;
 * within a file, only **module-level** `def` statements qualify. A method, a
@@ -50,6 +53,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import warnings
@@ -101,9 +105,23 @@ def _enumeration_starts(root: Path, subtrees: list[str] | None) -> list[Path]:
     starts: list[Path] = []
     resolved_root = root.resolve()
     for subtree in subtrees:
-        start = (resolved_root / subtree).resolve()
+        named = resolved_root / subtree
+        start = named.resolve()
+        # `resolved_root` carries no links, so the resolved path can differ from
+        # the lexically normalized one only because a component of `subtree` is
+        # itself a symbolic link. Testing the leaf alone would miss a link in the
+        # middle, and resolving first would erase the fact entirely: the walk's
+        # own `is_symlink()` guard never sees a start, only the entries under it.
+        if start != Path(os.path.normpath(named)):
+            raise ValueError("a subtree, or a directory leading to it, must not be a symbolic link")
         if not start.is_dir() or resolved_root not in start.parents:
             raise ValueError("each subtree must be an existing directory inside the root")
+        # Two spellings of one subtree, or a subtree nested inside another, would
+        # walk the same files twice: the digest is taken over the names joined by
+        # a separator, so a repeat moves it without the codebase having changed.
+        for seen in starts:
+            if start == seen or seen in start.parents or start in seen.parents:
+                raise ValueError("the subtrees must not repeat or contain one another")
         starts.append(start)
     return starts
 

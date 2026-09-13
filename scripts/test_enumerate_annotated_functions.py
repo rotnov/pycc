@@ -238,6 +238,82 @@ class SubtreeRestrictionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ENUMERATOR.collect_annotated_functions(root, ["../elsewhere"])
 
+    def test_rejects_a_subtree_root_that_is_itself_a_symbolic_link(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {"src/alpha.py": "def one(value: int) -> int:\n    return value\n"})
+            (root / "alias").symlink_to(root / "src", target_is_directory=True)
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["alias"])
+
+    def test_rejects_a_subtree_reached_through_a_symlinked_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(
+                root, {"src/inner/alpha.py": "def one(value: int) -> int:\n    return value\n"}
+            )
+            (root / "alias").symlink_to(root / "src", target_is_directory=True)
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["alias/inner"])
+
+    def test_rejects_two_spellings_of_the_same_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {"src/alpha.py": "def one(value: int) -> int:\n    return value\n"})
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["src", "src"])
+
+    def test_rejects_a_subtree_nested_inside_another_subtree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(
+                root, {"src/inner/alpha.py": "def one(value: int) -> int:\n    return value\n"}
+            )
+
+            with self.assertRaises(ValueError):
+                ENUMERATOR.collect_annotated_functions(root, ["src", "src/inner"])
+
+    def test_refusals_do_not_echo_the_subtree_that_was_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(root, {"src/alpha.py": "def one(value: int) -> int:\n    return value\n"})
+            (root / "secret-alias").symlink_to(root / "src", target_is_directory=True)
+
+            with self.assertRaises(ValueError) as caught:
+                ENUMERATOR.collect_annotated_functions(root, ["secret-alias"])
+
+            self.assertNotIn("secret-alias", str(caught.exception))
+            self.assertNotIn(str(root), str(caught.exception))
+
+    def test_an_ordinary_subtree_enumerates_exactly_as_before(self) -> None:
+        """The new refusals must not move the committed denominator or digest.
+
+        `scripts/bench_hosted_ext_precommit.json` pre-registers its numbers over
+        a subtree that is a plain directory, so the accepted path through
+        `_enumeration_starts` has to yield the identical start list and the
+        identical names it yielded before those refusals existed.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_tree(
+                root,
+                {
+                    "src/alpha.py": "def one(value: int) -> int:\n    return value\n",
+                    "src/inner/beta.py": "def two(value: int) -> int:\n    return value\n",
+                    "tests/gamma.py": "def three(value: int) -> int:\n    return value\n",
+                },
+            )
+
+            starts = ENUMERATOR._enumeration_starts(root, ["src"])
+            names = ENUMERATOR.collect_annotated_functions(root, ["src"])
+
+            self.assertEqual(starts, [root.resolve() / "src"])
+            self.assertEqual(names, ["src.alpha.one", "src.inner.beta.two"])
+
     def test_pre_registration_records_the_subtrees_that_were_enumerated(self) -> None:
         record = ENUMERATOR.read_pre_registration(
             Path(__file__).with_name("bench_hosted_ext_precommit.json")
