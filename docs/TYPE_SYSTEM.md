@@ -174,13 +174,21 @@ element, and panics on an empty one.
 - **Every block statement is walked.** Both halves of the pass — the rewrite
   and the producer scan — share one inventory of nested statement sequences
   covering `if`/`else`, `while`, both `for` forms, every `match` case body, and
-  every `try`/`except`/`except*`/`else`/`finally` suite, so sources (1) and (3)
-  behave identically at any nesting depth. Source (2) is the exception, and it
-  is a narrowing rather than a contract: its environment comes from a
+  every `try`/`except`/`except*`/`else`/`finally` suite, so source (1) — purely
+  syntactic, reading no environment — behaves identically at any nesting depth.
+  Sources (2) and (3) share one exception, and it is a narrowing rather than a
+  contract: both read the same flat whole-function environment built by a
   pre-existing pass shared with protocol monomorphization whose own statement
-  walk has no `match`/`try` arm, so a binding *created inside* one of those
-  suites is invisible to it. The cost is a missed resolution (`T0003`), never a
-  wrong element type.
+  walk has no `match`/`try` arm. Source (2) reads a binding out of it directly;
+  source (3) infers the producer's value *in* it. So a name bound only inside
+  one of those suites is invisible to both. The cost is a missed resolution,
+  never a wrong element type. What a miss reports is `T0003` in a `try` suite,
+  but inside a `match` case the failing concrete path routes the module into
+  the private-helper constraint solver, whose own `match` arm never binds
+  pattern captures, and D-220's solver-first merge surfaces that pre-existing
+  false `T0021` instead — see issue #1046; `main` emits the identical message
+  for the same program and for a `match` program with no empty container at
+  all.
 - **First-wins within a scope.** When two branches assign `[]` to the same
   name with different producers, both nodes take the first producer's type and
   the second branch's `append` reports the ordinary element-type mismatch. One
