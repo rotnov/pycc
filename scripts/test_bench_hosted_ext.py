@@ -651,6 +651,12 @@ class MachineIdentityTest(unittest.TestCase):
 
         self.assertIn("cpu", str(raised.exception))
 
+    @unittest.skipUnless(
+        sys.platform == "darwin",
+        "`observe_machine` reads `sysctl`/`sw_vers`, which only a macOS host answers; "
+        "the pre-registered machine is a Mac, so refusing every other host is the "
+        "behaviour `test_refuses_a_host_that_does_not_answer` pins portably.",
+    )
     def test_observes_this_host_in_the_committed_shape(self) -> None:
         observed = RUNNER.observe_machine()
 
