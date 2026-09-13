@@ -29,7 +29,11 @@
 
 use crate::ext_output::ExtPlatform;
 use pycc_diag::{Diagnostic, Severity};
-use pycc_hir::{HirItem, HirModule, Ty, is_public_name};
+use pycc_hir::{
+    BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirItem, HirModule, Ty,
+    is_public_name,
+};
+use std::collections::HashMap;
 #[cfg(test)]
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -690,20 +694,254 @@ fn capability_gap(name: &str, offender: &str) -> Diagnostic {
     }
 }
 
+/// The exact C declaration of the generated tag-to-class lookup.
+///
+/// Shared on purpose (risk R3 of this change's plan): the *definition* is
+/// emitted here while the forward declaration is hand-written in
+/// [`SHIM_C`], and nothing links the two until a C compiler runs inside an
+/// `#[ignore]`d test the coverage job never executes. Both the shim test
+/// and the generated-text test assert this one constant, so a spelling or
+/// parameter-type drift fails an ordinary `cargo test` instead.
+pub(crate) const USER_EXCEPTION_LOOKUP_DECL: &str =
+    "static PyObject *pycc_ext_user_exception_class(unsigned char tag)";
+
+/// The exact C declaration of the generated eager-registration entry point,
+/// called from `pycc_ext_exec_module` after the `.inc` is included (so it
+/// needs no forward declaration, unlike [`USER_EXCEPTION_LOOKUP_DECL`]).
+pub(crate) const USER_EXCEPTION_REGISTER_DECL: &str =
+    "static int pycc_ext_register_exception_classes(PyObject *module)";
+
+/// The two PEP 654 group classes. A class whose MRO reaches either one is
+/// excluded from the table by [`collect_user_exception_classes`]: the
+/// limited C API exposes no `PyExc_ExceptionGroup`, and PEP 654 requires
+/// `(msg, exceptions)`, so a synthesized stand-in would be a fake group
+/// class rather than CPython's. Such a class keeps today's honest
+/// `Exception`; `docs/RUNTIME.md` records the residual.
+const GROUP_EXCEPTION_CLASSES: [&str; 2] = ["BaseExceptionGroup", "ExceptionGroup"];
+
+/// One base of a synthesized user exception class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExceptionBase {
+    /// A seeded builtin exception class, spelled `PyExc_<name>` host-side.
+    /// The `&'static str` is the [`BUILTIN_EXCEPTION_CLASSES`] entry itself,
+    /// so the rendered spelling cannot drift from the array.
+    Builtin(&'static str),
+    /// Another entry of the same table, by its slot index. Always a lower
+    /// slot than the class that names it: `resolve_mro` requires a base to
+    /// be defined before its subclass, and `finalize` assigns tags in that
+    /// same program order.
+    User(usize),
+}
+
+/// One user-defined exception class the artifact synthesizes on the host
+/// side, in the order the generated registration function creates them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserExceptionClass {
+    /// The runtime tag `pycc_ext_raise_pending` receives for an instance of
+    /// this class. Assigned by `pycc_hir::program::finalize` in program
+    /// order, so it shifts on any source edit: it is regenerated with every
+    /// artifact and never persisted in a fixture, a checked-in file, or the
+    /// hand-written shim.
+    pub(crate) tag: u8,
+    /// The class's own (unqualified) Python name.
+    pub(crate) name: String,
+    /// The exception bases, in declaration order. Provably non-empty: a
+    /// class earns a tag only when its MRO reaches a builtin exception
+    /// class, which requires at least one exception base.
+    pub(crate) bases: Vec<ExceptionBase>,
+}
+
+/// The per-program table of user exception classes the artifact
+/// synthesizes, in ascending tag order.
+///
+/// Membership is decided here and nowhere else (correction C3 of this
+/// change's plan): the C shim performs no tag arithmetic of its own, so a
+/// class this function omits simply misses the generated lookup and keeps
+/// `PyExc_Exception`.
+///
+/// Selection is `exception_type_tag == Some(t)` with
+/// `t >= FIRST_USER_EXCEPTION_TYPE_TAG`. Neither `None` nor a smaller
+/// `Some` is a user class: `crates/pycc_hir/src/class.rs` documents that
+/// trap directly -- the flat seven builtins carry `None` and the PEP 3151
+/// `OSError` family carries a fixed `Some`. Group-derived classes are
+/// excluded by [`GROUP_EXCEPTION_CLASSES`], and a monomorphized generic
+/// specialization is untagged by construction and never appears here.
+///
+/// Bases come from `def.bases`, never from the linearized `def.mro`:
+/// `class E(MyBase, ValueError)` is legal and is caught natively by
+/// `except ValueError:`, so taking the first exception ancestor out of the
+/// MRO would pick `MyBase` alone and drop `ValueError` -- exactly the
+/// host-side mismatch this table exists to remove. A non-exception base (a
+/// method-only mixin) is dropped, which `docs/RUNTIME.md` records as a
+/// residual.
+pub(crate) fn collect_user_exception_classes(module: &HirModule) -> Vec<UserExceptionClass> {
+    let selected: Vec<(&str, &[String], u8)> = module
+        .class_defs
+        .iter()
+        .filter_map(|(name, def)| {
+            let tag = def.exception_type_tag?;
+            let derives_from_group = def
+                .mro
+                .iter()
+                .any(|ancestor| GROUP_EXCEPTION_CLASSES.contains(&ancestor.as_str()));
+            (tag >= FIRST_USER_EXCEPTION_TYPE_TAG && !derives_from_group).then_some((
+                name.as_str(),
+                def.bases.as_slice(),
+                tag,
+            ))
+        })
+        .collect();
+    let slots: HashMap<&str, usize> = selected
+        .iter()
+        .enumerate()
+        .map(|(slot, (name, _, _))| (*name, slot))
+        .collect();
+    selected
+        .iter()
+        .map(|(name, bases, tag)| UserExceptionClass {
+            tag: *tag,
+            name: (*name).to_string(),
+            bases: bases
+                .iter()
+                .filter_map(|base| {
+                    BUILTIN_EXCEPTION_CLASSES
+                        .iter()
+                        .copied()
+                        .find(|builtin| *builtin == base.as_str())
+                        .map(ExceptionBase::Builtin)
+                        .or_else(|| slots.get(base.as_str()).copied().map(ExceptionBase::User))
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The C expression naming one base class at registration time.
+fn base_expression(base: &ExceptionBase) -> String {
+    match base {
+        ExceptionBase::Builtin(name) => format!("PyExc_{name}"),
+        ExceptionBase::User(slot) => format!("pycc_ext_user_exception_classes[{slot}]"),
+    }
+}
+
+/// One table entry's registration: create the class if the cache slot is
+/// empty, then publish it as a module attribute.
+///
+/// The cache owns the strong reference `PyErr_NewException` returns and
+/// `PyModule_AddObjectRef` takes its own, so neither needs a compensating
+/// decref. The slot is assigned *before* `AddObjectRef` is checked, so a
+/// failing `AddObjectRef` cannot leak the class. A non-`NULL` slot is
+/// reused rather than re-minted: deleting the `sys.modules` entry and
+/// re-importing is the one path that re-runs `Py_mod_exec`
+/// (`docs/RUNTIME.md`), and reuse keeps class identity stable across it.
+/// A mid-registration failure leaves the already-created classes cached, so
+/// a later import completes the remaining slots.
+fn register_class_c(slot: usize, class: &UserExceptionClass) -> String {
+    let name = &class.name;
+    let mut out = format!("    if (pycc_ext_user_exception_classes[{slot}] == NULL) {{\n");
+    // A single base is passed directly; two or more need a `PyTuple`, which
+    // `PyErr_NewException` accepts and which is what gives the synthesized
+    // class the same `__mro__` the native side matches on.
+    let (base, release) = match class.bases.as_slice() {
+        [single] => (base_expression(single), ""),
+        several => {
+            let packed: Vec<String> = several.iter().map(base_expression).collect();
+            out.push_str(&format!(
+                "        PyObject *bases = PyTuple_Pack({}, {});\n",
+                several.len(),
+                packed.join(", ")
+            ));
+            out.push_str("        if (bases == NULL) {\n            return -1;\n        }\n");
+            ("bases".to_string(), "        Py_DECREF(bases);\n")
+        }
+    };
+    out.push_str(&format!(
+        "        pycc_ext_user_exception_classes[{slot}] = PyErr_NewException(\n            \
+         PYCC_EXT_MODULE_NAME_STR \".{name}\", {base}, NULL);\n"
+    ));
+    out.push_str(release);
+    out.push_str(&format!(
+        "        if (pycc_ext_user_exception_classes[{slot}] == NULL) {{\n            \
+         return -1;\n        }}\n    }}\n"
+    ));
+    out.push_str(&format!(
+        "    if (PyModule_AddObjectRef(module, \"{name}\", \
+         pycc_ext_user_exception_classes[{slot}]) < 0) {{\n        return -1;\n    }}\n"
+    ));
+    out
+}
+
+/// The user-exception-class half of the generated companion: the cache, the
+/// tag lookup `pycc_ext_raise_pending` calls, and the eager registration
+/// `pycc_ext_exec_module` calls.
+///
+/// Both functions are emitted unconditionally -- with empty bodies when the
+/// program declares no user exception class -- so every artifact links.
+///
+/// Entries are keyed by **explicit tag** in a `switch`, not by an offset
+/// into the cache: the tag space is sparse relative to the table, because
+/// `finalize` consumes a tag for a group-derived class that
+/// [`collect_user_exception_classes`] excludes. An array indexed by
+/// `tag - FIRST_USER_EXCEPTION_TYPE_TAG` and sized by entry count would
+/// then send a later class past its bounds and silently flatten it to
+/// `Exception` with no compile or link error; a `switch` makes that
+/// unrepresentable rather than merely tested against.
+fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
+    let mut out = String::new();
+    if classes.is_empty() {
+        out.push_str(&format!(
+            "{USER_EXCEPTION_LOOKUP_DECL}\n{{\n    (void)tag;\n    return NULL;\n}}\n\n"
+        ));
+        out.push_str(&format!(
+            "{USER_EXCEPTION_REGISTER_DECL}\n{{\n    (void)module;\n    return 0;\n}}\n\n"
+        ));
+        return out;
+    }
+    out.push_str(&format!(
+        "/* Synthesized user exception classes, created once during \
+         `Py_mod_exec`.\n * File-scope statics are licensed by the shim's \
+         refusal of both\n * subinterpreters and free-threaded hosts. */\n\
+         static PyObject *pycc_ext_user_exception_classes[{}];\n\n",
+        classes.len()
+    ));
+    out.push_str(&format!(
+        "{USER_EXCEPTION_LOOKUP_DECL}\n{{\n    switch (tag) {{\n"
+    ));
+    for (slot, class) in classes.iter().enumerate() {
+        out.push_str(&format!(
+            "    case {}:\n        return pycc_ext_user_exception_classes[{slot}];\n",
+            class.tag
+        ));
+    }
+    out.push_str("    default:\n        return NULL;\n    }\n}\n\n");
+    out.push_str(&format!("{USER_EXCEPTION_REGISTER_DECL}\n{{\n"));
+    for (slot, class) in classes.iter().enumerate() {
+        out.push_str(&register_class_c(slot, class));
+    }
+    out.push_str("    return 0;\n}\n\n");
+    out
+}
+
 /// Renders the generated C companion to [`SHIM_C`]: the module name macros,
-/// one `METH_FASTCALL` wrapper per export, and the `PyMethodDef` table.
+/// the user-exception-class table ([`exception_classes_c`]), one
+/// `METH_FASTCALL` wrapper per export, and the `PyMethodDef` table.
 ///
 /// `module_name` is already known to be a valid ASCII Python identifier
 /// (`ext_output::resolve` rejects everything else before this runs), and an
 /// export name is a Python identifier by construction, so neither can carry
 /// a character that would escape the C source it is pasted into.
-pub(crate) fn generate_exports_inc(module_name: &str, exports: &[ExtExport]) -> String {
+pub(crate) fn generate_exports_inc(
+    module_name: &str,
+    exports: &[ExtExport],
+    classes: &[UserExceptionClass],
+) -> String {
     let mut out = String::new();
     out.push_str("/* Generated by pycc --ext. Do not edit: see src/ext_build.rs. */\n");
     out.push_str(&format!("#define PYCC_EXT_MODULE_NAME {module_name}\n"));
     out.push_str(&format!(
         "#define PYCC_EXT_MODULE_NAME_STR \"{module_name}\"\n\n"
     ));
+    out.push_str(&exception_classes_c(classes));
     for export in exports {
         out.push_str(&wrapper_for(export));
     }

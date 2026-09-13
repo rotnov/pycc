@@ -467,10 +467,18 @@ bigint-intermediate paths through `require_inline_int` are Part C
 within. An exception that
 escapes an export is re-raised as the matching CPython class for the twenty-four
 builtin classes the bridge carries a tag for (the original twenty-three plus
-`OverflowError`, Part A of #1038, #1063); a user-defined exception class and
-the two PEP 654 group classes reach the caller as `Exception` with the original
-message, because the bridge hands the shim a numeric tag and not the class name.
-Restoring that identity is part of #1038 as well. Foreign imports,
+`OverflowError`, Part A of #1038, #1063). A *user-defined* exception class
+keeps its identity as of Part D of #1038 (#1066): the artifact synthesizes one
+CPython class per such class at import time, parented on the same bases the
+source declares, so `except m.MyError:`, `except ValueError:` for a subclass of
+a builtin, `type(e).__name__`, `type(e).__module__` and `e.args` all behave as
+they do for a hand-written extension. The two PEP 654 group classes still reach
+the caller as `Exception` with the original message, and so does any user class
+derived from one: the limited C API exposes no `PyExc_ExceptionGroup`, and PEP
+654 requires `(msg, exceptions)`, so a synthesized stand-in would be a fake
+group class rather than CPython's; carrying a real group across the boundary
+needs the `exceptions` sequence itself to cross and is tracked as
+[#1073](https://github.com/rotnov/pycc/issues/1073). Foreign imports,
 opaque objects, and the buffer protocol are Parts 2-4. That mode's typed boundary
 additionally faces callers pycc does not compile, so what a typed export
 wrapper does with an argument that violates its annotation is D-244 rule 7 —
@@ -500,7 +508,18 @@ narrowing to `tuple` and closes it over the container: a `tuple` subclass
 (a `collections.namedtuple` included) is accepted by `PyTuple_Check` and
 its elements are copied out by value, so what comes back is always an exact
 `tuple` and identity never survives -- for a subclass, and for an exact
-`tuple` handed to an identity export alike. Second,
+`tuple` handed to an identity export alike. The synthesized exception classes
+of #1066 are a third narrowing of the same kind, recorded in the same register:
+the synthesized class carries only the *exception* bases its source declares, so a
+method-only mixin (`class E(Mixin, ValueError)`) is dropped and
+`isinstance(e, Mixin)` is `False` host-side where native pycc holds it; and a
+class deriving from a PEP 654 group is not synthesized at all, so it arrives as
+`Exception` exactly as the group classes themselves do. Instance state beyond
+`args` is not a narrowing of this boundary at all: a class with its own
+`__init__` is rejected as `C0001` at every raise and `except` site in both
+modes (`pycc_types::exception::reject_own_constructor`, the #541 Part 3 gap),
+so no such instance exists to cross it. Such a class is still tagged, and so
+still registered as a module attribute the host can name. Second,
 an `ext` module's state is process-static — generated globals live in LLVM
 globals and the `METH_FASTCALL` wrappers ignore their module argument, with
 `m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not
@@ -509,7 +528,15 @@ hold. A subinterpreter is refused outright
 unaffected because CPython does not re-run `Py_mod_exec` for an extension
 module; the one divergent path is deleting the `sys.modules` entry and
 importing again, which re-runs the module body and lets the second instance
-overwrite state the first instance's wrappers still read.
+overwrite state the first instance's wrappers still read. The synthesized
+exception classes sit inside that same contract: they are created once in
+`Py_mod_exec`, published as module attributes with `PyModule_AddObjectRef`, and
+held by a file-scope cache that the shim's refusal of subinterpreters and
+free-threaded hosts licenses. A re-exec on that divergent path **reuses** the
+cached classes rather than minting new ones, so class identity stays stable
+across it and the first instance's classes are not leaked; a failure to create
+or publish one fails the import rather than importing a module whose
+`except m.MyError:` would silently never match.
 [#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
 rejecting that second instance and allocating state per instance.
 

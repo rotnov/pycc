@@ -75,6 +75,16 @@ extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
 extern long long pycc_ext_module_exec(void);
 
 /*
+ * The pending tag's synthesized user exception class, or NULL when the tag
+ * names no class this artifact registered. Defined in the generated
+ * companion, which is `#include`d far below this point -- hence the forward
+ * declaration here. The returned pointer is *borrowed*: the generated
+ * file-scope cache owns the strong reference, exactly as every `PyExc_*`
+ * below is a borrowed immortal.
+ */
+static PyObject *pycc_ext_user_exception_class(unsigned char tag);
+
+/*
  * Translates a pending pycc exception into a CPython one and clears it.
  * Returns 1 when it raised, 0 when nothing was pending.
  *
@@ -99,6 +109,7 @@ static int pycc_ext_raise_pending(void)
 {
     int tag = pycc_rt_ext_pending_type();
     PyObject *exc_type;
+    PyObject *user_class;
     PyObject *message;
     size_t len = 0;
     const unsigned char *bytes;
@@ -201,11 +212,20 @@ static int pycc_ext_raise_pending(void)
          *    constructor instead of the program's own error. `Exception`
          *    with the right message is the more truthful of the two.
          *  - a user-defined exception class carries a module-assigned tag
-         *    (26..=255) this shim knows nothing about; carrying its identity
-         *    across the boundary needs the class *name*, which the bridge
-         *    does not expose yet.
+         *    this shim knows nothing about, so the lookup below -- not any
+         *    tag arithmetic here -- decides whether the artifact registered
+         *    a class for it. A hit replaces `Exception` with the real
+         *    class, restoring `except m.MyError:`, `except ValueError:` for
+         *    a builtin subclass, and `type(e).__name__`. A miss keeps
+         *    `Exception`, which is what leaves the two group tags above (and
+         *    any class derived from them, which the table excludes for the
+         *    same reason) on the honest fallback.
          */
         exc_type = PyExc_Exception;
+        user_class = pycc_ext_user_exception_class((unsigned char)tag);
+        if (user_class != NULL) {
+            exc_type = user_class;
+        }
         break;
     }
     bytes = pycc_rt_ext_pending_message(&len);
@@ -636,7 +656,17 @@ static PyObject *pycc_ext_pack_str(void *result)
  */
 static int pycc_ext_exec_module(PyObject *module)
 {
-    (void)module;
+    /*
+     * The synthesized user exception classes are created and published as
+     * module attributes before the module body runs, so a body that raises
+     * one already finds it registered. This is the only place the module
+     * object is reachable (`m_size = 0`, so there is no module state), and
+     * a failure here fails the import loudly rather than importing a module
+     * whose `except m.MyError:` silently never matches.
+     */
+    if (pycc_ext_register_exception_classes(module) != 0) {
+        return -1;
+    }
     if (pycc_ext_module_exec() != 0) {
         if (!pycc_ext_raise_pending()) {
             PyErr_SetString(PyExc_ImportError, "pycc module body failed");
