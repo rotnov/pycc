@@ -131,18 +131,22 @@ C0003 is an `ext`-mode capability gap (D-244), and it is distinct from C0001 \
 in what is missing: the construct itself is fully supported -- pycc compiles \
 the function without complaint for a `native` executable -- but the \
 `PyObject*` boundary that a hosted extension module needs for that \
-signature does not exist yet. Part 1 of #1025 bridges `int` parameters and \
-`int` results only. Because D-244 rule 1 exports *every* public \
-module-level function (a stable ABI cannot have a per-function opt-out \
-without also having a way to spell it), one unexportable public signature \
+signature does not exist yet. The boundary carries `int`, `float` and \
+`bool` in either direction, and `None` as a return type only (#1036, \
+#1048); `str` (#1049), `tuple` (#1050), every other container, `T | None`, \
+and a `None` *parameter* (#1047) are still gaps -- `docs/RUNTIME.md`'s \
+`ext` boundary section carries the full matrix. Because D-244 rule 1 \
+exports *every* public module-level function (a stable ABI cannot have a \
+per-function opt-out without also having a way to spell it), one \
+unexportable public signature \
 fails the whole `--ext` build rather than silently shipping an artifact \
 missing a name its source clearly defines. Every gap in a program is \
 reported at once. The two fixes are to make the function private under \
 D-038's rule -- rename it with a leading underscore, which removes it from \
 the export set -- or to build without `--ext`.",
         example: "\
-def scale(factor: float) -> float:
-    return factor * 2.0
+def join(parts: str) -> str:
+    return parts
 ",
     },
     DiagnosticExplanation {

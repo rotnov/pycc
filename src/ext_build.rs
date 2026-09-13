@@ -395,8 +395,14 @@ pub(crate) struct ExtExport {
     /// The Python name, which is also the `PyMethodDef` name and the suffix
     /// of the `fnptr_<name>` global codegen emits for its binding.
     pub(crate) name: String,
-    /// How many `int` parameters it takes.
-    pub(crate) arity: usize,
+    /// The declared parameter types, in order. Their count is the arity the
+    /// `METH_FASTCALL` wrapper checks, and each one alone picks that
+    /// argument's C local, its `pycc_ext_unpack_*` helper and its slot in
+    /// the indirect call's cast.
+    pub(crate) params: Vec<Ty>,
+    /// The declared return type, which picks the cast's return type and the
+    /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
+    pub(crate) return_ty: Ty,
 }
 
 /// Derives the export set from the typed program, per D-244 rule 1: every
@@ -413,7 +419,8 @@ pub(crate) struct ExtExport {
 /// carries the `0gen_` prefix and has no `fnptr_` global to call through
 /// (codegen dispatches those directly).
 ///
-/// Part 1 of #1025 bridges `int` only, in both directions. Every other
+/// The boundary carries `int`, `float` and `bool` in either direction, and
+/// `None` as a return type only (#1036, #1048). Every other
 /// public signature is a [`EXT_CAPABILITY_CODE`] capability gap, and *all*
 /// of them are collected before returning -- one `--ext` build should not
 /// have to be re-run once per unsupported function.
@@ -445,12 +452,13 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         }
         let export = ExtExport {
             name: name.clone(),
-            arity: params.len(),
+            params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+            return_ty: return_ty.clone(),
         };
         // A module may rebind a public name -- two `def`s, or a `def` over an
         // imported name. Codegen emits exactly one `fnptr_<name>` global and
         // binds it to the *last* definition, so the wrapper table must carry
-        // exactly one entry per name, with that definition's arity: a second
+        // exactly one entry per name, with that definition's signature: a second
         // entry generates a second `pycc_ext_wrap_<name>` and the C compiler
         // rejects the redefinition outright. Replacing in place rather than
         // appending keeps the table in definition order, which is what the
@@ -469,14 +477,58 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     }
 }
 
+/// The C type and `pycc_ext_*` helper suffix one admissible boundary scalar
+/// uses inside a generated wrapper, or `None` when this pycc version's
+/// boundary cannot carry `ty` in either position.
+///
+/// Each C type is chosen to match exactly what `pycc_codegen`'s
+/// `ty_to_basic_type` gives the compiled function, because the wrapper
+/// reaches that function through a `void *fnptr_` cast no compiler can
+/// check: `Ty::Int` is `i64`, `Ty::Float` is `f64`, and `Ty::Bool` is a
+/// one-byte `i8` holding `0`/`1` at the parameter position as well as the
+/// return one -- hence `char`, and deliberately not `int` or `_Bool`. A
+/// width that disagrees with the callee is a silent miscompile here, never
+/// a compile error.
+fn boundary_scalar(ty: &Ty) -> Option<(&'static str, &'static str)> {
+    match ty {
+        Ty::Int => Some(("long long", "int")),
+        Ty::Float => Some(("double", "float")),
+        Ty::Bool => Some(("char", "bool")),
+        _ => None,
+    }
+}
+
+/// The C type of one parameter slot, or `None` when the boundary cannot
+/// carry `ty` as a parameter. `Ty::None` is deliberately absent: a `None`
+/// parameter stays a capability gap, gated on #1047's call-argument ICE.
+fn param_c_type(ty: &Ty) -> Option<&'static str> {
+    boundary_scalar(ty).map(|(c_type, _)| c_type)
+}
+
+/// The C return type of a wrapper's indirect call, or `None` when the
+/// boundary cannot carry `ty` as a return type. This is the one position
+/// `Ty::None` is admissible in -- codegen emits a `None` return as LLVM
+/// `void`, so the cast declares `void` and the wrapper's egress becomes
+/// `Py_RETURN_NONE`.
+fn return_c_type(ty: &Ty) -> Option<&'static str> {
+    match ty {
+        Ty::None => Some("void"),
+        _ => param_c_type(ty),
+    }
+}
+
 /// Names the first part of a signature the `ext` boundary cannot carry, as
-/// the user would write it (`x: float`, `-> str`), or `None` when the whole
-/// signature is `int`-only.
+/// the user would write it (`x: str`, `-> list`), or `None` when the whole
+/// signature is admissible.
+///
+/// Parameters and the return type are asked separately because the two
+/// admissible sets genuinely differ rather than sharing one widened list:
+/// see [`param_c_type`] and [`return_c_type`].
 fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<String> {
-    if let Some((name, ty)) = params.iter().find(|(_, ty)| *ty != Ty::Int) {
+    if let Some((name, ty)) = params.iter().find(|(_, ty)| param_c_type(ty).is_none()) {
         return Some(format!("parameter `{name}: {}`", render_ty(ty)));
     }
-    if *return_ty != Ty::Int {
+    if return_c_type(return_ty).is_none() {
         return Some(format!("return type `-> {}`", render_ty(return_ty)));
     }
     None
@@ -484,7 +536,7 @@ fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<St
 
 /// A short Python-facing spelling of a `Ty`, for the `C0003` message only.
 /// Deliberately coarse: a container's element type adds nothing to "this
-/// boundary carries `int` only".
+/// boundary carries scalars only".
 fn render_ty(ty: &Ty) -> &'static str {
     match ty {
         Ty::Int => "int",
@@ -511,8 +563,9 @@ fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         code: EXT_CAPABILITY_CODE,
         severity: Severity::Error,
         message: format!(
-            "--ext cannot export the public function `{name}`: its {offender} is not an \
-             `int`, and this pycc version's CPython boundary carries `int` only (D-244 rule \
+            "--ext cannot export the public function `{name}`: its {offender} is not a type \
+             this pycc version's CPython boundary can carry -- a parameter must be `int`, \
+             `float` or `bool`, and a return type must be one of those or `None` (D-244 rule \
              1 exports every public module-level function, so there is no way to opt one \
              out) -- rename it to `_{name}` to keep it out of the export set, or build \
              without --ext"
@@ -567,6 +620,21 @@ pub(crate) fn generate_exports_inc(module_name: &str, exports: &[ExtExport]) -> 
 /// (`f = g` at module level) call what Python says it calls.
 fn wrapper_for(export: &ExtExport) -> String {
     let name = &export.name;
+    let arity = export.params.len();
+    // Every local, unpack helper and cast slot below is a function of the
+    // declared type alone and never of the object that arrives: `def
+    // f(x: int)` gets `long long a0` and `pycc_ext_unpack_int` even though
+    // that helper also accepts `True`, because widening the accepted object
+    // set is the helper's business and never narrows the local.
+    // `collect_exports` refused every type these two lookups cannot name, so
+    // an export in hand always has both.
+    let slots: Vec<(&'static str, &'static str)> = export
+        .params
+        .iter()
+        .map(|ty| boundary_scalar(ty).expect("collect_exports admits only carriable parameters"))
+        .collect();
+    let return_c = return_c_type(&export.return_ty).expect("a carriable return type");
+    let returns_none = export.return_ty == Ty::None;
     let mut out = String::new();
     out.push_str(&format!("extern void *fnptr_{name};\n"));
     out.push_str(&format!(
@@ -575,46 +643,70 @@ fn wrapper_for(export: &ExtExport) -> String {
     ));
     out.push_str("    (void)self;\n");
     out.push_str("    (void)args;\n");
-    out.push_str("    long long result;\n");
-    for index in 0..export.arity {
-        out.push_str(&format!("    long long a{index};\n"));
+    // A `-> None` export has no result to hold: codegen emits its return as
+    // LLVM `void`, so a result local would be a C type error, not a waste.
+    if !returns_none {
+        out.push_str(&format!("    {return_c} result;\n"));
+    }
+    for (index, (c_type, _)) in slots.iter().enumerate() {
+        out.push_str(&format!("    {c_type} a{index};\n"));
     }
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
          \"{name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
          return NULL;\n    }}\n",
-        arity = export.arity,
-        plural = if export.arity == 1 { "" } else { "s" },
+        plural = if arity == 1 { "" } else { "s" },
     ));
-    for index in 0..export.arity {
+    for (index, (_, helper)) in slots.iter().enumerate() {
         out.push_str(&format!(
-            "    if (pycc_ext_unpack_int(args[{index}], \"{name}\", {index}, &a{index}) != 0) \
+            "    if (pycc_ext_unpack_{helper}(args[{index}], \"{name}\", {index}, &a{index}) != 0) \
              {{\n        return NULL;\n    }}\n"
         ));
     }
-    let params = if export.arity == 0 {
+    let params = if arity == 0 {
         "void".to_string()
     } else {
-        vec!["long long"; export.arity].join(", ")
+        slots
+            .iter()
+            .map(|(c_type, _)| *c_type)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
-    let call_args = (0..export.arity)
+    let call_args = (0..arity)
         .map(|index| format!("a{index}"))
         .collect::<Vec<_>>()
         .join(", ");
+    // Nothing is assigned on the `-> None` arm: a `void` call has no value.
+    let assign = if returns_none { "" } else { "result = " };
     out.push_str(&format!(
-        "    result = ((long long (*)({params}))fnptr_{name})({call_args});\n"
+        "    {assign}(({return_c} (*)({params}))fnptr_{name})({call_args});\n"
     ));
     // A compiled function that raised returns a neutral carrier and leaves
     // the runtime's thread-local flag set (see `pycc_codegen`'s
     // `exception_exit` block), so the carrier must never be packed: the
     // pending exception is checked first and translated into a CPython one.
+    // This reads no part of the call's return value, so it stands unchanged
+    // on the `-> None` arm -- where it is the only thing between a raised
+    // exception and a fabricated `None`.
     out.push_str(
         "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
          return NULL;\n    }\n",
     );
-    out.push_str(&format!(
-        "    return pycc_ext_pack_int(\"{name}\", result);\n}}\n\n"
-    ));
+    match &export.return_ty {
+        Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
+        // `pack_int` is the one packer that can fail, and its message names
+        // the function: D-141's bigint egress (#1040). `PyFloat_FromDouble`
+        // and `PyBool_FromLong` cannot fail on a value, so they take none.
+        Ty::Int => out.push_str(&format!(
+            "    return pycc_ext_pack_int(\"{name}\", result);\n}}\n\n"
+        )),
+        ty => {
+            let (_, helper) = boundary_scalar(ty).expect("a carriable return type");
+            out.push_str(&format!(
+                "    return pycc_ext_pack_{helper}(result);\n}}\n\n"
+            ));
+        }
+    }
     out
 }
 

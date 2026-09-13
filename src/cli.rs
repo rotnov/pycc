@@ -50,8 +50,9 @@ pub enum Command {
         /// callable of one stable-ABI artifact that a CPython interpreter
         /// imports. `-o` names that artifact; `docs/CLI_SPEC.md:23-63` is
         /// the canonical statement of how its suffix and module name are
-        /// derived. Part 1 of #1025 supports `int` parameters and results
-        /// only; any other public signature is a `C0003` capability gap.
+        /// derived. The boundary carries `int`, `float` and `bool` in
+        /// either direction and `None` as a return type only; any other
+        /// public signature is a `C0003` capability gap.
         #[arg(long)]
         ext: bool,
     },

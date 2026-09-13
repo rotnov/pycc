@@ -330,7 +330,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   environment; native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the `int` boundary)
+## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the scalar boundary)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -344,12 +344,36 @@ which the artifact is an executable that carries its own interpreter. The hosted
 boundary but none of the bundling, policy, or GIL-ownership rules below: an
 `ext` artifact is loaded by an external CPython that owns the environment and
 the GIL, and #1025/#1026 specify its contract. Part 1 of #1025 ([#1036](https://github.com/rotnov/pycc/issues/1036))
-implements that mode for the `int` boundary only: `pycc build PATH -o OUT --ext`
+implemented that mode for the `int` boundary, and Part 1 of #1037
+([#1048](https://github.com/rotnov/pycc/issues/1048)) widened it to the
+remaining scalars: `pycc build PATH -o OUT --ext`
 compiles against `Py_LIMITED_API 0x030D0000` (stable-ABI floor CPython 3.13),
-exports every public module-level function whose parameters and return are all
-`int` as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
+exports every public module-level function whose signature that boundary can
+carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
 `Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
-rejects any other public signature at compile time as `C0003`. Per the D-244
+rejects any other public signature at compile time as `C0003`.
+
+The table below is the canonical statement of what the `ext` boundary carries
+today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
+`docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than
+restating it.
+
+| Annotation | As a parameter | As a return type |
+|---|---|---|
+| `int` | carried; accepts `int` and `bool` (the `docs/TYPE_SYSTEM.md` type table's subtype rule), `OverflowError` outside the inline range | carried |
+| `float` | carried; accepts `float` **only** — an `int`, a `bool` or any `__float__` duck type raises `TypeError` | carried |
+| `bool` | carried; accepts `bool` **only** — an `int` or any other truthy object raises `TypeError` | carried, and identity survives: `PyBool_FromLong` returns the interned singleton |
+| `None` | **not carried**: `C0003`, gated on [#1047](https://github.com/rotnov/pycc/issues/1047)'s call-argument ICE | carried, as `Py_RETURN_NONE` |
+| `str`, `tuple[...]`, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
+
+`float` and `bool` refusing an `int` is not a local choice: it is
+`docs/TYPE_SYSTEM.md` rule 4 (D-086), no implicit numeric narrowing *or*
+widening at an annotated boundary, which rule 7 defers to for conformance. It
+is a deliberate divergence from `PyFloat_AsDouble` and from the C-API
+converters' habit of accepting anything convertible. `str` is Part 2 of #1037
+([#1049](https://github.com/rotnov/pycc/issues/1049)) and `tuple[...]` is
+Part 3 ([#1050](https://github.com/rotnov/pycc/issues/1050)); until they land,
+each is a `C0003` capability gap. Per the D-244
 amendment of 2026-09-12 an `int` outside the inline range `[-2^62, 2^62-1]`
 raises `OverflowError` at the wrapper until [#1040](https://github.com/rotnov/pycc/issues/1040)
 gives `pycc_rt` a bigint boundary. That guard covers the boundary only, not the
@@ -373,14 +397,18 @@ the oracle is scoped to annotation-conforming calls and the wrapper raises
 
 Two properties of that `ext` boundary are deliberate narrowings rather than
 oversights, and a caller that relies on CPython's own behavior will see a
-difference. First, the boundary carries `int` *values*, not objects: an `int`
+difference. First, the boundary carries scalar *values*, not objects: an `int`
 subclass instance is accepted and decoded, so `int`-subclass identity does not
 survive a crossing and `echo(E.X) is E.X` is `False` where an equivalent CPython
 function gives `True`. Preserving it is not implementable over D-061/D-141's
 unboxed tagged word, and narrowing the accepted domain to exact `int` instead
 would reject `bool`, which CPython accepts and which the #1036 oracle asserts;
 [#1043](https://github.com/rotnov/pycc/issues/1043) tracks whether an
-object-carrying path is worth its cost once Part 2 widens the boundary. Second,
+object-carrying path is worth its cost. #1048 added a second instance of that
+same question rather than a new one: the `float` parameter's `PyFloat_Check`
+likewise accepts a `float` subclass and flattens it to a `double`, so
+`float`-subclass identity does not survive either. `bool` is exempt, being
+unsubclassable. Second,
 an `ext` module's state is process-static — generated globals live in LLVM
 globals and the `METH_FASTCALL` wrappers ignore their module argument, with
 `m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not

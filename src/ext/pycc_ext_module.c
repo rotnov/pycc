@@ -300,6 +300,93 @@ static PyObject *pycc_ext_pack_int(const char *fn_name, long long encoded)
     }
 }
 
+/*
+ * Unpacks one argument at a `float` parameter. Returns 0, or -1 with a
+ * CPython exception set.
+ *
+ * `PyFloat_Check` before `PyFloat_AsDouble`, and no fallback: the converter
+ * alone accepts an `int`, a `bool` and every `__float__` duck type, and
+ * `docs/TYPE_SYSTEM.md` rule 4 (D-086) forbids implicit numeric widening as
+ * well as narrowing at an annotated boundary -- which D-244 rule 7 defers to
+ * for conformance. So `f(1)` at a `float` parameter is a `TypeError` here,
+ * deliberately unlike every C-API converter's habit.
+ */
+static int pycc_ext_unpack_float(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                 double *out)
+{
+    PyObject *type_name;
+
+    if (!PyFloat_Check(obj)) {
+        type_name = PyType_GetName(Py_TYPE(obj));
+        if (type_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a float");
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() argument %zd: '%U' object cannot be interpreted as a float",
+                         fn_name, index + 1, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    *out = PyFloat_AsDouble(obj);
+    return 0;
+}
+
+/*
+ * Unpacks one argument at a `bool` parameter. Returns 0, or -1 with a
+ * CPython exception set.
+ *
+ * `PyBool_Check`, never `PyObject_IsTrue`: rule 7's boundary is closed, so
+ * a truthy object is not a `bool`. An `int` is refused for the same reason
+ * `float` refuses one -- rule 4 / D-086 -- and the `int` parameter's own
+ * acceptance of `bool` does not run backwards, subtyping being
+ * one-directional.
+ *
+ * The out parameter is a one-byte `char` because the compiled function's
+ * own ABI slot is an `i8` holding 0/1 (`ty_to_basic_type`), and the
+ * generated wrapper reaches it through an unchecked `void *` cast.
+ */
+static int pycc_ext_unpack_bool(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                char *out)
+{
+    PyObject *type_name;
+
+    if (!PyBool_Check(obj)) {
+        type_name = PyType_GetName(Py_TYPE(obj));
+        if (type_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a bool");
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() argument %zd: '%U' object cannot be interpreted as a bool",
+                         fn_name, index + 1, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    *out = (char)(obj == Py_True);
+    return 0;
+}
+
+/*
+ * Packs a `float`-typed result. No function name and no failure path:
+ * `PyFloat_FromDouble` carries every `double`, including the infinities and
+ * NaN, so unlike `pycc_ext_pack_int` there is no value it has to refuse.
+ */
+static PyObject *pycc_ext_pack_float(double value)
+{
+    return PyFloat_FromDouble(value);
+}
+
+/*
+ * Packs a `bool`-typed result. `PyBool_FromLong` returns the interned
+ * singleton, so `m.f() is True` holds at the boundary rather than merely
+ * comparing equal.
+ */
+static PyObject *pycc_ext_pack_bool(char value)
+{
+    return PyBool_FromLong(value != 0);
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

@@ -214,7 +214,10 @@ directory once project mode exists.
 --ext               hosted mode: emit a CPython extension module instead of
                     an executable (D-244 rule 1; see the `OUT` contract
                     above). Implemented for public module-level functions
-                    whose parameters and return are all `int` (#1036); any
+                    whose parameters are all `int`, `float` or `bool` and
+                    whose return type is one of those or `None` (#1036,
+                    #1048; `docs/RUNTIME.md`'s `ext` boundary section is the
+                    canonical admissibility matrix); any
                     other public signature is rejected as `C0003`; the
                     export set is the whole linked program -- the entry file
                     and its import closure (D-222) -- so a public function
