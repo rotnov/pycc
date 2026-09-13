@@ -3,9 +3,12 @@
 ## Status
 
 Pull request [#1035](https://github.com/rotnov/pycc/pull/1035) is open against
-`main` at `1ede16ff72bfdc09dc0c469136ba72b5e6dce9cb`, which is both the branch's
-merge base and the remote default-branch tip re-resolved immediately before this
-file was committed. It carries `Fixes #1021`, and the
+`main`. The branch was opened from `1ede16ff72bfdc09dc0c469136ba72b5e6dce9cb`
+and later merged the default branch's own tip
+`f043eb06326f544304d2cef6e38f7495c9d4c12b` (PR #1042, `build --ext`) into
+itself, so that commit is the current merge base -- resolve it again before
+merging rather than trusting either SHA here, since `strict: true` requires the
+branch be up to date at the merge instant. It carries `Fixes #1021`, and the
 `closingIssuesReferences` GraphQL query reports `totalCount: 1` naming only
 #1021 -- re-run after the last `gh pr edit`. The branch carries the pass itself,
 one commit per review round, the retrospective entries below, and this snapshot,
@@ -25,8 +28,8 @@ run that gates the merge is the one started after it, not any earlier green
 run.
 
 The full local gate set ran green from a single-writer baseline against the
-branch's last commit that changed executable Rust. The commits after it carry
-documentation only: `docs/` files, plus module-level `//!` comments in
+branch's current head, after that default-branch merge. The commits between
+the last executable-Rust change and the head carry documentation only: `docs/` files, plus module-level `//!` comments in
 `crates/pycc_types/src/empty_container.rs`, which add no instrumentable line
 and so leave the changed-line coverage denominator untouched -- re-run the
 gate rather than inferring that from this sentence. The coverage diff was
