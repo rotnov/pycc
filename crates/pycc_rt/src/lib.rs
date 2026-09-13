@@ -706,8 +706,12 @@ pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
 /// overflows `float` range (`OverflowError`). Part A of #1038 (#1063) turns
 /// each into a D-173 raise instead of a panic, matching this crate's
 /// division-by-zero convention above; every raising arm returns `0.0` as its
-/// sentinel, which generated code never observes because the next checkpoint
-/// sees the pending exception first. The sentinel `return` is load-bearing
+/// sentinel. Generated code *can* observe that sentinel: `Pow` stays in
+/// `pycc_codegen::exception::expression_can_set_exception`'s infallible arm,
+/// so no check is emitted after the `**` itself and the pending exception is
+/// seen only at the next enclosing checkpoint -- a statement or more later, or
+/// at program exit. D-244's 2026-09-13 native-mode amendment records that
+/// residual and why it is deferred. The sentinel `return` is load-bearing
 /// rather than cosmetic: without it the zero-base arm would fall through to
 /// `powf`, produce `inf`, and have its `ZeroDivisionError` immediately
 /// relabelled `OverflowError` by the third arm in the same call.
@@ -2761,9 +2765,14 @@ mod tests {
     /// `return` is what keeps that from happening *inside* one `float_pow`
     /// call -- without it, `0.0 ** -1.0` would fall through to `powf`,
     /// produce `inf`, and have its `ZeroDivisionError` overwritten by the
-    /// overflow arm. Generated code observes each raise at the next
-    /// checkpoint, so the relabelling is unreachable there; this pins the
-    /// property at the runtime level.
+    /// overflow arm. Across *statements* the relabelling is reachable in
+    /// generated code too, precisely because `Pow` emits no checkpoint of its
+    /// own: two consecutive `**` assignments with no fallible expression
+    /// between them leave only the second raise pending. That is the
+    /// native-mode residual D-244's 2026-09-13 amendment defers, not a
+    /// property this test claims away; what the `return` guarantees is the
+    /// narrower thing pinned here -- that no single `float_pow` call can
+    /// relabel its own raise.
     #[test]
     fn a_later_pow_raise_relabels_an_earlier_one_but_never_within_one_call() {
         pycc_rt_exception_clear();

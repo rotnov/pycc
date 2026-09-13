@@ -2552,7 +2552,7 @@ mod tests {
         // #767 (D-198, third pass): every `Ty::Instance` `cast_compatibility`
         // sees from a real `check`-validated program names a class the
         // `Environment` was told about -- either an ordinary user class or
-        // one of the 23 seeded builtin exception classes (see
+        // one of the 26 seeded builtin exception classes (see
         // `crate::exception::is_user_defined_class`'s doc comment). This
         // directly exercises the function's own defensive fallback for the
         // "declared shape and Environment disagree" state that scenario
