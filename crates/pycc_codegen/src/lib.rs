@@ -7053,11 +7053,21 @@ fn emit_stmt<'ctx>(
             // error. Reading the pending flag here, rather than returning a
             // status from the check function, keeps the runtime ABI
             // unchanged and is strictly more correct under D-173: the loop
-            // also stops when anything in the *body* raised. Pending state
-            // is never legitimately live on entry to a loop test -- both the
-            // `except` handler bodies and the `finally` body clear it before
-            // running (see `exception.rs`) -- so this cannot cut a loop
-            // short spuriously.
+            // also stops when anything in the *body* raised.
+            //
+            // What this cannot do is cut a loop short after a raise that was
+            // already *handled*: `exception.rs` clears the pending state
+            // before an `except` handler body runs and before a `finally`
+            // body runs (restoring it afterwards), so a `for` loop in either
+            // position iterates in full. What it can do -- deliberately -- is
+            // exit at zero iterations when an *unhandled* raise is still
+            // pending from an earlier statement that was not itself a
+            // checkpoint, since `expression_can_set_exception` does not
+            // classify every call as one. That is the same
+            // raise-observed-at-the-next-checkpoint residual D-244's
+            // 2026-09-13 amendments record, and exiting is the correct
+            // response to it: a real exception is pending and is about to be
+            // reported, so running the loop body would be the bug.
             let exc_active = builder
                 .build_call(rt.exception_active, &[], "for_set_exc_active")
                 .expect("build_call should not fail for exception_active")

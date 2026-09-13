@@ -1323,8 +1323,10 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 
 /// Reads the element at `index` (Python's `list[index]`, D-105's v0.2
 /// `list[int]` slice). Sets the pending `IndexError` exception flag on an
-/// out-of-range index (D-173) and returns a sentinel `0`; the caller's
-/// generated code checks the flag after this call.
+/// out-of-range index (D-173) and returns a sentinel `tag_smallint(0)` --
+/// a *valid* D-141 encoded word, never a raw `0`, which
+/// `classify_encoded_int` would reject; the caller's generated code checks
+/// the flag after this call.
 ///
 /// Known v0.2 scope cut: negative indices are not supported. Real Python
 /// treats `lst[-1]` as the last element, but `pycc_types` has no way to
@@ -1474,17 +1476,20 @@ fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut
 
 /// Returns a **new** list containing the clamped, strided sub-range
 /// `[start, stop)` of `list`'s elements, stepping by `step` (Python's
-/// `list[start:stop:step]`, D-118's v0.2 `list[int]` slice). Panics on a
-/// negative `start`/`stop` or a non-positive `step` -- v0.2 ships no
-/// CPython-style negative-index/negative-step semantics, extending D-108's
-/// own uniform "no negative addressing" scope cut (`pycc_rt_int_list_get`)
-/// to slicing. `start`/`stop` are clamped into `[0, len]` after the sign
+/// `list[start:stop:step]`, D-118's v0.2 `list[int]` slice). Sets the
+/// pending `ValueError` exception flag (D-173, Part B of #1038, #1064) and
+/// returns a new empty list as the sentinel on a negative `start`/`stop` or
+/// a non-positive `step`; the caller's generated code checks the flag after
+/// this call. v0.2 ships no CPython-style negative-index/negative-step
+/// semantics, extending D-108's own uniform "no negative addressing" scope
+/// cut (`pycc_rt_int_list_get`) to slicing; the conformance gap is tracked
+/// as #1070. `start`/`stop` are clamped into `[0, len]` after the sign
 /// check, matching CPython's own out-of-range-slice-bound clamping --
 /// required for the accepted subset (omitted/over-long bounds) to match
 /// CPython byte-for-byte, not merely a nicety. The three sign/positivity
-/// panics run before `list.items.take()`, mirroring `int_list_get`'s own
-/// "leave `list` intact on a panic" care -- a panicking call here never
-/// touches `list`'s payload at all, so there is nothing to restore.
+/// checks run before `list.items.take()`, mirroring `int_list_get`'s own
+/// "leave `list` intact" care -- a rejected call here never touches
+/// `list`'s payload at all, so there is nothing to restore.
 ///
 /// # Element representation
 /// `start`/`stop`/`step` are raw, untagged `i64` offsets/strides, not
@@ -1798,7 +1803,8 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
     len
 }
 
-/// Panics if `current_len` differs from `expected_len`. `ForSet`'s own
+/// Raises `RuntimeError` (D-173) if `current_len` differs from
+/// `expected_len`. `ForSet`'s own
 /// iteration codegen (Task 9) calls this once per loop-test evaluation,
 /// comparing a freshly re-read `pycc_rt_int_set_len` against the length
 /// captured once in the loop's preheader. `set.add(value)` (PR-12, D-119)
