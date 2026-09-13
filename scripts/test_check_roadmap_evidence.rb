@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "json"
 require "minitest/autorun"
 require "open3"
 require "pathname"
@@ -347,6 +348,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # Hash of relative filename => content) instead of a single
   # `docs/ROADMAP.md`, exercising the dual-layout `docs/roadmap/**/*.md`
   # resolution path.
+  # Like `run_checker`, plus arbitrary extra files (a published benchmark
+  # report, a pre-registration record) written at their repository-relative
+  # paths under the same temporary root.
+  def run_checker_with_files(roadmap:, workflow:, files: {})
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "docs")
+      FileUtils.mkdir_p(root / ".github/workflows")
+      (root / "docs/ROADMAP.md").write(roadmap)
+      (root / ".github/workflows/ci.yml").write(workflow)
+      files.each do |relative, content|
+        path = root / relative
+        FileUtils.mkdir_p(path.dirname)
+        path.write(content)
+      end
+      return Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
+    end
+  end
+
   def run_checker_with_roadmap_dir(roadmap_files:, workflow:)
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
@@ -5235,10 +5255,57 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # product-sprint-1 evidence identifiers, registered ahead of the pull
   # request that checks the boxes citing them (mirrors the
   # ci-diff-coverage-100 tests).
+  #
+  # Claiming either identifier binds the roadmap box to the published report
+  # at `docs/benchmarks/hosted-ext-product-sprint-1.json`, so every property
+  # `docs/TESTING.md`'s "Reporting" bullet requires is a rejecting mutation
+  # here before the checker learns to accept it.
 
-  def test_accepts_product_sprint_1_hosted_ext_evidence
-    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read
-    roadmap = <<~MARKDOWN
+  PRODUCT_SPRINT_1_REPORT = "docs/benchmarks/hosted-ext-product-sprint-1.json"
+  PRODUCT_SPRINT_1_PRE_REGISTRATION = "scripts/bench_hosted_ext_precommit.json"
+
+  def product_sprint_1_record
+    JSON.parse((REPOSITORY_ROOT / PRODUCT_SPRINT_1_PRE_REGISTRATION).read)
+  end
+
+  # A report whose arms are in the shape the protocol fixes: a `cpython`
+  # median six times the `ext` median, a `cython` median twice it.
+  def product_sprint_1_report(record = product_sprint_1_record)
+    {
+      "input_sha256" => record["input_sha256"],
+      "machine" => record["machine"],
+      "replicates" => 7,
+      "versions" => {
+        "cpython" => "3.14.7",
+        "cpython_vv" => "Python 3.14.7 (main, Sep 1 2026, 00:00:00) [Clang]",
+        "cpython_configure_args" => "'--enable-optimizations' '--with-lto'",
+        "cython" => "3.1.6",
+        "pycc_profile" => "release"
+      },
+      "arms" => {
+        "cpython" => { "median_ns" => 6_000_000, "min_ns" => 5_900_000, "max_ns" => 6_200_000 },
+        "cython" => { "median_ns" => 2_000_000, "min_ns" => 1_950_000, "max_ns" => 2_100_000 },
+        "ext" => { "median_ns" => 1_000_000, "min_ns" => 980_000, "max_ns" => 1_050_000 }
+      },
+      "ratios" => { "versus_cpython" => 6.0, "versus_cython" => 2.0 },
+      "compile_unchanged_denominator" => record["compile_unchanged_denominator"],
+      "compile_unchanged_set_sha256" => record["compile_unchanged_set_sha256"],
+      "compile_unchanged_count" => 118
+    }
+  end
+
+  PRODUCT_SPRINT_1_CLAIMS = {
+    "sprint1-ext-hot-function-5x" =>
+      "the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython",
+    "sprint1-ext-numbers-published" =>
+      "the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers"
+  }.freeze
+
+  def product_sprint_1_roadmap(*evidence_ids)
+    items = evidence_ids.map do |evidence_id|
+      "- [x] #{PRODUCT_SPRINT_1_CLAIMS.fetch(evidence_id)} <!-- roadmap-evidence: #{evidence_id} -->"
+    end
+    <<~MARKDOWN
       # pycc Roadmap
 
       ## Current delivery status
@@ -5251,17 +5318,205 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
       **Accept:**
 
-      - [x] the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython <!-- roadmap-evidence: sprint1-ext-hot-function-5x -->
-      - [x] the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers <!-- roadmap-evidence: sprint1-ext-numbers-published -->
+      #{items.join("\n")}
     MARKDOWN
+  end
 
-    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+  # Runs the checker over a root that also carries the published report and
+  # the pre-registration record `run_checker` does not materialize.
+  def run_product_sprint_1_checker(evidence_ids:, report:, record: product_sprint_1_record)
+    files = {}
+    files[PRODUCT_SPRINT_1_REPORT] = report unless report.nil?
+    files[PRODUCT_SPRINT_1_PRE_REGISTRATION] = JSON.pretty_generate(record) unless record.nil?
+    run_checker_with_files(
+      roadmap: product_sprint_1_roadmap(*evidence_ids),
+      workflow: (REPOSITORY_ROOT / ".github/workflows/ci.yml").read,
+      files: files
+    )
+  end
+
+  def assert_product_sprint_1_rejected(label, report:, evidence_ids: PRODUCT_SPRINT_1_CLAIMS.keys, record: product_sprint_1_record)
+    _stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: evidence_ids,
+      report: report.nil? ? nil : (report.is_a?(String) ? report : JSON.pretty_generate(report)),
+      record: record
+    )
+    refute status.success?, "#{label}: the checker accepted it"
+    stderr
+  end
+
+  def test_accepts_product_sprint_1_hosted_ext_evidence
+    stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: PRODUCT_SPRINT_1_CLAIMS.keys,
+      report: JSON.pretty_generate(product_sprint_1_report)
+    )
 
     assert status.success?, stderr
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
+  def test_rejects_product_sprint_1_evidence_without_a_published_report
+    stderr = assert_product_sprint_1_rejected("absent report", report: nil)
+
+    assert_includes stderr, PRODUCT_SPRINT_1_REPORT
+  end
+
+  def test_rejects_product_sprint_1_evidence_without_the_pre_registration_record
+    stderr = assert_product_sprint_1_rejected(
+      "absent pre-registration record",
+      report: product_sprint_1_report,
+      record: nil
+    )
+
+    assert_includes stderr, PRODUCT_SPRINT_1_PRE_REGISTRATION
+  end
+
+  def test_rejects_a_product_sprint_1_report_that_does_not_parse
+    stderr = assert_product_sprint_1_rejected(
+      "malformed report",
+      report: "{\"replicates\": 7,"
+    )
+
+    assert_includes stderr, "does not parse"
+  end
+
+  def test_rejects_a_product_sprint_1_report_missing_a_required_field
+    %w[
+      replicates
+      versions
+      arms
+      ratios
+      machine
+      input_sha256
+      compile_unchanged_denominator
+      compile_unchanged_set_sha256
+      compile_unchanged_count
+    ].each do |field|
+      report = product_sprint_1_report
+      report.delete(field)
+      assert_product_sprint_1_rejected("missing #{field}", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_missing_a_per_arm_statistic
+    %w[cpython cython ext].each do |arm|
+      %w[median_ns min_ns max_ns].each do |field|
+        report = product_sprint_1_report
+        report["arms"][arm].delete(field)
+        assert_product_sprint_1_rejected("#{arm} missing #{field}", report: report)
+      end
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_missing_an_arm_entirely
+    %w[cpython cython ext].each do |arm|
+      report = product_sprint_1_report
+      report["arms"].delete(arm)
+      assert_product_sprint_1_rejected("missing the #{arm} arm", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_whose_arm_statistics_are_unordered
+    report = product_sprint_1_report
+    report["arms"]["ext"]["min_ns"] = report["arms"]["ext"]["max_ns"] + 1
+    assert_product_sprint_1_rejected("unordered ext statistics", report: report)
+  end
+
+  def test_rejects_a_product_sprint_1_report_with_a_corrupt_arm_statistic
+    [0, -1, "1000000", 1.5].each do |value|
+      report = product_sprint_1_report
+      report["arms"]["ext"]["median_ns"] = value
+      assert_product_sprint_1_rejected("ext median #{value.inspect}", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_with_the_wrong_replicate_count
+    [6, 8, "7", nil].each do |value|
+      report = product_sprint_1_report
+      report["replicates"] = value
+      assert_product_sprint_1_rejected("replicates #{value.inspect}", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_missing_a_pinned_version
+    %w[cpython cpython_vv cpython_configure_args cython pycc_profile].each do |field|
+      report = product_sprint_1_report
+      report["versions"].delete(field)
+      assert_product_sprint_1_rejected("missing version #{field}", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_missing_a_ratio
+    %w[versus_cpython versus_cython].each do |field|
+      report = product_sprint_1_report
+      report["ratios"].delete(field)
+      assert_product_sprint_1_rejected("missing ratio #{field}", report: report)
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_ratio_that_does_not_follow_from_its_medians
+    report = product_sprint_1_report
+    report["ratios"]["versus_cpython"] = 9.0
+    assert_product_sprint_1_rejected("inconsistent ratio", report: report)
+  end
+
+  def test_rejects_a_product_sprint_1_report_that_does_not_match_the_pre_registration
+    {
+      "input_sha256" => "0" * 64,
+      "compile_unchanged_set_sha256" => "0" * 64,
+      "compile_unchanged_denominator" => 7
+    }.each do |field, value|
+      report = product_sprint_1_report
+      report[field] = value
+      stderr = assert_product_sprint_1_rejected("mismatched #{field}", report: report)
+      assert_includes stderr, field
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_run_on_another_machine
+    report = product_sprint_1_report
+    report["machine"] = report["machine"].merge("cpu" => "some other CPU")
+    assert_product_sprint_1_rejected("mismatched machine", report: report)
+  end
+
+  def test_rejects_a_compile_unchanged_count_outside_the_committed_denominator
+    [-1, "118", product_sprint_1_record["compile_unchanged_denominator"] + 1].each do |value|
+      report = product_sprint_1_report
+      report["compile_unchanged_count"] = value
+      assert_product_sprint_1_rejected("count #{value.inspect}", report: report)
+    end
+  end
+
+  # D-244 rule 6 fixes the threshold; only the hot-function claim is judged
+  # against it, and the numbers-published claim is not.
+  def below_threshold_report
+    report = product_sprint_1_report
+    report["arms"]["cpython"] = { "median_ns" => 4_990_000, "min_ns" => 4_900_000, "max_ns" => 5_050_000 }
+    report["ratios"]["versus_cpython"] = 4.99
+    report
+  end
+
+  def test_rejects_a_product_sprint_1_speedup_below_the_threshold
+    stderr = assert_product_sprint_1_rejected(
+      "below-threshold speedup",
+      report: below_threshold_report,
+      evidence_ids: ["sprint1-ext-hot-function-5x"]
+    )
+
+    assert_includes stderr, "4.99"
+  end
+
+  def test_accepts_the_numbers_published_claim_below_the_speedup_threshold
+    _stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: ["sprint1-ext-numbers-published"],
+      report: JSON.pretty_generate(below_threshold_report)
+    )
+
+    assert status.success?, stderr
+  end
+
   def test_rejects_product_sprint_1_evidence_with_the_wrong_claim
+
     {
       "sprint1-ext-hot-function-5x" => "The hot function is fast enough.",
       "sprint1-ext-numbers-published" => "The numbers are published."

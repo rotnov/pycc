@@ -24,6 +24,11 @@ The enumeration predicate, in full:
 * every file whose name ends in `.py` under each enumerated subtree, skipping any
   directory whose name begins with `.` or is one of `ENUMERATION_SKIP_DIRS`
   (virtual environments, caches and build output are not source);
+* a symbolic link is never followed and never enumerated, whether it names a
+  file or a directory. A link is not the tree's own source: following one lets
+  the same file be counted twice under two names, or pull a whole tree in from
+  outside the enumerated subtrees, and either moves the digest without the
+  codebase having changed;
 * a file that does not parse is skipped rather than failing the walk, because
   a tree may legitimately carry fixtures for syntax errors;
 * within a file, only **module-level** `def` statements qualify. A method, a

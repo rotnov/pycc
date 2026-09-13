@@ -35,8 +35,10 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import shlex
 import statistics
 import subprocess
 import sys
@@ -56,6 +58,17 @@ UNOPTIMIZED_CONFIGURE_MARKERS = (
     "--with-address-sanitizer",
     "--with-undefined-behavior-sanitizer",
 )
+
+#: The configure flag whose *presence* is the only checkable proof CPython
+#: offers that the interpreter was built the way `docs/TESTING.md`'s "Versions"
+#: bullet requires. A denylist alone admits every build that merely avoids the
+#: markers above -- including an ordinary `./configure && make` with no
+#: optimization at all, which is exactly the slow baseline that bullet rules
+#: out because it manufactures a passing ratio on its own.
+OPTIMIZED_CONFIGURE_MARKER = "--enable-optimizations"
+
+#: Values that turn the flag above back off when it is spelled `=<value>`.
+DISABLED_CONFIGURE_VALUES = frozenset({"", "no", "false", "0"})
 
 
 class BenchmarkError(RuntimeError):
@@ -91,6 +104,30 @@ def assert_pinned_version(version_output: str) -> None:
         )
 
 
+def configure_tokens(configure_args: str) -> list[str]:
+    """Split `CONFIGURE_ARGS` the way the shell that produced it quoted them."""
+
+    try:
+        return shlex.split(configure_args)
+    except ValueError:
+        # An unbalanced quote is not this guard's business to repair; falling
+        # back to whitespace splitting keeps the positive check conservative.
+        return configure_args.split()
+
+
+def reports_optimized_build(configure_args: str) -> bool:
+    """Whether the flags positively assert the optimized build, not merely fail to deny it."""
+
+    for token in configure_tokens(configure_args):
+        if token == OPTIMIZED_CONFIGURE_MARKER:
+            return True
+        if token.startswith(f"{OPTIMIZED_CONFIGURE_MARKER}="):
+            value = token.split("=", 1)[1].strip().lower()
+            if value not in DISABLED_CONFIGURE_VALUES:
+                return True
+    return False
+
+
 def assert_optimized_build(configure_args: str | None) -> None:
     if configure_args is None:
         raise BenchmarkError(
@@ -101,6 +138,12 @@ def assert_optimized_build(configure_args: str | None) -> None:
             raise BenchmarkError(
                 f"the interpreter was configured with {marker}, which is inadmissible"
             )
+    if not reports_optimized_build(configure_args):
+        raise BenchmarkError(
+            "the interpreter does not report "
+            f"{OPTIMIZED_CONFIGURE_MARKER} in its CONFIGURE_ARGS, so it is not "
+            "provably the optimized build the baseline arm requires"
+        )
 
 
 def resolve_subject(environ: dict[str, str]) -> Path:
@@ -131,6 +174,11 @@ def verify_input_digest(path: Path, expected: str) -> None:
 def compare_outcomes(reference: ArmOutcome, candidate: ArmOutcome, tolerance: float) -> None:
     """Apply the correctness precondition; raise rather than score a wrong arm."""
 
+    # Checked first, and on every path: an arm that clobbers the committed
+    # input and then fails the same way the baseline does must not be scored
+    # for having been faster on arguments nobody else saw.
+    if reference.arguments_digest != candidate.arguments_digest:
+        raise BenchmarkError("an arm changed its arguments where the baseline did not")
     if reference.exception is not None or candidate.exception is not None:
         if reference.exception != candidate.exception:
             raise BenchmarkError(
@@ -144,6 +192,12 @@ def compare_outcomes(reference: ArmOutcome, candidate: ArmOutcome, tolerance: fl
             f"{type(reference.value).__name__} against {type(candidate.value).__name__}"
         )
     if isinstance(reference.value, float):
+        if not (math.isfinite(reference.value) and math.isfinite(candidate.value)):
+            # `abs(reference - nan) > allowed` is false, so a NaN would pass the
+            # tolerance test below by arithmetic rather than by agreeing.
+            raise BenchmarkError(
+                "a non-finite float result is not comparable within the committed tolerance"
+            )
         # Relative against the baseline's own magnitude, with an absolute floor
         # of one: an absolute-only tolerance is meaningless across the range a
         # geometric reduction can return.
@@ -154,8 +208,6 @@ def compare_outcomes(reference: ArmOutcome, candidate: ArmOutcome, tolerance: fl
             )
     elif reference.value != candidate.value:
         raise BenchmarkError("the arms returned different values")
-    if reference.arguments_digest != candidate.arguments_digest:
-        raise BenchmarkError("an arm changed its arguments where the baseline did not")
 
 
 def median_ns(timings: list[int]) -> int:
@@ -186,21 +238,27 @@ def read_pre_registration(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def digest_arguments(args: tuple) -> str:
+    """Digest the arguments as they stand now, so a mutation is visible."""
+
+    return hashlib.sha256(repr(args).encode("utf-8")).hexdigest()
+
+
 def time_call(call, *args) -> tuple[int, ArmOutcome]:
     """Time exactly the call, with nothing else inside the boundary."""
 
-    arguments_digest = hashlib.sha256(repr(args).encode("utf-8")).hexdigest()
     started = time.perf_counter_ns()
     try:
         value = call(*args)
     except BaseException as error:  # noqa: BLE001 - the arm's failure is the datum
+        # Digested *after* the call on this path too, and outside the clock: an
+        # arm that mutates its arguments and then raises would otherwise carry
+        # the pre-call digest and compare equal to the baseline's.
         finished = time.perf_counter_ns()
-        outcome = ArmOutcome(None, type(error).__name__, arguments_digest)
+        outcome = ArmOutcome(None, type(error).__name__, digest_arguments(args))
     else:
         finished = time.perf_counter_ns()
-        outcome = ArmOutcome(
-            value, None, hashlib.sha256(repr(args).encode("utf-8")).hexdigest()
-        )
+        outcome = ArmOutcome(value, None, digest_arguments(args))
     return finished - started, outcome
 
 

@@ -2955,7 +2955,171 @@ def resolve_evidence_ids(root)
   evidence_ids
 end
 
-def validate_evidence(root, _evidence_ids)
+# `docs/ROADMAP.md`'s two `product-sprint-1` acceptance items are the only
+# evidence identifiers in this file whose proof is a measurement rather than a
+# property of the CI workflow. `docs/TESTING.md`'s "Hosted `ext` benchmark
+# protocol (product-sprint-1)" section owns the protocol and its **Reporting**
+# bullet fixes what the published report must carry; the constants below name
+# where that report lives and which of its fields this checker refuses to take
+# on trust. Claiming either identifier with the report absent, malformed,
+# unbound from the pre-registration record, or -- for the speedup claim --
+# below the threshold [D-244](docs/decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+# rule 6 fixes, fails closed.
+PRODUCT_SPRINT_1_EVIDENCE_IDS = %w[
+  sprint1-ext-hot-function-5x
+  sprint1-ext-numbers-published
+].freeze
+PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID = "sprint1-ext-hot-function-5x"
+PRODUCT_SPRINT_1_REPORT_PATH = "docs/benchmarks/hosted-ext-product-sprint-1.json"
+PRODUCT_SPRINT_1_PRE_REGISTRATION_PATH = "scripts/bench_hosted_ext_precommit.json"
+PRODUCT_SPRINT_1_ARMS = %w[cpython cython ext].freeze
+PRODUCT_SPRINT_1_ARM_STATISTICS = %w[median_ns min_ns max_ns].freeze
+PRODUCT_SPRINT_1_VERSION_FIELDS = %w[
+  cpython
+  cpython_vv
+  cpython_configure_args
+  cython
+  pycc_profile
+].freeze
+#: Each reported ratio, and the arm whose median is its numerator; the `ext`
+#: arm's median is always the denominator.
+PRODUCT_SPRINT_1_RATIOS = { "versus_cpython" => "cpython", "versus_cython" => "cython" }.freeze
+#: The protocol's "Replicates and statistic" bullet fixes this count.
+PRODUCT_SPRINT_1_REPLICATES = 7
+#: Rounding in the published report is tolerated; a ratio that does not follow
+#: from the published medians at all is not.
+PRODUCT_SPRINT_1_RATIO_TOLERANCE = 0.01
+#: D-244 rule 6's kill criterion, quoted as a number rather than restated:
+#: "runs >= 5x faster than CPython when called from CPython".
+D244_RULE_6_CPYTHON_SPEEDUP = 5.0
+
+def read_evidence_json(path, label)
+  JSON.parse(path.read)
+rescue Errno::ENOENT
+  raise RoadmapEvidenceError, "#{path}: #{label} is missing, so the claim is unproven"
+rescue JSON::ParserError => e
+  raise RoadmapEvidenceError, "#{path}: #{label} does not parse as JSON: #{e.message}"
+end
+
+def positive_integer?(value)
+  value.is_a?(Integer) && value.positive?
+end
+
+def validate_product_sprint_1_arms(report, source)
+  arms = report["arms"]
+  unless arms.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry an `arms` object"
+  end
+
+  PRODUCT_SPRINT_1_ARMS.each do |arm|
+    summary = arms[arm]
+    unless summary.is_a?(Hash)
+      raise RoadmapEvidenceError, "#{source}: the report must carry the #{arm} arm"
+    end
+
+    PRODUCT_SPRINT_1_ARM_STATISTICS.each do |statistic|
+      unless positive_integer?(summary[statistic])
+        raise RoadmapEvidenceError,
+              "#{source}: the #{arm} arm's #{statistic} must be a positive integer"
+      end
+    end
+    unless summary["min_ns"] <= summary["median_ns"] &&
+           summary["median_ns"] <= summary["max_ns"]
+      raise RoadmapEvidenceError,
+            "#{source}: the #{arm} arm's minimum, median and maximum are not ordered"
+    end
+  end
+end
+
+def validate_product_sprint_1_reporting(report, source)
+  unless report["replicates"] == PRODUCT_SPRINT_1_REPLICATES
+    raise RoadmapEvidenceError,
+          "#{source}: the report must state #{PRODUCT_SPRINT_1_REPLICATES} replicates, " \
+          "the count the protocol fixes"
+  end
+
+  versions = report["versions"]
+  unless versions.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry a `versions` object"
+  end
+  PRODUCT_SPRINT_1_VERSION_FIELDS.each do |field|
+    value = versions[field]
+    unless value.is_a?(String) && !value.strip.empty?
+      raise RoadmapEvidenceError,
+            "#{source}: the report must restate the pinned #{field} version"
+    end
+  end
+
+  ratios = report["ratios"]
+  unless ratios.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry a `ratios` object"
+  end
+  PRODUCT_SPRINT_1_RATIOS.each do |ratio, arm|
+    value = ratios[ratio]
+    unless value.is_a?(Numeric) && value.positive?
+      raise RoadmapEvidenceError, "#{source}: the report's #{ratio} must be a positive number"
+    end
+
+    expected = report["arms"][arm]["median_ns"].to_f / report["arms"]["ext"]["median_ns"]
+    unless (expected - value.to_f).abs <= PRODUCT_SPRINT_1_RATIO_TOLERANCE * expected
+      raise RoadmapEvidenceError,
+            "#{source}: the report's #{ratio} does not follow from its published medians"
+    end
+  end
+end
+
+def validate_product_sprint_1_pre_registration(report, record, source, record_source)
+  %w[input_sha256 compile_unchanged_denominator compile_unchanged_set_sha256].each do |field|
+    next if !report[field].nil? && report[field] == record[field]
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report's #{field} does not match #{record_source}"
+  end
+  if report["machine"].nil? || report["machine"] != record["machine"]
+    raise RoadmapEvidenceError,
+          "#{source}: the report's machine identity does not match #{record_source}"
+  end
+
+  count = report["compile_unchanged_count"]
+  denominator = record["compile_unchanged_denominator"]
+  unless count.is_a?(Integer) && !count.negative? && denominator.is_a?(Integer) &&
+         count <= denominator
+    raise RoadmapEvidenceError,
+          "#{source}: the report's compile_unchanged_count must be an integer no greater " \
+          "than the committed denominator"
+  end
+end
+
+def validate_product_sprint_1_evidence(root, evidence_ids)
+  claimed = PRODUCT_SPRINT_1_EVIDENCE_IDS & evidence_ids
+  return if claimed.empty?
+
+  report_path = root / PRODUCT_SPRINT_1_REPORT_PATH
+  record_path = root / PRODUCT_SPRINT_1_PRE_REGISTRATION_PATH
+  report = read_evidence_json(report_path, "the published hosted `ext` benchmark report")
+  record = read_evidence_json(record_path, "the hosted `ext` pre-registration record")
+  unless report.is_a?(Hash) && record.is_a?(Hash)
+    raise RoadmapEvidenceError,
+          "#{report_path}: the report and the pre-registration record must each be a JSON object"
+  end
+
+  validate_product_sprint_1_arms(report, report_path)
+  validate_product_sprint_1_reporting(report, report_path)
+  validate_product_sprint_1_pre_registration(report, record, report_path, record_path)
+  return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
+
+  speedup = report["ratios"]["versus_cpython"].to_f
+  return if speedup >= D244_RULE_6_CPYTHON_SPEEDUP
+
+  raise RoadmapEvidenceError,
+        "#{report_path}: the reported CPython speedup #{speedup} is below the threshold " \
+        "D-244 rule 6 fixes for #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID}"
+end
+
+def validate_evidence(root, evidence_ids)
+  # Checked before the workflow is even read: the D-171 routing branch below
+  # returns early, and this evidence is not a property of the workflow.
+  validate_product_sprint_1_evidence(root, evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
   digest = Digest::SHA256.hexdigest(workflow_text)

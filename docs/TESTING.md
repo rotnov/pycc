@@ -521,7 +521,10 @@ rule 6); only numbers are published.
   the baseline alone, so a timing taken against one is inadmissible whatever it
   reports. The report carries `python3 -VV` and
   `sysconfig.get_config_var('CONFIGURE_ARGS')` for the interpreter actually used,
-  so that build is checkable rather than asserted.
+  so that build is checkable rather than asserted. Those flags must *positively*
+  report `--enable-optimizations`: an ordinary `./configure && make` build denies
+  none of the markers above and optimizes nothing, so refusing only the named
+  debug markers would admit exactly the slow baseline this bullet rules out.
   Every one of these versions is restated in the report, because a later run that
   changes one is a different experiment.
 - **Input.** Size alone does not pin this workload: the measured loop branches
@@ -559,10 +562,17 @@ rule 6); only numbers are published.
   arms are not bit-comparable in principle, since `-O2` on the Cython arm and
   LLVM on the `--release` pycc arm may both contract `a*b - c*d` to an FMA where
   the interpreter does not. A divergence beyond that committed tolerance is a
-  failure, not a ratio. An arm that raises where the CPython arm returns, or
+  failure, not a ratio. A non-finite float result -- a NaN or an infinity, on
+  either arm -- is a failure too, never an agreement: a tolerance comparison
+  against a NaN is false whatever the difference, so a silently non-finite arm
+  would otherwise pass the precondition by arithmetic rather than by agreeing. An arm that raises where the CPython arm returns, or
   raises a different exception type, has failed. The arguments must also be
   unchanged after the call, or changed exactly as the CPython arm changes them,
-  so that an arm cannot be faster for having clobbered the committed input.
+  so that an arm cannot be faster for having clobbered the committed input. That
+  holds on the failing path as well: the arguments are compared as they stand
+  after the call whether it returned or raised, so an arm cannot clobber its
+  input and then hide behind raising the same exception type the CPython arm
+  raises.
 - **Warm-up.** One untimed full run per arm before any timed run, so page
   faults, dynamic-loader work, and the interpreter's own caches are paid outside
   the measurement. For the `ext` arm that untimed run also pays the import and
@@ -580,7 +590,18 @@ rule 6); only numbers are published.
 - **Reporting.** The report publishes the three medians, their minima and
   maxima, both ratios (versus CPython and versus Cython), the replicate count,
   the machine and OS, and the pinned versions above. The threshold those numbers
-  are judged against is D-244 rule 6's and is not restated here.
+  are judged against is D-244 rule 6's and is not restated here. The report is
+  one JSON document at `docs/benchmarks/hosted-ext-product-sprint-1.json`, and
+  it restates the `input_sha256`, the `compile_unchanged_denominator`, the
+  `compile_unchanged_set_sha256` and the machine identity committed in
+  `scripts/bench_hosted_ext_precommit.json` -- a report that does not carry the
+  committed values is a different experiment, not this one's result. That path
+  and every field above are what `scripts/check_roadmap_evidence.rb` requires
+  before either `product-sprint-1` roadmap box may cite its evidence
+  identifier, so an unchecked box, an absent report, a missing field, a digest
+  that does not match the pre-registration record, or a speedup below D-244
+  rule 6's threshold all fail the roadmap evidence gate rather than passing
+  silently.
 - **The compile-unchanged count.** `product-sprint-1`'s second acceptance item
   is a count, not a timing: how many of the reference codebase's annotated
   functions compile unchanged as part of an `ext` artifact, over how many were
@@ -599,7 +620,9 @@ rule 6); only numbers are published.
   pre-registration record the **Input**, **Arms** and **Correctness
   precondition** bullets require; and `scripts/enumerate_annotated_functions.py`
   derives the compile-unchanged denominator and its digest, stating its
-  enumeration predicate in full. Two environment variables configure a run, and
+  enumeration predicate in full; and `scripts/check_roadmap_evidence.rb` binds
+  the roadmap's two `product-sprint-1` acceptance items to the published report
+  the **Reporting** bullet fixes. Two environment variables configure a run, and
   are defined here rather than in [CLI_SPEC.md](./CLI_SPEC.md) because neither
   is a `pycc` command-line variable: `PYCC_BENCH_SUBJECT` is the path to the
   subject function's module, outside this repository, and `PYCC_BENCH_PYTHON`

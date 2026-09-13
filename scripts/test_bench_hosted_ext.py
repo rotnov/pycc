@@ -74,6 +74,39 @@ class InterpreterGuardTest(unittest.TestCase):
         with self.assertRaises(BenchmarkError):
             RUNNER.assert_optimized_build(None)
 
+    def test_accepts_every_positive_spelling_of_the_optimization_flag(self) -> None:
+        for configure_args in (
+            "--enable-optimizations",
+            "'--prefix=/usr/local' '--enable-optimizations' '--with-lto'",
+            "--enable-optimizations=yes --with-lto",
+        ):
+            with self.subTest(configure_args=configure_args):
+                RUNNER.assert_optimized_build(configure_args)
+
+    def test_refuses_a_build_that_merely_avoids_the_denied_markers(self) -> None:
+        # An ordinary `./configure && make` denies nothing and optimizes
+        # nothing; the protocol calls such a baseline inadmissible because it
+        # manufactures a passing ratio on its own.
+        for configure_args in (
+            "--prefix=/usr/local",
+            "",
+            "--enable-optimizations=no --with-lto",
+            "--enable-optimizations=0",
+            "--enable-shared --enable-optimizations-experiment",
+        ):
+            with self.subTest(configure_args=configure_args):
+                with self.assertRaises(BenchmarkError) as raised:
+                    RUNNER.assert_optimized_build(configure_args)
+                self.assertIn(
+                    RUNNER.OPTIMIZED_CONFIGURE_MARKER, str(raised.exception)
+                )
+
+    def test_refuses_a_debug_build_even_when_it_claims_optimizations(self) -> None:
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.assert_optimized_build("--enable-optimizations --with-pydebug")
+
+        self.assertIn("--with-pydebug", str(raised.exception))
+
 
 class SubjectGuardTest(unittest.TestCase):
     def test_refuses_when_the_subject_is_not_configured(self) -> None:
@@ -174,6 +207,43 @@ class CorrectnessPreconditionTest(unittest.TestCase):
             RUNNER.compare_outcomes(
                 self.reference(), self.reference(arguments_digest="b"), tolerance=1e-12
             )
+
+    def test_refuses_an_arm_that_clobbered_its_arguments_and_then_raised(self) -> None:
+        # The exception path returns before the value comparison, so the
+        # arguments are the only thing left that can catch this arm.
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.compare_outcomes(
+                self.reference(value=None, exception="ValueError"),
+                self.reference(
+                    value=None, exception="ValueError", arguments_digest="b"
+                ),
+                tolerance=1e-12,
+            )
+
+        self.assertIn("changed its arguments", str(raised.exception))
+
+    def test_refuses_a_non_finite_float_against_a_finite_baseline(self) -> None:
+        # `abs(1.0 - nan) > allowed` is false, so nothing but an explicit
+        # refusal keeps a NaN out of the tolerance test.
+        for divergent in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(divergent=divergent):
+                with self.assertRaises(BenchmarkError) as raised:
+                    RUNNER.compare_outcomes(
+                        self.reference(value=1.0),
+                        self.reference(value=divergent),
+                        tolerance=1e-9,
+                    )
+                self.assertIn("non-finite", str(raised.exception))
+
+    def test_refuses_two_non_finite_floats_that_compare_equal(self) -> None:
+        for value in (float("nan"), float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(BenchmarkError):
+                    RUNNER.compare_outcomes(
+                        self.reference(value=value),
+                        self.reference(value=value),
+                        tolerance=1e-9,
+                    )
 
 
 class StatisticTest(unittest.TestCase):
@@ -303,6 +373,28 @@ class TimingBoundaryTest(unittest.TestCase):
             outcome.arguments_digest,
             hashlib.sha256(repr((7,)).encode("utf-8")).hexdigest(),
         )
+
+    def test_digests_the_arguments_after_a_call_that_mutated_and_then_raised(self) -> None:
+        def clobber_then_raise(values: list[int]) -> int:
+            values.append(99)
+            raise ZeroDivisionError("arm failed")
+
+        def just_raise(values: list[int]) -> int:
+            raise ZeroDivisionError("arm failed")
+
+        baseline_arguments = [1, 2, 3]
+        _, baseline = RUNNER.time_call(just_raise, baseline_arguments)
+        candidate_arguments = [1, 2, 3]
+        _, candidate = RUNNER.time_call(clobber_then_raise, candidate_arguments)
+
+        self.assertEqual(candidate_arguments, [1, 2, 3, 99])
+        self.assertEqual(
+            candidate.arguments_digest,
+            hashlib.sha256(repr(([1, 2, 3, 99],)).encode("utf-8")).hexdigest(),
+        )
+        self.assertNotEqual(baseline.arguments_digest, candidate.arguments_digest)
+        with self.assertRaises(BenchmarkError):
+            RUNNER.compare_outcomes(baseline, candidate, tolerance=1e-9)
 
     def test_runs_one_untimed_warm_up_and_seven_timed_replicates(self) -> None:
         calls: list[int] = []

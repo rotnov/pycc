@@ -113,6 +113,35 @@ class EnumeratePredicateTest(unittest.TestCase):
 
         self.assertEqual(names, ["kept.kept"])
 
+    def test_excludes_symlinked_files_and_symlinked_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = Path(directory) / "outside"
+            write_tree(
+                root,
+                {
+                    "kept.py": "def kept(a: int) -> int:\n    return a\n",
+                    "real/inner.py": "def inner(a: int) -> int:\n    return a\n",
+                },
+            )
+            outside.mkdir()
+            (outside / "elsewhere.py").write_text(
+                "def elsewhere(a: int) -> int:\n    return a\n", encoding="utf-8"
+            )
+            enumerated = root / "tree"
+            enumerated.mkdir()
+            (enumerated / "kept.py").write_text(
+                "def kept(a: int) -> int:\n    return a\n", encoding="utf-8"
+            )
+            (enumerated / "linked.py").symlink_to(root / "kept.py")
+            (enumerated / "linked_dir").symlink_to(outside, target_is_directory=True)
+
+            names = ENUMERATOR.collect_annotated_functions(root, ["tree"])
+
+        # Neither the symlinked file (which would count `kept` twice under a
+        # second name) nor anything under the symlinked directory appears.
+        self.assertEqual(names, ["tree.kept.kept"])
+
     def test_names_are_sorted_byte_wise_ascending(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
