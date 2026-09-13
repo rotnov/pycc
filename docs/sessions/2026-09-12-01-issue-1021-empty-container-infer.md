@@ -28,19 +28,16 @@ run that gates the merge is the one started after it, not any earlier green
 run.
 
 The full local gate set ran green from a single-writer baseline against the
-branch's current head, after that default-branch merge. The commits between
-the last executable-Rust change and the head carry documentation only: `docs/` files, plus module-level `//!` comments in
-`crates/pycc_types/src/empty_container.rs`, which add no instrumentable line
-and so leave the changed-line coverage denominator untouched -- re-run the
-gate rather than inferring that from this sentence. The coverage diff was
-regenerated in the same
-invocation that ran the gate: clippy (warnings denied), `cargo test --workspace`,
-`cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
-`scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
-`--check`, decision immutability, and site-pin merge currency all exit 0.
-Changed-line coverage is 424 of 424 (100.00%); workspace total is 38368/38404
-(99.91%), reported and not enforced. Those figures move with every further
-round; re-run the gate rather than citing them.
+branch's current head, after that default-branch merge, with the coverage
+diff regenerated in the same invocation that ran the gate: clippy (warnings
+denied), `cargo llvm-cov --workspace` (which runs the workspace test suite),
+`cargo doc --workspace --no-deps`, the `scripts/` unittest suite, both agent
+validators, `scripts/check-site.sh`, roadmap evidence, CI permissions, the
+decisions index `--check`, decision immutability, and site-pin merge currency
+all exit 0. Changed-line coverage is 430 of 430 (100.00%); workspace total is
+38375/38411 (99.91%), reported and not enforced. Those figures move with every
+further round, and every earlier round's own figures in this file were
+corrected rather than kept -- re-run the gate rather than citing them.
 
 ## Why this snapshot exists
 
