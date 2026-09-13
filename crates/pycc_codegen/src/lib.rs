@@ -7020,7 +7020,7 @@ fn emit_stmt<'ctx>(
             // `len` re-read below. Comparing every iteration's fresh read
             // against this snapshot, rather than silently visiting whatever
             // `len` grows to, matches CPython's own `RuntimeError` on
-            // set-changed-size-during-iteration with an honest panic.
+            // set-changed-size-during-iteration.
             let initial_len = build_int_set_len(builder, rt, set_ptr);
             let preheader = builder.get_insert_block().unwrap();
 
@@ -7040,9 +7040,41 @@ fn emit_stmt<'ctx>(
             let current = induction.as_basic_value().into_int_value();
             let len = build_int_set_len(builder, rt, set_ptr);
             build_int_set_check_not_resized(builder, rt, len, initial_len);
-            let cont = builder
-                .build_int_compare(IntPredicate::SLT, current, len, "for_set_cont")
+            let in_range = builder
+                .build_int_compare(IntPredicate::SLT, current, len, "for_set_in_range")
                 .expect("build_int_compare should not fail comparing two i64 operands");
+            // Part B of #1038 (#1064): `pycc_rt_int_set_check_not_resized`
+            // now *raises* `RuntimeError: Set changed size during iteration`
+            // (D-173) instead of aborting the process, and a D-173 raise
+            // returns normally. Without this conjunct the loop-continue
+            // condition would still be `current < len` -- and `len` is
+            // exactly the value the body just grew -- so a `for x in s:
+            // s.add(...)` loop would spin forever rather than reporting the
+            // error. Reading the pending flag here, rather than returning a
+            // status from the check function, keeps the runtime ABI
+            // unchanged and is strictly more correct under D-173: the loop
+            // also stops when anything in the *body* raised. Pending state
+            // is never legitimately live on entry to a loop test -- both the
+            // `except` handler bodies and the `finally` body clear it before
+            // running (see `exception.rs`) -- so this cannot cut a loop
+            // short spuriously.
+            let exc_active = builder
+                .build_call(rt.exception_active, &[], "for_set_exc_active")
+                .expect("build_call should not fail for exception_active")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_exception_active returns i8")
+                .into_int_value();
+            let no_exception = builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    exc_active,
+                    exc_active.get_type().const_zero(),
+                    "for_set_no_exc",
+                )
+                .expect("build_int_compare should not fail comparing an i8 against zero");
+            let cont = builder
+                .build_and(in_range, no_exception, "for_set_cont")
+                .expect("build_and should not fail for two i1 operands");
             builder
                 .build_conditional_branch(cont, body_bb, after_bb)
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");

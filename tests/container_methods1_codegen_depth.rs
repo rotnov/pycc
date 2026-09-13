@@ -52,13 +52,14 @@ print(len(xs))
 }
 
 #[test]
-fn list_pop_on_an_empty_list_traps_instead_of_a_catchable_index_error() {
-    // D-119's own honest-panic convention: CPython raises a catchable
-    // `IndexError` here; this compiler has no exception model, so the
-    // generated binary aborts instead. Verified against `python3` that the
-    // *source* is otherwise valid Python (it raises `IndexError` there,
-    // rather than failing to parse/type-check) -- the divergence is in the
-    // runtime failure mode, not in whether this is legal Python.
+fn list_pop_on_an_empty_list_raises_a_catchable_index_error() {
+    // Part B of #1038 (#1064) replaced D-119's honest-panic convention here
+    // with a D-173 pending-exception raise, so this now matches CPython:
+    // `IndexError`, catchable, rather than a process abort. Verified against
+    // `python3` that the source is valid Python raising `IndexError` there
+    // too. The uncaught form is pinned by
+    // `tests/issue_1064_list_set_float_raises.rs`; this one pins that the
+    // whole-program path is catchable from the compiled binary.
     //
     // Emptied via one `.pop()` rather than written as a literal `xs = []`:
     // an empty list literal's element type cannot be inferred without an
@@ -68,14 +69,18 @@ fn list_pop_on_an_empty_list_traps_instead_of_a_catchable_index_error() {
     let source = "\
 xs = [1]
 xs.pop()
-y = xs.pop()
-print(y)
+try:
+    y = xs.pop()
+except IndexError as e:
+    print(e)
 ";
-    let output = build_and_run("list_pop_empty_traps", source);
+    let output = build_and_run("list_pop_empty_raises", source);
     assert!(
-        !output.status.success(),
-        "popping from an empty list must trap rather than silently continuing"
+        output.status.success(),
+        "popping from an empty list must raise a catchable IndexError: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(output.stdout, b"pop from empty list\n");
 }
 
 #[test]
@@ -160,7 +165,7 @@ print(len(s))
 }
 
 #[test]
-fn growing_a_set_with_add_during_its_own_iteration_traps_instead_of_looping_forever() {
+fn growing_a_set_with_add_during_its_own_iteration_raises_instead_of_looping_forever() {
     // Review finding (P1) on this same task: `ForSet`'s loop bound
     // re-reads `pycc_rt_int_set_len` every iteration (mirroring `ForDict`,
     // D-123's own accepted divergence), but `set.add(value)` existing in
@@ -168,25 +173,29 @@ fn growing_a_set_with_add_during_its_own_iteration_traps_instead_of_looping_fore
     // is always a value not yet in `s`, so without a check this loop would
     // never terminate -- real CPython raises a catchable
     // `RuntimeError: Set changed size during iteration` on the very first
-    // mutation instead. This compiler has no exception model, so an
-    // honest panic (verified via a bounded process, not an infinite hang)
-    // is the correct match, per `pycc_rt_int_set_check_not_resized`'s own
-    // doc comment.
+    // mutation instead, and Part B of #1038 (#1064) makes pycc do the same:
+    // the check raises (D-173) rather than aborting, and `ForSet`'s
+    // loop-test gained an `pycc_rt_exception_active() == 0` conjunct so the
+    // loop actually terminates -- a D-173 raise returns normally, and the
+    // length it compares against is exactly the one the body just grew.
+    // Left uncaught here (the catchable form is pinned by
+    // `tests/issue_1064_list_set_float_raises.rs`) so this keeps asserting
+    // the bounded-process property it was written for.
     let source = "\
 s = {1}
 for x in s:
     s.add(x + 1)
 print(len(s))
 ";
-    let output = build_and_run("set_add_during_iteration_traps", source);
+    let output = build_and_run("set_add_during_iteration_raises", source);
     assert!(
         !output.status.success(),
-        "growing a set from inside its own `for` loop must trap, not loop forever or silently \
+        "growing a set from inside its own `for` loop must raise, not loop forever or silently \
          extend the iteration"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("set changed size during iteration"),
-        "expected pycc_rt's honest resize-check message, got: {stderr}"
+        stderr.contains("RuntimeError: Set changed size during iteration"),
+        "expected CPython's own resize message, got: {stderr}"
     );
 }
