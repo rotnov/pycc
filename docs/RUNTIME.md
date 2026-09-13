@@ -515,8 +515,11 @@ method-only mixin (`class E(Mixin, ValueError)`) is dropped and
 `isinstance(e, Mixin)` is `False` host-side where native pycc holds it; and a
 class deriving from a PEP 654 group is not synthesized at all, so it arrives as
 `Exception` exactly as the group classes themselves do. Instance state beyond
-`args` does not cross either -- a user class with its own `__init__` attributes
-hands the host the message and nothing else. Second,
+`args` is not a narrowing of this boundary at all: a class with its own
+`__init__` is rejected as `C0001` at every raise and `except` site in both
+modes (`pycc_types::exception::reject_own_constructor`, the #541 Part 3 gap),
+so no such instance exists to cross it. Such a class is still tagged, and so
+still registered as a module attribute the host can name. Second,
 an `ext` module's state is process-static — generated globals live in LLVM
 globals and the `METH_FASTCALL` wrappers ignore their module argument, with
 `m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not
