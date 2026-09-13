@@ -1453,8 +1453,8 @@ fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut
     let clamped_start = start.min(len);
     let clamped_stop = stop.min(len);
     let result = pycc_rt_int_list_new();
-    // Unlike `int_list_get` (whose own doc comment restores `list`'s
-    // payload before panicking on an out-of-range index), this loop's
+    // Unlike `int_list_get` (which restores `list`'s payload before
+    // raising on an out-of-range index), this loop's
     // take-window contains no fallible operation, so there is nothing to
     // restore: `items[i as usize]` cannot panic, since `i` starts at
     // `clamped_start` and the loop guard keeps it below `clamped_stop`,
