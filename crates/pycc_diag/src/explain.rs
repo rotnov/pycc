@@ -142,13 +142,19 @@ missing a name its source clearly defines. Every gap in a program is \
 reported at once. The two fixes are to make the function private under \
 D-038's rule -- rename it with a leading underscore, which removes it from \
 the export set -- or to build without `--ext`.",
-        // The example has to name a signature the boundary still refuses,
-        // so it must be re-pointed whenever the matrix widens: `str` was
-        // admitted by #1049, and a container is the nearest remaining gap
-        // (#1050). Nothing checks this against the implementation, so a
-        // stale example is a user-facing claim that ships wrong in silence.
+        // The example has to name a signature the boundary still refuses
+        // *and* that `native` mode compiles, since the explanation above
+        // rests on exactly that contrast. It must be re-pointed whenever
+        // the matrix widens: `str` was admitted by #1049, and a container
+        // is the nearest remaining gap (#1050). The element type is
+        // `int` because `pycc_hir::container::check_container_ty` rejects
+        // every other `list[T]` with `T0034` before the `--ext` capability
+        // scan ever runs -- `list[str]` would be a `T0034` example wearing
+        // a `C0003` label. Nothing checks this against the implementation
+        // (#1056), so a stale example is a user-facing claim that ships
+        // wrong in silence.
         example: "\
-def join(parts: list[str]) -> str:
+def join(parts: list[int]) -> str:
     return \"\"
 ",
     },

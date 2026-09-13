@@ -62,9 +62,11 @@ pub(crate) const MIN_PYTHON: (u32, u32) = (3, 13);
 /// Distinct from `C0001` ("construct not supported yet") because the
 /// construct here *is* supported -- `pycc` compiles the function perfectly
 /// well for `native` mode. What is missing is the `PyObject*` boundary for
-/// its signature: Part 1 of #1025 bridges `int` only. `docs/DIAGNOSTICS.md`
-/// carries the registry entry and `crates/pycc_diag/src/explain.rs` the
-/// long-form explanation.
+/// its signature; `docs/RUNTIME.md`'s admissibility matrix is the canonical
+/// statement of which types that boundary carries, in which direction, and
+/// what each admitted one narrows. `docs/DIAGNOSTICS.md` carries the
+/// registry entry and `crates/pycc_diag/src/explain.rs` the long-form
+/// explanation.
 pub(crate) const EXT_CAPABILITY_CODE: &str = "C0003";
 
 /// What a CPython installation told us about itself.
