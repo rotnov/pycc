@@ -6992,7 +6992,7 @@ fn emit_stmt<'ctx>(
         //    accepts silently visiting newly-inserted keys as a bounded
         //    divergence), a mid-loop `set.add()` (D-119, this same PR) is
         //    checked against the length captured once in the preheader and
-        //    panics honestly on any change -- see
+        //    raises `RuntimeError` (D-173) on any change -- see
         //    `pycc_rt_int_set_check_not_resized`'s own doc comment for why
         //    silently extending the iteration is not safe to accept here:
         //    `for x in s: s.add(x + 1)` would never terminate.
@@ -7068,6 +7068,16 @@ fn emit_stmt<'ctx>(
             // 2026-09-13 amendments record, and exiting is the correct
             // response to it: a real exception is pending and is about to be
             // reported, so running the loop body would be the bug.
+            //
+            // Note the emission order: the resize check above runs *before*
+            // this read, yet cannot relabel a body's own exception, because
+            // `check_set_len_unchanged` returns early when
+            // `pycc_rt_exception_active()` is already non-zero (review round
+            // 2 of #1064). Suppressing inside the runtime rather than
+            // branching around the call here keeps this block a single
+            // straight-line test with no extra basic block, and the two
+            // placements are observationally identical: the conjunct below
+            // terminates the loop on this same iteration either way.
             let exc_active = builder
                 .build_call(rt.exception_active, &[], "for_set_exc_active")
                 .expect("build_call should not fail for exception_active")

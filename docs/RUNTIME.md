@@ -446,7 +446,17 @@ gained a `pycc_rt_exception_active() == 0` conjunct, without which a `for x in
 s: s.add(...)` loop would spin forever instead of reporting the error. Those
 sentinels are observable: `print(1e20)` writes a bare newline to stdout before
 the `RuntimeError` reaches stderr, the same "sentinel before the exception is
-reported" shape D-244's 2026-09-13 amendment already accepts for Part A. The
+reported" shape D-244's 2026-09-13 amendment already accepts for Part A. They
+are observable in the *assignment* direction too, recorded by a further
+2026-09-13 D-244 amendment: neither a slice nor a `.pop()` is an
+`expression_can_set_exception` checkpoint, so `result = xs[-1:1]` and
+`y = empty.pop()` inside a `try` suite commit their sentinel to the target name
+before the suite's checkpoint observes the pending exception, and the handler
+sees a binding CPython would have left unchanged. Reaching the loop test with
+an exception already pending does *not* relabel it: `check_set_len_unchanged`
+returns early when `pycc_rt_exception_active()` is non-zero, so a body that
+both grows the set and raises propagates its own exception rather than the
+resize check's `RuntimeError`. The
 bigint-intermediate paths through `require_inline_int` are Part C
 ([#1065](https://github.com/rotnov/pycc/issues/1065)); until that lands, an
 `ext` artifact is only as safe as the magnitudes its own arithmetic stays

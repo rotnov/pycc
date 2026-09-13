@@ -1821,7 +1821,21 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
 /// abort. The function returns `()`; the `ForSet` loop-test codegen
 /// terminates the loop by conjoining `pycc_rt_exception_active() == 0`
 /// onto its continue condition.
+///
+/// A pending exception suppresses the check entirely. `pycc_rt_exception_raise`
+/// replaces the thread-local pending value unconditionally, so a body that both
+/// grows the set *and* raises -- `for x in s: s.add(x + 1); xs.pop()` on an
+/// empty `xs` -- would otherwise reach this check with `IndexError` pending and
+/// leave with `RuntimeError` pending, selecting the wrong `except` handler
+/// (CPython propagates the body's own `IndexError`). Suppressing here rather
+/// than reordering the loop-test codegen costs nothing in correctness: the
+/// loop-test's `pycc_rt_exception_active() == 0` conjunct is evaluated on the
+/// same iteration and terminates the loop either way, so the only observable
+/// difference is which exception survives.
 fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
+    if pycc_rt_exception_active() != 0 {
+        return;
+    }
     if current_len != expected_len {
         raise_builtin(
             EXCEPTION_TYPE_RUNTIME_ERROR,
@@ -3892,6 +3906,27 @@ mod tests {
         assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
         assert_eq!(message, "Set changed size during iteration");
         assert!(!message.contains("pycc_rt: "), "{message}");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn check_set_len_unchanged_keeps_an_already_pending_exception() {
+        // Part B of #1038 (#1064), review round 2: a `ForSet` body that both
+        // grows the set and raises reaches the loop test with its own
+        // exception pending. `pycc_rt_exception_raise` clobbers the pending
+        // value unconditionally, so without this guard the body's
+        // `IndexError` would be relabelled `RuntimeError: Set changed size
+        // during iteration` and the wrong `except` handler would run.
+        pycc_rt_exception_clear();
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "pop from empty list",
+        );
+        check_set_len_unchanged(4, 3);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
+        assert_eq!(message, "pop from empty list");
         pycc_rt_exception_clear();
     }
 

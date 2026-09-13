@@ -308,6 +308,82 @@ fn growing_a_set_during_its_own_iteration_terminates_with_a_runtime_error() {
     assert_eq!(stdout, "Set changed size during iteration\n2\n");
 }
 
+/// Review round 2 of #1064: a body that both *grows* the set and raises. The
+/// resize check is emitted before the loop test reads the pending flag, and
+/// `pycc_rt_exception_raise` replaces the thread-local pending value
+/// unconditionally, so without `check_set_len_unchanged`'s own
+/// already-pending early return this program selects the `RuntimeError`
+/// handler where CPython selects `IndexError`. Measured against CPython
+/// 3.14.x: `IndexError`.
+///
+/// This is the gap `a_for_set_loop_whose_body_raises_exits_at_the_next_test`
+/// leaves open -- its body raises but never grows the set, so the resize check
+/// never fires on top of the body's own pending exception.
+#[test]
+fn a_for_set_body_that_grows_the_set_and_raises_keeps_its_own_exception() {
+    let (ok, stdout, stderr) = build_and_run(
+        "grow_and_raise",
+        "def both() -> str:\n\
+         \x20   s = {1}\n\
+         \x20   try:\n\
+         \x20       for x in s:\n\
+         \x20           s.add(x + 1)\n\
+         \x20           xs = [1]\n\
+         \x20           xs.pop()\n\
+         \x20           xs.pop()\n\
+         \x20   except IndexError:\n\
+         \x20       return \"IndexError\"\n\
+         \x20   except RuntimeError:\n\
+         \x20       return \"RuntimeError\"\n\
+         \x20   return \"none\"\n\n\n\
+         print(both())\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "IndexError\n");
+}
+
+/// Review round 2 of #1064, thread 2: the accepted D-173 sentinel residual in
+/// its *assignment* direction. Neither `MirExpr::Slice` nor `MirExpr::ListPop`
+/// is a `pycc_codegen::exception::expression_can_set_exception` checkpoint, so
+/// each commits its sentinel to the target name before the enclosing suite's
+/// checkpoint observes the pending exception -- a binding CPython would have
+/// left at its previous value. Both arms are pinned together so a future
+/// half-fix that classifies only one of them fails here: the class belongs to
+/// the classifier, not to either expression, and `MirExpr::FString` reaches
+/// `float_to_str` with the same shape.
+///
+/// Widening `expression_can_set_exception` is out of scope for #1064 (plan
+/// section 9) -- it is pinned by
+/// `exception_guard_classification_keeps_the_arithmetic_fast_path_clean`
+/// because `nbody.py` evaluates ten `Pow` nodes per hot-loop iteration under
+/// the D-084/D-095/D-140 speedup floors. The residual closes with #1031.
+#[test]
+fn a_rejected_slice_and_an_empty_pop_both_commit_their_sentinel_to_the_target() {
+    let (ok, stdout, stderr) = build_and_run(
+        "sentinel_binding",
+        "xs = [9, 9, 9]\n\
+         result = [9, 9, 9]\n\
+         try:\n\
+         \x20   result = xs[-1:1]\n\
+         except ValueError as e:\n\
+         \x20   print(e)\n\
+         print(len(result))\n\
+         empty = [1]\n\
+         empty.pop()\n\
+         y = 7\n\
+         try:\n\
+         \x20   y = empty.pop()\n\
+         except IndexError as e:\n\
+         \x20   print(e)\n\
+         print(y)\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(
+        stdout,
+        "slice start must be non-negative\n0\npop from empty list\n0\n"
+    );
+}
+
 /// The same six raises seen from a CPython host through an `ext`-mode artifact
 /// (D-244), which is the mode where being catchable actually matters: the host
 /// interpreter, not pycc, owns the process, so a `SIGABRT` there took the whole
