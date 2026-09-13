@@ -907,8 +907,13 @@ mod tests {
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
             calls = guarded_bigint_refcount_calls(&llvm_string_to_owned(module.print_to_string()));
         };
-        compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))
-            .expect("codegen should succeed");
+        compile_to_object_with_observer(
+            mir,
+            &obj_path,
+            &CompileOptions::default(),
+            Some(&mut observer),
+        )
+        .expect("codegen should succeed");
         calls
     }
 
@@ -952,8 +957,13 @@ mod tests {
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
             ir = llvm_string_to_owned(module.print_to_string());
         };
-        compile_to_object_with_observer(mir, &obj_path, None, false, Some(&mut observer))
-            .expect("codegen should succeed");
+        compile_to_object_with_observer(
+            mir,
+            &obj_path,
+            &CompileOptions::default(),
+            Some(&mut observer),
+        )
+        .expect("codegen should succeed");
         ir
     }
 
@@ -1769,8 +1779,13 @@ mod tests {
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
             ir = llvm_string_to_owned(module.print_to_string());
         };
-        compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
-            .expect("codegen should succeed");
+        compile_to_object_with_observer(
+            &mir,
+            &obj_path,
+            &CompileOptions::default(),
+            Some(&mut observer),
+        )
+        .expect("codegen should succeed");
         assert!(
             !ir.contains("bigint_rc_call"),
             "a constant word must not reach the guard emitter, but the IR \

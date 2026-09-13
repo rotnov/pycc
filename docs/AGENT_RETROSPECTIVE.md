@@ -67,6 +67,36 @@ timing-sensitive assertion under a competing build.
 
 ---
 
+## 2026-09-12 — A blind `sed -i` deleted half of a multi-line Rust attribute and left the file uncompilable
+
+**What happened.** While wiring `--ext` (#1036), a crate-level
+`#![allow(dead_code, reason = "...")]` in `src/ext_output.rs` had become
+obsolete and needed removing. The attribute spanned three lines. A
+single-pattern `sed -i` matched only the first of them, leaving the
+remaining two lines of the attribute behind as a syntax error. The next
+`cargo` invocation failed with a parse error several lines away from the
+edit, and reconstructing what the file had originally contained cost more
+time than the edit itself would have.
+
+**Root cause.** `sed` is line-oriented and the edit target was not. The
+pattern was written from the attribute's first line alone, without checking
+whether the construct it belonged to ended on that line. Nothing in the
+command could have expressed "and everything through the closing bracket".
+
+**What fixed it.** Recovering the original three lines from `git show
+HEAD:src/ext_output.rs` and re-applying the deletion as an exact multi-line
+splice in Python (read the file, assert the full old text occurs exactly
+once, write the replacement).
+
+**Lesson.** For a construct that can span lines — a Rust attribute, a
+multi-line call, an `#[cfg(...)]` block, a doc comment — do not delete or
+rewrite it with a single-pattern `sed`. Use a splice that names the entire
+old text and asserts it occurs exactly once, so a partial match fails loudly
+instead of silently producing a half-edit. A `sed -i` is safe only when the
+whole unit of meaning demonstrably fits on the one line it matches.
+
+---
+
 ## 2026-09-12 — A universal claim was corrected one review round at a time, because each round enumerated only the sites the previous finding named
 
 **What happened.** A decision record narrowed an accepted, universally-stated

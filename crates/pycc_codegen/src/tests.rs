@@ -431,8 +431,7 @@ fn release_mode_actually_runs_llvm_optimization_passes() {
     compile_to_object_with_observer(
         &mir,
         &debug_obj_path,
-        None,
-        false,
+        &CompileOptions::default(),
         Some(&mut debug_observer),
     )
     .expect("debug codegen should succeed");
@@ -451,8 +450,10 @@ fn release_mode_actually_runs_llvm_optimization_passes() {
     compile_to_object_with_observer(
         &mir,
         &release_obj_path,
-        None,
-        true,
+        &CompileOptions {
+            release: true,
+            ..CompileOptions::default()
+        },
         Some(&mut release_observer),
     )
     .expect("release codegen should succeed");
@@ -1403,8 +1404,13 @@ fn an_oversized_int_literal_materializes_a_runtime_bigint() {
             saw_call |= llvm_string_to_owned(module.print_to_string())
                 .contains("call i64 @pycc_rt_int_from_i64");
         };
-        compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
-            .expect("an out-of-range int literal should compile");
+        compile_to_object_with_observer(
+            &mir,
+            &obj_path,
+            &CompileOptions::default(),
+            Some(&mut observer),
+        )
+        .expect("an out-of-range int literal should compile");
         assert!(saw_call, "{value} should be materialized at run time");
     }
 }
@@ -1498,8 +1504,13 @@ fn an_in_range_int_literal_is_still_folded_at_compile_time() {
         saw_call |= llvm_string_to_owned(module.print_to_string())
             .contains("call i64 @pycc_rt_int_from_i64");
     };
-    compile_to_object_with_observer(&mir, &obj_path, None, false, Some(&mut observer))
-        .expect("an in-range int literal should compile");
+    compile_to_object_with_observer(
+        &mir,
+        &obj_path,
+        &CompileOptions::default(),
+        Some(&mut observer),
+    )
+    .expect("an in-range int literal should compile");
     assert!(
         !saw_call,
         "an in-range literal needs no runtime materialization"
