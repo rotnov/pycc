@@ -94,6 +94,14 @@ void — green included — and the gate is re-run, not interpreted. Do not file
 the load-sensitive test as a flake to be fixed; the defect is running a
 timing-sensitive assertion under a competing build.
 
+A fourth form of the same thing is an inherited environment value: on this
+machine `TMPDIR` ends in a slash, so an isolated directory built as
+`"$TMPDIR/<tag>.XXXXXX"` carries a doubled separator into every path derived
+from it, and `tests/issue_934_protocol_return.rs` fails on the resulting
+path spelling while the code under test is correct. Strip the inherited
+value's trailing slashes before composing a path from it
+(`BASETMP=$(printf '%s' "${TMPDIR:-/tmp}" | sed 's:/*$::')`).
+
 ---
 
 ## 2026-09-12 — A blind `sed -i` deleted half of a multi-line Rust attribute and left the file uncompilable
