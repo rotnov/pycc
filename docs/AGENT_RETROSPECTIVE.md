@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-09-13 — A commit SHA typed from memory instead of read from `git rev-parse`
+
+**What happened.** A reply published to a review thread on pull request #1035
+cited the commit that fixed the finding as
+`95329461ee1c4f2a4b83c2def9a02fbe1d1fd0dd`. The real commit is
+`95329461e659e57bc3b3cbabf3928537948fadc9`. The two share only their first
+eight characters: everything after them was invented. The reply was already
+public, and editing an existing comment was outside this session's authorized
+writes, so the correction had to be a second reply on the same thread rather
+than a fix in place.
+
+**Root cause.** The SHA was produced by writing out forty hexadecimal
+characters from working memory, having seen the short form. A hash has no
+redundancy — there is no internal structure that makes a wrong continuation
+look wrong — so nothing in the act of writing it flagged the error, and the
+usual defence of re-reading what was written cannot catch it either.
+
+**What fixed it.** Comparing the published reply against
+`git rev-parse HEAD`, then posting a correction reply citing the real SHA.
+
+**Lesson.** Never transcribe a commit hash, a digest, or any other opaque
+identifier from memory into a durable artifact. Substitute the command that
+produces it — `"$(git rev-parse HEAD)"` inside the command that consumes it,
+or a captured variable — so the value reaches the artifact without ever
+passing through a sentence. The same rule already governs
+`gh pr merge --match-head-commit`; it applies identically to prose. Where an
+identifier must appear as literal text, paste it from a command's output in
+the same turn and verify it against the source afterwards.
+
 ## 2026-09-13 — A gate's verdict is only valid on a machine running nothing else that competes for it
 
 **What happened.** Three separate green-or-red verdicts taken during #1021's

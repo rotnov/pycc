@@ -38,7 +38,7 @@ invocation that ran the gate: clippy (warnings denied), `cargo test --workspace`
 `cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
 `scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
 `--check`, decision immutability, and site-pin merge currency all exit 0.
-Changed-line coverage is 424 of 424 (100.00%); workspace total is 37700/37734
+Changed-line coverage is 424 of 424 (100.00%); workspace total is 38368/38404
 (99.91%), reported and not enforced. Those figures move with every further
 round; re-run the gate rather than citing them.
 
