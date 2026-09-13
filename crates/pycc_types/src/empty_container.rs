@@ -77,13 +77,31 @@
 //! Within a function body the pass walks *every* block statement this HIR has
 //! -- `if`/`else`, `while`, both `for` forms, every `match` case body, and
 //! every `try`/`except`/`except*`/`else`/`finally` suite (see
-//! [`nested_bodies`]) -- so sources 1 and 3 work identically at any nesting
-//! depth. Source 2 is the one that does not: the environment comes from
+//! [`nested_bodies`]) -- so source 1, which is purely syntactic and reads no
+//! environment at all, works identically at any nesting depth.
+//!
+//! Sources 2 and 3 are the ones that do not, and they share one cause rather
+//! than differing: both read the flat whole-function `Environment` built by
 //! `bind_local_types_in_body`, a pre-existing pass shared with protocol
-//! monomorphization whose own statement walk has no `match`/`try` arm, so a
-//! binding *created inside* such a suite is absent from it. That costs a
-//! missed resolution (`T0003`), never a wrong element type, and widening a
+//! monomorphization whose own statement walk has no `match`/`try` arm. Source
+//! 2 reads a binding out of that environment directly; source 3 infers the
+//! producer's value *in* it ([`find_producer`] calls `infer_expr_in` with
+//! exactly that environment). So a name bound only inside a `match` case or a
+//! `try` suite is invisible to both, and `case y: xs = []; xs.append(y)` is
+//! not resolved even though `case y: xs: list[int] = []; xs.append(y)` is.
+//! That costs a missed resolution, never a wrong element type, and widening a
 //! shared pass belongs to its own change rather than to this one.
+//!
+//! What a miss then *reports* is not always `T0003`. A miss leaves the
+//! concrete path failing, which routes the module into the private-helper
+//! constraint solver, whose own `HirStmt::Match` arm never binds a pattern's
+//! capture names into the case environment -- so the capture is reported as
+//! `T0021` with the "local name is not bound before this use" message,
+//! and D-220's
+//! solver-first merge lets that win over the true `T0003`. That solver
+//! behavior predates this pass (`origin/main` emits the identical diagnostic
+//! for the same program, and for a `match` program containing no empty
+//! container at all) and is untouched here; it is tracked as issue #1046.
 
 use super::*;
 

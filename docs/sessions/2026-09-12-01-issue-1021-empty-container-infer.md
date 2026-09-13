@@ -25,9 +25,12 @@ run that gates the merge is the one started after it, not any earlier green
 run.
 
 The full local gate set ran green from a single-writer baseline against the
-branch's last Rust-source commit, with this snapshot and the documentation
-commits after it touching only `docs/`, which the changed-line coverage gate
-does not instrument. The coverage diff was regenerated in the same
+branch's last commit that changed executable Rust. The commits after it carry
+documentation only: `docs/` files, plus module-level `//!` comments in
+`crates/pycc_types/src/empty_container.rs`, which add no instrumentable line
+and so leave the changed-line coverage denominator untouched -- re-run the
+gate rather than inferring that from this sentence. The coverage diff was
+regenerated in the same
 invocation that ran the gate: clippy (warnings denied), `cargo test --workspace`,
 `cargo llvm-cov`, the `scripts/` unittest suite, both agent validators,
 `scripts/check-site.sh`, roadmap evidence, CI permissions, the decisions index
