@@ -1632,3 +1632,83 @@ print(go())
         "the first producer must still select the element type, got: {diagnostics}",
     );
 }
+/// #1021 bot review round 16: the per-body promotion that lets a producer
+/// read a name its own branch binds restored the *flat* whole-function type,
+/// which a mutually exclusive branch may have contributed. With `v` bound to
+/// `True` in the `if` arm and to `1` in the `else`, the flat pass retains
+/// `bool`, so promoting it inside the `else` resolved `EmptyList(Bool)` and
+/// reported `T0034` -- while the `xs = [v]` spelling of the same program sees
+/// the branch-local `int` and is accepted. A name bound by more than one
+/// syntactic site is now declined instead of promoted, so the empty spelling
+/// misses with `T0003` rather than resolving wrongly.
+#[test]
+fn a_name_bound_in_two_branches_is_not_promoted_from_the_flat_type() {
+    let diagnostics = check_error(
+        "cross_branch_promotion",
+        "\
+def go(flag: bool) -> int:
+    total = 0
+    if flag:
+        v = True
+    else:
+        v = 1
+        xs = []
+        xs.append(v)
+        total = len(xs)
+    return total
+
+
+print(go(False))
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "the cross-branch type must not resolve the container, got: {diagnostics}",
+    );
+    assert!(
+        !diagnostics.contains("T0034"),
+        "the flat `bool` must not have been promoted into the `else`, got: {diagnostics}",
+    );
+}
+
+/// The reference spelling of the program above: `xs = [v]` carries no empty
+/// literal, so this pass never touches it and the checker resolves `v` in the
+/// branch that binds it. `pycc check` accepting it is what makes the empty
+/// spelling's former `T0034` a *wrong* resolution rather than a shared
+/// limitation of both spellings.
+///
+/// Only `check` is asserted here, deliberately. Building and running this
+/// program aborts in the runtime's int decoding -- a D-040 sticky-
+/// representation defect in a branch-divergent `bool`/`int` binding that
+/// reproduces with no empty container anywhere in the program, so it is
+/// outside this pass and tracked separately.
+#[test]
+fn the_reference_spelling_of_the_cross_branch_program_still_checks() {
+    let (_dir, path) = write_source(
+        "cross_branch_promotion_ref",
+        "\
+def go(flag: bool) -> int:
+    total = 0
+    if flag:
+        v = True
+    else:
+        v = 1
+        xs = [v]
+        total = len(xs)
+    return total
+
+
+print(go(False))
+",
+    );
+    let output = Command::new(pycc_bin())
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the reference spelling must still check: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}

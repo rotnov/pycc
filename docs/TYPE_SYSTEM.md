@@ -205,6 +205,17 @@ element, and panics on an empty one.
   a type either, and both halves of a `d[k] = v` producer count: either the key
   or the value failing to infer is the same match. The cost is once more a
   `T0003`.
+- **A name bound in more than one place is not evidence.** A producer may read
+  a name its own branch or loop body binds, which the flat whole-function
+  binder demotes and the scan restores per body — but only when that name has a
+  single syntactic binding site in the whole function. With two sites the type
+  the flat binder recorded may have come from a *mutually exclusive* branch:
+  for `if flag: v = True` / `else: v = 1; xs = []; xs.append(v)` it is `bool`,
+  which resolved `list[bool]` and reported `T0034` inside the `else`, while the
+  `xs = [v]` spelling sees the branch-local `int` and compiles. Reconstructing
+  each body's own bindings would reimplement the checker's statement walk ahead
+  of it, so the evidence is declined instead, and two sites carrying the *same*
+  type are declined with it. The cost is again a `T0003`.
 - **The same gate as a written annotation.** A resolved type still passes
   through `pycc_hir::check_container_ty` (D-228), so an inferred `list[str]` is
   `T0034` and an inferred `dict[int, int]` is `T0036`, exactly as the written

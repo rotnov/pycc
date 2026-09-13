@@ -59,9 +59,13 @@ pub(crate) fn concrete_function_environment(hir: &HirModule) -> Option<Environme
     Some(annotated_function_environment(hir))
 }
 
-/// The same registry [`concrete_function_environment`] builds, but registering
-/// only the functions whose signatures are already fully concrete instead of
-/// refusing the whole module when any one of them still carries `Ty::Infer`.
+/// The same registry [`concrete_function_environment`] builds, but for *any*
+/// module: instead of refusing the whole module when one signature still
+/// carries `Ty::Infer`, it registers every function, an inferred signature
+/// included, with whatever type that signature currently has. The registry
+/// invariant below requires exactly that -- skipping such a function would
+/// abort the class resolvers -- so do not narrow this to the concrete
+/// signatures.
 ///
 /// This is what the #1021 empty-container pre-pass needs: that pass runs
 /// before private-helper inference has resolved anything, so demanding a

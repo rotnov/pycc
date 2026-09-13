@@ -373,6 +373,40 @@ fn collect_definite_top_level_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a
     }
 }
 
+/// Every syntactic binding site in `body`, nested bodies included, as one
+/// entry per site rather than one per name: a name listed twice is bound by
+/// two different statements, and the flat whole-function environment records
+/// only one of their types.
+///
+/// This counts sites, not reachable assignments -- the two arms of an `if`
+/// are two sites even though only one runs -- which is what
+/// [`scoped_for_body`] needs and is why no environment is consulted here.
+fn collect_binding_sites<'a>(body: &'a [HirStmt], sites: &mut Vec<&'a str>) {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, .. } => sites.push(target),
+            HirStmt::AnnAssign { target, value, .. } if value.is_some() => sites.push(target),
+            // A loop target is rebound on every iteration, and a loop nested
+            // in another construct's body is one more site for that name.
+            HirStmt::ForRange { var, .. } | HirStmt::ForList { var, .. } => sites.push(var),
+            HirStmt::ExprStmt(expr)
+            | HirStmt::If { test: expr, .. }
+            | HirStmt::While { test: expr, .. } => {
+                crate::collect_named_expr_names_in_expr(expr, sites)
+            }
+            _ => {}
+        }
+        for nested in nested_bodies(stmt) {
+            collect_binding_sites(nested, sites);
+        }
+    }
+}
+
+/// Whether `name` is bound by more than one of `sites`.
+fn bound_by_several_sites(sites: &[&str], name: &str) -> bool {
+    sites.iter().filter(|site| **site == name).count() > 1
+}
+
 /// The environment a producer scan of `body` -- one nested body of `stmt` --
 /// should read, given the environment of the scope enclosing `stmt`.
 ///
@@ -384,10 +418,36 @@ fn collect_definite_top_level_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a
 /// restoration is per *body*, not per statement, so an `if`'s two arms never
 /// see each other's bindings.
 ///
+/// The restored *type*, however, is the flat binder's, not this body's, and
+/// that is only trustworthy while the two cannot differ. `sites` is what
+/// establishes they cannot: a name bound by more than one syntactic site
+/// anywhere in the function is declined rather than promoted, because the
+/// type the flat binder recorded for it may have been contributed by a
+/// *different, mutually exclusive* site. For `if flag: v = True` /
+/// `else: v = 1; xs = []; xs.append(v)` the flat pass retains `bool` from the
+/// `if` arm, promoting it inside the `else` resolved `EmptyList(Bool)` and
+/// reported `T0034`, while the `xs = [v]` spelling sees the branch-local
+/// `int` and compiles -- a *wrong* resolution in exactly the sense D-245's
+/// invariant forbids (#1021 bot review round 16).
+///
+/// Declining is the repair rather than reconstructing the body's own
+/// environment, for the same reason [`demote_conditional_bindings`] gives:
+/// threading a per-body binder ahead of the checker would reimplement the
+/// statement-walk ordering the checker already owns, inside a pass whose
+/// design justification is that it is infallible and pure. The test is
+/// deliberately under-approximated in the safe direction -- two sites
+/// assigning the *same* type are declined too, costing a `T0003` and never a
+/// wrong element type.
+///
 /// `None` means nothing needed restoring and the caller can keep reading the
 /// enclosing environment, which is the common case and avoids cloning an
 /// `Environment` for every block statement in every function.
-fn scoped_for_body(stmt: &HirStmt, body: &[HirStmt], env: &Environment) -> Option<Environment> {
+fn scoped_for_body(
+    stmt: &HirStmt,
+    body: &[HirStmt],
+    env: &Environment,
+    sites: &[&str],
+) -> Option<Environment> {
     let mut restored: Vec<&str> = Vec::new();
     match stmt {
         HirStmt::ForRange { var, .. } | HirStmt::ForList { var, .. } => restored.push(var),
@@ -396,6 +456,7 @@ fn scoped_for_body(stmt: &HirStmt, body: &[HirStmt], env: &Environment) -> Optio
     collect_definite_top_level_names(body, &mut restored);
     let promotions: Vec<(String, Ty)> = restored
         .iter()
+        .filter(|name| !bound_by_several_sites(sites, name))
         .filter_map(|name| match env.binding_state(name) {
             Some(BindingState::Maybe(ty)) => Some(((*name).to_string(), ty.clone())),
             _ => None,
@@ -720,7 +781,9 @@ fn find_producer(
     env: &Environment,
     local_names: &[&str],
 ) -> Option<Resolution> {
-    match scan_for_producer(body, target, env, local_names) {
+    let mut sites: Vec<&str> = Vec::new();
+    collect_binding_sites(body, &mut sites);
+    match scan_for_producer(body, target, env, local_names, &sites) {
         ProducerScan::Resolved(resolution) => Some(resolution),
         ProducerScan::Matched | ProducerScan::NotFound => None,
     }
@@ -745,11 +808,12 @@ enum ProducerScan {
     Resolved(Resolution),
 }
 
-fn scan_for_producer(
-    body: &[HirStmt],
+fn scan_for_producer<'a>(
+    body: &'a [HirStmt],
     target: &str,
     env: &Environment,
     local_names: &[&str],
+    sites: &[&'a str],
 ) -> ProducerScan {
     for stmt in body {
         match stmt {
@@ -773,9 +837,9 @@ fn scan_for_producer(
             _ => {}
         }
         for nested in nested_bodies(stmt) {
-            let scoped = scoped_for_body(stmt, nested, env);
+            let scoped = scoped_for_body(stmt, nested, env, sites);
             let inner = scoped.as_ref().unwrap_or(env);
-            match scan_for_producer(nested, target, inner, local_names) {
+            match scan_for_producer(nested, target, inner, local_names, sites) {
                 ProducerScan::NotFound => {}
                 outcome => return outcome,
             }
