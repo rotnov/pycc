@@ -709,43 +709,79 @@ fn from_container_ty(ty: &Ty) -> Option<Resolution> {
 /// discards a resolution of the wrong shape at the rewrite site, so a
 /// cross-shape hit costs a missed resolution (`T0003`) and never yields a
 /// wrong element type. Such a program fails type-checking on its own terms
-/// anyway.
+/// anyway. The same is true of a producer whose value does not infer: the
+/// scan ends there with a miss rather than continuing to a later producer,
+/// because a later producer's element type is not the one the program's
+/// first use asks for, and selecting it would be a wrong resolution rather
+/// than a missed one. See [`ProducerScan`].
 fn find_producer(
     body: &[HirStmt],
     target: &str,
     env: &Environment,
     local_names: &[&str],
 ) -> Option<Resolution> {
+    match scan_for_producer(body, target, env, local_names) {
+        ProducerScan::Resolved(resolution) => Some(resolution),
+        ProducerScan::Matched | ProducerScan::NotFound => None,
+    }
+}
+
+/// The outcome of scanning one statement list for `target`'s first producer.
+///
+/// The middle variant is what makes the scan stop at the *first syntactic*
+/// producer rather than the first *inferring* one: a producer whose value
+/// fails to infer -- because it reads a name the flat whole-function
+/// environment never bound, such as one assigned inside a `try` suite --
+/// ends the scan with a miss instead of falling through to a later producer
+/// that might carry an entirely different element type.
+enum ProducerScan {
+    /// No statement in this list, or in any body nested inside it, names
+    /// `target` in producer position.
+    NotFound,
+    /// A producer for `target` was found, but its element type could not be
+    /// inferred. The scan is over; the caller resolves nothing.
+    Matched,
+    /// A producer for `target` was found and its element type inferred.
+    Resolved(Resolution),
+}
+
+fn scan_for_producer(
+    body: &[HirStmt],
+    target: &str,
+    env: &Environment,
+    local_names: &[&str],
+) -> ProducerScan {
     for stmt in body {
-        let found = match stmt {
+        match stmt {
             HirStmt::ExprStmt(HirExpr::ListAppend { list, value }) if list == target => {
-                crate::infer_expr_in(env, local_names, value)
-                    .ok()
-                    .map(Resolution::List)
+                return match crate::infer_expr_in(env, local_names, value) {
+                    Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
+                    Err(_) => ProducerScan::Matched,
+                };
             }
             HirStmt::DictSet { dict, key, value } if dict == target => {
-                match (
+                return match (
                     crate::infer_expr_in(env, local_names, key),
                     crate::infer_expr_in(env, local_names, value),
                 ) {
-                    (Ok(key_ty), Ok(value_ty)) => Some(Resolution::Dict(key_ty, value_ty)),
-                    _ => None,
-                }
+                    (Ok(key_ty), Ok(value_ty)) => {
+                        ProducerScan::Resolved(Resolution::Dict(key_ty, value_ty))
+                    }
+                    _ => ProducerScan::Matched,
+                };
             }
-            _ => None,
-        };
-        if found.is_some() {
-            return found;
+            _ => {}
         }
         for nested in nested_bodies(stmt) {
             let scoped = scoped_for_body(stmt, nested, env);
             let inner = scoped.as_ref().unwrap_or(env);
-            if let Some(resolution) = find_producer(nested, target, inner, local_names) {
-                return Some(resolution);
+            match scan_for_producer(nested, target, inner, local_names) {
+                ProducerScan::NotFound => {}
+                outcome => return outcome,
             }
         }
     }
-    None
+    ProducerScan::NotFound
 }
 
 /// `T0003` for an empty list literal no source of evidence could type.

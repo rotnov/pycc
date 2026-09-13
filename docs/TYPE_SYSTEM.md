@@ -193,6 +193,18 @@ element, and panics on an empty one.
   name with different producers, both nodes take the first producer's type and
   the second branch's `append` reports the ordinary element-type mismatch. One
   binding cannot hold two element types.
+- **The scan stops at the first *syntactic* producer, inferring or not.** A
+  producer statement that names the target but whose value does not infer ends
+  the scan with a miss, rather than falling through to a later producer. The
+  flat whole-function binder has no `match`/`try` arm, so a value bound inside
+  such a suite is invisible to it; letting the scan continue would resolve the
+  container from a producer the program's own first use contradicts — for
+  `try: v = 1; xs = []; xs.append(v); xs.append(True)` that was `list[bool]`,
+  reported as `T0034`, while the `xs = [v]` spelling compiles. The stop
+  propagates out of nested bodies, so a producer after the block cannot select
+  a type either, and both halves of a `d[k] = v` producer count: either the key
+  or the value failing to infer is the same match. The cost is once more a
+  `T0003`.
 - **The same gate as a written annotation.** A resolved type still passes
   through `pycc_hir::check_container_ty` (D-228), so an inferred `list[str]` is
   `T0034` and an inferred `dict[int, int]` is `T0036`, exactly as the written

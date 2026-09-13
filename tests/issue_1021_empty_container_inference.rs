@@ -1436,3 +1436,199 @@ print(f())
         "the in-function dict help is unchanged, got: {dict_in_function}",
     );
 }
+
+/// D-245 item 3 says the producer scan returns the first *syntactic*
+/// producer. Review round 15 on PR #1035 showed the implementation returned
+/// the first *inferring* one: a producer whose value failed to infer fell
+/// through and a later producer chose the element type instead. Inside a
+/// `try` suite the value name is exactly that -- `bind_local_types_in_body`
+/// has no `try` arm, so a binding made there is invisible to the flat
+/// whole-function environment -- so `xs.append(v)` was skipped and
+/// `xs.append(True)` resolved `list[bool]`, reported as `T0034`. That is a
+/// resolution the program's own first use contradicts, which the "never
+/// wrong, only missed" invariant forbids. The scan now stops at the match,
+/// and the outcome is the `T0003` a miss is supposed to produce.
+#[test]
+fn an_uninferable_producer_ends_the_scan_rather_than_deferring_to_a_later_one() {
+    let diagnostics = check_error(
+        "uninferable_producer_ends_scan",
+        "\
+def go() -> int:
+    total = 0
+    try:
+        v = 1
+        xs = []
+        xs.append(v)
+        xs.append(True)
+        total = len(xs)
+    except ValueError:
+        total = 0
+    return total
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "a matching but uninferable producer must miss, got: {diagnostics}",
+    );
+    assert!(
+        !diagnostics.contains("T0034"),
+        "the later producer must not have selected the element type, got: {diagnostics}",
+    );
+}
+
+/// The reference spelling of the same program. `xs = [v]` compiles and runs,
+/// which is what makes the `list[bool]` the old scan produced a *wrong*
+/// resolution rather than a merely unhelpful one: the two spellings have to
+/// agree on the element type or disagree by a miss, never by a different
+/// type.
+#[test]
+fn the_reference_spelling_of_the_uninferable_producer_program_still_compiles() {
+    let output = check_build_and_run(
+        "uninferable_producer_reference",
+        "\
+def go() -> int:
+    total = 0
+    try:
+        v = 1
+        xs = [v]
+        xs.append(True)
+        total = len(xs)
+    except ValueError:
+        total = 0
+    return total
+
+
+print(go())
+",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n");
+}
+
+/// The stop has to propagate out of the recursion, not just out of the
+/// statement list it was found in: a nested body's matching-but-uninferable
+/// producer ends the *whole* scan, so a later producer sitting after the
+/// block at function top level cannot select a different element type
+/// either.
+#[test]
+fn an_uninferable_producer_in_a_nested_body_ends_the_enclosing_scan_too() {
+    let diagnostics = check_error(
+        "uninferable_producer_propagates",
+        "\
+def go() -> int:
+    xs = []
+    try:
+        v = 1
+        xs.append(v)
+    except ValueError:
+        pass
+    xs.append(True)
+    return len(xs)
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "the nested miss must end the enclosing scan, got: {diagnostics}",
+    );
+    assert!(
+        !diagnostics.contains("T0034"),
+        "the top-level producer after the block must not resolve it, got: {diagnostics}",
+    );
+}
+
+/// The dict producer arm needs both halves to infer, and either half failing
+/// is the same match: a `d[k] = v` whose *value* does not infer stops the
+/// scan exactly as the list arm does.
+#[test]
+fn an_uninferable_dict_value_producer_ends_the_scan() {
+    let diagnostics = check_error(
+        "uninferable_dict_value_producer",
+        "\
+def go() -> int:
+    d = {}
+    try:
+        v = 1
+        d[\"k\"] = v
+    except ValueError:
+        pass
+    d[\"j\"] = True
+    return len(d)
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "an uninferable dict value must miss, got: {diagnostics}",
+    );
+    assert!(
+        !diagnostics.contains("T0036"),
+        "the later producer must not have selected the value type, got: {diagnostics}",
+    );
+}
+
+/// The symmetric half: the *key* is the part that does not infer. Without
+/// covering both, the arm would be asymmetric in exactly the way the
+/// list-only version of this fix would have been.
+#[test]
+fn an_uninferable_dict_key_producer_ends_the_scan() {
+    let diagnostics = check_error(
+        "uninferable_dict_key_producer",
+        "\
+def go() -> int:
+    d = {}
+    try:
+        k = \"a\"
+        d[k] = 1
+    except ValueError:
+        pass
+    d[True] = 2
+    return len(d)
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("T0003"),
+        "an uninferable dict key must miss, got: {diagnostics}",
+    );
+    assert!(
+        !diagnostics.contains("T0036"),
+        "the later producer must not have selected the key type, got: {diagnostics}",
+    );
+}
+
+/// The other direction of the same rule, so the stop does not quietly become
+/// a stop-on-anything: when the first producer *does* infer, it still wins
+/// over a later producer carrying a different type, and the later one fails
+/// with the ordinary element-type mismatch rather than re-resolving the
+/// container. This is D-245 item 5's first-wins rule read through the same
+/// code path.
+#[test]
+fn a_first_producer_that_infers_still_wins_over_a_later_differing_one() {
+    let diagnostics = check_error(
+        "first_inferring_producer_wins",
+        "\
+def go() -> int:
+    xs = []
+    xs.append(1)
+    xs.append(\"a\")
+    return len(xs)
+
+
+print(go())
+",
+    );
+    assert!(
+        diagnostics.contains("cannot append `str` to a list of `int`"),
+        "the first producer must still select the element type, got: {diagnostics}",
+    );
+}
