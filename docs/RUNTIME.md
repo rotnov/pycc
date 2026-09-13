@@ -476,7 +476,9 @@ they do for a hand-written extension. The two PEP 654 group classes still reach
 the caller as `Exception` with the original message, and so does any user class
 derived from one: the limited C API exposes no `PyExc_ExceptionGroup`, and PEP
 654 requires `(msg, exceptions)`, so a synthesized stand-in would be a fake
-group class rather than CPython's. Foreign imports,
+group class rather than CPython's; carrying a real group across the boundary
+needs the `exceptions` sequence itself to cross and is tracked as
+[#1073](https://github.com/rotnov/pycc/issues/1073). Foreign imports,
 opaque objects, and the buffer protocol are Parts 2-4. That mode's typed boundary
 additionally faces callers pycc does not compile, so what a typed export
 wrapper does with an argument that violates its annotation is D-244 rule 7 —
