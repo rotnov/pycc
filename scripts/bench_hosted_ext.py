@@ -13,14 +13,25 @@ beside the protocol:
 * `PYCC_BENCH_SUBJECT` -- the path to the subject function's module, outside
   this repository. The reference codebase is proprietary (D-244 rule 6), so the
   path and its contents are never echoed into stdout, the results file or any
-  report.
+  report; what binds the subject is the SHA-256 of its bytes, which is a number
+  and is committed in the pre-registration record.
 * `PYCC_BENCH_PYTHON` -- the pinned interpreter to time against, falling back
   to `PYCC_PYTHON`.
 
 The pre-registration record `scripts/bench_hosted_ext_precommit.json` supplies
-the seed, the input digest, the float tolerance and the machine identity; a run
-whose input does not digest to the committed value aborts before timing
-anything.
+the seed, the input digest, the subject digest, the float tolerance and the
+machine identity; a run whose input does not digest to the committed value
+aborts before timing anything. The record itself is bound to git: the bytes
+read from `--pre-registration` must equal the bytes of the committed blob at
+`HEAD`, so a record written after a result was seen is refused rather than
+scored. That binding is exactly "these are the committed bytes"; whether the
+rest of the checkout is clean is deliberately not part of it, since an
+ordinary development tree is dirty for reasons the record does not own.
+
+The machine is bound the same way, against what the host actually reports. Five
+of the committed `machine` fields are mechanically observable and are compared
+exactly; `power_profile` is not derivable from any of them and stays an
+operator assertion, restated in the report rather than verified here.
 
 `main` is the protocol's gate, not its driver: it resolves and checks the
 interpreter, the subject and the input, and stops. Constructing the three arms
@@ -38,6 +49,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import statistics
 import subprocess
@@ -69,6 +81,18 @@ OPTIMIZED_CONFIGURE_MARKER = "--enable-optimizations"
 
 #: Values that turn the flag above back off when it is spelled `=<value>`.
 DISABLED_CONFIGURE_VALUES = frozenset({"", "no", "false", "0"})
+
+#: The pre-registration record's repository-relative path. A run is scored only
+#: against the bytes committed at this path, so the path is part of the binding
+#: rather than an argument default.
+PRE_REGISTRATION_RELATIVE_PATH = "scripts/bench_hosted_ext_precommit.json"
+
+#: The `machine` fields the host reports for itself, and the command that
+#: reports each. `docs/TESTING.md`'s "Arms" bullet requires the run to happen on
+#: the committed machine; these are the fields that can be checked rather than
+#: asserted. `power_profile` is deliberately absent: nothing the host exposes
+#: reproduces that string, so it stays an operator assertion.
+OBSERVABLE_MACHINE_FIELDS = ("model_identifier", "cpu", "cores", "memory_bytes", "os")
 
 
 class BenchmarkError(RuntimeError):
@@ -158,6 +182,133 @@ def resolve_subject(environ: dict[str, str]) -> Path:
     return subject
 
 
+def read_subject_source(subject: Path, expected: object) -> bytes:
+    """Read the subject once and prove it is the pre-registered source.
+
+    The bytes are returned rather than the path so that every arm is built from
+    this one read: a path re-read per arm could be edited between them, and the
+    substituted source would still be reported as the byte-identical reference
+    function `docs/TESTING.md`'s "Subject" bullet requires.
+
+    Only the digest is ever compared or reported. The reference codebase is
+    proprietary (D-244 rule 6), so neither the path nor the source appears in
+    any refusal message here.
+    """
+
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise BenchmarkError(
+            "the pre-registration record does not register a subject_sha256, so the "
+            "subject is not bound to the reference source and no run is admissible"
+        )
+    source = subject.read_bytes()
+    actual = hashlib.sha256(source).hexdigest()
+    if actual != expected:
+        raise BenchmarkError(
+            "the subject's SHA-256 does not match the committed subject_sha256: "
+            f"expected {expected}, found {actual}"
+        )
+    return source
+
+
+def read_committed_blob(root: Path, relative_path: str) -> bytes:
+    """The bytes git has at `HEAD` for one tracked path, or a refusal."""
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "blob", f"HEAD:{relative_path}"],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise BenchmarkError(
+            f"git is not available, so {relative_path} cannot be shown to be committed"
+        ) from error
+    if completed.returncode != 0:
+        raise BenchmarkError(
+            f"git has no committed {relative_path} at HEAD, so the pre-registration "
+            "record cannot be shown to precede this run"
+        )
+    # Deliberately raw: a text-mode read or a strip would let a record that
+    # differs from the committed blob only in trailing whitespace pass as it.
+    return completed.stdout
+
+
+def assert_record_is_committed(raw: bytes, committed: bytes) -> None:
+    """Refuse a pre-registration record that is not the committed one.
+
+    Pre-registration is only binding if the record predates the run. A record
+    read from a file the run itself could have written proves nothing, so the
+    bytes must be the committed bytes. Path is not what is checked: bytes equal
+    to the committed blob *are* the committed record wherever they were read
+    from, and bytes that differ are not it even at the right path.
+
+    Whether the rest of the checkout is clean is not part of this: an ordinary
+    development tree carries unrelated modifications, and the property the
+    protocol needs is about this record's content alone.
+    """
+
+    if raw != committed:
+        raise BenchmarkError(
+            "the pre-registration record differs from the committed "
+            f"{PRE_REGISTRATION_RELATIVE_PATH} at HEAD, so it was not pre-registered"
+        )
+
+
+def observe_machine(root_command=subprocess.run) -> dict:
+    """What this host reports about itself, in the committed record's shape."""
+
+    def read(command: list[str]) -> str:
+        completed = root_command(command, capture_output=True, text=True, check=False)
+        if completed.returncode != 0:
+            raise BenchmarkError(
+                f"this host does not answer {command[0]}, so it cannot be shown to be "
+                "the pre-registered machine"
+            )
+        return completed.stdout.strip()
+
+    def sysctl(name: str) -> str:
+        return read(["sysctl", "-n", name])
+
+    try:
+        cores = int(sysctl("hw.ncpu"))
+        memory_bytes = int(sysctl("hw.memsize"))
+    except ValueError as error:
+        raise BenchmarkError("this host reports a non-numeric core or memory count") from error
+    return {
+        "model_identifier": sysctl("hw.model"),
+        "cpu": sysctl("machdep.cpu.brand_string"),
+        "cores": cores,
+        "memory_bytes": memory_bytes,
+        "os": f"macOS {read(['sw_vers', '-productVersion'])} "
+        f"(build {read(['sw_vers', '-buildVersion'])})",
+    }
+
+
+def compare_machine(observed: dict, committed: object) -> None:
+    """Refuse a run that moved to a machine other than the committed one.
+
+    `docs/TESTING.md`'s "Arms" bullet rules out a machine chosen after a result
+    was seen; an unchecked identity leaves that rule to good intentions.
+    """
+
+    if not isinstance(committed, dict):
+        raise BenchmarkError(
+            "the pre-registration record commits no machine identity, so this run "
+            "cannot be shown to be on the pre-registered machine"
+        )
+    for field in OBSERVABLE_MACHINE_FIELDS:
+        if field not in committed:
+            raise BenchmarkError(
+                f"the pre-registration record commits no machine {field}, so this run "
+                "cannot be shown to be on the pre-registered machine"
+            )
+        if observed[field] != committed[field]:
+            raise BenchmarkError(
+                f"this host is not the pre-registered machine: {field} is "
+                f"{observed[field]!r} where the record commits {committed[field]!r}"
+            )
+
+
 def verify_input_digest(path: Path, expected: str) -> None:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -171,24 +322,35 @@ def verify_input_digest(path: Path, expected: str) -> None:
         )
 
 
-def compare_outcomes(reference: ArmOutcome, candidate: ArmOutcome, tolerance: float) -> None:
-    """Apply the correctness precondition; raise rather than score a wrong arm."""
+def compare_outcomes(
+    reference: ArmOutcome,
+    candidate: ArmOutcome,
+    tolerance: float,
+    subject: str = "an arm",
+    against: str = "the baseline",
+) -> None:
+    """Apply the correctness precondition; raise rather than score a wrong arm.
 
-    # Checked first, and on every path: an arm that clobbers the committed
-    # input and then fails the same way the baseline does must not be scored
+    `subject` and `against` name the two sides in the refusal messages, because
+    this comparison serves two callers: one arm against the baseline arm, and
+    one timed replicate against its own arm's warm-up.
+    """
+
+    # Checked first, and on every path: a call that clobbers the committed
+    # input and then fails the same way its reference does must not be scored
     # for having been faster on arguments nobody else saw.
     if reference.arguments_digest != candidate.arguments_digest:
-        raise BenchmarkError("an arm changed its arguments where the baseline did not")
+        raise BenchmarkError(f"{subject} changed its arguments where {against} did not")
     if reference.exception is not None or candidate.exception is not None:
         if reference.exception != candidate.exception:
             raise BenchmarkError(
-                "the arms disagree on the exception raised: "
+                f"{subject} and {against} disagree on the exception raised: "
                 f"{reference.exception!r} against {candidate.exception!r}"
             )
         return
     if type(reference.value) is not type(candidate.value):
         raise BenchmarkError(
-            "the arms returned different types: "
+            f"{subject} and {against} returned different types: "
             f"{type(reference.value).__name__} against {type(candidate.value).__name__}"
         )
     if isinstance(reference.value, float):
@@ -204,10 +366,10 @@ def compare_outcomes(reference: ArmOutcome, candidate: ArmOutcome, tolerance: fl
         allowed = tolerance * max(1.0, abs(reference.value))
         if abs(reference.value - candidate.value) > allowed:
             raise BenchmarkError(
-                "the arms diverge beyond the committed float tolerance"
+                f"{subject} diverges from {against} beyond the committed float tolerance"
             )
     elif reference.value != candidate.value:
-        raise BenchmarkError("the arms returned different values")
+        raise BenchmarkError(f"{subject} and {against} returned different values")
 
 
 def median_ns(timings: list[int]) -> int:
@@ -234,8 +396,12 @@ def ratio_of_medians(baseline: dict, candidate: dict) -> float:
     return baseline["median_ns"] / candidate["median_ns"]
 
 
-def read_pre_registration(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def read_pre_registration(path: Path, root: Path, read_blob=read_committed_blob) -> dict:
+    """Read the record only after proving it is the committed one."""
+
+    raw = path.read_bytes()
+    assert_record_is_committed(raw, read_blob(root, PRE_REGISTRATION_RELATIVE_PATH))
+    return json.loads(raw.decode("utf-8"))
 
 
 def digest_arguments(args: tuple) -> str:
@@ -262,14 +428,33 @@ def time_call(call, *args) -> tuple[int, ArmOutcome]:
     return finished - started, outcome
 
 
-def run_arm(arm: str, call, *args) -> tuple[dict, ArmOutcome]:
-    """Warm one arm up untimed, then time `REPLICATES` calls of it.
+def run_arm(arm: str, call, make_arguments, tolerance: float) -> tuple[dict, ArmOutcome]:
+    """Warm one arm up untimed, then time `REPLICATES` validated calls of it.
 
     The warm-up is discarded because it pays one-off costs -- first-touch page
     faults, lazy imports inside the callee, cold caches -- that the protocol
-    does not attribute to the arm. Its outcome is what the correctness
-    precondition is compared on, so that comparison never sits inside a
-    reported timing.
+    does not attribute to the arm. Its outcome is what the cross-arm
+    correctness precondition is compared on, so that comparison never sits
+    inside a reported timing.
+
+    `make_arguments` builds the arguments afresh from the committed input, and
+    is called once per invocation outside the clock. Reusing one argument tuple
+    would let the warm-up change the workload every timed call then sees, and
+    would let each replicate operate on data the previous one had already
+    modified -- `docs/TESTING.md`'s "Correctness precondition" bullet permits an
+    arm to mutate its arguments as long as every arm mutates them identically,
+    so the runner must not assume they are immutable. Building them is outside
+    the "Timing boundary" bullet's boundary, which is why it happens here and
+    not inside `time_call`. Cross-arm digest comparison still holds because the
+    factory is deterministic from the committed input.
+
+    Every timed invocation is validated against this arm's own warm-up before
+    its duration is admitted into the median, under the same committed
+    `tolerance` the cross-arm comparison uses -- that tolerance is the
+    protocol's own statement of what counts as the same answer. A median over unvalidated calls is
+    a number from an arm that may have raised, or returned something else, on
+    every call that was actually timed -- which is precisely what the
+    correctness precondition exists to refuse.
 
     Building the three arms is not this function's business: it takes an
     already-callable arm, so the same code times the interpreter, the Cython
@@ -278,10 +463,24 @@ def run_arm(arm: str, call, *args) -> tuple[dict, ArmOutcome]:
 
     outcome: ArmOutcome | None = None
     for _ in range(WARMUP_RUNS):
-        _, outcome = time_call(call, *args)
+        _, outcome = time_call(call, *make_arguments())
     if outcome is None:
         raise BenchmarkError("an arm must be warmed up at least once before it is timed")
-    timings = [time_call(call, *args)[0] for _ in range(REPLICATES)]
+
+    timings: list[int] = []
+    for replicate in range(REPLICATES):
+        elapsed, timed = time_call(call, *make_arguments())
+        # Validated before the duration joins the list: an arm that answers the
+        # warm-up correctly and then misbehaves on every measured call would
+        # otherwise publish a perfectly ordinary-looking median.
+        compare_outcomes(
+            outcome,
+            timed,
+            tolerance,
+            subject=f"the {arm} arm's replicate {replicate + 1}",
+            against="its own warm-up",
+        )
+        timings.append(elapsed)
     return summarize(arm, timings), outcome
 
 
@@ -316,13 +515,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check-only", action="store_true", help="run the guards and stop")
     arguments = parser.parse_args(argv)
 
+    root = Path(__file__).resolve().parent.parent
     try:
-        record = read_pre_registration(arguments.pre_registration)
+        record = read_pre_registration(arguments.pre_registration, root)
+        compare_machine(observe_machine(), record.get("machine"))
         interpreter = resolve_interpreter(dict(os.environ))
         version_output, configure_args = interpreter_facts(interpreter)
         assert_pinned_version(version_output)
         assert_optimized_build(configure_args)
-        resolve_subject(dict(os.environ))
+        # Read once, before any arm is built, and the bytes reused from here on:
+        # a subject re-read per arm could be edited between them.
+        read_subject_source(resolve_subject(dict(os.environ)), record.get("subject_sha256"))
         verify_input_digest(arguments.input, record["input_sha256"])
     except BenchmarkError as error:
         print(str(error), file=sys.stderr)

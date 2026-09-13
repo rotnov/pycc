@@ -5,6 +5,8 @@
   "seed": 20260913,
   "triangles": 2000000,
   "input_sha256": "7e389bc4c05d956d94e76a5b5ad9d7db493fb9ac968abd6d0d0a6f9029e5bb93",
+  "subject_sha256": null,
+  "subject_sha256_rule": "SHA-256 over the bytes of the subject module named by PYCC_BENCH_SUBJECT. Only the digest is ever committed or published: the reference codebase is proprietary (D-244 rule 6), so neither its source nor a path naming it appears anywhere in this repository. Null means not yet registered, which the runner and scripts/check_roadmap_evidence.rb both refuse; the stage commit that registers it is the first action of the run that publishes numbers.",
   "float_tolerance": 1e-09,
   "float_tolerance_rationale": "Relative to the baseline's own magnitude, with an absolute floor of one. The arms are not bit-comparable in principle: -O2 on the Cython arm and LLVM on the --release pycc arm may both contract a*b - c*d to an FMA where the interpreter does not, so a few ulps of divergence is expected and anything larger is a defect.",
   "machine": {

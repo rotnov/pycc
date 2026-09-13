@@ -5264,8 +5264,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
   PRODUCT_SPRINT_1_REPORT = "docs/benchmarks/hosted-ext-product-sprint-1.json"
   PRODUCT_SPRINT_1_PRE_REGISTRATION = "scripts/bench_hosted_ext_precommit.json"
 
+  # The committed record carries `"subject_sha256": null` until the run that
+  # publishes numbers registers the reference subject's digest in its own stage
+  # commit, so the accepting fixtures stand in a registered digest here. The
+  # null case is a rejecting test of its own below.
+  PRODUCT_SPRINT_1_REGISTERED_SUBJECT = "b" * 64
+
   def product_sprint_1_record
-    JSON.parse((REPOSITORY_ROOT / PRODUCT_SPRINT_1_PRE_REGISTRATION).read)
+    record = JSON.parse((REPOSITORY_ROOT / PRODUCT_SPRINT_1_PRE_REGISTRATION).read)
+    record["subject_sha256"] ||= PRODUCT_SPRINT_1_REGISTERED_SUBJECT
+    record
   end
 
   # A report whose arms are in the shape the protocol fixes: a `cpython`
@@ -5273,6 +5281,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def product_sprint_1_report(record = product_sprint_1_record)
     {
       "input_sha256" => record["input_sha256"],
+      "subject_sha256" => record["subject_sha256"],
       "machine" => record["machine"],
       "replicates" => 7,
       "versions" => {
@@ -5463,6 +5472,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_rejects_a_product_sprint_1_report_that_does_not_match_the_pre_registration
     {
       "input_sha256" => "0" * 64,
+      "subject_sha256" => "0" * 64,
       "compile_unchanged_set_sha256" => "0" * 64,
       "compile_unchanged_denominator" => 7
     }.each do |field, value|
@@ -5470,6 +5480,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
       report[field] = value
       stderr = assert_product_sprint_1_rejected("mismatched #{field}", report: report)
       assert_includes stderr, field
+    end
+  end
+
+  # The subject digest is what binds the timed function to the reference
+  # source; a record that has not registered one cannot be cited by a roadmap
+  # box, whatever the report says.
+  def test_rejects_product_sprint_1_evidence_without_a_registered_subject_digest
+    [nil, "", "not-a-digest", "A" * 64, 7].each do |value|
+      record = product_sprint_1_record
+      record["subject_sha256"] = value
+      report = product_sprint_1_report(record)
+      stderr = assert_product_sprint_1_rejected(
+        "subject_sha256 #{value.inspect}",
+        report: report,
+        record: record
+      )
+      assert_includes stderr, "subject_sha256"
     end
   end
 

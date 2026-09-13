@@ -3069,7 +3069,26 @@ def validate_product_sprint_1_reporting(report, source)
 end
 
 def validate_product_sprint_1_pre_registration(report, record, source, record_source)
-  %w[input_sha256 compile_unchanged_denominator compile_unchanged_set_sha256].each do |field|
+  # Checked before the restatement loop below: a record whose subject digest is
+  # still unregistered binds the run to nothing, so a report restating that
+  # absence would otherwise "match" it. `docs/TESTING.md`'s "Subject" bullet
+  # requires the subject byte-identical across the arms, and only a digest
+  # committed before the run makes that checkable rather than asserted. The
+  # digest alone is published; the reference codebase is proprietary (D-244
+  # rule 6).
+  unless record["subject_sha256"].is_a?(String) &&
+         record["subject_sha256"].match?(/\A[0-9a-f]{64}\z/)
+    raise RoadmapEvidenceError,
+          "#{record_source}: subject_sha256 must be a registered SHA-256 before any run " \
+          "is scored, so the subject is bound to the reference source"
+  end
+
+  %w[
+    input_sha256
+    subject_sha256
+    compile_unchanged_denominator
+    compile_unchanged_set_sha256
+  ].each do |field|
     next if !report[field].nil? && report[field] == record[field]
 
     raise RoadmapEvidenceError,

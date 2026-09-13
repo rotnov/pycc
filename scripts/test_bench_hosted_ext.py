@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -29,6 +32,14 @@ RUNNER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
 BenchmarkError = RUNNER.BenchmarkError
+
+
+def committed_record() -> dict:
+    """The record's content, without the git binding `read_pre_registration` adds."""
+
+    return json.loads(
+        Path(__file__).with_name("bench_hosted_ext_precommit.json").read_text(encoding="utf-8")
+    )
 
 
 class InterpreterGuardTest(unittest.TestCase):
@@ -284,9 +295,7 @@ class ProtocolWordingTest(unittest.TestCase):
 
 class PreRegistrationTest(unittest.TestCase):
     def test_record_carries_every_field_the_protocol_commits(self) -> None:
-        record = RUNNER.read_pre_registration(
-            Path(__file__).with_name("bench_hosted_ext_precommit.json")
-        )
+        record = committed_record()
 
         for field in (
             "generator_path",
@@ -304,27 +313,21 @@ class PreRegistrationTest(unittest.TestCase):
                 self.assertIn(field, record)
 
     def test_record_carries_no_result(self) -> None:
-        record = RUNNER.read_pre_registration(
-            Path(__file__).with_name("bench_hosted_ext_precommit.json")
-        )
+        record = committed_record()
 
         for field in ("median_ns", "ratio", "speedup", "compile_unchanged_count"):
             with self.subTest(field=field):
                 self.assertNotIn(field, record)
 
     def test_machine_identity_carries_the_committed_shape(self) -> None:
-        record = RUNNER.read_pre_registration(
-            Path(__file__).with_name("bench_hosted_ext_precommit.json")
-        )
+        record = committed_record()
 
         for field in ("model_identifier", "cpu", "cores", "memory_bytes", "os", "power_profile"):
             with self.subTest(field=field):
                 self.assertIn(field, record["machine"])
 
     def test_input_digest_is_a_sha256_hex_string(self) -> None:
-        record = RUNNER.read_pre_registration(
-            Path(__file__).with_name("bench_hosted_ext_precommit.json")
-        )
+        record = committed_record()
 
         self.assertRegex(record["input_sha256"], r"\A[0-9a-f]{64}\Z")
         self.assertRegex(record["compile_unchanged_set_sha256"], r"\A[0-9a-f]{64}\Z")
@@ -400,26 +403,331 @@ class TimingBoundaryTest(unittest.TestCase):
         calls: list[int] = []
 
         def counted(value: int) -> int:
-            calls.append(value)
-            return len(calls)
+            calls.append(len(calls))
+            return value * 2
 
-        summary, outcome = RUNNER.run_arm("ext", counted, 1)
+        summary, outcome = RUNNER.run_arm("ext", counted, lambda: (21,), 1e-9)
 
         self.assertEqual(len(calls), RUNNER.WARMUP_RUNS + RUNNER.REPLICATES)
         self.assertEqual(summary["arm"], "ext")
         self.assertEqual(summary["replicates"], RUNNER.REPLICATES)
-        # The correctness datum comes from the warm-up, which no reported
-        # timing contains.
-        self.assertEqual(outcome.value, RUNNER.WARMUP_RUNS)
+        # The cross-arm correctness datum comes from the warm-up, which no
+        # reported timing contains; the timed calls are validated against it.
+        self.assertEqual(outcome.value, 42)
 
     def test_refuses_to_run_an_arm_without_a_warm_up(self) -> None:
         original = RUNNER.WARMUP_RUNS
         RUNNER.WARMUP_RUNS = 0
         try:
             with self.assertRaises(BenchmarkError):
-                RUNNER.run_arm("ext", lambda value: value, 1)
+                RUNNER.run_arm("ext", lambda value: value, lambda: (1,), 1e-9)
         finally:
             RUNNER.WARMUP_RUNS = original
+
+
+class ValidatedReplicateTest(unittest.TestCase):
+    """Finding: a median is admissible only over calls that were validated."""
+
+    def test_refuses_an_arm_that_misbehaves_only_on_the_timed_calls(self) -> None:
+        calls: list[int] = []
+
+        def right_once(value: int) -> int:
+            calls.append(value)
+            return 1 if len(calls) == 1 else 2
+
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.run_arm("ext", right_once, lambda: (1,), 1e-9)
+
+        self.assertIn("replicate 1", str(raised.exception))
+        self.assertIn("warm-up", str(raised.exception))
+
+    def test_refuses_an_arm_that_raises_only_on_the_timed_calls(self) -> None:
+        calls: list[int] = []
+
+        def raise_after_warm_up(value: int) -> int:
+            calls.append(value)
+            if len(calls) > 1:
+                raise ZeroDivisionError("arm failed")
+            return 1
+
+        with self.assertRaises(BenchmarkError):
+            RUNNER.run_arm("ext", raise_after_warm_up, lambda: (1,), 1e-9)
+
+    def test_refuses_an_arm_that_clobbers_its_arguments_only_when_timed(self) -> None:
+        calls: list[int] = []
+
+        def clobber_after_warm_up(values: list[int]) -> int:
+            calls.append(len(values))
+            if len(calls) > 1:
+                values.append(99)
+            return 1
+
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.run_arm("ext", clobber_after_warm_up, lambda: ([1, 2, 3],), 1e-9)
+
+        self.assertIn("changed its arguments", str(raised.exception))
+
+    def test_admits_an_arm_that_answers_every_timed_call(self) -> None:
+        summary, _ = RUNNER.run_arm("ext", lambda value: value + 1, lambda: (1,), 1e-9)
+
+        self.assertEqual(summary["replicates"], RUNNER.REPLICATES)
+
+
+class FreshArgumentsTest(unittest.TestCase):
+    """Finding: an arm that mutates its arguments must not time modified data."""
+
+    def test_every_invocation_receives_freshly_built_arguments(self) -> None:
+        seen: list[list[int]] = []
+
+        def mutating(values: list[int]) -> int:
+            seen.append(list(values))
+            values.append(len(values))
+            return 1
+
+        RUNNER.run_arm("ext", mutating, lambda: ([1, 2, 3],), 1e-9)
+
+        self.assertEqual(len(seen), RUNNER.WARMUP_RUNS + RUNNER.REPLICATES)
+        # Each call saw the committed input, not the previous call's leftovers.
+        for observed in seen:
+            self.assertEqual(observed, [1, 2, 3])
+
+    def test_the_factory_is_called_once_per_invocation(self) -> None:
+        built = []
+
+        def make_arguments() -> tuple:
+            built.append(object())
+            return (1,)
+
+        RUNNER.run_arm("ext", lambda value: value, make_arguments, 1e-9)
+
+        self.assertEqual(len(built), RUNNER.WARMUP_RUNS + RUNNER.REPLICATES)
+
+
+class CommittedRecordTest(unittest.TestCase):
+    """Finding: a pre-registration record is binding only if it is committed."""
+
+    def test_accepts_bytes_equal_to_the_committed_blob(self) -> None:
+        RUNNER.assert_record_is_committed(b'{"seed": 1}\n', b'{"seed": 1}\n')
+
+    def test_refuses_bytes_that_differ_from_the_committed_blob(self) -> None:
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.assert_record_is_committed(b'{"seed": 2}\n', b'{"seed": 1}\n')
+
+        self.assertIn(RUNNER.PRE_REGISTRATION_RELATIVE_PATH, str(raised.exception))
+
+    def test_refuses_a_record_differing_only_in_trailing_whitespace(self) -> None:
+        # Raw bytes, never a stripped text read: otherwise a rewritten record
+        # could pass as the committed one.
+        with self.assertRaises(BenchmarkError):
+            RUNNER.assert_record_is_committed(b'{"seed": 1}\n\n', b'{"seed": 1}\n')
+
+    def test_reads_the_committed_blob_from_a_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / RUNNER.PRE_REGISTRATION_RELATIVE_PATH
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'{"seed": 1}\n')
+            self.init_repository(root)
+
+            self.assertEqual(
+                RUNNER.read_committed_blob(root, RUNNER.PRE_REGISTRATION_RELATIVE_PATH),
+                b'{"seed": 1}\n',
+            )
+
+    def test_refuses_a_path_that_is_not_committed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "placeholder").write_text("x", encoding="utf-8")
+            self.init_repository(root)
+
+            with self.assertRaises(BenchmarkError):
+                RUNNER.read_committed_blob(root, RUNNER.PRE_REGISTRATION_RELATIVE_PATH)
+
+    def test_reading_the_record_refuses_an_uncommitted_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / RUNNER.PRE_REGISTRATION_RELATIVE_PATH
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'{"seed": 1}\n')
+            self.init_repository(root)
+            # The run rewrites the record after seeing a result.
+            target.write_bytes(b'{"seed": 2}\n')
+
+            with self.assertRaises(BenchmarkError):
+                RUNNER.read_pre_registration(target, root)
+
+    def test_reading_the_record_accepts_the_committed_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / RUNNER.PRE_REGISTRATION_RELATIVE_PATH
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'{"seed": 1}\n')
+            self.init_repository(root)
+
+            self.assertEqual(RUNNER.read_pre_registration(target, root), {"seed": 1})
+
+    def init_repository(self, root: Path) -> None:
+        """A hermetic repository, never the ambient worktree."""
+
+        environment = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(root),
+            "GIT_CONFIG_GLOBAL": str(root / "gitconfig-absent"),
+            "GIT_CONFIG_SYSTEM": str(root / "gitconfig-absent"),
+        }
+        for command in (
+            ["git", "init", "-q", "-b", "main"],
+            ["git", "add", "-A"],
+            [
+                "git",
+                "-c",
+                "user.email=bench@example.invalid",
+                "-c",
+                "user.name=bench",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "pre-registration",
+            ],
+        ):
+            subprocess.run(command, cwd=root, check=True, env=environment, capture_output=True)
+
+
+class MachineIdentityTest(unittest.TestCase):
+    """Finding: the run must happen on the pre-registered machine."""
+
+    def committed(self, **overrides: object) -> dict:
+        machine = {
+            "model_identifier": "Mac15,9",
+            "cpu": "Apple M3 Max",
+            "cores": 16,
+            "memory_bytes": 137438953472,
+            "os": "macOS 26.5.1 (build 25F80)",
+            "power_profile": "AC power",
+        }
+        machine.update(overrides)
+        return machine
+
+    def observed(self) -> dict:
+        machine = self.committed()
+        del machine["power_profile"]
+        return machine
+
+    def test_accepts_the_pre_registered_machine(self) -> None:
+        RUNNER.compare_machine(self.observed(), self.committed())
+
+    def test_refuses_every_observable_field_that_differs(self) -> None:
+        for field, value in (
+            ("model_identifier", "Mac16,1"),
+            ("cpu", "Apple M4 Max"),
+            ("cores", 24),
+            ("memory_bytes", 274877906944),
+            ("os", "macOS 26.6.0 (build 25G1)"),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(BenchmarkError) as raised:
+                    RUNNER.compare_machine(self.observed(), self.committed(**{field: value}))
+                self.assertIn(field, str(raised.exception))
+
+    def test_ignores_the_field_no_host_reports(self) -> None:
+        # `power_profile` is an operator assertion; nothing the host exposes
+        # reproduces it, so it is restated in the report rather than checked.
+        RUNNER.compare_machine(self.observed(), self.committed(power_profile="battery"))
+
+    def test_refuses_a_record_with_no_machine_identity(self) -> None:
+        for committed in (None, "Mac15,9"):
+            with self.subTest(committed=committed):
+                with self.assertRaises(BenchmarkError):
+                    RUNNER.compare_machine(self.observed(), committed)
+
+    def test_refuses_a_record_missing_an_observable_field(self) -> None:
+        committed = self.committed()
+        del committed["cpu"]
+
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.compare_machine(self.observed(), committed)
+
+        self.assertIn("cpu", str(raised.exception))
+
+    def test_observes_this_host_in_the_committed_shape(self) -> None:
+        observed = RUNNER.observe_machine()
+
+        for field in RUNNER.OBSERVABLE_MACHINE_FIELDS:
+            self.assertIn(field, observed)
+        self.assertIsInstance(observed["cores"], int)
+        self.assertIsInstance(observed["memory_bytes"], int)
+
+    def test_refuses_a_host_that_does_not_answer(self) -> None:
+        def failing(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+        with self.assertRaises(BenchmarkError):
+            RUNNER.observe_machine(failing)
+
+
+class SubjectDigestTest(unittest.TestCase):
+    """Finding: the timed subject must be the pre-registered reference source."""
+
+    SOURCE = b"def hot(a: float) -> float:\n    return a\n"
+
+    def subject(self, directory: str, source: bytes | None = None) -> Path:
+        path = Path(directory) / "hot_loop.py"
+        path.write_bytes(self.SOURCE if source is None else source)
+        return path
+
+    def test_accepts_and_returns_the_pre_registered_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            subject = self.subject(directory)
+
+            self.assertEqual(
+                RUNNER.read_subject_source(subject, hashlib.sha256(self.SOURCE).hexdigest()),
+                self.SOURCE,
+            )
+
+    def test_refuses_a_substituted_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            subject = self.subject(directory, b"def hot(a):\n    return 0.0\n")
+
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.read_subject_source(subject, hashlib.sha256(self.SOURCE).hexdigest())
+
+            self.assertIn("SHA-256", str(raised.exception))
+
+    def test_refuses_an_unregistered_subject_digest(self) -> None:
+        # The committed record carries `null` until the publishing run
+        # registers the digest in its own stage commit.
+        with tempfile.TemporaryDirectory() as directory:
+            subject = self.subject(directory)
+
+            for expected in (None, "", "not-a-digest", "A" * 64, 7):
+                with self.subTest(expected=expected):
+                    with self.assertRaises(BenchmarkError) as raised:
+                        RUNNER.read_subject_source(subject, expected)
+                    self.assertIn("subject_sha256", str(raised.exception))
+
+    def test_no_refusal_echoes_the_proprietary_path_or_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            subject = self.subject(directory, b"def proprietary_secret_name():\n    pass\n")
+
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.read_subject_source(subject, hashlib.sha256(self.SOURCE).hexdigest())
+
+            self.assertNotIn(str(subject), str(raised.exception))
+            self.assertNotIn("proprietary_secret_name", str(raised.exception))
+
+
+class UnregisteredSubjectRecordTest(unittest.TestCase):
+    def test_the_committed_record_registers_a_digest_or_declares_it_pending(self) -> None:
+        record = committed_record()
+        digest = record["subject_sha256"]
+
+        self.assertTrue(
+            digest is None or re.fullmatch(r"[0-9a-f]{64}", digest),
+            "subject_sha256 is either a registered SHA-256 or null",
+        )
+        self.assertIn("subject_sha256_rule", record)
 
 
 if __name__ == "__main__":

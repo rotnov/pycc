@@ -502,13 +502,30 @@ rule 6); only numbers are published.
 - **Subject.** One function — the reference codebase's hot loop — byte-identical
   across all three arms. Compiling unchanged is part of the claim, so an arm
   that edits the source to make it compile has failed rather than scored.
+  "Byte-identical" is checked, not asserted: the SHA-256 of the subject module's
+  bytes is committed as `subject_sha256` in the pre-registration record, and the
+  runner verifies it before any arm is built, then reuses the bytes it read so
+  the path cannot be edited between arms. Only the digest is committed or
+  published — a SHA-256 is a number, while a path or a source line would name
+  the proprietary codebase, which [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+  rule 6 forbids. The field is `null` in the committed record until the run that
+  publishes numbers registers the real digest; both the runner and
+  `scripts/check_roadmap_evidence.rb` refuse a `null`, so registering it is that
+  run's first action, in a stage commit of its own, and no roadmap box can cite
+  this protocol's evidence before then.
 - **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
   artifact. All three run back to back in one session on one machine, on the
   same OS and power profile, with no other timed work on the box. Which machine
   that is, is committed alongside the generator, the seed, and the digest below
   and restated in the report: a run whose arms were split across machines, or
   whose machine was chosen after a result was seen, is inadmissible for the same
-  reason the **Input** bullet gives.
+  reason the **Input** bullet gives. The runner compares the host's own answers
+  against the committed identity before it times anything, and refuses a
+  mismatch: `model_identifier`, `cpu`, `cores`, `memory_bytes` and the composed
+  `os` string are what the host reports for itself, so those five are verified
+  exactly. `power_profile` is not derivable from anything the host exposes and
+  remains an operator assertion, restated in the report rather than checked —
+  claiming otherwise would report a verification that does not happen.
 - **Versions.** The interpreter is the conformance oracle's pinned CPython (see
   "Python 3.14.7 oracle transition" above), GIL-enabled, and it is both the
   baseline arm and the host that imports the `ext` artifact — the loader and the
@@ -543,6 +560,20 @@ rule 6); only numbers are published.
   run that changes the generator, the seed, or the digest is a different
   experiment: report it as a protocol change, never as a comparison against an
   earlier ratio.
+- **The pre-registration record is bound to git.** Everything above turns on the
+  record predating the run, and a record read from a file the run itself could
+  have written proves nothing: a scored invocation could otherwise point
+  `--pre-registration` at a freshly generated JSON file whose digests describe
+  an input chosen after its performance was seen. The runner therefore reads
+  `--pre-registration` as raw bytes and refuses unless they equal the bytes git
+  has at `HEAD` for `scripts/bench_hosted_ext_precommit.json`. Bytes are what is
+  compared, not the path: bytes equal to the committed blob are the committed
+  record wherever they were read from, and bytes that differ are not it even at
+  the right path. The binding is exactly that — this record's content is the
+  committed content. Whether the rest of the checkout is clean is deliberately
+  outside it, since an ordinary working tree carries modifications this record
+  does not own, and a refusal on those would not distinguish a rewritten record
+  from ordinary development.
 - **Correctness precondition.** An arm that is faster and wrong scores nothing:
   it is reported as a failure, never as a ratio. The conformance harness's
   comparison is not the one that decides that here --
@@ -566,7 +597,13 @@ rule 6); only numbers are published.
   either arm -- is a failure too, never an agreement: a tolerance comparison
   against a NaN is false whatever the difference, so a silently non-finite arm
   would otherwise pass the precondition by arithmetic rather than by agreeing. An arm that raises where the CPython arm returns, or
-  raises a different exception type, has failed. The arguments must also be
+  raises a different exception type, has failed. This precondition applies to
+  every call whose duration is reported, not only to the warm-up: each timed
+  invocation's outcome and its post-call argument state are validated against
+  that arm's own warm-up under the same committed tolerance before the duration
+  is admitted into the median. An arm that answers correctly once and then
+  raises, or returns something else, on all seven measured calls would otherwise
+  publish an entirely ordinary-looking median. The arguments must also be
   unchanged after the call, or changed exactly as the CPython arm changes them,
   so that an arm cannot be faster for having clobbered the committed input. That
   holds on the failing path as well: the arguments are compared as they stand
@@ -586,16 +623,25 @@ rule 6); only numbers are published.
   test and immediately after it returns. The export wrappers' argument unpacking
   and result packing are therefore inside the boundary, because a caller pays
   them, while import, module load, argument construction, and building the
-  artifact are outside it for every arm.
+  artifact are outside it for every arm. Argument construction happens outside
+  the boundary *for every invocation*, not once per arm: the arguments are
+  rebuilt from the committed input before the warm-up and before each of the
+  seven replicates. The **Correctness precondition** bullet permits an arm to
+  mutate its arguments as long as every arm mutates them identically, so reusing
+  one argument tuple would let the warm-up change the workload every timed call
+  then sees, and let each replicate run on data the previous one had already
+  modified. Cross-arm comparison is unaffected, because the construction is
+  deterministic from the committed input.
 - **Reporting.** The report publishes the three medians, their minima and
   maxima, both ratios (versus CPython and versus Cython), the replicate count,
   the machine and OS, and the pinned versions above. The threshold those numbers
   are judged against is D-244 rule 6's and is not restated here. The report is
   one JSON document at `docs/benchmarks/hosted-ext-product-sprint-1.json`, and
-  it restates the `input_sha256`, the `compile_unchanged_denominator`, the
-  `compile_unchanged_set_sha256` and the machine identity committed in
-  `scripts/bench_hosted_ext_precommit.json` -- a report that does not carry the
-  committed values is a different experiment, not this one's result. That path
+  it restates the `input_sha256`, the `subject_sha256`, the
+  `compile_unchanged_denominator`, the `compile_unchanged_set_sha256` and the
+  machine identity committed in `scripts/bench_hosted_ext_precommit.json` -- a
+  report that does not carry the committed values is a different experiment, not
+  this one's result. That path
   and every field above are what `scripts/check_roadmap_evidence.rb` requires
   before either `product-sprint-1` roadmap box may cite its evidence
   identifier, so an unchecked box, an absent report, a missing field, a digest
