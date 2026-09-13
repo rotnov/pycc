@@ -235,6 +235,15 @@ class InputDigestTest(unittest.TestCase):
             self.assertNotIn(str(path), str(raised.exception))
             self.assertIn("--input", str(raised.exception))
 
+    def test_refuses_a_record_that_commits_no_input_digest(self) -> None:
+        # `main` reads the digest with `.get`, so a record missing the field
+        # must refuse here rather than raise a bare `KeyError` past the
+        # `BenchmarkError` handler.
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.verify_input_digest(Path("/nonexistent"), None)
+
+        self.assertIn("input_sha256", str(raised.exception))
+
     def test_refuses_a_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input.bin"

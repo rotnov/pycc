@@ -258,6 +258,10 @@ def read_committed_blob(root: Path, relative_path: str) -> bytes:
             check=False,
         )
     except OSError as error:
+        # Chained, unlike the reads that suppress their cause: `relative_path`
+        # is a path inside this repository, never the proprietary subject's, so
+        # nothing here can disclose it -- and an operator whose git is missing or
+        # unusable is served by seeing why.
         raise BenchmarkError(
             f"git is not available, so {relative_path} cannot be shown to be committed"
         ) from error
@@ -347,7 +351,12 @@ def compare_machine(observed: dict, committed: object) -> None:
             )
 
 
-def verify_input_digest(path: Path, expected: str) -> None:
+def verify_input_digest(path: Path, expected: str | None) -> None:
+    if not expected:
+        raise BenchmarkError(
+            "the pre-registration record commits no input_sha256, so the input this "
+            "run reads cannot be shown to be the pre-registered one"
+        )
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
@@ -678,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
         # Read once, before any arm is built, and the bytes reused from here on:
         # a subject re-read per arm could be edited between them.
         read_subject_source(resolve_subject(dict(os.environ)), record.get("subject_sha256"))
-        verify_input_digest(arguments.input, record["input_sha256"])
+        verify_input_digest(arguments.input, record.get("input_sha256"))
     except BenchmarkError as error:
         print(str(error), file=sys.stderr)
         return 1

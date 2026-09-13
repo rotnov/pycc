@@ -657,7 +657,8 @@ rule 6); only numbers are published.
   one JSON document at `docs/benchmarks/hosted-ext-product-sprint-1.json`, and
   it restates the `input_sha256`, the `subject_sha256`, the
   `compile_unchanged_denominator`, the `compile_unchanged_set_sha256` and the
-  machine identity committed in `scripts/bench_hosted_ext_precommit.json` -- a
+  machine identity committed in `scripts/bench_hosted_ext_precommit.json`, and
+  carries the `compile_unchanged_count` the next bullet defines -- a
   report that does not carry the committed values is a different experiment, not
   this one's result. That path
   and every field above are what `scripts/check_roadmap_evidence.rb` requires
