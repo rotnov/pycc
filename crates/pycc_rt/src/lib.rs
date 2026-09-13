@@ -203,9 +203,41 @@ pub extern "C" fn pycc_rt_int_sub(a: i64, b: i64) -> i64 {
     int_sub(a, b)
 }
 
+/// Part C of #1038 ([#1065](https://github.com/rotnov/pycc/issues/1065)):
+/// decodes an encoded `int` word to its inline numeric value, or raises
+/// `OverflowError` (D-173) and yields `None` when the word is a heap bigint
+/// pointer. It replaces `int_encoding::require_inline_int`, whose `panic!`
+/// unwound across the `extern "C"` boundary and became a process abort --
+/// fatal to an `ext` module's host interpreter (D-244).
+///
+/// Every caller must `return` its own type-valid sentinel on `None`
+/// *before* reaching any further `raise_builtin` call. `raise_builtin`
+/// installs unconditionally and does not check for an already-pending
+/// exception, so a later raise would otherwise report over this one; the
+/// zero-divisor arms of `int_floordiv`/`int_floormod` and the
+/// negative-exponent arm of `int_pow` are exactly that shape, and a bigint
+/// operand decoding to the sentinel `0` would reach them. Returning early
+/// closes that collision by construction rather than by a
+/// `pycc_rt_exception_active()` guard repeated at each raise site.
+fn decode_inline_or_raise(encoded: i64, context: &str) -> Option<i64> {
+    let value = inline_int_value(encoded);
+    if value.is_none() {
+        raise_builtin(
+            EXCEPTION_TYPE_OVERFLOW_ERROR,
+            "OverflowError",
+            &format!("{context} a bigint-valued `int` is not supported yet"),
+        );
+    }
+    value
+}
+
 fn int_mul(a: i64, b: i64) -> i64 {
-    let a = require_inline_int(a, "multiplying");
-    let b = require_inline_int(b, "multiplying");
+    let Some(a) = decode_inline_or_raise(a, "multiplying") else {
+        return tag_smallint(0);
+    };
+    let Some(b) = decode_inline_or_raise(b, "multiplying") else {
+        return tag_smallint(0);
+    };
     // Two decoded inline operands are each at most 62 magnitude bits, so
     // their exact product always fits in i128. Keep the tagged fast path when
     // possible and promote only the result, matching add/sub without
@@ -223,8 +255,16 @@ pub extern "C" fn pycc_rt_int_mul(a: i64, b: i64) -> i64 {
 }
 
 fn int_floordiv(a: i64, b: i64) -> i64 {
-    let a = require_inline_int(a, "dividing");
-    let b = require_inline_int(b, "dividing");
+    let Some(a) = decode_inline_or_raise(a, "dividing") else {
+        return tag_smallint(0);
+    };
+    // Returning here before the `b == 0` arm below is load-bearing, not
+    // stylistic: a bigint divisor decodes to no value at all, and letting it
+    // fall through as a `0` would report `ZeroDivisionError` over the
+    // `OverflowError` just raised. See `decode_inline_or_raise`.
+    let Some(b) = decode_inline_or_raise(b, "dividing") else {
+        return tag_smallint(0);
+    };
     if b == 0 {
         // D-173: set the pending exception flag instead of panicking.
         // Returns a sentinel `0` (tagged smallint 0); the caller's
@@ -270,8 +310,13 @@ pub extern "C" fn pycc_rt_int_floordiv(a: i64, b: i64) -> i64 {
 }
 
 fn int_floormod(a: i64, b: i64) -> i64 {
-    let a = require_inline_int(a, "computing the modulo of");
-    let b = require_inline_int(b, "computing the modulo of");
+    let Some(a) = decode_inline_or_raise(a, "computing the modulo of") else {
+        return tag_smallint(0);
+    };
+    // Same `b == 0` collision as `int_floordiv`; same reason to return here.
+    let Some(b) = decode_inline_or_raise(b, "computing the modulo of") else {
+        return tag_smallint(0);
+    };
     if b == 0 {
         // D-173: set the pending exception flag instead of panicking.
         raise_builtin(
@@ -311,8 +356,18 @@ pub extern "C" fn pycc_rt_int_floormod(a: i64, b: i64) -> i64 {
 }
 
 fn int_pow(base: i64, exp: i64) -> i64 {
-    let _ = require_inline_int(base, "exponentiating");
-    let mut exp = require_inline_int(exp, "exponentiating");
+    // The decoded base is discarded -- the loop below squares the *encoded*
+    // word through `int_mul` -- but the check is not: without it a bigint
+    // base would reach `int_mul` and raise a second, redundant
+    // `OverflowError` from inside the loop.
+    if decode_inline_or_raise(base, "exponentiating").is_none() {
+        return tag_smallint(0);
+    }
+    // Returning before the `exp < 0` arm below keeps its `RuntimeError` from
+    // reporting over this `OverflowError`. See `decode_inline_or_raise`.
+    let Some(mut exp) = decode_inline_or_raise(exp, "exponentiating") else {
+        return tag_smallint(0);
+    };
     if exp < 0 {
         // Part A of #1038 (#1063): a D-173 raise, not an abort. `RuntimeError`
         // rather than a CPython-conformant class because there is no
@@ -333,16 +388,42 @@ fn int_pow(base: i64, exp: i64) -> i64 {
         return tag_smallint(0);
     }
     let mut result = tag_smallint(1);
+    // Both variables are released unconditionally below, with no ownership
+    // flag: `result` starts as a smallint and `base` was just proved inline by
+    // `decode_inline_or_raise`, so a word that classifies as a bigint in either
+    // one can only be an object `int_mul` freshly allocated here and this
+    // function therefore owns. `bigint_release` is a no-op on every inline
+    // kind, so releasing the caller's own untouched word is well defined.
+    //
+    // Retiring them matters only since Part C of #1038 (#1065) replaced the
+    // abort with a raise: before it, the aborting process reclaimed everything.
+    // This is not the general temporary-ownership model -- unbound arithmetic
+    // temporaries still leak, which stays #146 Part 2 (#625).
     let mut base = base;
     while exp > 0 {
         if exp & 1 == 1 {
-            result = int_mul(result, base);
+            let next = int_mul(result, base);
+            // `int_mul` reads its operands without consuming them, so the
+            // previous word is still this function's to release.
+            bigint_release(result);
+            result = next;
         }
         exp >>= 1;
         if exp > 0 {
-            base = int_mul(base, base);
+            let next = int_mul(base, base);
+            bigint_release(base);
+            base = next;
+        }
+        // A promoted operand makes the *next* `int_mul` raise. Stop there
+        // rather than squaring on and installing the same `OverflowError`
+        // again, and retire both temporaries before returning the sentinel.
+        if pycc_rt_exception_active() != 0 {
+            bigint_release(result);
+            bigint_release(base);
+            return tag_smallint(0);
         }
     }
+    bigint_release(base);
     result
 }
 
@@ -352,8 +433,14 @@ pub extern "C" fn pycc_rt_int_pow(base: i64, exp: i64) -> i64 {
 }
 
 fn int_cmp(a: i64, b: i64) -> i32 {
-    let a = require_inline_int(a, "comparing");
-    let b = require_inline_int(b, "comparing");
+    // `0` is this function's sentinel: it is an ordinary value of the `i32`
+    // ordering it returns (`Ordering::Equal`), not a D-141 encoded word.
+    let Some(a) = decode_inline_or_raise(a, "comparing") else {
+        return 0;
+    };
+    let Some(b) = decode_inline_or_raise(b, "comparing") else {
+        return 0;
+    };
     match a.cmp(&b) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
@@ -430,7 +517,7 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // assert the pending exception state rather than `#[should_panic]`.
 //
 // Since #147 the operands are ordered through `encoded_int_cmp` rather than
-// decoded with `require_inline_int`, so a bigint start, stop, step, or
+// decoded to an inline value, so a bigint start, stop, step, or
 // mid-loop-promoted induction variable drives the loop normally instead of
 // aborting at D-141's runtime `int` boundary. Note the zero-step check reads
 // the *step's own encoded order against zero*, not the raw word: a bigint
@@ -536,21 +623,19 @@ pub extern "C" fn pycc_rt_range_normalize_operand(encoded: i64) -> i64 {
 }
 
 /// Converts an encoded int-compatible value (D-061/D-141) to `f64` -- the
-/// `int` half of Python's `int`/`float` arithmetic promotion (Task 6). Can
-/// panic (via `require_inline_int`'s bigint/invalid-word rejection path), so
-/// -- per this crate's established convention, see the implementation note
-/// above `int_add` --
-/// this is split into this private, ordinary-Rust-ABI function (freely
-/// panics, unwinds normally) and a thin `pub extern "C"` wrapper below.
-/// Deviation from the task brief: the brief's own Step 2 code made this a
-/// single plain `extern "C" fn`; that would abort (rather than unwind)
-/// if this function's own panic path were ever exercised directly from
-/// this crate's same-binary Rust tests, exactly the hazard the
-/// `int_add`/`range_continue` split comments already document -- this
-/// function is no exception just because its own tests don't currently
-/// hit that path directly.
+/// `int` half of Python's `int`/`float` arithmetic promotion (Task 6).
+/// Split into a private ordinary-ABI function plus the thin `extern "C"`
+/// wrapper below, matching `int_add`/`range_continue`. Part C of #1038
+/// ([#1065](https://github.com/rotnov/pycc/issues/1065)) turned the bigint
+/// case from a panic into a D-173 raise, so the split no longer guards an
+/// unwind-across-`extern "C"` abort; it stays because this crate's own
+/// tests call the private function directly, as the converted tests below
+/// do.
 fn int_to_float(tagged: i64) -> f64 {
-    require_inline_int(tagged, "converting") as f64
+    match decode_inline_or_raise(tagged, "converting") {
+        Some(value) => value as f64,
+        None => 0.0,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1779,12 +1864,20 @@ pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
 /// `set` must be a live `PyIntSetObj` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_int_set_add(set: *mut PyIntSetObj, value: i64) {
+    // Decode *before* taking `items` out of the `Cell`: an early return
+    // between the `take()` and the matching `set()` would leave the set
+    // silently emptied.
+    let Some(value_numeric) = decode_inline_or_raise(value, "storing in set[int]") else {
+        return;
+    };
     let mut items = unsafe { &*set }.items.take();
-    let value_numeric = require_inline_int(value, "storing in set[int]");
     if !items
         .iter()
         .copied()
-        .any(|existing| require_inline_int(existing, "reading from set[int]") == value_numeric)
+        // Already-stored words passed the ingress check above, so none of
+        // them is a bigint; `inline_int_value` needs no raise of its own and
+        // a hypothetical bigint simply compares unequal.
+        .any(|existing| inline_int_value(existing) == Some(value_numeric))
     {
         items.push(value);
     }
@@ -1984,9 +2077,10 @@ mod tests {
     ///
     /// Only `int_add`/`int_sub` are exercised: `int_mul`, `int_floordiv`,
     /// `int_floormod`, `int_pow` and `int_cmp` all route through
-    /// `require_inline_int`, which aborts on a bigint operand, so they have
-    /// no bigint result to alias in the first place (`docs/ROADMAP.md`'s
-    /// own bigint capability gap).
+    /// `decode_inline_or_raise`, which raises `OverflowError` and returns a
+    /// sentinel on a bigint operand (Part C of #1038), so they have no
+    /// bigint result to alias in the first place (`docs/ROADMAP.md`'s own
+    /// bigint capability gap).
     #[test]
     fn an_int_operation_never_returns_an_operand_s_own_word() {
         let big = tag_bigint(bigint_from_i128(1i128 << 62));
@@ -2064,6 +2158,87 @@ mod tests {
         pycc_rt_bigint_release(0);
         assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
         pycc_rt_bigint_release(word);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before + 1);
+    }
+
+    /// Part C of #1038 (#1065): `int_pow` squares the *encoded* word through
+    /// `int_mul`, so an inline base can promote to a heap bigint that only
+    /// `int_pow` itself holds. The very next `int_mul` then raises
+    /// `OverflowError` and returns a sentinel. Before Part C the aborting
+    /// process reclaimed that object; now a program can catch the exception in
+    /// a loop, so `int_pow` must retire its own temporaries on the raising
+    /// exit. `BIGINT_DROPS` is the only way a test can observe the free.
+    #[test]
+    fn int_pow_frees_its_own_promoted_temporaries_when_the_squaring_overflows() {
+        for (name, base, exp, freed) in [
+            // Promotes `base` at the last squaring; the final set bit's
+            // `int_mul` then sees it and raises, so that one object is the
+            // only temporary to retire.
+            ("2 ** 100", 2i64, 100i64, 1),
+            // Promotes the accumulator *and* the base before raising, so both
+            // releases have real work to do. An exact count, not `> before`:
+            // a regression that retires one of the two and leaks the other
+            // must fail here.
+            ("(2 ** 21) ** 7", 1i64 << 21, 7i64, 2),
+        ] {
+            pycc_rt_exception_clear();
+            let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+            assert_eq!(
+                int_pow(tag_smallint(base), tag_smallint(exp)),
+                tag_smallint(0),
+                "`{name}` must return the zero sentinel once it raises"
+            );
+            assert_eq!(
+                pycc_rt_exception_active(),
+                1,
+                "`{name}` must leave the `OverflowError` pending"
+            );
+            assert_eq!(
+                int_encoding::BIGINT_DROPS.with(|c| c.get()),
+                before + freed,
+                "`{name}` must free exactly the {freed} bigint(s) it promoted"
+            );
+            pycc_rt_exception_clear();
+        }
+    }
+
+    /// The success path: every operand stays inline, so both releases are the
+    /// no-ops `bigint_release` documents and the result is exact.
+    #[test]
+    fn int_pow_returns_an_inline_result_without_freeing_anything() {
+        pycc_rt_exception_clear();
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        assert_eq!(int_pow(tag_smallint(3), tag_smallint(4)), tag_smallint(81));
+        assert_eq!(int_pow(tag_smallint(-7), tag_smallint(1)), tag_smallint(-7));
+        assert_eq!(pycc_rt_exception_active(), 0);
+        assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before);
+    }
+
+    /// The other non-raising exit: the accumulator promotes mid-loop and the
+    /// loop still runs out of exponent bits, so `int_pow` hands the caller a
+    /// live heap bigint. Without this case the releases added around that exit
+    /// are only ever executed on the raising path, and an over-release of
+    /// `result` -- handing back a freed word -- would pass every other test
+    /// and the coverage gate alike, since the same lines are already hit.
+    #[test]
+    fn int_pow_hands_back_an_accumulator_that_promoted_mid_loop() {
+        pycc_rt_exception_clear();
+        let before = int_encoding::BIGINT_DROPS.with(|c| c.get());
+        // `(2 ** 21) ** 3` is `2 ** 63`: one past `i64`, so `int_mul` promotes
+        // it, and no operand is ever a bigint, so nothing raises.
+        let word = int_pow(tag_smallint(1 << 21), tag_smallint(3));
+        assert_eq!(pycc_rt_exception_active(), 0);
+        assert_eq!(
+            int_encoding::BIGINT_DROPS.with(|c| c.get()),
+            before,
+            "the returned reference is the caller's; nothing may be freed yet"
+        );
+        assert_eq!(
+            to_sign_and_magnitude(word),
+            (false, vec![0, 0x8000_0000]),
+            "`(2 ** 21) ** 3` must read back as `2 ** 63`"
+        );
+        bigint_release(word);
         assert_eq!(int_encoding::BIGINT_DROPS.with(|c| c.get()), before + 1);
     }
 
@@ -2286,11 +2461,145 @@ mod tests {
         assert_eq!(pycc_rt_int_cmp(tag_smallint(3), tag_smallint(2)), 1);
     }
 
+    /// Part C of #1038 (#1065): a heap bigint word, the operand every
+    /// converted site below rejects.
+    fn a_bigint_word() -> i64 {
+        tag_bigint(bigint_from_i128(1i128 << 80))
+    }
+
+    /// Part C of #1038 (#1065): asserts the pending exception is the
+    /// converted `OverflowError`, carries `context`, and does not carry the
+    /// retired `pycc_rt: ` panic prefix (the Part B convention).
+    fn assert_overflow_raised(context: &str) {
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_OVERFLOW_ERROR, "{message}");
+        assert!(
+            message == format!("{context} a bigint-valued `int` is not supported yet"),
+            "{message}"
+        );
+        assert!(!message.contains("pycc_rt: "), "{message}");
+    }
+
     #[test]
-    #[should_panic(expected = "bigint-valued")]
-    fn pycc_rt_int_cmp_on_a_bigint_tagged_operand_panics() {
-        let bigint = tag_bigint(bigint_from_i128(1i128 << 80));
-        int_cmp(bigint, tag_smallint(1));
+    fn a_bigint_operand_of_int_mul_raises_overflow_error_from_either_side() {
+        pycc_rt_exception_clear();
+        assert_eq!(int_mul(a_bigint_word(), tag_smallint(2)), tag_smallint(0));
+        assert_overflow_raised("multiplying");
+        pycc_rt_exception_clear();
+        assert_eq!(int_mul(tag_smallint(2), a_bigint_word()), tag_smallint(0));
+        assert_overflow_raised("multiplying");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_operand_of_int_cmp_raises_overflow_error_from_either_side() {
+        // Part C of #1038 (#1065): was `#[should_panic]`. The sentinel is a
+        // plain `0` -- `int_cmp` returns an `i32` ordering, not a D-141
+        // encoded word.
+        pycc_rt_exception_clear();
+        assert_eq!(int_cmp(a_bigint_word(), tag_smallint(1)), 0);
+        assert_overflow_raised("comparing");
+        pycc_rt_exception_clear();
+        assert_eq!(int_cmp(tag_smallint(1), a_bigint_word()), 0);
+        assert_overflow_raised("comparing");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_dividend_or_divisor_raises_overflow_error_not_zero_division() {
+        // The #1065 hazard, closed: `raise_builtin` installs
+        // unconditionally, so had the bigint divisor fallen through to
+        // `int_floordiv`'s `b == 0` arm as a decoded `0`, the
+        // `ZeroDivisionError` would have reported over this `OverflowError`.
+        pycc_rt_exception_clear();
+        assert_eq!(
+            int_floordiv(a_bigint_word(), tag_smallint(2)),
+            tag_smallint(0)
+        );
+        assert_overflow_raised("dividing");
+        pycc_rt_exception_clear();
+        assert_eq!(
+            int_floordiv(tag_smallint(6), a_bigint_word()),
+            tag_smallint(0)
+        );
+        assert_overflow_raised("dividing");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_operand_of_int_floormod_raises_overflow_error_not_zero_division() {
+        pycc_rt_exception_clear();
+        assert_eq!(
+            int_floormod(a_bigint_word(), tag_smallint(2)),
+            tag_smallint(0)
+        );
+        assert_overflow_raised("computing the modulo of");
+        pycc_rt_exception_clear();
+        assert_eq!(
+            int_floormod(tag_smallint(6), a_bigint_word()),
+            tag_smallint(0)
+        );
+        assert_overflow_raised("computing the modulo of");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_base_or_exponent_raises_overflow_error_not_runtime_error() {
+        // The exponent arm is the second collision of the same shape: a
+        // bigint exponent decoding to `0` would not be `< 0`, so `int_pow`
+        // would have silently computed `1` instead of propagating at all.
+        pycc_rt_exception_clear();
+        assert_eq!(int_pow(a_bigint_word(), tag_smallint(2)), tag_smallint(0));
+        assert_overflow_raised("exponentiating");
+        pycc_rt_exception_clear();
+        assert_eq!(int_pow(tag_smallint(2), a_bigint_word()), tag_smallint(0));
+        assert_overflow_raised("exponentiating");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn an_inline_pow_that_promotes_mid_loop_reports_the_multiplying_context() {
+        // `int_pow` is repeated `int_mul`, and `int_mul` *promotes* an
+        // overflowing product to a heap bigint. Both operands of `2 ** 40`
+        // are inline, so `int_pow`'s own two checks pass; the squaring step
+        // then produces a bigint that the next `int_mul` rejects. The raise
+        // therefore reports `multiplying` for an expression whose only
+        // operator is `**`. Pinned as measured behavior, not as a contract:
+        // it is pre-existing in kind (the retired `panic!` said `multiplying`
+        // too) and only became observable when Part C turned the abort into a
+        // returning raise. Exactly one exception is installed -- the loop's
+        // remaining iteration re-installs an identical one at worst.
+        pycc_rt_exception_clear();
+        assert_eq!(
+            int_pow(tag_smallint(1 << 40), tag_smallint(2)),
+            tag_smallint(0)
+        );
+        assert_overflow_raised("multiplying");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_operand_of_int_to_float_raises_overflow_error() {
+        pycc_rt_exception_clear();
+        assert_eq!(int_to_float(a_bigint_word()), 0.0);
+        assert_overflow_raised("converting");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_bigint_value_added_to_an_int_set_raises_and_leaves_the_set_intact() {
+        // The `Cell::take` hazard: `pycc_rt_int_set_add` lifts `items` out
+        // of its cell, so an early return placed after the `take()` would
+        // leave the set permanently empty. Decoding first is what keeps the
+        // already-stored element below observable.
+        pycc_rt_exception_clear();
+        let set = pycc_rt_int_set_new();
+        unsafe { pycc_rt_int_set_add(set, tag_smallint(7)) };
+        unsafe { pycc_rt_int_set_add(set, a_bigint_word()) };
+        assert_overflow_raised("storing in set[int]");
+        assert_eq!(unsafe { pycc_rt_int_set_len(set) }, 1);
+        pycc_rt_exception_clear();
+        unsafe { pycc_rt_int_set_decref(set) };
     }
 
     #[test]

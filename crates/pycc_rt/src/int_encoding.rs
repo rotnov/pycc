@@ -77,11 +77,6 @@ pub(crate) fn fits_smallint(value: i64) -> Option<i64> {
     (untag_smallint(tagged) == value).then_some(tagged)
 }
 
-pub(crate) fn require_inline_int(encoded: i64, context: &str) -> i64 {
-    inline_int_value(encoded)
-        .unwrap_or_else(|| panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet"))
-}
-
 /// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
 /// no trailing zero limbs except a single `[0]` representing zero itself.
 ///

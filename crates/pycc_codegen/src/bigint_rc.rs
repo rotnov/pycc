@@ -1605,10 +1605,15 @@ mod tests {
         assert_eq!((retains, releases), (4, 5), "got {calls:?}");
     }
 
-    /// #146 Part 2 (D-181). `int_cmp` aborts on a bigint operand
-    /// (`require_inline_int`), so a comparison's operand releases can never
-    /// be reached with a real heap word from a compiled program -- this is
-    /// the only place the emitted shape is observable at all.
+    /// #146 Part 2 (D-181). `int_cmp` raises `OverflowError` and returns its
+    /// `0` sentinel on a bigint operand (Part C of #1038, formerly an abort),
+    /// and `Compare` is not an `expression_can_set_exception` checkpoint, so
+    /// unlike before Part C these releases *are* reachable with a real heap
+    /// word: they run against the freshly owned operands after the raise, and
+    /// freeing them there is exactly what keeps the pending exception from
+    /// leaking them. A runtime-value assertion therefore cannot pin this
+    /// shape, and the static retain/release counts below are the only place it
+    /// is observable at all.
     ///
     /// `(n + n) < (n + n)`: each inner `+` has two borrowed `Name` operands
     /// and releases neither, while the comparison itself consumes two

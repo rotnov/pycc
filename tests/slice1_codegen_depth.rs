@@ -552,16 +552,19 @@ print(float(5))
 }
 
 #[test]
-fn a_float_call_on_a_bigint_argument_aborts_honestly() {
+fn a_float_call_on_a_bigint_argument_fails_honestly() {
     // Post-merge review finding: `float(x)` for a bigint-valued `x` (an
     // `int` promoted past the tagged smallint range by arithmetic
     // overflow) reaches `to_float`'s `Scalar::Int` arm, which calls
-    // `pycc_rt_int_to_float` -> `require_inline_int`, aborting -- the exact
-    // same pre-existing "no bigint-to-float" limitation ordinary arithmetic
-    // promotion already has (confirmed directly: `fib_iter(100) + 1.5` hits
-    // the identical abort on `main` before this PR), not a new gap
-    // `float()` introduces. Mirrors `list_append_bigint_aborts`'s own
-    // "executing test, not just a documented gap" convention (D-106).
+    // `pycc_rt_int_to_float` -- the exact same pre-existing "no
+    // bigint-to-float" limitation ordinary arithmetic promotion already has
+    // (confirmed directly: `fib_iter(100) + 1.5` fails identically), not a
+    // new gap `float()` introduces. Mirrors `list_append_bigint_aborts`'s
+    // own "executing test, not just a documented gap" convention (D-106).
+    //
+    // Part C of #1038 (#1065) turned that failure from a process abort into
+    // a D-173 `OverflowError`, so the class name is asserted below; the
+    // limitation itself is unchanged.
     let source = "\
 def fib_iter(n: int) -> int:
     a = 0
@@ -583,7 +586,7 @@ print(float(fib_iter(100)))
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("converting a bigint-valued `int` is not supported yet"),
+        stderr.contains("OverflowError: converting a bigint-valued `int` is not supported yet"),
         "expected pycc_rt's honest bigint message, got: {stderr}"
     );
 }

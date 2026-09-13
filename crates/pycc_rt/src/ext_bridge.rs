@@ -24,11 +24,15 @@
 //!
 //! **The boundary is the inline-integer range, never `i64`.** `fits_smallint`
 //! accepts `[-2^62, 2^62-1]`; `pycc_rt_int_from_i64` promotes anything outside
-//! it to a bigint-tagged word, whereupon the compiled body's first
-//! `require_inline_int` panics, which across a plain `extern "C"` boundary is a
-//! process abort -- i.e. a killed interpreter. An ingress check written against
-//! `i64` would let `f(4611686018427387905)` do exactly that. See the D-244
-//! amendment and #1040.
+//! it to a bigint-tagged word. Before Part C of #1038
+//! ([#1065](https://github.com/rotnov/pycc/issues/1065)) the compiled body's
+//! first inline-int decode then panicked, which across a plain `extern "C"`
+//! boundary is a process abort -- i.e. a killed interpreter; it now raises
+//! `OverflowError` instead, which the `ext` wrapper reports to the host. The
+//! ingress check stays written against the inline range rather than `i64` so
+//! `f(4611686018427387905)` is rejected with a clean `OverflowError` at the
+//! boundary instead of deep inside the body. See the D-244 amendment and
+//! #1040.
 
 use crate::int_encoding::{
     BOOL_FALSE_MARKER, BOOL_TRUE_MARKER, LOW_TAG_MASK, fits_smallint, is_smallint, untag_smallint,

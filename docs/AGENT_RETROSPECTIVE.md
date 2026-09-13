@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-09-13 — A local test gate run without CI's `--include-ignored` reported a test the same diff had just added as passing
+
+**What happened.** Part C of #1038 (#1065) added seven tests, one of them
+`#[ignore]`d because it needs CPython development headers. The implementing
+agent's gate table reported `cargo test --workspace --no-fail-fast` = 0 with
+"5415 passed, 0 failed, 83 ignored", and the pull request body carried that
+line. CI's very first run failed: every test job in `.github/workflows/ci.yml`
+runs `cargo test --workspace -- --include-ignored`, so the ignored test ran
+there and failed on a real defect in its own fixture — it passed a bigint
+*argument* across the `ext` boundary, which the generated wrapper's #1040
+argument unpacker rejects with its own `OverflowError` before the compiled body
+runs, so the site under test was never reached.
+
+**Root cause.** The local gate command and the CI gate command differ by a flag
+that changes which tests exist. Nothing in `AGENTS.md` or the skills said so,
+and the headers the test needs were in fact installed on the host, so the test
+was skipped for no reason other than the missing flag.
+
+**What fixed it.** The fixture now produces its bigint as an intermediate
+inside the compiled function (`(x * x) // d`) instead of receiving one as an
+argument, and `AGENTS.md`'s testing section now states that CI runs the suite
+with `-- --include-ignored` and that a local run without it is a different
+gate.
+
+**Lesson.** A gate is its exact command. Before reporting a local gate green,
+compare its flags against the workflow step that enforces it — a flag that
+changes the *set of tests collected* is not an optimization, and an
+`#[ignore]`d test the same diff introduced is exactly the case it hides.
+
 ## 2026-09-13 — A commit SHA typed from memory instead of read from `git rev-parse`
 
 **What happened.** A reply published to a review thread on pull request #1035
