@@ -472,6 +472,11 @@ arguments names argument 1.
   closed-set completeness guard that *is* inside
   `scripts/check_diff_coverage.py`'s denominator is
   `src/ext_build_tests/refusal_completeness.rs`, which is not `#[ignore]`d.
+  That guard closes the set along both axes: a new `BoundaryCarrier` variant
+  fails to compile against its wildcard-free refusal-arm `match`, and a new
+  `Ty` variant -- or an existing one newly admitted past `boundary_carrier`'s
+  own `_ => None` -- fails to compile against, or flips an assertion in, its
+  wildcard-free admissibility table. One axis alone would let the other drift.
 - **Cost.** Each `#[test]` in the file costs one full `pycc build` on every
   Tier-1 leg, so the shapes share a single artifact and a single script rather
   than taking one test each.

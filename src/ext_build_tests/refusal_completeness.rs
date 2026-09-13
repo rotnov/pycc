@@ -126,3 +126,64 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
         assert!(arity < first, "{inc}");
     }
 }
+
+/// Whether the boundary is expected to carry `ty` at a parameter position,
+/// stated here once for every variant of [`Ty`] with no wildcard arm.
+///
+/// [`boundary_carrier`] ends in `_ => None`, so the closed-set assertions
+/// above guard only the `BoundaryCarrier` axis: a new `Ty` admitted by a
+/// new arm there would map to an existing carrier shape and leave both the
+/// hand-maintained row list and the shim's helper set untouched. This
+/// function is the other axis. Adding a variant to `Ty` fails to compile
+/// here, and admitting an existing one flips an assertion below -- either
+/// way the change is stated rather than inherited.
+fn expected_to_carry(ty: &Ty) -> bool {
+    match ty {
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str => true,
+        // D-116 fixes a tuple's element types to the three scalars a
+        // `pycc_ext_unpack_*_at` helper exists for: `str` is a single C
+        // slot at a top-level position but has no element shim, and a
+        // nested tuple is not a single slot at all.
+        Ty::Tuple(elements) => elements
+            .iter()
+            .all(|element| matches!(element, Ty::Int | Ty::Float | Ty::Bool)),
+        Ty::None
+        | Ty::Infer
+        | Ty::Param(_)
+        | Ty::List(_)
+        | Ty::Dict(_)
+        | Ty::Set(_)
+        | Ty::Instance(_)
+        | Ty::Protocol(_)
+        | Ty::Optional(_) => false,
+    }
+}
+
+#[test]
+fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
+    let name = || Box::new("T".to_string());
+    let samples: Vec<Ty> = vec![
+        Ty::Int,
+        Ty::Float,
+        Ty::Bool,
+        Ty::Str,
+        Ty::None,
+        Ty::Infer,
+        Ty::Param(name()),
+        Ty::List(Box::new(Ty::Int)),
+        Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+        Ty::Set(Box::new(Ty::Int)),
+        Ty::Instance(name()),
+        Ty::Protocol(name()),
+        Ty::Optional(Box::new(Ty::Int)),
+        Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float, Ty::Bool])),
+        // The two element shapes the boundary refuses: neither has an
+        // `_at` helper, and both are unreachable from source today only
+        // because `T0039` refuses the annotation first.
+        Ty::Tuple(Box::new(vec![Ty::Str])),
+        Ty::Tuple(Box::new(vec![Ty::Tuple(Box::new(vec![Ty::Int]))])),
+    ];
+    for ty in samples {
+        assert_eq!(carries_param(&ty), expected_to_carry(&ty), "{ty:?}");
+    }
+}
