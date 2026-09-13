@@ -33,10 +33,13 @@
 //!
 //! `#[ignore]`d for the reason every `ext` test is: it asks an installed
 //! CPython 3.13+ to import a built artifact, which is a property of the
-//! machine. CI runs it on every Tier-1 `native-build-test` leg through that
-//! job's `cargo test --workspace -- --include-ignored`, and never in the
-//! coverage job, which runs `llvm-cov` without that flag. The completeness
-//! guard that *is* inside the coverage denominator lives in
+//! machine. CI runs it twice, on both supported loaders: on every Tier-1
+//! `native-build-test` leg against the 3.13 stable-ABI floor, and in
+//! `build-test-coverage`'s own `cargo test --workspace -- --include-ignored`
+//! step, which runs after that job installs CPython 3.14.7. It is measured
+//! in neither, because only that job's earlier `llvm-cov` step is, and that
+//! one runs without `--include-ignored`. The completeness guard that *is*
+//! inside the coverage denominator lives in
 //! `src/ext_build_tests/refusal_completeness.rs`.
 //!
 //! One `#[test]`, deliberately: each one costs a full `pycc build` on every

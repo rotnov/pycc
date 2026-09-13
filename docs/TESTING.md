@@ -467,8 +467,13 @@ arguments names argument 1.
   `#[ignore = "requires a CPython 3.13+ with development headers on PATH"]`,
   because an installed CPython with headers is a property of the machine. CI
   runs it on the Tier-1 `native-build-test` legs, which run the suite with
-  `-- --include-ignored`, and never in the coverage job, which runs `llvm-cov`
-  without that flag. It therefore earns no line coverage by construction: the
+  `-- --include-ignored` against the 3.13 stable-ABI floor, and once more in
+  `build-test-coverage` -- not in that job's `llvm-cov` step, which runs
+  without that flag, but in the plain `cargo test --workspace --
+  --include-ignored` step that follows it, after CPython 3.14.7 is installed.
+  The two are the harness's two supported loaders, so removing either leg
+  drops a version this file claims to agree. It earns no line coverage either
+  way, because only the `llvm-cov` step is measured: the
   closed-set completeness guard that *is* inside
   `scripts/check_diff_coverage.py`'s denominator is
   `src/ext_build_tests/refusal_completeness.rs`, which is not `#[ignore]`d.
