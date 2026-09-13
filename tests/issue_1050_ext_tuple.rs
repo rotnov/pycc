@@ -372,3 +372,37 @@ fn a_tuple_returning_export_raises_rather_than_packing_uninitialized_storage() {
          print('ok')\n",
     );
 }
+
+/// #1050 regression: a *stored* tuple's elements are borrowed, so the
+/// `tuple` egress must take its own reference before the packer discharges
+/// one. `pycc_ext_pack_int` releases a heap-bigint word on its
+/// `OverflowError` path; without a matching retain that release decrements a
+/// count the module global still holds, and the *second* call faults inside
+/// the host interpreter (observed before the fix as a non-unwinding panic in
+/// `pycc_rt_bigint_release`, an outright use-after-free in a release build).
+///
+/// So one call proves nothing here -- the loop is the test. The `bool` and
+/// `float` elements are the other half of the contract: only the `int` slots
+/// take a reference, because only the `int` packer discharges one.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_stored_tuple_of_bigints_survives_repeated_refused_returns() {
+    let dir = ScratchDir::new("ext_tuple_borrowed_bigint").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_tuple_borrowed",
+        "saved: tuple[int, bool, float] = ((2 ** 62 - 1) + 1, True, 1.5)\n\n\
+         def get() -> tuple[int, bool, float]:\n    return saved\n\n\
+         def small() -> tuple[int, int]:\n    return (1, 2)\n",
+    );
+    run_python(
+        &dir,
+        "import pycc_tuple_borrowed as m\n\
+         for _ in range(2000):\n    \
+         try:\n        m.get()\n    \
+         except OverflowError:\n        pass\n    \
+         else:\n        raise AssertionError('an out-of-range int must be refused')\n\
+         assert m.small() == (1, 2)\n\
+         print('ok')\n",
+    );
+}

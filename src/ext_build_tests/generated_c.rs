@@ -585,9 +585,9 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
         .expect("the check");
     let first_pack = inc.find("e0 = pycc_ext_pack_int").expect("the first pack");
     assert!(call < pending && pending < first_pack, "{inc}");
-    // Every element is packed before any failure is acted on: each `r`
-    // arrives retained (D-180 rule 6) and it is the packer that discharges
-    // the ownership, so bailing at the first failure would leak the rest.
+    // Every element is packed before any failure is acted on: the retain
+    // above gives this wrapper a reference the packer then discharges, so
+    // bailing at the first failure would leak the rest.
     let second_pack = inc
         .find("e1 = pycc_ext_pack_bool(r1);")
         .expect("the second");
@@ -613,6 +613,38 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
         ),
         "{inc}"
     );
+}
+
+#[test]
+fn a_tuple_return_retains_each_int_element_before_packing_it() {
+    // #1050 regression: a returned tuple's fields arrive *borrowed*. Codegen
+    // retains at a `return` only for a `Scalar::Int`, and the export thunk
+    // `extractvalue`s each field straight into its out-pointer, so a stored
+    // tuple (`saved = (2**62,)`; `return saved`) hands the wrapper a word the
+    // module global still owns. `pycc_ext_pack_int` releases that word on its
+    // `OverflowError` path, so without this retain the second call to the
+    // export faults inside the host interpreter.
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "split".to_string(),
+            params: vec![],
+            return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
+        }],
+    );
+    assert!(
+        inc.contains(
+            "    pycc_rt_bigint_retain(r0);\n    e0 = pycc_ext_pack_int(\"split\", r0);\n"
+        ),
+        "{inc}"
+    );
+    // Retain and release share one predicate, so the pairing has to come from
+    // one list: only the `int` slots take a reference, because only the `int`
+    // packer discharges one. A retain at a `bool` or `float` slot would be an
+    // unbalanced +1 on every successful call.
+    assert!(!inc.contains("pycc_rt_bigint_retain(r1)"), "{inc}");
+    assert!(!inc.contains("pycc_rt_bigint_retain(r2)"), "{inc}");
+    assert_eq!(inc.matches("pycc_rt_bigint_retain(").count(), 1, "{inc}");
 }
 
 #[test]

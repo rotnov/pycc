@@ -959,12 +959,28 @@ fn c_param_list(slots: &[BoundaryCarrier], out_slots: &[(&'static str, &'static 
 /// The egress of a `tuple`-returning wrapper (#1050): pack every element,
 /// then build the tuple.
 ///
+/// Each `r{index}` arrives **borrowed**, not retained. D-180 rule 6 retains
+/// at a `return` only where the returned value is a scalar: codegen's
+/// `MirStmt::Return` routes the value through `retain_if_int_duplicate`,
+/// which acts on a `Scalar::Int` and does nothing for an aggregate, and the
+/// `pycc_ext_thunk_` emitter then `extractvalue`s each field straight into
+/// its out-pointer. So returning a *stored* tuple (`saved = (2**62,)`;
+/// `return saved`) hands this function a word the module global still owns.
+/// `pycc_ext_pack_int` discharges one reference on its `OverflowError` path,
+/// which without a matching retain here decrements a count this wrapper
+/// never took -- a refcount underflow, and on the next call a use-after-free
+/// in the host interpreter.
+///
+/// So each `int` element takes its own reference with `pycc_rt_bigint_retain`
+/// immediately before the packer that discharges it. Retain and release share
+/// one predicate (`classify_encoded_int(word) == BigInt`), so the pairing is
+/// exactly balanced on a smallint, a bool marker, the word `0`, and an
+/// unclassifiable word alike -- and the retain is emitted from the same
+/// `helper == "int"` arm as the packer, so the two can never drift apart.
+///
 /// Every element is packed *unconditionally*, before any failure is acted
 /// on, and that ordering is the refcount discipline rather than a style
-/// choice. Each `r{index}` arrives retained (D-180 rule 6), and it is the
-/// matching `pycc_ext_pack_*` call that discharges the ownership -- the
-/// `int` packer releases a bigint word on its own `OverflowError` path.
-/// Bailing out at the first failing element would leave every later
+/// choice. Bailing out at the first failing element would leave every later
 /// element's word undischarged, leaking one `BigIntObj` per call on exactly
 /// the path that already raises.
 ///
@@ -980,6 +996,7 @@ fn pack_tuple_return(name: &str, out_slots: &[(&'static str, &'static str)]) -> 
     let mut out = String::new();
     for (index, (_, helper)) in out_slots.iter().enumerate() {
         let argument = if *helper == "int" {
+            out.push_str(&format!("    pycc_rt_bigint_retain(r{index});\n"));
             format!("\"{name}\", r{index}")
         } else {
             format!("r{index}")

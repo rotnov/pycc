@@ -44,8 +44,14 @@ extern long long pycc_rt_ext_int_decode(long long encoded);
 extern int pycc_rt_ext_pending_type(void);
 extern const unsigned char *pycc_rt_ext_pending_message(size_t *len);
 extern void pycc_rt_exception_clear(void);
-/* D-180 rule 6: a compiled function's return value arrives retained, so a
- * heap-bigint result this boundary refuses still has to be released. */
+/* D-180 rule 6: a compiled function's scalar return value arrives retained,
+ * so a heap-bigint result this boundary refuses still has to be released.
+ * A *tuple* element does not arrive retained -- the aggregate return path
+ * takes no per-field retain -- so a tuple egress takes its own reference
+ * with `pycc_rt_bigint_retain` before handing the word to the packer that
+ * discharges one. Both are no-ops for a smallint, a bool marker, and the
+ * word `0`, so the pairing stays balanced on every classification. */
+extern void pycc_rt_bigint_retain(long long word);
 extern void pycc_rt_bigint_release(long long word);
 /* The `str` boundary (Part 2 of #1037, #1049). `pycc_rt`'s own `i64` length
  * is `long long` here and its `usize` is `size_t`; `PyStrObj` stays an opaque

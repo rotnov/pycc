@@ -350,7 +350,7 @@ remaining scalars. Part 2 of #1037
 ([#1049](https://github.com/rotnov/pycc/issues/1049)) added `str` in both
 directions, and Part 3
 ([#1050](https://github.com/rotnov/pycc/issues/1050)) added a `tuple` of
-those scalars in both directions: `pycc build PATH -o OUT --ext`
+`int`/`float`/`bool` in both directions: `pycc build PATH -o OUT --ext`
 compiles against `Py_LIMITED_API 0x030D0000` (stable-ABI floor CPython 3.13),
 exports every public module-level function whose signature that boundary can
 carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
