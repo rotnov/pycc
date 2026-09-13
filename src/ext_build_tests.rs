@@ -417,26 +417,49 @@ fn every_exception_tag_the_c_shim_switches_on_still_names_that_class() {
 // ---------------------------------------------------------------- exports
 
 #[test]
-fn every_public_int_only_module_level_function_is_exported_in_source_order() {
+fn every_public_carriable_module_level_function_is_exported_in_source_order() {
     let hir = module(vec![
         func("first", &[("x", Ty::Int)], Ty::Int),
         func("second", &[], Ty::Int),
         func("third", &[("a", Ty::Int), ("b", Ty::Int)], Ty::Int),
+        // #1048 widened the boundary: each of these reaches the export set
+        // rather than the gap list, and the signature travels with it.
+        func("scaled", &[("factor", Ty::Float)], Ty::Float),
+        func("negated", &[("flag", Ty::Bool)], Ty::Bool),
+        func("sink", &[("x", Ty::Int)], Ty::None),
     ]);
     assert_eq!(
-        collect_exports(&hir).expect("an int-only program exports cleanly"),
+        collect_exports(&hir).expect("a carriable program exports cleanly"),
         vec![
             ExtExport {
                 name: "first".to_string(),
-                arity: 1
+                params: vec![Ty::Int],
+                return_ty: Ty::Int,
             },
             ExtExport {
                 name: "second".to_string(),
-                arity: 0
+                params: Vec::new(),
+                return_ty: Ty::Int,
             },
             ExtExport {
                 name: "third".to_string(),
-                arity: 2
+                params: vec![Ty::Int, Ty::Int],
+                return_ty: Ty::Int,
+            },
+            ExtExport {
+                name: "scaled".to_string(),
+                params: vec![Ty::Float],
+                return_ty: Ty::Float,
+            },
+            ExtExport {
+                name: "negated".to_string(),
+                params: vec![Ty::Bool],
+                return_ty: Ty::Bool,
+            },
+            ExtExport {
+                name: "sink".to_string(),
+                params: vec![Ty::Int],
+                return_ty: Ty::None,
             },
         ]
     );
@@ -464,13 +487,14 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
         collect_exports(&hir).expect("no public gap remains"),
         vec![ExtExport {
             name: "kept".to_string(),
-            arity: 0
+            params: Vec::new(),
+            return_ty: Ty::Int,
         }]
     );
 }
 
 #[test]
-fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_arity() {
+fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature() {
     // Python rebinds rather than redeclares, and codegen follows it: one
     // `fnptr_two` global, bound to the second `def`. A second table entry
     // would emit `pycc_ext_wrap_two` twice and the C compiler would reject
@@ -486,17 +510,20 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_arity() {
         vec![
             ExtExport {
                 name: "one".to_string(),
-                arity: 0
+                params: Vec::new(),
+                return_ty: Ty::Int,
             },
-            // Definition order, last definition's arity: the entry keeps the
-            // position the name first claimed.
+            // Definition order, last definition's signature: the entry keeps
+            // the position the name first claimed.
             ExtExport {
                 name: "two".to_string(),
-                arity: 2
+                params: vec![Ty::Int, Ty::Int],
+                return_ty: Ty::Int,
             },
             ExtExport {
                 name: "three".to_string(),
-                arity: 0
+                params: Vec::new(),
+                return_ty: Ty::Int,
             },
         ]
     );
@@ -509,50 +536,80 @@ fn a_program_with_no_public_function_exports_nothing_rather_than_failing() {
 }
 
 #[test]
-fn a_non_int_parameter_is_a_capability_gap_naming_the_parameter() {
-    let hir = module(vec![func("scale", &[("factor", Ty::Float)], Ty::Int)]);
-    let gaps = collect_exports(&hir).expect_err("float is not bridged in Part 1");
+fn a_parameter_the_boundary_cannot_carry_is_a_capability_gap_naming_it() {
+    let hir = module(vec![func("greet", &[("who", Ty::Str)], Ty::Int)]);
+    let gaps = collect_exports(&hir).expect_err("str is not bridged by #1048");
     assert_eq!(gaps.len(), 1);
     assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
     assert_eq!(gaps[0].span, None);
     assert!(
-        gaps[0].message.contains("`factor: float`"),
+        gaps[0].message.contains("`who: str`"),
         "{}",
         gaps[0].message
     );
-    assert!(gaps[0].message.contains("`_scale`"), "{}", gaps[0].message);
+    // Both ways out stay in the message: D-038's `_`-prefix opt-out, and
+    // dropping `--ext` altogether.
+    assert!(gaps[0].message.contains("`_greet`"), "{}", gaps[0].message);
+    assert!(
+        gaps[0].message.contains("without --ext"),
+        "{}",
+        gaps[0].message
+    );
 }
 
 #[test]
-fn a_non_int_return_type_is_a_capability_gap_naming_the_return_type() {
+fn a_none_parameter_is_still_a_capability_gap_after_the_scalar_widening() {
+    // `None` is admissible as a return type and not as a parameter, so the
+    // two admissible sets are asked separately. This arm stays live until
+    // #1047's call-argument ICE is fixed; widening it here would turn a
+    // diagnostic into a codegen assertion failure.
+    let hir = module(vec![func("sink", &[("x", Ty::None)], Ty::None)]);
+    let gaps = collect_exports(&hir).expect_err("a None parameter is not carriable");
+    assert_eq!(gaps.len(), 1);
+    assert!(gaps[0].message.contains("`x: None`"), "{}", gaps[0].message);
+}
+
+#[test]
+fn a_return_type_the_boundary_cannot_carry_is_a_capability_gap_naming_it() {
     let hir = module(vec![func("name_of", &[("x", Ty::Int)], Ty::Str)]);
-    let gaps = collect_exports(&hir).expect_err("str is not bridged in Part 1");
+    let gaps = collect_exports(&hir).expect_err("str is not bridged by #1048");
     assert_eq!(gaps.len(), 1);
     assert!(gaps[0].message.contains("`-> str`"), "{}", gaps[0].message);
 }
 
 #[test]
-fn a_bool_signature_is_a_gap_because_the_boundary_is_int_only_in_part_one() {
-    // `bool` is a conforming *argument* type at the boundary (D-141 gives it
-    // a dedicated encoding), but a declared `bool` parameter is a different
-    // thing: the compiled function's own ABI slot is `i1`, not the encoded
-    // word the shim produces. Part 1 declares `int` only.
-    let hir = module(vec![func("flag", &[("b", Ty::Bool)], Ty::Int)]);
-    let gaps = collect_exports(&hir).expect_err("bool is not an int slot");
-    assert!(gaps[0].message.contains("`b: bool`"), "{}", gaps[0].message);
+fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
+    // A declared `bool` parameter is not the D-141 encoded word an `int`
+    // slot carries: the compiled function's own ABI slot is a plain `i8`
+    // holding 0/1 -- `i8` at the parameter position too, since parameters
+    // and returns share one `ty_to_basic_type`. So it is carried by its own
+    // helper and its own one-byte C type, never through the `int` path.
+    let hir = module(vec![func("flag", &[("b", Ty::Bool)], Ty::Bool)]);
+    let exports = collect_exports(&hir).expect("bool is carried by #1048");
+    assert_eq!(
+        exports,
+        vec![ExtExport {
+            name: "flag".to_string(),
+            params: vec![Ty::Bool],
+            return_ty: Ty::Bool,
+        }]
+    );
 }
 
 #[test]
 fn every_gap_in_a_program_is_collected_before_the_build_gives_up() {
     let hir = module(vec![
-        func("a", &[("x", Ty::Float)], Ty::Int),
-        func("b", &[], Ty::None),
-        func("c", &[("x", Ty::Int)], Ty::Int),
+        func("a", &[("x", Ty::Str)], Ty::Int),
+        func("b", &[("x", Ty::None)], Ty::Int),
+        // Carriable after #1048, so neither of these joins the gap list.
+        func("c", &[("x", Ty::Float)], Ty::None),
         func("d", &[("xs", Ty::List(Box::new(Ty::Int)))], Ty::Int),
+        func("e", &[("x", Ty::Bool)], Ty::Int),
     ]);
-    let gaps = collect_exports(&hir).expect_err("three of the four are gaps");
+    let gaps = collect_exports(&hir).expect_err("three of the five are gaps");
     assert_eq!(gaps.len(), 3);
-    assert!(gaps[1].message.contains("`-> None`"), "{}", gaps[1].message);
+    assert!(gaps[0].message.contains("`x: str`"), "{}", gaps[0].message);
+    assert!(gaps[1].message.contains("`x: None`"), "{}", gaps[1].message);
     assert!(
         gaps[2].message.contains("`xs: list`"),
         "{}",
@@ -607,7 +664,8 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
         "m",
         &[ExtExport {
             name: "answer".to_string(),
-            arity: 0,
+            params: Vec::new(),
+            return_ty: Ty::Int,
         }],
     );
     assert!(inc.contains("extern void *fnptr_answer;"), "{inc}");
@@ -631,7 +689,8 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
         "m",
         &[ExtExport {
             name: "square".to_string(),
-            arity: 1,
+            params: vec![Ty::Int],
+            return_ty: Ty::Int,
         }],
     );
     assert!(
@@ -658,7 +717,8 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
         "m",
         &[ExtExport {
             name: "add".to_string(),
-            arity: 2,
+            params: vec![Ty::Int, Ty::Int],
+            return_ty: Ty::Int,
         }],
     );
     assert!(
@@ -688,7 +748,8 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
         "m",
         &[ExtExport {
             name: "risky".to_string(),
-            arity: 1,
+            params: vec![Ty::Int],
+            return_ty: Ty::Int,
         }],
     );
     let check = inc
@@ -700,6 +761,139 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
     assert!(
         check < pack,
         "the pending check must precede the pack:\n{inc}"
+    );
+}
+
+#[test]
+fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "scale".to_string(),
+            params: vec![Ty::Float],
+            return_ty: Ty::Float,
+        }],
+    );
+    assert!(inc.contains("    double result;"), "{inc}");
+    // The half-widened wrapper is the sharpest failure mode here: a
+    // `long long result` left behind while the cast and the pack move to
+    // `double` compiles clean, warns nothing, and returns 2 for 2.5.
+    assert!(!inc.contains("long long result"), "{inc}");
+    assert!(inc.contains("    double a0;"), "{inc}");
+    assert!(
+        inc.contains("pycc_ext_unpack_float(args[0], \"scale\", 0, &a0)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("result = ((double (*)(double))fnptr_scale)(a0);"),
+        "{inc}"
+    );
+    // The float packer cannot fail on a value, so it takes no function name.
+    assert!(inc.contains("return pycc_ext_pack_float(result);"), "{inc}");
+}
+
+#[test]
+fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "negate".to_string(),
+            params: vec![Ty::Bool],
+            return_ty: Ty::Bool,
+        }],
+    );
+    assert!(inc.contains("    char result;"), "{inc}");
+    assert!(inc.contains("    char a0;"), "{inc}");
+    assert!(
+        inc.contains("pycc_ext_unpack_bool(args[0], \"negate\", 0, &a0)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("result = ((char (*)(char))fnptr_negate)(a0);"),
+        "{inc}"
+    );
+    assert!(inc.contains("return pycc_ext_pack_bool(result);"), "{inc}");
+    // `_Bool` is not `i1`-shaped here and `int` is four bytes: either would
+    // disagree with the callee across an unchecked `void *` cast.
+    assert!(!inc.contains("_Bool"), "{inc}");
+    assert!(!inc.contains("(int (*)"), "{inc}");
+}
+
+#[test]
+fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "sink".to_string(),
+            params: vec![Ty::Int],
+            return_ty: Ty::None,
+        }],
+    );
+    // LLVM emits a `None` return as `void`, so there is nothing to hold and
+    // nothing to assign -- both would be C type errors.
+    assert!(!inc.contains("result"), "{inc}");
+    assert!(
+        inc.contains("((void (*)(long long))fnptr_sink)(a0);"),
+        "{inc}"
+    );
+    assert!(inc.contains("    Py_RETURN_NONE;"), "{inc}");
+    assert!(!inc.contains("pycc_ext_pack"), "{inc}");
+}
+
+#[test]
+fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "mix".to_string(),
+            params: vec![Ty::Int, Ty::Float, Ty::Bool],
+            return_ty: Ty::Float,
+        }],
+    );
+    assert!(
+        inc.contains("    long long a0;\n    double a1;\n    char a2;\n"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_int(args[0], \"mix\", 0, &a0)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_float(args[1], \"mix\", 1, &a1)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_bool(args[2], \"mix\", 2, &a2)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("result = ((double (*)(long long, double, char))fnptr_mix)(a0, a1, a2);"),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
+    // The arm with no result to inspect is exactly the one where skipping
+    // the check would hand Python a fabricated `None` instead of the
+    // exception the compiled function raised.
+    let inc = generate_exports_inc(
+        "m",
+        &[ExtExport {
+            name: "risky".to_string(),
+            params: vec![Ty::Int],
+            return_ty: Ty::None,
+        }],
+    );
+    let check = inc
+        .find("pycc_rt_ext_pending_type() >= 0")
+        .expect("the wrapper checks the pending flag");
+    let egress = inc
+        .find("Py_RETURN_NONE;")
+        .expect("the wrapper returns None");
+    assert!(
+        check < egress,
+        "the pending check must precede the None egress:\n{inc}"
     );
 }
 
@@ -718,6 +912,19 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
     // writes it as, so the two really do land side by side.
     assert!(SHIM_C.contains(&format!("#include \"{EXPORTS_INC_NAME}\"")));
     assert_eq!(SHIM_C_NAME, "pycc_ext_module.c");
+    // The helpers the generated wrappers call by name for each carried
+    // scalar. A wrapper that names a helper the shim does not define fails
+    // at C compile time, which no unit test here can reach.
+    for helper in [
+        "static int pycc_ext_unpack_int(PyObject *obj",
+        "static int pycc_ext_unpack_float(PyObject *obj",
+        "static int pycc_ext_unpack_bool(PyObject *obj",
+        "static PyObject *pycc_ext_pack_int(",
+        "static PyObject *pycc_ext_pack_float(double value)",
+        "static PyObject *pycc_ext_pack_bool(char value)",
+    ] {
+        assert!(SHIM_C.contains(helper), "{helper}");
+    }
     // The module body runs in the exec slot, never in `PyInit_`.
     assert!(SHIM_C.contains("{Py_mod_exec, (void *)pycc_ext_exec_module}"));
     assert!(SHIM_C.contains("Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED"));

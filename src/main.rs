@@ -1164,7 +1164,7 @@ mod ext_build_wiring_tests {
     #[test]
     fn a_public_function_the_boundary_cannot_carry_fails_the_build_with_a_diagnostic() {
         let dir = ScratchDir::new("ext_plan_gap").expect("scratch");
-        let src = write_source(&dir, "def scale(x: float) -> float:\n    return x\n");
+        let src = write_source(&dir, "def greet(x: str) -> str:\n    return x\n");
         let code = plan_ext(
             &src,
             &dir.join("m"),
@@ -1173,7 +1173,7 @@ mod ext_build_wiring_tests {
             &header_less_toolchain(&dir),
             &dir.join("main.o"),
         )
-        .expect_err("float is not bridged in Part 1");
+        .expect_err("str is not bridged by #1048");
         assert_eq!(code, ExitCode::from(1));
     }
 
