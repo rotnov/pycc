@@ -351,9 +351,9 @@ pub struct HirClassDef {
     /// `pycc_hir::exception::builtin_exception_class_defs`. Reading `None`
     /// as "user-defined" or `Some` as "user-defined" is equally wrong.
     ///
-    /// A tag is assigned by `module::lower_all` (in its post-loop phase, after
-    /// the per-item walk, and only when that walk collected nothing) to every
-    /// user-declared class whose
+    /// A tag is assigned by `program::finalize` (reached from
+    /// `module::lower_all` for a single module and from the driver's linker
+    /// for a whole program) to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
     /// the range `26..=255` — `0..=25` are reserved for the 26-member builtin
     /// hierarchy (the flat seven, the `OSError` family, `ExceptionGroup`/

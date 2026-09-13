@@ -407,7 +407,8 @@ fn plan_ext(
     // line of its own, which no passing build ever executes and which
     // `scripts/check_diff_coverage.py` then reports as an uncovered
     // changed line (D-242 rule 1).
-    let inc_body = ext_build::generate_exports_inc(&output.module_name, &exports);
+    let classes = ext_build::collect_user_exception_classes(typed_hir);
+    let inc_body = ext_build::generate_exports_inc(&output.module_name, &exports, &classes);
     write_ext_source(&shim, ext_build::SHIM_C)?;
     write_ext_source(&inc, &inc_body)?;
     Ok(ExtPlan {

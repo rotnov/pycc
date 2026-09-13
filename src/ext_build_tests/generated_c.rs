@@ -8,9 +8,30 @@
 
 use super::*;
 
+/// [`generate_exports_inc`] for a program that declares no user exception
+/// class -- every case in this file that predates #1066, and the one that
+/// asserts both generated class functions are still emitted with empty
+/// bodies so an artifact with no such class still links.
+fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
+    generate_exports_inc(module_name, exports, &[])
+}
+
+/// The generated companion for a program lowered from real source, so the
+/// tags and the class order are the ones `pycc_hir::program::finalize`
+/// really assigns rather than ones a hand-built `HirClassDef` asserts into
+/// existence (`module()` here builds an empty `class_defs`).
+fn inc_from_source(source: &str) -> String {
+    let dir = pycc_scratch::ScratchDir::new("ext_exception_classes").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, source).expect("write source");
+    let module = crate::frontend::resolve_frontend(&src)
+        .unwrap_or_else(|_| panic!("the fixture must type-check"));
+    generate_exports_inc("m", &[], &collect_user_exception_classes(&module))
+}
+
 #[test]
 fn the_generated_companion_defines_the_module_name_in_both_spellings() {
-    let inc = generate_exports_inc("fastmath", &[]);
+    let inc = inc_no_classes("fastmath", &[]);
     assert!(
         inc.contains("#define PYCC_EXT_MODULE_NAME fastmath\n"),
         "{inc}"
@@ -30,7 +51,7 @@ fn the_generated_companion_defines_the_module_name_in_both_spellings() {
 
 #[test]
 fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "answer".to_string(),
@@ -55,7 +76,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
 
 #[test]
 fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "square".to_string(),
@@ -83,7 +104,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
 
 #[test]
 fn a_binary_export_unpacks_each_argument_at_its_own_index() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "add".to_string(),
@@ -114,7 +135,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
     // A compiled function that raised returns a neutral carrier and leaves
     // the thread-local flag set, so packing it first would hand Python a
     // fabricated value instead of the exception.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "risky".to_string(),
@@ -136,7 +157,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
 
 #[test]
 fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "scale".to_string(),
@@ -164,7 +185,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
 
 #[test]
 fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "negate".to_string(),
@@ -191,7 +212,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
 
 #[test]
 fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "sink".to_string(),
@@ -212,7 +233,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
 
 #[test]
 fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "mix".to_string(),
@@ -247,7 +268,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
     // The arm with no result to inspect is exactly the one where skipping
     // the check would hand Python a fabricated `None` instead of the
     // exception the compiled function raised.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "risky".to_string(),
@@ -274,7 +295,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
     // parameter and the return alike -- a width that disagrees with the
     // callee is a silent miscompile, not a compile error. Note the space
     // after the star: the declaration is `{c_type} a{index}`.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "shout".to_string(),
@@ -303,7 +324,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
     // compiled function's own parameter slot ever consumes. A `TypeError` on
     // a later argument bails before the call, so without this cleanup every
     // raising call would leak each earlier `str`.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "join".to_string(),
@@ -378,6 +399,18 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
     ] {
         assert!(SHIM_C.contains(helper), "{helper}");
     }
+    // R3: the lookup's forward declaration here and its definition in the
+    // generated companion are two hand-written spellings of one signature,
+    // bound by nothing until a C compiler runs. Both are asserted against
+    // the same constant, so a drift fails an ordinary `cargo test`.
+    assert!(
+        shim_c().contains(&format!("{USER_EXCEPTION_LOOKUP_DECL};")),
+        "{USER_EXCEPTION_LOOKUP_DECL}"
+    );
+    assert!(
+        shim_c().contains("if (pycc_ext_register_exception_classes(module) != 0) {"),
+        "{SHIM_C}"
+    );
     // The module body runs in the exec slot, never in `PyInit_`.
     assert!(SHIM_C.contains("{Py_mod_exec, (void *)pycc_ext_exec_module}"));
     assert!(SHIM_C.contains("Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED"));
@@ -505,7 +538,7 @@ fn the_shims_unpack_order_puts_bool_before_int_before_the_type_error() {
 
 #[test]
 fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "total".to_string(),
@@ -556,7 +589,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
 
 #[test]
 fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "split".to_string(),
@@ -624,7 +657,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
     // module global still owns. `pycc_ext_pack_int` releases that word on its
     // `OverflowError` path, so without this retain the second call to the
     // export faults inside the host interpreter.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "split".to_string(),
@@ -653,7 +686,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
     // `int` occupy the same single slot at the thunk, and only the
     // `PyTuple_Check` on the way in and the `PyTuple_New(1)` on the way out
     // keep the Python-level types apart.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "wrap".to_string(),
@@ -674,7 +707,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
 
 #[test]
 fn several_tuple_parameters_keep_one_local_namespace_each() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "dot".to_string(),
@@ -720,7 +753,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
     // The only owning argument type is `str`, and a refused `tuple` after it
     // exits before the call that would have consumed the reference. A tuple
     // owes nothing itself: its elements are copied out by value.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "tag".to_string(),
@@ -750,7 +783,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
 
 #[test]
 fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "origin".to_string(),
@@ -791,7 +824,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
     // against nothing, and the `--ext` link defers undefined symbols
     // (`-undefined dynamic_lookup` on Mach-O, `-Bsymbolic` on ELF) so a
     // disagreement here links cleanly and dies on the first call.
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "pair".to_string(),
@@ -815,7 +848,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
     // A scalar-only export in the same module keeps the legacy spelling
     // byte for byte: #1050 widens the boundary without rewriting what
     // #1036 through #1049 already emit.
-    let scalar = generate_exports_inc(
+    let scalar = inc_no_classes(
         "m",
         &[ExtExport {
             name: "square".to_string(),
@@ -833,7 +866,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
 
 #[test]
 fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() {
-    let inc = generate_exports_inc(
+    let inc = inc_no_classes(
         "m",
         &[ExtExport {
             name: "record".to_string(),
@@ -851,4 +884,172 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
     );
     assert!(!inc.contains("result"), "{inc}");
     assert!(inc.contains("    Py_RETURN_NONE;\n"), "{inc}");
+}
+
+#[test]
+fn a_program_with_no_user_exception_class_still_emits_both_class_functions() {
+    // Both are emitted unconditionally, with empty bodies: the shim calls
+    // them by name whatever the program declares, so an artifact that
+    // omitted them would fail to link. A program whose only exception
+    // classes are the seeded builtins is this same case -- they carry
+    // `None` or a fixed sub-26 tag and are never table entries.
+    let inc = inc_no_classes("m", &[]);
+    assert!(
+        inc.contains(&format!(
+            "{USER_EXCEPTION_LOOKUP_DECL}\n{{\n    (void)tag;\n    return NULL;\n}}\n"
+        )),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(&format!(
+            "{USER_EXCEPTION_REGISTER_DECL}\n{{\n    (void)module;\n    return 0;\n}}\n"
+        )),
+        "{inc}"
+    );
+    assert!(!inc.contains("pycc_ext_user_exception_classes["), "{inc}");
+    let builtins_only = inc_from_source("try:\n    x = 1\nexcept ValueError:\n    x = 2\n");
+    assert!(
+        !builtins_only.contains("pycc_ext_user_exception_classes["),
+        "{builtins_only}"
+    );
+}
+
+#[test]
+fn a_class_subclassing_exception_is_registered_under_the_qualified_module_name() {
+    let inc = inc_from_source("class MyError(Exception):\n    pass\n\nx = 1\n");
+    assert!(
+        inc.contains("static PyObject *pycc_ext_user_exception_classes[1];"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "        pycc_ext_user_exception_classes[0] = PyErr_NewException(\n            \
+             PYCC_EXT_MODULE_NAME_STR \".MyError\", PyExc_Exception, NULL);\n"
+        ),
+        "{inc}"
+    );
+    // The cache owns the strong reference and `AddObjectRef` takes its own,
+    // so the slot is assigned before the registration is checked.
+    assert!(
+        inc.contains(
+            "    if (PyModule_AddObjectRef(module, \"MyError\", \
+             pycc_ext_user_exception_classes[0]) < 0) {\n        return -1;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // A non-NULL slot is reused rather than re-minted, so a re-import that
+    // re-runs `Py_mod_exec` keeps class identity.
+    assert!(
+        inc.contains("    if (pycc_ext_user_exception_classes[0] == NULL) {\n"),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_class_subclassing_a_builtin_carries_that_builtin_as_its_base() {
+    // The C1 case: without the base, a host-side `except ValueError:` does
+    // not match what `except ValueError:` catches natively.
+    let inc = inc_from_source("class MyValueError(ValueError):\n    pass\n\nx = 1\n");
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".MyValueError\", PyExc_ValueError, NULL);"),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_class_subclassing_a_user_class_names_that_class_slot_and_follows_it() {
+    let inc = inc_from_source(
+        "class MyValueError(ValueError):\n    pass\n\n\
+         class Deep(MyValueError):\n    pass\n\nx = 1\n",
+    );
+    assert!(
+        inc.contains("static PyObject *pycc_ext_user_exception_classes[2];"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "PYCC_EXT_MODULE_NAME_STR \".Deep\", pycc_ext_user_exception_classes[0], NULL);"
+        ),
+        "{inc}"
+    );
+    // The base is created before the subclass that names it. The source is
+    // lowered for real here, so this exercises `finalize`'s program-order
+    // tag assignment and `resolve_mro`'s base-before-subclass requirement
+    // rather than an order a hand-built `HirClassDef` asserted into being.
+    let base = inc.find("\".MyValueError\"").expect("the base entry");
+    let derived = inc.find("\".Deep\"").expect("the derived entry");
+    assert!(base < derived, "{inc}");
+}
+
+#[test]
+fn a_class_with_two_exception_bases_is_created_from_a_tuple_of_both() {
+    // Natively `except ValueError:` catches this class, because matching
+    // walks the whole MRO. Taking a single base out of the linearized MRO
+    // would pick `MyBase` and drop `ValueError`, so the tuple is what keeps
+    // the host side in step.
+    let inc = inc_from_source(
+        "class MyBase(Exception):\n    pass\n\n\
+         class E(MyBase, ValueError):\n    pass\n\nx = 1\n",
+    );
+    assert!(
+        inc.contains(
+            "        PyObject *bases = PyTuple_Pack(2, \
+             pycc_ext_user_exception_classes[0], PyExc_ValueError);\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".E\", bases, NULL);"),
+        "{inc}"
+    );
+    assert!(inc.contains("        Py_DECREF(bases);\n"), "{inc}");
+}
+
+#[test]
+fn a_group_derived_class_is_excluded_without_shifting_the_class_beside_it() {
+    // The sparse-tag case, and the reason entries are keyed by explicit tag
+    // rather than indexed by `tag - FIRST_USER_EXCEPTION_TYPE_TAG`: the
+    // group class still *consumes* the first user tag while being excluded
+    // from the table, so an array sized by entry count and indexed by that
+    // offset would send `E` past its bounds, return NULL, and silently
+    // flatten `E` to `Exception` with no compile or link error.
+    let inc = inc_from_source(
+        "class G(ExceptionGroup):\n    pass\n\nclass E(ValueError):\n    pass\n\nx = 1\n",
+    );
+    let group_tag = FIRST_USER_EXCEPTION_TYPE_TAG;
+    let user_tag = FIRST_USER_EXCEPTION_TYPE_TAG + 1;
+    assert!(
+        inc.contains("static PyObject *pycc_ext_user_exception_classes[1];"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(&format!(
+            "    case {user_tag}:\n        return pycc_ext_user_exception_classes[0];\n"
+        )),
+        "{inc}"
+    );
+    assert!(!inc.contains(&format!("    case {group_tag}:")), "{inc}");
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".E\", PyExc_ValueError, NULL);"),
+        "{inc}"
+    );
+    assert!(!inc.contains("\".G\""), "{inc}");
+}
+
+#[test]
+fn a_non_exception_base_is_dropped_from_the_synthesized_class() {
+    // A method-only mixin passes the attribute-layout prefix check, so
+    // `class E(Mixin, ValueError)` compiles -- but it is not an exception
+    // class and has no host-side counterpart, so the synthesized class
+    // carries `ValueError` alone and `isinstance(e, Mixin)` diverges from
+    // native pycc. `docs/RUNTIME.md` records that residual.
+    let inc = inc_from_source(
+        "class Mixin:\n    pass\n\nclass E(Mixin, ValueError):\n    pass\n\nx = 1\n",
+    );
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".E\", PyExc_ValueError, NULL);"),
+        "{inc}"
+    );
+    assert!(!inc.contains("PyTuple_Pack"), "{inc}");
+    assert!(!inc.contains("Mixin"), "{inc}");
 }
