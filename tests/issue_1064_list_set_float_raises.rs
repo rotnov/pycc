@@ -342,6 +342,41 @@ fn a_for_set_body_that_grows_the_set_and_raises_keeps_its_own_exception() {
     assert_eq!(stdout, "IndexError\n");
 }
 
+/// Review round 3 of #1064: the loop's *exceptional* exit edge must not fall
+/// through into the statement after the loop. `for_set_after` is now reached
+/// by two edges -- ran out of elements, and the pending-exception conjunct --
+/// so it ends in `guard_statement_effects` like every other fallible
+/// statement. Pre-fix this program printed `BAD` before the `RuntimeError`
+/// reached its handler; CPython prints neither.
+///
+/// Both arms are asserted in one program so the guard cannot be satisfied by
+/// suppressing the normal path too: `quiet()`'s loop raises nothing and must
+/// still reach its own trailing `print`.
+#[test]
+fn the_statement_after_a_raising_for_set_loop_does_not_run() {
+    let (ok, stdout, stderr) = build_and_run(
+        "after_block_guard",
+        "def grow() -> None:\n\
+         \x20   s = {1, 2, 3}\n\
+         \x20   for x in s:\n\
+         \x20       s.add(x + 100)\n\
+         \x20   print(\"BAD\")\n\n\n\
+         def quiet() -> None:\n\
+         \x20   s = {1, 2, 3}\n\
+         \x20   for x in s:\n\
+         \x20       y = x + 1\n\
+         \x20   print(\"AFTER\")\n\n\n\
+         quiet()\n\
+         try:\n\
+         \x20   grow()\n\
+         except RuntimeError:\n\
+         \x20   print(\"caught\")\n\
+         print(\"END\")\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "AFTER\ncaught\nEND\n");
+}
+
 /// Review round 2 of #1064, thread 2: the accepted D-173 sentinel residual in
 /// its *assignment* direction. Neither `MirExpr::Slice` nor `MirExpr::ListPop`
 /// is a `pycc_codegen::exception::expression_can_set_exception` checkpoint, so

@@ -443,7 +443,11 @@ normally where a `panic!` did not, each site also returns a sentinel that is a
 *valid* value of its return type -- `tag_smallint(0)`, a fresh empty list, an
 empty `str`, never a raw `0` or `NULL` -- and `MirStmt::ForSet`'s loop-test
 gained a `pycc_rt_exception_active() == 0` conjunct, without which a `for x in
-s: s.add(...)` loop would spin forever instead of reporting the error. Those
+s: s.add(...)` loop would spin forever instead of reporting the error. That
+conjunct gives the loop a second exit edge, so the block after it ends in the
+same statement-effect guard every other fallible statement uses: the statement
+following a `for` over a set does not run when the loop left through the
+exceptional edge. Those
 sentinels are observable: `print(1e20)` writes a bare newline to stdout before
 the `RuntimeError` reaches stderr, the same "sentinel before the exception is
 reported" shape D-244's 2026-09-13 amendment already accepts for Part A. They

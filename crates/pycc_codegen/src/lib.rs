@@ -7148,6 +7148,24 @@ fn emit_stmt<'ctx>(
             }
 
             builder.position_at_end(after_bb);
+            // Review round 3 of #1064. `after_bb` is reached by two edges
+            // now: the ordinary "the loop ran out of elements" one, and the
+            // exception conjunct's own early exit above. Falling through
+            // without a checkpoint would let the statement *after* the loop
+            // run with a real exception already pending -- measured: a
+            // `for x in s: s.add(...)` loop followed by `print("BAD")`
+            // inside a function printed `BAD` before the `RuntimeError`
+            // reached its handler. That is not the
+            // raise-observed-at-the-next-checkpoint residual D-244's
+            // 2026-09-13 amendments accept, which is a property of
+            // `expression_can_set_exception`'s classification of *operands*;
+            // this is a statement-level edge this same commit introduced, so
+            // it is closed here rather than recorded. `guard_statement_effects`
+            // is the project's one mechanism for that edge (it also unwinds
+            // the D-208 pending-release stack), so the loop's exceptional
+            // exit routes through exactly the block every other fallible
+            // statement does.
+            guard_statement_effects(context, builder, rt);
             Ok(())
         }
         // `target = [elt for var in <source> [if cond]]` (PR-12 Task 5a,
