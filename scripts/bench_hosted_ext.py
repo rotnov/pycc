@@ -534,6 +534,27 @@ def run_arm(arm: str, call, make_arguments, tolerance: float) -> tuple[dict, Arm
     return summarize(arm, timings), outcome
 
 
+def ask_interpreter(command: list[str]) -> str:
+    """Run `command`, refusing rather than crashing when it cannot be run.
+
+    Every other precondition in this file states itself as a `BenchmarkError`
+    refusal, because an operator who misconfigured the protocol needs to be told
+    which precondition they missed. A configured interpreter that does not exist,
+    is not executable, or exits non-zero would otherwise leave a raw traceback
+    instead, so it is funnelled here like every other guarded call. `from None`
+    keeps the configured path out of a chained traceback for the same reason the
+    reads do.
+    """
+
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        raise BenchmarkError(
+            "the pinned interpreter must answer: set PYCC_BENCH_PYTHON (or PYCC_PYTHON) "
+            "to an interpreter that exists and runs"
+        ) from None
+
+
 def interpreter_identity(interpreter: str) -> str:
     """Ask `interpreter` which executable it actually is, resolved through links.
 
@@ -543,12 +564,9 @@ def interpreter_identity(interpreter: str) -> str:
     compared against the same fact about this process.
     """
 
-    return subprocess.run(
-        [interpreter, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    return ask_interpreter(
+        [interpreter, "-c", "import os, sys; print(os.path.realpath(sys.executable))"]
+    ).strip()
 
 
 def host_identity() -> str:
@@ -581,19 +599,14 @@ def assert_hosts_the_arms(configured_identity: str, this_identity: str) -> None:
 
 
 def interpreter_facts(interpreter: str) -> tuple[str, str | None]:
-    version_output = subprocess.run(
-        [interpreter, "-VV"], check=True, capture_output=True, text=True
-    ).stdout
-    configure_args = subprocess.run(
+    version_output = ask_interpreter([interpreter, "-VV"])
+    configure_args = ask_interpreter(
         [
             interpreter,
             "-c",
             "import sysconfig; print(sysconfig.get_config_var('CONFIGURE_ARGS'))",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+        ]
+    ).strip()
     return version_output, None if configure_args in {"", "None"} else configure_args
 
 

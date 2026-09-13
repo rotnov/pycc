@@ -657,10 +657,12 @@ rule 6); only numbers are published.
   this one's result. That path
   and every field above are what `scripts/check_roadmap_evidence.rb` requires
   before either `product-sprint-1` roadmap box may cite its evidence
-  identifier, so an unchecked box, an absent report, a missing field, a digest
-  that does not match the pre-registration record, a restated version that
-  contradicts its pin, or a speedup below D-244 rule 6's threshold all fail the
-  roadmap evidence gate rather than passing silently. The speedup that threshold
+  identifier, so an absent report, a missing field, a digest that does not match
+  the pre-registration record, a restated version that contradicts its pin, or a
+  speedup below D-244 rule 6's threshold all fail the roadmap evidence gate
+  rather than passing silently. An unchecked box claims nothing and so validates
+  nothing: the checker collects an evidence identifier only from a checked item,
+  and these requirements are what checking the box must satisfy. The speedup that threshold
   judges is the ratio derived from the published medians, not the ratio the
   report prints for itself: the printed ratio is checked for consistency with
   those medians and rounding is tolerated there, so judging the threshold

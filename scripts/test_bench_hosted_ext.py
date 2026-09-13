@@ -77,6 +77,34 @@ class InterpreterGuardTest(unittest.TestCase):
         with self.assertRaises(BenchmarkError):
             RUNNER.assert_hosts_the_arms("", "/usr/bin/python3.11")
 
+    # Every other precondition in the runner refuses through `BenchmarkError`;
+    # the two calls that ask the configured interpreter about itself must do the
+    # same rather than raising a bare `FileNotFoundError` or
+    # `CalledProcessError` through `main`. Both directions run the *current*
+    # interpreter -- the portable fact that it exists and can exit non-zero on
+    # demand -- rather than reading anything about the host, so this says the
+    # same thing on macOS and on Linux CI.
+    def test_returns_what_an_interpreter_that_answers_printed(self) -> None:
+        self.assertEqual(
+            RUNNER.ask_interpreter([sys.executable, "-c", "print('answered')"]).strip(),
+            "answered",
+        )
+
+    def test_refuses_an_interpreter_that_cannot_be_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            absent = os.path.join(directory, "no-such-interpreter")
+            with self.assertRaises(BenchmarkError) as raised:
+                RUNNER.ask_interpreter([absent, "-VV"])
+
+            self.assertIn("PYCC_BENCH_PYTHON", str(raised.exception))
+            self.assertNotIn(absent, str(raised.exception))
+
+    def test_refuses_an_interpreter_that_exits_non_zero(self) -> None:
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.ask_interpreter([sys.executable, "-c", "raise SystemExit(3)"])
+
+        self.assertIn("PYCC_BENCH_PYTHON", str(raised.exception))
+
     def test_accepts_the_pinned_version(self) -> None:
         RUNNER.assert_pinned_version("Python 3.14.7 (main, Sep 1 2026, 00:00:00) [Clang]")
 
