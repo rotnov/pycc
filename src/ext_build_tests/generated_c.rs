@@ -407,8 +407,17 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
         shim_c().contains(&format!("{USER_EXCEPTION_LOOKUP_DECL};")),
         "{USER_EXCEPTION_LOOKUP_DECL}"
     );
+    // The registration call is the same two-spellings problem, so it is
+    // built from its own constant rather than hand-typed: a rename that
+    // updates the constant, the generator and the shim together would
+    // otherwise leave a stale literal here and fail only in a C compiler.
+    let register_name = USER_EXCEPTION_REGISTER_DECL
+        .split('(')
+        .next()
+        .and_then(|head| head.rsplit(' ').next())
+        .expect("the register declaration names a function");
     assert!(
-        shim_c().contains("if (pycc_ext_register_exception_classes(module) != 0) {"),
+        shim_c().contains(&format!("if ({register_name}(module) != 0) {{")),
         "{SHIM_C}"
     );
     // The module body runs in the exec slot, never in `PyInit_`.
