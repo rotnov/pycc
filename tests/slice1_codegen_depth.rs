@@ -1587,10 +1587,13 @@ for v in ys:
 }
 
 #[test]
-fn a_runtime_negative_slice_start_traps_instead_of_cpython_last_element_addressing() {
-    // D-118's own runtime-panic scope cut, extended from D-108's existing
-    // index precedent to slicing: a negative `start` traps rather than
-    // addressing from the end the way real CPython's `xs[-1:3]` would.
+fn a_runtime_negative_slice_start_raises_instead_of_cpython_last_element_addressing() {
+    // D-118's own runtime scope cut, extended from D-108's existing index
+    // precedent to slicing: a negative `start` is rejected rather than
+    // addressing from the end the way real CPython's `xs[-1:3]` would. Part
+    // B of #1038 (#1064) made that rejection a catchable `ValueError`
+    // instead of a process abort; the conformance gap itself is unchanged
+    // and tracked as issue #1070.
     // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here.
     // When this test was written no unary operator lowered at all; #602 has
     // since made the literal form `-1` lower too, but `0 - 1` remains an
@@ -1601,9 +1604,14 @@ neg = 0 - 1
 ys = xs[neg:3]
 print(len(ys))
 ";
-    let output = build_and_run("slice_negative_start_traps", source);
+    let output = build_and_run("slice_negative_start_raises", source);
     assert!(
         !output.status.success(),
-        "a negative slice start must trap rather than silently address from the end"
+        "a negative slice start must raise rather than silently address from the end"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ValueError: slice start must be non-negative"),
+        "expected a catchable ValueError, got: {stderr}"
     );
 }

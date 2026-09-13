@@ -6992,7 +6992,7 @@ fn emit_stmt<'ctx>(
         //    accepts silently visiting newly-inserted keys as a bounded
         //    divergence), a mid-loop `set.add()` (D-119, this same PR) is
         //    checked against the length captured once in the preheader and
-        //    panics honestly on any change -- see
+        //    raises `RuntimeError` (D-173) on any change -- see
         //    `pycc_rt_int_set_check_not_resized`'s own doc comment for why
         //    silently extending the iteration is not safe to accept here:
         //    `for x in s: s.add(x + 1)` would never terminate.
@@ -7020,7 +7020,7 @@ fn emit_stmt<'ctx>(
             // `len` re-read below. Comparing every iteration's fresh read
             // against this snapshot, rather than silently visiting whatever
             // `len` grows to, matches CPython's own `RuntimeError` on
-            // set-changed-size-during-iteration with an honest panic.
+            // set-changed-size-during-iteration.
             let initial_len = build_int_set_len(builder, rt, set_ptr);
             let preheader = builder.get_insert_block().unwrap();
 
@@ -7040,9 +7040,61 @@ fn emit_stmt<'ctx>(
             let current = induction.as_basic_value().into_int_value();
             let len = build_int_set_len(builder, rt, set_ptr);
             build_int_set_check_not_resized(builder, rt, len, initial_len);
-            let cont = builder
-                .build_int_compare(IntPredicate::SLT, current, len, "for_set_cont")
+            let in_range = builder
+                .build_int_compare(IntPredicate::SLT, current, len, "for_set_in_range")
                 .expect("build_int_compare should not fail comparing two i64 operands");
+            // Part B of #1038 (#1064): `pycc_rt_int_set_check_not_resized`
+            // now *raises* `RuntimeError: Set changed size during iteration`
+            // (D-173) instead of aborting the process, and a D-173 raise
+            // returns normally. Without this conjunct the loop-continue
+            // condition would still be `current < len` -- and `len` is
+            // exactly the value the body just grew -- so a `for x in s:
+            // s.add(...)` loop would spin forever rather than reporting the
+            // error. Reading the pending flag here, rather than returning a
+            // status from the check function, keeps the runtime ABI
+            // unchanged and is strictly more correct under D-173: the loop
+            // also stops when anything in the *body* raised.
+            //
+            // What this cannot do is cut a loop short after a raise that was
+            // already *handled*: `exception.rs` clears the pending state
+            // before an `except` handler body runs and before a `finally`
+            // body runs (restoring it afterwards), so a `for` loop in either
+            // position iterates in full. What it can do -- deliberately -- is
+            // exit at zero iterations when an *unhandled* raise is still
+            // pending from an earlier statement that was not itself a
+            // checkpoint, since `expression_can_set_exception` does not
+            // classify every call as one. That is the same
+            // raise-observed-at-the-next-checkpoint residual D-244's
+            // 2026-09-13 amendments record, and exiting is the correct
+            // response to it: a real exception is pending and is about to be
+            // reported, so running the loop body would be the bug.
+            //
+            // Note the emission order: the resize check above runs *before*
+            // this read, yet cannot relabel a body's own exception, because
+            // `check_set_len_unchanged` returns early when
+            // `pycc_rt_exception_active()` is already non-zero (review round
+            // 2 of #1064). Suppressing inside the runtime rather than
+            // branching around the call here keeps this block a single
+            // straight-line test with no extra basic block, and the two
+            // placements are observationally identical: the conjunct below
+            // terminates the loop on this same iteration either way.
+            let exc_active = builder
+                .build_call(rt.exception_active, &[], "for_set_exc_active")
+                .expect("build_call should not fail for exception_active")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_exception_active returns i8")
+                .into_int_value();
+            let no_exception = builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    exc_active,
+                    exc_active.get_type().const_zero(),
+                    "for_set_no_exc",
+                )
+                .expect("build_int_compare should not fail comparing an i8 against zero");
+            let cont = builder
+                .build_and(in_range, no_exception, "for_set_cont")
+                .expect("build_and should not fail for two i1 operands");
             builder
                 .build_conditional_branch(cont, body_bb, after_bb)
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");
@@ -7096,6 +7148,24 @@ fn emit_stmt<'ctx>(
             }
 
             builder.position_at_end(after_bb);
+            // Review round 3 of #1064. `after_bb` is reached by two edges
+            // now: the ordinary "the loop ran out of elements" one, and the
+            // exception conjunct's own early exit above. Falling through
+            // without a checkpoint would let the statement *after* the loop
+            // run with a real exception already pending -- measured: a
+            // `for x in s: s.add(...)` loop followed by `print("BAD")`
+            // inside a function printed `BAD` before the `RuntimeError`
+            // reached its handler. That is not the
+            // raise-observed-at-the-next-checkpoint residual D-244's
+            // 2026-09-13 amendments accept, which is a property of
+            // `expression_can_set_exception`'s classification of *operands*;
+            // this is a statement-level edge this same commit introduced, so
+            // it is closed here rather than recorded. `guard_statement_effects`
+            // is the project's one mechanism for that edge (it also unwinds
+            // the D-208 pending-release stack), so the loop's exceptional
+            // exit routes through exactly the block every other fallible
+            // statement does.
+            guard_statement_effects(context, builder, rt);
             Ok(())
         }
         // `target = [elt for var in <source> [if cond]]` (PR-12 Task 5a,

@@ -1098,9 +1098,11 @@ pub extern "C" fn pycc_rt_bool_to_str(value: i8) -> *mut PyStrObj {
 /// the decimal point (`3.0`, never bare `3`, unlike Rust's own `{}`
 /// `Display` for `f64`), and `inf`/`-inf`/`nan` are lowercase (Rust's
 /// own `Display` capitalizes `NaN`). Reproducing CPython's scientific
-/// notation formatting exactly is out of scope for this task -- an
-/// honest panic for that narrow range, not a silently wrong digit
-/// string (a documented, named gap, same convention as D-026/D-043).
+/// notation formatting exactly is out of scope for this task -- Part B of
+/// #1038 (#1064) raises a catchable `RuntimeError` for that narrow range
+/// rather than returning a silently wrong digit string (a documented,
+/// named gap, same convention as D-026/D-043; the remaining conformance
+/// work is tracked as #1071).
 fn float_to_str(value: f64) -> *mut PyStrObj {
     if value.is_nan() {
         return new_pystr(b"nan");
@@ -1114,10 +1116,20 @@ fn float_to_str(value: f64) -> *mut PyStrObj {
     // start-inclusive, end-exclusive) -- the same condition as the task
     // brief's own `magnitude >= 1e16 || magnitude < 1e-4`, just reordered.
     if magnitude != 0.0 && !(1e-4..1e16).contains(&magnitude) {
-        panic!(
-            "pycc_rt: formatting a float this large or small ({value}) needs \
-             scientific notation, which is not supported yet"
+        // Part B of #1038 (#1064): a D-173 raise, not an abort. The sentinel
+        // is an empty `str` -- a *valid* `PyStrObj`, never null, so a caller
+        // that touches it before its own pending-exception check is safe.
+        // `raise_builtin` copies `msg` immediately, so a borrowed `format!`
+        // temporary is fine here.
+        raise_builtin(
+            EXCEPTION_TYPE_RUNTIME_ERROR,
+            "RuntimeError",
+            &format!(
+                "formatting a float this large or small ({value}) needs \
+                 scientific notation, which is not supported yet"
+            ),
         );
+        return new_pystr(b"");
     }
     let text = format!("{value}");
     let text = if text.contains('.') {
@@ -1128,7 +1140,9 @@ fn float_to_str(value: f64) -> *mut PyStrObj {
     new_pystr(text.as_bytes())
 }
 
-/// See the panic-across-FFI note above `pycc_rt_int_add`.
+/// Sets the pending `RuntimeError` exception flag (D-173) and returns an
+/// empty `str` when `value` needs scientific notation; the caller's
+/// generated code checks the flag after this call.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_float_to_str(value: f64) -> *mut PyStrObj {
     float_to_str(value)
@@ -1282,17 +1296,11 @@ pub unsafe extern "C" fn pycc_rt_int_list_append(list: *mut PyIntListObj, value:
     list.items.set(items);
 }
 
-/// # Safety (panic-across-FFI note, same rationale as `pycc_rt_int_add`'s
-/// own doc comment above)
-/// `pycc_rt_int_list_get` below is a plain `extern "C" fn`, not `extern
-/// "C-unwind"`. A panic that would otherwise unwind past its boundary is
-/// instead turned into a process abort -- correct for pycc-generated LLVM
-/// code calling it, but unsuitable for `#[should_panic]` testing directly
-/// against the public wrapper (confirmed empirically the same way
-/// `pycc_rt_float_to_str`'s own split was: see this file's tests below).
-/// This private function holds the real, freely-panicking logic; tests
-/// exercising the panic call it directly, exactly as this file's
-/// established convention already does for `int_add`/`float_to_str`.
+/// Private half of `pycc_rt_int_list_get` below. Its out-of-range path is
+/// a D-173 pending-exception raise rather than an abort, so the split is
+/// no longer about panic-across-FFI: it exists so this file's unit tests
+/// can drive the raise and inspect the pending state without going through
+/// the public `extern "C"` wrapper's raw pointer.
 fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
     let items = list.items.take();
     let len = items.len();
@@ -1315,17 +1323,19 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 
 /// Reads the element at `index` (Python's `list[index]`, D-105's v0.2
 /// `list[int]` slice). Sets the pending `IndexError` exception flag on an
-/// out-of-range index (D-173) and returns a sentinel `0`; the caller's
-/// generated code checks the flag after this call.
+/// out-of-range index (D-173) and returns a sentinel `tag_smallint(0)` --
+/// a *valid* D-141 encoded word, never a raw `0`, which
+/// `classify_encoded_int` would reject; the caller's generated code checks
+/// the flag after this call.
 ///
 /// Known v0.2 scope cut: negative indices are not supported. Real Python
 /// treats `lst[-1]` as the last element, but `pycc_types` has no way to
 /// reject a negative index at compile time (the index value is only known
-/// at runtime) -- so this panics on *any* negative index, the same
-/// "index out of range" panic as a too-large positive one. This is a
+/// at runtime) -- so this raises `IndexError` on *any* negative index, the
+/// same "index out of range" raise as a too-large positive one. This is a
 /// deliberate, documented v0.2 gap (D-108), not a bug: it means a
 /// conformance fixture exercising this function must not use negative
-/// indexing, since that would panic here rather than matching CPython's
+/// indexing, since that would raise here rather than matching CPython's
 /// last-element behavior.
 ///
 /// # Element representation
@@ -1404,30 +1414,47 @@ pub unsafe extern "C" fn pycc_rt_int_list_decref(list: *mut PyIntListObj) {
     }
 }
 
-/// # Safety (panic-across-FFI note, same rationale as `int_list_get`'s own
-/// doc comment above)
-/// `pycc_rt_int_list_slice` below is a plain `extern "C" fn`, not `extern
-/// "C-unwind"` -- a panic that would otherwise unwind past its boundary is
-/// instead turned into a process abort. This private function holds the
-/// real, freely-panicking logic; tests exercising a panic call it directly,
-/// exactly like `int_list_get`'s own split.
+/// Part B of #1038 (#1064) converted this function's three rejected-bound
+/// aborts into D-173 pending-exception raises, so it no longer panics.
+/// `pycc_rt_int_list_slice` below remains a plain `extern "C" fn`, not
+/// `extern "C-unwind"`; this private function holds the real logic and
+/// unit tests call it directly, exactly like `int_list_get`'s own split.
 fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut PyIntListObj {
+    // The three bound checks below run before `list.items.take()`, so unlike
+    // `int_list_get` there is no payload to restore before returning.
+    // The sentinel is a fresh empty list -- a valid `PyIntListObj`, never
+    // null, so a caller may safely touch it before its own flag check.
     if start < 0 {
-        panic!("pycc_rt: slice start must be non-negative");
+        raise_builtin(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            "ValueError",
+            "slice start must be non-negative",
+        );
+        return pycc_rt_int_list_new();
     }
     if stop < 0 {
-        panic!("pycc_rt: slice stop must be non-negative");
+        raise_builtin(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            "ValueError",
+            "slice stop must be non-negative",
+        );
+        return pycc_rt_int_list_new();
     }
     if step <= 0 {
-        panic!("pycc_rt: slice step must be positive");
+        raise_builtin(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            "ValueError",
+            "slice step must be positive",
+        );
+        return pycc_rt_int_list_new();
     }
     let items = list.items.take();
     let len = items.len() as i64;
     let clamped_start = start.min(len);
     let clamped_stop = stop.min(len);
     let result = pycc_rt_int_list_new();
-    // Unlike `int_list_get` (whose own doc comment restores `list`'s
-    // payload before panicking on an out-of-range index), this loop's
+    // Unlike `int_list_get` (which restores `list`'s payload before
+    // raising on an out-of-range index), this loop's
     // take-window contains no fallible operation, so there is nothing to
     // restore: `items[i as usize]` cannot panic, since `i` starts at
     // `clamped_start` and the loop guard keeps it below `clamped_stop`,
@@ -1449,17 +1476,20 @@ fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut
 
 /// Returns a **new** list containing the clamped, strided sub-range
 /// `[start, stop)` of `list`'s elements, stepping by `step` (Python's
-/// `list[start:stop:step]`, D-118's v0.2 `list[int]` slice). Panics on a
-/// negative `start`/`stop` or a non-positive `step` -- v0.2 ships no
-/// CPython-style negative-index/negative-step semantics, extending D-108's
-/// own uniform "no negative addressing" scope cut (`pycc_rt_int_list_get`)
-/// to slicing. `start`/`stop` are clamped into `[0, len]` after the sign
+/// `list[start:stop:step]`, D-118's v0.2 `list[int]` slice). Sets the
+/// pending `ValueError` exception flag (D-173, Part B of #1038, #1064) and
+/// returns a new empty list as the sentinel on a negative `start`/`stop` or
+/// a non-positive `step`; the caller's generated code checks the flag after
+/// this call. v0.2 ships no CPython-style negative-index/negative-step
+/// semantics, extending D-108's own uniform "no negative addressing" scope
+/// cut (`pycc_rt_int_list_get`) to slicing; the conformance gap is tracked
+/// as #1070. `start`/`stop` are clamped into `[0, len]` after the sign
 /// check, matching CPython's own out-of-range-slice-bound clamping --
 /// required for the accepted subset (omitted/over-long bounds) to match
 /// CPython byte-for-byte, not merely a nicety. The three sign/positivity
-/// panics run before `list.items.take()`, mirroring `int_list_get`'s own
-/// "leave `list` intact on a panic" care -- a panicking call here never
-/// touches `list`'s payload at all, so there is nothing to restore.
+/// checks run before `list.items.take()`, mirroring `int_list_get`'s own
+/// "leave `list` intact" care -- a rejected call here never touches
+/// `list`'s payload at all, so there is nothing to restore.
 ///
 /// # Element representation
 /// `start`/`stop`/`step` are raw, untagged `i64` offsets/strides, not
@@ -1488,31 +1518,33 @@ pub unsafe extern "C" fn pycc_rt_int_list_slice(
     int_list_slice(unsafe { &*list }, start, stop, step)
 }
 
-/// # Safety (panic-across-FFI note, same rationale as `int_list_get`'s own
-/// doc comment above)
-/// `pycc_rt_int_list_pop` below is a plain `extern "C" fn`, not `extern
-/// "C-unwind"` -- a panic that would otherwise unwind past its boundary is
-/// instead turned into a process abort. This private function holds the
-/// real, freely-panicking logic; tests exercising the panic call it
-/// directly, exactly like `int_list_get`'s own split.
+/// Part B of #1038 (#1064) converted this function's empty-list abort into
+/// a D-173 pending-exception raise, so it no longer panics.
+/// `pycc_rt_int_list_pop` below remains a plain `extern "C" fn`, not
+/// `extern "C-unwind"`; this private function holds the real logic and
+/// unit tests call it directly, exactly like `int_list_get`'s own split.
 fn int_list_pop(list: &PyIntListObj) -> i64 {
     let mut items = list.items.take();
     let Some(value) = items.pop() else {
-        // Restore the (empty) payload before panicking, same rationale as
-        // `int_list_get`'s own "restore before panicking" comment.
+        // Restore the (empty) payload before raising, same rationale as
+        // `int_list_get`'s own "restore before returning" comment.
         list.items.set(items);
-        panic!("pycc_rt: pop from empty list");
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "pop from empty list",
+        );
+        return tag_smallint(0);
     };
     list.items.set(items);
     value
 }
 
 /// Removes and returns the list's **last** element (Python's `list.pop()`,
-/// PR-12, D-119). Panics if `list` is empty, matching this file's
-/// established "honest panic over silently wrong data" convention (CPython
-/// raises a catchable `IndexError` here; this compiler has no exception
-/// model, so this is an unrecoverable panic instead). The panic message is
-/// `"pycc_rt: pop from empty list"`.
+/// PR-12, D-119). Sets the pending `IndexError` exception flag (D-173) and
+/// returns a sentinel `tag_smallint(0)` if `list` is empty, matching
+/// CPython's own catchable `IndexError`; the caller's generated code checks
+/// the flag after this call. The message is `"pop from empty list"`.
 ///
 /// # Element representation
 /// The returned value is the stored D-141 encoded word unchanged, so a bool
@@ -1771,7 +1803,8 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
     len
 }
 
-/// Panics if `current_len` differs from `expected_len`. `ForSet`'s own
+/// Raises `RuntimeError` (D-173) if `current_len` differs from
+/// `expected_len`. `ForSet`'s own
 /// iteration codegen (Task 9) calls this once per loop-test evaluation,
 /// comparing a freshly re-read `pycc_rt_int_set_len` against the length
 /// captured once in the loop's preheader. `set.add(value)` (PR-12, D-119)
@@ -1783,12 +1816,32 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
 /// bounded divergence (a dict grown by re-inserting existing keys stays
 /// finite; a set grown by always-novel derived values does not). Real
 /// CPython raises a catchable `RuntimeError: Set changed size during
-/// iteration` here; this compiler has no exception model, so an honest
-/// panic is the correct match for this file's own established
-/// convention, not a new failure mode invented for this case.
+/// iteration` here, and Part B of #1038 (#1064) makes this do the same:
+/// a D-173 pending-exception raise with CPython's own message, not an
+/// abort. The function returns `()`; the `ForSet` loop-test codegen
+/// terminates the loop by conjoining `pycc_rt_exception_active() == 0`
+/// onto its continue condition.
+///
+/// A pending exception suppresses the check entirely. `pycc_rt_exception_raise`
+/// replaces the thread-local pending value unconditionally, so a body that both
+/// grows the set *and* raises -- `for x in s: s.add(x + 1); xs.pop()` on an
+/// empty `xs` -- would otherwise reach this check with `IndexError` pending and
+/// leave with `RuntimeError` pending, selecting the wrong `except` handler
+/// (CPython propagates the body's own `IndexError`). Suppressing here rather
+/// than reordering the loop-test codegen costs nothing in correctness: the
+/// loop-test's `pycc_rt_exception_active() == 0` conjunct is evaluated on the
+/// same iteration and terminates the loop either way, so the only observable
+/// difference is which exception survives.
 fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
+    if pycc_rt_exception_active() != 0 {
+        return;
+    }
     if current_len != expected_len {
-        panic!("pycc_rt: set changed size during iteration");
+        raise_builtin(
+            EXCEPTION_TYPE_RUNTIME_ERROR,
+            "RuntimeError",
+            "Set changed size during iteration",
+        );
     }
 }
 
@@ -2998,28 +3051,29 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not supported yet")]
-    fn pycc_rt_float_to_str_rejects_magnitudes_needing_scientific_notation() {
-        // CPython's `repr(float)` switches to scientific notation outside a
-        // specific decimal-exponent range (verified against `python3.13`:
+    fn pycc_rt_float_to_str_raises_on_magnitudes_needing_scientific_notation() {
+        // Part B of #1038 (#1064): was `#[should_panic]`. CPython's
+        // `repr(float)` switches to scientific notation outside a specific
+        // decimal-exponent range (verified against `python3.13`:
         // `repr(1e17)` is `'1e+17'`, not the full 18-digit expansion) --
-        // reproducing that exact algorithm is out of scope for this task;
-        // this is an honest, loud "not supported yet" for that narrow range
-        // (never a silently wrong digit string), not silently accepted.
-        //
-        // Deviation from the task brief: calls the private `float_to_str`
-        // directly, not the public `pycc_rt_float_to_str` wrapper the brief
-        // used -- the wrapper is a plain `extern "C" fn`, so a panic
-        // crossing its boundary aborts the whole test binary (`SIGABRT`)
-        // instead of unwinding into `#[should_panic]`'s own catch (see the
-        // private-logic/public-wrapper split added above, same convention
-        // as `int_add`/`pycc_rt_int_add`).
-        float_to_str(1e17);
+        // reproducing that exact algorithm is still out of scope, but the
+        // gap is now a catchable `RuntimeError` instead of a process abort
+        // (never a silently wrong digit string). The sentinel is an empty
+        // `str`, a valid object the caller may touch before its own check.
+        pycc_rt_exception_clear();
+        let result = pycc_rt_float_to_str(1e17);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        assert!(message.contains("not supported yet"), "{message}");
+        assert!(!message.contains("pycc_rt: "), "{message}");
+        assert!(!result.is_null());
+        assert_eq!(unsafe { &*result }.bytes(), b""); // sentinel value
+        unsafe { pycc_rt_str_decref(result) };
+        pycc_rt_exception_clear();
     }
 
     #[test]
-    #[should_panic(expected = "not supported yet")]
-    fn pycc_rt_float_to_str_rejects_small_magnitudes_needing_scientific_notation() {
+    fn pycc_rt_float_to_str_raises_on_small_magnitudes_needing_scientific_notation() {
         // Same rationale as the large-magnitude case above, for the *low*
         // end of the supported range: verified against `python3.13`,
         // `repr(1e-5)` is `'1e-05'` (scientific), unlike `repr(1e-4)` which
@@ -3029,9 +3083,18 @@ mod tests {
         // `magnitude < 1e-4` to `true` -- every value they use is either
         // `>= 1e-4` in magnitude or exactly `0.0`, so without this test the
         // small-magnitude half of that `||` would never actually fire.
-        // Calls the private `float_to_str` directly, same reason as the
-        // large-magnitude test above.
-        float_to_str(1e-5);
+        pycc_rt_exception_clear();
+        let result = pycc_rt_float_to_str(1e-5);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        // The message is the only non-static one of Part B's six: it
+        // interpolates the offending value, so pin that too.
+        assert!(message.contains("(0.00001)"), "{message}");
+        assert!(message.contains("scientific notation"), "{message}");
+        assert!(!result.is_null());
+        assert_eq!(unsafe { &*result }.bytes(), b""); // sentinel value
+        unsafe { pycc_rt_str_decref(result) };
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -3486,51 +3549,57 @@ mod tests {
         }
     }
 
-    #[test]
-    #[should_panic(expected = "pycc_rt: slice start must be non-negative")]
-    fn pycc_rt_int_list_slice_rejects_negative_start() {
-        // Calls the private `int_list_slice` directly, not the public
-        // `pycc_rt_int_list_slice` wrapper -- the wrapper is a plain
-        // `unsafe extern "C" fn`, so a panic crossing its boundary aborts
-        // the whole test binary instead of unwinding into
-        // `#[should_panic]`'s own catch, exactly like
-        // `int_list_get_out_of_range_panics_honestly`'s own established
-        // convention above.
+    /// Part B of #1038 (#1064): drives one rejected `int_list_slice` bound
+    /// and returns the pending tag/message, asserting the sentinel is a
+    /// valid, empty, non-null list along the way. Shared by the four
+    /// rejected-bound tests below, which differ only in their arguments.
+    fn slice_rejection(start: i64, stop: i64, step: i64) -> (u8, String) {
+        pycc_rt_exception_clear();
         unsafe {
             let list = pycc_rt_int_list_new();
             pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_slice(&*list, -1, 1, 1);
+            let result = int_list_slice(&*list, start, stop, step);
+            let pending = pending_tag_and_message();
+            assert!(!result.is_null());
+            assert_eq!(collect_list(result), Vec::<i64>::new()); // sentinel
+            pycc_rt_int_list_decref(result);
+            pycc_rt_int_list_decref(list);
+            pycc_rt_exception_clear();
+            pending
         }
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: slice stop must be non-negative")]
-    fn pycc_rt_int_list_slice_rejects_negative_stop() {
-        unsafe {
-            let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_slice(&*list, 0, -1, 1);
-        }
+    fn pycc_rt_int_list_slice_raises_on_a_negative_start() {
+        // Part B of #1038 (#1064): was `#[should_panic]`. CPython addresses
+        // `lst[-1:]` from the end rather than rejecting it; pycc's v0.2
+        // slice still does not, but the gap is now a catchable `ValueError`
+        // rather than a process abort. Conformance is tracked as #1070.
+        let (tag, message) = slice_rejection(-1, 1, 1);
+        assert_eq!(tag, EXCEPTION_TYPE_VALUE_ERROR);
+        assert_eq!(message, "slice start must be non-negative");
+        assert!(!message.contains("pycc_rt: "), "{message}");
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: slice step must be positive")]
-    fn pycc_rt_int_list_slice_rejects_zero_step() {
-        unsafe {
-            let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_slice(&*list, 0, 1, 0);
-        }
+    fn pycc_rt_int_list_slice_raises_on_a_negative_stop() {
+        let (tag, message) = slice_rejection(0, -1, 1);
+        assert_eq!(tag, EXCEPTION_TYPE_VALUE_ERROR);
+        assert_eq!(message, "slice stop must be non-negative");
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: slice step must be positive")]
-    fn pycc_rt_int_list_slice_rejects_negative_step() {
-        unsafe {
-            let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, tag_smallint(1));
-            int_list_slice(&*list, 0, 1, -1);
-        }
+    fn pycc_rt_int_list_slice_raises_on_a_zero_step() {
+        let (tag, message) = slice_rejection(0, 1, 0);
+        assert_eq!(tag, EXCEPTION_TYPE_VALUE_ERROR);
+        assert_eq!(message, "slice step must be positive");
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_raises_on_a_negative_step() {
+        let (tag, message) = slice_rejection(0, 1, -1);
+        assert_eq!(tag, EXCEPTION_TYPE_VALUE_ERROR);
+        assert_eq!(message, "slice step must be positive");
     }
 
     #[test]
@@ -3620,18 +3689,28 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: pop from empty list")]
-    fn pycc_rt_int_list_pop_on_an_empty_list_panics_honestly() {
-        // Calls the private `int_list_pop` directly, not the public
-        // `pycc_rt_int_list_pop` wrapper -- the wrapper is a plain `unsafe
-        // extern "C" fn`, so a panic crossing its boundary aborts the whole
-        // test binary instead of unwinding into `#[should_panic]`'s own
-        // catch, exactly like `int_list_get_out_of_range_panics_honestly`'s
-        // own established convention above.
+    fn pycc_rt_int_list_pop_on_an_empty_list_raises_index_error() {
+        // Part B of #1038 (#1064): was `#[should_panic]`. CPython raises a
+        // catchable `IndexError` here and now so does pycc; the sentinel is
+        // `tag_smallint(0)`, a *valid* D-141 encoded word (raw `0` is not --
+        // `classify_encoded_int` rejects it), so a caller may decode it
+        // before its own pending-exception check.
+        pycc_rt_exception_clear();
         unsafe {
             let list = pycc_rt_int_list_new();
-            int_list_pop(&*list);
+            let result = int_list_pop(&*list);
+            let (tag, message) = pending_tag_and_message();
+            assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
+            assert_eq!(message, "pop from empty list");
+            assert!(!message.contains("pycc_rt: "), "{message}");
+            assert_eq!(result, tag_smallint(0)); // sentinel value
+            // The (empty) payload is restored before the raise, so the list
+            // is still usable afterwards.
+            pycc_rt_int_list_append(list, tag_smallint(7));
+            assert_eq!(collect_list(list), vec![tag_smallint(7)]);
+            pycc_rt_int_list_decref(list);
         }
+        pycc_rt_exception_clear();
     }
 
     #[test]
@@ -3815,16 +3894,40 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "pycc_rt: set changed size during iteration")]
-    fn check_set_len_unchanged_panics_when_lengths_differ() {
-        // Calls the private `check_set_len_unchanged` directly, not the
-        // public `pycc_rt_int_set_check_not_resized` wrapper -- the wrapper
-        // is a plain `extern "C" fn`, so a panic crossing its boundary
-        // aborts the whole test binary instead of unwinding into
-        // `#[should_panic]`'s own catch, exactly like
-        // `pycc_rt_int_list_pop_on_an_empty_list_panics_honestly`'s own
-        // established convention above.
+    fn check_set_len_unchanged_raises_when_lengths_differ() {
+        // Part B of #1038 (#1064): was `#[should_panic]`. The function is
+        // `-> ()`, so there is no sentinel: the `ForSet` loop-test codegen
+        // terminates the loop by reading `pycc_rt_exception_active()`. The
+        // message is now CPython's own, capitalised `Set`, where the panic
+        // said lowercase `set`.
+        pycc_rt_exception_clear();
         check_set_len_unchanged(4, 3);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        assert_eq!(message, "Set changed size during iteration");
+        assert!(!message.contains("pycc_rt: "), "{message}");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn check_set_len_unchanged_keeps_an_already_pending_exception() {
+        // Part B of #1038 (#1064), review round 2: a `ForSet` body that both
+        // grows the set and raises reaches the loop test with its own
+        // exception pending. `pycc_rt_exception_raise` clobbers the pending
+        // value unconditionally, so without this guard the body's
+        // `IndexError` would be relabelled `RuntimeError: Set changed size
+        // during iteration` and the wrong `except` handler would run.
+        pycc_rt_exception_clear();
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "pop from empty list",
+        );
+        check_set_len_unchanged(4, 3);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
+        assert_eq!(message, "pop from empty list");
+        pycc_rt_exception_clear();
     }
 
     #[test]
