@@ -7,9 +7,14 @@ requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
 conditional companion runtime bundled only when a source import resolves to a
 CPython-backed dependency under the selected interop policy (D-128). The
 no-libpython guarantee is a property of the `native` executable mode; the
-planned hosted `ext` mode (a CPython extension module loaded by an external
-interpreter) explicitly resolves its CPython symbols from the host and does
-not carry it (D-244).
+hosted `ext` mode (a CPython extension module loaded by an external
+interpreter, `pycc build --ext`) explicitly resolves its CPython symbols from
+the host and does not carry it (D-244). `pycc_rt` itself stays libpython-free
+even there: it owns only the pure encode/decode/classify half of D-244 rule
+2's boundary (`crates/pycc_rt/src/ext_bridge.rs`), and the `PyObject*` moves
+live in the fixed C shim the driver compiles beside the generated object, so
+linking `libpycc_rt.a` into a `native` executable never pulls a CPython
+symbol in.
 
 ## Object model
 
@@ -325,7 +330,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   environment; native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (planned v0.7; not implemented)
+## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the `int` boundary)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -338,11 +343,55 @@ which the artifact is an executable that carries its own interpreter. The hosted
 `ext` mode added by D-244 shares the import classification and the typed
 boundary but none of the bundling, policy, or GIL-ownership rules below: an
 `ext` artifact is loaded by an external CPython that owns the environment and
-the GIL, and #1025/#1026 specify its contract. That mode's typed boundary
+the GIL, and #1025/#1026 specify its contract. Part 1 of #1025 ([#1036](https://github.com/rotnov/pycc/issues/1036))
+implements that mode for the `int` boundary only: `pycc build PATH -o OUT --ext`
+compiles against `Py_LIMITED_API 0x030D0000` (stable-ABI floor CPython 3.13),
+exports every public module-level function whose parameters and return are all
+`int` as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
+`Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
+rejects any other public signature at compile time as `C0003`. Per the D-244
+amendment of 2026-09-12 an `int` outside the inline range `[-2^62, 2^62-1]`
+raises `OverflowError` at the wrapper until [#1040](https://github.com/rotnov/pycc/issues/1040)
+gives `pycc_rt` a bigint boundary. That guard covers the boundary only, not the
+interior: an exported function whose *intermediate* value leaves the inline
+range and is then consumed by a further operation (`(x * x) * 0`) reaches
+`require_inline_int`, whose `panic!` crosses a plain `extern "C"` frame and
+aborts the hosting interpreter rather than raising. Part 3 of #1025
+([#1038](https://github.com/rotnov/pycc/issues/1038)) removes those abort paths
+and is a blocker on #1025's closure; until it lands, an `ext` artifact is only
+as safe as the magnitudes its own arithmetic stays within. An exception that
+escapes an export is re-raised as the matching CPython class for the twenty-three
+builtin classes the bridge carries a tag for; a user-defined exception class and
+the two PEP 654 group classes reach the caller as `Exception` with the original
+message, because the bridge hands the shim a numeric tag and not the class name.
+Restoring that identity is part of #1038 as well. Foreign imports,
+opaque objects, and the buffer protocol are Parts 2-4. That mode's typed boundary
 additionally faces callers pycc does not compile, so what a typed export
 wrapper does with an argument that violates its annotation is D-244 rule 7 —
 the oracle is scoped to annotation-conforming calls and the wrapper raises
 `TypeError` outside them — and it is not restated here.
+
+Two properties of that `ext` boundary are deliberate narrowings rather than
+oversights, and a caller that relies on CPython's own behavior will see a
+difference. First, the boundary carries `int` *values*, not objects: an `int`
+subclass instance is accepted and decoded, so `int`-subclass identity does not
+survive a crossing and `echo(E.X) is E.X` is `False` where an equivalent CPython
+function gives `True`. Preserving it is not implementable over D-061/D-141's
+unboxed tagged word, and narrowing the accepted domain to exact `int` instead
+would reject `bool`, which CPython accepts and which the #1036 oracle asserts;
+[#1043](https://github.com/rotnov/pycc/issues/1043) tracks whether an
+object-carrying path is worth its cost once Part 2 widens the boundary. Second,
+an `ext` module's state is process-static — generated globals live in LLVM
+globals and the `METH_FASTCALL` wrappers ignore their module argument, with
+`m_size = 0` and no `m_free` — so PEP 489's per-instance guarantee does not
+hold. A subinterpreter is refused outright
+(`Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED`), and `importlib.reload()` is
+unaffected because CPython does not re-run `Py_mod_exec` for an extension
+module; the one divergent path is deleting the `sys.modules` entry and
+importing again, which re-runs the module body and lets the second instance
+overwrite state the first instance's wrappers still read.
+[#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
+rejecting that second instance and allocating state per instance.
 
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge

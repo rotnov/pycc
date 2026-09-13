@@ -131,7 +131,7 @@ pub(super) fn lower_protocol_class(
                     if !all_args.is_empty() && all_args[0].parameter.name.as_str() == "self" {
                         // Strip `self` and lower the rest.
                         let rest = &all_args[1..];
-                        let method_is_public = !method_name.starts_with('_');
+                        let method_is_public = crate::is_public_name(&method_name);
                         let p = crate::lower_arg_list(
                             rest,
                             method_is_public,
@@ -155,7 +155,7 @@ pub(super) fn lower_protocol_class(
                         // No `self` parameter — this is unusual for a
                         // protocol method but we handle it gracefully by
                         // lowering all parameters.
-                        let method_is_public = !method_name.starts_with('_');
+                        let method_is_public = crate::is_public_name(&method_name);
                         let p = crate::lower_arg_list(
                             all_args,
                             method_is_public,

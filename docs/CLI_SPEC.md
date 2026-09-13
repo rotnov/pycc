@@ -20,7 +20,7 @@ native binary at `OUT`. Planned v0.7 embedded-mode builds with a permitted
 CPython-backed import instead use `OUT` as the deployment-artifact destination
 for an autonomous application bundle. D-128 deliberately defers the bundle's
 exact file layout until the v0.7 resolver and packaging plan is accepted. The
-planned hosted `ext` mode is the exception to both (D-244 rule 1):
+hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
 never an executable or a bundle. The recognized extension suffixes are the
 target platform's own `importlib.machinery.EXTENSION_SUFFIXES`, which CPython
@@ -211,10 +211,16 @@ directory once project mode exists.
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable
---ext               planned hosted mode: emit a CPython extension module
-                    instead of an executable (D-244 rule 1; see the `OUT`
-                    contract above); conflicts with `--lib`,
-                    `--interop-policy`, and `--pure`
+--ext               hosted mode: emit a CPython extension module instead of
+                    an executable (D-244 rule 1; see the `OUT` contract
+                    above). Implemented for public module-level functions
+                    whose parameters and return are all `int` (#1036); any
+                    other public signature is rejected as `C0003`; the
+                    export set is the whole linked program -- the entry file
+                    and its import closure (D-222) -- so a public function
+                    in an imported project module is exported too. Will
+                    conflict with `--lib`, `--interop-policy`, and `--pure`
+                    once those flags exist.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
                     planned v0.7 embedded-mode policy for CPython-backed
@@ -322,6 +328,34 @@ config-file `build.target-dir` (verified under both cargo 1.88.0 and the
 pinned 1.97.1: with `.cargo/config.toml` naming `from-config`, a plain
 build wrote there and `CARGO_TARGET_DIR=from-env` redirected to
 `from-env`).
+
+Two further variables apply to `build --ext` only, and only to locating
+the CPython headers the artifact compiles against:
+
+- **`PYCC_PYTHON`** names the interpreter to probe for its `include`
+  directory, its `libs` directory and its version. Default: `python3`.
+  The interpreter is run once, with a fixed `-c` script and no shell; it
+  must satisfy the stable-ABI floor (CPython 3.13, D-244), and an
+  interpreter that cannot be started, exits non-zero, or prints something
+  unparseable is an environment failure at exit 2.
+- **`PYCC_PYTHON_INCLUDE`**, when set, supplies that header directory
+  directly and **no interpreter is run at all** — for a cross build, or a
+  sysroot whose interpreter cannot execute on the building host. The
+  `libs` directory is then taken as its sibling. Because nothing runs,
+  nothing can read the headers' real version: setting this variable is an
+  assertion that they are at least the stable-ABI floor, and headers that
+  are not fail later in the C compiler rather than in `pycc`. It outranks
+  `PYCC_PYTHON`, which is still recorded and still named in diagnostics.
+
+Whichever variable supplies it, the resolved header directory is checked
+before anything is compiled: it must exist and it must contain `Python.h`.
+A directory that is missing, or that exists but holds no header, is an
+environment failure at exit 2 — an interpreter installed without its
+development package is a broken build environment, not a defect in the
+source being compiled, and reporting it as one would misclassify it as a
+compile error.
+
+Neither variable has any effect without `--ext`.
 
 ## `pycc.toml`
 

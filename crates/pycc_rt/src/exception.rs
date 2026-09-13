@@ -94,6 +94,63 @@ pub extern "C" fn pycc_rt_exception_clear() {
     EXCEPTION_STATE.with(|state| state.set(ExceptionState::CLEAR));
 }
 
+/// D-244's `ext` boundary, exception half: the pending exception's type tag,
+/// or `-1` when nothing is pending.
+///
+/// The `ext` artifact must **return** a failure to CPython, never terminate
+/// the process. `pycc_rt_exception_print_and_exit` -- `native` mode's handler,
+/// unchanged -- calls `std::process::exit(1)`, which inside an imported
+/// extension module kills the interpreter rather than failing the import. So
+/// the `ext` epilogue reads the pending state through this accessor trio,
+/// raises the matching CPython exception from the C shim, and returns: `NULL`
+/// from a per-export wrapper, `-1` from the `Py_mod_exec` slot.
+///
+/// Split three ways rather than returning a struct because the caller is C:
+/// the tag selects a `PyExc_*` object (see this module's tag constants, whose
+/// literal values `pycc_rt::ext_bridge`'s drift-guard test pins), and the
+/// message travels as pointer + length because a `PyStrObj` is not
+/// NUL-terminated.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_ext_pending_type() -> i32 {
+    EXCEPTION_STATE.with(|state| {
+        let pending = state.get();
+        if pending.active == 0 || pending.value.is_null() {
+            return -1;
+        }
+        i32::from(unsafe { (*pending.value).type_tag })
+    })
+}
+
+/// The pending exception's message as UTF-8 bytes, writing its length through
+/// `len`. Null (with `*len == 0`) when nothing is pending.
+///
+/// The bytes belong to the pending exception object, which this runtime never
+/// frees (see [`PyExceptionObj`]'s leak-only note), so they stay readable
+/// until the caller has copied them into a CPython exception -- which the
+/// shim does immediately, before [`pycc_rt_exception_clear`].
+///
+/// # Safety
+///
+/// `len` must be non-null and point to a writable, aligned `usize`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_ext_pending_message(len: *mut usize) -> *const u8 {
+    EXCEPTION_STATE.with(|state| {
+        let pending = state.get();
+        if pending.active == 0 || pending.value.is_null() {
+            unsafe { *len = 0 };
+            return std::ptr::null();
+        }
+        let message = unsafe { (*pending.value).message };
+        if message.is_null() {
+            unsafe { *len = 0 };
+            return std::ptr::null();
+        }
+        let bytes = unsafe { (*message).bytes() };
+        unsafe { *len = bytes.len() };
+        bytes.as_ptr()
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_exception_alloc(
     type_tag: u8,
@@ -565,6 +622,67 @@ mod tests {
             name.len(),
             alloc_exception_message(msg),
         )
+    }
+
+    /// D-244's `ext` exception accessors, all four states in one test so no
+    /// arm survives on a thread whose exception state another test left set:
+    /// the state is thread-local and `cargo test` runs tests in parallel, so
+    /// each assertion here is made against state this test itself installed.
+    #[test]
+    fn the_ext_accessors_report_the_pending_exception_and_nothing_when_clear() {
+        // Nothing pending.
+        pycc_rt_exception_clear();
+        let mut len: usize = 7;
+        assert_eq!(pycc_rt_ext_pending_type(), -1);
+        assert!(unsafe { pycc_rt_ext_pending_message(&raw mut len) }.is_null());
+        assert_eq!(len, 0);
+
+        // A raised exception reports its tag and its message bytes.
+        pycc_rt_exception_raise(alloc_named(
+            EXCEPTION_TYPE_ZERO_DIV_ERROR,
+            "ZeroDivisionError",
+            "division by zero",
+        ));
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_ZERO_DIV_ERROR)
+        );
+        let bytes = unsafe { pycc_rt_ext_pending_message(&raw mut len) };
+        assert!(!bytes.is_null());
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(bytes, len) },
+            b"division by zero"
+        );
+
+        // An exception with no message object at all: the shim substitutes
+        // an empty string rather than reading a null pointer.
+        pycc_rt_exception_clear();
+        pycc_rt_exception_raise(pycc_rt_exception_alloc(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+        ));
+        len = 7;
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_VALUE_ERROR)
+        );
+        assert!(unsafe { pycc_rt_ext_pending_message(&raw mut len) }.is_null());
+        assert_eq!(len, 0);
+
+        // An `active` flag with a null value is not a pending exception.
+        EXCEPTION_STATE.with(|state| {
+            state.set(ExceptionState {
+                active: 1,
+                value: std::ptr::null_mut(),
+            });
+        });
+        len = 7;
+        assert_eq!(pycc_rt_ext_pending_type(), -1);
+        assert!(unsafe { pycc_rt_ext_pending_message(&raw mut len) }.is_null());
+        assert_eq!(len, 0);
+        pycc_rt_exception_clear();
     }
 
     #[test]

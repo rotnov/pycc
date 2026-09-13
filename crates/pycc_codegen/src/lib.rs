@@ -32,7 +32,10 @@ mod exception_render;
 use exception_render::emit_exception_message;
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
+mod ext;
 mod target_machine;
+pub use ext::{CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL};
+use ext::{entry_fn_name, is_module_entry_symbol};
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -5247,7 +5250,24 @@ pub fn compile_to_object(
     target_triple: Option<&str>,
     release: bool,
 ) -> Result<(), String> {
-    compile_to_object_with_observer(mir, output_path, target_triple, release, None)
+    compile_to_object_with_options(
+        mir,
+        output_path,
+        &CompileOptions {
+            target_triple: target_triple.map(str::to_string),
+            release,
+            ..CompileOptions::default()
+        },
+    )
+}
+
+/// `compile_to_object` with the full option set (D-244's `ext` mode).
+pub fn compile_to_object_with_options(
+    mir: &MirModule,
+    output_path: &Path,
+    options: &CompileOptions,
+) -> Result<(), String> {
+    compile_to_object_with_observer(mir, output_path, options, None)
 }
 
 /// #379 (PR-19): Emit per-enum-member singleton init sequences. Each enum
@@ -5347,10 +5367,11 @@ fn emit_enum_member_inits<'ctx>(
 fn compile_to_object_with_observer(
     mir: &MirModule,
     output_path: &Path,
-    target_triple: Option<&str>,
-    release: bool,
+    options: &CompileOptions,
     mut observer: Option<&mut CodegenObserver<'_>>,
 ) -> Result<(), String> {
+    let target_triple = options.target_triple.as_deref();
+    let release = options.release;
     let context = Context::create();
     let module = context.create_module("pycc_module");
     let builder = context.create_builder();
@@ -5467,7 +5488,7 @@ fn compile_to_object_with_observer(
     let module_globals = declare_module_globals(&context, &module, &module_bindings);
 
     let entry_fn_type = i64_type.fn_type(&[], false);
-    let entry_fn = module.add_function("main", entry_fn_type, None);
+    let entry_fn = module.add_function(entry_fn_name(options.ext), entry_fn_type, None);
     let entry_block = context.append_basic_block(entry_fn, "entry");
     let top_exception_exit = context.append_basic_block(entry_fn, "top_exception_exit");
     builder.position_at_end(entry_block);
@@ -5563,8 +5584,16 @@ fn compile_to_object_with_observer(
     // `str` local's single exit point is program completion right here, so
     // this is where its accepted refcounting scope (D-061's Task 7
     // addendum) decrefs it exactly once, before `main` itself returns.
+    //
+    // `ext` mode has no such exit point. The entry function is D-244's
+    // `Py_mod_exec` slot, and the module object outlives it: every wrapper
+    // the host may call afterwards still reads these globals, so decrefing
+    // them here frees storage that stays reachable. `PyModuleDef.m_free` is
+    // NULL, so nothing ever tears the module down -- holding the reference
+    // for the process lifetime is the correct D-060 accounting, exactly as
+    // the exceptional exit below already assumes.
     for slot in module_globals.values() {
-        if slot.ty == pycc_mir::Ty::Str {
+        if slot.ty == pycc_mir::Ty::Str && !options.ext {
             let value = builder
                 .build_load(
                     context.ptr_type(inkwell::AddressSpace::default()),
@@ -5599,18 +5628,36 @@ fn compile_to_object_with_observer(
     // target alive while top-level expressions are emitted lets recursive
     // expression guards stop later operands and effects immediately.
     builder.position_at_end(top_exception_exit);
-    let exc_val = builder
-        .build_call(rt.exception_value, &[], "top_exc_val")
-        .expect("build_call should not fail for exception_value")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_exception_value returns a pointer")
-        .into_pointer_value();
-    builder
-        .build_call(rt.exception_print_and_exit, &[exc_val.into()], "")
-        .expect("build_call should not fail for exception_print_and_exit");
-    builder
-        .build_unreachable()
-        .expect("build_unreachable should terminate a noreturn block");
+    if options.ext {
+        // D-244's `ext` mode: the module body runs inside the host
+        // interpreter's `Py_mod_exec` slot, so an uncaught module-scope
+        // exception must *fail the import*, not end the process.
+        // `pycc_rt_exception_print_and_exit` is `-> !` and calls
+        // `std::process::exit(1)`, which here would terminate the
+        // interpreter that just imported this artifact. Return `-1`
+        // instead, leaving the pending exception state set: the C shim
+        // reads it through `pycc_rt_ext_pending_type`/`_message`, raises
+        // the matching CPython exception, and returns `-1` from the slot.
+        // `print_and_exit` stays `native` mode's handler, untouched.
+        builder
+            .build_return(Some(
+                &i64_type.const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+            ))
+            .expect("build_return should not fail on a freshly positioned builder");
+    } else {
+        let exc_val = builder
+            .build_call(rt.exception_value, &[], "top_exc_val")
+            .expect("build_call should not fail for exception_value")
+            .try_as_basic_value()
+            .expect_basic("pycc_rt_exception_value returns a pointer")
+            .into_pointer_value();
+        builder
+            .build_call(rt.exception_print_and_exit, &[exc_val.into()], "")
+            .expect("build_call should not fail for exception_print_and_exit");
+        builder
+            .build_unreachable()
+            .expect("build_unreachable should terminate a noreturn block");
+    }
 
     // Second pass: fill in each user function's body, now that every
     // function (including ones a body might call) is already declared.
@@ -6502,15 +6549,15 @@ fn emit_stmt<'ctx>(
             Ok(())
         }
         MirStmt::Return(value) => {
-            if builder
-                .get_insert_block()
-                .unwrap()
-                .get_parent()
-                .unwrap()
-                .get_name()
-                .to_bytes()
-                == b"main"
-            {
+            if is_module_entry_symbol(
+                builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_name()
+                    .to_bytes(),
+            ) {
                 panic!(
                     "pycc_codegen: internal error: a top-level statement terminated `main`'s \
                      entry block -- pycc_types::check (T0024) should have rejected a module-level \

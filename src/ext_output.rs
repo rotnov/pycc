@@ -25,12 +25,12 @@
 //!   host. A host-conditioned suffix set would silently emit a Linux-shaped
 //!   name for a Windows target, and would leave one arm unexecutable in CI.
 //!
-//! The `--ext` flag itself is not wired yet: this module lands first, on its
-//! own, so the contract is settled and unit-tested before the flag, the
-//! codegen entry point, and the link argv follow (PR 1b of #1036). [`resolve`]
-//! is shaped for `try_build` to call directly at that point — `OUT` and the
-//! resolved target in, artifact path and module name out — so no further
-//! refactoring of this module is expected there.
+//! `try_build` calls [`resolve`] directly (`src/main.rs`'s `plan_ext`) —
+//! `OUT` and the resolved target in, artifact path and module name out.
+//! This module landed one pull request ahead of that caller (PR 1a of
+//! #1036) so the contract was settled and unit-tested on its own; PR 1b
+//! wired the flag and removed the `dead_code` allowance that ahead-of-caller
+//! landing needed.
 //!
 //! Extracted into its own file rather than added to `src/main.rs`, which is
 //! already near `AGENTS.md`'s ~1,000-line decomposition threshold; see
@@ -40,13 +40,6 @@
 //! requires "a valid ASCII Python identifier", and `"class".isidentifier()`
 //! is `True` in CPython, so rejecting keywords would be a rule this contract
 //! does not state.
-
-#![allow(
-    dead_code,
-    reason = "the `--ext` flag that calls into here is wired by PR 1b of #1036; \
-              this module ships first so the output contract is settled and \
-              unit-tested on its own. PR 1b removes this attribute."
-)]
 
 use std::path::{Path, PathBuf};
 
@@ -63,17 +56,6 @@ pub(crate) enum ExtPlatform {
 }
 
 impl ExtPlatform {
-    /// Classifies a target triple. Total by construction: every non-Windows
-    /// Tier-1 triple is a POSIX shared-object target, and `--target` is
-    /// validated against the Tier-1 list before it reaches here.
-    pub(crate) fn from_target_triple(triple: &str) -> Self {
-        if triple.contains("-windows") {
-            Self::Windows
-        } else {
-            Self::Unix
-        }
-    }
-
     /// The version-agnostic recognized suffixes, most-specific first. The
     /// interpreter-specific tagged suffix that heads CPython's own list is
     /// handled by [`has_tagged_suffix`] instead, because this contract
@@ -496,15 +478,18 @@ mod ext_output_tests {
     #[test]
     fn the_suffix_set_follows_the_target_triple_not_the_host() {
         assert!(matches!(
-            ExtPlatform::from_target_triple("x86_64-pc-windows-msvc"),
+            crate::ext_build::ExtLinkPlatform::from_target_triple("x86_64-pc-windows-msvc")
+                .suffix_platform(),
             ExtPlatform::Windows
         ));
         assert!(matches!(
-            ExtPlatform::from_target_triple("x86_64-unknown-linux-gnu"),
+            crate::ext_build::ExtLinkPlatform::from_target_triple("x86_64-unknown-linux-gnu")
+                .suffix_platform(),
             ExtPlatform::Unix
         ));
         assert!(matches!(
-            ExtPlatform::from_target_triple("aarch64-apple-darwin"),
+            crate::ext_build::ExtLinkPlatform::from_target_triple("aarch64-apple-darwin")
+                .suffix_platform(),
             ExtPlatform::Unix
         ));
     }
