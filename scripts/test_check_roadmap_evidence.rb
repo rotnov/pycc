@@ -5533,6 +5533,89 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "4.99"
   end
 
+  # The medians are the measurement; the reported ratio is a restatement of
+  # them. A report whose published medians divide out to 4.96 cannot clear the
+  # threshold by rounding `versus_cpython` up to 5.0, even though 5.0 is inside
+  # the consistency check's rounding tolerance.
+  def test_rejects_a_speedup_the_published_medians_do_not_reach
+    report = product_sprint_1_report
+    report["arms"]["cpython"] = { "median_ns" => 4_960_000, "min_ns" => 4_900_000, "max_ns" => 5_050_000 }
+    report["ratios"]["versus_cpython"] = 5.0
+
+    stderr = assert_product_sprint_1_rejected(
+      "rounded-up speedup",
+      report: report,
+      evidence_ids: ["sprint1-ext-hot-function-5x"]
+    )
+
+    assert_includes stderr, "4.96"
+  end
+
+  # The mirror of the case above: the medians decide, so a report whose derived
+  # ratio clears the threshold is admissible even when the number it prints for
+  # `versus_cpython` rounds just below it.
+  def test_accepts_a_speedup_the_published_medians_reach
+    report = product_sprint_1_report
+    report["arms"]["cpython"] = { "median_ns" => 5_020_000, "min_ns" => 4_950_000, "max_ns" => 5_090_000 }
+    report["ratios"]["versus_cpython"] = 4.99
+
+    _stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: ["sprint1-ext-hot-function-5x"],
+      report: JSON.pretty_generate(report)
+    )
+
+    assert status.success?, stderr
+  end
+
+  # `docs/TESTING.md`'s "Versions" bullet pins three of the five reported
+  # version fields to a literal value. Restating some other string is what the
+  # bullet's "Every one of these versions is restated in the report" forbids.
+  def test_rejects_a_product_sprint_1_report_restating_the_wrong_pinned_version
+    {
+      "cpython" => "3.14.6",
+      "cython" => "3.1.5",
+      "pycc_profile" => "debug"
+    }.each do |field, value|
+      report = product_sprint_1_report
+      report["versions"][field] = value
+      stderr = assert_product_sprint_1_rejected("#{field} #{value.inspect}", report: report)
+      assert_includes stderr, field
+    end
+  end
+
+  # `cpython_vv` and `cpython_configure_args` have no single pinned literal --
+  # the `-VV` banner and `CONFIGURE_ARGS` differ per build. The protocol fixes
+  # checkable *properties* of them instead, the same ones
+  # `scripts/bench_hosted_ext.py` refuses a live interpreter over.
+  def test_rejects_a_product_sprint_1_report_whose_version_output_contradicts_the_pin
+    [
+      "Python 3.14.6 (main, Sep 1 2026, 00:00:00) [Clang]",
+      "3.14.7",
+      "Python 3.14.7 free-threading build (main, Sep 1 2026, 00:00:00) [Clang]"
+    ].each do |value|
+      report = product_sprint_1_report
+      report["versions"]["cpython_vv"] = value
+      stderr = assert_product_sprint_1_rejected("cpython_vv #{value.inspect}", report: report)
+      assert_includes stderr, "cpython_vv"
+    end
+  end
+
+  def test_rejects_a_product_sprint_1_report_whose_configure_args_are_inadmissible
+    [
+      "'--enable-optimizations' '--with-pydebug'",
+      "'--with-lto'",
+      "'--enable-optimizations=no' '--with-lto'"
+    ].each do |value|
+      report = product_sprint_1_report
+      report["versions"]["cpython_configure_args"] = value
+      stderr = assert_product_sprint_1_rejected(
+        "cpython_configure_args #{value.inspect}",
+        report: report
+      )
+      assert_includes stderr, "cpython_configure_args"
+    end
+  end
+
   def test_accepts_the_numbers_published_claim_below_the_speedup_threshold
     _stdout, stderr, status = run_product_sprint_1_checker(
       evidence_ids: ["sprint1-ext-numbers-published"],

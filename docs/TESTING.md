@@ -542,8 +542,21 @@ rule 6); only numbers are published.
   report `--enable-optimizations`: an ordinary `./configure && make` build denies
   none of the markers above and optimizes nothing, so refusing only the named
   debug markers would admit exactly the slow baseline this bullet rules out.
+  A free-threaded build is refused for a second reason of its own: the `ext`
+  artifact is built against the GIL-enabled stable ABI and its module
+  initializer rejects a free-threaded host outright, so the `ext` arm cannot run
+  there at all. The runner therefore refuses an interpreter whose `-VV` banner
+  carries the `free-threading build` marker, rather than letting the arm fail
+  later at import.
   Every one of these versions is restated in the report, because a later run that
-  changes one is a different experiment.
+  changes one is a different experiment. Three of those restatements are pinned
+  to a literal value and are compared against it -- CPython `3.14.7`, Cython
+  `3.1.6`, and the `release` pycc profile. The `-VV` banner and the
+  `CONFIGURE_ARGS` string have no single pinned value, since they differ per
+  build; what is checked of them is the properties this bullet fixes -- the
+  banner reports the pinned CPython and is not a `free-threading build`, and the
+  flags carry none of the inadmissible markers and positively report
+  `--enable-optimizations`.
 - **Input.** Size alone does not pin this workload: the measured loop branches
   on its data, so two evaluators who generate different inputs of the same size
   can reach opposite verdicts on the same implementation. The workload is
@@ -645,9 +658,14 @@ rule 6); only numbers are published.
   and every field above are what `scripts/check_roadmap_evidence.rb` requires
   before either `product-sprint-1` roadmap box may cite its evidence
   identifier, so an unchecked box, an absent report, a missing field, a digest
-  that does not match the pre-registration record, or a speedup below D-244
-  rule 6's threshold all fail the roadmap evidence gate rather than passing
-  silently.
+  that does not match the pre-registration record, a restated version that
+  contradicts its pin, or a speedup below D-244 rule 6's threshold all fail the
+  roadmap evidence gate rather than passing silently. The speedup that threshold
+  judges is the ratio derived from the published medians, not the ratio the
+  report prints for itself: the printed ratio is checked for consistency with
+  those medians and rounding is tolerated there, so judging the threshold
+  against it would let a rounded-up number clear a bar the measurement does
+  not.
 - **The compile-unchanged count.** `product-sprint-1`'s second acceptance item
   is a count, not a timing: how many of the reference codebase's annotated
   functions compile unchanged as part of an `ext` artifact, over how many were

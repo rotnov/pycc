@@ -5,6 +5,7 @@ require "pathname"
 require "psych"
 require "digest"
 require "json"
+require "shellwords"
 
 class RoadmapEvidenceError < StandardError; end
 
@@ -2981,6 +2982,31 @@ PRODUCT_SPRINT_1_VERSION_FIELDS = %w[
   cython
   pycc_profile
 ].freeze
+#: The subset of the fields above that `docs/TESTING.md`'s "Versions" bullet
+#: pins to one literal value. Restating anything else is not a restatement of
+#: the pin, so the report is refused rather than taken on trust.
+PRODUCT_SPRINT_1_PINNED_VERSIONS = {
+  "cpython" => "3.14.7",
+  "cython" => "3.1.6",
+  "pycc_profile" => "release"
+}.freeze
+#: `cpython_vv` and `cpython_configure_args` have no pinned literal -- the
+#: `-VV` banner and `CONFIGURE_ARGS` differ per build, and the protocol asks
+#: for "the interpreter actually used" rather than a fixed string. What the
+#: bullet does fix is checkable properties of them, and the constants below
+#: mirror `scripts/bench_hosted_ext.py`'s guards over the live interpreter --
+#: that file is the source those values are copied from, and the two must
+#: change together.
+PRODUCT_SPRINT_1_FREE_THREADING_MARKER = "free-threading build"
+PRODUCT_SPRINT_1_UNOPTIMIZED_CONFIGURE_MARKERS = %w[
+  --with-pydebug
+  --with-trace-refs
+  --without-pymalloc
+  --with-address-sanitizer
+  --with-undefined-behavior-sanitizer
+].freeze
+PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER = "--enable-optimizations"
+PRODUCT_SPRINT_1_DISABLED_CONFIGURE_VALUES = ["", "no", "false", "0"].freeze
 #: Each reported ratio, and the arm whose median is its numerator; the `ext`
 #: arm's median is always the denominator.
 PRODUCT_SPRINT_1_RATIOS = { "versus_cpython" => "cpython", "versus_cython" => "cython" }.freeze
@@ -3031,6 +3057,66 @@ def validate_product_sprint_1_arms(report, source)
   end
 end
 
+# `docs/TESTING.md`'s "Versions" bullet pins no literal `-VV` banner -- it
+# requires the banner of "the interpreter actually used". Two properties of it
+# are fixed all the same: it must report the pinned CPython, and it must be a
+# GIL-enabled build. `src/ext/pycc_ext_module.c`'s `PyInit_` refuses a
+# free-threaded host outright, so a report restating one describes a run the
+# `ext` arm could not have happened in.
+def validate_product_sprint_1_version_output(version_output, source)
+  tokens = version_output.split
+  reported = tokens[0] == "Python" && tokens.length > 1 ? tokens[1] : ""
+  unless reported == PRODUCT_SPRINT_1_PINNED_VERSIONS.fetch("cpython")
+    raise RoadmapEvidenceError,
+          "#{source}: the report's cpython_vv does not report the pinned CPython " \
+          "#{PRODUCT_SPRINT_1_PINNED_VERSIONS.fetch('cpython')}"
+  end
+  return unless version_output.include?(PRODUCT_SPRINT_1_FREE_THREADING_MARKER)
+
+  raise RoadmapEvidenceError,
+        "#{source}: the report's cpython_vv is a #{PRODUCT_SPRINT_1_FREE_THREADING_MARKER}, " \
+        "which the protocol's GIL-enabled host requirement rules out"
+end
+
+#: Mirrors `scripts/bench_hosted_ext.py`'s `reports_optimized_build`, including
+#: its fallback to whitespace splitting when the recorded flags carry an
+#: unbalanced quote that `Shellwords` refuses.
+def product_sprint_1_configure_tokens(configure_args)
+  Shellwords.split(configure_args)
+rescue ArgumentError
+  configure_args.split
+end
+
+def product_sprint_1_reports_optimized_build(configure_args)
+  product_sprint_1_configure_tokens(configure_args).any? do |token|
+    next true if token == PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER
+
+    next false unless token.start_with?("#{PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER}=")
+
+    value = token.split("=", 2).last.strip.downcase
+    !PRODUCT_SPRINT_1_DISABLED_CONFIGURE_VALUES.include?(value)
+  end
+end
+
+# The other field with no pinned literal, checked for the same properties
+# `scripts/bench_hosted_ext.py` refuses a live interpreter over: none of the
+# markers that make a build inadmissible, and a *positive* report of the
+# optimization flag rather than the mere absence of the denied ones.
+def validate_product_sprint_1_configure_args(configure_args, source)
+  PRODUCT_SPRINT_1_UNOPTIMIZED_CONFIGURE_MARKERS.each do |marker|
+    next unless configure_args.include?(marker)
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report's cpython_configure_args carry #{marker}, which is inadmissible"
+  end
+  return if product_sprint_1_reports_optimized_build(configure_args)
+
+  raise RoadmapEvidenceError,
+        "#{source}: the report's cpython_configure_args do not positively report " \
+        "#{PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER}, so the baseline arm is not provably " \
+        "the optimized build the protocol requires"
+end
+
 def validate_product_sprint_1_reporting(report, source)
   unless report["replicates"] == PRODUCT_SPRINT_1_REPLICATES
     raise RoadmapEvidenceError,
@@ -3048,7 +3134,17 @@ def validate_product_sprint_1_reporting(report, source)
       raise RoadmapEvidenceError,
             "#{source}: the report must restate the pinned #{field} version"
     end
+
+    pinned = PRODUCT_SPRINT_1_PINNED_VERSIONS[field]
+    next if pinned.nil?
+    next if value.strip == pinned
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report restates #{field} as #{value.strip.inspect}, not the " \
+          "#{pinned.inspect} the protocol pins"
   end
+  validate_product_sprint_1_version_output(versions["cpython_vv"], source)
+  validate_product_sprint_1_configure_args(versions["cpython_configure_args"], source)
 
   ratios = report["ratios"]
   unless ratios.is_a?(Hash)
@@ -3127,12 +3223,17 @@ def validate_product_sprint_1_evidence(root, evidence_ids)
   validate_product_sprint_1_pre_registration(report, record, report_path, record_path)
   return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
 
-  speedup = report["ratios"]["versus_cpython"].to_f
+  # Judged from the published medians, never from the reported ratio: the
+  # consistency check above tolerates rounding, so a ratio printed as 5.0 can
+  # stand for medians that divide out to 4.96. The medians are the
+  # measurement, so they are what the threshold is applied to, exactly and
+  # without tolerance.
+  speedup = report["arms"]["cpython"]["median_ns"].to_f / report["arms"]["ext"]["median_ns"]
   return if speedup >= D244_RULE_6_CPYTHON_SPEEDUP
 
   raise RoadmapEvidenceError,
-        "#{report_path}: the reported CPython speedup #{speedup} is below the threshold " \
-        "D-244 rule 6 fixes for #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID}"
+        "#{report_path}: the CPython speedup #{speedup} its published medians yield is below " \
+        "the threshold D-244 rule 6 fixes for #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID}"
 end
 
 def validate_evidence(root, evidence_ids)

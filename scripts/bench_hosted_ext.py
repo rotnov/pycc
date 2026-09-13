@@ -60,6 +60,12 @@ PINNED_PYTHON_VERSION = "3.14.7"
 REPLICATES = 7
 WARMUP_RUNS = 1
 
+#: The `Py_GetVersion()` marker a free-threaded CPython carries, and the only
+#: detector `src/ext/pycc_ext_module.c` found to be reliable at `PyInit_` time
+#: (`sys._is_gil_enabled()` returned True on a free-threaded 3.14 there). The
+#: artifact refuses such a host outright, so the `ext` arm cannot run on one.
+FREE_THREADING_VERSION_MARKER = "free-threading build"
+
 #: Configure-time markers that make an interpreter inadmissible as the baseline
 #: arm. `docs/TESTING.md`'s "Versions" bullet rules such a build out whatever it
 #: reports, because a slow baseline manufactures a passing ratio on its own.
@@ -125,6 +131,21 @@ def assert_pinned_version(version_output: str) -> None:
         raise BenchmarkError(
             f"the benchmark interpreter must be exactly Python {PINNED_PYTHON_VERSION}, "
             f"found {reported or version_output.strip()!r}"
+        )
+
+
+def assert_gil_enabled(version_output: str) -> None:
+    """Refuse a free-threaded host, which `docs/TESTING.md`'s "Versions" bullet rules out.
+
+    Kept apart from `assert_pinned_version`: that guard reads only the version
+    number, and a free-threaded build reports exactly the pinned one.
+    """
+
+    if FREE_THREADING_VERSION_MARKER in version_output:
+        raise BenchmarkError(
+            f"the benchmark interpreter reports a {FREE_THREADING_VERSION_MARKER}; the "
+            "protocol requires a GIL-enabled host, and the `ext` artifact refuses to "
+            "import into a free-threaded one"
         )
 
 
@@ -522,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
         interpreter = resolve_interpreter(dict(os.environ))
         version_output, configure_args = interpreter_facts(interpreter)
         assert_pinned_version(version_output)
+        assert_gil_enabled(version_output)
         assert_optimized_build(configure_args)
         # Read once, before any arm is built, and the bytes reused from here on:
         # a subject re-read per arm could be edited between them.

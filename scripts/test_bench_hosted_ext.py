@@ -68,6 +68,29 @@ class InterpreterGuardTest(unittest.TestCase):
 
         self.assertIn(RUNNER.PINNED_PYTHON_VERSION, str(raised.exception))
 
+    # `docs/TESTING.md`'s "Versions" bullet requires a GIL-enabled host, and
+    # `src/ext/pycc_ext_module.c`'s `PyInit_` refuses a free-threaded one
+    # outright, so the `ext` arm cannot even be imported there. Both directions
+    # are driven from a fabricated `-VV` payload rather than the ambient
+    # interpreter, so this test says the same thing on macOS and on Linux CI.
+    def test_accepts_a_gil_enabled_interpreter(self) -> None:
+        RUNNER.assert_gil_enabled("Python 3.14.7 (main, Sep 1 2026, 00:00:00) [Clang]")
+
+    def test_refuses_a_free_threaded_interpreter(self) -> None:
+        with self.assertRaises(BenchmarkError) as raised:
+            RUNNER.assert_gil_enabled(
+                "Python 3.14.7 free-threading build (main, Sep 1 2026, 00:00:00) [Clang]"
+            )
+
+        self.assertIn("free-threading build", str(raised.exception))
+
+    def test_the_pinned_version_guard_alone_admits_a_free_threaded_build(self) -> None:
+        # The version guard parses only the first two tokens, so it cannot be
+        # the detector; this pins why the refusal lives in its own guard.
+        RUNNER.assert_pinned_version(
+            "Python 3.14.7 free-threading build (main, Sep 1 2026, 00:00:00) [Clang]"
+        )
+
     def test_accepts_an_optimized_build(self) -> None:
         RUNNER.assert_optimized_build("--enable-optimizations --with-lto")
 
