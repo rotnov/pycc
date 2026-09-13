@@ -435,7 +435,10 @@ and float-formatting paths: `int_list_slice`'s three rejected bounds raise
 `float_to_str` outside its `1e-4 <= |x| < 1e16` positional window raises
 `RuntimeError`, and `check_set_len_unchanged` raises CPython's own
 `RuntimeError: Set changed size during iteration`. None of the six messages
-carries the old `pycc_rt: ` panic prefix. Because a D-173 raise returns
+carries the old `pycc_rt: ` panic prefix. The conformance gaps behind the
+first and third of those are tracked as
+[#1070](https://github.com/rotnov/pycc/issues/1070) and
+[#1071](https://github.com/rotnov/pycc/issues/1071). Because a D-173 raise returns
 normally where a `panic!` did not, each site also returns a sentinel that is a
 *valid* value of its return type -- `tag_smallint(0)`, a fresh empty list, an
 empty `str`, never a raw `0` or `NULL` -- and `MirStmt::ForSet`'s loop-test

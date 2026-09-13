@@ -1593,7 +1593,7 @@ fn a_runtime_negative_slice_start_raises_instead_of_cpython_last_element_address
     // addressing from the end the way real CPython's `xs[-1:3]` would. Part
     // B of #1038 (#1064) made that rejection a catchable `ValueError`
     // instead of a process abort; the conformance gap itself is unchanged
-    // and tracked separately.
+    // and tracked as issue #1070.
     // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here.
     // When this test was written no unary operator lowered at all; #602 has
     // since made the literal form `-1` lower too, but `0 - 1` remains an

@@ -1102,7 +1102,7 @@ pub extern "C" fn pycc_rt_bool_to_str(value: i8) -> *mut PyStrObj {
 /// #1038 (#1064) raises a catchable `RuntimeError` for that narrow range
 /// rather than returning a silently wrong digit string (a documented,
 /// named gap, same convention as D-026/D-043; the remaining conformance
-/// work is tracked separately).
+/// work is tracked as #1071).
 fn float_to_str(value: f64) -> *mut PyStrObj {
     if value.is_nan() {
         return new_pystr(b"nan");
@@ -3554,7 +3554,7 @@ mod tests {
         // Part B of #1038 (#1064): was `#[should_panic]`. CPython addresses
         // `lst[-1:]` from the end rather than rejecting it; pycc's v0.2
         // slice still does not, but the gap is now a catchable `ValueError`
-        // rather than a process abort. Conformance is tracked separately.
+        // rather than a process abort. Conformance is tracked as #1070.
         let (tag, message) = slice_rejection(-1, 1, 1);
         assert_eq!(tag, EXCEPTION_TYPE_VALUE_ERROR);
         assert_eq!(message, "slice start must be non-negative");
