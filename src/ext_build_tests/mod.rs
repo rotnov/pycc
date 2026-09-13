@@ -10,9 +10,25 @@
 //! No test here asserts a rendered `Path`: `Display`/`to_string_lossy`
 //! carries the building host's separator, so `dist/m` renders as `dist\m` on
 //! Windows. Paths are compared as `PathBuf`s built with `Path::join`.
+//!
+//! For the same reason, a test that matches a *multi-line* fragment of
+//! [`SHIM_C`] goes through [`shim_c`] rather than reading the constant
+//! directly. A single-line match needs no normalization and uses `SHIM_C`.
 
 use super::*;
 use pycc_hir::Ty;
+
+/// [`SHIM_C`] with its line endings normalized to `\n`.
+///
+/// `include_str!` embeds the shim exactly as the checkout holds it, and a
+/// Windows checkout holds it with CRLF endings, so an assertion spanning a
+/// line break matches on four Tier-1 targets and fails on the fifth. The
+/// shipped artifact is deliberately left alone -- a C compiler does not care
+/// which ending the source carries, and rewriting it here would make the
+/// tests describe something other than what `--ext` writes out.
+fn shim_c() -> String {
+    SHIM_C.replace("\r\n", "\n")
+}
 
 fn func(name: &str, params: &[(&str, Ty)], return_ty: Ty) -> HirItem {
     HirItem::Function {

@@ -420,7 +420,8 @@ fn the_shims_str_egress_releases_the_reference_unconditionally() {
     assert!(
         SHIM_C.contains("extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);")
     );
-    let body = &SHIM_C[SHIM_C
+    let shim = shim_c();
+    let body = &shim[shim
         .find("static PyObject *pycc_ext_pack_str(void *result)")
         .expect("the pack helper")..];
     let end = body.find("\n}\n").expect("the helper's end");
@@ -448,7 +449,8 @@ fn the_shims_str_ingress_checks_the_type_before_the_converter_and_carries_a_leng
     // `unpack_float` refuses an `int`: D-244 rule 7 defers to
     // `docs/TYPE_SYSTEM.md` rule 4 (D-086), so an `os.PathLike` or a
     // `__str__` duck type is a `TypeError` here rather than a coercion.
-    let body = &SHIM_C[SHIM_C
+    let shim = shim_c();
+    let body = &shim[shim
         .find("static int pycc_ext_unpack_str(PyObject *obj")
         .expect("the unpack helper")..];
     let check = body.find("!PyUnicode_Check(obj)").expect("the type check");
