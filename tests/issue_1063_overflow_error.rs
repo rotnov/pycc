@@ -297,3 +297,72 @@ fn a_built_ext_module_raises_the_right_cpython_class_from_every_converted_pow_pa
         String::from_utf8_lossy(&run.stderr)
     );
 }
+
+/// The residual D-244's 2026-09-13 scope amendment records, pinned through a
+/// real `ext` artifact so the amendment's claims stay measured rather than
+/// asserted. `Pow` is deliberately not a checkpoint (plan section 2a: ten
+/// `Pow` nodes per `tests/fixtures/nbody.py` hot-loop iteration sit under
+/// D-084/D-095/D-140's speedup floors), so an export that handles the
+/// exception itself sees it at the next enclosing checkpoint, not at the
+/// `**`. Two consequences, both strictly better than the process abort they
+/// replace, and both closed by #1031 rather than here:
+///
+/// 1. a statement following the `**` inside the same `try` suite runs first;
+/// 2. a second `**` raise before that checkpoint relabels the first.
+///
+/// A `try` suite's own end *is* a checkpoint, so a `**` written as the last
+/// statement of the suite does reach its handler on time -- that third case
+/// is pinned too, because it is what bounds the residual.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_ext_export_that_handles_a_pow_raise_itself_observes_it_at_the_next_checkpoint() {
+    let dir = ScratchDir::new("1063_ext_residual").expect("scratch");
+    let src = write_fixture(
+        &dir,
+        "m.py",
+        "def on_time(a: float, b: float) -> float:\n    \
+         try:\n        x = a ** b\n    except OverflowError:\n        return -1.0\n    \
+         return 99.0\n\n\
+         def one_late(a: float, b: float) -> float:\n    y = 0.0\n    \
+         try:\n        x = a ** b\n        y = 1.0\n    except OverflowError:\n        \
+         return y\n    return 99.0\n\n\
+         def relabelled(a: float) -> float:\n    \
+         try:\n        x = a ** 1024.0\n        z = 0.0 ** -1.0\n    \
+         except OverflowError:\n        return 1.0\n    \
+         except ZeroDivisionError:\n        return 2.0\n    return 99.0\n",
+    );
+    let build = Command::new(pycc_bin())
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("pycc_residual_mod"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let script = "import pycc_residual_mod as m\n\
+         # The suite end is a checkpoint, so this handler runs on time.\n\
+         assert m.on_time(2.0, 1024.0) == -1.0, m.on_time(2.0, 1024.0)\n\
+         # One statement of the suite runs before the handler: y is already 1.0.\n\
+         assert m.one_late(2.0, 1024.0) == 1.0, m.one_late(2.0, 1024.0)\n\
+         # The later ZeroDivisionError relabels the earlier OverflowError.\n\
+         assert m.relabelled(2.0) == 2.0, m.relabelled(2.0)\n\
+         # None of the three left pending state behind.\n\
+         assert m.on_time(2.0, 3.0) == 99.0\n";
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(script)
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

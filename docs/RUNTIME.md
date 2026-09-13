@@ -131,9 +131,10 @@ identical `Ty::Instance("MyError")`, so a type-keyed rule could not tell them
 apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
-Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202).** HIR
+Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202; to all 26 by
+Part A of #1038, #1063, which appended `OverflowError`).** HIR
 lowering synthesizes a
-real `HirClassDef` for each of those 25 names, seeded before any
+real `HirClassDef` for each of those 26 names, seeded before any
 user statement of a module that references one of them is lowered, so they
 participate in the same class table user-defined classes do. `Exception` carries a synthetic
 `__init__(self, message: str)`; the other six inherit it through their MRO.
@@ -421,7 +422,13 @@ and is a blocker on #1025's closure. Its Part A
 numeric-operator `**` paths -- `float_pow`'s three arms and `int_pow`'s
 negative exponent now raise `ZeroDivisionError`, `RuntimeError` and
 `OverflowError` through D-173 rather than aborting -- so the wrapper epilogue
-turns each into a `NULL` return with the exception set. The bigint-intermediate
+turns each into a `NULL` return with the exception set. That epilogue covers the
+*uncaught* direction only: because `Pow` is not itself a checkpoint, an export
+that handles the exception in its own `try` suite observes it at the next
+enclosing checkpoint, so a statement following the `**` in that suite runs first
+and a second `**` raise before that checkpoint relabels the first. D-244's
+2026-09-13 scope amendment records both shapes and why closing them waits on
+#1031. The bigint-intermediate
 paths through `require_inline_int` are Part C
 ([#1065](https://github.com/rotnov/pycc/issues/1065)) and the list, set and
 float-formatting paths are Part B
