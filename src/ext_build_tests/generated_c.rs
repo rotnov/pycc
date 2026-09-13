@@ -943,6 +943,13 @@ fn a_class_subclassing_exception_is_registered_under_the_qualified_module_name()
         inc.contains("    if (pycc_ext_user_exception_classes[0] == NULL) {\n"),
         "{inc}"
     );
+    // Every tag the table does not hold -- tag 0, the 23..=24 pair C3 keeps
+    // as `Exception`, and any sparse gap -- leaves the `switch` through an
+    // explicit `return NULL`, never off the end of a non-`void` function.
+    assert!(
+        inc.contains("    default:\n        return NULL;\n    }\n}\n"),
+        "{inc}"
+    );
 }
 
 #[test]
