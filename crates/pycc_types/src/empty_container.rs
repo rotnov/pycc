@@ -210,6 +210,13 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     // narrower module scope than the checker that follows it -- and the line
     // keeps that true as the registry grows.
     module_env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
+    // Part 1 of #1026, for the same env-parity reason as the alias table
+    // above: this pass must never see a narrower module scope than the
+    // checker that follows it. A foreign name is `Ty::Object`, which is
+    // not an admitted container element type, so no producer here can
+    // resolve a container through it -- parity is the property, not a
+    // reachable defect.
+    crate::foreign::bind_foreign_objects(&mut module_env, &hir.imports);
     let top_level_stmts: Vec<HirStmt> = hir
         .items
         .iter()
@@ -704,7 +711,8 @@ fn contains_infer(ty: &Ty) -> bool {
         | Ty::None
         | Ty::Param(_)
         | Ty::Instance(_)
-        | Ty::Protocol(_) => false,
+        | Ty::Protocol(_)
+        | Ty::Object => false,
     }
 }
 
@@ -729,7 +737,8 @@ fn contains_optional(ty: &Ty) -> bool {
         | Ty::Infer
         | Ty::Param(_)
         | Ty::Instance(_)
-        | Ty::Protocol(_) => false,
+        | Ty::Protocol(_)
+        | Ty::Object => false,
     }
 }
 

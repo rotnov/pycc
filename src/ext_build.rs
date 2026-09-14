@@ -664,6 +664,9 @@ fn render_ty(ty: &Ty) -> &'static str {
         Ty::Dict(_) => "dict",
         Ty::Set(_) => "set",
         Ty::Tuple(_) => "tuple",
+        // Part 1 of #1026: the spelling `Ty::name()` uses, so the gap
+        // message names the same thing a `T0023` about the binding would.
+        Ty::Object => "object",
         _ => "that type",
     }
 }

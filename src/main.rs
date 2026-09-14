@@ -1,6 +1,7 @@
 mod cli;
 mod ext_build;
 mod ext_output;
+mod foreign_import;
 mod frontend;
 mod modules;
 mod project_config;
@@ -270,6 +271,22 @@ fn try_build(
 ) -> Result<(), ExitCode> {
     let typed_hir =
         resolve_frontend(path).map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
+    // A CPython import only means anything inside a CPython interpreter,
+    // so a native build refuses it here -- before codegen, which is
+    // allowed to ignore the item precisely because of this gate.
+    if ext.is_none() {
+        foreign_import::refuse_in_native_mode(&typed_hir).map_err(|gaps| {
+            // Span-less `I0403`s, exactly as `plan_ext`'s `C0003`s are:
+            // an `ImportBinding` carries no source range, and
+            // `pycc_diag::render_human` renders a span-less diagnostic
+            // without consulting the (empty) source text.
+            ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
+                &path.display().to_string(),
+                "",
+                gaps,
+            )))
+        })?;
+    }
     // Everything `--ext` needs that can fail on the program itself or on
     // the host toolchain is resolved here, before codegen runs: a `C0003`
     // capability gap and a missing `Python.h` are both cheaper to report

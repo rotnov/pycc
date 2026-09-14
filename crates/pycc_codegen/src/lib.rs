@@ -34,13 +34,14 @@ mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
 mod ext_thunk;
+mod foreign_import;
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
     ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
     ext_thunk_symbol, is_ext_exportable_name,
 };
-use ext::{entry_fn_name, is_module_entry_symbol};
+use ext::{EXT_OBJ_IMPORT_SYMBOL, entry_fn_name, is_module_entry_symbol};
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -392,6 +393,13 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
                 .struct_type(&[payload_ty, context.i8_type().into()], false)
                 .into()
         }
+        // An opaque CPython object (Part 1 of #1026): a `PyObject *`, the
+        // same pointer representation `Str`/`List`/`Instance` already get
+        // above. pycc knows nothing about the pointee -- every operation
+        // on an `object`-typed value is refused by `pycc_types` (`I0404`)
+        // -- so the representation only has to be wide enough to hold the
+        // borrowed module handle `pycc_ext_obj_import` returns.
+        pycc_mir::Ty::Object => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // Deviation from the task brief: the brief's own version of this
         // catch-all's message read "(only int/float/bool/str/list[int] do)"
         // -- but that parenthetical is inaccurate twice over. This function
@@ -426,7 +434,8 @@ fn default_value_for_type<'ctx>(
         | pycc_mir::Ty::Dict(_)
         | pycc_mir::Ty::Set(_)
         | pycc_mir::Ty::Instance(_)
-        | pycc_mir::Ty::Protocol(_) => context
+        | pycc_mir::Ty::Protocol(_)
+        | pycc_mir::Ty::Object => context
             .ptr_type(inkwell::AddressSpace::default())
             .const_null()
             .into(),
@@ -4962,8 +4971,17 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
 fn collect_module_bindings(mir: &MirModule) -> BTreeMap<String, pycc_mir::Ty> {
     let mut bindings = BTreeMap::new();
     for item in &mir.items {
-        if let MirItem::TopLevelStmt(stmt) = item {
-            collect_stmt_bindings(stmt, &mut bindings);
+        match item {
+            MirItem::TopLevelStmt(stmt) => collect_stmt_bindings(stmt, &mut bindings),
+            // Part 1 of #1026: a foreign import binds its local name to an
+            // opaque CPython object, which needs the same process-wide
+            // storage every other module binding gets -- generated
+            // functions can read a module global (D-041) regardless of
+            // where the binding statement appears.
+            MirItem::ForeignImport { local_name, .. } => {
+                bindings.insert(local_name.clone(), pycc_mir::Ty::Object);
+            }
+            MirItem::Function { .. } => {}
         }
     }
     // #379 (PR-19): declare a module global for each enum member singleton.
@@ -5131,6 +5149,21 @@ fn declare_module_globals<'ctx>(
                 // it: `pycc_rt::instance` is leak-only, mirroring `List`/
                 // `Dict`/`Set`.
                 pycc_mir::Ty::Instance(_) => (
+                    context.ptr_type(inkwell::AddressSpace::default()).into(),
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null()
+                        .into(),
+                ),
+                // Part 1 of #1026: identical storage and reasoning to
+                // `Ty::Instance(_)` directly above -- an opaque pointer,
+                // null until `pycc_ext_obj_import` stores the imported
+                // module object into it, with the separate `initialized`
+                // flag below trapping any read that reaches it first. No
+                // exit-time release accompanies it: the module object is
+                // owned for the artifact's lifetime (see
+                // `foreign_import.rs` and `docs/RUNTIME.md`).
+                pycc_mir::Ty::Object => (
                     context.ptr_type(inkwell::AddressSpace::default()).into(),
                     context
                         .ptr_type(inkwell::AddressSpace::default())
@@ -5563,6 +5596,27 @@ fn compile_to_object_with_observer(
                     .build_conditional_branch(has_exc, top_exception_exit, cont_bb)
                     .expect("build_conditional_branch should not fail");
                 builder.position_at_end(cont_bb);
+            }
+            // Part 1 of #1026: emit the import call here, at the item's
+            // own position in the source-order loop, rather than as a
+            // hoisted prologue -- see `foreign_import.rs`. `def_iter` is
+            // deliberately not advanced: it pairs with
+            // `MirItem::Function` items only.
+            MirItem::ForeignImport {
+                local_name,
+                module_path,
+            } => {
+                if options.ext {
+                    foreign_import::emit(
+                        &context,
+                        &builder,
+                        &module,
+                        entry_fn,
+                        &module_globals,
+                        local_name,
+                        module_path,
+                    );
+                }
             }
             MirItem::Function { name, .. } => {
                 // Store this definition's function pointer into the

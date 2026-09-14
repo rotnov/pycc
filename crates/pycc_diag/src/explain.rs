@@ -1252,6 +1252,45 @@ compiler.",
 ",
     },
     DiagnosticExplanation {
+        code: "I0403",
+        severity: Severity::Error,
+        summary: "CPython import in native mode; `pycc build --ext` is required",
+        explanation: "\
+I0403 reports an `import` of a module pycc does not implement natively and \
+does not resolve inside the project, in a build that produces a standalone \
+native executable. Since Part 1 of #1026 such an import is compiled as a \
+CPython import: the module object is acquired from the running interpreter \
+at module-execution time. A `pycc build --ext` artifact has such an \
+interpreter -- it is an extension module CPython itself loads -- but a \
+plain `pycc build` executable embeds none, so there is nothing to import \
+from. Rebuild with `--ext`, or drop the import.",
+        example: "\
+import numpy  # error[I0403] under `pycc build`; fine under `pycc build --ext`
+
+def scale(x: float) -> float:
+    return x * 2.0
+",
+    },
+    DiagnosticExplanation {
+        code: "I0404",
+        severity: Severity::Error,
+        summary: "operation on a CPython object is not supported yet",
+        explanation: "\
+I0404 reports an operation on a value whose type is the opaque CPython \
+object type `object` -- today, always a module bound by a CPython `import` \
+under `--ext`. Part 1 of #1026 binds the imported module and implements no \
+operation on it at all, so every read of such a binding is refused: \
+attribute access, calls, iteration, formatting and arithmetic alike. The \
+refusal narrows as the later parts of #1026 land -- attribute load and \
+call, then the protocol operations, then the boundary conversions -- and \
+this code is retired when they have.",
+        example: "\
+import numpy
+
+x = numpy.pi  # error[I0404]: `numpy` is a CPython object
+",
+    },
+    DiagnosticExplanation {
         code: "W1001",
         severity: Severity::Warning,
         summary: "unreachable code",

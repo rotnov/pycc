@@ -166,7 +166,15 @@ pub(super) fn call_result_scalar<'ctx>(
         // rather than a runtime panic discovered by a user, which is
         // what makes "only these three remain unhandled" a mechanically
         // checked claim instead of a comment.
-        ty @ (Ty::Infer | Ty::Param(_) | Ty::Protocol(_)) => {
+        //
+        // `Ty::Object` (Part 1 of #1026) joins them for a fourth reason: a
+        // foreign binding's opaque CPython object is the one `Ty::Object`
+        // value Part 1 produces, and it is never a *call result* -- calling
+        // a foreign object is refused by `pycc_types` (`I0404`) and no
+        // user function can be annotated to return `object`, which is
+        // unspellable in an annotation. Part 2's call support has to
+        // replace this arm with a real extraction.
+        ty @ (Ty::Infer | Ty::Param(_) | Ty::Protocol(_) | Ty::Object) => {
             panic!(
                 "pycc_codegen: a `{}`-typed call result is not supported yet",
                 ty.name()

@@ -267,6 +267,12 @@ pub enum ResolvedImport<'a> {
     /// cycle, or a `C0001` for a shape the compiler does not support yet
     /// (a namespace package, an absolute module that resolves nowhere).
     NotFound { code: &'static str, message: String },
+    /// `import X`: `X` is neither a project module nor a `pycc_std` one,
+    /// so Part 1 of #1026 binds it as an opaque CPython object
+    /// ([`ImportBinding::Foreign`]). Recorded only for the bare, undotted,
+    /// unaliased `import X` shape -- see `src/modules.rs`'s own `missing`
+    /// for why every other foreign shape stays unanswered.
+    Foreign,
 }
 
 /// The driver's answers for every [`ProjectImportRequest`] of one module,
@@ -367,6 +373,7 @@ pub(crate) fn lower_import_stmt(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,
     position: FuturePosition,
+    item_index: usize,
 ) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
@@ -394,6 +401,25 @@ pub(crate) fn lower_import_stmt(
                     ),
                     import.range,
                 ));
+            }
+            // Part 1 of #1026: a foreign root binds an opaque CPython
+            // object rather than failing. `item_index` is the number of
+            // `HirItem`s the statements before this one produced, which is
+            // where `pycc_mir` splices the import back into the module
+            // body so the generated `pycc_ext_obj_import` call runs in
+            // source order rather than hoisted (see `MirItem::ForeignImport`).
+            if matches!(
+                resolved.get(statement_span(import.range)),
+                Some(ResolvedImport::Foreign)
+            ) {
+                return Ok(Some(LoweredImport {
+                    bindings: vec![ImportBinding::Foreign {
+                        local_name: module_name.to_string(),
+                        module_path: module_name.to_string(),
+                        item_index,
+                    }],
+                    ..LoweredImport::default()
+                }));
             }
             let Some(module) = pycc_std::resolve_module(module_name) else {
                 return Err(unsupported(
@@ -427,10 +453,10 @@ pub(crate) fn lower_import_stmt(
                         statement_span(import.range),
                     ));
                 }
-                // `Found` is only ever the answer to a bare `import m`;
-                // an unanswered `from` import lowers as a single-file
-                // compilation would.
-                Some(ResolvedImport::Found) | None => {}
+                // `Found` and `Foreign` are only ever the answer to a bare
+                // `import m`; an unanswered `from` import lowers as a
+                // single-file compilation would.
+                Some(ResolvedImport::Found | ResolvedImport::Foreign) | None => {}
             }
             // No answer is ever recorded for a future import
             // (`project_import_request` skips it), so this always runs
@@ -787,7 +813,8 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
     match binding {
         ImportBinding::Module { local_name, .. }
         | ImportBinding::Symbol { local_name, .. }
-        | ImportBinding::Project { local_name, .. } => local_name,
+        | ImportBinding::Project { local_name, .. }
+        | ImportBinding::Foreign { local_name, .. } => local_name,
     }
 }
 

@@ -91,6 +91,18 @@ pub(crate) fn is_module_entry_symbol(name: &[u8]) -> bool {
 /// an undefined thunk resolves to nothing and dies at call time).
 pub const EXT_THUNK_PREFIX: &str = "pycc_ext_thunk_";
 
+/// The fixed C shim's module-import helper (Part 1 of #1026): it takes a
+/// NUL-terminated module name and returns a *new* reference to the imported
+/// module, or `NULL` with the CPython exception already set.
+///
+/// Kept here for exactly the reason [`EXT_THUNK_PREFIX`] is: the symbol is
+/// defined in `src/ext/pycc_ext_module.c` and declared by LLVM in
+/// `foreign_import.rs`, and the `--ext` link resolves an undefined symbol
+/// lazily (`-undefined dynamic_lookup` on Mach-O, `-Bsymbolic` on ELF), so
+/// a misspelling on either side is a crash at first call rather than a link
+/// error. One constant, referenced by both sides, makes that impossible.
+pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

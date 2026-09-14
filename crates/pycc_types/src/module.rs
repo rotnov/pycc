@@ -274,6 +274,11 @@ pub(super) fn check_with_environment_all(
     // exactly once rather than in each constructor -- a fully annotated
     // module takes the concrete path and would otherwise never see it.
     env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
+    // Part 1 of #1026: seed every foreign import as a definitely-bound
+    // `Ty::Object` in the same common sink, for the same reason -- both
+    // `Environment` constructors reach here, and a fully annotated module
+    // takes the concrete path that never runs the solver.
+    crate::foreign::bind_foreign_objects(&mut env, &hir.imports);
     // Issue #22: clear `defined_functions` before the top-level source-order
     // pass. `bind_function` (called by `check_with_signatures_all`'s pass 1
     // or `concrete_function_environment`) adds every function to this set,

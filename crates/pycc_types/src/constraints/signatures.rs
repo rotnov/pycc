@@ -247,6 +247,15 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // environment below.
         std_module_aliases: crate::std_receiver::bind_std_module_aliases(&hir.imports),
     };
+    // Part 1 of #1026: a foreign import binds a definite name the solver
+    // has no type term for (`Ty::Object` is not a solver term), which is
+    // exactly what `opaque_bindings` is for -- without it a read of the
+    // name would fall through to the "not a solver-tracked local" case and
+    // produce a misleading `T0021` instead of leaving the real refusal to
+    // the check phase's `I0404`.
+    for name in crate::foreign::foreign_object_names(&hir.imports) {
+        globals.opaque_bindings.insert(name.to_string());
+    }
     for (index, item) in hir.items.iter().enumerate() {
         match item {
             HirItem::TopLevelStmt(stmt) => {

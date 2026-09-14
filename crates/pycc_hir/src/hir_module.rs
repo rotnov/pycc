@@ -339,7 +339,9 @@ pub enum ImportBinding {
     /// carries a `Ty` -- only `<local_name>.<attr>` attribute access on
     /// this bound name resolves further, via `pycc_std::resolve_symbol`,
     /// and the lowered HIR always spells the result with the canonical
-    /// module name (`"math.sqrt"`), never the alias.
+    /// module name (`"math.sqrt"`), never the alias. A `pycc_std` module
+    /// name itself never carries a `Ty` -- unlike
+    /// [`ImportBinding::Foreign`], whose bound name *is* a value.
     Module {
         local_name: String,
         module: pycc_std::StdModule,
@@ -366,6 +368,27 @@ pub enum ImportBinding {
         local_name: String,
         module_path: String,
         kind: ProjectBindingKind,
+    },
+    /// `import numpy` where `numpy` is neither a project module nor a
+    /// `pycc_std` one (Part 1 of #1026): binds `local_name` to an opaque
+    /// CPython module object, `Ty::Object`. Unlike every other variant
+    /// this one is *not* compile-time-only -- the bound name is a real
+    /// runtime value, a `PyObject *` the generated `Py_mod_exec` slot
+    /// obtains from `pycc_ext_obj_import(module_path)`.
+    ///
+    /// `item_index` is the number of `HirItem`s the module statements
+    /// *preceding* this import produced. `HirModule::imports` is a side
+    /// table with no span and no position of its own, and an `import`
+    /// statement produces no `HirItem`, so without this field the import's
+    /// place in the module body would be lost and the generated import
+    /// call would have to be hoisted ahead of every statement -- which
+    /// CPython does not do and which D-244 rule 3 does not permit. The
+    /// index is module-local when `module::lower_module` records it and is
+    /// rebased onto the linked program's item list by `program::link`.
+    Foreign {
+        local_name: String,
+        module_path: String,
+        item_index: usize,
     },
 }
 

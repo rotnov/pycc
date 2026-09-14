@@ -1,0 +1,5 @@
+error[I0404]: `numpy` is a CPython object; operations on a CPython object are not supported yet -- Part 1 of #1026 binds the imported module but implements no operation on it
+ --> tests/diagnostics/i0404_foreign_module_operation.py:1:1
+  |
+1 | import numpy
+  | ^ `numpy` is a CPython object; operations on a CPython object are not supported yet -- Part 1 of #1026 binds the imported module but implements no operation on it

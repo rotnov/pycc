@@ -15,7 +15,7 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, MAX_USER_EXCEPTION_CLASSES,
+    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES,
     builtin_exception_class_defs, builtin_exception_init_item, is_builtin_exception_class,
     unsupported,
 };
@@ -121,9 +121,27 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
         for name in own {
             owners.insert(name.to_string(), index);
         }
+        // Part 1 of #1026: `ImportBinding::Foreign::item_index` is the
+        // position of the import in its *own* module's item list, so it
+        // has to be rebased onto the concatenated program the moment that
+        // list is appended after the preceding modules' items. Captured
+        // before the `extend` below, which is what makes it the offset of
+        // this module's first item in the linked program.
+        let item_offset = items.len();
         items.extend(hir.items);
         type_aliases.extend(hir.type_aliases);
-        imports.extend(hir.imports);
+        imports.extend(hir.imports.into_iter().map(|binding| match binding {
+            ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index,
+            } => ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index: item_index + item_offset,
+            },
+            other => other,
+        }));
         let seeded = hir.seeded_builtin_exception_classes;
         class_defs.extend(
             hir.class_defs

@@ -354,6 +354,45 @@ fn every_gap_in_a_program_is_collected_before_the_build_gives_up() {
     assert!(third.contains("`xs: list`"), "{third}");
 }
 
+/// Part 1 of #1026 work item 12: D-244 rule 2 fixes the artifact's ABI to a
+/// scalar set, and an opaque CPython object is not in it. The refusal is
+/// `C0003` -- the same capability gap every other unadmitted type gets --
+/// and it fires in `collect_exports`, before `boundary_carrier` is ever
+/// consulted, which is what the `Ty::Object => false` arm in
+/// `refusal_completeness.rs` pins from the other side.
+///
+/// Unreachable from Python source today: `object` is not spellable in an
+/// annotation, and a parameter needs one. The HIR is built directly here
+/// for exactly that reason -- the boundary's answer must be stated before
+/// a later part of #1026 makes the shape reachable, not after.
+#[test]
+fn an_object_typed_parameter_is_refused_at_the_export_boundary() {
+    let hir = module(vec![func("wrap", &[("x", Ty::Object)], Ty::Int)]);
+    let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
+    assert!(
+        gaps[0].message.contains("`x: object`"),
+        "{}",
+        gaps[0].message
+    );
+}
+
+/// The return half of the same refusal: `collect_exports` asks the two
+/// positions against separate admissible sets, so a `-> object` that only
+/// the parameter arm refused would still reach the wrapper.
+#[test]
+fn an_object_return_type_is_refused_at_the_export_boundary() {
+    let hir = module(vec![func("fetch", &[("x", Ty::Int)], Ty::Object)]);
+    let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
+    assert_eq!(gaps.len(), 1);
+    assert!(
+        gaps[0].message.contains("`-> object`"),
+        "{}",
+        gaps[0].message
+    );
+}
+
 #[test]
 fn every_ty_the_gap_message_can_name_renders_a_python_spelling() {
     let cases = [
@@ -365,6 +404,7 @@ fn every_ty_the_gap_message_can_name_renders_a_python_spelling() {
         (Ty::Dict(Box::new((Ty::Str, Ty::Int))), "dict"),
         (Ty::Set(Box::new(Ty::Int)), "set"),
         (Ty::Tuple(Box::new(vec![Ty::Int])), "tuple"),
+        (Ty::Object, "object"),
         (Ty::Param(Box::new("T".to_string())), "that type"),
     ];
     for (ty, spelling) in cases {

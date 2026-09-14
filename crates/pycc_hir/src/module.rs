@@ -439,7 +439,10 @@ fn lower_top_level_item<'a>(
         state.aliases.push((name, ty));
         return Ok(());
     }
-    if let Some(mut lowered) = lower_import_stmt(stmt, resolved, position)? {
+    // Part 1 of #1026: `state.items.len()` at this exact point is the
+    // number of `HirItem`s the preceding module statements produced, which
+    // is the interleaving position an `ImportBinding::Foreign` records.
+    if let Some(mut lowered) = lower_import_stmt(stmt, resolved, position, state.items.len())? {
         // Same reverse-direction check as the two type-alias arms above,
         // for `import ...`/`from ... import ...` (a single statement can
         // bind more than one local name, e.g. `from math import sqrt,

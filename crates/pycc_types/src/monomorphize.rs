@@ -2696,10 +2696,18 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
             seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
             items: hir.items.clone(),
             type_aliases: Vec::new(),
-            imports: Vec::new(),
-            // Unlike `type_aliases`/`imports` (both fully discharged during
-            // HIR lowering -- nothing downstream reads either again),
-            // `class_defs` is actively consumed after this point: `check`'s
+            // Part 1 of #1026: `imports` used to be dropped here for the
+            // same reason `type_aliases` still is -- fully discharged
+            // during HIR lowering, read by nothing downstream. That stopped
+            // being true when `ImportBinding::Foreign` became the record of
+            // a CPython import: `pycc_mir::build` splices one
+            // `MirItem::ForeignImport` per foreign binding into the item
+            // list at its recorded position, and `src/main.rs`'s `I0403`
+            // gate reads the same list. Dropping the field here left both
+            // reading an empty list, so an `import numpy` compiled to an
+            // artifact that never imported anything.
+            imports: hir.imports.clone(),
+            // `class_defs` is likewise actively consumed after this point: `check`'s
             // own class-body checking (Task 3) and every one of
             // `pycc_mir`/`pycc_codegen`'s slot-index/method-mangled-name
             // lookups (Tasks 5/6) read it from the `HirModule` that reaches
@@ -2888,7 +2896,9 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
         items,
         type_aliases: Vec::new(),
-        imports: Vec::new(),
+        // Carried for the same reason as on the no-generics path above:
+        // Part 1 of #1026 gave `imports` a downstream reader.
+        imports: hir.imports.clone(),
         class_defs,
     })
 }

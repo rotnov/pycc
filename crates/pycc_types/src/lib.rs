@@ -6,6 +6,7 @@ mod enum_lower;
 mod env;
 mod exception;
 mod expr;
+mod foreign;
 mod module;
 mod monomorphize;
 mod narrow;
@@ -416,7 +417,15 @@ fn lookup_bound_name(
     // Issue #118 Part 1: three-way distinction -- definitely bound -> ok, maybe
     // bound -> T0041, unbound -> T0021 (local) or "not defined" (global).
     match env.binding_state(name) {
-        Some(BindingState::Definitely(ty)) => Ok(ty.clone()),
+        Some(BindingState::Definitely(ty)) => {
+            // Part 1 of #1026, choke point 2: `for x in numpy:` and
+            // `[e for x in numpy]` lower to `HirStmt::ForList` /
+            // `HirExpr::ListComp`, whose list field is a plain `String`
+            // (D-105), so they reach the binding through this helper
+            // rather than through `infer_expr_in`'s `Name` arm.
+            crate::foreign::reject_object_read(name, ty)?;
+            Ok(ty.clone())
+        }
         Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
         None => {
             if is_local(local_names, name) {
@@ -459,7 +468,8 @@ fn ty_contains_param(ty: &Ty) -> bool {
         | Ty::None
         | Ty::Infer
         | Ty::Instance(_)
-        | Ty::Protocol(_) => false,
+        | Ty::Protocol(_)
+        | Ty::Object => false,
     }
 }
 
@@ -3011,7 +3021,8 @@ fn scan_signature_ty_for_param(
         | Ty::None
         | Ty::Infer
         | Ty::Instance(_)
-        | Ty::Protocol(_) => Ok(()),
+        | Ty::Protocol(_)
+        | Ty::Object => Ok(()),
     }
 }
 

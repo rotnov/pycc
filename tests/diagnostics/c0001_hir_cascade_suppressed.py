@@ -1,4 +1,4 @@
-import os
+import os as o
 class A:
     async def m(self) -> None: pass
 class B(A):
