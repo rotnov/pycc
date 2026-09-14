@@ -722,7 +722,7 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the protocol cannot be executed at the current `ext` boundary
+### Status: the protocol has no admissible subject
 
 Nothing above is amended by this subsection, and nothing above has been
 amended since it was committed. The protocol is unchanged, the
@@ -732,7 +732,7 @@ does not re-derive the same three findings.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
-times are possible, and both are blocked today:
+times are possible, and the boundary blocks only one of them:
 
 - **The sweep reading** — a replicate is one call that consumes the whole
   committed input — needs the subject to read the ~128 MB file itself.
@@ -740,39 +740,45 @@ times are possible, and both are blocked today:
   --ext` is rejected with ``error[C0001]: call to builtin `open` is valid
   Python but not implemented yet``, and no file-reading builtin is registered
   in `crates/pycc_std`.
-- **The per-record reading** — a replicate is one call per record, with the
-  records handed in as arguments — cannot carry the input either. The `ext`
-  boundary admits `int`, `float`, `bool`, `str` and fixed-arity tuples of
-  `int`/`float`/`bool` as parameters and returns those or `None`; `bytes`
-  is rejected with `C0001`, `list[float]` with `T0034`, `tuple[float, ...]`
-  with `T0053`, and a `list[int]` parameter with `C0003`. A 2,000,000-record
-  input has no admissible spelling at that boundary.
+- **The per-record reading** — a replicate is one call per record, with one
+  record's fields handed in as arguments and the host looping over the
+  records — **is** admissible at the current boundary. The `ext` boundary
+  admits `int`, `float`, `bool`, `str` and fixed-arity tuples of
+  `int`/`float`/`bool` as parameters and returns those or `None`, and a
+  triangle plus its query point is eight `float` arguments returning a
+  `bool` — exactly the shape the measurement below already exports and
+  times. What the boundary rejects is handing a record, or the whole input,
+  across as a *container*: `bytes` with `C0001`, `list[float]` with `T0034`,
+  `tuple[float, ...]` with `T0053`, and a `list[int]` parameter with `C0003`.
+  That the input holds 2,000,000 records does not make one record's signature
+  inadmissible; it only means the host, not the subject, does the iterating.
 
-There are two prerequisites, and the first is **necessary but not
-sufficient**:
+Two prerequisites remain, and they are not the same for the two readings:
 
-1. **The boundary must be able to carry the committed input.** That is the
-   buffer-protocol bridge (#1027), which gives a subject a `memoryview`
-   parameter whose elements compile to native loads — the one signature shape
-   that expresses "2,000,000 triangles plus their query points" as a single
-   call's argument. #1027 in turn depends on foreign imports (#1026).
-2. **An admissible subject must exist at all.** Reported as a count, so that
-   nothing about the proprietary codebase is published beyond one
-   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-   rule 6): the number of functions in the reference codebase that both
-   [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-   rule 1 would export and the current `ext` boundary admits is **zero**, and
-   #1027 does not change that count — a buffer parameter changes what the
-   boundary can carry, not which functions are exportable or what their
-   sources say. The **Subject** bullet's "byte-identical across all three
-   arms" is what the count is taken against.
+1. **The sweep reading needs the boundary to be able to carry the committed
+   input in one call.** That is the buffer-protocol bridge (#1027), which
+   gives a subject a `memoryview` parameter whose elements compile to native
+   loads — the one signature shape that expresses "2,000,000 triangles plus
+   their query points" as a single call's argument. #1027 in turn depends on
+   foreign imports (#1026). This prerequisite does not apply to the per-record
+   reading, which the boundary already admits.
+2. **Either reading needs an admissible subject to exist at all**, and none
+   does. Reported as a count, so that nothing about the proprietary codebase
+   is published beyond one ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6): the number of functions in
+   the reference codebase that both [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1 would export and the
+   current `ext` boundary admits is **zero**. What fails there is the export
+   test, not the carrier: the candidate functions are not visible where rule 1
+   looks, and no boundary work changes a function's visibility or its source
+   bytes. The **Subject** bullet's "byte-identical across all three arms" is
+   what the count is taken against.
 
-The second prerequisite has no issue tracking it, because it may not be a
-compiler gap at all: the **Subject** bullet requires a byte-identical function
-from a codebase that currently has none to offer, so closing it could equally
-mean revising what the protocol takes as its subject. That is left open here
-rather than settled, but it must be settled before #1039 can resume — landing
-#1027 alone does not unblock this run.
+The operative blocker is therefore the second prerequisite, for both readings.
+It has no issue tracking it, because it may not be a compiler gap at all: the
+**Subject** bullet requires a byte-identical function from a codebase that
+currently has none to offer, so closing it could equally mean revising what
+the protocol takes as its subject. That is left open here rather than settled,
+but it must be settled before #1039 can resume — and landing #1027 alone does
+not settle it.
 
 The protocol's **Input** bullet forbids choosing a different workload after
 meeting either obstacle, so the committed generator, seed and digest stand as
@@ -802,21 +808,17 @@ than a Python-level call**, by about 29 ns of wrapper. The wrapper is already
 runtime's per-call pending-exception check, not a calling convention that can
 be swapped. That finding is filed against #1031.
 
-The second row bounds the body speedup. Writing a per-call ratio as
-`(15.5 + body_py) / (29.1 + body_ext)`, the ratio rises with the amount of
-work per call and asymptotes to `body_py / body_ext`, which these two rows
-put at `148.5 / 46.9` ≈ **3.17x** for float arithmetic. Read that as a lower
-bound rather than a point estimate: the 29.1 ns subtracted from the second
-row was measured at one argument, while the second row's wrapper unpacks
-eight and packs a `bool`, so the subtraction leaves part of that wrapper's
-cost inside `body_ext` and *over*estimates it. The true asymptote is
-therefore at or above 3.17x, which is the direction the argument needs. It is
-a bound, not a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
-scalar calls at this arithmetic speedup, because the boundary can only eat
-into a body speedup, never add to it. Clearing 5x needs either a compiled
-body well over 5x faster than CPython's, or a boundary crossed once per sweep
-instead of once per record — which is the same #1027 the reading above
-names.
+The second row is the shape the per-record reading would use: eight `float`
+arguments and a `bool` return, the same arity a triangle-plus-query-point
+record has. At that arity the export is about **2.16x** faster per call than
+the same function written in Python, boundary cost included. Both rows are
+single observations of specific signatures, not a model: no asymptote or
+body-only ratio is derived from them here, because subtracting the
+one-argument row from the eight-argument row leaves unmatched
+argument-binding and return-path costs on both sides of the quotient and the
+resulting figure would isolate nothing. Neither row is evidence about D-244
+rule 6's 5x bar in either direction — only a run of the protocol above can be
+that.
 
 ## Planned CPython interop matrix (v0.7)
 
