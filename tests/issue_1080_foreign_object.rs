@@ -289,6 +289,64 @@ fn a_def_below_a_foreign_import_keeps_the_call_accepted() {
     assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
 }
 
+/// The solver runs its own source-order pass over a second environment
+/// (`crates/pycc_types/src/constraints/signatures.rs`), and it reaches a
+/// private helper's body *before* the check pass ever runs. Seeding the
+/// foreign names once, ahead of that pass, was not enough: a `def json`
+/// above the import left the name def-rebound, so the helper's call
+/// resolved against the shadowed function and unified `str` with `int` --
+/// a `T0021` conflict reported instead of the documented refusal. The
+/// import now supersedes the earlier `def` at its own position in that
+/// pass too.
+#[test]
+fn a_helper_calling_a_foreign_import_below_a_same_named_def_is_refused() {
+    let dir = ScratchDir::new("foreign_helper_shadowed_def").expect("scratch");
+    let output = check(
+        &dir,
+        "def json(x: int) -> int:\n    return x\n\n\nimport json\n\ndef _helper(x):\n    return json(x)\n\n\ny = _helper(\"s\")\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
+/// The mirrored order stays accepted inside a helper body too: the `def`
+/// below the import rebinds the name to a function, so the helper's call is
+/// an ordinary call. Pinned so the refusal above cannot widen.
+#[test]
+fn a_helper_calling_a_def_below_a_foreign_import_is_accepted() {
+    let dir = ScratchDir::new("foreign_helper_def_below").expect("scratch");
+    let output = check(
+        &dir,
+        "import json\n\ndef json(x: int) -> int:\n    return x\n\n\ndef _helper(x: int) -> int:\n    return json(x)\n\n\ny = _helper(1)\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
+/// A function local that happens to share a foreign import's name is an
+/// ordinary local. The per-body environment strips the module-level opaque
+/// marker for every local name; the foreign marker is the second half of
+/// that same fact and is stripped with it. Left behind, the local's own
+/// assignment would be read back through the foreign provenance and infer
+/// as `object`, turning an unresolved-container inference into a misleading
+/// return-type mismatch (`T0022: expected return type `object``).
+#[test]
+fn a_local_shadowing_a_foreign_import_is_not_a_foreign_object() {
+    let dir = ScratchDir::new("foreign_local_shadow").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy\n\ndef _helper():\n    numpy = {\"x\": 1}\n    return numpy\n\n\nz = _helper()\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(!rendered.contains("T0022"), "{rendered}");
+    assert!(
+        rendered.contains("cannot infer return type of private helper `_helper`"),
+        "{rendered}"
+    );
+}
+
 /// Builds `body` as an extension module named `module` inside `dir`.
 fn build_ext(dir: &Path, module: &str, body: &str) {
     let build = pycc()

@@ -269,7 +269,23 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         globals.opaque_bindings.insert(name.to_string());
         globals.foreign_objects.insert(name.to_string());
     }
+    // PR 1c of #1080 review finding 1: the seed above is a one-time
+    // pre-pass, so a `def` *above* the import would leave the name
+    // `defs_rebound` here and the solver would treat a later call as a call
+    // of that function -- reporting `T0021` before validation could emit the
+    // documented `I0404`. `crate::foreign::bind_foreign_objects_at` applies
+    // the same rule to the `Environment` pass; this is its
+    // `ConstraintEnvironment` mirror, reading the same recorded
+    // `item_index`.
+    let rebind_foreign_at = |globals: &mut ConstraintEnvironment<'_, '_>, position: usize| {
+        for name in crate::foreign::foreign_object_names_at(&hir.imports, position) {
+            globals.defs_rebound.remove(name);
+            globals.opaque_bindings.insert(name.to_string());
+            globals.foreign_objects.insert(name.to_string());
+        }
+    };
     for (index, item) in hir.items.iter().enumerate() {
+        rebind_foreign_at(&mut globals, index);
         match item {
             HirItem::TopLevelStmt(stmt) => {
                 collect_block_constraints(
@@ -290,9 +306,20 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // the net binding, not a stale shadowed primitive.
             HirItem::Function { name, .. } => {
                 globals.defs_rebound.insert(name.clone());
+                // Symmetric with `rebind_foreign_at` above: a `def` *below*
+                // the import rebinds the name to a function, exactly as
+                // CPython's last-binding-wins order does, so the foreign
+                // provenance must not survive it -- otherwise the Call arm's
+                // foreign gate would refuse an ordinary call.
+                globals.opaque_bindings.remove(name.as_str());
+                globals.foreign_objects.remove(name.as_str());
             }
         }
     }
+    // A trailing `import` records the item count itself, so it has no
+    // iteration of its own above (same convention as
+    // `bind_foreign_objects_at`).
+    rebind_foreign_at(&mut globals, hir.items.len());
     let mut collected = KeyedDiagnostics::new();
     for (index, (item, local_names)) in hir.items.iter().zip(function_local_names).enumerate() {
         let HirItem::Function {
@@ -327,6 +354,13 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // local name re-binds within this function body, so a stale
             // module-level opaque marker must not survive for it either.
             env.opaque_bindings.remove(local_name);
+            // PR 1c of #1080 review finding 2: the foreign marker is the
+            // second half of the same fact and must be removed with it.
+            // Left behind, a local assigned a solver-opaque value would be
+            // read back through the foreign-global provenance and infer as
+            // `Ty::Object`, turning an unresolved-container inference into a
+            // misleading return-type mismatch.
+            env.foreign_objects.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted
         // signature's names (#386): a redefined method shares its mangled

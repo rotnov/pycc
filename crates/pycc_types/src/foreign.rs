@@ -120,5 +120,27 @@ pub(crate) fn bind_foreign_objects_at(
     }
 }
 
+/// The local names a foreign import recorded at `position` binds, for the
+/// solver's own source-order pass.
+///
+/// [`bind_foreign_objects_at`] is the `Environment` half of the same rule;
+/// the solver walks a `ConstraintEnvironment` instead, which has no
+/// `bind`, so it needs the names rather than the binding action. Both
+/// callers read the one `item_index` the lowering recorded, so "where does
+/// a foreign import take effect" keeps a single answer.
+pub(crate) fn foreign_object_names_at(
+    imports: &[ImportBinding],
+    position: usize,
+) -> impl Iterator<Item = &str> {
+    imports.iter().filter_map(move |binding| match binding {
+        ImportBinding::Foreign {
+            local_name,
+            item_index,
+            ..
+        } if *item_index == position => Some(local_name.as_str()),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests;

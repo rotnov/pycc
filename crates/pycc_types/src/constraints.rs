@@ -671,6 +671,18 @@ pub(crate) fn collect_expr_constraints(
             if env.bindings.contains_key(callee) && !env.defs_rebound.contains(callee) {
                 return Err(non_callable_binding(callee));
             }
+            // Part 1 of #1026, PR 1c of #1080 review finding 1: a foreign
+            // import binds its name to a CPython module object, and the name
+            // deliberately stays out of `bindings` (see the `Name` arm), so
+            // the gate above cannot see it. Without this one a `def json`
+            // placed *above* `import json` would still be found by
+            // `signatures.get` below and the call would be checked against
+            // the shadowed function -- reporting a `T0021` unification
+            // conflict instead of the documented refusal. This is the
+            // solver-side half of `foreign`'s third choke point.
+            if env.foreign_objects.contains(callee.as_str()) {
+                return Err(crate::foreign::object_operation_unsupported(callee));
+            }
             if is_local(env.local_names, callee) {
                 return Err(unbound_local(callee));
             }
