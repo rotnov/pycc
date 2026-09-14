@@ -5,6 +5,7 @@ require "pathname"
 require "psych"
 require "digest"
 require "json"
+require "shellwords"
 
 class RoadmapEvidenceError < StandardError; end
 
@@ -32,7 +33,11 @@ EVIDENCE_CLAIMS = {
   "ci-diff-coverage-100" =>
     "Every compiler-relevant pull request keeps 100% line coverage of its added and modified Rust lines, and total line and region coverage is reported by CI.",
   "readme-diff-coverage-badge-bound" =>
-    "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold."
+    "The README coverage badge percentage is bound to ci.yml's enforced --require-changed-lines threshold.",
+  "sprint1-ext-hot-function-5x" =>
+    "the owner's reference hot function compiles unchanged as an `ext` module and runs at least 5x faster than CPython when called from CPython",
+  "sprint1-ext-numbers-published" =>
+    "the count of reference functions compiling unchanged and the hot loop's speedup versus CPython and Cython are published as numbers"
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -74,6 +79,14 @@ EVIDENCE_SECTIONS = {
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
+  ],
+  "sprint1-ext-hot-function-5x" => [
+    "pycc Roadmap",
+    "product-sprint-1 — annotated code callable from CPython"
+  ],
+  "sprint1-ext-numbers-published" => [
+    "pycc Roadmap",
+    "product-sprint-1 — annotated code callable from CPython"
   ]
 }.freeze
 # Historical audit-fixture digest. The public policy no longer accepts it.
@@ -2943,7 +2956,320 @@ def resolve_evidence_ids(root)
   evidence_ids
 end
 
-def validate_evidence(root, _evidence_ids)
+# `docs/ROADMAP.md`'s two `product-sprint-1` acceptance items are the only
+# evidence identifiers in this file whose proof is a measurement rather than a
+# property of the CI workflow. `docs/TESTING.md`'s "Hosted `ext` benchmark
+# protocol (product-sprint-1)" section owns the protocol and its **Reporting**
+# bullet fixes what the published report must carry; the constants below name
+# where that report lives and which of its fields this checker refuses to take
+# on trust. Claiming either identifier with the report absent, malformed,
+# unbound from the pre-registration record, or -- for the speedup claim --
+# below the threshold [D-244](docs/decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+# rule 6 fixes, fails closed.
+PRODUCT_SPRINT_1_EVIDENCE_IDS = %w[
+  sprint1-ext-hot-function-5x
+  sprint1-ext-numbers-published
+].freeze
+PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID = "sprint1-ext-hot-function-5x"
+PRODUCT_SPRINT_1_REPORT_PATH = "docs/benchmarks/hosted-ext-product-sprint-1.json"
+PRODUCT_SPRINT_1_PRE_REGISTRATION_PATH = "scripts/bench_hosted_ext_precommit.json"
+PRODUCT_SPRINT_1_ARMS = %w[cpython cython ext].freeze
+PRODUCT_SPRINT_1_ARM_STATISTICS = %w[median_ns min_ns max_ns].freeze
+PRODUCT_SPRINT_1_VERSION_FIELDS = %w[
+  cpython
+  cpython_vv
+  cpython_configure_args
+  cython
+  cython_mode
+  cython_c_optimization
+  pycc_profile
+].freeze
+#: The subset of the fields above that `docs/TESTING.md`'s "Versions" bullet
+#: pins to one literal value. Restating anything else is not a restatement of
+#: the pin, so the report is refused rather than taken on trust. The Cython
+#: arm's build mode and the optimization level its generated C is compiled at
+#: are pinned here for the same reason the version is: that arm's median is the
+#: denominator of one of the two published ratios, so a run that compiled it
+#: differently measured something else.
+PRODUCT_SPRINT_1_PINNED_VERSIONS = {
+  "cpython" => "3.14.7",
+  "cython" => "3.1.6",
+  "cython_mode" => "pure-python",
+  "cython_c_optimization" => "-O2",
+  "pycc_profile" => "release"
+}.freeze
+#: The one Cython setting the protocol states as a directive rather than a
+#: version string. It is required to be the JSON boolean `true` exactly: a
+#: string `"true"`, a `1`, and an absent key are all refused, because Ruby
+#: truthiness would accept every one of them and the protocol fixes the
+#: directive as enabled, not as merely present.
+PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD = "cython_annotation_typing"
+#: `cpython_vv` and `cpython_configure_args` have no pinned literal -- the
+#: `-VV` banner and `CONFIGURE_ARGS` differ per build, and the protocol asks
+#: for "the interpreter actually used" rather than a fixed string. What the
+#: bullet does fix is checkable properties of them, and the constants below
+#: mirror `scripts/bench_hosted_ext.py`'s guards over the live interpreter --
+#: that file is the source those values are copied from, and the two must
+#: change together.
+PRODUCT_SPRINT_1_FREE_THREADING_MARKER = "free-threading build"
+PRODUCT_SPRINT_1_UNOPTIMIZED_CONFIGURE_MARKERS = %w[
+  --with-pydebug
+  --with-trace-refs
+  --without-pymalloc
+  --with-address-sanitizer
+  --with-undefined-behavior-sanitizer
+].freeze
+PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER = "--enable-optimizations"
+PRODUCT_SPRINT_1_DISABLED_CONFIGURE_VALUES = ["", "no", "false", "0"].freeze
+#: Each reported ratio, and the arm whose median is its numerator; the `ext`
+#: arm's median is always the denominator.
+PRODUCT_SPRINT_1_RATIOS = { "versus_cpython" => "cpython", "versus_cython" => "cython" }.freeze
+#: The protocol's "Replicates and statistic" bullet fixes this count.
+PRODUCT_SPRINT_1_REPLICATES = 7
+#: Rounding in the published report is tolerated; a ratio that does not follow
+#: from the published medians at all is not.
+PRODUCT_SPRINT_1_RATIO_TOLERANCE = 0.01
+#: D-244 rule 6's kill criterion, quoted as a number rather than restated:
+#: "runs >= 5x faster than CPython when called from CPython".
+D244_RULE_6_CPYTHON_SPEEDUP = 5.0
+
+def read_evidence_json(path, label)
+  JSON.parse(path.read)
+rescue Errno::ENOENT
+  raise RoadmapEvidenceError, "#{path}: #{label} is missing, so the claim is unproven"
+rescue JSON::ParserError => e
+  raise RoadmapEvidenceError, "#{path}: #{label} does not parse as JSON: #{e.message}"
+end
+
+def positive_integer?(value)
+  value.is_a?(Integer) && value.positive?
+end
+
+def validate_product_sprint_1_arms(report, source)
+  arms = report["arms"]
+  unless arms.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry an `arms` object"
+  end
+
+  PRODUCT_SPRINT_1_ARMS.each do |arm|
+    summary = arms[arm]
+    unless summary.is_a?(Hash)
+      raise RoadmapEvidenceError, "#{source}: the report must carry the #{arm} arm"
+    end
+
+    PRODUCT_SPRINT_1_ARM_STATISTICS.each do |statistic|
+      unless positive_integer?(summary[statistic])
+        raise RoadmapEvidenceError,
+              "#{source}: the #{arm} arm's #{statistic} must be a positive integer"
+      end
+    end
+    unless summary["min_ns"] <= summary["median_ns"] &&
+           summary["median_ns"] <= summary["max_ns"]
+      raise RoadmapEvidenceError,
+            "#{source}: the #{arm} arm's minimum, median and maximum are not ordered"
+    end
+  end
+end
+
+# `docs/TESTING.md`'s "Versions" bullet pins no literal `-VV` banner -- it
+# requires the banner of "the interpreter actually used". Two properties of it
+# are fixed all the same: it must report the pinned CPython, and it must be a
+# GIL-enabled build. `src/ext/pycc_ext_module.c`'s `PyInit_` refuses a
+# free-threaded host outright, so a report restating one describes a run the
+# `ext` arm could not have happened in.
+def validate_product_sprint_1_version_output(version_output, source)
+  tokens = version_output.split
+  reported = tokens[0] == "Python" && tokens.length > 1 ? tokens[1] : ""
+  unless reported == PRODUCT_SPRINT_1_PINNED_VERSIONS.fetch("cpython")
+    raise RoadmapEvidenceError,
+          "#{source}: the report's cpython_vv does not report the pinned CPython " \
+          "#{PRODUCT_SPRINT_1_PINNED_VERSIONS.fetch('cpython')}"
+  end
+  return unless version_output.include?(PRODUCT_SPRINT_1_FREE_THREADING_MARKER)
+
+  raise RoadmapEvidenceError,
+        "#{source}: the report's cpython_vv is a #{PRODUCT_SPRINT_1_FREE_THREADING_MARKER}, " \
+        "which the protocol's GIL-enabled host requirement rules out"
+end
+
+#: Mirrors `scripts/bench_hosted_ext.py`'s `reports_optimized_build`, including
+#: its fallback to whitespace splitting when the recorded flags carry an
+#: unbalanced quote that `Shellwords` refuses.
+def product_sprint_1_configure_tokens(configure_args)
+  Shellwords.split(configure_args)
+rescue ArgumentError
+  configure_args.split
+end
+
+def product_sprint_1_reports_optimized_build(configure_args)
+  product_sprint_1_configure_tokens(configure_args).any? do |token|
+    next true if token == PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER
+
+    next false unless token.start_with?("#{PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER}=")
+
+    value = token.split("=", 2).last.strip.downcase
+    !PRODUCT_SPRINT_1_DISABLED_CONFIGURE_VALUES.include?(value)
+  end
+end
+
+# The other field with no pinned literal, checked for the same properties
+# `scripts/bench_hosted_ext.py` refuses a live interpreter over: none of the
+# markers that make a build inadmissible, and a *positive* report of the
+# optimization flag rather than the mere absence of the denied ones.
+def validate_product_sprint_1_configure_args(configure_args, source)
+  PRODUCT_SPRINT_1_UNOPTIMIZED_CONFIGURE_MARKERS.each do |marker|
+    next unless configure_args.include?(marker)
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report's cpython_configure_args carry #{marker}, which is inadmissible"
+  end
+  return if product_sprint_1_reports_optimized_build(configure_args)
+
+  raise RoadmapEvidenceError,
+        "#{source}: the report's cpython_configure_args do not positively report " \
+        "#{PRODUCT_SPRINT_1_OPTIMIZED_CONFIGURE_MARKER}, so the baseline arm is not provably " \
+        "the optimized build the protocol requires"
+end
+
+def validate_product_sprint_1_reporting(report, source)
+  unless report["replicates"] == PRODUCT_SPRINT_1_REPLICATES
+    raise RoadmapEvidenceError,
+          "#{source}: the report must state #{PRODUCT_SPRINT_1_REPLICATES} replicates, " \
+          "the count the protocol fixes"
+  end
+
+  versions = report["versions"]
+  unless versions.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry a `versions` object"
+  end
+  PRODUCT_SPRINT_1_VERSION_FIELDS.each do |field|
+    value = versions[field]
+    unless value.is_a?(String) && !value.strip.empty?
+      raise RoadmapEvidenceError,
+            "#{source}: the report must restate the pinned #{field} version"
+    end
+
+    pinned = PRODUCT_SPRINT_1_PINNED_VERSIONS[field]
+    next if pinned.nil?
+    next if value.strip == pinned
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report restates #{field} as #{value.strip.inspect}, not the " \
+          "#{pinned.inspect} the protocol pins"
+  end
+  unless versions[PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD] == true
+    raise RoadmapEvidenceError,
+          "#{source}: the report must restate #{PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD} as " \
+          "the boolean true, the directive the protocol pins for the Cython arm"
+  end
+  validate_product_sprint_1_version_output(versions["cpython_vv"], source)
+  validate_product_sprint_1_configure_args(versions["cpython_configure_args"], source)
+
+  ratios = report["ratios"]
+  unless ratios.is_a?(Hash)
+    raise RoadmapEvidenceError, "#{source}: the report must carry a `ratios` object"
+  end
+  PRODUCT_SPRINT_1_RATIOS.each do |ratio, arm|
+    value = ratios[ratio]
+    unless value.is_a?(Numeric) && value.positive?
+      raise RoadmapEvidenceError, "#{source}: the report's #{ratio} must be a positive number"
+    end
+
+    expected = report["arms"][arm]["median_ns"].to_f / report["arms"]["ext"]["median_ns"]
+    unless (expected - value.to_f).abs <= PRODUCT_SPRINT_1_RATIO_TOLERANCE * expected
+      raise RoadmapEvidenceError,
+            "#{source}: the report's #{ratio} does not follow from its published medians"
+    end
+  end
+end
+
+def validate_product_sprint_1_pre_registration(report, record, source, record_source, claimed)
+  # Checked before the restatement loop below: a record whose subject digest is
+  # still unregistered binds the run to nothing, so a report restating that
+  # absence would otherwise "match" it. `docs/TESTING.md`'s "Subject" bullet
+  # requires the subject byte-identical across the arms, and only a digest
+  # committed before the run makes that checkable rather than asserted. The
+  # digest alone is published; the reference codebase is proprietary (D-244
+  # rule 6).
+  unless record["subject_sha256"].is_a?(String) &&
+         record["subject_sha256"].match?(/\A[0-9a-f]{64}\z/)
+    raise RoadmapEvidenceError,
+          "#{record_source}: subject_sha256 must be a registered SHA-256 before any run " \
+          "is scored, so the subject is bound to the reference source"
+  end
+
+  %w[
+    input_sha256
+    subject_sha256
+    compile_unchanged_denominator
+    compile_unchanged_set_sha256
+  ].each do |field|
+    next if !report[field].nil? && report[field] == record[field]
+
+    raise RoadmapEvidenceError,
+          "#{source}: the report's #{field} does not match #{record_source}"
+  end
+  if report["machine"].nil? || report["machine"] != record["machine"]
+    raise RoadmapEvidenceError,
+          "#{source}: the report's machine identity does not match #{record_source}"
+  end
+
+  count = report["compile_unchanged_count"]
+  denominator = record["compile_unchanged_denominator"]
+  unless count.is_a?(Integer) && !count.negative? && denominator.is_a?(Integer) &&
+         count <= denominator
+    raise RoadmapEvidenceError,
+          "#{source}: the report's compile_unchanged_count must be an integer no greater " \
+          "than the committed denominator"
+  end
+  return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
+  return if count.positive?
+
+  # Zero remains admissible for the numbers-only claim, which publishes the
+  # count whatever it is. It is not admissible for the speedup claim, whose
+  # roadmap sentence asserts that the reference hot function compiled unchanged
+  # and then outran CPython -- a claim no run with an empty compile-unchanged
+  # set can have made.
+  raise RoadmapEvidenceError,
+        "#{source}: the report's compile_unchanged_count is 0, so no reference function " \
+        "compiled unchanged and #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID} claims one that did"
+end
+
+def validate_product_sprint_1_evidence(root, evidence_ids)
+  claimed = PRODUCT_SPRINT_1_EVIDENCE_IDS & evidence_ids
+  return if claimed.empty?
+
+  report_path = root / PRODUCT_SPRINT_1_REPORT_PATH
+  record_path = root / PRODUCT_SPRINT_1_PRE_REGISTRATION_PATH
+  report = read_evidence_json(report_path, "the published hosted `ext` benchmark report")
+  record = read_evidence_json(record_path, "the hosted `ext` pre-registration record")
+  unless report.is_a?(Hash) && record.is_a?(Hash)
+    raise RoadmapEvidenceError,
+          "#{report_path}: the report and the pre-registration record must each be a JSON object"
+  end
+
+  validate_product_sprint_1_arms(report, report_path)
+  validate_product_sprint_1_reporting(report, report_path)
+  validate_product_sprint_1_pre_registration(report, record, report_path, record_path, claimed)
+  return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
+
+  # Judged from the published medians, never from the reported ratio: the
+  # consistency check above tolerates rounding, so a ratio printed as 5.0 can
+  # stand for medians that divide out to 4.96. The medians are the
+  # measurement, so they are what the threshold is applied to, exactly and
+  # without tolerance.
+  speedup = report["arms"]["cpython"]["median_ns"].to_f / report["arms"]["ext"]["median_ns"]
+  return if speedup >= D244_RULE_6_CPYTHON_SPEEDUP
+
+  raise RoadmapEvidenceError,
+        "#{report_path}: the CPython speedup #{speedup} its published medians yield is below " \
+        "the threshold D-244 rule 6 fixes for #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID}"
+end
+
+def validate_evidence(root, evidence_ids)
+  # Checked before the workflow is even read: the D-171 routing branch below
+  # returns early, and this evidence is not a property of the workflow.
+  validate_product_sprint_1_evidence(root, evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
   digest = Digest::SHA256.hexdigest(workflow_text)
