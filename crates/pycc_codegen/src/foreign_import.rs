@@ -202,6 +202,41 @@ mod tests {
         assert!(import < after, "{ir}");
     }
 
+    /// Two foreign imports in one module share one extern declaration of
+    /// the shim helper.
+    ///
+    /// `obj_import_fn` declares `pycc_ext_obj_import` lazily and returns
+    /// the existing `FunctionValue` on every later call; declaring it
+    /// twice would be an LLVM module-verifier error (a redefinition), so
+    /// the second import is what proves the early return is taken rather
+    /// than merely present. Both calls are still emitted, in source order.
+    #[test]
+    fn a_second_foreign_import_reuses_the_one_extern_declaration() {
+        let mut declared = 0usize;
+        let ir = entry_ir(
+            "foreign_import_twice",
+            vec![
+                MirItem::ForeignImport {
+                    local_name: "numpy".to_string(),
+                    module_path: "numpy".to_string(),
+                },
+                MirItem::ForeignImport {
+                    local_name: "scipy".to_string(),
+                    module_path: "scipy".to_string(),
+                },
+            ],
+        );
+        let mut rest = ir.as_str();
+        while let Some(at) = rest.find(EXT_OBJ_IMPORT_SYMBOL) {
+            declared += 1;
+            rest = &rest[at + EXT_OBJ_IMPORT_SYMBOL.len()..];
+        }
+        assert_eq!(declared, 2, "one call site per import: {ir}");
+        let numpy = ir.find("numpy").expect("the first module name");
+        let scipy = ir.find("scipy").expect("the second module name");
+        assert!(numpy < scipy, "{ir}");
+    }
+
     /// The gate `src/foreign_import.rs` exists to make coverable: outside
     /// `--ext` there is no interpreter to import into, the driver has
     /// already refused with `I0403`, and this arm emits nothing rather than

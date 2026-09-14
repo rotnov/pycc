@@ -3439,6 +3439,25 @@ fn an_infer_typed_return_value_is_not_yet_supported() {
 }
 
 #[test]
+fn ty_to_basic_type_gives_an_opaque_object_a_pointer_representation() {
+    // Part 1 of #1026. No *source* reaches this arm today: an `object`
+    // is only ever a module binding, `declare_module_globals` decides a
+    // module global's storage with its own match rather than through
+    // this function, and the two positions that would route an `object`
+    // here -- a function parameter and a return -- are refused before
+    // codegen (`I0404` inside the module, `C0003` at the `ext` export
+    // boundary). The arm exists anyway because this function's catch-all
+    // is a `panic!`, so the first construct that does give an `object` a
+    // signature position would turn a supported program into an internal
+    // compiler error rather than a diagnostic; this test is what keeps
+    // the arm honest until then. `PyObject *` is opaque to pycc, so the
+    // only property worth pinning is that it is the same plain pointer
+    // `Ty::Str`/`Ty::List` already get.
+    let context = Context::create();
+    assert!(ty_to_basic_type(&context, Ty::Object).is_pointer_type());
+}
+
+#[test]
 fn ty_to_basic_type_gives_tuple_a_struct_representation_positionally() {
     // Supersedes `ty_to_basic_type_panics_clearly_for_tuple`, which
     // asserted that `Ty::Tuple` had no LLVM representation at all --

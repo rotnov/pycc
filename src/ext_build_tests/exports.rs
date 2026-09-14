@@ -371,11 +371,8 @@ fn an_object_typed_parameter_is_refused_at_the_export_boundary() {
     let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
     assert_eq!(gaps.len(), 1);
     assert_eq!(gaps[0].code, EXT_CAPABILITY_CODE);
-    assert!(
-        gaps[0].message.contains("`x: object`"),
-        "{}",
-        gaps[0].message
-    );
+    let message = &gaps[0].message;
+    assert!(message.contains("`x: object`"), "{message}");
 }
 
 /// The return half of the same refusal: `collect_exports` asks the two
@@ -386,11 +383,8 @@ fn an_object_return_type_is_refused_at_the_export_boundary() {
     let hir = module(vec![func("fetch", &[("x", Ty::Int)], Ty::Object)]);
     let gaps = collect_exports(&hir).expect_err("an opaque object is not carriable");
     assert_eq!(gaps.len(), 1);
-    assert!(
-        gaps[0].message.contains("`-> object`"),
-        "{}",
-        gaps[0].message
-    );
+    let message = &gaps[0].message;
+    assert!(message.contains("`-> object`"), "{message}");
 }
 
 #[test]
