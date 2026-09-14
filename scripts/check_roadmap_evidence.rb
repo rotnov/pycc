@@ -2980,16 +2980,30 @@ PRODUCT_SPRINT_1_VERSION_FIELDS = %w[
   cpython_vv
   cpython_configure_args
   cython
+  cython_mode
+  cython_c_optimization
   pycc_profile
 ].freeze
 #: The subset of the fields above that `docs/TESTING.md`'s "Versions" bullet
 #: pins to one literal value. Restating anything else is not a restatement of
-#: the pin, so the report is refused rather than taken on trust.
+#: the pin, so the report is refused rather than taken on trust. The Cython
+#: arm's build mode and the optimization level its generated C is compiled at
+#: are pinned here for the same reason the version is: that arm's median is the
+#: denominator of one of the two published ratios, so a run that compiled it
+#: differently measured something else.
 PRODUCT_SPRINT_1_PINNED_VERSIONS = {
   "cpython" => "3.14.7",
   "cython" => "3.1.6",
+  "cython_mode" => "pure-python",
+  "cython_c_optimization" => "-O2",
   "pycc_profile" => "release"
 }.freeze
+#: The one Cython setting the protocol states as a directive rather than a
+#: version string. It is required to be the JSON boolean `true` exactly: a
+#: string `"true"`, a `1`, and an absent key are all refused, because Ruby
+#: truthiness would accept every one of them and the protocol fixes the
+#: directive as enabled, not as merely present.
+PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD = "cython_annotation_typing"
 #: `cpython_vv` and `cpython_configure_args` have no pinned literal -- the
 #: `-VV` banner and `CONFIGURE_ARGS` differ per build, and the protocol asks
 #: for "the interpreter actually used" rather than a fixed string. What the
@@ -3143,6 +3157,11 @@ def validate_product_sprint_1_reporting(report, source)
           "#{source}: the report restates #{field} as #{value.strip.inspect}, not the " \
           "#{pinned.inspect} the protocol pins"
   end
+  unless versions[PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD] == true
+    raise RoadmapEvidenceError,
+          "#{source}: the report must restate #{PRODUCT_SPRINT_1_ANNOTATION_TYPING_FIELD} as " \
+          "the boolean true, the directive the protocol pins for the Cython arm"
+  end
   validate_product_sprint_1_version_output(versions["cpython_vv"], source)
   validate_product_sprint_1_configure_args(versions["cpython_configure_args"], source)
 
@@ -3164,7 +3183,7 @@ def validate_product_sprint_1_reporting(report, source)
   end
 end
 
-def validate_product_sprint_1_pre_registration(report, record, source, record_source)
+def validate_product_sprint_1_pre_registration(report, record, source, record_source, claimed)
   # Checked before the restatement loop below: a record whose subject digest is
   # still unregistered binds the run to nothing, so a report restating that
   # absence would otherwise "match" it. `docs/TESTING.md`'s "Subject" bullet
@@ -3203,6 +3222,17 @@ def validate_product_sprint_1_pre_registration(report, record, source, record_so
           "#{source}: the report's compile_unchanged_count must be an integer no greater " \
           "than the committed denominator"
   end
+  return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
+  return if count.positive?
+
+  # Zero remains admissible for the numbers-only claim, which publishes the
+  # count whatever it is. It is not admissible for the speedup claim, whose
+  # roadmap sentence asserts that the reference hot function compiled unchanged
+  # and then outran CPython -- a claim no run with an empty compile-unchanged
+  # set can have made.
+  raise RoadmapEvidenceError,
+        "#{source}: the report's compile_unchanged_count is 0, so no reference function " \
+        "compiled unchanged and #{PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID} claims one that did"
 end
 
 def validate_product_sprint_1_evidence(root, evidence_ids)
@@ -3220,7 +3250,7 @@ def validate_product_sprint_1_evidence(root, evidence_ids)
 
   validate_product_sprint_1_arms(report, report_path)
   validate_product_sprint_1_reporting(report, report_path)
-  validate_product_sprint_1_pre_registration(report, record, report_path, record_path)
+  validate_product_sprint_1_pre_registration(report, record, report_path, record_path, claimed)
   return unless claimed.include?(PRODUCT_SPRINT_1_SPEEDUP_EVIDENCE_ID)
 
   # Judged from the published medians, never from the reported ratio: the

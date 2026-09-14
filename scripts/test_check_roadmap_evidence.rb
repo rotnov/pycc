@@ -5289,6 +5289,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
         "cpython_vv" => "Python 3.14.7 (main, Sep 1 2026, 00:00:00) [Clang]",
         "cpython_configure_args" => "'--enable-optimizations' '--with-lto'",
         "cython" => "3.1.6",
+        "cython_mode" => "pure-python",
+        "cython_annotation_typing" => true,
+        "cython_c_optimization" => "-O2",
         "pycc_profile" => "release"
       },
       "arms" => {
@@ -5448,7 +5451,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_rejects_a_product_sprint_1_report_missing_a_pinned_version
-    %w[cpython cpython_vv cpython_configure_args cython pycc_profile].each do |field|
+    %w[
+      cpython
+      cpython_vv
+      cpython_configure_args
+      cython
+      cython_mode
+      cython_c_optimization
+      cython_annotation_typing
+      pycc_profile
+    ].each do |field|
       report = product_sprint_1_report
       report["versions"].delete(field)
       assert_product_sprint_1_rejected("missing version #{field}", report: report)
@@ -5574,6 +5586,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     {
       "cpython" => "3.14.6",
       "cython" => "3.1.5",
+      "cython_mode" => "cdef",
+      "cython_c_optimization" => "-O0",
       "pycc_profile" => "debug"
     }.each do |field, value|
       report = product_sprint_1_report
@@ -5581,6 +5595,72 @@ class RoadmapEvidenceCliTest < Minitest::Test
       stderr = assert_product_sprint_1_rejected("#{field} #{value.inspect}", report: report)
       assert_includes stderr, field
     end
+  end
+
+  # The Cython arm's `annotation_typing` directive is the one protocol setting
+  # stated as a directive rather than a version string, so it is required to be
+  # the JSON boolean `true` exactly. Every value below is truthy in Ruby or
+  # would pass a bare presence check, and none of them is the directive the
+  # protocol pins.
+  def test_rejects_a_product_sprint_1_report_whose_annotation_typing_is_not_the_boolean_true
+    ["true", 1, "enabled", false, nil].each do |value|
+      report = product_sprint_1_report
+      report["versions"]["cython_annotation_typing"] = value
+      stderr = assert_product_sprint_1_rejected(
+        "cython_annotation_typing #{value.inspect}",
+        report: report
+      )
+      assert_includes stderr, "cython_annotation_typing"
+    end
+  end
+
+  # The accepting half of the pair above: the fixture already restates the
+  # Cython build mode, the directive and the C optimization level, and a report
+  # carrying all three as the protocol pins them is admissible.
+  def test_accepts_a_product_sprint_1_report_restating_the_cython_build_settings
+    report = product_sprint_1_report
+    assert_equal "pure-python", report["versions"]["cython_mode"]
+    assert_equal true, report["versions"]["cython_annotation_typing"]
+    assert_equal "-O2", report["versions"]["cython_c_optimization"]
+
+    _stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: PRODUCT_SPRINT_1_CLAIMS.keys,
+      report: JSON.pretty_generate(report)
+    )
+
+    assert status.success?, stderr
+  end
+
+  # `sprint1-ext-hot-function-5x` asserts that the reference hot function
+  # compiled unchanged, which no run with an empty compile-unchanged set can
+  # have observed. Zero is inside the committed denominator, so the range check
+  # above admits it; this claim still must not.
+  def test_rejects_a_zero_compile_unchanged_count_for_the_hot_function_claim
+    report = product_sprint_1_report
+    report["compile_unchanged_count"] = 0
+
+    stderr = assert_product_sprint_1_rejected(
+      "zero count for the speedup claim",
+      report: report,
+      evidence_ids: ["sprint1-ext-hot-function-5x"]
+    )
+
+    assert_includes stderr, "compile_unchanged_count"
+  end
+
+  # The mirror of the case above, and the reason the refusal is scoped to one
+  # identifier: `sprint1-ext-numbers-published` publishes the count whatever it
+  # is, so zero is a publishable result rather than a contradiction.
+  def test_accepts_a_zero_compile_unchanged_count_for_the_numbers_published_claim
+    report = product_sprint_1_report
+    report["compile_unchanged_count"] = 0
+
+    _stdout, stderr, status = run_product_sprint_1_checker(
+      evidence_ids: ["sprint1-ext-numbers-published"],
+      report: JSON.pretty_generate(report)
+    )
+
+    assert status.success?, stderr
   end
 
   # `cpython_vv` and `cpython_configure_args` have no single pinned literal --

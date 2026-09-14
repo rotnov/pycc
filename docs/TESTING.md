@@ -549,14 +549,23 @@ rule 6); only numbers are published.
   carries the `free-threading build` marker, rather than letting the arm fail
   later at import.
   Every one of these versions is restated in the report, because a later run that
-  changes one is a different experiment. Three of those restatements are pinned
-  to a literal value and are compared against it -- CPython `3.14.7`, Cython
-  `3.1.6`, and the `release` pycc profile. The `-VV` banner and the
-  `CONFIGURE_ARGS` string have no single pinned value, since they differ per
-  build; what is checked of them is the properties this bullet fixes -- the
-  banner reports the pinned CPython and is not a `free-threading build`, and the
-  flags carry none of the inadmissible markers and positively report
-  `--enable-optimizations`.
+  changes one is a different experiment, and every restatement is checked in one
+  of three ways. Five are pinned to a literal value and are compared against it
+  -- CPython `3.14.7` in `cpython`, Cython `3.1.6` in `cython`, the Cython build
+  mode `pure-python` in `cython_mode`, the C optimization level `-O2` in
+  `cython_c_optimization`, and the `release` pycc profile in `pycc_profile`. One
+  is a directive rather than a version string: `cython_annotation_typing` must
+  be the JSON boolean `true` exactly, so a string `"true"`, a `1` and an absent
+  key are all refused -- the protocol pins the directive as enabled, not as
+  merely mentioned. The Cython build settings are bound as tightly as the
+  version is because that arm's median is the denominator of one of the two
+  published ratios: a run that built it in a different mode, with the directive
+  off, or without `-O2` measured something the protocol does not describe. The
+  remaining two, the `-VV` banner and the `CONFIGURE_ARGS` string, have no
+  single pinned value, since they differ per build; what is checked of them is
+  the properties this bullet fixes -- the banner reports the pinned CPython and
+  is not a `free-threading build`, and the flags carry none of the inadmissible
+  markers and positively report `--enable-optimizations`.
 - **Input.** Size alone does not pin this workload: the measured loop branches
   on its data, so two evaluators who generate different inputs of the same size
   can reach opposite verdicts on the same implementation. The workload is
@@ -652,7 +661,10 @@ rule 6); only numbers are published.
   deterministic from the committed input.
 - **Reporting.** The report publishes the three medians, their minima and
   maxima, both ratios (versus CPython and versus Cython), the replicate count,
-  the machine and OS, and the pinned versions above. The threshold those numbers
+  the machine and OS, and the pinned versions above -- `cpython`, `cpython_vv`,
+  `cpython_configure_args`, `cython`, `cython_mode`,
+  `cython_annotation_typing`, `cython_c_optimization` and `pycc_profile`, under
+  a `versions` object. The threshold those numbers
   are judged against is D-244 rule 6's and is not restated here. The report is
   one JSON document at `docs/benchmarks/hosted-ext-product-sprint-1.json`, and
   it restates the `input_sha256`, the `subject_sha256`, the
@@ -660,7 +672,10 @@ rule 6); only numbers are published.
   machine identity committed in `scripts/bench_hosted_ext_precommit.json`, and
   carries the `compile_unchanged_count` the next bullet defines -- a
   report that does not carry the committed values is a different experiment, not
-  this one's result. That path
+  this one's result. That count must be positive whenever the hot-function
+  acceptance item is claimed, since that item asserts a reference function did
+  compile unchanged; the numbers-published item publishes the count whatever it
+  is, zero included. That path
   and every field above are what `scripts/check_roadmap_evidence.rb` requires
   before either `product-sprint-1` roadmap box may cite its evidence
   identifier, so an absent report, a missing field, a digest that does not match
