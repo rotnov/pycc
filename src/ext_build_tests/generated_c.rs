@@ -428,6 +428,37 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
 }
 
 #[test]
+fn the_exec_slot_only_raises_its_generic_import_error_when_nothing_else_did() {
+    // A module body that fails reports through one of two channels:
+    // `pycc_rt`'s thread-local pending state, or an exception CPython
+    // itself set with no pycc pending state at all. `pycc_ext_raise_pending`
+    // returns 0 in the second case, so a guard that tests it alone replaces
+    // the real exception (a `ModuleNotFoundError` from a failed host
+    // import, say) with "pycc module body failed". The guard must also ask
+    // `PyErr_Occurred`, and must ask `pycc_ext_raise_pending` first: that
+    // call is what sets the exception, so short-circuiting must not skip
+    // it. Only a C compiler and a live interpreter can execute this path,
+    // and no source the current tree compiles reaches it -- the end-to-end
+    // `ModuleNotFoundError` assertion arrives with foreign imports -- so
+    // the shim text is asserted here the way every other shim invariant in
+    // this file is.
+    assert!(
+        SHIM_C.contains("if (!pycc_ext_raise_pending() && !PyErr_Occurred()) {"),
+        "{SHIM_C}"
+    );
+    assert!(
+        !SHIM_C.contains("if (!pycc_ext_raise_pending()) {"),
+        "the unguarded form overwrites a CPython-set exception\n{SHIM_C}"
+    );
+    // The fallback it guards is still there: a body that fails with neither
+    // channel set must not import successfully.
+    assert!(
+        SHIM_C.contains("PyErr_SetString(PyExc_ImportError, \"pycc module body failed\");"),
+        "{SHIM_C}"
+    );
+}
+
+#[test]
 fn the_shims_bigint_egress_releases_the_reference_before_it_raises() {
     // D-180 rule 6 hands the wrapper a retained return value, so the arm
     // the D-244 amendment turns into an `OverflowError` has to drop it --

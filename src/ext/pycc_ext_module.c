@@ -668,7 +668,21 @@ static int pycc_ext_exec_module(PyObject *module)
         return -1;
     }
     if (pycc_ext_module_exec() != 0) {
-        if (!pycc_ext_raise_pending()) {
+        /*
+         * The generic `ImportError` is a last resort, not the default. A
+         * failing body reports through one of two channels: `pycc_rt`'s
+         * thread-local pending state, which `pycc_ext_raise_pending` turns
+         * into a live CPython exception, or -- for a body that called into
+         * CPython directly -- an exception CPython already set, with no
+         * pycc pending state at all. `pycc_ext_raise_pending` returns 0 in
+         * that second case, so raising unconditionally here would replace
+         * the real exception (a `ModuleNotFoundError` from a failed host
+         * import, say) with a message that names neither the cause nor the
+         * culprit. Check `PyErr_Occurred` before overwriting, and keep
+         * `pycc_ext_raise_pending` as the left operand: it is the call that
+         * sets the exception, so short-circuiting must not skip it.
+         */
+        if (!pycc_ext_raise_pending() && !PyErr_Occurred()) {
             PyErr_SetString(PyExc_ImportError, "pycc module body failed");
         }
         return -1;
