@@ -88,6 +88,12 @@ fn ty_name_returns_the_python_spelling_of_every_scalar_variant() {
         Ty::Protocol(Box::new("MyProto".to_string())).name(),
         "MyProto"
     );
+    // Part 1 of #1026: `Ty::Object` is the foreign-object type, which no
+    // annotation can spell and every operation on which is refused, so no
+    // source program renders it -- covering its arm needs a unit test. The
+    // spelling still matters: it is what a future diagnostic that reports a
+    // foreign value's type would print.
+    assert_eq!(Ty::Object.name(), "object");
 }
 
 #[test]

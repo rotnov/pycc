@@ -274,6 +274,11 @@ pub(super) fn check_with_environment_all(
     // exactly once rather than in each constructor -- a fully annotated
     // module takes the concrete path and would otherwise never see it.
     env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
+    // Part 1 of #1026: seed every foreign import as a definitely-bound
+    // `Ty::Object` in the same common sink, for the same reason -- both
+    // `Environment` constructors reach here, and a fully annotated module
+    // takes the concrete path that never runs the solver.
+    crate::foreign::bind_foreign_objects(&mut env, &hir.imports);
     // Issue #22: clear `defined_functions` before the top-level source-order
     // pass. `bind_function` (called by `check_with_signatures_all`'s pass 1
     // or `concrete_function_environment`) adds every function to this set,
@@ -297,6 +302,11 @@ pub(super) fn check_with_environment_all(
     // The gate therefore tests the net source-order binding, in this pass
     // and in pass 3's final environment alike.
     for (index, item) in hir.items.iter().enumerate() {
+        // PR 1c of #1080 review finding 2: an `import` runs at its own
+        // position too. Re-binding here is what lets a foreign import
+        // supersede an earlier same-named `def` -- the pre-seed above
+        // cannot, since the `def` below rebinds the name after it.
+        crate::foreign::bind_foreign_objects_at(&mut env, &hir.imports, index);
         match item {
             HirItem::TopLevelStmt(stmt) => {
                 check_stmt(&mut env, stmt).map_err(|diagnostic| top_level(index, diagnostic))?;
@@ -319,6 +329,10 @@ pub(super) fn check_with_environment_all(
             }
         }
     }
+    // An `import` after the last item records the item count itself, which
+    // the loop above never reaches -- the common shape for a trailing
+    // import, and the one D-041's pass 3 then checks bodies against.
+    crate::foreign::bind_foreign_objects_at(&mut env, &hir.imports, hir.items.len());
     // Pass 3: check every function body against a clone of `env` as it
     // stands once the whole module's top-level code has been processed
     // (D-041) -- a function can read any module-level global regardless of

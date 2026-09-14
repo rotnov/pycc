@@ -191,6 +191,11 @@ pub(crate) fn infer_expr_in(
                 // `check_assignment`'s target checking (see `env.narrowed`'s
                 // own doc comment).
                 Some(BindingState::Definitely(ty)) => {
+                    // Part 1 of #1026, choke point 1: an expression-position
+                    // read of a foreign import is the single producer of a
+                    // `Ty::Object` value, so refusing it here refuses every
+                    // operation derived from it at once.
+                    crate::foreign::reject_object_read(name, ty)?;
                     Ok(env.narrowed_ty(name).unwrap_or_else(|| ty.clone()))
                 }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -296,7 +301,15 @@ pub(crate) fn infer_expr_in(
             // records that consequence (it rejects some later-rebind programs
             // CPython's dynamic order would run) as deliberate; source-order
             // visibility questions stay #22's scope.
-            if env.lookup(callee).is_some() && !env.def_rebound.contains(callee) {
+            if let Some(ty) = env.lookup(callee)
+                && !env.def_rebound.contains(callee)
+            {
+                // Part 1 of #1026, choke point 3: a foreign object is not
+                // callable *yet*, which is a different claim from D-110's
+                // "this name is bound to a value, and no value in the
+                // current subset is callable" -- say so with `I0404`
+                // rather than the generic `T0021`.
+                crate::foreign::reject_object_read(callee, &ty)?;
                 return Err(non_callable_binding(callee));
             }
             // Issue #118 Part 1: a maybe-bound callee is not callable -- it
@@ -1377,6 +1390,7 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
         | Ty::Set(_)
         | Ty::Tuple(_)
         | Ty::Instance(_)
-        | Ty::Protocol(_) => false,
+        | Ty::Protocol(_)
+        | Ty::Object => false,
     }
 }

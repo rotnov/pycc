@@ -38,7 +38,8 @@ use crate::{
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt, PropertyDef, Ty,
+    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt, ImportBinding,
+    PropertyDef, Ty,
 };
 
 /// One successful D-134 call-site monomorphization: the concrete return
@@ -1955,11 +1956,17 @@ pub(crate) fn rewrite_generic_calls_in_instantiation(
 /// function is dropped (only specializations reach MIR/codegen). Returns
 /// the updated items list with monomorphized functions appended and call
 /// sites rewritten.
+///
+/// The second return value is parallel to `items`: `kept[i]` says whether
+/// input item `i` survived into the returned list. Dropping an item shifts
+/// every later item's position, and `ImportBinding::Foreign::item_index`
+/// records a position in this very list, so the caller needs the mask to
+/// recompute those positions (PR 1c of #1080 review finding 1).
 fn monomorphize_protocol_params(
     items: Vec<HirItem>,
     env: &Environment,
     _new_class_defs: &mut Vec<(String, HirClassDef)>,
-) -> Vec<HirItem> {
+) -> (Vec<HirItem>, Vec<bool>) {
     // Collect functions with protocol-typed parameters (cloned, so we
     // can move `items` below without a borrow conflict).
     let protocol_funcs: HashMap<String, HirItem> = items
@@ -1974,8 +1981,10 @@ fn monomorphize_protocol_params(
         })
         .collect();
     if protocol_funcs.is_empty() {
-        return items;
+        let kept = vec![true; items.len()];
+        return (items, kept);
     }
+    let mut kept = Vec::with_capacity(items.len());
     let mut new_items = Vec::new();
     let mut specializations: Vec<HirItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -1999,6 +2008,7 @@ fn monomorphize_protocol_params(
                 // dropped — this is fine, matching how generic functions
                 // are dropped.
                 let _ = (params, return_ty);
+                kept.push(false);
             }
             HirItem::TopLevelStmt(ref stmt) => {
                 bind_local_types_in_stmt(&mut module_env, &[], stmt);
@@ -2012,6 +2022,7 @@ fn monomorphize_protocol_params(
                     &mut seen,
                 );
                 new_items.push(HirItem::TopLevelStmt(new_stmt));
+                kept.push(true);
             }
             HirItem::Function {
                 name,
@@ -2046,6 +2057,7 @@ fn monomorphize_protocol_params(
                     return_ty,
                     body: new_body,
                 });
+                kept.push(true);
             }
         }
     }
@@ -2076,7 +2088,48 @@ fn monomorphize_protocol_params(
         }
     }
     new_items.extend(all_specializations);
-    new_items
+    (new_items, kept)
+}
+
+/// Recomputes every `ImportBinding::Foreign`'s recorded item position for
+/// an item list monomorphization has rewritten (PR 1c of #1080 review
+/// finding 1).
+///
+/// `item_index` is the item *count* at the moment the `import` lowered, so
+/// the import belongs immediately before original item `item_index` --
+/// which means the new position is simply how many of the original items
+/// strictly before it still exist. `survives[j]` says whether original
+/// item `j` reached the returned list; a trailing import records
+/// `hir.items.len()`, which the clamp maps to "after everything that
+/// survived". Items monomorphization *appends* (generic instantiations,
+/// protocol specializations) all land after every original item, so they
+/// never shift a recomputed position. The result stays ascending, which is
+/// what `pycc_mir::splice_foreign_imports`'s running-offset insertion
+/// assumes.
+fn remap_foreign_import_positions(
+    imports: &[ImportBinding],
+    survives: &[bool],
+) -> Vec<ImportBinding> {
+    imports
+        .iter()
+        .map(|binding| match binding {
+            ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index,
+                span,
+            } => ImportBinding::Foreign {
+                local_name: local_name.clone(),
+                module_path: module_path.clone(),
+                item_index: survives[..(*item_index).min(survives.len())]
+                    .iter()
+                    .filter(|kept| **kept)
+                    .count(),
+                span: *span,
+            },
+            other => other.clone(),
+        })
+        .collect()
 }
 
 /// #380 (PR-20): Per-item worker for the specialization rewrite loop.
@@ -2696,10 +2749,21 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
             seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
             items: hir.items.clone(),
             type_aliases: Vec::new(),
-            imports: Vec::new(),
-            // Unlike `type_aliases`/`imports` (both fully discharged during
-            // HIR lowering -- nothing downstream reads either again),
-            // `class_defs` is actively consumed after this point: `check`'s
+            // Part 1 of #1026: `imports` used to be dropped here for the
+            // same reason `type_aliases` still is -- fully discharged
+            // during HIR lowering, read by nothing downstream. That stopped
+            // being true when `ImportBinding::Foreign` became the record of
+            // a CPython import: `pycc_mir::build` splices one
+            // `MirItem::ForeignImport` per foreign binding into the item
+            // list at its recorded position, and `src/main.rs`'s `I0403`
+            // gate reads the same list. Dropping the field here left both
+            // reading an empty list, so an `import numpy` compiled to an
+            // artifact that never imported anything. This exit returns
+            // `hir.items` unchanged, so each binding's recorded
+            // `item_index` still addresses the item it was recorded
+            // against; the monomorphized exit below has to recompute them.
+            imports: hir.imports.clone(),
+            // `class_defs` is likewise actively consumed after this point: `check`'s
             // own class-body checking (Task 3) and every one of
             // `pycc_mir`/`pycc_codegen`'s slot-index/method-mangled-name
             // lookups (Tasks 5/6) read it from the `HirModule` that reaches
@@ -2835,6 +2899,14 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         });
     }
 
+    // PR 1c of #1080 review finding 1: `flatten` drops every slot pass 2
+    // left `None` (each original generic function), so an item's position
+    // in `items` is no longer its position in `hir.items`. Record which
+    // originals survive before the shape that carried the information is
+    // gone; `monomorphize_protocol_params` below drops items a second time
+    // and reports its own mask, and the two compose into one remap of
+    // `ImportBinding::Foreign::item_index`.
+    let kept_after_rewrite: Vec<bool> = rewritten.iter().map(Option::is_some).collect();
     let mut items = rewritten.into_iter().flatten().collect::<Vec<_>>();
     // PEP 695 (#387): Pass 2b — rewrite any `GenericClassInstantiate`
     // expressions that survived inside monomorphized generic-class method
@@ -2870,11 +2942,33 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // access against the concrete class. This pass runs after the existing
     // generic function monomorphization, scanning the (already rewritten)
     // items for calls to protocol-parameter functions.
-    items = monomorphize_protocol_params(items, &env, &mut new_class_defs);
-    // `type_aliases`/`imports` are empty by design on both of this
-    // function's exits -- see the no-generics early return above (PR-13
-    // final review I1) and that return's own comment for why `class_defs`
-    // is not treated the same way.
+    let kept_after_protocol;
+    (items, kept_after_protocol) = monomorphize_protocol_params(items, &env, &mut new_class_defs);
+    // Compose the two drop masks into one "did original item `j` survive
+    // the whole function" mask, then recompute every foreign import's
+    // recorded position against it. `kept_after_protocol` is parallel to
+    // that pass's *input*, whose leading `kept_after_rewrite.iter().filter(..).count()`
+    // entries are the surviving originals in order, so walking the two in
+    // lockstep is the composition.
+    let mut surviving_position = 0usize;
+    let survives: Vec<bool> = kept_after_rewrite
+        .iter()
+        .map(|kept| {
+            if !*kept {
+                return false;
+            }
+            let still_here = kept_after_protocol[surviving_position];
+            surviving_position += 1;
+            still_here
+        })
+        .collect();
+    let imports = remap_foreign_import_positions(&hir.imports, &survives);
+    // `type_aliases` is empty by design on both of this function's exits
+    // -- see the no-generics early return above (PR-13 final review I1)
+    // and that return's own comment for why `class_defs` is not treated
+    // the same way. `imports` is carried on both exits (Part 1 of #1026),
+    // recomputed here because this exit rewrites the item list the
+    // positions in it refer to.
     // PEP 695 (#387): include the monomorphized class definitions alongside
     // the originals, so `pycc_mir`'s `classes` HashMap can resolve the
     // mangled class name to its specialized `HirClassDef` (attribute slots,
@@ -2888,7 +2982,10 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         seeded_builtin_exception_classes: hir.seeded_builtin_exception_classes,
         items,
         type_aliases: Vec::new(),
-        imports: Vec::new(),
+        // Carried for the same reason as on the no-generics path above:
+        // Part 1 of #1026 gave `imports` a downstream reader. Unlike that
+        // path, this one rewrote `items`, so the positions are remapped.
+        imports,
         class_defs,
     })
 }

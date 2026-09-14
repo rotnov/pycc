@@ -639,6 +639,33 @@ static PyObject *pycc_ext_pack_str(void *result)
     return packed;
 }
 
+/*
+ * Part 1 of #1026: the module-import helper compiled code calls for a
+ * foreign `import numpy`.
+ *
+ * A thin `PyImport_ImportModule` wrapper and nothing more -- it returns a
+ * new reference to the imported module, or NULL with the CPython exception
+ * (a `ModuleNotFoundError` for a module that is not on the interpreter's
+ * `sys.path`) already set, which is exactly the convention the generated
+ * call site checks for. Every *decision* about the import stays with
+ * CPython, keeping this file's "only moves `PyObject*`s" division of labour
+ * with `pycc_rt` intact.
+ *
+ * Not `static`, unlike every other helper here: LLVM-generated code
+ * declares and calls it by this name (`EXT_OBJ_IMPORT_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`).
+ *
+ * The returned reference is deliberately never released. The generated
+ * module body stores it in a module-level global that lives for the
+ * artifact's lifetime, and the artifact has no teardown hook to release it
+ * from; the module object is in the interpreter's `sys.modules` for that
+ * whole lifetime anyway. `docs/RUNTIME.md` records the rule.
+ */
+PyObject *pycc_ext_obj_import(const char *name)
+{
+    return PyImport_ImportModule(name);
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

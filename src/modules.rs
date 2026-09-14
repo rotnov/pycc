@@ -70,6 +70,15 @@ enum Resolution {
     /// resolves nowhere on disk): left unanswered so `pycc_hir` reports it
     /// exactly as a single-file compilation would.
     Unanswered,
+    /// A bare `import X` whose single-segment absolute root is neither a
+    /// project module nor a `pycc_std` one (Part 1 of #1026): the name is
+    /// taken to be a CPython module the produced extension imports at
+    /// module-exec time, and `pycc_hir` binds it as an opaque object
+    /// (`ImportBinding::Foreign`). Whether that module actually exists is
+    /// not knowable here -- the answer lives in the `sys.path` of the
+    /// interpreter that loads the artifact, so the failure is a runtime
+    /// `ModuleNotFoundError`, never a compile-time diagnostic.
+    Foreign,
 }
 
 /// Loads the whole program reachable from `entry`.
@@ -151,6 +160,7 @@ impl Loader {
                 Resolution::NotFound { code, message } => {
                     resolved.insert(span, ResolvedImport::NotFound { code, message });
                 }
+                Resolution::Foreign => resolved.insert(span, ResolvedImport::Foreign),
                 Resolution::Unanswered => {}
             }
         }
@@ -400,11 +410,29 @@ impl Loader {
     }
 
     /// The diagnostic for a dotted name that resolves to nothing: a
-    /// CPython-rejected relative import (`T0021`), or -- for an absolute
-    /// name -- no answer at all, so `pycc_hir` keeps its own
+    /// CPython-rejected relative import (`T0021`), a foreign CPython
+    /// module (Part 1 of #1026), or -- for every other absolute name --
+    /// no answer at all, so `pycc_hir` keeps its own
     /// "import of module `x` is not supported yet" `C0001`.
     fn missing(&self, base: &Base, request: &ProjectImportRequest) -> Resolution {
         if !base.relative {
+            // Part 1 of #1026 admits exactly one foreign shape: a bare
+            // `import X` naming a single, undotted root. `request.names`
+            // is non-empty only for a `from X import n`, which binds
+            // names out of the module rather than the module itself, and
+            // a dotted `import X.Y` binds `X` while importing `X.Y` --
+            // both keep `pycc_hir`'s existing `C0001` until a later part
+            // implements them. (`import X as Y` never reaches here at
+            // all: `project_import_request` records no request for an
+            // aliased import, so no answer is ever looked up for it.)
+            if request.names.is_empty()
+                && request
+                    .module
+                    .as_deref()
+                    .is_some_and(|module| !module.contains('.'))
+            {
+                return Resolution::Foreign;
+            }
             return Resolution::Unanswered;
         }
         let spec = format!(

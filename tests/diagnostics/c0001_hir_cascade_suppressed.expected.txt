@@ -1,8 +1,8 @@
 error[C0001]: import of module `os` is not supported yet
  --> tests/diagnostics/c0001_hir_cascade_suppressed.py:1:1
   |
-1 | import os
-  | ^^^^^^^^^ import of module `os` is not supported yet
+1 | import os as o
+  | ^^^^^^^^^^^^^^ import of module `os` is not supported yet
 error[C0001]: an async method is not supported yet
  --> tests/diagnostics/c0001_hir_cascade_suppressed.py:3:5
   |

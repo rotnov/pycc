@@ -382,6 +382,7 @@ restating it.
 | `str` | carried; accepts `str` **only** — no `__str__`, `os.PathLike` or buffer duck type. A lone surrogate raises CPython's own `UnicodeEncodeError`, propagated verbatim | carried |
 | `tuple[...]` of `int`/`bool`/`float` | carried; accepts a `tuple` or a `tuple` subclass of exactly the declared arity, each element admitted by its own `int`/`float`/`bool` row above -- `str` is carried at a top-level position but not as an element. Every other object -- `list`, `str`, an iterator, a different arity -- raises `TypeError` | carried, always as an exact `tuple` |
 | `tuple[...]` carrying anything else, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
+| `object` | **not carried**: `C0003` | **not carried**: `C0003` |
 
 `float` and `bool` refusing an `int` is not a local choice: it is
 `docs/TYPE_SYSTEM.md` rule 4 (D-086), no implicit numeric narrowing *or*
@@ -570,6 +571,111 @@ or publish one fails the import rather than importing a module whose
 
 [#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
 rejecting that second instance and allocating state per instance.
+
+### Foreign imports in the module body
+
+Part 1 of [#1026](https://github.com/rotnov/pycc/issues/1026) makes a plain,
+unaliased, undotted `import <name>` a *foreign* import when `<name>` is neither
+a project module nor a `pycc_std` registration: it binds the CPython module
+object itself, typed `object` (see
+[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). This is the only
+construct in the language that produces an `object`, and the admissibility
+table above is why one can never leave: an `object` parameter or return on an
+exported function is a `C0003` capability gap, so the value stays inside the
+artifact.
+
+**Position, not a prologue.** D-244 rule 3 binds the artifact to CPython's
+statement-by-statement module body, so each foreign import runs *where it was
+written*. `pycc_mir::build` splices one `MirItem::ForeignImport` into the item
+list at the import statement's own recorded position rather than hoisting every
+import to the top of `Py_mod_exec`; a module-level statement with an observable
+effect written above a failing import therefore has already run when the import
+raises, exactly as under CPython. `tests/issue_1080_foreign_object.rs` asserts
+that against a real host interpreter, and
+`crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
+emission layer.
+
+**Failure.** The emitted call is `pycc_ext_obj_import`, which wraps
+`PyImport_ImportModule`. A failure leaves CPython's own exception set — a
+missing module surfaces to the host as `ModuleNotFoundError` naming the module,
+not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
+so the import statement that loaded the artifact fails and no partially
+initialized module is left in `sys.modules`.
+
+**Ownership.** `pycc_ext_obj_import` returns the *new* reference
+`PyImport_ImportModule` hands back and the artifact never releases it: the
+module object is reachable from `sys.modules` for the life of the interpreter
+regardless, the `object` binding is a module-level global with no scope to
+leave, and the language offers no operation that could drop or alias it
+(every operation on the name is `I0404`). A `Py_DECREF` path is therefore not
+merely unimplemented but unreachable, and adding one belongs with the first
+construct that can actually consume an `object`.
+
+The same rule decides what a *duplicate* foreign import does, and that
+outcome is a recorded decision rather than an unexercised side effect. A
+module's imports are not definitions to `pycc_hir::program::link`, so two
+linked project modules may each write `import numpy`; each contributes its
+own `MirItem::ForeignImport`, while `pycc_codegen` keys the foreign-import
+globals by local name and so gives both the same single slot. Both calls
+run, in linked-program order (the concatenation `link` produces, not either
+module's own source order), and the second overwrites the slot with its own
+new reference. That is correct by the rule above rather than in spite of it:
+the slot ends up holding a valid, correctly typed module object, and the
+first reference is simply never released — exactly what every foreign
+import does. Collapsing the duplicate to one call, or releasing the
+overwritten reference, would be an optimization of an already-correct
+program, and belongs with the first construct that can consume an
+`object`.
+
+**The bound name does not cross a module boundary yet.** The binding is
+positional — `ImportBinding::Foreign` carries the index of the item the
+import sits at in *its own* module's item list, which `program::link`
+rebases onto the linked program — so it is meaningful only in the module
+that wrote the `import`. Two consequences are refused rather than
+approximated, both `C0001` while lowering, so `pycc check` reports them and
+neither build path is reached:
+
+- **Re-export.** `from dep import numpy`, where `numpy` is `dep.py`'s own
+  foreign import, is refused at the importing statement. The importer
+  produces no item for that statement, so there is no position in its item
+  list that could carry the binding honestly; cloning `dep.py`'s index into
+  the importer would both mis-rebase it and run a second
+  `pycc_ext_obj_import` for one source statement.
+- **Cross-module shadowing.** A top-level definition of a name that a
+  *different* linked module binds as a foreign import is refused at the
+  definition, in either dependency order. Part 1 of #881 links modules into
+  one flat namespace, so `dep.py`'s `import numpy` and `main.py`'s
+  `def numpy()` would otherwise make `dep.py`'s own `numpy(...)` resolve to
+  the entry module's function instead of raising CPython's `TypeError`. A
+  module shadowing its *own* foreign import is refused by the same rule and
+  in the same phase, in either order -- see below.
+
+**A module does not shadow its own foreign import either.** A module in which
+any other top-level statement binds a foreign import's local name -- a `def`,
+a `class`, a `type` alias, a plain assignment, or a second `import`, written
+above or below the import -- is refused with `C0001` while lowering, at the
+shadowing statement, or at the import itself when the shadowing binding is
+another import and so has no statement span of its own. Two foreign imports
+of the same local name are refused on the same rule rather than exempted as
+benign, and a name is reported once however many statements bind it.
+The positional binding above is what makes the artifact honest about *when*
+the import runs; it is not enough to make the compiler honest about *which*
+binding a name has, because every pass that walks the module would have to
+reproduce the same positional rule. Export discovery is the one where that
+became a wrong artifact rather than a wrong diagnostic: `collect_exports`
+kept a `PyMethodDef` entry for a `def` that a later import supersedes, so a
+host calling `compiled.<name>` reached the stale function where CPython hands
+back a module object. Refusing the shape is one rule at one site
+(`pycc_hir::import::reject_shadowed_foreign_imports`), it is fail-closed, and
+it makes the same-module case agree with the cross-module one above.
+Supporting either order is later work under #1026.
+
+**Native mode.** A plain `pycc build` produces a standalone executable with no
+interpreter to import into, so the driver refuses the program with `I0403`
+before codegen — one diagnostic per foreign import, each at its own `import`
+statement in the file that wrote it — and
+`crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
+`MirItem::ForeignImport` when `!options.ext`.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

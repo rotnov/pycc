@@ -267,6 +267,12 @@ pub enum ResolvedImport<'a> {
     /// cycle, or a `C0001` for a shape the compiler does not support yet
     /// (a namespace package, an absolute module that resolves nowhere).
     NotFound { code: &'static str, message: String },
+    /// `import X`: `X` is neither a project module nor a `pycc_std` one,
+    /// so Part 1 of #1026 binds it as an opaque CPython object
+    /// ([`ImportBinding::Foreign`]). Recorded only for the bare, undotted,
+    /// unaliased `import X` shape -- see `src/modules.rs`'s own `missing`
+    /// for why every other foreign shape stays unanswered.
+    Foreign,
 }
 
 /// The driver's answers for every [`ProjectImportRequest`] of one module,
@@ -367,6 +373,7 @@ pub(crate) fn lower_import_stmt(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,
     position: FuturePosition,
+    item_index: usize,
 ) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
@@ -394,6 +401,26 @@ pub(crate) fn lower_import_stmt(
                     ),
                     import.range,
                 ));
+            }
+            // Part 1 of #1026: a foreign root binds an opaque CPython
+            // object rather than failing. `item_index` is the number of
+            // `HirItem`s the statements before this one produced, which is
+            // where `pycc_mir` splices the import back into the module
+            // body so the generated `pycc_ext_obj_import` call runs in
+            // source order rather than hoisted (see `MirItem::ForeignImport`).
+            if matches!(
+                resolved.get(statement_span(import.range)),
+                Some(ResolvedImport::Foreign)
+            ) {
+                return Ok(Some(LoweredImport {
+                    bindings: vec![ImportBinding::Foreign {
+                        local_name: module_name.to_string(),
+                        module_path: module_name.to_string(),
+                        item_index,
+                        span: statement_span(import.range),
+                    }],
+                    ..LoweredImport::default()
+                }));
             }
             let Some(module) = pycc_std::resolve_module(module_name) else {
                 return Err(unsupported(
@@ -427,10 +454,10 @@ pub(crate) fn lower_import_stmt(
                         statement_span(import.range),
                     ));
                 }
-                // `Found` is only ever the answer to a bare `import m`;
-                // an unanswered `from` import lowers as a single-file
-                // compilation would.
-                Some(ResolvedImport::Found) | None => {}
+                // `Found` and `Foreign` are only ever the answer to a bare
+                // `import m`; an unanswered `from` import lowers as a
+                // single-file compilation would.
+                Some(ResolvedImport::Found | ResolvedImport::Foreign) | None => {}
             }
             // No answer is ever recorded for a future import
             // (`project_import_request` skips it), so this always runs
@@ -540,7 +567,13 @@ fn lower_project_from_import(
                 import.range,
             ));
         }
-        if !bind_project_name(name, module, resolved, &mut lowered) {
+        if !bind_project_name(
+            name,
+            module,
+            resolved,
+            statement_span(import.range),
+            &mut lowered,
+        )? {
             let module_name = match &import.module {
                 Some(module_name) => format!("module `{module_name}` (`{}`)", module.display_path),
                 None => format!("package `{}`", module.display_path),
@@ -557,13 +590,17 @@ fn lower_project_from_import(
 
 /// Looks `name` up in `module`'s top level in the documented order and,
 /// when found, records the binding (and any class/alias copies it needs)
-/// into `lowered`. Returns `false` when the module has no such name.
+/// into `lowered`. Returns `Ok(false)` when the module has no such name,
+/// and `Err` when the name resolves to a shape this part cannot re-export
+/// (see the re-export branch). `span` is the importing statement's source
+/// span, which is where such a diagnostic is reported.
 fn bind_project_name(
     name: &str,
     module: &ResolvedModule<'_>,
     resolved: &ResolvedImports<'_>,
+    span: Span,
     lowered: &mut LoweredImport,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let origin = module.hir;
     let is_synthetic = |class_name: &str| {
         origin.seeded_builtin_exception_classes && is_builtin_exception_class(class_name)
@@ -580,7 +617,7 @@ fn bind_project_name(
     {
         copy_class_with_ancestors(origin, name, &mut lowered.classes);
         lowered.bindings.push(project(ProjectBindingKind::Class));
-        return true;
+        return Ok(true);
     }
     if origin
         .items
@@ -588,7 +625,7 @@ fn bind_project_name(
         .any(|item| matches!(item, HirItem::Function { name: function_name, .. } if function_name == name))
     {
         lowered.bindings.push(project(ProjectBindingKind::Function));
-        return true;
+        return Ok(true);
     }
     if let Some(alias) = origin
         .type_aliases
@@ -599,7 +636,7 @@ fn bind_project_name(
         lowered
             .bindings
             .push(project(ProjectBindingKind::TypeAlias));
-        return true;
+        return Ok(true);
     }
     if let Some(binding) = origin
         .imports
@@ -631,14 +668,37 @@ fn bind_project_name(
                 ProjectBindingKind::Function | ProjectBindingKind::Variable => {}
             }
         }
+        if let ImportBinding::Foreign { module_path, .. } = binding {
+            // Part 1 of #1026 binds a foreign import at its own source
+            // position in its own module: `item_index` counts the items
+            // *that* module's preceding statements produced, and
+            // `program::link` rebases it onto the linked program as though
+            // it belonged to the module that recorded it. Cloning the
+            // binding into the importer would hand the importer's offset
+            // to a dependency-local index (an out-of-range splice in
+            // `pycc_mir`) and would run a second CPython import for one
+            // source statement. The importer produces no item of its own
+            // here, so there is no position in its item list that could
+            // carry the binding honestly; representing this shape is a
+            // later part's work.
+            return Err(unsupported(
+                format!(
+                    "`{}` binds `{name}` to the CPython module object `{module_path}`; \
+                     re-exporting a foreign import across project modules is not \
+                     supported yet",
+                    module.display_path
+                ),
+                span.start..span.end,
+            ));
+        }
         lowered.bindings.push(binding.clone());
-        return true;
+        return Ok(true);
     }
     if top_level_bound_names(&origin.items).contains(name) {
         lowered.bindings.push(project(ProjectBindingKind::Variable));
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 /// Copies `name`'s class definition and every class in its MRO (which
@@ -787,8 +847,91 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
     match binding {
         ImportBinding::Module { local_name, .. }
         | ImportBinding::Symbol { local_name, .. }
-        | ImportBinding::Project { local_name, .. } => local_name,
+        | ImportBinding::Project { local_name, .. }
+        | ImportBinding::Foreign { local_name, .. } => local_name,
     }
+}
+
+/// Refuses a module in which any other top-level binding spells the local
+/// name of a foreign import (Part 1 of #1026, PR 1c of #1080).
+///
+/// Part 1's containment invariant is that the single producer of a
+/// `Ty::Object` value is a read of a foreign binding, so refusing that read
+/// refuses every derived operation. A module that binds the same name twice,
+/// once foreign and once not, breaks that premise: the name's meaning then
+/// depends on the position of every read, and each pass that walks the
+/// module -- the check pass, the constraint solver, MIR lowering, export
+/// discovery -- would have to reproduce the same positional rule
+/// independently. Three review rounds on #1080 found three passes that did
+/// not, most seriously `collect_exports`, which kept a `PyMethodDef` for a
+/// `def` the import supersedes, so the host called a stale function where
+/// CPython would hand back a module object.
+///
+/// Refusing the shape instead is one rule at one site, fail-closed, and
+/// consistent with the cross-module case, which Part 1 already refuses.
+/// Supporting either order is later work; see #1026.
+///
+/// The colliding binding comes from either of two tables, because a module's
+/// top level binds names in both. `definition_spans` is every definition the
+/// module makes, with its span, and never carries an import's own binding --
+/// the import arm of `module::lower_module_item` records nothing there. So
+/// `imports` is consulted as well: a second `import` statement binding the
+/// same local name is invisible to `definition_spans` but supersedes the
+/// foreign binding exactly as a `def` does (review round 4 on #1080, which
+/// found `import json` followed by `import math as json` reaching the
+/// solver and reporting a misleading receiver diagnostic against the wrong
+/// statement when the name was used, and passing silently when it was not).
+///
+/// Two foreign imports of the same local name are refused on the same rule
+/// rather than exempted as benign. The shape is degenerate either way, and
+/// admitting it would mean this predicate has to reason about which of two
+/// `Ty::Object` producers a read resolves to -- the positional question the
+/// refusal exists to avoid.
+///
+/// At most one diagnostic per name, so a duplicated import reports once. A
+/// definition's span is preferred over the import's when both exist: it is
+/// the statement that is unusual, the import being ordinary on its own.
+pub(crate) fn reject_shadowed_foreign_imports(
+    imports: &[ImportBinding],
+    definition_spans: &[(String, Span)],
+) -> Vec<Diagnostic> {
+    let mut reported: Vec<&str> = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (index, binding) in imports.iter().enumerate() {
+        let ImportBinding::Foreign {
+            local_name, span, ..
+        } = binding
+        else {
+            continue;
+        };
+        if reported.contains(&local_name.as_str()) {
+            continue;
+        }
+        let definition = definition_spans
+            .iter()
+            .find(|(name, _)| name == local_name)
+            .map(|(_, span)| *span);
+        let shadowed_by_import = imports
+            .iter()
+            .enumerate()
+            .any(|(other, candidate)| other != index && import_local_name(candidate) == local_name);
+        let Some(span) = definition.or(shadowed_by_import.then_some(*span)) else {
+            continue;
+        };
+        reported.push(local_name.as_str());
+        // `C0001` by hand rather than through `unsupported`: the span is
+        // already a `Span` recorded during lowering, not an AST
+        // `TextRange`, and that helper takes only the range shape.
+        diagnostics.push(Diagnostic::error(
+            "C0001",
+            format!(
+                "`{local_name}` is bound both by a foreign `import` and by another top-level \
+                 statement in this module; shadowing a foreign import is not supported yet"
+            ),
+            span,
+        ));
+    }
+    diagnostics
 }
 
 #[cfg(test)]

@@ -827,6 +827,23 @@ pub enum MirItem {
         body: Vec<MirStmt>,
     },
     TopLevelStmt(MirStmt),
+    /// Part 1 of #1026: a foreign (CPython-object) import, spliced into
+    /// `MirModule::items` at the position the corresponding module-body
+    /// statement would have occupied, so codegen's single source-order
+    /// item loop emits the `pycc_ext_obj_import` call exactly where the
+    /// `import` statement stood.
+    ///
+    /// It is an *item*, not a side table, precisely so that ordering is
+    /// structural rather than a convention codegen has to re-derive: PR 1b
+    /// carried the same information as a separate `foreign_imports` vector,
+    /// which could only be emitted as a hoisted prologue and would have run
+    /// a module's imports ahead of a preceding statement's observable
+    /// effects -- a divergence from CPython that D-244 rule 3 does not
+    /// admit.
+    ForeignImport {
+        local_name: String,
+        module_path: String,
+    },
 }
 
 #[derive(Default)]
@@ -839,19 +856,6 @@ pub struct MirModule {
     /// at module-init time. Non-enum class defs are also carried, though
     /// codegen only reads `enum_members` from them today.
     pub class_defs: Vec<(String, pycc_hir::HirClassDef)>,
-    /// Part 1 of #1026: the module's foreign (CPython-object) imports, as
-    /// `(local name, module path)` pairs in source order, carried through to
-    /// codegen so the `ext` module-exec prologue can import each one at
-    /// module-init time.
-    ///
-    /// Only a *foreign* binding belongs here. The stdlib (`ImportBinding::Module`
-    /// / `ImportBinding::Symbol`, D-136/D-137) and project (`ImportBinding::Project`,
-    /// #898/D-222) bindings in `HirModule::imports` are compile-time-only and
-    /// have no runtime object to import, so they are filtered out. No foreign
-    /// binding variant exists yet, so this vector is empty for every program
-    /// the compiler accepts today; the channel is carried now and consumed in
-    /// a later part of #1026.
-    pub foreign_imports: Vec<(String, String)>,
 }
 
 pub fn build(hir: &HirModule) -> MirModule {
@@ -903,29 +907,61 @@ pub fn build(hir: &HirModule) -> MirModule {
             lowered[index] = Some(lower_item(item, &mut scopes, &classes));
         }
     }
-    let items = lowered
+    let mut items: Vec<MirItem> = lowered
         .into_iter()
         .map(|item| item.expect("every HIR item is either a function or a top-level statement"))
         .collect();
+    splice_foreign_imports(&mut items, &hir.imports);
     MirModule {
         items,
         class_defs: hir.class_defs.clone(),
-        foreign_imports: hir.imports.iter().filter_map(foreign_import_of).collect(),
     }
 }
 
-/// Part 1 of #1026: project one `HirModule::imports` binding onto the
-/// `(local name, module path)` pair `MirModule::foreign_imports` carries, or
-/// `None` when the binding has no runtime object to import.
+/// Part 1 of #1026: inserts a [`MirItem::ForeignImport`] into `items` for
+/// every foreign binding, each at the position it occupied among the module
+/// statements (`ImportBinding::Foreign::item_index`, rebased onto the linked
+/// program by `pycc_hir::program::link`).
 ///
-/// The match is deliberately exhaustive rather than a `_` catch-all: every
-/// binding variant that exists today is compile-time-only, so the function
-/// returns `None` for all of them, and a future foreign variant makes this
-/// site fail to compile until it is classified here.
-fn foreign_import_of(binding: &ImportBinding) -> Option<(String, String)> {
-    match binding {
-        ImportBinding::Module { .. } | ImportBinding::Symbol { .. } => None,
-        ImportBinding::Project { .. } => None,
+/// Insertion is by ascending index with a running offset, so two imports
+/// recorded at the same or at increasing positions both land in source
+/// order: the `n`-th insertion shifts every later recorded index by `n`.
+/// `HirModule::imports` is already in source order -- `module::lower_module`
+/// appends each statement's bindings as it walks the body, and `link`
+/// concatenates modules in dependency order -- so the indices arrive sorted
+/// and `sort` is unnecessary; the offset alone is what keeps them correct.
+///
+/// An index past the end of `items` cannot occur: it is the item count at
+/// the moment the import lowered, and every stage between that moment and
+/// this one either appends items or, when it changes the list the positions
+/// refer to, recomputes them against the list it produces --
+/// `pycc_types::monomorphize`, which drops each original generic and each
+/// protocol-parameter function, and `pycc_types::enum_lower`'s
+/// `unroll_enum_loops`, which expands one top-level enum loop into one item
+/// per member. `insert` would panic rather than misplace
+/// the call if that invariant were ever broken, which is the failure this
+/// splice wants -- PR 1c of #1080 review finding 1 is exactly that panic,
+/// observed before `monomorphize` did the recomputation.
+fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
+    let mut inserted = 0usize;
+    for binding in imports {
+        let ImportBinding::Foreign {
+            local_name,
+            module_path,
+            item_index,
+            ..
+        } = binding
+        else {
+            continue;
+        };
+        items.insert(
+            item_index + inserted,
+            MirItem::ForeignImport {
+                local_name: local_name.clone(),
+                module_path: module_path.clone(),
+            },
+        );
+        inserted += 1;
     }
 }
 

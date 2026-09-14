@@ -309,3 +309,146 @@ fn many_exception_classes(prefix: &str, count: usize) -> String {
     ));
     source
 }
+
+/// Lowers `source` with the driver answering `ResolvedImport::Foreign` for
+/// the statement spelled `import_stmt`, so the module carries an
+/// `ImportBinding::Foreign` (Part 1 of #1026). `input` cannot do this: it
+/// lowers against an empty answer table, which that branch never fires on.
+fn foreign_input(display_path: &str, source: &str, import_stmt: &str) -> LinkInput {
+    let start = source
+        .find(import_stmt)
+        .expect("the fixture must contain its import statement");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        Span::new(start as u32, (start + import_stmt.len()) as u32),
+        crate::ResolvedImport::Foreign,
+    );
+    LinkInput {
+        display_path: display_path.to_string(),
+        module: lower_module(&parse(source), &resolved).expect("a fixture module must lower"),
+    }
+}
+
+#[test]
+fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
+    // The first module contributes three items, so the second module's
+    // items start at program index 3; its own import sits at local index
+    // 1, which makes the expected rebased index 4. Both numbers are
+    // greater than one and different from each other, so an
+    // implementation that dropped either the offset or the local index
+    // lands somewhere else.
+    let first = input("first.py", "a = 1\nb = 2\nc = 3\n");
+    assert_eq!(first.module.hir.items.len(), 3);
+    let second = foreign_input("second.py", "d = 4\nimport numpy\n", "import numpy");
+    assert_eq!(
+        second.module.hir.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            item_index: 1,
+            // `import numpy` follows `d = 4\n`, so the recorded span is
+            // the import statement's own range, not the module's start.
+            span: Span::new(6, 18),
+        }],
+        "the fixture's own index must be local, or the rebase below proves nothing"
+    );
+
+    let linked = link(vec![first, second]).expect("the fixture program must link");
+
+    assert_eq!(
+        linked.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            item_index: 4,
+            span: Span::new(6, 18),
+        }]
+    );
+}
+
+const FOREIGN_DEP: &str = "import json\n\n\ndef f() -> int:\n    return json()\n";
+const SHADOWING_ENTRY: &str = "def json() -> int:\n    return 1\n";
+const SHADOW_MESSAGE: &str = "module `main.py` defines `json`, which `dep.py` binds to a \
+                              CPython module object; shadowing a foreign import across \
+                              modules is not supported yet";
+
+#[test]
+fn a_definition_shadowing_another_module_s_foreign_import_is_rejected() {
+    // The entry module is linked last, after the dependency that binds
+    // `json` to the CPython module object.
+    let (index, diagnostic) = first_error(vec![
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+        input("main.py", SHADOWING_ENTRY),
+    ]);
+    assert_eq!(index, 1, "the diagnostic belongs to the shadowing module");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, SHADOW_MESSAGE);
+    assert_eq!(
+        diagnostic.span,
+        Some(Span::new(0, SHADOWING_ENTRY.trim_end().len() as u32)),
+        "the span is the shadowing definition's own statement"
+    );
+}
+
+#[test]
+fn a_definition_before_the_foreign_module_in_link_order_is_rejected_too() {
+    // The reverse dependency order: the shadowing definition is linked
+    // first, so a check that only consulted the incrementally built
+    // `owners` map would miss it.
+    let (index, diagnostic) = first_error(vec![
+        input("main.py", SHADOWING_ENTRY),
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+    ]);
+    assert_eq!(index, 0, "the diagnostic still belongs to the definition");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, SHADOW_MESSAGE);
+}
+
+#[test]
+fn a_foreign_import_no_other_module_shadows_still_links() {
+    let linked = link(vec![
+        input("a.py", "def first() -> int:\n    return 1\n"),
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+    ])
+    .expect("a foreign import no module shadows must link");
+    assert_eq!(
+        linked.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "json".to_string(),
+            module_path: "json".to_string(),
+            item_index: 1,
+            span: Span::new(0, "import json".len() as u32),
+        }],
+        "the dependency-local index 0 is rebased past `a.py`'s one item"
+    );
+}
+
+#[test]
+fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
+    // `import json` then `def json()` in one file is refused by
+    // `import::reject_shadowed_foreign_imports` while the module is still
+    // being lowered, so no `LinkInput` for it can exist and this gate --
+    // which exists for the case a *different* module's definition silently
+    // changes what the foreign module's own call resolves to -- stays
+    // cross-module. Asserted here rather than only at the lowering site so
+    // the two rules cannot drift into either a gap or a double report.
+    let source = "import json\n\n\ndef json() -> int:\n    return 1\n";
+    let start = source
+        .find("import json")
+        .expect("fixture contains its import");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        Span::new(start as u32, (start + "import json".len()) as u32),
+        crate::ResolvedImport::Foreign,
+    );
+    let diagnostics =
+        lower_module(&parse(source), &resolved).expect_err("the shadowing module must be refused");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("shadowing a foreign import is not supported yet"),
+        "{diagnostics:?}"
+    );
+}

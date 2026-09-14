@@ -164,6 +164,21 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// and after `bindings` itself, so a real term always takes priority
     /// over a stale opaque marker for the same name.
     pub(crate) opaque_bindings: HashSet<String>,
+    /// Part 1 of #1026: the subset of `opaque_bindings` that a foreign
+    /// `import` bound to a CPython module object. Unlike every other
+    /// opaque binding, this one *does* have a type -- `Ty::Object` -- so
+    /// the `Name` arm hands the solver `Ok(Ty::Object)` for it instead of
+    /// "no term at all"; see that arm for why the distinction matters and
+    /// why these names must nonetheless stay out of `bindings`.
+    ///
+    /// The set is seeded once from the module's import table and never
+    /// mutated afterwards, because neither way of displacing a foreign
+    /// name can be misled by a stale entry. A module-level rebinding puts
+    /// a real term in `bindings`, which the `Name` arm consults first; a
+    /// function-local name shadowing a foreign one is dropped from
+    /// `opaque_bindings` by the per-function seeding in `signatures`, and
+    /// the arm that reads this set is reached only through that one.
+    pub(crate) foreign_objects: HashSet<String>,
     /// Part 1 of #883 (#962): mirror of `Environment::std_module_aliases`
     /// -- every `(alias, module)` pair the module's import table binds,
     /// from `std_receiver::bind_std_module_aliases`. Populated on the
@@ -186,6 +201,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             defs_rebound: HashSet::new(),
             maybe_bindings: HashSet::new(),
             opaque_bindings: HashSet::new(),
+            foreign_objects: HashSet::new(),
             std_module_aliases: Vec::new(),
         }
     }
@@ -508,7 +524,35 @@ pub(crate) fn collect_expr_constraints(
                 // `opaque_bindings`'s doc comment) is not an unbound local
                 // — it just has no type term to offer. Return `Ok(None)`
                 // instead of falling through to `unbound_local` below.
-                None if env.opaque_bindings.contains(name.as_str()) => Ok(None),
+                //
+                // Part 1 of #1026 carves out the one opaque binding that
+                // *does* have a term: a foreign `import` binds `Ty::Object`,
+                // and `TypeTerm` is `Result<Ty, usize>`, so `Ok(Ty::Object)`
+                // is an ordinary concrete term. Offering it matters because
+                // `Ok(None)` leaves a helper that returns the module object
+                // with an unresolved return variable, and signature
+                // materialization then reports `T0021: cannot infer return
+                // type ...; add an annotation` -- advice the user cannot
+                // act on, because the foreign object type is deliberately
+                // unspellable. With the term, the return materializes and
+                // the check phase's own `I0404` (choke point 1 in
+                // `crate::foreign`) reports the real refusal instead.
+                //
+                // Containment: this arm is the only way `Ty::Object` can
+                // enter the solver, and reaching it means the source read
+                // a foreign binding in expression position -- which the
+                // check phase refuses. So no `Object`-typed signature ever
+                // survives to codegen. The names deliberately stay out of
+                // `bindings`: the `Call` arm below refuses any bound
+                // non-`def` callee with `non_callable_binding`, which would
+                // pre-empt `numpy(1)`'s `I0404` with a `T0021`.
+                None if env.opaque_bindings.contains(name.as_str()) => {
+                    if env.foreign_objects.contains(name.as_str()) {
+                        Ok(Some(Ok(Ty::Object)))
+                    } else {
+                        Ok(None)
+                    }
+                }
                 None if is_local(env.local_names, name) => Err(unbound_local(name)),
                 None => Ok(None),
             }
@@ -626,6 +670,19 @@ pub(crate) fn collect_expr_constraints(
             // line of defense.
             if env.bindings.contains_key(callee) && !env.defs_rebound.contains(callee) {
                 return Err(non_callable_binding(callee));
+            }
+            // Part 1 of #1026: a foreign import binds its name to a
+            // CPython module object, and the name deliberately stays out of
+            // `bindings` (see the `Name` arm), so the gate above cannot see
+            // it. Without this one, a call of the module object inside an
+            // unannotated private helper leaves the helper's return variable
+            // unresolved and signature materialization reports `T0021: ...
+            // add an annotation` -- advice no annotation can satisfy, since
+            // the foreign object type is deliberately unspellable -- before
+            // the check phase's documented `I0404` could fire. This is the
+            // solver-side half of `foreign`'s third choke point.
+            if env.foreign_objects.contains(callee.as_str()) {
+                return Err(crate::foreign::object_operation_unsupported(callee));
             }
             if is_local(env.local_names, callee) {
                 return Err(unbound_local(callee));

@@ -130,8 +130,6 @@ fn defining_main_without_calling_it_produces_no_output() {
             body: vec![call_print(42)],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice0_uncalled_main")
         .expect("failed to create scratch dir");
@@ -156,8 +154,6 @@ fn compiles_an_explicit_call_to_main_to_a_running_binary() {
             MirItem::TopLevelStmt(call_user_fn("main")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice0").expect("failed to create scratch dir");
     let obj_path = dir.join("slice0.o");
@@ -197,8 +193,6 @@ fn monomorphized_generic_function_dispatches_directly_without_fn_ptr_global() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("monomorphized_direct_dispatch")
         .expect("failed to create scratch dir");
@@ -215,8 +209,6 @@ fn compiles_top_level_statement_with_no_main() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_print(42))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("slice0_toplevel").expect("failed to create scratch dir");
@@ -240,8 +232,6 @@ fn a_no_op_statement_compiles_and_produces_no_observable_output() {
             MirItem::TopLevelStmt(call_print(1)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice0_no_op").expect("failed to create scratch dir");
     let obj_path = dir.join("slice0_no_op.o");
@@ -271,8 +261,6 @@ fn top_level_statements_run_in_order_including_a_call_to_main() {
             MirItem::TopLevelStmt(call_user_fn("main")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("slice0_combined").expect("failed to create scratch dir");
@@ -289,8 +277,6 @@ fn calling_an_undefined_function_at_top_level_is_rejected() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_user_fn("does_not_exist"))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("slice0_undefined_fn").expect("failed to create scratch dir");
@@ -312,8 +298,6 @@ fn calling_an_undefined_function_inside_a_function_body_is_rejected() {
             body: vec![call_user_fn("also_does_not_exist")],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice0_undefined_fn_nested")
         .expect("failed to create scratch dir");
@@ -337,8 +321,6 @@ fn a_function_can_be_defined_under_any_name_without_being_called() {
             body: vec![],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("slice0_any_fn_name").expect("failed to create scratch dir");
@@ -357,8 +339,6 @@ fn write_to_file_failure_is_reported_as_an_error() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_print(42))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let scratch = pycc_scratch::ScratchDir::new("codegen_test_nonexistent_dir")
         .expect("failed to create scratch dir");
@@ -430,8 +410,6 @@ fn release_flag_fixture() -> MirModule {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     }
 }
 
@@ -498,8 +476,6 @@ fn cross_compiles_object_code_for_a_different_target_triple() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_print(42))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("cross_x64").expect("failed to create scratch dir");
     let obj_path = dir.join("cross_x64.o");
@@ -535,8 +511,6 @@ fn an_unknown_target_triple_is_a_clean_error() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_print(42))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bad_triple").expect("failed to create scratch dir");
     let obj_path = dir.join("bad_triple.o");
@@ -566,8 +540,6 @@ fn target_initialization_happens_once_across_concurrent_compiles() {
     let mir = MirModule {
         items: vec![MirItem::TopLevelStmt(call_print(42))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..4)
@@ -607,8 +579,6 @@ fn compiles_a_zero_argument_print_producing_just_a_newline() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("print_zero_args").expect("failed to create scratch dir");
@@ -635,8 +605,6 @@ fn compiles_a_multi_argument_print_with_mixed_types_space_separated() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("print_mixed_multi").expect("failed to create scratch dir");
@@ -657,8 +625,6 @@ fn compiles_print_of_a_bool_false() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_false").expect("failed to create scratch dir");
     let obj_path = dir.join("print_false.o");
@@ -691,8 +657,6 @@ fn compiles_print_of_a_void_returning_call_as_none() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_none_from_call")
         .expect("failed to create scratch dir");
@@ -740,8 +704,6 @@ fn compiles_print_evaluating_all_args_before_output_with_a_side_effecting_call()
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_eval_order_side_effect")
         .expect("failed to create scratch dir");
@@ -791,8 +753,6 @@ fn compiles_print_with_a_failing_later_argument_produces_no_partial_output() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_eval_order_fail_later")
         .expect("failed to create scratch dir");
@@ -843,8 +803,6 @@ fn returning_a_void_returning_call_result_from_a_none_returning_function_runs_th
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("return_none_call").expect("failed to create scratch dir");
@@ -896,8 +854,6 @@ fn printing_a_none_typed_parameter_renders_none() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_none_typed_parameter")
         .expect("failed to create scratch dir");
@@ -948,8 +904,6 @@ fn a_bare_return_with_no_value_exits_a_none_returning_function_early() {
             MirItem::TopLevelStmt(call_print(1)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("bare_return_none").expect("failed to create scratch dir");
@@ -995,8 +949,6 @@ fn compiles_local_variable_arithmetic_comparisons_and_floor_division() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("locals_arith").expect("failed to create scratch dir");
     let obj_path = dir.join("locals_arith.o");
@@ -1027,8 +979,6 @@ fn compiles_a_comparison_result_stored_in_a_bool_local() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_local").expect("failed to create scratch dir");
     let obj_path = dir.join("bool_local.o");
@@ -1060,8 +1010,6 @@ fn reassigning_a_local_reuses_its_existing_alloca() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("reassign_local").expect("failed to create scratch dir");
@@ -1100,8 +1048,6 @@ fn compiles_and_runs_add_sub_mul_mod_and_pow_binops() {
             MirItem::TopLevelStmt(print_binop(BinOpKind::Pow, 2, 5)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("int_binops").expect("failed to create scratch dir");
     let obj_path = dir.join("int_binops.o");
@@ -1138,8 +1084,6 @@ fn true_division_binop_codegen_panics_via_its_dedicated_arm() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("true_div_panics").expect("failed to create scratch dir");
@@ -1171,8 +1115,6 @@ fn compiles_the_remaining_comparison_operators() {
             MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("remaining_cmp_ops").expect("failed to create scratch dir");
@@ -1207,8 +1149,6 @@ fn ge_and_ne_execute_with_the_correct_boolean_value_for_int() {
             MirItem::TopLevelStmt(print_compare(CmpOpKind::NotEq, 5, 6)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("ge_ne_values").expect("failed to create scratch dir");
     let obj_path = dir.join("ge_ne_values.o");
@@ -1254,8 +1194,6 @@ fn a_nan_float_is_not_equal_to_itself_and_is_truthy() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("nan_comparisons").expect("failed to create scratch dir");
@@ -1292,8 +1230,6 @@ fn reading_a_bool_local_back_out_of_its_alloca() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("read_bool_local").expect("failed to create scratch dir");
@@ -1335,8 +1271,6 @@ fn adding_a_bool_left_operand_to_an_int_promotes_bool_to_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_bool_left_promotes")
         .expect("failed to create scratch dir");
@@ -1374,8 +1308,6 @@ fn adding_an_int_and_a_bool_right_operand_promotes_bool_to_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_bool_right_promotes")
         .expect("failed to create scratch dir");
@@ -1410,8 +1342,6 @@ fn comparing_a_bool_left_operand_to_an_int_promotes_bool_to_int() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("compare_bool_left_promotes")
         .expect("failed to create scratch dir");
@@ -1433,8 +1363,6 @@ fn comparing_an_int_and_a_bool_right_operand_promotes_bool_to_int() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("compare_bool_right_promotes")
         .expect("failed to create scratch dir");
@@ -1461,8 +1389,6 @@ fn an_oversized_int_literal_materializes_a_runtime_bigint() {
                 ty: Ty::None,
             }))],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new("oversized_int_literal_materializes")
             .expect("failed to create scratch dir");
@@ -1567,8 +1493,6 @@ fn an_in_range_int_literal_is_still_folded_at_compile_time() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("in_range_int_literal_folds")
         .expect("failed to create scratch dir");
@@ -1636,8 +1560,6 @@ fn assigning_a_zero_part_fstring_hits_the_defensive_internal_panic() {
             value: MirExpr::FString(vec![]),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_zero_parts_panics")
         .expect("failed to create scratch dir");
@@ -1682,8 +1604,6 @@ fn printing_a_mistyped_compare_expression_prints_the_actual_runtime_value() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_mistyped_compare_prints_actual_value")
         .expect("failed to create scratch dir");
@@ -1705,8 +1625,6 @@ fn a_bare_expression_statement_evaluates_and_discards_its_value() {
             MirExpr::IntLiteral(5),
         ))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("bare_expr_stmt").expect("failed to create scratch dir");
@@ -1800,8 +1718,6 @@ fn a_walrus_in_an_if_test_predeclares_its_storage_slot_and_runs() {
             orelse: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("walrus_in_if_test").expect("failed to create scratch dir");
@@ -1860,8 +1776,6 @@ fn a_walrus_with_an_optional_int_value_and_a_repeated_target_name_predeclare_cor
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("walrus_optional_and_repeated_name")
         .expect("failed to create scratch dir");
@@ -2006,8 +1920,6 @@ fn reading_a_float_local_back_out_of_its_alloca() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("read_float_local").expect("failed to create scratch dir");
@@ -2066,8 +1978,6 @@ fn a_function_parameter_can_be_reassigned_read_back_and_printed() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("param_reference_reads_back")
         .expect("failed to create scratch dir");
@@ -2121,8 +2031,6 @@ fn a_function_reads_a_module_level_global_it_does_not_itself_assign() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("function_reads_module_global")
         .expect("failed to create scratch dir");
@@ -2166,8 +2074,6 @@ fn compiles_an_if_else_choosing_the_correct_branch_at_runtime() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("if_else").expect("failed to create scratch dir");
     let obj_path = dir.join("if_else.o");
@@ -2206,8 +2112,6 @@ fn an_if_whose_both_branches_return_terminates_its_unreachable_merge() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("if_both_branches_return")
         .expect("failed to create scratch dir");
@@ -2229,8 +2133,6 @@ fn a_statically_unreachable_match_tail_terminates_its_function() {
             body: vec![MirStmt::Unreachable],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("statically_unreachable_match_tail")
         .expect("failed to create scratch dir");
@@ -2252,8 +2154,6 @@ fn compiles_an_if_with_no_else_and_a_false_test_prints_nothing() {
             orelse: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("if_no_else").expect("failed to create scratch dir");
     let obj_path = dir.join("if_no_else.o");
@@ -2308,8 +2208,6 @@ fn compiles_a_while_loop_that_counts_down() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("while_countdown").expect("failed to create scratch dir");
@@ -2367,8 +2265,6 @@ fn compiles_a_while_loop_using_a_bare_int_condition_via_truthy() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("while_int_truthy").expect("failed to create scratch dir");
@@ -2421,8 +2317,6 @@ fn emit_expr_evaluates_not_over_a_non_literal_int_operand() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("not_over_int_name").expect("failed to create scratch dir");
@@ -2476,8 +2370,6 @@ fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("while_body_always_returns")
         .expect("failed to create scratch dir");
@@ -2508,8 +2400,6 @@ fn compiles_a_for_range_loop_with_a_positive_step() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_pos").expect("failed to create scratch dir");
     let obj_path = dir.join("for_range_pos.o");
@@ -2560,8 +2450,6 @@ fn a_second_top_level_for_range_loop_reusing_a_loop_variable_name_is_not_redecla
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_reused_loop_var")
         .expect("failed to create scratch dir");
@@ -2592,8 +2480,6 @@ fn compiles_a_for_range_loop_with_a_negative_step() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_neg").expect("failed to create scratch dir");
     let obj_path = dir.join("for_range_neg.o");
@@ -2618,8 +2504,6 @@ fn for_range_with_a_non_int_start_is_rejected() {
             body: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_bad_start_panics")
         .expect("failed to create scratch dir");
@@ -2640,8 +2524,6 @@ fn for_range_with_a_non_int_stop_is_rejected() {
             body: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_bad_stop_panics")
         .expect("failed to create scratch dir");
@@ -2662,8 +2544,6 @@ fn for_range_with_a_non_int_step_is_rejected() {
             body: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_bad_step_panics")
         .expect("failed to create scratch dir");
@@ -2704,8 +2584,6 @@ fn for_range_with_a_bool_start_stop_and_step_all_widen_to_int() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_bool_start_stop_step")
         .expect("failed to create scratch dir");
@@ -2739,8 +2617,6 @@ fn for_range_with_a_bool_stop_widens_to_int() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("for_range_bool_stop").expect("failed to create scratch dir");
@@ -2802,8 +2678,6 @@ fn for_range_normalizes_int_typed_bool_markers_before_the_induction_phi() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_encoded_bool_markers")
         .expect("failed to create scratch dir");
@@ -2866,8 +2740,6 @@ fn compiles_nested_control_flow_with_a_statement_after_it_in_the_same_body() {
             ],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("nested_control_flow_resume")
         .expect("failed to create scratch dir");
@@ -2898,8 +2770,6 @@ fn calling_an_undefined_function_inside_an_if_then_body_is_rejected() {
             orelse: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("if_then_undefined_fn")
         .expect("failed to create scratch dir");
@@ -2920,8 +2790,6 @@ fn calling_an_undefined_function_inside_an_if_orelse_body_is_rejected() {
             orelse: vec![call_user_fn("does_not_exist_in_if_orelse")],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("if_orelse_undefined_fn")
         .expect("failed to create scratch dir");
@@ -2941,8 +2809,6 @@ fn calling_an_undefined_function_inside_a_while_body_is_rejected() {
             body: vec![call_user_fn("does_not_exist_in_while")],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("while_undefined_fn").expect("failed to create scratch dir");
@@ -2965,8 +2831,6 @@ fn calling_an_undefined_function_inside_a_for_range_body_is_rejected() {
             body: vec![call_user_fn("does_not_exist_in_for_range")],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_undefined_fn")
         .expect("failed to create scratch dir");
@@ -3011,8 +2875,6 @@ fn compiles_a_function_call_with_real_arguments_and_a_return_value() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("call_with_args").expect("failed to create scratch dir");
@@ -3064,8 +2926,6 @@ fn a_multi_argument_call_binds_each_parameter_in_the_right_order() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("call_arg_order").expect("failed to create scratch dir");
@@ -3141,8 +3001,6 @@ fn compiles_a_recursive_function_with_an_early_return() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("recursive_fact").expect("failed to create scratch dir");
@@ -3198,8 +3056,6 @@ fn a_function_returning_from_both_if_and_else_branches_compiles_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("if_else_both_return").expect("failed to create scratch dir");
@@ -3225,8 +3081,6 @@ fn a_non_none_function_falling_through_is_an_internal_error_not_bad_ir() {
             body: vec![],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fallthrough_internal_error")
         .expect("failed to create scratch dir");
@@ -3273,8 +3127,6 @@ fn a_non_none_function_whose_try_raise_finally_body_always_terminates_compiles_c
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_raise_finally_always_terminates")
         .expect("failed to create scratch dir");
@@ -3300,8 +3152,6 @@ fn a_top_level_return_is_an_internal_error_not_bad_ir() {
             MirExpr::IntLiteral(0),
         )))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("top_level_return_internal_error")
         .expect("failed to create scratch dir");
@@ -3339,8 +3189,6 @@ fn calling_an_undefined_function_as_a_nested_expression_is_an_internal_error() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("undefined_fn_nested_expr_panics")
         .expect("failed to create scratch dir");
@@ -3380,8 +3228,6 @@ fn compiles_a_function_call_returning_bool_used_as_an_expression() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("call_returns_bool").expect("failed to create scratch dir");
@@ -3429,8 +3275,6 @@ fn a_none_typed_call_result_can_be_stored_and_printed() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("none_typed_call_result_storage")
         .expect("failed to create scratch dir");
@@ -3477,8 +3321,6 @@ fn an_infer_typed_call_result_used_as_a_nested_expression_is_not_supported() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("infer_typed_call_result_panics")
         .expect("failed to create scratch dir");
@@ -3516,8 +3358,6 @@ fn a_param_typed_call_result_is_not_supported() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("param_typed_call_result_panics")
         .expect("failed to create scratch dir");
@@ -3551,8 +3391,6 @@ fn a_protocol_typed_call_result_is_not_supported() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("protocol_typed_call_result_panics")
         .expect("failed to create scratch dir");
@@ -3593,13 +3431,30 @@ fn an_infer_typed_return_value_is_not_yet_supported() {
             body: vec![],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("infer_return_panics").expect("failed to create scratch dir");
     let obj_path = dir.join("infer_return_panics.o");
     let _ = compile_to_object(&mir, &obj_path, None, false);
+}
+
+#[test]
+fn ty_to_basic_type_gives_an_opaque_object_a_pointer_representation() {
+    // Part 1 of #1026. No *source* reaches this arm today: an `object`
+    // is only ever a module binding, `declare_module_globals` decides a
+    // module global's storage with its own match rather than through
+    // this function, and the two positions that would route an `object`
+    // here -- a function parameter and a return -- are refused before
+    // codegen (`I0404` inside the module, `C0003` at the `ext` export
+    // boundary). The arm exists anyway because this function's catch-all
+    // is a `panic!`, so the first construct that does give an `object` a
+    // signature position would turn a supported program into an internal
+    // compiler error rather than a diagnostic; this test is what keeps
+    // the arm honest until then. `PyObject *` is opaque to pycc, so the
+    // only property worth pinning is that it is the same plain pointer
+    // `Ty::Str`/`Ty::List` already get.
+    let context = Context::create();
+    assert!(ty_to_basic_type(&context, Ty::Object).is_pointer_type());
 }
 
 #[test]
@@ -4389,8 +4244,6 @@ fn a_list_result_binop_is_not_yet_supported() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_list_result_panics")
         .expect("failed to create scratch dir");
@@ -4440,8 +4293,6 @@ fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("list_int_param_and_return")
         .expect("failed to create scratch dir");
@@ -4511,8 +4362,6 @@ fn passing_a_list_value_as_a_function_argument_marshals_it_like_a_pointer() {
             },
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("list_int_passed_as_argument")
         .expect("failed to create scratch dir");
@@ -4596,8 +4445,6 @@ fn list_fixture_module(body: Vec<MirStmt>) -> MirModule {
             MirItem::TopLevelStmt(call_user_fn("f")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     }
 }
 
@@ -4667,8 +4514,6 @@ fn a_math_sqrt_call_with_the_wrong_argument_count_is_an_internal_error() {
             ty: Ty::Float,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("math_sqrt_wrong_arity_panics")
         .expect("failed to create scratch dir");
@@ -4694,8 +4539,6 @@ fn a_math_sqrt_call_on_a_non_float_argument_is_an_internal_error() {
             ty: Ty::Float,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("math_sqrt_non_float_panics")
         .expect("failed to create scratch dir");
@@ -4829,8 +4672,6 @@ fn dict_literal_construction_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_literal_and_len")
         .expect("failed to create scratch dir");
@@ -4973,8 +4814,6 @@ fn class_instantiation_attribute_and_method_call_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("class_instantiation_attribute_and_method_call")
         .expect("failed to create scratch dir");
@@ -5098,8 +4937,6 @@ fn bool_float_and_str_typed_attribute_slots_round_trip_correctly() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_float_str_attribute_slots")
         .expect("failed to create scratch dir");
@@ -5241,8 +5078,6 @@ fn a_str_attribute_read_twice_and_then_reassigned_does_not_use_after_free() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_attribute_read_twice_and_reassigned")
         .expect("failed to create scratch dir");
@@ -5305,8 +5140,6 @@ fn attribute_read_over_a_non_instance_base_panics_with_an_internal_error() {
             ty: Ty::Int,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("attribute_read_over_a_non_instance_base")
         .expect("failed to create scratch dir");
@@ -5332,8 +5165,6 @@ fn instantiation_of_an_unregistered_constructor_panics_with_an_internal_error() 
             })),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("instantiation_of_an_unregistered_constructor")
         .expect("failed to create scratch dir");
@@ -5420,8 +5251,6 @@ fn a_function_returning_an_instance_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("a_function_returning_an_instance")
         .expect("failed to create scratch dir");
@@ -5496,8 +5325,6 @@ fn instantiating_a_class_at_module_scope_with_a_truthiness_check_codegens_and_ru
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("class_instance_truthiness")
         .expect("failed to create scratch dir");
@@ -5585,8 +5412,6 @@ fn math_sqrt_call_codegens_and_runs() {
             ty: Ty::Float,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("math_sqrt_call").expect("failed to create scratch dir");
@@ -5609,8 +5434,6 @@ fn math_pi_codegens_and_runs() {
             ty: Ty::Float,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("math_pi").expect("failed to create scratch dir");
     let obj_path = dir.join("math_pi.o");
@@ -5644,8 +5467,6 @@ fn float_call_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("float_call").expect("failed to create scratch dir");
     let obj_path = dir.join("float_call.o");
@@ -5687,8 +5508,6 @@ fn a_user_defined_float_function_codegens_and_runs_instead_of_the_builtin() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("user_defined_float_call")
         .expect("failed to create scratch dir");
@@ -5726,8 +5545,6 @@ fn dict_get_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get").expect("failed to create scratch dir");
     let obj_path = dir.join("dict_get.o");
@@ -5771,8 +5588,6 @@ fn dict_set_item_updates_an_existing_key_in_place() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("dict_set_update").expect("failed to create scratch dir");
@@ -5812,8 +5627,6 @@ fn dict_set_item_appends_a_new_key() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("dict_set_append").expect("failed to create scratch dir");
@@ -5858,8 +5671,6 @@ fn for_k_in_dict_iterates_keys_in_insertion_order() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("for_dict_iteration").expect("failed to create scratch dir");
@@ -5919,8 +5730,6 @@ fn reassigning_the_for_dict_loop_variable_inside_the_body_does_not_corrupt_the_d
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_dict_var_reassignment")
         .expect("failed to create scratch dir");
@@ -5960,8 +5769,6 @@ fn set_literal_construction_dedups_and_reports_correct_len() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("set_literal_and_len").expect("failed to create scratch dir");
@@ -6010,8 +5817,6 @@ fn for_x_in_set_iterates_in_first_insertion_order() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("for_set_iteration").expect("failed to create scratch dir");
@@ -6099,8 +5904,6 @@ fn compiles_a_function_with_a_set_int_parameter_and_set_int_return_value() {
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("set_int_param_and_return")
         .expect("failed to create scratch dir");
@@ -6142,8 +5945,6 @@ fn passing_a_set_value_as_a_function_argument_marshals_it_like_a_pointer() {
             },
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("set_int_passed_as_argument")
         .expect("failed to create scratch dir");
@@ -6172,8 +5973,6 @@ fn an_error_inside_a_for_set_body_propagates_out_of_codegen() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("for_set_body_error").expect("failed to create scratch dir");
@@ -6316,8 +6115,6 @@ fn tuple_construction_and_literal_index_reads_codegen_and_run() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_literal_and_reads")
         .expect("failed to create scratch dir");
@@ -6371,8 +6168,6 @@ fn a_function_local_tuple_codegens_and_runs_through_its_alloca_slot() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("tuple_local_slot").expect("failed to create scratch dir");
@@ -6400,8 +6195,6 @@ fn an_inline_tuple_literal_can_be_subscripted_without_a_named_binding() {
             index: Box::new(MirExpr::IntLiteral(1)),
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_inline_subscript")
         .expect("failed to create scratch dir");
@@ -6473,8 +6266,6 @@ fn compiles_a_function_with_a_tuple_parameter_and_tuple_return_value() {
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_param_and_return")
         .expect("failed to create scratch dir");
@@ -6515,8 +6306,6 @@ fn passing_a_tuple_value_as_a_function_argument_marshals_it_by_value() {
             },
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_passed_as_argument")
         .expect("failed to create scratch dir");
@@ -6595,8 +6384,6 @@ fn a_non_scalar_tuple_element_is_an_internal_error() {
             value: MirExpr::TupleLiteral(vec![MirExpr::StringLiteral("a".to_string())]),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_non_scalar_element")
         .expect("failed to create scratch dir");
@@ -6633,8 +6420,6 @@ fn a_tuple_subscript_with_a_non_literal_index_is_an_internal_error() {
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_non_literal_index")
         .expect("failed to create scratch dir");
@@ -6666,8 +6451,6 @@ fn reading_a_non_scalar_tuple_element_is_not_supported() {
             })],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("tuple_non_scalar_element_read")
         .expect("failed to create scratch dir");
@@ -6830,8 +6613,6 @@ fn optional_int_annotated_assignment_constructs_a_present_struct_and_reads_its_p
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_present_is_none")
         .expect("failed to create scratch dir");
@@ -6876,8 +6657,6 @@ fn optional_int_annotated_assignment_with_bare_none_constructs_an_absent_struct(
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_absent_is_none")
         .expect("failed to create scratch dir");
@@ -6928,8 +6707,6 @@ fn optional_int_reassignment_from_present_to_absent_updates_the_is_none_reading(
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_reassign_to_none")
         .expect("failed to create scratch dir");
@@ -6978,8 +6755,6 @@ fn optional_int_truthiness_follows_cpython_for_present_and_absent_values() {
             if_prints_one_else_zero("c"),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_truthiness")
         .expect("failed to create scratch dir");
@@ -7026,8 +6801,6 @@ fn optional_int_narrowed_read_of_a_present_smallint_prints_the_payload() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_smallint")
         .expect("failed to create scratch dir");
@@ -7079,8 +6852,6 @@ fn optional_int_narrowed_read_of_a_present_bigint_prints_the_payload() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_bigint")
         .expect("failed to create scratch dir");
@@ -7151,8 +6922,6 @@ fn a_narrowed_bigint_duplicated_into_a_second_binding_survives_the_original_slot
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_narrowed_bigint_survives_reassign")
         .expect("failed to create scratch dir");
@@ -7181,8 +6950,6 @@ fn optional_unwrap_on_a_non_optional_operand_panics_defensively_in_codegen() {
             Box::new(Ty::Int),
         )))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_unwrap_non_optional_operand")
         .expect("failed to create scratch dir");
@@ -7231,8 +6998,6 @@ fn an_optional_int_parameter_and_return_value_round_trip_through_a_function_call
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_call_roundtrip")
         .expect("failed to create scratch dir");
@@ -7293,8 +7058,6 @@ fn an_optional_int_function_that_raises_before_returning_still_produces_a_valid_
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_exceptional_exit")
         .expect("failed to create scratch dir");
@@ -7325,8 +7088,6 @@ fn is_none_on_a_non_optional_non_none_operand_panics_defensively_in_codegen() {
             ty: Ty::Bool,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_is_none_non_optional_operand")
         .expect("failed to create scratch dir");
@@ -7390,8 +7151,6 @@ fn is_none_on_a_ty_none_typed_non_optional_operand_reads_the_ty_none_arm() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_is_none_ty_none_operand")
         .expect("failed to create scratch dir");
@@ -7455,8 +7214,6 @@ fn optional_int_annotated_assignment_inside_a_function_body_uses_the_alloca_stor
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_int_function_local_alloca")
         .expect("failed to create scratch dir");
@@ -7504,8 +7261,6 @@ fn none_is_operand_reads_the_right_hand_side_when_none_is_written_on_the_left() 
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_none_is_x_ordering")
         .expect("failed to create scratch dir");
@@ -7573,8 +7328,6 @@ fn optional_float_annotated_assignment_constructs_a_present_struct_and_reads_its
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_present_is_none")
         .expect("failed to create scratch dir");
@@ -7622,8 +7375,6 @@ fn optional_bool_annotated_assignment_constructs_a_present_struct_and_reads_its_
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_present_is_none")
         .expect("failed to create scratch dir");
@@ -7668,8 +7419,6 @@ fn optional_float_annotated_assignment_with_bare_none_constructs_an_absent_struc
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_absent_is_none")
         .expect("failed to create scratch dir");
@@ -7715,8 +7464,6 @@ fn optional_bool_annotated_assignment_with_bare_none_constructs_an_absent_struct
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_absent_is_none")
         .expect("failed to create scratch dir");
@@ -7772,8 +7519,6 @@ fn optional_float_truthiness_follows_cpython_for_present_and_absent_values() {
             if_prints_one_else_zero("c", optional_float()),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_truthiness")
         .expect("failed to create scratch dir");
@@ -7836,8 +7581,6 @@ fn optional_bool_truthiness_follows_cpython_for_present_and_absent_values() {
             if_prints_one_else_zero("c", optional_bool()),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_truthiness")
         .expect("failed to create scratch dir");
@@ -7889,8 +7632,6 @@ fn optional_float_narrowed_read_of_a_present_value_prints_the_payload() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_narrowed")
         .expect("failed to create scratch dir");
@@ -7938,8 +7679,6 @@ fn optional_bool_narrowed_read_of_a_present_value_prints_the_payload() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_narrowed")
         .expect("failed to create scratch dir");
@@ -7996,8 +7735,6 @@ fn an_optional_bool_function_that_raises_before_returning_still_produces_a_valid
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_exceptional_exit")
         .expect("failed to create scratch dir");
@@ -8081,8 +7818,6 @@ fn optional_bool_absent_value_truthiness_and_narrowed_unwrap_are_both_correct() 
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_absent_end_to_end")
         .expect("failed to create scratch dir");
@@ -8237,8 +7972,6 @@ fn a_return_inside_a_for_list_body_returns_immediately_without_looping() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_list_return_inside_body")
         .expect("failed to create scratch dir");
@@ -8306,8 +8039,6 @@ fn a_return_inside_a_for_set_body_returns_immediately_without_looping() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_set_return_inside_body")
         .expect("failed to create scratch dir");
@@ -8515,8 +8246,6 @@ fn a_module_level_list_binding_gets_a_null_initialized_pointer_global() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("module_level_list_global")
         .expect("failed to create scratch dir");
@@ -8607,8 +8336,6 @@ fn compiles_a_none_typed_parameter_and_value_return() {
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("none_param_compiles").expect("failed to create scratch dir");
@@ -8646,8 +8373,6 @@ fn compiles_a_function_with_a_float_parameter_and_float_return_value() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("float_param_and_return")
         .expect("failed to create scratch dir");
@@ -8705,8 +8430,6 @@ fn a_return_inside_a_for_range_body_returns_immediately_without_looping() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("for_range_return_inside_body")
         .expect("failed to create scratch dir");
@@ -8745,8 +8468,6 @@ fn compiles_a_function_call_with_a_bool_argument() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("call_with_bool_arg").expect("failed to create scratch dir");
@@ -8786,8 +8507,6 @@ fn a_bool_argument_widens_to_int_when_the_parameter_is_declared_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_arg_widens_to_int")
         .expect("failed to create scratch dir");
@@ -8827,8 +8546,6 @@ fn a_bool_return_value_widens_to_int_when_the_function_declares_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_return_widens_to_int")
         .expect("failed to create scratch dir");
@@ -8871,8 +8588,6 @@ fn reassigning_an_int_local_with_a_bool_value_widens_it_to_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("reassign_bool_into_int")
         .expect("failed to create scratch dir");
@@ -8902,8 +8617,6 @@ fn an_explicit_int_boundary_preserves_bool_identity_in_an_int_slot() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("int_boundary_bool_identity")
         .expect("failed to create scratch dir");
@@ -8952,8 +8665,6 @@ fn bool_identity_survives_nested_int_forwarding_and_fstring_formatting() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_identity_nested_fstring")
         .expect("failed to create scratch dir");
@@ -8990,8 +8701,6 @@ fn a_bool_dict_value_round_trips_with_identity_preserved() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_dict_value_identity")
         .expect("failed to create scratch dir");
@@ -9025,8 +8734,6 @@ fn nesting_a_print_call_inside_another_expression_is_not_yet_supported() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("print_result_nested_panics")
         .expect("failed to create scratch dir");
@@ -9054,8 +8761,6 @@ fn referencing_a_name_with_no_bound_local_is_an_internal_error() {
             ty: Ty::Int,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("unbound_name_panics").expect("failed to create scratch dir");
@@ -9080,8 +8785,6 @@ fn compiles_true_division_of_two_ints_as_float_arithmetic() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("true_div").expect("failed to create scratch dir");
     let obj_path = dir.join("true_div.o");
@@ -9102,8 +8805,6 @@ fn compiles_mixed_int_and_float_addition() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("mixed_add").expect("failed to create scratch dir");
     let obj_path = dir.join("mixed_add.o");
@@ -9135,8 +8836,6 @@ fn compiles_bool_arithmetic_promoted_to_int() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bool_arith").expect("failed to create scratch dir");
     let obj_path = dir.join("bool_arith.o");
@@ -9160,8 +8859,6 @@ fn compiles_a_float_comparison() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("float_cmp").expect("failed to create scratch dir");
     let obj_path = dir.join("float_cmp.o");
@@ -9184,8 +8881,6 @@ fn compiles_an_if_test_on_a_float_expression() {
                 orelse: vec![],
             })],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("float_truthy_{test}"))
             .expect("failed to create scratch dir");
@@ -9221,8 +8916,6 @@ fn an_int_result_binop_with_a_float_operand_hits_to_numeric_encoded_int_defensiv
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_int_result_float_operand_panics")
         .expect("failed to create scratch dir");
@@ -9254,8 +8947,6 @@ fn a_none_result_binop_is_not_yet_supported() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_none_result_panics")
         .expect("failed to create scratch dir");
@@ -9284,8 +8975,6 @@ fn a_str_result_binop_with_a_non_str_left_operand_hits_the_internal_consistency_
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_binop_left_mismatch_panics")
         .expect("failed to create scratch dir");
@@ -9311,8 +9000,6 @@ fn a_str_result_binop_with_a_non_str_right_operand_hits_the_internal_consistency
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_binop_right_mismatch_panics")
         .expect("failed to create scratch dir");
@@ -9338,8 +9025,6 @@ fn a_str_binop_other_than_concatenation_is_not_yet_supported() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_binop_unsupported_op_panics")
         .expect("failed to create scratch dir");
@@ -9377,8 +9062,6 @@ fn compiles_string_repetition_in_both_operand_orders() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_binop_repetition")
         .expect("failed to create scratch dir");
@@ -9403,8 +9086,6 @@ fn compiles_string_repetition_with_a_bool_count() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_binop_repetition_bool")
         .expect("failed to create scratch dir");
@@ -9431,8 +9112,6 @@ fn a_str_result_multiplication_without_a_str_operand_is_an_internal_error() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_repetition_without_str_operand")
         .expect("failed to create scratch dir");
@@ -9460,8 +9139,6 @@ fn compiles_bool_promoted_to_float_in_mixed_arithmetic() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("bool_float_mixed").expect("failed to create scratch dir");
@@ -9504,8 +9181,6 @@ fn compiles_the_remaining_float_binop_kinds() {
             MirItem::TopLevelStmt(float_binop(BinOpKind::Pow, 2.0, 5.0)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("float_binops").expect("failed to create scratch dir");
     let obj_path = dir.join("float_binops.o");
@@ -9532,8 +9207,6 @@ fn compiles_a_mixed_int_and_float_comparison() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("mixed_cmp").expect("failed to create scratch dir");
     let obj_path = dir.join("mixed_cmp.o");
@@ -9567,8 +9240,6 @@ fn compiles_the_remaining_float_comparison_operators() {
             MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("remaining_float_cmp_ops")
         .expect("failed to create scratch dir");
@@ -9603,8 +9274,6 @@ fn compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("str_concat_reassign").expect("failed to create scratch dir");
@@ -9660,8 +9329,6 @@ fn a_repeated_string_prints_its_repetition() {
             ),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("str_repeat_prints").expect("failed to create scratch dir");
@@ -9692,8 +9359,6 @@ fn a_string_assignment_rejects_a_predeclared_non_string_slot() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_assignment_non_str_slot_panics")
         .expect("failed to create scratch dir");
@@ -9730,8 +9395,6 @@ fn an_int_local_first_assigned_inside_an_if_body_is_readable_after_the_if() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("int_first_assign_in_if_body")
         .expect("failed to create scratch dir");
@@ -9773,8 +9436,6 @@ fn an_int_local_assigned_in_both_branches_of_an_if_else_is_readable_after_the_if
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("int_first_assign_in_if_else_both")
         .expect("failed to create scratch dir");
@@ -9808,8 +9469,6 @@ fn a_str_local_first_assigned_inside_an_if_body_is_freed_at_top_level_completion
             orelse: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_first_assign_in_if_body")
         .expect("failed to create scratch dir");
@@ -9842,8 +9501,6 @@ fn a_str_local_assigned_in_both_branches_of_an_if_else_is_freed_at_top_level_com
             }],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_first_assign_in_if_else_both")
         .expect("failed to create scratch dir");
@@ -9901,8 +9558,6 @@ fn a_str_local_first_assigned_inside_a_while_body_frees_previous_and_final_value
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_first_assign_in_while_body")
         .expect("failed to create scratch dir");
@@ -9944,8 +9599,6 @@ fn a_str_local_never_assigned_on_the_taken_path_decrefs_a_clean_null_at_completi
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_never_assigned_on_taken_path")
         .expect("failed to create scratch dir");
@@ -9991,8 +9644,6 @@ fn a_str_local_first_assigned_inside_a_functions_own_leading_if_body() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_first_assign_in_fn_leading_if")
         .expect("failed to create scratch dir");
@@ -10029,8 +9680,6 @@ fn a_str_local_first_assigned_as_a_functions_own_plain_leading_statement() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_first_assign_in_fn_plain")
         .expect("failed to create scratch dir");
@@ -10085,8 +9734,6 @@ fn an_int_local_assigned_in_both_branches_of_a_functions_own_leading_if_else() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("int_first_assign_in_fn_leading_if_else")
         .expect("failed to create scratch dir");
@@ -10133,8 +9780,6 @@ fn a_float_local_first_assigned_inside_a_function_uses_preclassified_storage() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("float_first_assign_in_fn")
         .expect("failed to create scratch dir");
@@ -10159,8 +9804,6 @@ fn compiles_a_string_comparison() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_cmp").expect("failed to create scratch dir");
     let obj_path = dir.join("str_cmp.o");
@@ -10190,8 +9833,6 @@ fn a_string_comparison_result_is_correct_at_runtime() {
                 orelse: vec![],
             })],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("str_cmp_runtime_{left}_{right}"))
             .expect("failed to create scratch dir");
@@ -10236,8 +9877,6 @@ fn compiles_the_remaining_string_comparison_operators() {
             MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("remaining_str_cmp_ops")
         .expect("failed to create scratch dir");
@@ -10268,8 +9907,6 @@ fn a_mixed_int_and_string_comparison_hits_the_internal_consistency_check() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("mixed_int_str_cmp_panics")
         .expect("failed to create scratch dir");
@@ -10310,8 +9947,6 @@ fn a_string_comparison_with_a_lying_right_operand_hits_the_internal_consistency_
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("lying_str_cmp_panics")
         .expect("failed to create scratch dir");
@@ -10334,8 +9969,6 @@ fn compiles_an_if_test_on_a_string_expression() {
                 orelse: vec![],
             })],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("str_truthy_{}", test.len()))
             .expect("failed to create scratch dir");
@@ -10357,8 +9990,6 @@ fn compiles_a_string_literal_longer_than_the_inline_cap() {
             value: MirExpr::StringLiteral(long),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("str_long_literal").expect("failed to create scratch dir");
@@ -10403,8 +10034,6 @@ fn compiles_a_function_with_a_str_parameter_and_str_return_value() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_param_and_return")
         .expect("failed to create scratch dir");
@@ -10438,8 +10067,6 @@ fn an_int_result_binop_with_a_str_operand_hits_to_numeric_encoded_int_defensive_
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_int_result_str_operand_panics")
         .expect("failed to create scratch dir");
@@ -10465,8 +10092,6 @@ fn a_float_result_binop_with_a_str_operand_hits_to_float_defensive_panic() {
             },
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("binop_float_result_str_operand_panics")
         .expect("failed to create scratch dir");
@@ -10527,8 +10152,6 @@ fn compiles_an_f_string_interpolating_an_int_between_literal_parts() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_int").expect("failed to create scratch dir");
     let obj_path = dir.join("fstring_int.o");
@@ -10547,8 +10170,6 @@ fn compiles_an_f_string_interpolating_a_float_and_a_bool() {
             ]),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("fstring_float_bool").expect("failed to create scratch dir");
@@ -10586,8 +10207,6 @@ fn compiles_an_f_string_interpolating_a_none_returning_call_as_none() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_none_call_as_none")
         .expect("failed to create scratch dir");
@@ -10609,8 +10228,6 @@ fn compiles_an_f_string_with_only_literal_parts() {
             )]),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_literal_only")
         .expect("failed to create scratch dir");
@@ -10648,8 +10265,6 @@ fn compiles_an_f_string_interpolating_an_existing_str_value() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_str_passthrough")
         .expect("failed to create scratch dir");
@@ -10694,8 +10309,6 @@ fn interpolating_a_none_returning_call_in_an_f_string_renders_none_not_false() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_none_call_renders_none")
         .expect("failed to create scratch dir");
@@ -10746,8 +10359,6 @@ fn interpolating_a_none_typed_parameter_renders_none() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fstring_none_typed_parameter")
         .expect("failed to create scratch dir");
@@ -10805,8 +10416,6 @@ fn compiles_a_loop_whose_accumulator_overflows_into_a_bigint() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bigint_overflow_loop")
         .expect("failed to create scratch dir");
@@ -10886,8 +10495,6 @@ fn a_dict_literal_with_a_non_str_key_is_an_internal_error() {
             value: MirExpr::DictLiteral(vec![(MirExpr::IntLiteral(1), MirExpr::IntLiteral(2))]),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_literal_non_str_key_panics")
         .expect("failed to create scratch dir");
@@ -10915,8 +10522,6 @@ fn a_dict_get_with_a_non_str_key_is_an_internal_error() {
             key: Box::new(MirExpr::IntLiteral(1)),
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get_non_str_key_panics")
         .expect("failed to create scratch dir");
@@ -10950,8 +10555,6 @@ fn a_dict_set_with_a_non_str_key_is_an_internal_error() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_set_non_str_key_panics")
         .expect("failed to create scratch dir");
@@ -10990,8 +10593,6 @@ fn compiles_a_function_with_a_dict_str_int_parameter_and_dict_str_int_return_val
             }))],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_str_int_param_and_return")
         .expect("failed to create scratch dir");
@@ -11034,8 +10635,6 @@ fn passing_a_dict_value_as_a_function_argument_marshals_it_like_a_pointer() {
             },
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_str_int_passed_as_argument")
         .expect("failed to create scratch dir");
@@ -11067,8 +10666,6 @@ fn an_error_inside_a_for_dict_body_propagates_out_of_codegen() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("for_dict_body_error").expect("failed to create scratch dir");
@@ -11115,8 +10712,6 @@ fn a_dict_literal_key_read_from_a_variable_is_increfed_before_storage() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_literal_variable_key_incref")
         .expect("failed to create scratch dir");
@@ -11162,8 +10757,6 @@ fn dict_set_item_key_read_from_a_variable_is_increfed_before_storage() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_set_variable_key_incref")
         .expect("failed to create scratch dir");
@@ -11257,8 +10850,6 @@ fn a_range_sourced_list_comprehension_with_no_filter_computes_every_element() {
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_range_no_filter")
         .expect("failed to create scratch dir");
@@ -11320,8 +10911,6 @@ fn a_list_sourced_list_comprehension_with_a_filter_only_keeps_matching_elements(
             MirItem::TopLevelStmt(print_each_int("ys")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_list_with_filter")
         .expect("failed to create scratch dir");
@@ -11389,8 +10978,6 @@ fn a_list_sourced_list_comprehension_that_rebinds_its_own_source_name_reads_the_
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_self_referential_source")
         .expect("failed to create scratch dir");
@@ -11465,8 +11052,6 @@ fn a_range_sourced_list_comprehension_whose_bound_reads_its_own_rebound_target_u
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_self_referential_range_bound")
         .expect("failed to create scratch dir");
@@ -11523,8 +11108,6 @@ fn a_list_comprehensions_elt_reading_its_own_rebound_target_reads_the_pre_existi
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_self_referential_elt")
         .expect("failed to create scratch dir");
@@ -11574,8 +11157,6 @@ fn a_set_sourced_list_comprehension_with_no_filter_visits_every_element() {
             MirItem::TopLevelStmt(print_each_int("zs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_set_no_filter")
         .expect("failed to create scratch dir");
@@ -11643,8 +11224,6 @@ fn an_empty_range_sourced_list_comprehension_produces_a_genuinely_valid_empty_li
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_range_empty")
         .expect("failed to create scratch dir");
@@ -11702,8 +11281,6 @@ fn a_dict_sourced_list_comprehension_binds_its_key_without_crashing() {
             MirItem::TopLevelStmt(print_each_int("zs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("listcomp_dict_source_no_crash")
         .expect("failed to create scratch dir");
@@ -11761,8 +11338,6 @@ fn a_range_sourced_set_comprehension_with_a_filter_only_keeps_matching_elements(
             MirItem::TopLevelStmt(print_each_int_from_set("evens")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("setcomp_range_with_filter")
         .expect("failed to create scratch dir");
@@ -11811,8 +11386,6 @@ fn a_list_sourced_set_comprehension_with_no_filter_deduplicates_repeated_element
             MirItem::TopLevelStmt(print_each_int_from_set("s")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("setcomp_list_no_filter_dedup")
         .expect("failed to create scratch dir");
@@ -11870,8 +11443,6 @@ fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pr
             MirItem::TopLevelStmt(print_each_int_from_set("s")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("setcomp_self_referential_rebind")
         .expect("failed to create scratch dir");
@@ -11940,8 +11511,6 @@ fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_us
             MirItem::TopLevelStmt(print_each_int_from_set("s")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("setcomp_self_referential_range_bound")
         .expect("failed to create scratch dir");
@@ -11997,8 +11566,6 @@ fn a_dict_sourced_set_comprehension_binds_its_key_without_crashing() {
             MirItem::TopLevelStmt(print_each_int_from_set("zs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("setcomp_dict_source_no_crash")
         .expect("failed to create scratch dir");
@@ -12064,8 +11631,6 @@ fn a_range_sourced_dict_comprehension_with_an_fstring_key_computes_every_entry()
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_range_fstring_key")
         .expect("failed to create scratch dir");
@@ -12161,8 +11726,6 @@ fn a_dict_sourced_dict_comprehension_builds_an_independent_copy_and_leaves_the_s
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_dict_source_independent_copy")
         .expect("failed to create scratch dir");
@@ -12234,8 +11797,6 @@ fn a_list_sourced_dict_comprehension_with_a_filter_only_keeps_matching_entries()
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_list_with_filter")
         .expect("failed to create scratch dir");
@@ -12311,8 +11872,6 @@ fn a_set_sourced_dict_comprehension_with_a_filter_only_keeps_matching_entries() 
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_set_with_filter")
         .expect("failed to create scratch dir");
@@ -12348,8 +11907,6 @@ fn a_dict_comprehension_with_a_non_str_key_is_an_internal_error() {
             value: Box::new(MirExpr::IntLiteral(2)),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_non_str_key_panics")
         .expect("failed to create scratch dir");
@@ -12388,8 +11945,6 @@ fn a_dict_comprehension_with_a_non_str_key_under_a_filter_is_an_internal_error()
             value: Box::new(MirExpr::IntLiteral(2)),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_non_str_key_filtered_panics")
         .expect("failed to create scratch dir");
@@ -12462,8 +12017,6 @@ fn a_dict_sourced_dict_comprehension_that_rebinds_its_own_source_name_reads_the_
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_self_referential_rebind")
         .expect("failed to create scratch dir");
@@ -12559,8 +12112,6 @@ fn a_range_sourced_dict_comprehension_whose_bound_reads_its_own_rebound_target_u
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dictcomp_self_referential_range_bound")
         .expect("failed to create scratch dir");
@@ -12617,8 +12168,6 @@ fn a_slice_with_all_three_bounds_present_returns_the_expected_sub_range() {
             MirItem::TopLevelStmt(print_each_int("ys")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice_all_bounds_present")
         .expect("failed to create scratch dir");
@@ -12653,8 +12202,6 @@ fn a_slice_with_every_bound_omitted_defaults_to_the_whole_list_stepped_by_one() 
             MirItem::TopLevelStmt(print_each_int("ys")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice_all_bounds_omitted")
         .expect("failed to create scratch dir");
@@ -12688,8 +12235,6 @@ fn a_slice_with_only_a_step_present_skips_every_other_element() {
             MirItem::TopLevelStmt(print_each_int("ys")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("slice_step_only").expect("failed to create scratch dir");
@@ -12733,8 +12278,6 @@ fn a_sliced_list_is_a_genuinely_independent_allocation_from_its_base() {
             MirItem::TopLevelStmt(print_each_int("ys")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice_result_is_independent")
         .expect("failed to create scratch dir");
@@ -12780,8 +12323,6 @@ fn a_list_sourced_slice_that_rebinds_its_own_source_name_reads_the_pre_existing_
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("slice_self_referential_rebind")
         .expect("failed to create scratch dir");
@@ -12822,8 +12363,6 @@ fn list_pop_removes_and_returns_the_last_element_and_shrinks_len() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("list_pop_basic").expect("failed to create scratch dir");
@@ -12872,8 +12411,6 @@ fn pop_twice_on_the_same_list_in_one_statement_removes_in_order() {
             MirItem::TopLevelStmt(print_each_int("xs")),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("list_pop_twice_same_statement")
         .expect("failed to create scratch dir");
@@ -12907,8 +12444,6 @@ fn dict_get_or_default_on_a_present_key_returns_the_stored_value_codegens_and_ru
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get_or_default_present")
         .expect("failed to create scratch dir");
@@ -12943,8 +12478,6 @@ fn dict_get_or_default_on_a_missing_key_returns_the_default_codegens_and_runs() 
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get_or_default_missing")
         .expect("failed to create scratch dir");
@@ -12997,8 +12530,6 @@ fn dict_get_or_default_nested_in_its_own_default_argument_resolves_correctly() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get_or_default_nested_default")
         .expect("failed to create scratch dir");
@@ -13035,8 +12566,6 @@ fn a_dict_get_or_default_with_a_non_str_key_is_an_internal_error() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("dict_get_or_default_non_str_key_panics")
         .expect("failed to create scratch dir");
@@ -13084,8 +12613,6 @@ fn function_redefinition_uses_unique_mangled_names() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("fn_redef_unique_names")
         .expect("failed to create scratch dir");
@@ -13142,8 +12669,6 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("set_add_grows_and_dedups")
         .expect("failed to create scratch dir");
@@ -13296,8 +12821,6 @@ fn null_instance_classmethod_codegens_and_runs() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("null_instance_classmethod")
         .expect("failed to create scratch dir");
@@ -13359,8 +12882,6 @@ fn enum_member_singleton_init_emits_and_runs() {
             ty: Ty::None,
         }))],
         class_defs: vec![("Color".to_string(), class_def)],
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("enum_member_init").expect("failed to create scratch dir");
@@ -13436,8 +12957,6 @@ fn str_valued_enum_member_singleton_init_emits_and_runs() {
             read_member("AXIAL", 1, Ty::Str),
         ],
         class_defs: vec![("Kind".to_string(), class_def)],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("str_enum_member_init")
         .expect("failed to create scratch dir");
@@ -13530,8 +13049,6 @@ fn abstract_method_body_with_non_none_return_emits_default_value() {
                 is_abstract: true,
             },
         )],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("abstract_default_ret")
         .expect("failed to create scratch dir");
@@ -13551,8 +13068,6 @@ fn calling_an_undefined_function_inside_a_seq_is_rejected() {
             call_user_fn("does_not_exist_in_seq"),
         ]))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("seq_undefined_fn").expect("failed to create scratch dir");
@@ -13572,8 +13087,6 @@ fn seq_with_valid_statements_compiles_and_runs() {
             call_print(20),
         ]))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("seq_valid").expect("failed to create scratch dir");
     let obj_path = dir.join("seq_valid.o");
@@ -13621,8 +13134,6 @@ fn none_singleton_comparison_emits_zero_carrier() {
             }),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("none_singleton_cmp").expect("failed to create scratch dir");
@@ -13734,8 +13245,6 @@ fn bare_except_codegen_builds_and_runs() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("bare_except_codegen").expect("failed to create scratch dir");
@@ -13761,8 +13270,6 @@ fn raise_with_non_string_message_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("raise_non_str").expect("failed to create scratch dir");
     let obj_path = dir.join("raise_non_str.o");
@@ -13781,8 +13288,6 @@ fn raising_a_non_instance_existing_value_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("raise_existing_non_instance")
         .expect("failed to create scratch dir");
@@ -13821,8 +13326,6 @@ fn raising_a_bound_existing_exception_builds_successfully() {
             finalbody: vec![],
         })],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("raise_existing_instance")
         .expect("failed to create scratch dir");
@@ -13851,8 +13354,6 @@ fn constructed_group_with_non_string_message_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("constructed_group_non_str_message")
         .expect("failed to create scratch dir");
@@ -13879,8 +13380,6 @@ fn constructed_group_with_a_non_instance_member_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("constructed_group_non_instance_member")
         .expect("failed to create scratch dir");
@@ -13976,8 +13475,6 @@ fn a_successful_multi_member_exception_group_construction_compiles_and_runs() {
             finalbody: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("successful_multi_member_exception_group")
         .expect("failed to create scratch dir");
@@ -14018,8 +13515,6 @@ fn constructed_group_cause_with_non_string_message_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("constructed_group_cause_non_str_message")
         .expect("failed to create scratch dir");
@@ -14059,8 +13554,6 @@ fn a_codegen_error_in_a_try_star_body_propagates_out_of_emit_try_star() {
             finalbody: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_body_codegen_error")
         .expect("failed to create scratch dir");
@@ -14092,8 +13585,6 @@ fn a_codegen_error_in_a_try_star_handler_body_propagates_out_of_emit_try_star() 
             finalbody: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_handler_codegen_error")
         .expect("failed to create scratch dir");
@@ -14130,8 +13621,6 @@ fn a_codegen_error_in_a_try_star_else_body_propagates_out_of_emit_try_star() {
             finalbody: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_else_codegen_error")
         .expect("failed to create scratch dir");
@@ -14166,8 +13655,6 @@ fn a_codegen_error_in_a_try_star_finally_body_propagates_out_of_emit_try_star() 
             }],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_finally_codegen_error")
         .expect("failed to create scratch dir");
@@ -14227,8 +13714,6 @@ fn a_try_star_with_a_bound_handler_else_and_finally_compiles_and_runs() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_bound_handler_else_finally")
         .expect("failed to create scratch dir");
@@ -14271,8 +13756,6 @@ fn a_try_star_else_that_falls_through_branches_to_finally() {
             finalbody: vec![print_expr(MirExpr::StringLiteral("finally".to_string()))],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_else_falls_through")
         .expect("failed to create scratch dir");
@@ -14312,8 +13795,6 @@ fn a_try_star_else_that_returns_does_not_branch_to_finally() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_else_returns")
         .expect("failed to create scratch dir");
@@ -14358,8 +13839,6 @@ fn a_try_star_returning_a_value_through_its_finally_in_a_non_none_function() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_return_value_through_finally")
         .expect("failed to create scratch dir");
@@ -14394,8 +13873,6 @@ fn try_star_finally_body_with_return_does_not_fall_through() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_finally_return")
         .expect("failed to create scratch dir");
@@ -14439,8 +13916,6 @@ fn a_try_star_without_a_finally_reraises_an_unmatched_remainder() {
             finalbody: vec![],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_star_no_finally_reraise")
         .expect("failed to create scratch dir");
@@ -14474,8 +13949,6 @@ fn raise_from_with_non_string_message_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("raise_from_non_str").expect("failed to create scratch dir");
@@ -14505,8 +13978,6 @@ fn raise_from_with_non_string_cause_is_a_codegen_error() {
             frame_function: "test_fn".to_string(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("raise_from_non_str_cause")
         .expect("failed to create scratch dir");
@@ -14538,8 +14009,6 @@ fn try_body_emit_error_propagates() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_body_err").expect("failed to create scratch dir");
     let obj_path = dir.join("try_body_err.o");
@@ -14569,8 +14038,6 @@ fn try_handler_body_emit_error_propagates() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_handler_err").expect("failed to create scratch dir");
@@ -14601,8 +14068,6 @@ fn try_else_body_emit_error_propagates() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_else_err").expect("failed to create scratch dir");
     let obj_path = dir.join("try_else_err.o");
@@ -14632,8 +14097,6 @@ fn try_finally_body_emit_error_propagates() {
             finalbody: vec![call_user_fn("nonexistent_in_finally")],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_finally_err").expect("failed to create scratch dir");
@@ -14677,8 +14140,6 @@ fn try_body_with_return_does_not_fall_through() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_body_return").expect("failed to create scratch dir");
@@ -14710,8 +14171,6 @@ fn try_handler_body_with_return_does_not_fall_through() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_handler_return").expect("failed to create scratch dir");
@@ -14743,8 +14202,6 @@ fn try_else_body_with_return_does_not_fall_through() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_else_return").expect("failed to create scratch dir");
@@ -14776,8 +14233,6 @@ fn try_finally_body_with_return_does_not_fall_through() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_finally_return").expect("failed to create scratch dir");
@@ -14805,8 +14260,6 @@ fn a_bare_non_none_return_routes_through_finally_with_a_default_value() {
             }],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("bare_non_none_return_finally")
         .expect("failed to create scratch dir");
@@ -14851,8 +14304,6 @@ fn nested_finally_return_routing_covers_value_and_none_abis() {
                 }],
             }],
             class_defs: vec![],
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("nested_finally_{name}"))
             .expect("failed to create scratch dir");
@@ -14874,8 +14325,6 @@ fn nested_finally_return_routing_covers_value_and_none_abis() {
             }],
         }],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("direct_none_finally").expect("failed to create scratch dir");
@@ -14945,8 +14394,6 @@ fn nested_try_star_finally_return_routing_covers_value_and_none_abis() {
                 }],
             }],
             class_defs: vec![],
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("nested_trystar_finally_{name}"))
             .expect("failed to create scratch dir");
@@ -14973,8 +14420,6 @@ fn nested_try_star_finally_return_routing_covers_value_and_none_abis() {
             }],
         }],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("direct_none_trystar_finally")
         .expect("failed to create scratch dir");
@@ -15019,8 +14464,6 @@ fn raise_from_codegen_builds_and_runs() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("raise_from_codegen").expect("failed to create scratch dir");
@@ -15057,8 +14500,6 @@ fn reraise_codegen_builds() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("reraise_codegen").expect("failed to create scratch dir");
@@ -15097,8 +14538,6 @@ fn try_with_no_handlers_branches_to_finally() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_no_handlers").expect("failed to create scratch dir");
@@ -15157,8 +14596,6 @@ fn try_with_multiple_handlers_dispatches_to_next() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_multi_dispatch").expect("failed to create scratch dir");
@@ -15215,8 +14652,6 @@ fn a_multi_tag_handler_ors_every_tag_it_accepts() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_multi_tag").expect("failed to create scratch dir");
     let obj_path = dir.join("try_multi_tag.o");
@@ -15268,8 +14703,6 @@ fn a_multi_tag_handler_declines_a_tag_outside_its_set() {
             finalbody: Vec::new(),
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir =
         pycc_scratch::ScratchDir::new("try_multi_tag_miss").expect("failed to create scratch dir");
@@ -15327,8 +14760,6 @@ fn a_pep_758_multi_type_handler_ors_every_named_types_tag_independently() {
                 finalbody: Vec::new(),
             })],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new(&format!("try_pep758_multi_{class_name}"))
             .expect("failed to create scratch dir");
@@ -15379,8 +14810,6 @@ fn try_else_body_falls_through_to_finally() {
             })],
         })],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("try_else_falls_through")
         .expect("failed to create scratch dir");
@@ -15428,8 +14857,6 @@ fn print_of_a_caught_exception_binding_prints_its_message() {
             finalbody: vec![],
         })],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("exception_message_print")
         .expect("failed to create scratch dir");
@@ -15474,8 +14901,6 @@ fn fstring_interpolation_of_a_caught_exception_binding_renders_its_message() {
             finalbody: vec![],
         })],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("exception_message_fstring")
         .expect("failed to create scratch dir");
@@ -15538,8 +14963,6 @@ fn optional_float_bare_none_argument_constructs_a_correctly_typed_absent_struct(
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_bare_none_argument")
         .expect("failed to create scratch dir");
@@ -15595,8 +15018,6 @@ fn optional_bool_bare_none_argument_constructs_a_correctly_typed_absent_struct()
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_bool_bare_none_argument")
         .expect("failed to create scratch dir");
@@ -15650,8 +15071,6 @@ fn optional_float_bare_none_return_constructs_a_correctly_typed_absent_struct() 
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new("optional_float_bare_none_return")
         .expect("failed to create scratch dir");
@@ -15695,8 +15114,6 @@ fn run_container_return(label: &str, ty: Ty, literal: MirExpr, probe: MirExpr) -
             MirItem::TopLevelStmt(print_expr(probe)),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
     let obj_path = dir.join(format!("{label}.o"));

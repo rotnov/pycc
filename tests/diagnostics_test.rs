@@ -128,11 +128,16 @@ fn c0001_issue_864_repro() {
     assert_json_diagnostic_matches_fixture("c0001_issue_864_repro");
 }
 
-// #867 (D-219) cascade suppression: an unsupported `import os`, a rejected
+// #867 (D-219) cascade suppression: an unsupported `import os as o`, a
 // `class A`, and a later genuine `*args` gap are the three reported
 // `C0001`s; `class B(A)` (unknown base) and `def g(a: A)` (unknown
 // annotation) name the skipped `A` and are skipped silently -- no render
 // of any kind between the line-3 and line-9 diagnostics.
+//
+// The import carries an `as` alias only since Part 1 of #1026: a plain
+// `import os` now binds a CPython module object instead of reaching the
+// `C0001` catch-all, and this fixture needs a rejected first item for the
+// cascade to be a cascade at all.
 #[test]
 fn c0001_hir_cascade_suppressed() {
     assert_diagnostic_matches_fixture("c0001_hir_cascade_suppressed");
@@ -726,9 +731,16 @@ fn c0001_dict_comprehension_unpacking() {
 }
 
 // PR-14 (D-136/D-137): an unrecognized stdlib/third-party module name
-// (`import cgi`, `os`, `typing`, ...) fails closed with the same generic
-// C0001 catch-all every other unimplemented statement shape uses -- not a
+// (`cgi`, `os`, `typing`, ...) fails closed with the same generic C0001
+// catch-all every other unimplemented statement shape uses -- not a
 // dedicated per-module message.
+//
+// Part 1 of #1026 narrowed which shapes reach that catch-all: a plain
+// `import cgi` binds a CPython module object now, so what is pinned here
+// is the aliased `import cgi as c`, which still falls through. The plain
+// form's own behavior is pinned in `tests/issue_1080_foreign_object.rs`:
+// accepted by `pycc check`, refused by a native `pycc build` with
+// `I0403`.
 #[test]
 fn c0001_import_unrecognized_module() {
     assert_diagnostic_matches_fixture("c0001_import_unrecognized_module");
@@ -1293,4 +1305,26 @@ fn t0034_inferred_list_str_is_not_compiled_yet() {
 #[test]
 fn t0036_inferred_dict_int_int_is_not_compiled_yet() {
     assert_diagnostic_matches_fixture("t0036_inferred_dict_int_int_is_not_compiled_yet");
+}
+
+// Part 1 of #1026: a CPython `import` binds the module object and nothing
+// more, so every operation on the binding is refused.
+
+/// `I0404` on the plainest read there is -- passing the bound module to
+/// `print`. The choke-point set behind this one fixture (an expression-
+/// position read, a `for`/comprehension iterable, and a call of the name)
+/// is exercised shape by shape in `tests/issue_1080_foreign_object.rs`.
+#[test]
+fn i0404_foreign_module_operation() {
+    assert_diagnostic_matches_fixture("i0404_foreign_module_operation");
+}
+
+/// Rebinding an imported module is a second, non-foreign binding of the
+/// name, which Part 1 of #1026 refuses outright rather than supporting
+/// positionally (PR 1c of #1080). Pinned in a fixture because the
+/// diagnostic must point at the *shadowing* statement, not at the import:
+/// the import is the binding the user almost certainly meant to keep.
+#[test]
+fn c0001_foreign_module_shadowed_import() {
+    assert_diagnostic_matches_fixture("c0001_foreign_module_shadowed_import");
 }

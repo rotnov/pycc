@@ -191,6 +191,13 @@ fn expected_to_carry(ty: &Ty) -> bool {
         | Ty::Instance(_)
         | Ty::Protocol(_)
         | Ty::Optional(_) => false,
+        // Part 1 of #1026: an opaque CPython object is refused at the
+        // export boundary (D-244 rule 2 admits only the scalar set). The
+        // refusal is stated twice over: `collect_exports` rejects the
+        // signature with `C0003` before `boundary_carrier` is ever asked
+        // (see `an_object_typed_parameter_is_refused_at_the_export_boundary`),
+        // and this arm pins the carrier answer itself.
+        Ty::Object => false,
     }
 }
 
@@ -211,6 +218,7 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::Instance(name()),
         Ty::Protocol(name()),
         Ty::Optional(Box::new(Ty::Int)),
+        Ty::Object,
         Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float, Ty::Bool])),
         // The two element shapes the boundary refuses: neither has an
         // `_at` helper, and both are unreachable from source today only

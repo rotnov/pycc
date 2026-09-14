@@ -8,6 +8,7 @@
 //! types that stay in `lib.rs`.
 
 use crate::{FStringPart, HirClassDef, HirExpr, HirItem, HirPattern, HirStmt, Ty};
+use pycc_diag::Span;
 use std::collections::HashSet;
 
 /// Issue #769 follow-up (D-068 re-review of #780, third round): the set of
@@ -339,7 +340,9 @@ pub enum ImportBinding {
     /// carries a `Ty` -- only `<local_name>.<attr>` attribute access on
     /// this bound name resolves further, via `pycc_std::resolve_symbol`,
     /// and the lowered HIR always spells the result with the canonical
-    /// module name (`"math.sqrt"`), never the alias.
+    /// module name (`"math.sqrt"`), never the alias. A `pycc_std` module
+    /// name itself never carries a `Ty` -- unlike
+    /// [`ImportBinding::Foreign`], whose bound name *is* a value.
     Module {
         local_name: String,
         module: pycc_std::StdModule,
@@ -366,6 +369,37 @@ pub enum ImportBinding {
         local_name: String,
         module_path: String,
         kind: ProjectBindingKind,
+    },
+    /// `import numpy` where `numpy` is neither a project module nor a
+    /// `pycc_std` one (Part 1 of #1026): binds `local_name` to an opaque
+    /// CPython module object, `Ty::Object`. Unlike every other variant
+    /// this one is *not* compile-time-only -- the bound name is a real
+    /// runtime value, a `PyObject *` the generated `Py_mod_exec` slot
+    /// obtains from `pycc_ext_obj_import(module_path)`.
+    ///
+    /// `item_index` is the number of `HirItem`s the module statements
+    /// *preceding* this import produced. `HirModule::imports` is a side
+    /// table with no span and no position of its own, and an `import`
+    /// statement produces no `HirItem`, so without this field the import's
+    /// place in the module body would be lost and the generated import
+    /// call would have to be hoisted ahead of every statement -- which
+    /// CPython does not do and which D-244 rule 3 does not permit. The
+    /// index is module-local when `module::lower_module` records it and is
+    /// rebased onto the linked program's item list by `program::link`.
+    ///
+    /// `span` is the `import` statement's own source range. Every other
+    /// variant is compile-time-only and is never the subject of a
+    /// diagnostic of its own, but this one can be: a native build refuses
+    /// it (`I0403`), and a module that binds the same local name twice
+    /// refuses that too (`C0001`). Both diagnostics must point at the
+    /// import statement, and the import side table carries no position
+    /// otherwise -- `item_index` counts items, not bytes, so it cannot
+    /// stand in for one (PR 1c of #1080 review round 4).
+    Foreign {
+        local_name: String,
+        module_path: String,
+        item_index: usize,
+        span: Span,
     },
 }
 

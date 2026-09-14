@@ -42,7 +42,7 @@
 use crate::narrow;
 use crate::{BindingState, Environment};
 use pycc_diag::Diagnostic;
-use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
+use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, ImportBinding, Ty};
 use std::collections::HashMap;
 
 use super::{check_assignment, join_loop_body};
@@ -151,6 +151,8 @@ fn build_enum_member_table(
 /// for v0.3 fixtures). A module with no enum classes is returned unchanged.
 pub(crate) fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnostic> {
     // Fast path: if no class is an enum class, there is nothing to unroll.
+    // The item list is returned untouched, so every recorded foreign-import
+    // position stays valid without a remap.
     let has_enum = hir
         .class_defs
         .iter()
@@ -161,12 +163,16 @@ pub(crate) fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnos
     // Build a lookup table: enum class name -> member names (in source order).
     let enum_members = build_enum_member_table(&hir.class_defs);
     // Walk top-level items and function bodies, splicing unrolled statements.
+    // `produced[i]` is how many items original item `i` became, which is what
+    // the recorded foreign-import positions are remapped through below.
     let mut new_items: Vec<HirItem> = Vec::with_capacity(hir.items.len());
+    let mut produced: Vec<usize> = Vec::with_capacity(hir.items.len());
     for item in hir.items.drain(..) {
         match item {
             HirItem::TopLevelStmt(stmt) => {
                 let mut unrolled =
                     unroll_enum_loops_in_stmts(std::slice::from_ref(&stmt), &enum_members);
+                produced.push(unrolled.len());
                 for s in unrolled.drain(..) {
                     new_items.push(HirItem::TopLevelStmt(s));
                 }
@@ -178,6 +184,7 @@ pub(crate) fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnos
                 body,
             } => {
                 let body = unroll_enum_loops_in_stmts(&body, &enum_members);
+                produced.push(1);
                 new_items.push(HirItem::Function {
                     name,
                     params,
@@ -188,7 +195,49 @@ pub(crate) fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnos
         }
     }
     hir.items = new_items;
+    hir.imports = remap_foreign_import_positions(&hir.imports, &produced);
     Ok(hir)
+}
+
+/// Recomputes each foreign import's recorded item position against a list
+/// this pass rewrote, where original item `i` became `produced[i]` items.
+///
+/// `ImportBinding::Foreign::item_index` is a position in the item list as it
+/// stood when the `import` lowered, and `pycc_mir::splice_foreign_imports`
+/// reads it as a position in the final list. Unrolling a top-level
+/// `for c in Color:` replaces one item with one per member, so every
+/// position recorded after such a loop refers to the wrong item unless it is
+/// recomputed -- the import would land *inside* the unrolled sequence,
+/// running before top-level statements that precede it in source. The new
+/// position is the number of items the prefix before it produced, which is
+/// where the import still belongs: everything that preceded it, however many
+/// items it became, still precedes it.
+///
+/// A position past the end cannot arise: this pass never drops an item
+/// (`produced[i] >= 1` for every `i`, since a non-enum statement unrolls to
+/// itself), and `min(produced.len())` clamps the trailing-import position
+/// that records the item count itself.
+fn remap_foreign_import_positions(
+    imports: &[ImportBinding],
+    produced: &[usize],
+) -> Vec<ImportBinding> {
+    imports
+        .iter()
+        .map(|binding| match binding {
+            ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index,
+                span,
+            } => ImportBinding::Foreign {
+                local_name: local_name.clone(),
+                module_path: module_path.clone(),
+                item_index: produced[..(*item_index).min(produced.len())].iter().sum(),
+                span: *span,
+            },
+            other => other.clone(),
+        })
+        .collect()
 }
 
 /// Helper for `unroll_enum_loops`: walks a `Vec<HirStmt>`, splicing any

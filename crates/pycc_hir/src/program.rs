@@ -15,7 +15,7 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, MAX_USER_EXCEPTION_CLASSES,
+    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES,
     builtin_exception_class_defs, builtin_exception_init_item, is_builtin_exception_class,
     unsupported,
 };
@@ -48,6 +48,12 @@ pub struct LinkInput {
 /// let the shadowing module's definition collide with the synthetic one --
 /// so a seeded input plus a shadowing input is rejected (`C0001`, at the
 /// shadowing definition).
+///
+/// Foreign-shadow check (Part 1 of #1026): a top-level definition of a
+/// name that a *different* linked module binds with `ImportBinding::Foreign`
+/// is rejected (`C0001`, at the shadowing definition), in either dependency
+/// order. A module shadowing its own foreign import is not this check's
+/// business -- `module::lower_module` reports that case itself.
 ///
 /// Collision check: a top-level class, function, type alias, or bound
 /// variable name defined by two different inputs is `C0001` at the later
@@ -83,6 +89,55 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                 span_range(definition_span(&shadowing.module, name)),
             ),
         )]);
+    }
+    // Part 1 of #1026: a foreign import binds its local name to a real
+    // runtime `PyObject *`, but it is an import rather than a definition,
+    // so `definition_spans` never records it and the `owners` collision
+    // check below cannot see it. Without this gate a module's
+    // `import json` and another module's `def json()` both survive
+    // linking into one flat namespace, and the dependency's `json(...)`
+    // silently resolves to the entry module's function instead of raising
+    // `TypeError` the way CPython does. Both directions are caught because
+    // this runs over all inputs before any of them are consumed, so a
+    // definition that precedes the foreign module in dependency order is
+    // rejected as well. Same-module shadowing (`import json` then `def
+    // json()` in one file) is deliberately excluded: `lower_module`
+    // already reports it (`I0404`/`T0023`) with a more specific message.
+    let foreign_locals: Vec<(&str, usize)> = inputs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, input)| {
+            input
+                .module
+                .hir
+                .imports
+                .iter()
+                .filter_map(move |binding| match binding {
+                    ImportBinding::Foreign { local_name, .. } => Some((local_name.as_str(), index)),
+                    _ => None,
+                })
+        })
+        .collect();
+    for (index, input) in inputs.iter().enumerate() {
+        for (name, span) in &input.module.definition_spans {
+            if let Some((_, owner)) = foreign_locals
+                .iter()
+                .find(|(local_name, owner)| local_name == name && *owner != index)
+            {
+                return Err(vec![(
+                    index,
+                    unsupported(
+                        format!(
+                            "module `{}` defines `{name}`, which `{}` binds to a CPython \
+                             module object; shadowing a foreign import across modules is \
+                             not supported yet",
+                            input.display_path, inputs[*owner].display_path
+                        ),
+                        span_range(*span),
+                    ),
+                )]);
+            }
+        }
     }
     let display_paths: Vec<String> = inputs
         .iter()
@@ -121,9 +176,29 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
         for name in own {
             owners.insert(name.to_string(), index);
         }
+        // Part 1 of #1026: `ImportBinding::Foreign::item_index` is the
+        // position of the import in its *own* module's item list, so it
+        // has to be rebased onto the concatenated program the moment that
+        // list is appended after the preceding modules' items. Captured
+        // before the `extend` below, which is what makes it the offset of
+        // this module's first item in the linked program.
+        let item_offset = items.len();
         items.extend(hir.items);
         type_aliases.extend(hir.type_aliases);
-        imports.extend(hir.imports);
+        imports.extend(hir.imports.into_iter().map(|binding| match binding {
+            ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index,
+                span,
+            } => ImportBinding::Foreign {
+                local_name,
+                module_path,
+                item_index: item_index + item_offset,
+                span,
+            },
+            other => other,
+        }));
         let seeded = hir.seeded_builtin_exception_classes;
         class_defs.extend(
             hir.class_defs

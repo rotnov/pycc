@@ -1,1 +1,1 @@
-import cgi
+import cgi as c

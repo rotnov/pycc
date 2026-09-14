@@ -1001,8 +1001,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let ir = emitted_ir("bigint_rc_exc_unwind_present", &mir);
         assert!(
@@ -1128,8 +1126,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let ir = emitted_ir("bigint_rc_exc_unwind_absent", &mir);
         assert!(
@@ -1180,8 +1176,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let ir = emitted_ir("bigint_rc_tuple_exc_unwind_present", &mir);
         assert!(
@@ -1289,8 +1283,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let ir = emitted_ir("bigint_rc_tuple_success_path", &mir);
         assert!(
@@ -1325,8 +1317,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_int_slot_store", &mir);
         let retains = calls
@@ -1393,8 +1383,6 @@ mod tests {
                 },
             ],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_walrus_call_argument", &mir);
         let retains = calls
@@ -1446,8 +1434,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_optional_wrap_retain", &mir);
         let retains = calls
@@ -1497,8 +1483,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_optional_wrap_release", &mir);
         let retains = calls
@@ -1553,8 +1537,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_optional_unwrap_retain", &mir);
         let retains = calls
@@ -1598,8 +1580,6 @@ mod tests {
                 }],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_range_aliased_bounds", &mir);
         let retains = calls
@@ -1659,8 +1639,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_compare_operands", &mir);
         let retains = calls
@@ -1699,8 +1677,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_mul_operands", &mir);
         let retains = calls
@@ -1759,8 +1735,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_tuple_operand", &mir);
         let retains = calls
@@ -1800,8 +1774,6 @@ mod tests {
                 }))],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let dir = pycc_scratch::ScratchDir::new("bigint_rc_const_literal")
             .expect("failed to create scratch dir");
@@ -1862,8 +1834,6 @@ mod tests {
                 ],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_tuple_bind", &mir);
         let retains = calls
@@ -1898,8 +1868,6 @@ mod tests {
                 }],
             }],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in(label, &mir);
         let retains = calls
@@ -2053,8 +2021,6 @@ mod tests {
                 }),
             ],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_int_attr_slot_bool_store", &mir);
         let retains = calls
@@ -2137,8 +2103,6 @@ mod tests {
                 }),
             ],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_optional_float_unwrap", &mir);
         assert_eq!(
@@ -2187,8 +2151,6 @@ mod tests {
                 }),
             ],
             class_defs: Vec::new(),
-
-            ..Default::default()
         };
         let calls = refcount_calls_in("bigint_rc_optional_bool_unwrap", &mir);
         assert_eq!(

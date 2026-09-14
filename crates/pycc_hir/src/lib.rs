@@ -171,6 +171,16 @@ pub enum Ty {
     /// variant does not move `size_of::<Ty>()` past the D-109 16-byte
     /// ceiling.
     Optional(Box<Ty>),
+    /// An opaque CPython object (Part 1 of #1026): the value a foreign
+    /// `import numpy` binds. Carries no shape at all -- pycc knows only
+    /// that the value is a `PyObject *` owned by the CPython runtime, so
+    /// every operation on it is refused by `pycc_types` (`I0404`) except
+    /// the read that produces it. The variant is deliberately unit-shaped
+    /// and unspellable in an annotation: `object` is not a builtin type
+    /// name `annotation_to_ty` accepts, so no source program can name it.
+    /// A unit variant adds no payload, so `size_of::<Ty>()` stays at the
+    /// D-109 16-byte ceiling.
+    Object,
 }
 
 impl Ty {
@@ -193,6 +203,7 @@ impl Ty {
             Ty::Instance(class_name) => class_name.to_string(),
             Ty::Protocol(name) => name.to_string(),
             Ty::Optional(inner) => format!("{} | None", inner.name()),
+            Ty::Object => "object".to_string(),
         }
     }
 }

@@ -100,6 +100,10 @@ struct ProgramSources {
     /// builtin exception classes, `Exception.__init__`), which is attributed
     /// to the entry file.
     bounds: Vec<usize>,
+    /// `import_bounds[i]` is the number of `ImportBinding`s contributed by
+    /// files `0..=i`, the import-table analogue of `bounds` (Part 1 of
+    /// #1026). Read by [`Self::owner_of_import`].
+    import_bounds: Vec<usize>,
 }
 
 impl ProgramSources {
@@ -109,12 +113,37 @@ impl ProgramSources {
 
     fn owner(&self, key: DiagnosticKey) -> usize {
         match key.item_index() {
-            Some(index) => self
-                .bounds
-                .partition_point(|end| *end <= index)
-                .min(self.entry()),
+            Some(index) => self.owner_of_item(index),
             None => self.entry(),
         }
+    }
+
+    /// The file that owns item `index` of the linked program.
+    fn owner_of_item(&self, index: usize) -> usize {
+        self.bounds
+            .partition_point(|end| *end <= index)
+            .min(self.entry())
+    }
+
+    /// The file that owns import `position` of the linked program's import
+    /// table (Part 1 of #1026).
+    ///
+    /// Same shape as [`Self::owner_of_item`] against the import bounds
+    /// instead of the item bounds. An import's own `item_index` cannot
+    /// serve here: it is the item count at the moment the `import` lowered,
+    /// so a trailing import in one file and a leading import in the next
+    /// record the same linked index. The import table has no such boundary
+    /// ambiguity -- `pycc_hir::link` concatenates each module's imports in
+    /// the same file order as its items.
+    ///
+    /// The `.min(entry())` clamp is unreachable here (the last import bound
+    /// *is* the linked import count, so `partition_point` can never exceed
+    /// `entry()`); it is kept for shape parity with `owner_of_item`, where
+    /// `finalize`'s appended program-wide items make it load-bearing.
+    fn owner_of_import(&self, position: usize) -> usize {
+        self.import_bounds
+            .partition_point(|end| *end <= position)
+            .min(self.entry())
     }
 
     /// Groups keyed diagnostics into per-file payloads, in program order.
@@ -142,18 +171,26 @@ fn link_frontend(path: &Path) -> Result<(HirModule, ProgramSources), FrontendFai
     let program: LoadedProgram = modules::load(path)?;
     let mut files = Vec::with_capacity(program.modules.len());
     let mut bounds = Vec::with_capacity(program.modules.len());
+    let mut import_bounds = Vec::with_capacity(program.modules.len());
     let mut inputs = Vec::with_capacity(program.modules.len());
     let mut total = 0;
+    let mut imports_total = 0;
     for loaded in program.modules {
         total += loaded.module.hir.items.len();
         bounds.push(total);
+        imports_total += loaded.module.hir.imports.len();
+        import_bounds.push(imports_total);
         files.push((loaded.display_path.clone(), loaded.source));
         inputs.push(LinkInput {
             display_path: loaded.display_path,
             module: loaded.module,
         });
     }
-    let sources = ProgramSources { files, bounds };
+    let sources = ProgramSources {
+        files,
+        bounds,
+        import_bounds,
+    };
     let linked = pycc_hir::link(inputs).map_err(|keyed| sources.group(keyed))?;
     let hir = pycc_hir::finalize(linked).map_err(|diagnostics| {
         let entry = sources.entry();
@@ -171,6 +208,37 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
     let (hir, sources) = link_frontend(path)?;
     pycc_types::check_and_resolve_all_keyed(&hir)
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
+}
+
+/// [`resolve_frontend`] plus the native-mode foreign-import gate, for a
+/// `pycc build` without `--ext` (Part 1 of #1026).
+///
+/// The gate runs here rather than in `main.rs` for one reason: only this
+/// module holds the `ProgramSources` that says which *file* an import
+/// belongs to, and a foreign import in a dependency must be reported
+/// against that dependency, not against the entry path (PR 1c of #1080
+/// review finding 2).
+///
+/// Order matters twice. The refusal is *computed* before the type check,
+/// against the linked HIR whose item indices still line up with the
+/// per-file bounds -- `check_and_resolve_all_keyed` runs monomorphization
+/// and enum lowering, which rewrite the item list and recompute those
+/// positions. It is *reported* after, so a program with both a type error
+/// and a foreign import still reports the type error first, exactly as the
+/// former `main.rs` call site did.
+pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, FrontendFailure> {
+    let (hir, sources) = link_frontend(path)?;
+    let native_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
+    let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
+        .map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
+    match native_gaps {
+        Ok(()) => Ok(resolved),
+        Err(gaps) => Err(sources.group(
+            gaps.into_iter()
+                .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic))
+                .collect(),
+        )),
+    }
 }
 
 fn attribute(

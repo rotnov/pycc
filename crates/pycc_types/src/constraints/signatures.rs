@@ -242,11 +242,39 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         defs_rebound: HashSet::new(),
         maybe_bindings: HashSet::new(),
         opaque_bindings: HashSet::new(),
+        foreign_objects: HashSet::new(),
         // #962: the module's alias table, read by the stdlib receiver
         // shadow check; copied field-by-field into every per-function
         // environment below.
         std_module_aliases: crate::std_receiver::bind_std_module_aliases(&hir.imports),
     };
+    // Part 1 of #1026: a foreign import binds a definite name whose type is
+    // `Ty::Object`. It is recorded in `opaque_bindings` so that every piece
+    // of machinery that already knows how to keep a definitely-bound name
+    // out of the "unbound local" path -- rebinding removal, join-site
+    // merging -- applies unchanged, and additionally in `foreign_objects`,
+    // which is what makes the solver's `Name` arm hand back the concrete
+    // term `Ok(Ty::Object)` rather than "no term at all".
+    //
+    // Both are needed. Without the opaque marker a read of the name would
+    // fall through to the "not a solver-tracked local" case; without the
+    // foreign marker a helper returning the module object would keep an
+    // unresolved return variable and signature materialization would report
+    // a misleading `T0021: ... add an annotation` -- advice no annotation
+    // can satisfy, since the foreign object type is deliberately
+    // unspellable -- before the check phase's `I0404` could fire. The names
+    // deliberately do not go into `bindings`: see the `Name` arm in
+    // `super::collect_expr_constraints` for why.
+    for name in crate::foreign::foreign_object_names(&hir.imports) {
+        globals.opaque_bindings.insert(name.to_string());
+        globals.foreign_objects.insert(name.to_string());
+    }
+    // The one-time pre-pass above is sound precisely because a module in
+    // which any *other* top-level binding spells a foreign import's name is
+    // refused outright at lowering
+    // (`pycc_hir::import::reject_shadowed_foreign_imports`), so no `def` or
+    // assignment can precede or follow the import under that name and the
+    // seed can never be stale.
     for (index, item) in hir.items.iter().enumerate() {
         match item {
             HirItem::TopLevelStmt(stmt) => {
@@ -286,6 +314,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             defs_rebound: globals.defs_rebound.clone(),
             maybe_bindings: globals.maybe_bindings.clone(),
             opaque_bindings: globals.opaque_bindings.clone(),
+            foreign_objects: globals.foreign_objects.clone(),
             // #962: this literal copies field by field on purpose (it is
             // not a `.clone()`), so the alias table must be named here or
             // every function body would silently get an empty one.
@@ -304,6 +333,13 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // local name re-binds within this function body, so a stale
             // module-level opaque marker must not survive for it either.
             env.opaque_bindings.remove(local_name);
+            // PR 1c of #1080 review finding 2: the foreign marker is the
+            // second half of the same fact and must be removed with it.
+            // Left behind, a local assigned a solver-opaque value would be
+            // read back through the foreign-global provenance and infer as
+            // `Ty::Object`, turning an unresolved-container inference into a
+            // misleading return-type mismatch.
+            env.foreign_objects.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted
         // signature's names (#386): a redefined method shares its mangled

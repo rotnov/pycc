@@ -358,8 +358,6 @@ fn assert_raw_codegen_error(name: &str, stmt: pycc_mir::MirStmt, expected_messag
     let mir = pycc_mir::MirModule {
         items: vec![pycc_mir::MirItem::TopLevelStmt(stmt)],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let err = pycc_codegen::compile_to_object(&mir, &dir.join("invalid.o"), None, false)
         .expect_err("invalid raw MIR must fail closed");
@@ -483,8 +481,6 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
             finalbody: vec![],
         })],
         class_defs: vec![],
-
-        ..Default::default()
     };
     pycc_codegen::compile_to_object(&mir, &dir.join("bare_except.o"), None, false)
         .expect("a bare handler is valid raw MIR");
@@ -524,8 +520,6 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
             },
         ],
         class_defs: vec![],
-
-        ..Default::default()
     };
     pycc_codegen::compile_to_object(&mir, &dir.join("return_paths.o"), None, false)
         .expect("raw return routing must remain valid in the dependency instance");
@@ -533,8 +527,6 @@ fn raw_mir_exception_paths_are_checked_in_the_dependency_instance() {
     let invalid_top_level_return = pycc_mir::MirModule {
         items: vec![pycc_mir::MirItem::TopLevelStmt(MirStmt::Return(None))],
         class_defs: vec![],
-
-        ..Default::default()
     };
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = pycc_codegen::compile_to_object(

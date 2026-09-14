@@ -95,8 +95,6 @@ fn public_codegen_api_covers_float_runtime_ops_and_parameter_reassignment() {
             })),
         ],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
 
     compile_mir("public_success_paths", &mir).expect("public codegen paths should compile");
@@ -115,8 +113,6 @@ fn public_codegen_api_rejects_a_name_without_storage() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let _ = compile_mir("missing_storage", &mir);
 }
@@ -135,8 +131,6 @@ fn public_codegen_api_rejects_an_undefined_nested_call() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let _ = compile_mir("undefined_nested_call", &mir);
 }
@@ -151,8 +145,6 @@ fn public_codegen_api_rejects_an_empty_structural_fstring() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let _ = compile_mir("empty_structural_fstring", &mir);
 }
@@ -166,8 +158,6 @@ fn public_codegen_api_returns_an_error_for_an_undefined_void_call() {
             ty: Ty::None,
         }))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let error = compile_mir("undefined_void_call", &mir).expect_err("the call should fail");
     assert!(error.contains("missing"));
@@ -187,8 +177,6 @@ fn public_codegen_api_propagates_an_error_from_a_function_body() {
             })],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let error = compile_mir("undefined_void_call_in_function", &mir)
         .expect_err("the function body should fail");
@@ -206,8 +194,6 @@ fn public_codegen_api_rejects_a_non_none_function_that_falls_through() {
             body: vec![],
         }],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let _ = compile_mir("non_none_fallthrough", &mir);
 }
@@ -220,8 +206,6 @@ fn public_codegen_api_rejects_a_top_level_return() {
             MirExpr::IntLiteral(0),
         )))],
         class_defs: Vec::new(),
-
-        ..Default::default()
     };
     let _ = compile_mir("top_level_return", &mir);
 }
