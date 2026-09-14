@@ -566,7 +566,13 @@ fn lower_project_from_import(
                 import.range,
             ));
         }
-        if !bind_project_name(name, module, resolved, &mut lowered) {
+        if !bind_project_name(
+            name,
+            module,
+            resolved,
+            statement_span(import.range),
+            &mut lowered,
+        )? {
             let module_name = match &import.module {
                 Some(module_name) => format!("module `{module_name}` (`{}`)", module.display_path),
                 None => format!("package `{}`", module.display_path),
@@ -583,13 +589,17 @@ fn lower_project_from_import(
 
 /// Looks `name` up in `module`'s top level in the documented order and,
 /// when found, records the binding (and any class/alias copies it needs)
-/// into `lowered`. Returns `false` when the module has no such name.
+/// into `lowered`. Returns `Ok(false)` when the module has no such name,
+/// and `Err` when the name resolves to a shape this part cannot re-export
+/// (see the re-export branch). `span` is the importing statement's source
+/// span, which is where such a diagnostic is reported.
 fn bind_project_name(
     name: &str,
     module: &ResolvedModule<'_>,
     resolved: &ResolvedImports<'_>,
+    span: Span,
     lowered: &mut LoweredImport,
-) -> bool {
+) -> Result<bool, Diagnostic> {
     let origin = module.hir;
     let is_synthetic = |class_name: &str| {
         origin.seeded_builtin_exception_classes && is_builtin_exception_class(class_name)
@@ -606,7 +616,7 @@ fn bind_project_name(
     {
         copy_class_with_ancestors(origin, name, &mut lowered.classes);
         lowered.bindings.push(project(ProjectBindingKind::Class));
-        return true;
+        return Ok(true);
     }
     if origin
         .items
@@ -614,7 +624,7 @@ fn bind_project_name(
         .any(|item| matches!(item, HirItem::Function { name: function_name, .. } if function_name == name))
     {
         lowered.bindings.push(project(ProjectBindingKind::Function));
-        return true;
+        return Ok(true);
     }
     if let Some(alias) = origin
         .type_aliases
@@ -625,7 +635,7 @@ fn bind_project_name(
         lowered
             .bindings
             .push(project(ProjectBindingKind::TypeAlias));
-        return true;
+        return Ok(true);
     }
     if let Some(binding) = origin
         .imports
@@ -657,14 +667,37 @@ fn bind_project_name(
                 ProjectBindingKind::Function | ProjectBindingKind::Variable => {}
             }
         }
+        if let ImportBinding::Foreign { module_path, .. } = binding {
+            // Part 1 of #1026 binds a foreign import at its own source
+            // position in its own module: `item_index` counts the items
+            // *that* module's preceding statements produced, and
+            // `program::link` rebases it onto the linked program as though
+            // it belonged to the module that recorded it. Cloning the
+            // binding into the importer would hand the importer's offset
+            // to a dependency-local index (an out-of-range splice in
+            // `pycc_mir`) and would run a second CPython import for one
+            // source statement. The importer produces no item of its own
+            // here, so there is no position in its item list that could
+            // carry the binding honestly; representing this shape is a
+            // later part's work.
+            return Err(unsupported(
+                format!(
+                    "`{}` binds `{name}` to the CPython module object `{module_path}`; \
+                     re-exporting a foreign import across project modules is not \
+                     supported yet",
+                    module.display_path
+                ),
+                span.start..span.end,
+            ));
+        }
         lowered.bindings.push(binding.clone());
-        return true;
+        return Ok(true);
     }
     if top_level_bound_names(&origin.items).contains(name) {
         lowered.bindings.push(project(ProjectBindingKind::Variable));
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 /// Copies `name`'s class definition and every class in its MRO (which

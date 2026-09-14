@@ -627,6 +627,30 @@ overwritten reference, would be an optimization of an already-correct
 program, and belongs with the first construct that can consume an
 `object`.
 
+**The bound name does not cross a module boundary yet.** The binding is
+positional — `ImportBinding::Foreign` carries the index of the item the
+import sits at in *its own* module's item list, which `program::link`
+rebases onto the linked program — so it is meaningful only in the module
+that wrote the `import`. Two consequences are refused rather than
+approximated, both `C0001` while lowering, so `pycc check` reports them and
+neither build path is reached:
+
+- **Re-export.** `from dep import numpy`, where `numpy` is `dep.py`'s own
+  foreign import, is refused at the importing statement. The importer
+  produces no item for that statement, so there is no position in its item
+  list that could carry the binding honestly; cloning `dep.py`'s index into
+  the importer would both mis-rebase it and run a second
+  `pycc_ext_obj_import` for one source statement.
+- **Cross-module shadowing.** A top-level definition of a name that a
+  *different* linked module binds as a foreign import is refused at the
+  definition, in either dependency order. Part 1 of #881 links modules into
+  one flat namespace, so `dep.py`'s `import numpy` and `main.py`'s
+  `def numpy()` would otherwise make `dep.py`'s own `numpy(...)` resolve to
+  the entry module's function instead of raising CPython's `TypeError`. A
+  module shadowing its *own* foreign import is untouched: `import numpy`
+  then `def numpy()` in one file is CPython's own rebinding, and pycc
+  reproduces it.
+
 **Native mode.** A plain `pycc build` produces a standalone executable with no
 interpreter to import into, so the driver refuses the program with `I0403`
 before codegen — one diagnostic per foreign import — and

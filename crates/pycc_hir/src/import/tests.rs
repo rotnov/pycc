@@ -520,3 +520,87 @@ fn an_imported_alias_to_a_class_the_importer_never_copied_still_accepts_a_subscr
         diagnostic.message
     );
 }
+
+/// A dependency that binds `name` to a CPython module object: `source`'s
+/// `import_stmt` is answered `ResolvedImport::Foreign`, the way the driver
+/// answers an import that resolves to neither a project module nor a
+/// `pycc_std` one (Part 1 of #1026).
+fn foreign_dependency(source: &str, import_stmt: &str) -> HirModule {
+    let start = source
+        .find(import_stmt)
+        .expect("the fixture must contain its import statement");
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        Span::new(start as u32, (start + import_stmt.len()) as u32),
+        ResolvedImport::Foreign,
+    );
+    lower_module(&parsed, &resolved)
+        .expect("a dependency fixture must lower")
+        .hir
+}
+
+#[test]
+fn re_exporting_a_dependency_s_foreign_import_is_refused() {
+    // Finding A of the #1087 review: cloning the `Foreign` binding would
+    // carry the dependency's own `item_index` into the importer, where
+    // `program::link` rebases it as though it were the importer's -- an
+    // out-of-range splice in `pycc_mir` -- and would also run a second
+    // CPython import for the one `import json` statement in `dep.py`.
+    let fixture = Fixture {
+        origin: foreign_dependency(
+            "def a() -> int:\n    return 1\n\n\nimport json\n",
+            "import json",
+        ),
+    };
+    let source = "from dep import json\n";
+    let diagnostic = fixture.first_error(source, &[]);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "`dep.py` binds `json` to the CPython module object `json`; re-exporting a \
+         foreign import across project modules is not supported yet"
+    );
+    assert_eq!(
+        diagnostic.span,
+        Some(Span::new(0, source.trim_end().len() as u32)),
+        "the diagnostic points at the importing statement"
+    );
+}
+
+#[test]
+fn a_dependency_with_no_preceding_items_is_refused_the_same_way() {
+    // The smallest shape of the same defect, where the dependency
+    // produces no item before its import. Whether the stale index landed
+    // inside the importer's item vector (a silent duplicate
+    // `pycc_ext_obj_import`) or past its end (a panic in `pycc_mir`)
+    // depended only on how many items each side happened to have, so the
+    // refusal has to cover this shape too.
+    let fixture = Fixture {
+        origin: foreign_dependency("import json\n", "import json"),
+    };
+    let diagnostic = fixture.first_error("from dep import json\n", &[]);
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("re-exporting a foreign import"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_dependency_s_other_names_are_still_importable_alongside_a_foreign_import() {
+    // The refusal is scoped to the foreign name itself: a module that also
+    // does `import json` still re-exports its own definitions.
+    let fixture = Fixture {
+        origin: foreign_dependency(
+            "import json\n\n\ndef helper(n: int) -> int:\n    return n\n",
+            "import json",
+        ),
+    };
+    let lowered = fixture.lower_ok("from dep import helper\n\nn: int = helper(1)\n");
+    assert_eq!(
+        binding_kinds(&lowered),
+        vec![("helper", ProjectBindingKind::Function)]
+    );
+}

@@ -454,3 +454,123 @@ fn a_module_whose_generics_are_all_dropped_still_builds_and_loads() {
         stderr_of(&run)
     );
 }
+
+/// Runs `pycc check` over a two-file project and returns its stdout with
+/// the process's own exit code asserted to be 1.
+fn check_project(tag: &str, dep: &str, entry: &str) -> (pycc_scratch::ScratchDir, String) {
+    let dir = ScratchDir::new(tag).expect("scratch");
+    std::fs::write(dir.join("dep.py"), dep).expect("write the dependency");
+    let main = dir.join("main.py");
+    std::fs::write(&main, entry).expect("write the entry");
+    let output = pycc()
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("pycc should spawn");
+    let rendered = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(1), "{rendered}");
+    (dir, rendered)
+}
+
+/// Finding A of the #1087 review: `from dep import json`, where `json` is
+/// `dep.py`'s own foreign import, used to clone the `Foreign` binding with
+/// its dependency-local `item_index` into the entry module. `link` then
+/// rebased that index as though it belonged to the entry, so `--ext` built
+/// either an out-of-range splice (a `pycc_mir` panic) or a second
+/// `pycc_ext_obj_import` for one source statement. It is now refused while
+/// lowering, so `check` catches it before any build path runs.
+#[test]
+fn re_exporting_a_dependency_s_foreign_import_is_refused_across_files() {
+    for dep in [
+        // The shape that panicked: three items before the import, so the
+        // rebased index ran past the entry module's item vector.
+        "def a() -> int:\n    return 1\ndef b() -> int:\n    return 2\n\
+         def c() -> int:\n    return 3\nimport json\n",
+        // The smaller variant, with a single preceding item.
+        "def a() -> int:\n    return 1\nimport json\n",
+        // No preceding item at all.
+        "import json\n",
+    ] {
+        let (dir, rendered) = check_project("foreign_reexport", dep, "from dep import json\n");
+        assert!(rendered.contains("error[C0001]"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "binds `json` to the CPython module object `json`; re-exporting a \
+                 foreign import across project modules is not supported yet"
+            ),
+            "{rendered}"
+        );
+        // The refusal is reported at the importing statement, in the entry.
+        assert!(
+            rendered.contains(&format!("{}:1:1", rendered_path(&dir.join("main.py")))),
+            "{rendered}"
+        );
+    }
+}
+
+/// Finding B of the #1087 review: a top-level definition of a name another
+/// module binds to a CPython module object used to survive linking, so the
+/// dependency's own `json()` call silently resolved to the entry's
+/// function instead of raising CPython's `TypeError`. Both dependency
+/// orders are covered: the shadowing definition in the entry (linked last)
+/// and in a dependency linked before the foreign module.
+#[test]
+fn a_definition_shadowing_another_module_s_foreign_import_is_refused() {
+    let (dir, rendered) = check_project(
+        "foreign_shadow_entry",
+        "import json\ndef f() -> int:\n    return json()\n",
+        "from dep import f\n\n\ndef json() -> int:\n    return 1\n\n\nx: int = f()\n",
+    );
+    assert!(rendered.contains("error[C0001]"), "{rendered}");
+    // The message names both modules by their rendered display paths.
+    assert!(
+        rendered.contains(&format!(
+            "module `{}` defines `json`, which `{}` binds to a CPython module object; \
+             shadowing a foreign import across modules is not supported yet",
+            rendered_path(&dir.join("main.py")),
+            rendered_path(&dir.join("dep.py"))
+        )),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("{}:4:1", rendered_path(&dir.join("main.py")))),
+        "the diagnostic is at the shadowing definition: {rendered}"
+    );
+}
+
+/// The reverse link order: `shadow.py` is linked before the module whose
+/// foreign import it shadows, so an incremental check over the names
+/// already linked would not see the collision.
+#[test]
+fn a_definition_linked_before_the_foreign_module_is_refused_too() {
+    let dir = ScratchDir::new("foreign_shadow_dep").expect("scratch");
+    std::fs::write(dir.join("shadow.py"), "def json() -> int:\n    return 1\n")
+        .expect("write the shadowing dependency");
+    std::fs::write(
+        dir.join("dep.py"),
+        "import json\ndef f() -> int:\n    return json()\n",
+    )
+    .expect("write the foreign dependency");
+    let main = dir.join("main.py");
+    std::fs::write(
+        &main,
+        "from shadow import json\nfrom dep import f\n\n\nx: int = f()\n",
+    )
+    .expect("write the entry");
+    let output = pycc()
+        .arg("check")
+        .arg(&main)
+        .output()
+        .expect("pycc should spawn");
+    let rendered = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(1), "{rendered}");
+    assert!(rendered.contains("error[C0001]"), "{rendered}");
+    assert!(
+        rendered.contains("shadowing a foreign import across modules is not supported yet"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("{}:1:1", rendered_path(&dir.join("shadow.py")))),
+        "the diagnostic names the shadowing module: {rendered}"
+    );
+}

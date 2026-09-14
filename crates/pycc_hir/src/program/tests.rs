@@ -361,3 +361,79 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         }]
     );
 }
+
+const FOREIGN_DEP: &str = "import json\n\n\ndef f() -> int:\n    return json()\n";
+const SHADOWING_ENTRY: &str = "def json() -> int:\n    return 1\n";
+const SHADOW_MESSAGE: &str = "module `main.py` defines `json`, which `dep.py` binds to a \
+                              CPython module object; shadowing a foreign import across \
+                              modules is not supported yet";
+
+#[test]
+fn a_definition_shadowing_another_module_s_foreign_import_is_rejected() {
+    // The entry module is linked last, after the dependency that binds
+    // `json` to the CPython module object.
+    let (index, diagnostic) = first_error(vec![
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+        input("main.py", SHADOWING_ENTRY),
+    ]);
+    assert_eq!(index, 1, "the diagnostic belongs to the shadowing module");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, SHADOW_MESSAGE);
+    assert_eq!(
+        diagnostic.span,
+        Some(Span::new(0, SHADOWING_ENTRY.trim_end().len() as u32)),
+        "the span is the shadowing definition's own statement"
+    );
+}
+
+#[test]
+fn a_definition_before_the_foreign_module_in_link_order_is_rejected_too() {
+    // The reverse dependency order: the shadowing definition is linked
+    // first, so a check that only consulted the incrementally built
+    // `owners` map would miss it.
+    let (index, diagnostic) = first_error(vec![
+        input("main.py", SHADOWING_ENTRY),
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+    ]);
+    assert_eq!(index, 0, "the diagnostic still belongs to the definition");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, SHADOW_MESSAGE);
+}
+
+#[test]
+fn a_foreign_import_no_other_module_shadows_still_links() {
+    let linked = link(vec![
+        input("a.py", "def first() -> int:\n    return 1\n"),
+        foreign_input("dep.py", FOREIGN_DEP, "import json"),
+    ])
+    .expect("a foreign import no module shadows must link");
+    assert_eq!(
+        linked.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "json".to_string(),
+            module_path: "json".to_string(),
+            item_index: 1,
+        }],
+        "the dependency-local index 0 is rebased past `a.py`'s one item"
+    );
+}
+
+#[test]
+fn a_module_shadowing_its_own_foreign_import_is_not_this_gate_s_business() {
+    // `import json` then `def json()` in one file is CPython's own
+    // rebinding: the name holds the function from the `def` onwards, and
+    // pycc reproduces that. Only a *different* module's definition
+    // silently changes what the foreign module's own call resolves to, so
+    // the gate must stay cross-module.
+    let source = "import json\n\n\ndef json() -> int:\n    return 1\n";
+    let linked = link(vec![foreign_input("main.py", source, "import json")])
+        .expect("a module shadowing its own foreign import still links");
+    assert_eq!(
+        linked.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "json".to_string(),
+            module_path: "json".to_string(),
+            item_index: 0,
+        }]
+    );
+}
