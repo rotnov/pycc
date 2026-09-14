@@ -37,6 +37,13 @@ fn stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// `path` spelled the way `pycc_diag::render_human` spells it: with
+/// forward slashes on every platform, so a Windows assertion compares
+/// against the rendered form rather than the platform separator.
+fn rendered_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// Writes `body` to `dir/m.py` and returns the path.
 fn source(dir: &Path, body: &str) -> std::path::PathBuf {
     let src = dir.join("m.py");
@@ -145,7 +152,12 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
         assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
         let rendered = stderr_of(&output);
         assert!(rendered.contains("error[I0403]"), "{rendered}");
-        let located = format!("{}:1:1", dir.join(owner).display());
+        // `pycc_diag` renders every path with forward slashes
+        // (`render_human`'s own `replace('\\\\', "/")`), so the expected
+        // location is normalized the same way rather than spelled with the
+        // platform separator -- the existing convention in
+        // `tests/issue_941_enum_subclass.rs` and `tests/slice0.rs`.
+        let located = format!("{}:1:1", rendered_path(&dir.join(owner)));
         assert!(rendered.contains(&located), "{owner}: {rendered}");
         let other = if owner == "dep.py" {
             "main.py"
@@ -153,7 +165,7 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
             "dep.py"
         };
         assert!(
-            !rendered.contains(&format!("{}:", dir.join(other).display())),
+            !rendered.contains(&format!("{}:", rendered_path(&dir.join(other)))),
             "{owner}: {rendered}"
         );
     }
