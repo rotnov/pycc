@@ -118,6 +118,8 @@ fn module(items: Vec<MirItem>) -> MirModule {
     MirModule {
         items,
         class_defs: Vec::new(),
+
+        ..Default::default()
     }
 }
 

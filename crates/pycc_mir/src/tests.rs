@@ -19,6 +19,7 @@ mod comprehension;
 mod exception;
 mod expr;
 mod expr_ty;
+mod import;
 mod matching;
 mod narrow;
 mod protocol;
