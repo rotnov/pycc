@@ -214,12 +214,18 @@ Follow the plan. Write tests for success, failure, and edge paths alongside the 
 target ([D-242](../../../docs/decisions/D-242-product-mode-the-delivery-process-informs-rather-than-blocks.md) rule 1; total coverage is reported, never enforced). Update every
 affected document in the same commits as the code. Before entering review, run the full local
 gate set: the diff-coverage gate as three commands, capturing each exit status. First
-define the scratch directory they write to — an isolated, automatically cleaned one, per
-`docs/TESTING.md`'s "Scratch directories" section (never a `pycc_` prefix, never a path
-under the working tree): `S="$(mktemp -d)"; trap 'rm -rf "$S"' EXIT`. Then
-`TMPDIR="$S" CARGO_TARGET_DIR="$S/target" cargo llvm-cov --workspace --lcov --output-path "$S/coverage.lcov" > "$S/cov.log" 2>&1; echo $?`
-(about five minutes cold on an M-series Mac; the isolated `TMPDIR`/`CARGO_TARGET_DIR` keep
-the instrumented build and the test scratch out of the shared tree),
+define the two directories they write to, per `docs/TESTING.md`'s "Scratch directories"
+section, which owns the rule: the test scratch is isolated and ephemeral (never a `pycc_`
+prefix, never a path under the working tree) — `S="$(mktemp -d)"` — while the instrumented
+build is pinned to one stable directory per worktree —
+`C="$HOME/.cache/pycc-coverage/$(basename "$PWD")/target"`. Do not point the second at the
+first: a `trap 'rm -rf "$S"' EXIT` fires when *that* shell exits, so it never survives to a
+later tool call, and each attempt's ~3.3 GB instrumented build is then abandoned rather than
+reused. Then
+`TMPDIR="$S" CARGO_TARGET_DIR="$C" cargo llvm-cov --workspace --lcov --output-path "$S/coverage.lcov" > "$S/cov.log" 2>&1; echo $?`
+(about five minutes cold on an M-series Mac; `cargo llvm-cov` clears the workspace's own
+artifacts and every `.profraw` at the start of each run, so the pinned directory cannot
+carry a prior run's coverage into this one),
 then `git diff -U0 --no-color --no-renames "$(git merge-base origin/main HEAD)" HEAD > "$S/changed.diff"`,
 then `python3 -B scripts/check_diff_coverage.py --lcov "$S/coverage.lcov" --diff "$S/changed.diff" --root "$PWD" --require-changed-lines 100; echo $?`
 (the merge base is the right local base because the local branch is not a merge commit) —
