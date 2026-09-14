@@ -202,3 +202,30 @@ fn with_foreign_import_named(
     });
     hir
 }
+
+/// `unroll_enum_loops` runs *after* `monomorphize` and is the one remaining
+/// pass that changes how many items the list holds: a top-level
+/// `for c in Color:` becomes one loop-variable assignment plus one body copy
+/// per enum member. A position recorded after such a loop therefore has to
+/// be recomputed as well, or `pycc_mir::splice_foreign_imports` emits the
+/// import *inside* the unrolled sequence -- running it before top-level
+/// statements that precede it in source. The non-foreign binding alongside
+/// it pins that the remap carries the rest of the table through untouched.
+#[test]
+fn a_foreign_import_after_an_unrolled_enum_loop_is_repositioned_past_it() {
+    let source =
+        "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor c in Color:\n    print(c.value)\n";
+    let mut hir = with_foreign_import_at(lower(source), 1);
+    hir.imports.push(ImportBinding::Module {
+        local_name: "math".to_string(),
+        module: pycc_std::StdModule::Math,
+    });
+    let resolved = crate::check_and_resolve_all_keyed(&hir).expect("the fixture type-checks");
+    assert_eq!(resolved.items.len(), 4, "{:?}", resolved.items);
+    assert_eq!(foreign_position(&resolved.imports), 4);
+    assert!(
+        matches!(resolved.imports[1], ImportBinding::Module { .. }),
+        "{:?}",
+        resolved.imports
+    );
+}

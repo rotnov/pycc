@@ -933,10 +933,12 @@ pub fn build(hir: &HirModule) -> MirModule {
 ///
 /// An index past the end of `items` cannot occur: it is the item count at
 /// the moment the import lowered, and every stage between that moment and
-/// this one either appends items or, when it drops them
-/// (`pycc_types::monomorphize`, which discards each original generic and
-/// each protocol-parameter function), recomputes the recorded positions
-/// against the list it produces. `insert` would panic rather than misplace
+/// this one either appends items or, when it changes the list the positions
+/// refer to, recomputes them against the list it produces --
+/// `pycc_types::monomorphize`, which drops each original generic and each
+/// protocol-parameter function, and `pycc_types::enum_lower`'s
+/// `unroll_enum_loops`, which expands one top-level enum loop into one item
+/// per member. `insert` would panic rather than misplace
 /// the call if that invariant were ever broken, which is the failure this
 /// splice wants -- PR 1c of #1080 review finding 1 is exactly that panic,
 /// observed before `monomorphize` did the recomputation.
