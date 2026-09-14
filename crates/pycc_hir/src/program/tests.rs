@@ -309,3 +309,55 @@ fn many_exception_classes(prefix: &str, count: usize) -> String {
     ));
     source
 }
+
+/// Lowers `source` with the driver answering `ResolvedImport::Foreign` for
+/// the statement spelled `import_stmt`, so the module carries an
+/// `ImportBinding::Foreign` (Part 1 of #1026). `input` cannot do this: it
+/// lowers against an empty answer table, which that branch never fires on.
+fn foreign_input(display_path: &str, source: &str, import_stmt: &str) -> LinkInput {
+    let start = source
+        .find(import_stmt)
+        .expect("the fixture must contain its import statement");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        Span::new(start as u32, (start + import_stmt.len()) as u32),
+        crate::ResolvedImport::Foreign,
+    );
+    LinkInput {
+        display_path: display_path.to_string(),
+        module: lower_module(&parse(source), &resolved).expect("a fixture module must lower"),
+    }
+}
+
+#[test]
+fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
+    // The first module contributes three items, so the second module's
+    // items start at program index 3; its own import sits at local index
+    // 1, which makes the expected rebased index 4. Both numbers are
+    // greater than one and different from each other, so an
+    // implementation that dropped either the offset or the local index
+    // lands somewhere else.
+    let first = input("first.py", "a = 1\nb = 2\nc = 3\n");
+    assert_eq!(first.module.hir.items.len(), 3);
+    let second = foreign_input("second.py", "d = 4\nimport numpy\n", "import numpy");
+    assert_eq!(
+        second.module.hir.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            item_index: 1,
+        }],
+        "the fixture's own index must be local, or the rebase below proves nothing"
+    );
+
+    let linked = link(vec![first, second]).expect("the fixture program must link");
+
+    assert_eq!(
+        linked.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            item_index: 4,
+        }]
+    );
+}

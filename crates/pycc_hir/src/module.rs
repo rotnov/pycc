@@ -714,13 +714,33 @@ fn statement_span(stmt: &Stmt) -> Span {
 /// or without an `asname`: `import math as m` binds `m` and yields nothing,
 /// while `import numpy as np` yields `[np]`. Both import arms
 /// therefore mirror `import::lower_import_stmt`'s own success conditions
-/// exactly rather than approximating them, one arm per statement kind, so
-/// a shape that lowers poisons nothing and every shape that does not
-/// poisons. An import that lowers binds a name the two cascade lookups
+/// for every shape decidable from the statement alone, one arm per
+/// statement kind, so such a shape that lowers poisons nothing and every
+/// such shape that does not poisons. An import that lowers binds a name
+/// the two cascade lookups
 /// (`annotation_to_ty`'s bare-name arm and `validate_bases`) cannot resolve
 /// anyway -- they consult only the class table and the alias table -- so a
 /// later annotation naming it fails today either way, and that diagnostic
 /// is a genuine, independent gap that must stay reported.
+///
+/// Recorded divergence (Part 1 of #1026): `lower_import_stmt` has a third
+/// success condition this mirror deliberately does not model. A bare,
+/// unaliased, undotted name that is neither a `pycc_std` module nor a
+/// project module lowers to an `ImportBinding::Foreign` when -- and only
+/// when -- the driver's `ResolvedImports` table answers
+/// `ResolvedImport::Foreign` for that statement's span. That answer is not
+/// derivable from the statement alone, which is all this function sees, so
+/// `import numpy` is still classified here as a poisoning shape even in a
+/// build where it lowers. What keeps the stale prediction harmless is the
+/// *asymmetry* in `lower_module`'s loop, not a surviving biconditional: the
+/// loop consults `poisonable_names` on both arms, but on `Ok` it only
+/// `retain`s -- un-poisoning what the statement actually bound -- so a name
+/// predicted for a statement that then lowered is dropped rather than
+/// suppressing anything. Do not "repair" the `Stmt::Import` arm by teaching
+/// it this case without a span-keyed answer table in hand, and do not
+/// assume the biconditional above still holds for a bare foreign name.
+/// `module::tests::a_foreign_import_lowers_and_still_poisons_its_name`
+/// pins this state.
 ///
 /// Every remaining statement kind -- `def`, assignment, expression
 /// statement -- yields nothing on purpose, for that same reason: those
@@ -770,13 +790,18 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
             vec![target.id.as_str()]
         }
         Stmt::Import(import) => {
-            // `import::lower_import_stmt` accepts exactly one shape: a single
-            // alias (with or without an `asname` -- Part 1 of #883, #962) and
-            // a module name `pycc_std` resolves. The condition is exact
-            // rather than an approximation of that arm -- its earlier
-            // `ResolvedImport::Found` branch cannot fire for a
-            // stdlib-resolving name, because `project_import_request` returns
-            // `None` for one, so no answer is ever recorded for its span.
+            // `import::lower_import_stmt` accepts exactly one shape this
+            // function can recognize: a single alias (with or without an
+            // `asname` -- Part 1 of #883, #962) and a module name `pycc_std`
+            // resolves. The condition is exact rather than an approximation
+            // of that arm -- its earlier `ResolvedImport::Found` branch
+            // cannot fire for a stdlib-resolving name, because
+            // `project_import_request` returns `None` for one, so no answer
+            // is ever recorded for its span. Its `ResolvedImport::Foreign`
+            // branch is the recorded divergence documented above: it turns
+            // on a span-keyed driver answer this function does not have, so
+            // a bare foreign name falls through and poisons even though it
+            // lowers.
             if let [alias] = import.names.as_slice()
                 && pycc_std::resolve_module(alias.name.as_str()).is_some()
             {

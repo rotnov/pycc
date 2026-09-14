@@ -773,6 +773,14 @@ fn a_successful_stdlib_from_import_poisons_nothing() {
 /// than one shape at a time. A new rejection branch added to
 /// `lower_import_stmt` without a matching `poisonable_names` arm fails
 /// here as soon as its shape joins this list.
+///
+/// Every row is driven through `lower_all`, which lowers against
+/// `ResolvedImports::default()`, so the corpus cannot reach
+/// `lower_import_stmt`'s `ResolvedImport::Foreign` branch (Part 1 of
+/// #1026) -- that branch fires only on a span-keyed driver answer, and no
+/// row here wants one. That case is a deliberate divergence from the
+/// biconditional rather than another row, so it is pinned by the sibling
+/// test `a_foreign_import_lowers_and_still_poisons_its_name` below.
 const IMPORT_SHAPES: &[&str] = &[
     // `Stmt::Import`: accepted, then one row per rejection branch.
     "import math\n",
@@ -821,6 +829,41 @@ fn a_failing_import_poisons_and_a_lowering_one_does_not() {
             source.trim_end()
         );
     }
+}
+
+/// The one import shape the corpus above cannot reach: a bare, unaliased,
+/// non-stdlib, non-project name that the driver answered
+/// `ResolvedImport::Foreign` for. It *lowers* -- to an
+/// `ImportBinding::Foreign` -- and `poisonable_names` still names it,
+/// because that function sees one statement and never the answer table.
+///
+/// This pins the divergence `module::poisonable_names`'s docstring
+/// records, not a defect: `lower_module`'s loop only `retain`s poisoned
+/// names on the `Ok` arm, so a prediction made for a statement that then
+/// lowered suppresses nothing. If someone later teaches the `Stmt::Import`
+/// arm about this case, this test fails and the docstring has to be
+/// revisited with it.
+#[test]
+fn a_foreign_import_lowers_and_still_poisons_its_name() {
+    let source = "import numpy\n";
+    let module = parse(source);
+    let statement = &module.body[0];
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        span_of(source, "import numpy", 0),
+        crate::ResolvedImport::Foreign,
+    );
+
+    let lowered = lower_module(&module, &resolved).expect("a foreign import must lower");
+    assert_eq!(
+        lowered.hir.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            item_index: 0,
+        }]
+    );
+    assert_eq!(poisonable_names(statement), vec!["numpy"]);
 }
 
 // ---------------------------------------------------------------------------
