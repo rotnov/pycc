@@ -37,9 +37,11 @@ fn stderr_of(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-/// `path` spelled the way `pycc_diag::render_human` spells it: with
-/// forward slashes on every platform, so a Windows assertion compares
-/// against the rendered form rather than the platform separator.
+/// `path` spelled the way `pycc_diag::render_human` spells a diagnostic's
+/// `-->` location line: with forward slashes on every platform, so a Windows
+/// assertion compares against the rendered form rather than the platform
+/// separator. A path interpolated into a diagnostic's *message body* is not
+/// normalized that way, so assert those with `Path::display` instead.
 fn rendered_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -522,13 +524,15 @@ fn a_definition_shadowing_another_module_s_foreign_import_is_refused() {
         "from dep import f\n\n\ndef json() -> int:\n    return 1\n\n\nx: int = f()\n",
     );
     assert!(rendered.contains("error[C0001]"), "{rendered}");
-    // The message names both modules by their rendered display paths.
+    // The message names both modules by their display paths. `render_human`
+    // normalizes the `-->` location line to forward slashes but interpolates a
+    // message body verbatim, so a body assertion uses the platform separator.
     assert!(
         rendered.contains(&format!(
             "module `{}` defines `json`, which `{}` binds to a CPython module object; \
              shadowing a foreign import across modules is not supported yet",
-            rendered_path(&dir.join("main.py")),
-            rendered_path(&dir.join("dep.py"))
+            dir.join("main.py").display(),
+            dir.join("dep.py").display()
         )),
         "{rendered}"
     );
