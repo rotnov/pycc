@@ -2125,6 +2125,47 @@ directory itself a `pycc_*` name: a directory whose name fully parses as
 `pycc_{category}_{pid}_{nanos}_{seq}` inside a shared temp directory is,
 by the D-201/D-209 contract, pycc property and eligible for sweeping.
 
+**Pin `CARGO_TARGET_DIR` per worktree; keep `TMPDIR` ephemeral.** The two
+variables answer different questions and must not be given the same
+lifetime. `TMPDIR` holds the run's *test scratch*, and the fail-closed
+`pycc_*` leak check above only works on a directory that starts empty --
+so it is freshly created and removed per run, exactly as the recipe says.
+`CARGO_TARGET_DIR` holds the *instrumented build*, which is pure cache:
+it participates in no leak check, and `cargo llvm-cov` removes the
+workspace's own artifacts and every `.profraw` at the start of each run
+unless `--no-clean` is passed, so a reused directory cannot carry a prior
+run's coverage into the next one. Point it at one stable directory per
+worktree instead:
+
+```sh
+cov="$HOME/.cache/pycc-coverage/$(basename "$PWD")/target"   # stable: outside the worktree, outside any swept temp root
+iso="$(mktemp -d)"; trap 'rm -rf "$iso"' EXIT                # ephemeral: as above
+TMPDIR="$iso" CARGO_TARGET_DIR="$cov" cargo llvm-cov --workspace \
+  --lcov --output-path "$iso/coverage.lcov" > "$iso/cov.log" 2>&1; echo $?
+```
+
+Measured on an M-series Mac: two consecutive runs against one pinned
+directory reported identical figures (changed lines and workspace total
+alike), and the directory stayed at 3.3 GB with its `.profraw` count flat
+across runs rather than growing by a further 3.3 GB each time.
+
+The old shape wrote the instrumented build under the ephemeral directory
+too, and it leaked for a mechanical reason worth stating: `trap ... EXIT`
+fires when *that shell* exits, and an agent-driven loop runs each command
+in a separate shell, so the trap has always already fired by the time the
+next command starts. Sessions therefore substituted a stable hand-named
+directory per attempt -- and nothing removed those, because the documented
+cleanup lived in a trap that no longer applied. One incident accumulated
+roughly 36 GB across twelve abandoned coverage target directories and
+about 18,000 `.profraw` files. A pinned directory removes the incentive:
+re-running the gate overwrites it instead of minting another one.
+
+Do not put the pinned directory under the working tree (Cargo artifacts
+are not repository content), under a swept temp root (it would be deleted
+and rebuilt, which is the cost this avoids), or share one across
+worktrees (two concurrent `cargo` processes on one lock present as a
+hang, not an error).
+
 **What the automatic sweep cannot serve.** Two cases are permanently
 outside the Part 4 sweep's reach, and this guidance is their remedy:
 

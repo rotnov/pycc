@@ -33,6 +33,48 @@ never a merge gate.
 
 ---
 
+## 2026-09-14 — A documented cleanup lived in a `trap` that an agent-driven loop can never reach
+
+**What happened.** The session's temp root had grown to 51 GB. Twelve
+abandoned `cargo llvm-cov` target directories (`gate`, `gate2`, `gate3`,
+`cov`, `cov1067`, `iso`, `gates`, `gates-1080a`, `target-cov`,
+`target-lcov`, …) accounted for roughly 36 GB of it, alongside about
+18,000 `.profraw` files. No process held them; nothing had ever deleted
+them.
+
+**Root cause.** `.claude/skills/issue-implement/SKILL.md`'s coverage
+recipe defined its scratch directory as
+`S="$(mktemp -d)"; trap 'rm -rf "$S"' EXIT` and then put the instrumented
+build inside it as `CARGO_TARGET_DIR="$S/target"`. A shell `trap ... EXIT`
+fires when *that shell* exits, and an agent runs each command in a
+separate shell — so the trap had always already fired before the next
+command ran, and could never clean up a multi-command gate. Sessions
+noticed the directory vanishing between calls and worked around it by
+substituting a stable hand-named directory per attempt, which removed the
+only cleanup the recipe had. The convention was followed for creation and
+structurally unreachable for cleanup, so nothing looked wrong at any
+single step.
+
+**What fixed it.** Splitting the two lifetimes, because the two variables
+answer different questions: `TMPDIR` stays ephemeral (the fail-closed
+`pycc_*` leak check only works on a directory that starts empty), while
+`CARGO_TARGET_DIR` is pinned to one stable per-worktree directory outside
+the tree and outside any swept temp root. `cargo llvm-cov` clears the
+workspace's artifacts and every `.profraw` at the start of each run
+unless `--no-clean` is passed, so reuse cannot contaminate the numbers —
+verified by two consecutive runs against one pinned directory reporting
+identical changed-line and workspace figures, with the directory flat at
+3.3 GB instead of growing by that much per attempt.
+
+**Lesson.** A cleanup step written as a shell `trap` is only real for a
+gate that runs inside one shell invocation. When documenting a multi-step
+gate an agent will run across separate tool calls, prefer a directory
+whose *reuse* is the cleanup — one stable path that the next run
+overwrites — over a fresh path that something is supposed to delete
+later. And when a recipe's stated cleanup cannot be reached, expect the
+next session to quietly substitute something that does not clean up at
+all, rather than to report the recipe as broken.
+
 ## 2026-09-14 — A benchmark protocol was pre-registered before anyone checked that a subject for it existed
 
 **What happened.** `docs/TESTING.md`'s hosted `ext` benchmark protocol and its
