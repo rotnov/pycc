@@ -9,6 +9,7 @@
 //! one, at its recorded index.
 
 use crate::*;
+use pycc_diag::Span;
 use pycc_hir::{HirModule, ImportBinding, ProjectBindingKind};
 
 fn module_with_imports(imports: Vec<ImportBinding>) -> HirModule {
@@ -43,6 +44,7 @@ fn foreign(local_name: &str, item_index: usize) -> ImportBinding {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
         item_index,
+        span: Span::new(0, 0),
     }
 }
 

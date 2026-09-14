@@ -840,6 +840,7 @@ dependencies = [
 name = "pycc_mir"
 version = "0.1.0"
 dependencies = [
+ "pycc_diag",
  "pycc_hir",
  "pycc_std",
 ]

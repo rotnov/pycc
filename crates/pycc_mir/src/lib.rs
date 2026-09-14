@@ -949,6 +949,7 @@ fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
             local_name,
             module_path,
             item_index,
+            ..
         } = binding
         else {
             continue;

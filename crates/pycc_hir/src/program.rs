@@ -190,10 +190,12 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                 local_name,
                 module_path,
                 item_index,
+                span,
             } => ImportBinding::Foreign {
                 local_name,
                 module_path,
                 item_index: item_index + item_offset,
+                span,
             },
             other => other,
         }));

@@ -2117,6 +2117,7 @@ fn remap_foreign_import_positions(
                 local_name,
                 module_path,
                 item_index,
+                span,
             } => ImportBinding::Foreign {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
@@ -2124,6 +2125,7 @@ fn remap_foreign_import_positions(
                     .iter()
                     .filter(|kept| **kept)
                     .count(),
+                span: *span,
             },
             other => other.clone(),
         })

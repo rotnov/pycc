@@ -228,10 +228,12 @@ fn remap_foreign_import_positions(
                 local_name,
                 module_path,
                 item_index,
+                span,
             } => ImportBinding::Foreign {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
                 item_index: produced[..(*item_index).min(produced.len())].iter().sum(),
+                span: *span,
             },
             other => other.clone(),
         })

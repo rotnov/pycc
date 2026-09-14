@@ -8,6 +8,7 @@
 //! types that stay in `lib.rs`.
 
 use crate::{FStringPart, HirClassDef, HirExpr, HirItem, HirPattern, HirStmt, Ty};
+use pycc_diag::Span;
 use std::collections::HashSet;
 
 /// Issue #769 follow-up (D-068 re-review of #780, third round): the set of
@@ -385,10 +386,20 @@ pub enum ImportBinding {
     /// CPython does not do and which D-244 rule 3 does not permit. The
     /// index is module-local when `module::lower_module` records it and is
     /// rebased onto the linked program's item list by `program::link`.
+    ///
+    /// `span` is the `import` statement's own source range. Every other
+    /// variant is compile-time-only and is never the subject of a
+    /// diagnostic of its own, but this one can be: a native build refuses
+    /// it (`I0403`), and a module that binds the same local name twice
+    /// refuses that too (`C0001`). Both diagnostics must point at the
+    /// import statement, and the import side table carries no position
+    /// otherwise -- `item_index` counts items, not bytes, so it cannot
+    /// stand in for one (PR 1c of #1080 review round 4).
     Foreign {
         local_name: String,
         module_path: String,
         item_index: usize,
+        span: Span,
     },
 }
 

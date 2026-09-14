@@ -652,8 +652,12 @@ neither build path is reached:
 
 **A module does not shadow its own foreign import either.** A module in which
 any other top-level statement binds a foreign import's local name -- a `def`,
-a `class`, a `type` alias, or a plain assignment, written above or below the
-import -- is refused with `C0001` while lowering, at the shadowing statement.
+a `class`, a `type` alias, a plain assignment, or a second `import`, written
+above or below the import -- is refused with `C0001` while lowering, at the
+shadowing statement, or at the import itself when the shadowing binding is
+another import and so has no statement span of its own. Two foreign imports
+of the same local name are refused on the same rule rather than exempted as
+benign, and a name is reported once however many statements bind it.
 The positional binding above is what makes the artifact honest about *when*
 the import runs; it is not enough to make the compiler honest about *which*
 binding a name has, because every pass that walks the module would have to
@@ -668,7 +672,8 @@ Supporting either order is later work under #1026.
 
 **Native mode.** A plain `pycc build` produces a standalone executable with no
 interpreter to import into, so the driver refuses the program with `I0403`
-before codegen — one diagnostic per foreign import — and
+before codegen — one diagnostic per foreign import, each at its own `import`
+statement in the file that wrote it — and
 `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
 `MirItem::ForeignImport` when `!options.ext`.
 

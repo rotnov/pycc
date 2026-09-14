@@ -117,11 +117,12 @@ fn a_native_build_refuses_a_foreign_import_with_i0403() {
 #[test]
 fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
     let rows = [
-        // (dep.py, main.py, the file the diagnostic must name)
+        // (dep.py, main.py, the file the diagnostic must name, its line)
         (
             "import numpy\ndef f() -> int:\n    return 1\n",
             "from dep import f\nx = f()\n",
             "dep.py",
+            1,
         ),
         // The dependency's import is *trailing*: its item index equals the
         // dependency's own end bound, the boundary an item-index join would
@@ -130,6 +131,7 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
             "def f() -> int:\n    return 1\nimport numpy\n",
             "from dep import f\nx = f()\n",
             "dep.py",
+            3,
         ),
         // The entry's own import, at the same boundary index from the other
         // side.
@@ -137,9 +139,10 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
             "def f() -> int:\n    return 1\n",
             "from dep import f\nimport numpy\nx = f()\n",
             "main.py",
+            2,
         ),
     ];
-    for (dep, entry, owner) in rows {
+    for (dep, entry, owner, line) in rows {
         let dir = ScratchDir::new("foreign_native_multifile").expect("scratch");
         std::fs::write(dir.join("dep.py"), dep).expect("write the dependency");
         let main = dir.join("main.py");
@@ -159,7 +162,10 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
         // location is normalized the same way rather than spelled with the
         // platform separator -- the existing convention in
         // `tests/issue_941_enum_subclass.rs` and `tests/slice0.rs`.
-        let located = format!("{}:1:1", rendered_path(&dir.join(owner)));
+        // The line is the import statement's own, carried on the binding
+        // (review round 4 on #1080): every row's import sits at a different
+        // line, so a span that reverted to `0` fails here as well.
+        let located = format!("{}:{line}:1", rendered_path(&dir.join(owner)));
         assert!(rendered.contains(&located), "{owner}: {rendered}");
         let other = if owner == "dep.py" {
             "main.py"
@@ -356,6 +362,84 @@ fn an_unshadowed_foreign_import_keeps_its_refusal() {
     let rendered = stdout_of(&output);
     assert!(rendered.contains("error[I0404]"), "{rendered}");
     assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
+/// A second `import` binding the same local name shadows the foreign one
+/// exactly as a `def` does, and `definition_spans` -- the table the refusal
+/// first consulted -- never carries an import's own binding, so this shape
+/// slipped past it (review round 4 on #1080). Used, it reached the solver
+/// and reported a receiver diagnostic against `import json`, the statement
+/// the alias supersedes; unused, it was accepted silently.
+#[test]
+fn a_second_import_rebinding_a_foreign_name_is_refused() {
+    for body in [
+        "import json\nimport math as json\n\ny = json.sqrt(4.0)\n",
+        "import json\nimport math as json\n",
+    ] {
+        let dir = ScratchDir::new("foreign_rebound_by_import").expect("scratch");
+        let output = check(&dir, body);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+        let rendered = stdout_of(&output);
+        assert!(
+            rendered.contains("shadowing a foreign import is not supported yet"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("is a local name here"), "{rendered}");
+    }
+}
+
+/// Two foreign imports of the same name are refused on the same rule rather
+/// than exempted as benign: admitting them would mean asking which of two
+/// `Ty::Object` producers a read resolves to, which is the positional
+/// question the refusal exists to avoid. One diagnostic, not one per import.
+#[test]
+fn a_duplicated_foreign_import_is_refused_once() {
+    let dir = ScratchDir::new("foreign_duplicate_import").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy
+import numpy
+",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert_eq!(
+        rendered
+            .matches("shadowing a foreign import is not supported yet")
+            .count(),
+        // Twice per diagnostic: `render_human` prints the message on the
+        // `error[...]` line and again under the source caret.
+        2,
+        "{rendered}"
+    );
+}
+
+/// `I0403` points at the `import` statement. Every one of them used to be
+/// built with `Span::new(0, 0)`, so a foreign import that was not the first
+/// statement reported at `<file>:1:1` and underlined an unrelated line
+/// (review round 4 on #1080). The fixture's import sits on line 5 precisely
+/// so a hard-coded zero span fails the assertion.
+#[test]
+fn a_native_refusal_points_at_the_import_statement() {
+    let dir = ScratchDir::new("foreign_native_span").expect("scratch");
+    let output = pycc()
+        .arg("build")
+        .arg(source(
+            &dir,
+            "def g() -> int:\n    return 1\n\n\nimport numpy\n",
+        ))
+        .arg("-o")
+        .arg(dir.join("m"))
+        .output()
+        .expect("pycc should spawn");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stderr_of(&output);
+    assert!(rendered.contains("error[I0403]"), "{rendered}");
+    assert!(
+        rendered.contains(&format!("{}:5:1", rendered_path(&dir.join("m.py")))),
+        "{rendered}"
+    );
+    assert!(rendered.contains("5 | import numpy"), "{rendered}");
 }
 
 /// A function local that happens to share a foreign import's name is an

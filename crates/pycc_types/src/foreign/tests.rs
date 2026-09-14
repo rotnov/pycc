@@ -26,6 +26,7 @@ fn lists_only_the_foreign_bindings() {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
             item_index: 0,
+            span: Span::new(0, 0),
         },
     ];
     assert_eq!(foreign_object_names(&imports), vec!["numpy"]);
@@ -53,6 +54,7 @@ fn with_foreign_import(mut hir: pycc_hir::HirModule) -> pycc_hir::HirModule {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
         item_index: 0,
+        span: Span::new(0, 0),
     });
     hir
 }
@@ -90,6 +92,7 @@ fn with_foreign_import_at(mut hir: pycc_hir::HirModule, item_index: usize) -> py
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
         item_index,
+        span: Span::new(0, 0),
     });
     hir
 }
@@ -199,6 +202,7 @@ fn with_foreign_import_named(
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
         item_index,
+        span: Span::new(0, 0),
     });
     hir
 }

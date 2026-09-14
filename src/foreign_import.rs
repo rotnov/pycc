@@ -13,7 +13,7 @@
 //! of asserting: this gate has already refused every program that could
 //! reach it.
 
-use pycc_diag::{Diagnostic, Span};
+use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, ImportBinding};
 
 /// One `I0403` per foreign import in `hir`, in source order, or `Ok(())`
@@ -43,7 +43,9 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
         .iter()
         .enumerate()
         .filter_map(|(position, binding)| match binding {
-            ImportBinding::Foreign { module_path, .. } => Some((
+            ImportBinding::Foreign {
+                module_path, span, ..
+            } => Some((
                 position,
                 Diagnostic::error(
                     "I0403",
@@ -52,7 +54,13 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
                          `pycc build --ext`: a native executable embeds no CPython \
                          interpreter to import it into"
                     ),
-                    Span::new(0, 0),
+                    // The import statement's own range, carried on the
+                    // binding. Before it was, every `I0403` was built with
+                    // `Span::new(0, 0)`, so a foreign import that was not
+                    // the first statement reported at `<file>:1:1` and
+                    // highlighted an unrelated line (PR 1c of #1080 review
+                    // round 4).
+                    *span,
                 ),
             )),
             ImportBinding::Module { .. }
@@ -69,6 +77,7 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pycc_diag::Span;
     use pycc_hir::ProjectBindingKind;
 
     fn hir(imports: Vec<ImportBinding>) -> HirModule {
@@ -86,6 +95,7 @@ mod tests {
             local_name: name.to_string(),
             module_path: name.to_string(),
             item_index: 0,
+            span: Span::new(0, 0),
         }
     }
 
