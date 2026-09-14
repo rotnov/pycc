@@ -757,14 +757,15 @@ a different workload after meeting this obstacle, so the committed generator,
 seed and digest stand as they are and the run waits for the boundary rather
 than the boundary's limits reshaping the run.
 
-A third leg fails independently of the boundary: the reference codebase's
-only barycentric function is a private helper (a leading underscore, so
+A third leg fails independently of the boundary, and is reported as a count
+so that nothing about the proprietary codebase is published beyond one
+([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6): the number of functions in the reference codebase that both
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-rule 1 would not export it) whose parameters are numpy and VTK objects, which
-`pycc` cannot compile at all. D-244's Context records a probe run against a
-distilled standalone annotated module, not against that source; the
-**Subject** bullet's "byte-identical across all three arms" is a stronger
-requirement than the probe met.
+rule 1 would export and the current `ext` boundary admits is **zero**. The
+**Subject** bullet's "byte-identical across all three arms" is what that count
+is taken against, and it is a stronger requirement than any probe reported so
+far has met.
 
 #### What the boundary costs, measured
 
@@ -787,8 +788,9 @@ be swapped. That finding is filed against #1031.
 The second row gives the body speedup. Writing a per-call ratio as
 `(15.5 + body_py) / (29.1 + body_ext)`, the ratio rises with the amount of
 work per call and asymptotes to `body_py / body_ext`, which these two rows
-put at `148 / 47` ≈ **3.15x** for float arithmetic. That is the ceiling, not
-a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
+put at `148.5 / 46.9` ≈ **3.17x** for float arithmetic — taken from the
+unrounded differences, since rounding each operand first moves the published
+ceiling. That is the ceiling, not a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
 scalar calls at this arithmetic speedup, because the boundary can only eat
 into a body speedup, never add to it. Clearing 5x needs either a compiled
 body well over 5x faster than CPython's, or a boundary crossed once per sweep
