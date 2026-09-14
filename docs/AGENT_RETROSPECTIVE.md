@@ -33,6 +33,65 @@ never a merge gate.
 
 ---
 
+## 2026-09-14 — A benchmark protocol was pre-registered before anyone checked that a subject for it existed
+
+**What happened.** `docs/TESTING.md`'s hosted `ext` benchmark protocol and its
+pre-registration record (`scripts/bench_hosted_ext_precommit.json`, merged as
+`fe2b36a8`) were written and committed — generator, seed, a SHA-256 over a
+~128 MB input file, machine identity, float tolerance — before anyone had
+checked either that the `ext` boundary could carry that input into a compiled
+subject or that a subject satisfying the protocol's own **Subject** bullet
+existed at all. Two independent obstacles turned up, and the first round of
+this entry recorded only the first of them:
+
+1. **Carrier admissibility, for one of the two readings.** A whole-sweep
+   subject would have to read the file itself and `pycc` has no `open`
+   (`C0001`), so the sweep reading waits on #1027's buffer-protocol bridge.
+   The per-record reading does **not**: one record is eight `float`
+   arguments returning a `bool`, which the boundary already admits and which
+   `docs/TESTING.md`'s own ad-hoc measurement already exports and times. The
+   container rejections (`C0001` on `bytes`, `T0034` on `list[float]`,
+   `T0053` on `tuple[float, ...]`, `C0003` on a `list[int]` parameter) prove
+   a record cannot be passed as a *container*, not that a record cannot be
+   passed.
+2. **Subject existence, for both readings.** The count of functions in the
+   reference codebase that D-244 rule 1 would export and the boundary admits
+   is zero, and what fails is the export test, not the carrier — no boundary
+   work changes a function's visibility or its source bytes. This is the
+   operative blocker, and it has no tracking issue, because closing it may
+   mean revising the **Subject** bullet rather than the compiler.
+
+The protocol is therefore correct, committed, and unrunnable — not "until
+#1027 lands", which was the entry's first and wrong conclusion.
+
+**Root cause.** The protocol's own **Input** bullet exists to stop the workload
+being chosen after a result is seen, and it did its job — but "is this workload
+pinned" is a different question from both "can it be *carried* across the
+boundary being measured" and "does a function the **Subject** bullet accepts
+exist to measure", and only the first was asked before committing. The second
+round then compounded it: having found one obstacle, the diagnosis stopped
+there and named #1027 as *the* blocker, which an external reviewer had to
+refute against the section's own measured eight-argument row.
+
+**What fixed it.** Nothing needed fixing in the protocol: the honest outcome
+was to leave it, the record, and the `null` `subject_sha256` exactly as
+committed, publish the blocker plus the measured ceiling instead of a scored
+run, and check neither `product-sprint-1` roadmap box. Amending the record to
+fit a workload the boundary can carry would have been input selection after
+meeting an obstacle — precisely what the bullet forbids.
+
+**Lesson.** Before committing a pre-registered input digest, compile the
+smallest subject that consumes that input through the boundary the benchmark
+measures, *and* identify the actual function that will be measured. Carrier
+admissibility and subject existence are both preconditions of
+pre-registration, not details of the run, and a protocol pinned to an input
+is unamendable by construction once either fails. The second half of the
+lesson is about the diagnosis rather than the protocol: when a blocker is
+found, check whether it blocks every reading of the run or only one, and
+check the claim against measurements the same document already contains —
+"no admissible spelling exists" was contradicted by a row two subsections
+below it.
+
 ## 2026-09-13 — A local test gate run without CI's `--include-ignored` reported a test the same diff had just added as passing
 
 **What happened.** Part C of #1038 (#1065) added seven tests, one of them
