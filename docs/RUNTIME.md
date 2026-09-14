@@ -617,8 +617,9 @@ module's imports are not definitions to `pycc_hir::program::link`, so two
 linked project modules may each write `import numpy`; each contributes its
 own `MirItem::ForeignImport`, while `pycc_codegen` keys the foreign-import
 globals by local name and so gives both the same single slot. Both calls
-run, in source order, and the second overwrites the slot with its own new
-reference. That is correct by the rule above rather than in spite of it:
+run, in linked-program order (the concatenation `link` produces, not either
+module's own source order), and the second overwrites the slot with its own
+new reference. That is correct by the rule above rather than in spite of it:
 the slot ends up holding a valid, correctly typed module object, and the
 first reference is simply never released — exactly what every foreign
 import does. Collapsing the duplicate to one call, or releasing the

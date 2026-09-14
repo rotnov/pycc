@@ -712,16 +712,16 @@ fn statement_span(stmt: &Stmt) -> Span {
 /// #883 (#962, D-231) a `Stmt::Import` lowers -- and so poisons nothing --
 /// exactly when it has one alias and a `pycc_std`-resolvable module, with
 /// or without an `asname`: `import math as m` binds `m` and yields nothing,
-/// while `import numpy as np` yields `[np]`. Both import arms
-/// therefore mirror `import::lower_import_stmt`'s own success conditions
-/// for every shape decidable from the statement alone, one arm per
-/// statement kind, so such a shape that lowers poisons nothing and every
-/// such shape that does not poisons. An import that lowers binds a name
-/// the two cascade lookups
-/// (`annotation_to_ty`'s bare-name arm and `validate_bases`) cannot resolve
-/// anyway -- they consult only the class table and the alias table -- so a
-/// later annotation naming it fails today either way, and that diagnostic
-/// is a genuine, independent gap that must stay reported.
+/// while `import numpy as np` yields `[np]`. Both import arms therefore
+/// mirror `import::lower_import_stmt`'s own success conditions for
+/// every shape decidable from the statement alone, one arm per
+/// statement kind, so such a shape that lowers poisons nothing and
+/// every such shape that does not poisons. An import that lowers binds
+/// a name the two cascade lookups (`annotation_to_ty`'s bare-name arm
+/// and `validate_bases`) cannot resolve anyway -- they consult only the
+/// class table and the alias table -- so a later annotation naming it
+/// fails today either way, and that diagnostic is a genuine,
+/// independent gap that must stay reported.
 ///
 /// Recorded divergence (Part 1 of #1026): `lower_import_stmt` has a third
 /// success condition this mirror deliberately does not model. A bare,
