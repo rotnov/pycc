@@ -81,3 +81,124 @@ fn the_resolved_module_still_carries_its_foreign_imports() {
         );
     }
 }
+
+/// The same lowering helper, with the foreign binding recorded at an
+/// arbitrary position rather than always at 0 -- which is what the
+/// positional claims below are about.
+fn with_foreign_import_at(mut hir: pycc_hir::HirModule, item_index: usize) -> pycc_hir::HirModule {
+    hir.imports.push(ImportBinding::Foreign {
+        local_name: "numpy".to_string(),
+        module_path: "numpy".to_string(),
+        item_index,
+    });
+    hir
+}
+
+/// The recorded position of the single foreign binding in `imports`.
+fn foreign_position(imports: &[ImportBinding]) -> usize {
+    imports
+        .iter()
+        .find_map(|binding| match binding {
+            ImportBinding::Foreign { item_index, .. } => Some(*item_index),
+            _ => None,
+        })
+        .expect("the fixture records exactly one foreign binding")
+}
+
+/// PR 1c of #1080 review finding 1, the panic arm. `monomorphize` drops
+/// every original generic function, so an import recorded after two of
+/// them used to survive as index 2 against an item list of length 0 --
+/// `pycc_mir::splice_foreign_imports` then panicked in `Vec::insert`
+/// ("insertion index (is 2) should be <= len (is 0)"). The position is
+/// recomputed to 0, which is both in range and where the import belongs:
+/// nothing that preceded it still exists.
+#[test]
+fn a_foreign_import_after_dropped_generics_is_repositioned_to_the_surviving_prefix() {
+    let source = "def _a[T](x: T) -> T:\n    return x\n\n\ndef _b[T](x: T) -> T:\n    return x\n";
+    let resolved = crate::check_and_resolve_all_keyed(&with_foreign_import_at(lower(source), 2))
+        .expect("the fixture type-checks");
+    assert!(resolved.items.is_empty(), "{:?}", resolved.items);
+    assert_eq!(foreign_position(&resolved.imports), 0);
+}
+
+/// The same finding's silent arm, which is the one that reached an
+/// artifact: one dropped generic followed by a surviving `def` left the
+/// import at index 1 against a one-item list, so `insert(1, ..)` *appended*
+/// it -- emitting the import after the function instead of before it, in
+/// violation of D-244 rule 3. The recomputed position is 0, so the import
+/// still precedes the item that followed it in the source.
+#[test]
+fn a_foreign_import_before_a_surviving_item_keeps_preceding_it() {
+    let source = "def _a[T](x: T) -> T:\n    return x\n\n\ndef f() -> int:\n    return 1\n";
+    let resolved = crate::check_and_resolve_all_keyed(&with_foreign_import_at(lower(source), 1))
+        .expect("the fixture type-checks");
+    assert_eq!(foreign_position(&resolved.imports), 0);
+    let names: Vec<&str> = resolved
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            pycc_hir::HirItem::Function { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["f"], "{:?}", resolved.items);
+}
+
+/// `monomorphize`'s other exit -- the early return a module with no
+/// generic, no generic class and no protocol parameter takes -- returns
+/// `hir.items` unchanged, so every recorded position must survive
+/// untouched. Asserted rather than argued, because "this exit does not
+/// rewrite the list" is exactly the kind of claim a later change breaks.
+#[test]
+fn the_non_generic_exit_leaves_a_recorded_position_alone() {
+    let source = "x = 1\n\n\ndef f() -> int:\n    return 1\n";
+    let resolved = crate::check_and_resolve_all_keyed(&with_foreign_import_at(lower(source), 1))
+        .expect("the fixture type-checks");
+    assert_eq!(foreign_position(&resolved.imports), 1);
+    assert_eq!(resolved.items.len(), 2);
+}
+
+/// PR 1c of #1080 review finding 2. The pre-seed above cannot supersede a
+/// binding the source-order pass makes *later*, so `def json()` followed by
+/// `import json` left `json` marked def-rebound, the call gate skipped the
+/// `I0404` refusal, and `json()` compiled into a call to the shadowed
+/// function -- where CPython raises `TypeError: 'module' object is not
+/// callable`. Applying the binding at its recorded position is what refuses
+/// it.
+#[test]
+fn a_foreign_import_supersedes_an_earlier_def_of_the_same_name() {
+    let source = "def json() -> int:\n    return 1\n\n\nx = json()\n";
+    let hir = with_foreign_import_named(lower(source), "json", 1);
+    let diagnostics = crate::check_all(&hir).expect_err("the call must be refused");
+    assert!(
+        diagnostics.iter().any(|d| d.code == "I0404"),
+        "{diagnostics:?}"
+    );
+}
+
+/// The opposite order is a program CPython *runs*: the `def` executes after
+/// the import and rebinds the name to a function, so the call is an
+/// ordinary call and must keep compiling. Refusing this one would be an
+/// over-rejection introduced by the fix above, which is why both orders are
+/// pinned.
+#[test]
+fn a_def_after_a_foreign_import_rebinds_the_name_and_still_compiles() {
+    let source = "def json() -> int:\n    return 1\n\n\nx = json()\n";
+    let hir = with_foreign_import_named(lower(source), "json", 0);
+    crate::check_all(&hir).expect("the `def` below the import wins");
+}
+
+/// As [`with_foreign_import_at`], for a fixture that needs the binding to
+/// collide with a name the source itself defines.
+fn with_foreign_import_named(
+    mut hir: pycc_hir::HirModule,
+    local_name: &str,
+    item_index: usize,
+) -> pycc_hir::HirModule {
+    hir.imports.push(ImportBinding::Foreign {
+        local_name: local_name.to_string(),
+        module_path: local_name.to_string(),
+        item_index,
+    });
+    hir
+}

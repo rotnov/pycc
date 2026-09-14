@@ -931,10 +931,15 @@ pub fn build(hir: &HirModule) -> MirModule {
 /// concatenates modules in dependency order -- so the indices arrive sorted
 /// and `sort` is unnecessary; the offset alone is what keeps them correct.
 ///
-/// An index past the end of `items` cannot occur (it is the item count at
-/// the moment the import lowered, and items are only ever appended after
-/// that), but `insert` would panic rather than misplace the call if it did,
-/// which is the failure this splice wants.
+/// An index past the end of `items` cannot occur: it is the item count at
+/// the moment the import lowered, and every stage between that moment and
+/// this one either appends items or, when it drops them
+/// (`pycc_types::monomorphize`, which discards each original generic and
+/// each protocol-parameter function), recomputes the recorded positions
+/// against the list it produces. `insert` would panic rather than misplace
+/// the call if that invariant were ever broken, which is the failure this
+/// splice wants -- PR 1c of #1080 review finding 1 is exactly that panic,
+/// observed before `monomorphize` did the recomputation.
 fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
     let mut inserted = 0usize;
     for binding in imports {

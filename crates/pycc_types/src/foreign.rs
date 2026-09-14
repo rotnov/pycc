@@ -65,14 +65,22 @@ pub(crate) fn foreign_object_names(imports: &[ImportBinding]) -> Vec<&str> {
 
 /// Seeds every foreign import as a definitely-bound `Ty::Object` global.
 ///
-/// Seeding happens *before* the source-order top-level pass (D-041 pass 2),
-/// not at the import statement's own position, because an `import`
-/// statement produces no `HirItem` and so has no position in `hir.items` to
-/// seed at. The observable consequence is that a module-body read of a
-/// foreign name placed *above* its `import` is `I0404` rather than the
-/// `T0021` CPython's own `NameError` would justify -- a fail-closed
-/// divergence: both are compile errors, and the program is refused either
-/// way. Recorded in `docs/TYPE_SYSTEM.md`.
+/// Seeding happens *before* the source-order top-level pass (D-041 pass 2)
+/// so that a read placed above the `import` is refused too: an `import`
+/// statement produces no `HirItem`, so there is no item at its own position
+/// for the pass to seed from. The observable consequence is that a
+/// module-body read of a foreign name placed *above* its `import` is
+/// `I0404` rather than the `T0021` CPython's own `NameError` would justify
+/// -- a fail-closed divergence: both are compile errors, and the program is
+/// refused either way. Recorded in `docs/TYPE_SYSTEM.md`.
+///
+/// The seed alone is not enough, because it cannot supersede a binding the
+/// source-order pass makes *later*: a `def numpy()` above the import used
+/// to leave `numpy` def-rebound, which made the call gate skip the `I0404`
+/// refusal and let the artifact call a function CPython would have replaced
+/// with a module object (PR 1c of #1080 review finding 2). The pass
+/// therefore re-applies each binding at its recorded position, via
+/// [`bind_foreign_objects_at`].
 ///
 /// D-040's sticky-representation rule then does the rest: a later
 /// `numpy = 3` in the same module is `T0023`, because the name's recorded
@@ -80,6 +88,35 @@ pub(crate) fn foreign_object_names(imports: &[ImportBinding]) -> Vec<&str> {
 pub(crate) fn bind_foreign_objects(env: &mut Environment, imports: &[ImportBinding]) {
     for name in foreign_object_names(imports) {
         env.bind(name.to_string(), Ty::Object);
+    }
+}
+
+/// Applies every foreign import recorded at `position` in the item list,
+/// at the point the source-order pass reaches that position.
+///
+/// `ImportBinding::Foreign::item_index` is the item count at the moment the
+/// `import` lowered, so the statement runs immediately *before* item
+/// `position`; a trailing import records the item count itself, which the
+/// caller applies once the loop is done. `Environment::bind` clears the
+/// name's `def_rebound` mark, which is precisely what makes a later call
+/// reach the `I0404` refusal instead of the stale function pointer -- and,
+/// symmetrically, a `def` *below* the import re-marks the name and keeps
+/// working, matching CPython's own last-binding-wins order.
+pub(crate) fn bind_foreign_objects_at(
+    env: &mut Environment,
+    imports: &[ImportBinding],
+    position: usize,
+) {
+    for binding in imports {
+        if let ImportBinding::Foreign {
+            local_name,
+            item_index,
+            ..
+        } = binding
+            && *item_index == position
+        {
+            env.bind(local_name.clone(), Ty::Object);
+        }
     }
 }
 

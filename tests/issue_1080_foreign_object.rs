@@ -137,6 +137,41 @@ fn rebinding_a_foreign_module_is_t0023_rather_than_i0404() {
     assert!(!rendered.contains("I0404"), "{rendered}");
 }
 
+/// PR 1c of #1080 review finding 2, end to end. `def json()` above
+/// `import json` is a program CPython runs and then fails on
+/// (`TypeError: 'module' object is not callable`), because the import
+/// rebinds the name to the module object. pycc used to accept it and emit
+/// a call to the shadowed function; the import now supersedes the earlier
+/// `def` at its own position, so the call is refused.
+///
+/// `import json` is deliberately a *real* stdlib module pycc does not
+/// implement, which is what makes it a foreign binding rather than a
+/// `pycc_std` one.
+#[test]
+fn a_foreign_import_below_a_same_named_def_refuses_the_later_call() {
+    let dir = ScratchDir::new("foreign_shadows_def").expect("scratch");
+    let output = check(
+        &dir,
+        "def json() -> int:\n    return 1\n\n\nimport json\n\nx = json()\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stdout_of(&output).contains("error[I0404]"), "{output:?}");
+}
+
+/// The other order stays accepted: the `def` runs after the import and
+/// rebinds the name to a function, exactly as CPython does, so the call is
+/// an ordinary call. Pinned so the refusal above cannot quietly widen into
+/// an over-rejection.
+#[test]
+fn a_def_below_a_foreign_import_keeps_the_call_accepted() {
+    let dir = ScratchDir::new("foreign_shadowed_by_def").expect("scratch");
+    let output = check(
+        &dir,
+        "import json\n\ndef json() -> int:\n    return 1\n\n\nx = json()\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
 /// Builds `body` as an extension module named `module` inside `dir`.
 fn build_ext(dir: &Path, module: &str, body: &str) {
     let build = pycc()
@@ -270,4 +305,37 @@ fn a_statement_above_a_failing_foreign_import_has_already_run_in_the_host() {
     let printed = stdout_of(&run);
     assert!(printed.contains("before the import"), "{printed}");
     assert!(!printed.contains("after the import"), "{printed}");
+}
+
+/// PR 1c of #1080 review finding 1, end to end. `monomorphize` drops every
+/// original generic function, which used to leave the import's recorded
+/// position pointing past the end of the item list: this exact module
+/// aborted the build with `insertion index (is 2) should be <= len (is 0)`
+/// out of `pycc_mir::splice_foreign_imports`. The structural assertions --
+/// that the recomputed position is both in range and still ahead of the
+/// items that followed the import in the source -- are non-ignored, in
+/// `crates/pycc_types/src/foreign/tests.rs`; this is the hosted
+/// confirmation that the artifact such a module produces really loads.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_module_whose_generics_are_all_dropped_still_builds_and_loads() {
+    let dir = ScratchDir::new("foreign_dropped_generics_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_dropped_generics_mod",
+        "def _a[T](x: T) -> T:\n    return x\n\n\n\
+         def _b[T](x: T) -> T:\n    return x\n\n\
+         import json\n\n\
+         def answer() -> int:\n    return 42\n",
+    );
+    let run = python(
+        &dir,
+        "import pycc_dropped_generics_mod as m\nassert m.answer() == 42, m.answer()\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
 }

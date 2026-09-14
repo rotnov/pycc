@@ -398,7 +398,9 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // above. pycc knows nothing about the pointee -- every operation
         // on an `object`-typed value is refused by `pycc_types` (`I0404`)
         // -- so the representation only has to be wide enough to hold the
-        // borrowed module handle `pycc_ext_obj_import` returns.
+        // module handle `pycc_ext_obj_import` returns (a *new* reference
+        // the artifact retains for its whole lifetime; `docs/RUNTIME.md`
+        // owns that rule).
         pycc_mir::Ty::Object => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // Deviation from the task brief: the brief's own version of this
         // catch-all's message read "(only int/float/bool/str/list[int] do)"
