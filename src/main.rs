@@ -9,7 +9,10 @@ mod source;
 
 use clap::Parser;
 use cli::{Cli, Command, ErrorFormat, OutputFormat};
-use frontend::{check_frontend, report_build_failure, report_check_failure, resolve_frontend};
+use frontend::{
+    check_frontend, report_build_failure, report_check_failure, resolve_frontend,
+    resolve_frontend_native,
+};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -269,24 +272,18 @@ fn try_build(
     obj_path: &Path,
     ext: Option<&ext_build::ExtToolchain>,
 ) -> Result<(), ExitCode> {
-    let typed_hir =
-        resolve_frontend(path).map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
-    // A CPython import only means anything inside a CPython interpreter,
-    // so a native build refuses it here -- before codegen, which is
-    // allowed to ignore the item precisely because of this gate.
-    if ext.is_none() {
-        foreign_import::refuse_in_native_mode(&typed_hir).map_err(|gaps| {
-            // Span-less `I0403`s, exactly as `plan_ext`'s `C0003`s are:
-            // an `ImportBinding` carries no source range, and
-            // `pycc_diag::render_human` renders a span-less diagnostic
-            // without consulting the (empty) source text.
-            ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
-                &path.display().to_string(),
-                "",
-                gaps,
-            )))
-        })?;
+    // A CPython import only means anything inside a CPython interpreter, so
+    // a native build refuses it -- before codegen, which is allowed to
+    // ignore the item precisely because of this gate. The gate lives inside
+    // the frontend seam because that is where the per-file sources are: the
+    // `I0403` has to be rendered against whichever file of the program
+    // actually wrote the `import`, which for a multi-file program is
+    // usually a dependency rather than the entry path.
+    let typed_hir = match ext {
+        Some(_) => resolve_frontend(path),
+        None => resolve_frontend_native(path),
     }
+    .map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
     // Everything `--ext` needs that can fail on the program itself or on
     // the host toolchain is resolved here, before codegen runs: a `C0003`
     // capability gap and a missing `Python.h` are both cheaper to report

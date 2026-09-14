@@ -94,6 +94,109 @@ fn a_native_build_refuses_a_foreign_import_with_i0403() {
     assert!(rendered.contains("--ext"), "{rendered}");
 }
 
+/// The multi-file shape of the same gate: the `import` lives in a
+/// dependency, not in the file named on the command line, and the `I0403`
+/// must name the dependency (PR 1c of #1080 review finding 2).
+///
+/// Both orders are exercised because the import's recorded *item* index is
+/// the item count at the moment it lowered, so a trailing import in the
+/// dependency records the same linked index as a leading import in the
+/// entry -- `src/frontend.rs`'s `owner_of_import` keys on the import
+/// table's own position instead, which has no such ambiguity. The third row
+/// is the control: an import the entry itself wrote still belongs to the
+/// entry.
+#[test]
+fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
+    let rows = [
+        // (dep.py, main.py, the file the diagnostic must name)
+        (
+            "import numpy\ndef f() -> int:\n    return 1\n",
+            "from dep import f\nx = f()\n",
+            "dep.py",
+        ),
+        // The dependency's import is *trailing*: its item index equals the
+        // dependency's own end bound, the boundary an item-index join would
+        // hand to the entry file instead.
+        (
+            "def f() -> int:\n    return 1\nimport numpy\n",
+            "from dep import f\nx = f()\n",
+            "dep.py",
+        ),
+        // The entry's own import, at the same boundary index from the other
+        // side.
+        (
+            "def f() -> int:\n    return 1\n",
+            "from dep import f\nimport numpy\nx = f()\n",
+            "main.py",
+        ),
+    ];
+    for (dep, entry, owner) in rows {
+        let dir = ScratchDir::new("foreign_native_multifile").expect("scratch");
+        std::fs::write(dir.join("dep.py"), dep).expect("write the dependency");
+        let main = dir.join("main.py");
+        std::fs::write(&main, entry).expect("write the entry");
+        let output = pycc()
+            .arg("build")
+            .arg(&main)
+            .arg("-o")
+            .arg(dir.join("m"))
+            .output()
+            .expect("pycc should spawn");
+        assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+        let rendered = stderr_of(&output);
+        assert!(rendered.contains("error[I0403]"), "{rendered}");
+        let located = format!("{}:1:1", dir.join(owner).display());
+        assert!(rendered.contains(&located), "{owner}: {rendered}");
+        let other = if owner == "dep.py" {
+            "main.py"
+        } else {
+            "dep.py"
+        };
+        assert!(
+            !rendered.contains(&format!("{}:", dir.join(other).display())),
+            "{owner}: {rendered}"
+        );
+    }
+}
+
+/// A type error in the program is still reported instead of the `I0403`:
+/// the native gate is computed before the type check (its indices have to
+/// match the pre-monomorphization item list) but reported after it, so the
+/// ordering the single-file gate had is unchanged.
+#[test]
+fn a_type_error_is_reported_before_the_native_foreign_refusal() {
+    let dir = ScratchDir::new("foreign_native_type_error").expect("scratch");
+    let output = pycc()
+        .arg("build")
+        .arg(source(&dir, "import numpy\n\nx: int = \"s\"\n"))
+        .arg("-o")
+        .arg(dir.join("m"))
+        .output()
+        .expect("pycc should spawn");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stderr_of(&output);
+    assert!(!rendered.contains("I0403"), "{rendered}");
+}
+
+/// Finding 1 of the same review: a private helper that returns the bound
+/// module object must be refused with the documented `I0404`, not with a
+/// `T0021` telling the user to add a return annotation. No annotation can
+/// satisfy that advice -- the foreign object type is deliberately
+/// unspellable -- so the solver's `Name` arm hands back the concrete
+/// `Ty::Object` term and lets the check phase report the real refusal.
+#[test]
+fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
+    let dir = ScratchDir::new("foreign_helper_return").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy\n\ndef _helper():\n    return numpy\n\nx = _helper()\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
 /// Every shape that reads the binding, one row per choke point.
 ///
 /// `tests/diagnostics/i0404_foreign_module_operation.py` pins the exact
