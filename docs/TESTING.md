@@ -721,6 +721,80 @@ rule 6); only numbers are published.
   subject function's module, outside this repository, and `PYCC_BENCH_PYTHON`
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
+
+### Status: the protocol cannot be executed at the current `ext` boundary
+
+Nothing above is amended by this subsection, and nothing above has been
+amended since it was committed. The protocol is unchanged, the
+pre-registration record is unchanged, and `subject_sha256` is still `null`.
+This records why no run has been scored against it, so that a later session
+does not re-derive the same three findings.
+
+A scored run needs one function that is byte-identical across the three arms
+and that the `ext` arm can actually export. Two readings of what one replicate
+times are possible, and both are blocked today:
+
+- **The sweep reading** — a replicate is one call that consumes the whole
+  committed input — needs the subject to read the ~128 MB file itself.
+  `pycc` has no `open`: a sweep-shaped subject compiled with `pycc build
+  --ext` is rejected with ``error[C0001]: call to builtin `open` is valid
+  Python but not implemented yet``, and no file-reading builtin is registered
+  in `crates/pycc_std`.
+- **The per-record reading** — a replicate is one call per record, with the
+  records handed in as arguments — cannot carry the input either. The `ext`
+  boundary admits `int`, `float`, `bool`, `str` and fixed-arity tuples of
+  `int`/`float`/`bool` as parameters and returns those or `None`; `bytes`
+  is rejected with `C0001`, `list[float]` with `T0034`, `tuple[float, ...]`
+  with `T0053`, and a `list[int]` parameter with `C0003`. A 2,000,000-record
+  input has no admissible spelling at that boundary.
+
+The prerequisite is therefore the buffer-protocol bridge (#1027), which is
+what gives a subject a `memoryview` parameter whose elements compile to
+native loads — the one signature shape that expresses "2,000,000 triangles
+plus their query points" as a single call's argument. #1027 in turn depends
+on foreign imports (#1026). The protocol's **Input** bullet forbids choosing
+a different workload after meeting this obstacle, so the committed generator,
+seed and digest stand as they are and the run waits for the boundary rather
+than the boundary's limits reshaping the run.
+
+A third leg fails independently of the boundary: the reference codebase's
+only barycentric function is a private helper (a leading underscore, so
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 1 would not export it) whose parameters are numpy and VTK objects, which
+`pycc` cannot compile at all. D-244's Context records a probe run against a
+distilled standalone annotated module, not against that source; the
+**Subject** bullet's "byte-identical across all three arms" is a stronger
+requirement than the probe met.
+
+#### What the boundary costs, measured
+
+The per-call cost of the `ext` boundary was measured directly, outside this
+protocol, so that the reading above is a number rather than an expectation.
+Two `--release` `--ext` exports were timed against the same function written
+in Python, on the same interpreter and machine, 1,000,000 calls each:
+
+| Subject | `ext` | CPython | Ratio |
+| --- | --- | --- | --- |
+| `noop(float) -> float` | 29.1 ns/call | 15.5 ns/call | 0.53x |
+| `point_in_triangle(8 floats) -> bool` | 76.0 ns/call | 164.0 ns/call | 2.16x |
+
+The first row isolates the boundary: an export that does nothing is **slower
+than a Python-level call**, by about 29 ns of wrapper. The wrapper is already
+`METH_FASTCALL`, so that cost is argument unboxing, result boxing, and the
+runtime's per-call pending-exception check, not a calling convention that can
+be swapped. That finding is filed against #1031.
+
+The second row gives the body speedup. Writing a per-call ratio as
+`(15.5 + body_py) / (29.1 + body_ext)`, the ratio rises with the amount of
+work per call and asymptotes to `body_py / body_ext`, which these two rows
+put at `148 / 47` ≈ **3.15x** for float arithmetic. That is the ceiling, not
+a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
+scalar calls at this arithmetic speedup, because the boundary can only eat
+into a body speedup, never add to it. Clearing 5x needs either a compiled
+body well over 5x faster than CPython's, or a boundary crossed once per sweep
+instead of once per record — which is the same #1027 the reading above
+names.
+
 ## Planned CPython interop matrix (v0.7)
 
 D-128's transparent interop contract is not implemented by the current

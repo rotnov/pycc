@@ -33,6 +33,43 @@ never a merge gate.
 
 ---
 
+## 2026-09-14 — A benchmark protocol was pre-registered against a boundary that could not carry its own committed input
+
+**What happened.** `docs/TESTING.md`'s hosted `ext` benchmark protocol and its
+pre-registration record (`scripts/bench_hosted_ext_precommit.json`, merged as
+`fe2b36a8`) were written and committed — generator, seed, a SHA-256 over a
+~128 MB input file, machine identity, float tolerance — before anyone had
+checked whether the `ext` boundary could carry that input into a compiled
+subject at all. It cannot, under either reading of what one replicate times:
+a whole-sweep subject would have to read the file itself and `pycc` has no
+`open` (`C0001`), while a per-record subject would have to take the records as
+arguments and the boundary admits only scalars and fixed-arity scalar tuples
+(`C0001` on `bytes`, `T0034` on `list[float]`, `T0053` on
+`tuple[float, ...]`, `C0003` on a `list[int]` parameter). The protocol is
+therefore correct, committed, and unrunnable until #1027 lands.
+
+**Root cause.** The protocol's own **Input** bullet exists to stop the workload
+being chosen after a result is seen, and it did its job — but "can this
+workload be *carried* across the boundary being measured" is a different
+question from "is this workload pinned", and only the second was asked before
+committing. The digest pinned an input whose *admissibility* nobody had
+verified.
+
+**What fixed it.** Nothing needed fixing in the protocol: the honest outcome
+was to leave it, the record, and the `null` `subject_sha256` exactly as
+committed, publish the blocker plus the measured ceiling instead of a scored
+run, and check neither `product-sprint-1` roadmap box. Amending the record to
+fit a workload the boundary can carry would have been input selection after
+meeting an obstacle — precisely what the bullet forbids.
+
+**Lesson.** Before committing a pre-registered input digest, compile the
+smallest subject that consumes that input through the boundary the benchmark
+measures, and keep the compiler's acceptance or rejection as evidence.
+Carrier admissibility is a precondition of pre-registration, not a detail of
+the run: a protocol pinned to an input its own measurement path cannot accept
+is unamendable by construction, so the cost of checking late is the whole
+protocol waiting on an unrelated feature.
+
 ## 2026-09-13 — A local test gate run without CI's `--include-ignored` reported a test the same diff had just added as passing
 
 **What happened.** Part C of #1038 (#1065) added seven tests, one of them
