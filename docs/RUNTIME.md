@@ -382,6 +382,7 @@ restating it.
 | `str` | carried; accepts `str` **only** — no `__str__`, `os.PathLike` or buffer duck type. A lone surrogate raises CPython's own `UnicodeEncodeError`, propagated verbatim | carried |
 | `tuple[...]` of `int`/`bool`/`float` | carried; accepts a `tuple` or a `tuple` subclass of exactly the declared arity, each element admitted by its own `int`/`float`/`bool` row above -- `str` is carried at a top-level position but not as an element. Every other object -- `list`, `str`, an iterator, a different arity -- raises `TypeError` | carried, always as an exact `tuple` |
 | `tuple[...]` carrying anything else, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
+| `object` | **not carried**: `C0003` | **not carried**: `C0003` |
 
 `float` and `bool` refusing an `int` is not a local choice: it is
 `docs/TYPE_SYSTEM.md` rule 4 (D-086), no implicit numeric narrowing *or*
@@ -570,6 +571,51 @@ or publish one fails the import rather than importing a module whose
 
 [#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
 rejecting that second instance and allocating state per instance.
+
+### Foreign imports in the module body
+
+Part 1 of [#1026](https://github.com/rotnov/pycc/issues/1026) makes a plain,
+unaliased, undotted `import <name>` a *foreign* import when `<name>` is neither
+a project module nor a `pycc_std` registration: it binds the CPython module
+object itself, typed `object` (see
+[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). This is the only
+construct in the language that produces an `object`, and the admissibility
+table above is why one can never leave: an `object` parameter or return on an
+exported function is a `C0003` capability gap, so the value stays inside the
+artifact.
+
+**Position, not a prologue.** D-244 rule 3 binds the artifact to CPython's
+statement-by-statement module body, so each foreign import runs *where it was
+written*. `pycc_mir::build` splices one `MirItem::ForeignImport` into the item
+list at the import statement's own recorded position rather than hoisting every
+import to the top of `Py_mod_exec`; a module-level statement with an observable
+effect written above a failing import therefore has already run when the import
+raises, exactly as under CPython. `tests/issue_1080_foreign_object.rs` asserts
+that against a real host interpreter, and
+`crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
+emission layer.
+
+**Failure.** The emitted call is `pycc_ext_obj_import`, which wraps
+`PyImport_ImportModule`. A failure leaves CPython's own exception set — a
+missing module surfaces to the host as `ModuleNotFoundError` naming the module,
+not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
+so the import statement that loaded the artifact fails and no partially
+initialized module is left in `sys.modules`.
+
+**Ownership.** `pycc_ext_obj_import` returns the *new* reference
+`PyImport_ImportModule` hands back and the artifact never releases it: the
+module object is reachable from `sys.modules` for the life of the interpreter
+regardless, the `object` binding is a module-level global with no scope to
+leave, and the language offers no operation that could drop or alias it
+(every operation on the name is `I0404`). A `Py_DECREF` path is therefore not
+merely unimplemented but unreachable, and adding one belongs with the first
+construct that can actually consume an `object`.
+
+**Native mode.** A plain `pycc build` produces a standalone executable with no
+interpreter to import into, so the driver refuses the program with `I0403`
+before codegen — one diagnostic per foreign import — and
+`crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
+`MirItem::ForeignImport` when `!options.ext`.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local
