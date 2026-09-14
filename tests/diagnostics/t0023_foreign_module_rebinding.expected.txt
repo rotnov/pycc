@@ -1,5 +1,0 @@
-error[T0023]: cannot assign `int` to `numpy`, previously inferred as `object`
- --> tests/diagnostics/t0023_foreign_module_rebinding.py:1:1
-  |
-1 | import numpy
-  | ^ cannot assign `int` to `numpy`, previously inferred as `object`

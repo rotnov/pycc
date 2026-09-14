@@ -647,9 +647,24 @@ neither build path is reached:
   one flat namespace, so `dep.py`'s `import numpy` and `main.py`'s
   `def numpy()` would otherwise make `dep.py`'s own `numpy(...)` resolve to
   the entry module's function instead of raising CPython's `TypeError`. A
-  module shadowing its *own* foreign import is untouched: `import numpy`
-  then `def numpy()` in one file is CPython's own rebinding, and pycc
-  reproduces it.
+  module shadowing its *own* foreign import is refused by the same rule and
+  in the same phase, in either order -- see below.
+
+**A module does not shadow its own foreign import either.** A module in which
+any other top-level statement binds a foreign import's local name -- a `def`,
+a `class`, a `type` alias, or a plain assignment, written above or below the
+import -- is refused with `C0001` while lowering, at the shadowing statement.
+The positional binding above is what makes the artifact honest about *when*
+the import runs; it is not enough to make the compiler honest about *which*
+binding a name has, because every pass that walks the module would have to
+reproduce the same positional rule. Export discovery is the one where that
+became a wrong artifact rather than a wrong diagnostic: `collect_exports`
+kept a `PyMethodDef` entry for a `def` that a later import supersedes, so a
+host calling `compiled.<name>` reached the stale function where CPython hands
+back a module object. Refusing the shape is one rule at one site
+(`pycc_hir::import::reject_shadowed_foreign_imports`), it is fail-closed, and
+it makes the same-module case agree with the cross-module one above.
+Supporting either order is later work under #1026.
 
 **Native mode.** A plain `pycc build` produces a standalone executable with no
 interpreter to import into, so the driver refuses the program with `I0403`

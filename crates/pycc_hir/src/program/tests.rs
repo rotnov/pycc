@@ -419,21 +419,31 @@ fn a_foreign_import_no_other_module_shadows_still_links() {
 }
 
 #[test]
-fn a_module_shadowing_its_own_foreign_import_is_not_this_gate_s_business() {
-    // `import json` then `def json()` in one file is CPython's own
-    // rebinding: the name holds the function from the `def` onwards, and
-    // pycc reproduces that. Only a *different* module's definition
-    // silently changes what the foreign module's own call resolves to, so
-    // the gate must stay cross-module.
+fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
+    // `import json` then `def json()` in one file is refused by
+    // `import::reject_shadowed_foreign_imports` while the module is still
+    // being lowered, so no `LinkInput` for it can exist and this gate --
+    // which exists for the case a *different* module's definition silently
+    // changes what the foreign module's own call resolves to -- stays
+    // cross-module. Asserted here rather than only at the lowering site so
+    // the two rules cannot drift into either a gap or a double report.
     let source = "import json\n\n\ndef json() -> int:\n    return 1\n";
-    let linked = link(vec![foreign_input("main.py", source, "import json")])
-        .expect("a module shadowing its own foreign import still links");
-    assert_eq!(
-        linked.imports,
-        vec![ImportBinding::Foreign {
-            local_name: "json".to_string(),
-            module_path: "json".to_string(),
-            item_index: 0,
-        }]
+    let start = source
+        .find("import json")
+        .expect("fixture contains its import");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        Span::new(start as u32, (start + "import json".len()) as u32),
+        crate::ResolvedImport::Foreign,
+    );
+    let diagnostics =
+        lower_module(&parse(source), &resolved).expect_err("the shadowing module must be refused");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("shadowing a foreign import is not supported yet"),
+        "{diagnostics:?}"
     );
 }

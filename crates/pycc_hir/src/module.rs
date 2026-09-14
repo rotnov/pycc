@@ -330,6 +330,15 @@ pub fn lower_module(
             ));
         }
     }
+    // Part 1 of #1026, PR 1c of #1080: the whole item list exists only
+    // here, so this is the first point at which both orders of a shadowed
+    // foreign import -- a `def`/assignment above it and one below it -- are
+    // visible at once. Appended to the same per-item diagnostic list so a
+    // module with an earlier failure still reports that one first.
+    diagnostics.extend(crate::import::reject_shadowed_foreign_imports(
+        &state.imports,
+        &state.definition_spans,
+    ));
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }

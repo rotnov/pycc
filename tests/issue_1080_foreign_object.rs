@@ -240,88 +240,122 @@ fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     }
 }
 
-/// Rebinding is not an operation on the object, so it is not `I0404`: the
-/// name already has a representation, and D-040's sticky representation
-/// rule reports `T0023` against it. Pinned rendering lives in
-/// `tests/diagnostics/t0023_foreign_module_rebinding.py`; what matters here
-/// is that the two codes do not overlap.
+/// Rebinding is not an operation on the object, so it is not `I0404`
+/// either: it is a second, non-foreign binding of the name, which the
+/// refusal below rejects at lowering before any pass reads the name's type
+/// at all. Pinned rendering lives in
+/// `tests/diagnostics/c0001_foreign_module_shadowed_import.py`; what
+/// matters here is that the two codes do not overlap.
 #[test]
-fn rebinding_a_foreign_module_is_t0023_rather_than_i0404() {
+fn rebinding_a_foreign_module_is_refused_rather_than_i0404() {
     let dir = ScratchDir::new("foreign_rebind").expect("scratch");
     let output = check(&dir, "import numpy\n\nnumpy = 3\n");
     let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[T0023]"), "{rendered}");
+    assert!(rendered.contains("error[C0001]"), "{rendered}");
     assert!(!rendered.contains("I0404"), "{rendered}");
 }
 
-/// PR 1c of #1080 review finding 2, end to end. `def json()` above
-/// `import json` is a program CPython runs and then fails on
-/// (`TypeError: 'module' object is not callable`), because the import
-/// rebinds the name to the module object. pycc used to accept it and emit
-/// a call to the shadowed function; the import now supersedes the earlier
-/// `def` at its own position, so the call is refused.
+/// Three rounds of review on #1080 each found one more pass that did not
+/// apply "a foreign import supersedes an earlier binding of the same name"
+/// positionally -- the check pass, then the constraint solver, then export
+/// discovery, which kept a `PyMethodDef` for a `def` the import supersedes
+/// so the host called a stale function where CPython hands back a module
+/// object. The rule now is the refusal instead: a module that binds one
+/// name both foreign and non-foreign is rejected at lowering, whichever
+/// order the two bindings are written in, which is also what Part 1 already
+/// does for the cross-module case. Supporting either order is later work
+/// (#1026).
 ///
 /// `import json` is deliberately a *real* stdlib module pycc does not
 /// implement, which is what makes it a foreign binding rather than a
 /// `pycc_std` one.
 #[test]
-fn a_foreign_import_below_a_same_named_def_refuses_the_later_call() {
+fn a_foreign_import_below_a_same_named_def_is_refused() {
     let dir = ScratchDir::new("foreign_shadows_def").expect("scratch");
     let output = check(
         &dir,
         "def json() -> int:\n    return 1\n\n\nimport json\n\nx = json()\n",
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    assert!(stdout_of(&output).contains("error[I0404]"), "{output:?}");
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[C0001]"), "{rendered}");
+    assert!(
+        rendered.contains("shadowing a foreign import is not supported yet"),
+        "{rendered}"
+    );
 }
 
-/// The other order stays accepted: the `def` runs after the import and
-/// rebinds the name to a function, exactly as CPython does, so the call is
-/// an ordinary call. Pinned so the refusal above cannot quietly widen into
-/// an over-rejection.
+/// The other order is refused by the same rule. This is the shape whose
+/// acceptance produced the wrong *artifact*: type checking succeeded, but
+/// `collect_exports` created a `PyMethodDef` for the `def` even though the
+/// import is the name's final binding, so a host importing the extension
+/// saw and could call the stale function.
 #[test]
-fn a_def_below_a_foreign_import_keeps_the_call_accepted() {
+fn a_def_below_a_foreign_import_is_refused() {
     let dir = ScratchDir::new("foreign_shadowed_by_def").expect("scratch");
     let output = check(
         &dir,
         "import json\n\ndef json() -> int:\n    return 1\n\n\nx = json()\n",
     );
-    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(
+        stdout_of(&output).contains("shadowing a foreign import is not supported yet"),
+        "{}",
+        stdout_of(&output)
+    );
 }
 
-/// The solver runs its own source-order pass over a second environment
-/// (`crates/pycc_types/src/constraints/signatures.rs`), and it reaches a
-/// private helper's body *before* the check pass ever runs. Seeding the
-/// foreign names once, ahead of that pass, was not enough: a `def json`
-/// above the import left the name def-rebound, so the helper's call
-/// resolved against the shadowed function and unified `str` with `int` --
-/// a `T0021` conflict reported instead of the documented refusal. The
-/// import now supersedes the earlier `def` at its own position in that
-/// pass too.
+/// A plain assignment is a binding exactly as a `def` is, so it is refused
+/// on the same rule. Before the refusal, the check pass's unconditional
+/// pre-seed made `check_assignment` see `json` as already having
+/// representation `object` and rejected the *first* statement with a
+/// `T0023` -- a diagnostic about the assignment, for a conflict the import
+/// below it introduced.
 #[test]
-fn a_helper_calling_a_foreign_import_below_a_same_named_def_is_refused() {
-    let dir = ScratchDir::new("foreign_helper_shadowed_def").expect("scratch");
+fn an_assignment_above_a_foreign_import_is_refused() {
+    let dir = ScratchDir::new("foreign_shadows_assignment").expect("scratch");
+    let output = check(&dir, "json = 1\nimport json\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(
+        rendered.contains("shadowing a foreign import is not supported yet"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("T0023"), "{rendered}");
+}
+
+/// The same shape with a later call. The solver's own source-order pass
+/// reaches a call collector that checks `bindings` first, so the `int` term
+/// the assignment left there produced the generic "bound to a non-callable
+/// value" `T0021` before validation could say anything about the import.
+#[test]
+fn an_assignment_above_a_foreign_import_is_refused_before_the_call() {
+    let dir = ScratchDir::new("foreign_shadows_assignment_call").expect("scratch");
+    let output = check(&dir, "json = 1\nimport json\n\ny = json()\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(
+        rendered.contains("shadowing a foreign import is not supported yet"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
+/// The refusal is bounded by the shadowing: a foreign import whose name
+/// nothing else in the module binds keeps Part 1's documented `I0404`, and
+/// it reaches that refusal through the solver's own pass, before signature
+/// materialization can report a `T0021` no annotation could satisfy.
+#[test]
+fn an_unshadowed_foreign_import_keeps_its_refusal() {
+    let dir = ScratchDir::new("foreign_unshadowed_helper").expect("scratch");
     let output = check(
         &dir,
-        "def json(x: int) -> int:\n    return x\n\n\nimport json\n\ndef _helper(x):\n    return json(x)\n\n\ny = _helper(\"s\")\n",
+        "import json\n\ndef _helper():\n    return json()\n\n\ny = _helper()\n",
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stdout_of(&output);
     assert!(rendered.contains("error[I0404]"), "{rendered}");
     assert!(!rendered.contains("T0021"), "{rendered}");
-}
-
-/// The mirrored order stays accepted inside a helper body too: the `def`
-/// below the import rebinds the name to a function, so the helper's call is
-/// an ordinary call. Pinned so the refusal above cannot widen.
-#[test]
-fn a_helper_calling_a_def_below_a_foreign_import_is_accepted() {
-    let dir = ScratchDir::new("foreign_helper_def_below").expect("scratch");
-    let output = check(
-        &dir,
-        "import json\n\ndef json(x: int) -> int:\n    return x\n\n\ndef _helper(x: int) -> int:\n    return json(x)\n\n\ny = _helper(1)\n",
-    );
-    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
 }
 
 /// A function local that happens to share a foreign import's name is an

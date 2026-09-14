@@ -1319,12 +1319,12 @@ fn i0404_foreign_module_operation() {
     assert_diagnostic_matches_fixture("i0404_foreign_module_operation");
 }
 
-/// The user-visible spelling of `Ty::Object` is `object`, and `T0023`
-/// (D-040's sticky representation) is where a user meets it: rebinding an
-/// imported module to an `int` reports what the name was "previously
-/// inferred as". Pinned in a fixture so the spelling cannot drift with a
-/// later edit to `Ty::name()`.
+/// Rebinding an imported module is a second, non-foreign binding of the
+/// name, which Part 1 of #1026 refuses outright rather than supporting
+/// positionally (PR 1c of #1080). Pinned in a fixture because the
+/// diagnostic must point at the *shadowing* statement, not at the import:
+/// the import is the binding the user almost certainly meant to keep.
 #[test]
-fn t0023_foreign_module_rebinding() {
-    assert_diagnostic_matches_fixture("t0023_foreign_module_rebinding");
+fn c0001_foreign_module_shadowed_import() {
+    assert_diagnostic_matches_fixture("c0001_foreign_module_shadowed_import");
 }
