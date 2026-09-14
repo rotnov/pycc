@@ -567,8 +567,19 @@ cached classes rather than minting new ones, so class identity stays stable
 across it and the first instance's classes are not leaked; a failure to create
 or publish one fails the import rather than importing a module whose
 `except m.MyError:` would silently never match.
+
 [#1044](https://github.com/rotnov/pycc/issues/1044) carries the choice between
 rejecting that second instance and allocating state per instance.
+
+A module body that fails reports through one of two channels, and the exec
+slot preserves whichever one carries the failure. `pycc_rt`'s thread-local
+pending state becomes a live CPython exception; a body that called into
+CPython directly leaves an exception CPython already set, with no pycc
+pending state at all. The generic `ImportError("pycc module body failed")`
+is raised only when neither channel is set, so a real exception -- a
+`ModuleNotFoundError` from a failed host import, say -- reaches the importer
+unchanged instead of being replaced by a message that names neither the
+cause nor the culprit.
 
 pycc classifies each resolved import as a native pycc module or a
 CPython-backed dependency. A CPython-backed import generates an interop bridge
