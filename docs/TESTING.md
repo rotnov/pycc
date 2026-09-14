@@ -658,7 +658,13 @@ rule 6); only numbers are published.
   one argument tuple would let the warm-up change the workload every timed call
   then sees, and let each replicate run on data the previous one had already
   modified. Cross-arm comparison is unaffected, because the construction is
-  deterministic from the committed input.
+  deterministic from the committed input. "The committed input" is the open file
+  handle the digest was taken through, never the path: the runner verifies
+  `input_sha256` through a handle it then keeps, and every rebuild seeks that
+  handle back to zero rather than reopening `--input`. A path checked once and
+  reopened per invocation is a different object as soon as it is replaced in
+  between, and all three arms would then agree with each other on data nobody
+  committed while the report still carried the pre-registered digest.
 - **Reporting.** The report publishes the three medians, their minima and
   maxima, both ratios (versus CPython and versus Cython), the replicate count,
   the machine and OS, and the pinned versions above -- `cpython`, `cpython_vv`,

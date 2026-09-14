@@ -219,7 +219,30 @@ class InputDigestTest(unittest.TestCase):
             path = Path(directory) / "input.bin"
             path.write_bytes(b"payload")
 
-            RUNNER.verify_input_digest(path, hashlib.sha256(b"payload").hexdigest())
+            handle = RUNNER.open_verified_input(path, hashlib.sha256(b"payload").hexdigest())
+            try:
+                # Returned positioned at the start, so the caller reads exactly
+                # the bytes that were digested rather than reopening the path.
+                self.assertEqual(handle.read(), b"payload")
+            finally:
+                handle.close()
+
+    def test_reads_the_bytes_it_digested_after_the_path_is_replaced(self) -> None:
+        # The gap this closes: a path checked and then reopened is a different
+        # object once it has been replaced, and every arm would agree on data
+        # nobody committed while the report carried the pre-registered digest.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.bin"
+            path.write_bytes(b"payload")
+
+            handle = RUNNER.open_verified_input(path, hashlib.sha256(b"payload").hexdigest())
+            try:
+                path.unlink()
+                path.write_bytes(b"substituted")
+
+                self.assertEqual(handle.read(), b"payload")
+            finally:
+                handle.close()
 
     def test_refuses_an_unreadable_input_without_echoing_the_path(self) -> None:
         # A directory makes the read itself fail (`IsADirectoryError`, an
@@ -230,7 +253,7 @@ class InputDigestTest(unittest.TestCase):
             path.mkdir()
 
             with self.assertRaises(BenchmarkError) as raised:
-                RUNNER.verify_input_digest(path, "0" * 64)
+                RUNNER.open_verified_input(path, "0" * 64)
 
             self.assertNotIn(str(path), str(raised.exception))
             self.assertIn("--input", str(raised.exception))
@@ -240,7 +263,7 @@ class InputDigestTest(unittest.TestCase):
         # must refuse here rather than raise a bare `KeyError` past the
         # `BenchmarkError` handler.
         with self.assertRaises(BenchmarkError) as raised:
-            RUNNER.verify_input_digest(Path("/nonexistent"), None)
+            RUNNER.open_verified_input(Path("/nonexistent"), None)
 
         self.assertIn("input_sha256", str(raised.exception))
 
@@ -250,7 +273,7 @@ class InputDigestTest(unittest.TestCase):
             path.write_bytes(b"payload")
 
             with self.assertRaises(BenchmarkError) as raised:
-                RUNNER.verify_input_digest(path, "0" * 64)
+                RUNNER.open_verified_input(path, "0" * 64)
 
         self.assertIn("SHA-256", str(raised.exception))
 

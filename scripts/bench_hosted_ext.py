@@ -58,6 +58,7 @@ import statistics
 import subprocess
 import sys
 import time
+from typing import BinaryIO
 
 PINNED_PYTHON_VERSION = "3.14.7"
 REPLICATES = 7
@@ -351,7 +352,21 @@ def compare_machine(observed: dict, committed: object) -> None:
             )
 
 
-def verify_input_digest(path: Path, expected: str | None) -> None:
+def open_verified_input(path: Path, expected: str | None) -> BinaryIO:
+    """Open the input once, prove it is the pre-registered one, and hand that handle back.
+
+    The digest is taken *through the handle every arm will read from*, and the
+    path is never opened a second time. A path that is checked and then reopened
+    is a different object whenever it was replaced in between -- while the arms
+    are being built, say -- and all three arms would then agree with each other
+    on data nobody committed while the report still carried the pre-registered
+    `input_sha256`. So the caller keeps this handle and builds every
+    invocation's arguments by seeking it back to zero, never by reading `path`
+    again. The stream is read in blocks rather than into memory, because the
+    committed input is large enough that holding it whole would itself perturb
+    the measurement.
+    """
+
     if not expected:
         raise BenchmarkError(
             "the pre-registration record commits no input_sha256, so the input this "
@@ -359,9 +374,7 @@ def verify_input_digest(path: Path, expected: str | None) -> None:
         )
     digest = hashlib.sha256()
     try:
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
+        handle = path.open("rb")
     except OSError:
         # Path-free for the same reason as `read_subject_source`: the generated
         # input lives outside this repository beside the proprietary reference
@@ -370,12 +383,26 @@ def verify_input_digest(path: Path, expected: str | None) -> None:
             "the input file named by --input could not be read, so it cannot be shown to "
             "digest to the committed input_sha256"
         ) from None
-    actual = digest.hexdigest()
-    if actual != expected:
+    try:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+        actual = digest.hexdigest()
+        if actual != expected:
+            raise BenchmarkError(
+                "the input file's SHA-256 does not match the committed digest: "
+                f"expected {expected}, found {actual}"
+            )
+        handle.seek(0)
+    except OSError:
+        handle.close()
         raise BenchmarkError(
-            "the input file's SHA-256 does not match the committed digest: "
-            f"expected {expected}, found {actual}"
-        )
+            "the input file named by --input could not be read, so it cannot be shown to "
+            "digest to the committed input_sha256"
+        ) from None
+    except BaseException:
+        handle.close()
+        raise
+    return handle
 
 
 def compare_outcomes(
@@ -687,11 +714,15 @@ def main(argv: list[str] | None = None) -> int:
         # Read once, before any arm is built, and the bytes reused from here on:
         # a subject re-read per arm could be edited between them.
         read_subject_source(resolve_subject(dict(os.environ)), record.get("subject_sha256"))
-        verify_input_digest(arguments.input, record.get("input_sha256"))
+        verified_input = open_verified_input(arguments.input, record.get("input_sha256"))
     except BenchmarkError as error:
         print(str(error), file=sys.stderr)
         return 1
 
+    # A scored run hands this handle to its argument factory and keeps it open
+    # for the whole run; this stage proves the preconditions and stops, so the
+    # handle has no further reader here.
+    verified_input.close()
     print("protocol preconditions satisfied")
     if arguments.check_only:
         return 0
