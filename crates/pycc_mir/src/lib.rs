@@ -13,7 +13,7 @@ mod matching;
 use matching::nest_match_alternatives;
 use matching::try_lower_enum_member_attr;
 mod stmt;
-use pycc_hir::{CompIter, HirItem, HirModule, HirStmt};
+use pycc_hir::{CompIter, HirItem, HirModule, HirStmt, ImportBinding};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use stmt::lower_stmt;
@@ -829,6 +829,7 @@ pub enum MirItem {
     TopLevelStmt(MirStmt),
 }
 
+#[derive(Default)]
 pub struct MirModule {
     pub items: Vec<MirItem>,
     /// #379 (PR-19): the module's class definitions, carried through to
@@ -838,6 +839,19 @@ pub struct MirModule {
     /// at module-init time. Non-enum class defs are also carried, though
     /// codegen only reads `enum_members` from them today.
     pub class_defs: Vec<(String, pycc_hir::HirClassDef)>,
+    /// Part 1 of #1026: the module's foreign (CPython-object) imports, as
+    /// `(local name, module path)` pairs in source order, carried through to
+    /// codegen so the `ext` module-exec prologue can import each one at
+    /// module-init time.
+    ///
+    /// Only a *foreign* binding belongs here. The stdlib (`ImportBinding::Module`
+    /// / `ImportBinding::Symbol`, D-136/D-137) and project (`ImportBinding::Project`,
+    /// #898/D-222) bindings in `HirModule::imports` are compile-time-only and
+    /// have no runtime object to import, so they are filtered out. No foreign
+    /// binding variant exists yet, so this vector is empty for every program
+    /// the compiler accepts today; the channel is carried now and consumed in
+    /// a later part of #1026.
+    pub foreign_imports: Vec<(String, String)>,
 }
 
 pub fn build(hir: &HirModule) -> MirModule {
@@ -896,6 +910,22 @@ pub fn build(hir: &HirModule) -> MirModule {
     MirModule {
         items,
         class_defs: hir.class_defs.clone(),
+        foreign_imports: hir.imports.iter().filter_map(foreign_import_of).collect(),
+    }
+}
+
+/// Part 1 of #1026: project one `HirModule::imports` binding onto the
+/// `(local name, module path)` pair `MirModule::foreign_imports` carries, or
+/// `None` when the binding has no runtime object to import.
+///
+/// The match is deliberately exhaustive rather than a `_` catch-all: every
+/// binding variant that exists today is compile-time-only, so the function
+/// returns `None` for all of them, and a future foreign variant makes this
+/// site fail to compile until it is classified here.
+fn foreign_import_of(binding: &ImportBinding) -> Option<(String, String)> {
+    match binding {
+        ImportBinding::Module { .. } | ImportBinding::Symbol { .. } => None,
+        ImportBinding::Project { .. } => None,
     }
 }
 
