@@ -748,31 +748,48 @@ times are possible, and both are blocked today:
   with `T0053`, and a `list[int]` parameter with `C0003`. A 2,000,000-record
   input has no admissible spelling at that boundary.
 
-The prerequisite is therefore the buffer-protocol bridge (#1027), which is
-what gives a subject a `memoryview` parameter whose elements compile to
-native loads — the one signature shape that expresses "2,000,000 triangles
-plus their query points" as a single call's argument. #1027 in turn depends
-on foreign imports (#1026). The protocol's **Input** bullet forbids choosing
-a different workload after meeting this obstacle, so the committed generator,
-seed and digest stand as they are and the run waits for the boundary rather
-than the boundary's limits reshaping the run.
+There are two prerequisites, and the first is **necessary but not
+sufficient**:
 
-A third leg fails independently of the boundary, and is reported as a count
-so that nothing about the proprietary codebase is published beyond one
-([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-rule 6): the number of functions in the reference codebase that both
-[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
-rule 1 would export and the current `ext` boundary admits is **zero**. The
-**Subject** bullet's "byte-identical across all three arms" is what that count
-is taken against, and it is a stronger requirement than any probe reported so
-far has met.
+1. **The boundary must be able to carry the committed input.** That is the
+   buffer-protocol bridge (#1027), which gives a subject a `memoryview`
+   parameter whose elements compile to native loads — the one signature shape
+   that expresses "2,000,000 triangles plus their query points" as a single
+   call's argument. #1027 in turn depends on foreign imports (#1026).
+2. **An admissible subject must exist at all.** Reported as a count, so that
+   nothing about the proprietary codebase is published beyond one
+   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+   rule 6): the number of functions in the reference codebase that both
+   [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+   rule 1 would export and the current `ext` boundary admits is **zero**, and
+   #1027 does not change that count — a buffer parameter changes what the
+   boundary can carry, not which functions are exportable or what their
+   sources say. The **Subject** bullet's "byte-identical across all three
+   arms" is what the count is taken against.
 
-#### What the boundary costs, measured
+The second prerequisite has no issue tracking it, because it may not be a
+compiler gap at all: the **Subject** bullet requires a byte-identical function
+from a codebase that currently has none to offer, so closing it could equally
+mean revising what the protocol takes as its subject. That is left open here
+rather than settled, but it must be settled before #1039 can resume — landing
+#1027 alone does not unblock this run.
 
-The per-call cost of the `ext` boundary was measured directly, outside this
-protocol, so that the reading above is a number rather than an expectation.
-Two `--release` `--ext` exports were timed against the same function written
-in Python, on the same interpreter and machine, 1,000,000 calls each:
+The protocol's **Input** bullet forbids choosing a different workload after
+meeting either obstacle, so the committed generator, seed and digest stand as
+they are and the run waits rather than the obstacles reshaping the run.
+
+#### What the boundary costs, measured (not part of the protocol)
+
+Everything in this subsection is an ad-hoc measurement taken **outside** the
+protocol above, so that the reading is a number rather than an expectation.
+It is not pre-registered, carries none of the protocol's disciplines — no
+replicates, no median, no committed input, no correctness precondition — and
+is not evidence for either `product-sprint-1` roadmap box or for D-244 rule
+6's kill criterion. Only a run of the protocol itself can be those things.
+The method, stated so the numbers can be read for what they are: two
+`--release` `--ext` exports, timed against the same function written in
+Python, on the same interpreter and machine, 1,000,000 calls each, wall time
+divided by the call count.
 
 | Subject | `ext` | CPython | Ratio |
 | --- | --- | --- | --- |
@@ -785,12 +802,16 @@ than a Python-level call**, by about 29 ns of wrapper. The wrapper is already
 runtime's per-call pending-exception check, not a calling convention that can
 be swapped. That finding is filed against #1031.
 
-The second row gives the body speedup. Writing a per-call ratio as
+The second row bounds the body speedup. Writing a per-call ratio as
 `(15.5 + body_py) / (29.1 + body_ext)`, the ratio rises with the amount of
 work per call and asymptotes to `body_py / body_ext`, which these two rows
-put at `148.5 / 46.9` ≈ **3.17x** for float arithmetic — taken from the
-unrounded differences, since rounding each operand first moves the published
-ceiling. That is the ceiling, not a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
+put at `148.5 / 46.9` ≈ **3.17x** for float arithmetic. Read that as a lower
+bound rather than a point estimate: the 29.1 ns subtracted from the second
+row was measured at one argument, while the second row's wrapper unpacks
+eight and packs a `bool`, so the subtraction leaves part of that wrapper's
+cost inside `body_ext` and *over*estimates it. The true asymptote is
+therefore at or above 3.17x, which is the direction the argument needs. It is
+a bound, not a datapoint: no per-call body clears D-244 rule 6's 5x bar through 2,000,000
 scalar calls at this arithmetic speedup, because the boundary can only eat
 into a body speedup, never add to it. Clearing 5x needs either a compiled
 body well over 5x faster than CPython's, or a boundary crossed once per sweep
