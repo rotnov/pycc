@@ -68,7 +68,12 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::DictGet { .. }
         | MirExpr::Instantiate(_)
         | MirExpr::ObjAttrGet { .. }
-        | MirExpr::ObjMethodCall { .. } => true,
+        | MirExpr::ObjMethodCall { .. }
+        // PR 3a of #1082: `ObjLen` joins them on the identical argument --
+        // `PyObject_Size` raises `TypeError` for an operand with no length,
+        // and `foreign_len::emit_len` owns the `-1` check that actually
+        // stops the module body.
+        | MirExpr::ObjLen { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod

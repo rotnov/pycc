@@ -739,8 +739,13 @@ pub(crate) fn collect_expr_constraints(
                     )
                     .with_help("pass exactly 1 argument"));
                 }
+                // Part 3 of #1026 (PR 3a of #1082): mirrors `expr.rs`'s own
+                // `len` guard, which now also admits `Ty::Object`. The
+                // `Ok(Ty::Int)` result term below was already unconditional,
+                // so accepting the new argument type here is the whole
+                // change the solver needs.
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
-                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_))
+                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Object)
                 {
                     return Err(Diagnostic::error(
                         "T0033",

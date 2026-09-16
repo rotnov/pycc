@@ -65,6 +65,21 @@
 //! consumer. `docs/TYPE_SYSTEM.md`'s `object` row owns that statement,
 //! and #1095 tracks routing them to foreign dispatch.
 //!
+//! **PR 3a of #1082 (Part 3 of #1026) added `len` and truth testing, and
+//! deleted a whole class of refusal.** `len(o)` type-checks to `Ty::Int`
+//! (`expr.rs`'s and `constraints.rs`'s `len` guards both admit
+//! [`Ty::Object`] now), and an `if`/`while` test or a comprehension guard
+//! places no constraint on its operand at all -- `pycc_codegen`'s `truthy`
+//! grew a `Scalar::Object` arm that calls the shim's `pycc_ext_obj_truthy`,
+//! so the ten `reject_object_condition` sites that existed only to keep an
+//! object away from a codegen panic are gone. Nothing else about the
+//! positional bound changes: both operations read their operand through the
+//! same `HirExpr::Name` arm, so both are still `I0404` inside a function
+//! body and still `T0021` above the `import`.
+//!
+//! `not o` is *not* part of this: `unop.rs`'s `Not` arm answers `T0021` for
+//! a non-`bool` operand, which it did before PR 3a and still does.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -96,8 +111,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value, and Part 2 of #1026 implements attribute access and positional \
-             scalar-argument method calls on it and nothing else"
+             value, and #1026 implements attribute access, positional \
+             scalar-argument method calls, `len` and truth testing on it and \
+             nothing else"
         ),
         Span::new(0, 0),
     )
@@ -122,9 +138,14 @@ pub(crate) fn reject_object_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> 
 /// `Err(I0404)` when `ty` is the opaque object type, naming `operation`.
 ///
 /// The consumer-side counterpart of [`reject_object_read`]: one helper so
-/// the ten condition sites, the renderer, `check_assignment`,
-/// `check_isinstance` and `check_match` cannot drift into ten spellings of
-/// the same rule.
+/// the three remaining consuming sites -- `check_assignment`
+/// (`lib.rs`), `check_match` (`lib.rs`) and `check_isinstance`
+/// (`class.rs`) -- cannot drift into three spellings of the same rule.
+///
+/// Part 3 of #1026 (PR 3a of #1082) removed the largest group of callers:
+/// the ten `if`/`while`/comprehension-guard condition sites, which refused
+/// `Ty::Object` only because `pycc_codegen`'s `truthy` had no object arm.
+/// It has one now, so a condition no longer consults this helper at all.
 pub(crate) fn reject_object_operand(ty: &Ty, operation: &str) -> Result<(), Diagnostic> {
     if matches!(ty, Ty::Object) {
         return Err(object_operation_unsupported(operation));

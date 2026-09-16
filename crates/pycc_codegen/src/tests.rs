@@ -3724,12 +3724,12 @@ fn truthiness_of_a_list_value_panics_honestly() {
     // (`docs/ARCHITECTURE.md` records the same gap as user-visible
     // behavior -- `if xs:` type-checks and then stops codegen here.)
     let context = Context::create();
-    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
     let ptr = context
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
-    truthy(&context, &builder, &rt, Scalar::List(ptr));
+    truthy(&context, &builder, &module, &rt, Scalar::List(ptr));
 }
 
 #[test]
@@ -3773,6 +3773,7 @@ fn truthy_of_an_optional_with_a_pointer_payload_panics_as_an_internal_error() {
     truthy(
         &context,
         &builder,
+        &module,
         &rt,
         Scalar::Optional(optional_with_pointer_payload),
     );
@@ -3862,12 +3863,12 @@ fn truthiness_of_a_dict_value_panics_honestly() {
     // is the correct behavior. Calls `truthy` directly with a hand-built
     // `Scalar::Dict`, for the identical reason that test gives.
     let context = Context::create();
-    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
     let ptr = context
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
-    truthy(&context, &builder, &rt, Scalar::Dict(ptr));
+    truthy(&context, &builder, &module, &rt, Scalar::Dict(ptr));
 }
 
 #[test]
@@ -5992,12 +5993,12 @@ fn truthiness_of_a_set_value_panics_honestly() {
     // correct behavior. Calls `truthy` directly with a hand-built
     // `Scalar::Set`, for the identical reason that test gives.
     let context = Context::create();
-    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
     let ptr = context
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
-    truthy(&context, &builder, &rt, Scalar::Set(ptr));
+    truthy(&context, &builder, &module, &rt, Scalar::Set(ptr));
 }
 
 #[test]
@@ -6325,9 +6326,9 @@ fn truthiness_of_a_tuple_value_panics_honestly() {
     // hand-built `Scalar::Tuple`, for the identical reason that test
     // gives.
     let context = Context::create();
-    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
-    truthy(&context, &builder, &rt, tuple_scalar(&context));
+    truthy(&context, &builder, &module, &rt, tuple_scalar(&context));
 }
 
 #[test]
@@ -15208,10 +15209,10 @@ fn a_tuple_typed_call_result_is_returned_as_a_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// D-244, Part 2 of #1026: the `Scalar::Object` arms.
+// D-244, #1026: the `Scalar::Object` arms.
 //
-// Every arm below is defensive: `pycc_types`' Part 2 refusal migration
-// rejects a `Ty::Object` operand at each of these consuming sites (see
+// Most arms below are defensive: `pycc_types`' Part 2 refusal migration
+// rejects a `Ty::Object` operand at those consuming sites (see
 // `docs/TYPE_SYSTEM.md`'s `object` row), so no type-checked program reaches
 // them. Each is pinned directly with a hand-built `Scalar::Object` carrying
 // a null `PyObject *` -- the same convention the `Scalar::List` defensive
@@ -15220,6 +15221,11 @@ fn a_tuple_typed_call_result_is_returned_as_a_struct() {
 // first. The two *reachable* `Ty::Object` paths (`MirStmt::Return`'s
 // pass-through and `call_result_scalar`'s arm) are covered by real MIR at
 // the end of this section instead.
+//
+// `truthy`'s arm is the exception, and PR 3a of #1082 is what made it one:
+// it no longer panics, because the ten condition-position refusals that
+// justified the panic are gone. Its test below therefore asserts the shim
+// call it emits rather than a message.
 // ---------------------------------------------------------------------------
 
 /// A null `PyObject *` as a [`Scalar::Object`]. None of the defensive tests
@@ -15263,18 +15269,73 @@ fn to_str_rejects_a_cpython_object_operand() {
     to_str(&builder, &rt, null_object_scalar(&context));
 }
 
+/// Part 3 of #1026 (PR 3a of #1082): `truthy`'s `Scalar::Object` arm used
+/// to be the defensive panic this test pinned. It is now a real capability
+/// -- a `pycc_ext_obj_truthy` call plus the module-exec failure edge -- so
+/// the assertion moved from a message to the emitted IR.
+///
+/// The direct `truthy` call is kept rather than compiling real MIR (the
+/// module-level shapes are covered in `foreign_len.rs`'s own tests) because
+/// it pins the arm to the function that owns it, exactly as
+/// `truthiness_of_a_list_value_panics_honestly` above does. It does need a
+/// positioned block inside a function spelled [`EXT_MODULE_EXEC_SYMBOL`],
+/// because the arm asserts that enclosing function before appending the
+/// failure edge's blocks.
 #[test]
-#[should_panic(expected = "truthiness of a CPython object value is not supported yet")]
-fn truthiness_of_a_cpython_object_value_is_an_internal_error() {
-    // Unlike `truthiness_of_a_list_value_panics_honestly` above, this gap
-    // is *not* reachable from a type-checked program: Part 2 refuses a
-    // `Ty::Object` condition at all ten condition-position sites, precisely
-    // so that CPython's `__bool__`/`__len__` protocol is never silently
-    // approximated.
+fn truthiness_of_a_cpython_object_value_calls_the_shim_helper() {
     let context = Context::create();
-    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
-    truthy(&context, &builder, &rt, null_object_scalar(&context));
+    let entry = module.add_function(
+        EXT_MODULE_EXEC_SYMBOL,
+        context.i64_type().fn_type(&[], false),
+        None,
+    );
+    builder.position_at_end(context.append_basic_block(entry, "entry"));
+    truthy(
+        &context,
+        &builder,
+        &module,
+        &rt,
+        null_object_scalar(&context),
+    );
+    let ir = {
+        use inkwell::values::AnyValue;
+        crate::llvm_string_to_owned(entry.print_to_string())
+    };
+    assert!(ir.contains(EXT_OBJ_TRUTHY_SYMBOL), "{ir}");
+    assert!(ir.contains("foreign_truthy_failed"), "{ir}");
+    assert!(
+        ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+        "{ir}"
+    );
+}
+
+/// The enclosing-function assertion `truthy`'s object arm inherits from
+/// `foreign_len::emit_truthy`: the failure edge returns `i64 -1`, which
+/// would not even verify inside a function of another return type. No
+/// type-checked program reaches it -- `pycc_types` refuses reading a
+/// CPython object outside a module body (`I0404`) -- so this pins it
+/// directly by positioning the builder inside an ordinary function.
+#[test]
+#[should_panic(expected = "was emitted outside `pycc_ext_module_exec`")]
+fn truthiness_of_a_cpython_object_outside_the_module_entry_is_an_internal_error() {
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    let f = module.add_function(
+        "not_the_entry",
+        context.void_type().fn_type(&[], false),
+        None,
+    );
+    builder.position_at_end(context.append_basic_block(f, "entry"));
+    truthy(
+        &context,
+        &builder,
+        &module,
+        &rt,
+        null_object_scalar(&context),
+    );
 }
 
 #[test]
@@ -15433,7 +15494,7 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
 }
 
 #[test]
-#[should_panic(expected = "a foreign attribute load was emitted outside")]
+#[should_panic(expected = "an operation on a CPython object was emitted outside")]
 fn a_foreign_attribute_load_inside_a_function_body_is_an_internal_error() {
     // The guard `foreign_attr::expect_module_exec_entry` exists for. This
     // exact program -- `import numpy`, `def _pi(): return numpy.pi`,

@@ -636,6 +636,21 @@ bridge at all: the one function a call can appear in is the one function with a
 `-1` edge. Lifting the bound is what would require the bridge, alongside the
 ordering-aware name resolution TYPE_SYSTEM.md describes.
 
+**`len` and a truth test fail on that same edge, and inherit that same bound.**
+PR 3a of [#1082](https://github.com/rotnov/pycc/issues/1082) added two more shim
+helpers, and each reports failure as `-1` rather than as `NULL`, because each
+answers a scalar rather than a `PyObject *`. `pycc_ext_obj_len` wraps
+`PyObject_Size` and then D-141-encodes the result, so an operand with no
+`__len__` surfaces as CPython's own `TypeError` — the encode is fused into the
+same helper deliberately, so codegen emits one failure edge for `len` rather
+than two, and the encode arm is unreachable for a real container.
+`pycc_ext_obj_truthy` wraps `PyObject_IsTrue`, which calls the operand's own
+`__bool__` or `__len__` and so really can raise arbitrary user exceptions.
+`crates/pycc_codegen/src/foreign_len.rs` tests each status and returns `-1` from
+`Py_mod_exec`, exactly as `foreign_attr.rs` does for a `NULL`. Both are
+admitted only in a module body, on the identical positional rule and for the
+identical reason, so neither needs the exception bridge either.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -646,6 +661,14 @@ whose result is also a new reference, and it too is never released. A method
 call's *result* is governed by the same rule for the same reason:
 `PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
 returns it to compiled code unreleased.
+
+`len` and a truth test are the two operations that add nothing to that leaked
+set. `pycc_ext_obj_len` answers a `Py_ssize_t` and `pycc_ext_obj_truthy` answers
+a C `int`; neither creates a reference and neither touches the operand's
+refcount on any path, so `len(o)` or `if o:` inside a module-scope loop is
+refcount-neutral no matter the trip count. The out-parameter `len` writes
+through is a single `i64` slot hoisted into the module-exec entry block, so such
+a loop does not grow the host's stack either.
 
 Everything the call creates *internally*, by contrast, is released, so the leak
 is exactly one reference per call rather than one per argument plus two.
@@ -681,8 +704,8 @@ ordinary control flow, so `numpy.pi` written in a loop leaks one reference per
 iteration — the leak is trip-count-linear rather than bounded by process exit.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
-every consuming operation other than a further attribute load or a method call
-is refused with `I0404`, and the `ext` export boundary refuses an `object`
+every consuming operation other than a further attribute load, a method call,
+`len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)

@@ -156,6 +156,12 @@ pub(super) fn emit<'ctx>(
 /// [`emit`]'s own doc comment for why every admitted `ObjAttrGet` really is
 /// emitted here -- it is a `pycc_types` refusal, so reaching this arm from
 /// anywhere else is a front-end defect.
+///
+/// Shared by every foreign-object operation that has a failure edge, not
+/// just the attribute load this module owns: `foreign_call.rs`'s method
+/// call and `foreign_len.rs`'s `len` and truth test call it too, on the
+/// identical reasoning and behind the identical `pycc_types` refusal. The
+/// message therefore names the class of operation rather than one of them.
 pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
     let function = builder
         .get_insert_block()
@@ -164,10 +170,10 @@ pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> Functio
         .expect("every basic block belongs to a function");
     if function.get_name().to_bytes() != EXT_MODULE_EXEC_SYMBOL.as_bytes() {
         panic!(
-            "pycc_codegen: internal error: a foreign attribute load was emitted outside \
-             `{EXT_MODULE_EXEC_SYMBOL}` -- pycc_types refuses reading a CPython object \
-             anywhere but a module body, and only the module-exec entry has the failure \
-             edge a failed lookup takes"
+            "pycc_codegen: internal error: an operation on a CPython object was emitted \
+             outside `{EXT_MODULE_EXEC_SYMBOL}` -- pycc_types refuses reading a CPython \
+             object anywhere but a module body, and only the module-exec entry has the \
+             failure edge a failed operation takes"
         )
     }
     function

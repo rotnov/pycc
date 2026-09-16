@@ -854,6 +854,67 @@ PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
     return result;
 }
 
+/*
+ * Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object value
+ * (`EXT_OBJ_LEN_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `o` is borrowed and its refcount is untouched on every path --
+ * `PyObject_Size` neither steals nor retains, and the result is a plain
+ * `Py_ssize_t`, so no new reference exists to leak under the #1092
+ * leak-only regime.
+ *
+ * The D-141 encode is fused in here rather than emitted by codegen so the
+ * whole operation presents *one* failure edge to the caller: `PyObject_Size`
+ * raises `TypeError` for an operand with no length, and the encode refuses a
+ * value outside the inline range `[-2**62, 2**62-1]`. Two `-1` returns from
+ * one symbol let `foreign_len.rs` emit a single branch to the module-exec
+ * failure edge instead of two. The encode arm is unreachable for a real
+ * container -- no object has 2**62 elements -- and exists as defence in
+ * depth; `PyErr_NoMemory` is the honest report for a length that large.
+ *
+ * As with `pycc_ext_obj_getattr`, a NULL `o` is decided here as defence in
+ * depth: `PyObject_Size` dereferences `Py_TYPE(o)` with no guard of its own,
+ * and the caller's own NULL check already routed a failed producer to the
+ * module-exec failure edge with its exception set, so returning `-1` without
+ * setting a second one leaves exactly one exception pending.
+ */
+int pycc_ext_obj_len(PyObject *o, long long *out)
+{
+    Py_ssize_t size;
+
+    if (o == NULL) {
+        return -1;
+    }
+    size = PyObject_Size(o);
+    if (size == -1 && PyErr_Occurred()) {
+        return -1;
+    }
+    if (pycc_rt_ext_int_encode((long long)size, out) != 0) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Part 3 of #1026 (PR 3a of #1082): truth testing a CPython object value
+ * (`EXT_OBJ_TRUTHY_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Returns `1` for a truthy operand, `0` for a falsy one, and `-1` with a
+ * CPython exception set on failure -- `PyObject_IsTrue` calls the operand's
+ * `__bool__` or `__len__`, which is arbitrary Python code and really can
+ * raise. `o` is borrowed and its refcount is untouched on every path.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+int pycc_ext_obj_truthy(PyObject *o)
+{
+    if (o == NULL) {
+        return -1;
+    }
+    return PyObject_IsTrue(o);
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

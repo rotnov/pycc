@@ -135,6 +135,34 @@ pub(super) fn lower_expr(
                     }
                 })
                 .collect();
+            // Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object
+            // becomes its own node rather than the `Call { callee: "len" }`
+            // below. The two are not interchangeable at codegen -- the
+            // scalar path yields a raw `i64` the caller re-tags, while the
+            // shim hands back an already-encoded word and can fail -- so the
+            // split happens here, where the argument's type is still known.
+            // See `MirExpr::ObjLen`'s own doc comment.
+            //
+            // There is deliberately no `$fn:len` shadow check here.
+            // `pycc_types::check` resolves `len` as the reserved builtin
+            // whatever the module defines -- exactly as the scalar `len`
+            // arm below records ("a hand-recognized builtin, not a
+            // user-declarable `$fn:` signature", D-105 point 3) -- so a
+            // module-level `def len` never changes which lowering a `len`
+            // call takes, and the user's function is simply not called. A
+            // shadow guard here would not honour the shadow; it would only
+            // desynchronise MIR from the checker, letting `len(<object>)`
+            // pass `pycc check` and then reach codegen as an ordinary
+            // `Call` whose `Scalar::Object` argument trips
+            // `expect_list_pointer`'s internal-error assertion. The
+            // checker/CPython divergence itself -- that shadowing `len` is
+            // silently ignored rather than refused -- is filed as #1098 and
+            // is not this lowering's to fix.
+            if callee == "len" && args.len() == 1 && matches!(args[0].ty(), Ty::Object) {
+                return MirExpr::ObjLen {
+                    base: Box::new(args.into_iter().next().expect("checked len() == 1")),
+                };
+            }
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
             // it (`pycc_hir::class`'s own doc comment) -- so it is resolved

@@ -143,6 +143,31 @@ pub const EXT_OBJ_PACK_BOOL_SYMBOL: &str = "pycc_ext_obj_pack_bool";
 /// independent CPython `str` out.
 pub const EXT_OBJ_PACK_STR_SYMBOL: &str = "pycc_ext_obj_pack_str";
 
+/// The fixed C shim's `len` helper (Part 3 of #1026): it takes a borrowed
+/// `PyObject *` and an out-pointer, writes the D-141 encoded `int` word for
+/// `PyObject_Size(o)` through it and returns `0`, or returns `-1` with a
+/// CPython exception already set. It does not touch the operand's refcount.
+///
+/// The `PyObject_Size` call and the `pycc_rt_ext_int_encode` call are fused
+/// inside the shim deliberately: either can fail, and folding both into one
+/// `-1` return lets codegen emit exactly *one* module-exec failure edge for
+/// `len` instead of two. (The encode failure is unreachable for a real
+/// container -- a length never leaves D-141's inline range -- so the second
+/// branch exists only as defence in depth.) Spelled once here for exactly
+/// the reason [`EXT_OBJ_IMPORT_SYMBOL`] is: the `--ext` link resolves an
+/// undefined symbol lazily, so a misspelling is a crash at first call rather
+/// than a link error.
+pub const EXT_OBJ_LEN_SYMBOL: &str = "pycc_ext_obj_len";
+
+/// The fixed C shim's truth-testing helper (Part 3 of #1026): it takes a
+/// borrowed `PyObject *` and returns `1` for a truthy operand, `0` for a
+/// falsy one, or `-1` with a CPython exception already set (`PyObject_IsTrue`
+/// can run arbitrary `__bool__`/`__len__` code, so it really can raise). It
+/// does not touch the operand's refcount.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

@@ -37,6 +37,7 @@ mod ext_thunk;
 mod foreign_attr;
 mod foreign_call;
 mod foreign_import;
+mod foreign_len;
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
@@ -44,9 +45,9 @@ pub use ext::{
     ext_thunk_symbol, is_ext_exportable_name,
 };
 use ext::{
-    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
-    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, entry_fn_name,
-    is_module_entry_symbol,
+    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -2671,7 +2672,7 @@ fn emit_expr_unchecked<'ctx>(
                 locals,
                 operand,
             );
-            let truthy_cond = truthy(context, builder, rt, operand_scalar);
+            let truthy_cond = truthy(context, builder, module, rt, operand_scalar);
             release_scalar_if_int_temporary(context, builder, rt, operand, &operand_scalar);
             let inverted = builder
                 .build_not(truthy_cond, "not_truthy")
@@ -3668,6 +3669,14 @@ fn emit_expr_unchecked<'ctx>(
                 .collect();
             foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
         }
+        // Part 3 of #1026 (PR 3a of #1082): `len(o)`. `foreign_len` carries
+        // the contract -- why the D-141 encode happens inside the shim
+        // rather than here, why that leaves exactly one failure edge, and
+        // why the out-parameter's `alloca` is hoisted to the entry block.
+        MirExpr::ObjLen { base } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            foreign_len::emit_len(context, builder, module, base_scalar)
+        }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
             let null_ptr = ptr_type.const_null();
@@ -4061,9 +4070,15 @@ fn build_call_to_with_leading_args<'ctx>(
 /// now including `str` (Task 7): `False` only for the empty string,
 /// delegated to `pycc_rt_str_truthy` (D-059's representation is opaque to
 /// this crate).
+/// `module` is threaded in for the `Scalar::Object` arm alone (Part 3 of
+/// #1026, PR 3a of #1082): that arm declares and calls the shim's
+/// `pycc_ext_obj_truthy`, and inkwell 0.9's `FunctionValue` exposes no
+/// `get_parent`, so the LLVM module cannot be recovered from the builder's
+/// own insertion point the way the enclosing *function* can.
 fn truthy<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
     scalar: Scalar<'ctx>,
 ) -> inkwell::values::IntValue<'ctx> {
@@ -4263,19 +4278,19 @@ fn truthy<'ctx>(
                 .build_and(present, payload_truthy, "opt_truthy")
                 .expect("build_and should not fail for two i8 operands")
         }
-        // Defensive rather than a reachable feature gap (D-244, Part 2 of
-        // #1026): CPython's own `bool(x)` for an arbitrary object consults
-        // `__bool__`/`__len__`, which needs a `PyObject_IsTrue` call no
-        // `pycc_ext_obj_*` shim provides in Part 2. `pycc_types` therefore
-        // refuses a `Ty::Object` condition explicitly at all ten
-        // condition-position sites (Part 2's R11 hole), so no type-checked
-        // program reaches this arm -- which is what makes the panic honest
-        // rather than a crash on input the checker accepted.
-        Scalar::Object(_) => {
-            panic!(
-                "pycc_codegen: internal error: truthiness of a CPython object value is not \
-                 supported yet -- pycc_types should have refused this before codegen"
-            )
+        // D-244, Part 3 of #1026 (PR 3a of #1082): CPython's own `bool(x)`
+        // for an arbitrary object consults `__bool__`/`__len__`, which is
+        // arbitrary Python code, so this delegates to the shim's
+        // `pycc_ext_obj_truthy` -- and takes the module-exec failure edge
+        // when that code raises. This arm is what closed Part 2's R11 hole:
+        // `pycc_types` used to refuse a `Ty::Object` condition at ten
+        // condition-position sites *because* there was no answer here, and
+        // PR 3a deleted all ten (`crates/pycc_types/src/foreign.rs`).
+        Scalar::Object(ptr) => {
+            let bit = foreign_len::emit_truthy(context, builder, module, ptr);
+            builder
+                .build_int_z_extend(bit, context.i8_type(), "bool_from_object_truthy")
+                .expect("build_int_z_extend should not fail widening i1 to i8")
         }
     };
     builder
@@ -6390,7 +6405,7 @@ fn emit_stmt<'ctx>(
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                let cond = truthy(context, builder, rt, scalar);
+                let cond = truthy(context, builder, module, rt, scalar);
                 // #146 Part 2 (D-181): released *after* `truthy`, which
                 // reads a bigint operand's limbs -- releasing first could
                 // free the very word being tested.
@@ -6460,7 +6475,7 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(test_bb);
             let cond = {
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, test);
-                let cond = truthy(context, builder, rt, scalar);
+                let cond = truthy(context, builder, module, rt, scalar);
                 // #146 Part 2 (D-181): released *after* `truthy`, which
                 // reads a bigint operand's limbs -- releasing first could
                 // free the very word being tested.
@@ -7874,7 +7889,7 @@ fn emit_stmt<'ctx>(
                         locals,
                         cond_expr,
                     );
-                    let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    let cond_i1 = truthy(context, builder, module, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
                     release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);
@@ -8358,7 +8373,7 @@ fn emit_stmt<'ctx>(
                         locals,
                         cond_expr,
                     );
-                    let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    let cond_i1 = truthy(context, builder, module, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
                     release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);
@@ -8836,7 +8851,7 @@ fn emit_stmt<'ctx>(
                         locals,
                         cond_expr,
                     );
-                    let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    let cond_i1 = truthy(context, builder, module, rt, cond_scalar);
                     // #146 Part 2 (D-181): released after `truthy`, which
                     // reads a bigint operand's limbs.
                     release_scalar_if_int_temporary(context, builder, rt, cond_expr, &cond_scalar);

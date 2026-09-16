@@ -977,20 +977,6 @@ fn check_range_operand_in(
     }
 }
 
-/// Refuses a CPython object in condition position (Part 2 of #1026, #1081).
-///
-/// The checker deliberately places no type constraint on an `if`/`while`
-/// test or a comprehension guard -- Python's own truthiness has no static
-/// type restriction -- so every one of those ten sites infers the test and
-/// drops the result. `Ty::Object` is the one type that cannot be dropped:
-/// `pycc_codegen`'s `truthy` has no object arm, so an admitted
-/// `if numpy.pi:` would reach codegen and panic there instead of producing
-/// a diagnostic here. Factored into one function so the ten call sites
-/// cannot drift into ten spellings of the rule.
-fn reject_object_condition(ty: &Ty) -> Result<(), Diagnostic> {
-    foreign::reject_object_operand(ty, "using a CPython object as a condition")
-}
-
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
     // Part 2 of #1026 (#1081): binding a CPython object to a name stays
     // refused. Placed at the entry, *before* the `env.lookup_any(target)`
@@ -1992,7 +1978,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // always executes, so this binding is unconditional relative to
             // the branch join below.
             collect_named_expr_bindings(env, &[], test)?;
-            reject_object_condition(&infer_expr(env, test)?)?;
+            infer_expr(env, test)?;
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe` (the orelse clone is empty, so every body
@@ -2033,7 +2019,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // PEP 572 (#774): bind before validating -- see the `ExprStmt`
             // arm's doc comment above for why this order is required.
             collect_named_expr_bindings(env, &[], test)?;
-            reject_object_condition(&infer_expr(env, test)?)?;
+            infer_expr(env, test)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
             // Fast path: if the body introduces no bindings, check in-place.
@@ -2164,7 +2150,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr(env, cond)?)?;
+                infer_expr(env, cond)?;
             }
             let elt_ty = infer_expr(env, elt)?;
             if elt_ty != Ty::Int {
@@ -2193,7 +2179,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr(env, cond)?)?;
+                infer_expr(env, cond)?;
             }
             let elt_ty = infer_expr(env, elt)?;
             if elt_ty != Ty::Int {
@@ -2223,7 +2209,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr(env, cond)?)?;
+                infer_expr(env, cond)?;
             }
             let key_ty = infer_expr(env, key)?;
             let value_ty = infer_expr(env, value)?;
@@ -2631,7 +2617,7 @@ fn check_stmt_in_function(
             // `local_names`. The test always executes, so this binding is
             // unconditional relative to the branch join below.
             collect_named_expr_bindings(env, local_names, test)?;
-            reject_object_condition(&infer_expr_in(env, local_names, test)?)?;
+            infer_expr_in(env, local_names, test)?;
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe`.
@@ -2679,7 +2665,7 @@ fn check_stmt_in_function(
             // PEP 572 (#774): bind before validating, mirroring the `If`
             // arm just above.
             collect_named_expr_bindings(env, local_names, test)?;
-            reject_object_condition(&infer_expr_in(env, local_names, test)?)?;
+            infer_expr_in(env, local_names, test)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
             // Fast path: if the body introduces no bindings, check in-place.
@@ -2805,7 +2791,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
+                infer_expr_in(env, local_names, cond)?;
             }
             let elt_ty = infer_expr_in(env, local_names, elt)?;
             if elt_ty != Ty::Int {
@@ -2830,7 +2816,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
+                infer_expr_in(env, local_names, cond)?;
             }
             let elt_ty = infer_expr_in(env, local_names, elt)?;
             if elt_ty != Ty::Int {
@@ -2856,7 +2842,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
+                infer_expr_in(env, local_names, cond)?;
             }
             let key_ty = infer_expr_in(env, local_names, key)?;
             let value_ty = infer_expr_in(env, local_names, value)?;

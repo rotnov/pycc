@@ -452,7 +452,15 @@ pub(crate) fn infer_expr_in(
                         Span::new(0, 0),
                     ).with_help("pass exactly 1 argument"));
                 }
-                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_) | Ty::Set(_)) {
+                // Part 3 of #1026 (PR 3a of #1082): `Ty::Object` joins them.
+                // A CPython object's length is whatever `PyObject_Size`
+                // answers at run time, so the refusal moves from compile
+                // time to the host -- `len(o)` on an operand with no
+                // `__len__` raises `TypeError` there. The diagnostic text
+                // deliberately stays as it is: `object` is not spellable in
+                // an annotation, so naming it in the message a user sees for
+                // `len(5)` would point at a type they cannot write.
+                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Object) {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(

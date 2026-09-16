@@ -275,3 +275,95 @@ fn a_method_call_on_a_foreign_attribute_keeps_the_load_as_its_base() {
     };
     assert_eq!(attr, "linalg");
 }
+
+// ---------------------------------------------------------------------
+// PR 3a of #1082 (Part 3 of #1026): `len` on the bound object.
+//
+// Same rationale as the four tests above -- this is the only place the
+// `HirExpr::Call { callee: "len" }` -> `MirExpr::ObjLen` split runs on
+// real HIR. `pycc_codegen`'s `foreign_len.rs` tests hand-build the node
+// because they are about what LLVM receives, and the integration tests
+// either stop at `pycc check` (which never lowers) or need a hosting
+// interpreter. Without a test here the split itself is unexercised.
+// ---------------------------------------------------------------------
+
+fn call(callee: &str, args: Vec<pycc_hir::HirExpr>) -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::Call {
+        callee: callee.to_string(),
+        args,
+    }
+}
+
+#[test]
+fn len_of_a_foreign_object_lowers_to_obj_len() {
+    // `import numpy` / `len(numpy)`. The argument's `Ty::Object` is what
+    // diverts this away from the ordinary scalar `len` lowering below it,
+    // so the operand type -- not the callee name alone -- is the test's
+    // subject.
+    let hir = module_with_discarded(call(
+        "len",
+        vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+    ));
+    let expr = only_discarded_expr(&hir);
+    // The node carries no `ty` field for the same reason `ObjMethodCall`
+    // does not: `ty()` answering `Ty::Int` unconditionally is the contract.
+    assert_eq!(expr.ty(), Ty::Int);
+    let MirExpr::ObjLen { base } = expr else {
+        panic!("expected an `ObjLen`");
+    };
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+}
+
+#[test]
+fn len_of_a_foreign_attribute_keeps_the_load_as_its_base() {
+    // `len(numpy.linalg)`: the operand is an `ObjAttrGet` rather than a
+    // bare name, which proves the split keys on the lowered argument's
+    // type and not on the argument being a module binding.
+    let hir = module_with_discarded(call(
+        "len",
+        vec![attr_get(
+            pycc_hir::HirExpr::Name("numpy".to_string()),
+            "linalg",
+        )],
+    ));
+    let MirExpr::ObjLen { base } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjLen`");
+    };
+    let MirExpr::ObjAttrGet { attr, .. } = *base else {
+        panic!("expected the base to stay an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "linalg");
+}
+
+#[test]
+fn len_of_a_foreign_object_ignores_a_module_level_len_definition() {
+    // The regression PR 3a's original guard caused: a module-level
+    // `def len(...)` put `$fn:len` in scope, the guard declined the
+    // `ObjLen` split, and `len(<object>)` reached codegen as an ordinary
+    // `Call` whose `Scalar::Object` argument tripped `expect_list_pointer`.
+    // `pycc_types::check` resolves `len` as the reserved builtin either
+    // way, so the lowering must not second-guess it. The divergence from
+    // CPython -- that the shadow is ignored rather than refused -- is
+    // #1098, not this node's concern.
+    let hir = HirModule {
+        items: vec![
+            HirItem::Function {
+                name: "len".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                    "x".to_string(),
+                )))],
+            },
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(call(
+                "len",
+                vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+            ))),
+        ],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    };
+    let MirExpr::ObjLen { base } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjLen` despite the shadowing `def len`");
+    };
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+}
