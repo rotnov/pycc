@@ -907,8 +907,22 @@ pub(crate) fn collect_expr_constraints(
                     )
                     .with_help("pass exactly 1 argument"));
                 }
+                // Part 4 of #1026 (PR 4a of #1083) admits `Ty::Object` here
+                // exactly as `infer_expr_in`'s own arm does; the two must not
+                // drift. Its comment carries the D-244 rule-7 reasoning and the
+                // reason the message still enumerates only the three original
+                // types.
+                //
+                // It does *not* carry that arm's user-defined-class guard, and
+                // cannot: this solver's environment has no class table. Nor
+                // does it need one -- a `Ty::Object` term can only come from a
+                // foreign name, and `I0404` refuses a foreign name used in a
+                // function body at all, which is the only place this solver
+                // runs (issue #142's unannotated private helpers). Verified by
+                // compiling a private helper returning `float(gc)`: `I0404`,
+                // with and without a user-defined `class float`.
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
-                    && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool)
+                    && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Object)
                 {
                     return Err(Diagnostic::error(
                         "T0021",
@@ -921,6 +935,30 @@ pub(crate) fn collect_expr_constraints(
                     .with_help("pass an `int`, `float`, or `bool` value"));
                 }
                 return Ok(Some(Ok(Ty::Float)));
+            }
+            if callee == "bool" && !signatures.contains_key(callee) {
+                // Part 4 of #1026 (PR 4a of #1083): the solver-side mirror of
+                // `infer_expr_in`'s `bool` arm, which owns the reasoning --
+                // `Ty::Object` only, user-defined `bool` first.
+                //
+                // Unlike the `float` arm above, this one does not defer an
+                // unresolved term. `bool` admits exactly one argument type,
+                // so every other argument -- resolved to something else, or
+                // not yet resolved at all -- falls through to
+                // `unsupported_callable_builtin`'s C0001 below, which is how
+                // issue #142 deliberately classifies a known callable builtin
+                // in the solver. `float` can be lenient only because its arm
+                // ends in an unconditional `Ty::Float`, so an unresolved term
+                // there still has a result to fall through to; here there is
+                // none.
+                //
+                // The user-defined-class guard `infer_expr_in`'s arm carries is
+                // absent here for the reason the `float` arm above states: no
+                // class table, and `I0404` keeps `Ty::Object` out of every
+                // function body this solver runs on.
+                if let [Some(Ok(Ty::Object))] = arg_terms.as_slice() {
+                    return Ok(Some(Ok(Ty::Bool)));
+                }
             }
             let Some(signature) = signatures.get(callee) else {
                 // Issue #142: a private helper calling a known callable

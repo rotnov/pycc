@@ -221,6 +221,28 @@ pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
 
+/// The fixed C shim's `float(o)` conversion helper (Part 4 of #1026, PR 4a
+/// of #1083): it takes a borrowed `PyObject *` and a `double *`
+/// out-parameter, writes the converted value and returns `0`, or returns
+/// `-1` with the CPython exception already set.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// D-244 rule 7 keeps the type boundary closed at the *thunk export seam*,
+/// where a value crosses implicitly and the annotation is the whole
+/// contract. `float(o)` in user source names its destination type, so
+/// running CPython's own `PyNumber_Float` protocol -- the operand's
+/// `__float__`, `__index__` or string parse -- is precisely what the author
+/// asked for. `docs/TYPE_SYSTEM.md`'s `object` row and the helper's own C
+/// comment record the same distinction.
+///
+/// **Ownership.** The helper releases the temporary `PyNumber_Float`
+/// produces on *every* exit, including the failing one, and nothing but a
+/// `double` escapes into compiled code -- so unlike an attribute load or a
+/// subscript, this operation adds nothing to the #1092 leak-only set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_FLOAT_SYMBOL: &str = "pycc_ext_obj_to_float";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

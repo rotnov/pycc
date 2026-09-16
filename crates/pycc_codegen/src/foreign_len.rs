@@ -1,5 +1,5 @@
-//! Emission for `len(o)` and truth testing on a CPython object value
-//! (Part 3 of #1026, PR 3a of #1082).
+//! Emission for `len(o)`, truth testing and `float(o)` on a CPython object
+//! value (Part 3 of #1026, PR 3a of #1082; Part 4 of #1026, PR 4a of #1083).
 //!
 //! The third sibling of `foreign_attr.rs` and `foreign_call.rs`, carved out
 //! of `lib.rs` for the same reason (AGENTS.md's "Keep source files
@@ -7,18 +7,22 @@
 //! operations share a module because they share everything that matters at
 //! this layer: each is one call to a fixed shim helper that answers a
 //! *scalar* rather than a `PyObject *`, and each reports failure as `-1`
-//! rather than as `NULL`, so neither can reuse `foreign_call.rs`'s
-//! `fail_on_null`.
+//! rather than as `NULL`, so none can reuse `foreign_call.rs`'s
+//! `fail_on_null`. PR 4a's `float(o)` is the third member of that family and
+//! lives here for the same reason; `bool(o)` needs no emitter of its own at
+//! all, because it is exactly [`emit_truthy`] widened to a `Scalar::Bool`.
 //!
-//! **Ownership** (`docs/RUNTIME.md`). Neither helper produces a reference at
-//! all -- `pycc_ext_obj_len` answers a D-141 encoded `int` word and
-//! `pycc_ext_obj_truthy` answers a C `int` -- and neither touches its
-//! operand's refcount. So unlike an attribute load or a method call, neither
-//! of these adds anything to the #1092 leak-only set: there is nothing to
-//! leak and nothing to release.
+//! **Ownership** (`docs/RUNTIME.md`). None of these helpers lets a reference
+//! escape -- `pycc_ext_obj_len` answers a D-141 encoded `int` word,
+//! `pycc_ext_obj_truthy` answers a C `int`, and `pycc_ext_obj_to_float`
+//! answers a `double` after releasing the temporary `PyNumber_Float` handed
+//! it, on *every* exit rather than only the successful one -- and none
+//! touches its operand's refcount. So unlike an attribute load or a method
+//! call, none of these adds anything to the #1092 leak-only set: there is
+//! nothing to leak in compiled code and nothing left for it to release.
 //!
-//! **Failure** (`docs/RUNTIME.md`). Both helpers leave *CPython's* error
-//! indicator set, which pycc's own pending-exception guard (D-173) cannot
+//! **Failure** (`docs/RUNTIME.md`). Every helper here leaves *CPython's*
+//! error indicator set, which pycc's own pending-exception guard (D-173) cannot
 //! see, so each arm below emits its own check and returns
 //! [`EXT_MODULE_EXEC_FAILED`] from the module-exec entry point -- exactly
 //! `foreign_attr::emit`'s answer to the same question, and for exactly its
@@ -67,6 +71,23 @@ fn obj_truthy_fn<'ctx>(
     )
 }
 
+/// Declares the shim's `int pycc_ext_obj_to_float(PyObject *, double *)`
+/// once per module, on [`obj_len_fn`]'s pattern and for its reason.
+fn obj_to_float_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_TO_FLOAT_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_TO_FLOAT_SYMBOL,
+        context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
+        None,
+    )
+}
+
 /// Routes a negative `status` to the module-exec failure edge, leaving the
 /// builder positioned on the success continuation.
 ///
@@ -107,8 +128,8 @@ fn fail_on_negative<'ctx>(
     builder.position_at_end(cont_bb);
 }
 
-/// Allocates one `i64` out-slot in the *entry block* of `entry_fn`, leaving
-/// the builder positioned exactly where it was.
+/// Allocates one `slot_ty` out-slot named `name` in the *entry block* of
+/// `entry_fn`, leaving the builder positioned exactly where it was.
 ///
 /// The single-slot twin of `foreign_call.rs`'s `alloca_in_entry_block`, and
 /// it exists for that function's documented reason rather than for tidiness:
@@ -116,9 +137,10 @@ fn fail_on_negative<'ctx>(
 /// at the call site would make `while c: n = len(gc)` at module scope grow
 /// the hosting interpreter's stack without bound.
 fn out_slot_in_entry_block<'ctx>(
-    context: &'ctx Context,
     builder: &Builder<'ctx>,
     entry_fn: FunctionValue<'ctx>,
+    slot_ty: impl inkwell::types::BasicType<'ctx>,
+    name: &str,
 ) -> PointerValue<'ctx> {
     let resume_at = builder
         .get_insert_block()
@@ -134,7 +156,7 @@ fn out_slot_in_entry_block<'ctx>(
         .expect("the module-exec entry block already holds the foreign import's own call");
     builder.position_before(&first);
     let slot = builder
-        .build_alloca(context.i64_type(), "foreign_len_out")
+        .build_alloca(slot_ty, name)
         .expect("build_alloca should not fail");
     builder.position_at_end(resume_at);
     slot
@@ -167,7 +189,7 @@ pub(super) fn emit_len<'ctx>(
     let entry_fn = expect_module_exec_entry(builder);
     let len_fn = obj_len_fn(context, module);
     let base_ptr = expect_object_pointer(base);
-    let out = out_slot_in_entry_block(context, builder, entry_fn);
+    let out = out_slot_in_entry_block(builder, entry_fn, context.i64_type(), "foreign_len_out");
     let status = builder
         .build_call(len_fn, &[base_ptr.into(), out.into()], "foreign_len")
         .expect("build_call should not fail for pycc_ext_obj_len")
@@ -220,6 +242,63 @@ pub(super) fn emit_truthy<'ctx>(
         .expect("build_int_truncate should not fail")
 }
 
+/// Emits one `float(o)` against a CPython object and yields the converted
+/// value as a [`Scalar::Float`].
+///
+/// `lib.rs`'s `to_float` panics on a `Scalar::Object` -- it knows only how
+/// to widen pycc's own scalars -- so the `float` builtin's emission branches
+/// on the operand before reaching it and lands here instead.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// D-244 rule 7 closes the type boundary at the *thunk export seam*, where
+/// a value crosses implicitly and the annotation is the whole contract.
+/// `float(o)` names its destination type in user source, so running
+/// CPython's own `PyNumber_Float` protocol behind [`EXT_OBJ_TO_FLOAT_SYMBOL`]
+/// is exactly what the author asked for. The same paragraph is recorded on
+/// that constant, in the helper's C comment, and in `docs/TYPE_SYSTEM.md`'s
+/// `object` row.
+///
+/// The shim releases the reference `PyNumber_Float` produces on every exit,
+/// so nothing here adds to the #1092 leak-only set. Failure is `-1` with
+/// CPython's error indicator set, taking [`fail_on_negative`]'s module-exec
+/// failure edge -- `PyNumber_Float` raises `TypeError` for an operand with
+/// no conversion and `ValueError` for an unparseable string, neither of
+/// which pycc can rule out at compile time for an opaque pointee.
+///
+/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
+pub(super) fn emit_to_float<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let to_float_fn = obj_to_float_fn(context, module);
+    let base_ptr = expect_object_pointer(base);
+    let out = out_slot_in_entry_block(
+        builder,
+        entry_fn,
+        context.f64_type(),
+        "foreign_to_float_out",
+    );
+    let status = builder
+        .build_call(
+            to_float_fn,
+            &[base_ptr.into(), out.into()],
+            "foreign_to_float",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_to_float")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_to_float returns int")
+        .into_int_value();
+    fail_on_negative(context, builder, entry_fn, status, "foreign_to_float");
+    let value = builder
+        .build_load(context.f64_type(), out, "foreign_to_float_value")
+        .expect("build_load should not fail")
+        .into_float_value();
+    Scalar::Float(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +322,24 @@ mod tests {
             .map(MirItem::TopLevelStmt),
         );
         items
+    }
+
+    /// `x = <conversion>(<module>)` at module scope, for the Part 4 arms.
+    ///
+    /// An assignment rather than a discarded expression statement so the
+    /// converted value is actually consumed, which is what forces the load
+    /// out of the out-slot to be emitted.
+    fn convert(module: &str, callee: &str, ty: Ty) -> Vec<MirItem> {
+        program(module, |base| {
+            vec![MirStmt::Assign {
+                target: "converted".to_string(),
+                value: MirExpr::Call {
+                    callee: callee.to_string(),
+                    args: vec![base],
+                    ty: ty.clone(),
+                },
+            }]
+        })
     }
 
     /// One discarded `len(<module>)`.
@@ -505,5 +602,106 @@ mod tests {
             2,
             "one call site per condition: {ir}"
         );
+    }
+
+    /// `float(o)` reaches the Part 4 shim helper rather than `lib.rs`'s
+    /// `to_float`, which panics on a `Scalar::Object`.
+    ///
+    /// Asserted through [`EXT_OBJ_TO_FLOAT_SYMBOL`] rather than against a
+    /// literal for the lazy-link reason that constant records.
+    #[test]
+    fn a_foreign_float_conversion_calls_the_shim_helper_by_its_shared_symbol() {
+        let ir = entry_ir(
+            "foreign_to_float_call",
+            convert("numpy", "float", Ty::Float),
+        );
+        assert!(ir.contains(EXT_OBJ_TO_FLOAT_SYMBOL), "{ir}");
+    }
+
+    /// A raising `PyNumber_Float` stops the module body on the module-exec
+    /// failure edge rather than continuing with an unwritten out-slot.
+    #[test]
+    fn a_failed_foreign_float_conversion_returns_on_the_module_exec_failure_edge() {
+        let ir = entry_ir(
+            "foreign_to_float_fail_edge",
+            convert("numpy", "float", Ty::Float),
+        );
+        assert!(ir.contains("foreign_to_float_failed"), "{ir}");
+        assert!(ir.contains("foreign_to_float_fail:"), "{ir}");
+        assert!(ir.contains("foreign_to_float_cont:"), "{ir}");
+        assert!(
+            ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+            "{ir}"
+        );
+    }
+
+    /// The conversion's out-slot is a `double` hoisted into the entry block,
+    /// so a module-scope loop around a `float(o)` does not grow the host's
+    /// stack -- `the_out_slot_alloca_is_hoisted_into_the_entry_block`'s claim
+    /// for the second slot type `out_slot_in_entry_block` now serves.
+    #[test]
+    fn the_float_conversion_out_slot_is_a_double_in_the_entry_block() {
+        let ir = entry_ir(
+            "foreign_to_float_in_loop",
+            program("numpy", |base| {
+                vec![MirStmt::While {
+                    test: MirExpr::BoolLiteral(false),
+                    body: vec![MirStmt::Assign {
+                        target: "converted".to_string(),
+                        value: MirExpr::Call {
+                            callee: "float".to_string(),
+                            args: vec![base],
+                            ty: Ty::Float,
+                        },
+                    }],
+                }]
+            }),
+        );
+        let alloca_at = ir
+            .find("foreign_to_float_out = alloca double")
+            .unwrap_or_else(|| panic!("no double out-slot alloca: {ir}"));
+        let first_label_at = ir
+            .find("\n\n")
+            .unwrap_or_else(|| panic!("no second basic block: {ir}"));
+        assert!(alloca_at < first_label_at, "{ir}");
+    }
+
+    /// Two `float(o)` conversions in one module share one extern
+    /// declaration -- `obj_to_float_fn`'s early return.
+    ///
+    /// The needle carries the call's own `(` because the bare symbol name
+    /// cannot tell the two outcomes apart: `LLVMAddFunction` does not reject
+    /// a duplicate name, it renames the second declaration to
+    /// `@pycc_ext_obj_to_float.1`, which still contains the bare symbol as a
+    /// substring. Counting `@pycc_ext_obj_to_float(` instead counts only the
+    /// call sites that reach the *first* declaration, so dropping the early
+    /// return leaves one of the two conversions calling the renamed
+    /// duplicate and the count falls to 1.
+    #[test]
+    fn a_second_foreign_float_conversion_reuses_the_one_extern_declaration() {
+        let mut items = convert("numpy", "float", Ty::Float);
+        items.extend(convert("scipy", "float", Ty::Float));
+        let ir = entry_ir("foreign_to_float_twice", items);
+        assert_eq!(
+            occurrences(&ir, &format!("@{EXT_OBJ_TO_FLOAT_SYMBOL}(")),
+            2,
+            "one call site per conversion, both on the one declaration: {ir}"
+        );
+    }
+
+    /// `bool(o)` adds no symbol of its own: it is PR 3a's truth test widened
+    /// to the `i8` a `Scalar::Bool` carries, and it inherits that helper's
+    /// module-exec failure edge unchanged.
+    #[test]
+    fn a_foreign_bool_conversion_reuses_the_truth_testing_helper() {
+        let ir = entry_ir("foreign_bool_call", convert("numpy", "bool", Ty::Bool));
+        assert!(ir.contains(EXT_OBJ_TRUTHY_SYMBOL), "{ir}");
+        assert!(!ir.contains(EXT_OBJ_TO_FLOAT_SYMBOL), "{ir}");
+        assert!(ir.contains("foreign_truthy_fail:"), "{ir}");
+        assert!(
+            ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+            "{ir}"
+        );
+        assert!(ir.contains("bool_from_object"), "{ir}");
     }
 }

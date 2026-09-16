@@ -5120,6 +5120,10 @@ fn float_with_two_arguments_is_rejected_as_t0021() {
     assert_eq!(err.message, "`float` expects exactly 1 argument, got 2");
 }
 
+/// Also the pin for PR 4a of #1083's deliberate omission: `float`'s gate now
+/// admits `Ty::Object` too, but the message still enumerates only the three
+/// spellable types, because `object` is unspellable in an annotation (D-137)
+/// and "pass an `object`" is advice nobody can act on.
 #[test]
 fn float_of_a_str_is_rejected_as_t0021() {
     let mut env = Environment::new();
@@ -21435,4 +21439,65 @@ fn a_class_attribute_earlier_in_the_slice_outranks_a_later_property() {
         "class A:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass B(A):\n    X: int = 1\n\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass C(A):\n    def __init__(self) -> None:\n        self.n = 0\n\n    @property\n    def X(self) -> int:\n        return 99\n\n\nclass D(B, C):\n    def __init__(self) -> None:\n        self.n = 0\n\n    def read(self) -> int:\n        return super().X\n\n\nprint(D().read())\n",
     )
     .expect("an earlier class attribute must outrank a later property");
+}
+
+// ---------------------------------------------------------------------
+// PR 4a of #1083 (Part 4 of #1026): `float(o)` and `bool(o)`.
+//
+// `tests/issue_1083_foreign_conversions.rs` drives the same claims through
+// the public CLI; these pin the two arms directly, including the shapes the
+// CLI cannot reach because `pycc_hir` or an earlier pass refuses them first.
+// ---------------------------------------------------------------------
+
+#[test]
+fn float_of_a_foreign_object_is_admitted_as_float() {
+    let mut env = Environment::new();
+    env.bind("o".to_string(), Ty::Object);
+    let expr = HirExpr::Call {
+        callee: "float".to_string(),
+        args: vec![HirExpr::Name("o".to_string())],
+    };
+    assert_eq!(infer_expr(&env, &expr).unwrap(), Ty::Float);
+}
+
+#[test]
+fn bool_of_a_foreign_object_is_admitted_as_bool() {
+    let mut env = Environment::new();
+    env.bind("o".to_string(), Ty::Object);
+    let expr = HirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![HirExpr::Name("o".to_string())],
+    };
+    assert_eq!(infer_expr(&env, &expr).unwrap(), Ty::Bool);
+}
+
+#[test]
+fn bool_of_a_non_object_keeps_its_c0001_refusal() {
+    // Fork 1 of the plan, stated openly: Part 4 relaxes exactly the object
+    // case. `bool(1)` is still the capability-gap refusal it was, and
+    // #1017/#1018 own the general builtin-conversion story.
+    let mut env = Environment::new();
+    env.bind("x".to_string(), Ty::Int);
+    let expr = HirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![HirExpr::Name("x".to_string())],
+    };
+    assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "C0001");
+}
+
+#[test]
+fn bool_of_a_foreign_object_with_a_second_argument_keeps_its_c0001_refusal() {
+    // The arm admits exactly one argument, so a mis-arity call falls through
+    // to the same C0001 every other unsupported `bool` shape gets rather
+    // than inventing a T0021 of its own.
+    let mut env = Environment::new();
+    env.bind("o".to_string(), Ty::Object);
+    let expr = HirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![
+            HirExpr::Name("o".to_string()),
+            HirExpr::Name("o".to_string()),
+        ],
+    };
+    assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "C0001");
 }

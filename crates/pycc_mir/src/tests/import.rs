@@ -559,3 +559,82 @@ fn a_for_loop_over_a_foreign_object_overwrites_an_earlier_binding_of_its_variabl
     assert_eq!(name, "x");
     assert_eq!(*ty, Ty::Object, "the loop must overwrite the earlier `int`");
 }
+
+// ---------------------------------------------------------------------
+// PR 4a of #1083 (Part 4 of #1026): `float(o)` and `bool(o)`.
+//
+// Neither gets a `MirExpr` variant -- both stay ordinary `Call` nodes and
+// only the *type* the lowering assigns them is at stake. Without a `bool`
+// branch, `bool(o)` falls to `lookup`'s `$fn:bool` miss and panics: a
+// `pycc check` that exits 0 followed by a `pycc build --ext` that aborts.
+// ---------------------------------------------------------------------
+
+#[test]
+fn float_of_a_foreign_object_stays_a_call_typed_float() {
+    let hir = module_with_discarded(call(
+        "float",
+        vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+    ));
+    let MirExpr::Call { callee, args, ty } = only_discarded_expr(&hir) else {
+        panic!("expected a plain `Call`");
+    };
+    assert_eq!(callee, "float");
+    assert_eq!(ty, Ty::Float);
+    assert!(matches!(
+        args.as_slice(),
+        [MirExpr::Name { ty: Ty::Object, .. }]
+    ));
+}
+
+#[test]
+fn bool_of_a_foreign_object_stays_a_call_typed_bool() {
+    let hir = module_with_discarded(call(
+        "bool",
+        vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+    ));
+    let MirExpr::Call { callee, args, ty } = only_discarded_expr(&hir) else {
+        panic!("expected a plain `Call`");
+    };
+    assert_eq!(callee, "bool");
+    assert_eq!(ty, Ty::Bool);
+    assert!(matches!(
+        args.as_slice(),
+        [MirExpr::Name { ty: Ty::Object, .. }]
+    ));
+}
+
+#[test]
+fn a_user_defined_bool_function_is_lowered_as_a_real_call_not_the_builtin() {
+    // The C4 guard, mirrored from `float`'s: `pycc_types` honours a
+    // `def bool(...)` and refuses the builtin arm outright, so a lowering
+    // that ignored the shadow would type the call `Ty::Bool` against the
+    // user function's own registered `Ty::Int` return. This is the opposite
+    // of `len`'s case (`len_of_a_foreign_object_ignores_a_module_level_len_
+    // definition` above), where the checker resolves the builtin regardless
+    // and the lowering must follow it.
+    let hir = HirModule {
+        items: vec![
+            HirItem::Function {
+                name: "bool".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                    "x".to_string(),
+                )))],
+            },
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(call(
+                "bool",
+                vec![pycc_hir::HirExpr::IntLiteral(1)],
+            ))),
+        ],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    };
+    let mir = build(&hir);
+    let MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call { ty, .. })) = &mir.items[2] else {
+        panic!(
+            "expected the shadowing call to stay a `Call`: {:?}",
+            mir.items
+        );
+    };
+    assert_eq!(*ty, Ty::Int, "the user function's return type must win");
+}

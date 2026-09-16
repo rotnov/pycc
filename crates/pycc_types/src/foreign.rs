@@ -104,6 +104,33 @@
 //! again and keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The positional
 //! bound is inherited unchanged.
 //!
+//! **PR 4a of #1083 (Part 4 of #1026) added two conversions *out* of the
+//! opaque type: `float(o)` and `bool(o)`.** Both are handled in `expr.rs`'s
+//! `HirExpr::Call` arm (and mirrored in `constraints.rs`) rather than here:
+//! `float`'s existing argument gate gains [`Ty::Object`], and `bool` gets a
+//! new arm admitted for [`Ty::Object`] **only**, so `bool(1)` keeps its
+//! `C0001` verbatim. Both arms carry `float`'s user-defined-function guard,
+//! because a `def float(...)`/`def bool(...)` is a valid working program
+//! today and must keep winning.
+//!
+//! These are the first operations that produce a *pycc-native* value from an
+//! object, so they are also the first that leave nothing behind: the shim
+//! releases its own CPython temporary on every exit and no new reference
+//! escapes, which is why Part 4 does not grow #1092. They run CPython's own
+//! conversion protocol (`PyNumber_Float`, `PyObject_IsTrue`), which is *not*
+//! a D-244 rule-7 violation: rule 7 closes the boundary at the thunk export
+//! seam, where a value crosses implicitly and the annotation is the whole
+//! contract, whereas `float(o)` in user source is an explicit conversion
+//! request that names its destination type. `docs/TYPE_SYSTEM.md`'s `object`
+//! row carries the user-facing statement.
+//!
+//! The residual incoherence is stated rather than hidden: `bool(o)` compiles
+//! while `bool(1)` is still `C0001`, because Part 4 relaxes exactly the
+//! object case and leaves the general builtin-conversion story to
+//! #1017/#1018. The positional bound is inherited unchanged, and
+//! `print(float(o))` now type-checks where `print(o)` stays `I0404` --
+//! the refusal is on the object, not on a `float` derived from one.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -137,8 +164,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
              scalar-argument method calls, `len`, truth testing, a \
-             scalar-key subscript load and `for` iteration on it and \
-             nothing else"
+             scalar-key subscript load, `for` iteration and the `float` \
+             and `bool` conversions on it and nothing else"
         ),
         Span::new(0, 0),
     )

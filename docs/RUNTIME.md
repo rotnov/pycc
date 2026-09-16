@@ -695,6 +695,32 @@ into the module-exec entry block, so a loop does not grow the host's stack. The
 loop is admitted only in a module body, on the identical positional rule and
 for the identical reason, so it needs no exception bridge either.
 
+**The `float` and `bool` conversions fail on that same edge, and inherit that
+same bound.** PR 4a of [#1083](https://github.com/rotnov/pycc/issues/1083)
+(Part 4 of #1026) added exactly one shim helper, `pycc_ext_obj_to_float`, which
+wraps `PyNumber_Float`, reads the result with `PyFloat_AsDouble`, writes the
+`double` through an out-parameter and reports failure as `-1` — so it joins
+`len` and the truth test in `crates/pycc_codegen/src/foreign_len.rs` rather than
+the `NULL`-answering helpers. An operand with no `__float__`/`__index__` and no
+parseable text surfaces the host's own `TypeError` or `ValueError`, and the
+remaining module-body statements never run. `bool(o)` adds **no helper at all**:
+it is the `pycc_ext_obj_truthy` call the truth test already makes, widened from
+`i1` to the byte a pycc `bool` occupies, so it inherits that helper's failure
+edge unchanged, and it has no out-parameter of its own. The `double`
+out-parameter belongs to `pycc_ext_obj_to_float` alone: a single slot hoisted
+into the module-exec entry block, on the same rule `len`'s `i64` slot follows,
+so a module-scope loop around a `float(o)` does not grow the host's stack. Both are
+admitted only in a module body, on the identical positional rule and for the
+identical reason, so neither needs the exception bridge either.
+
+Running CPython's own conversion protocol here is **not** a D-244 rule 7
+violation. Rule 7 keeps the type boundary closed at the *thunk export seam*,
+where a value crosses implicitly and its annotation is the whole contract.
+`float(o)` in user source is an explicit conversion request that names its
+destination type, so running the operand's own `__float__` is what the author
+asked for. [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s `object` row carries the
+user-facing statement of the same distinction.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -724,13 +750,21 @@ to owns that reference from then on. Codegen consequently emits no release of
 its own around a subscript load, and a failed packer's `NULL` is safe to pass
 straight through.
 
-`len` and a truth test are the two operations that add nothing to that leaked
-set. `pycc_ext_obj_len` answers a `Py_ssize_t` and `pycc_ext_obj_truthy` answers
-a C `int`; neither creates a reference and neither touches the operand's
-refcount on any path, so `len(o)` or `if o:` inside a module-scope loop is
-refcount-neutral no matter the trip count. The out-parameter `len` writes
-through is a single `i64` slot hoisted into the module-exec entry block, so such
-a loop does not grow the host's stack either.
+`len`, a truth test and Part 4's two conversions are the operations that add
+nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
+`pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither
+touches the operand's refcount on any path, so `len(o)` or `if o:` inside a
+module-scope loop is refcount-neutral no matter the trip count. The
+out-parameter `len` writes through is a single `i64` slot hoisted into the
+module-exec entry block, so such a loop does not grow the host's stack either.
+`pycc_ext_obj_to_float` is the first helper that *does* create a CPython
+temporary — `PyNumber_Float` hands back a new reference — and it is also the
+first that **releases what it owns on every exit, not only the successful
+one**: the `Py_DECREF` runs before the failing return as well, so a raising
+`PyFloat_AsDouble` leaks nothing either. Only a `double` escapes into compiled
+code. **Part 4 therefore does not grow
+[#1092](https://github.com/rotnov/pycc/issues/1092)**, and `float(o)`/`bool(o)`
+in a module-scope loop are refcount-neutral at any trip count.
 
 Everything the call creates *internally*, by contrast, is released, so the leak
 is exactly one reference per call rather than one per argument plus two.
@@ -767,14 +801,17 @@ iteration — the leak is trip-count-linear rather than bounded by process exit.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
-a subscript load, `for` iteration, `len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
+a subscript load, `for` iteration, `len`, a truth test or a `float`/`bool`
+conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
 attribute load, a foreign method call or a foreign subscript load until the
 release protocol lands, and must not measure a foreign `for` loop at all**,
-since that one leaks an item per trip whatever its body contains --
+since that one leaks an item per trip whatever its body contains. **The caveat
+does not extend to Part 4's conversions**: `float(o)` and `bool(o)` leak
+nothing, so a hot loop containing only those is a legitimate measurement --
 because the resident-set
 growth, not the compiled code, would dominate the result. An *unbound* `str`
 argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a

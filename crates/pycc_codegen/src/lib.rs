@@ -48,7 +48,7 @@ use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
     EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
-    EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -2814,7 +2814,51 @@ fn emit_expr_unchecked<'ctx>(
                     )
                 };
                 let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                // Part 4 of #1026 (PR 4a of #1083): a CPython object cannot go
+                // through `to_float`, which knows only pycc's own scalars and
+                // panics on `Scalar::Object`. It takes the shim helper instead,
+                // which runs CPython's own `PyNumber_Float` protocol -- an
+                // explicit conversion the author asked for by naming the
+                // destination type, not the implicit thunk-seam crossing D-244
+                // rule 7 closes (see `foreign_len::emit_to_float`).
+                if matches!(scalar, Scalar::Object(_)) {
+                    return foreign_len::emit_to_float(context, builder, module, scalar);
+                }
                 return Scalar::Float(to_float(context, builder, rt, scalar));
+            }
+            if callee == "bool" && !user_functions.contains_key(callee.as_str()) {
+                // Part 4 of #1026 (PR 4a of #1083). `pycc_types` admits the
+                // `bool` builtin for a `Ty::Object` argument *only* -- every
+                // other argument type keeps its C0001 refusal -- and only when
+                // no user `def bool` claims the name, which is the same guard
+                // `float` above carries and for the same reason. So this arm
+                // sees exactly one shape, and both backstops below are against
+                // malformed MIR rather than against legitimate source.
+                //
+                // No new shim symbol: `bool(o)` is the truth test PR 3a already
+                // emits for an `if`/`while` condition, widened from `i1` to the
+                // `i8` a `Scalar::Bool` carries -- exactly what `truthy`'s own
+                // `Scalar::Object` arm does.
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `bool` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                let Scalar::Object(ptr) = scalar else {
+                    panic!(
+                        "pycc_codegen: internal error: `bool` takes a CPython object argument \
+                         -- pycc_types::check (C0001) should have rejected this before codegen"
+                    )
+                };
+                let bit = foreign_len::emit_truthy(context, builder, module, ptr);
+                return Scalar::Bool(
+                    builder
+                        .build_int_z_extend(bit, context.i8_type(), "bool_from_object")
+                        .expect("build_int_z_extend should not fail widening i1 to i8"),
+                );
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error

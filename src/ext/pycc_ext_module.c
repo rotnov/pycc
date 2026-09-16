@@ -1022,6 +1022,61 @@ long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
     return PyErr_Occurred() == NULL ? 0 : -1;
 }
 
+/*
+ * Part 4 of #1026 (PR 4a of #1083): `float(o)` on a CPython object value
+ * (`EXT_OBJ_TO_FLOAT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Writes the converted C double through `*out` and answers `0`, or answers
+ * `-1` with a CPython exception already set.
+ *
+ * # Why running CPython's own conversion protocol here is not a D-244
+ * # rule-7 violation
+ *
+ * D-244 rule 7 keeps the type boundary *closed at the thunk export seam*:
+ * where a value crosses implicitly, the annotation is the whole contract,
+ * so no conversion protocol may run behind the author's back. This helper
+ * is on the other side of that distinction. `float(o)` in user source is an
+ * *explicit conversion request*: the author wrote the destination type, so
+ * running `PyNumber_Float` -- the operand's own `__float__`, `__index__` or
+ * string parse -- is exactly what they asked for, not an implicit crossing.
+ * The same paragraph is recorded in `docs/TYPE_SYSTEM.md`'s `object` row.
+ *
+ * # Ownership
+ *
+ * `PyNumber_Float` hands back a *new* reference, and this helper releases it
+ * on every exit, not only the successful one. Part 4's conversions therefore
+ * add nothing to the #1092 leak-only set: the converted value is a pycc-side
+ * `double` and no CPython reference escapes into compiled code.
+ *
+ * `PyFloat_AsDouble` on the result of `PyNumber_Float` cannot itself fail --
+ * that result is a `float` by construction -- but its `-1.0`-plus-
+ * `PyErr_Occurred()` convention is still tested, as defence in depth and so
+ * that the ownership rule above holds on a path that is meant to be
+ * unreachable.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+int pycc_ext_obj_to_float(PyObject *o, double *out)
+{
+    PyObject *converted;
+    double value;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    converted = PyNumber_Float(o);
+    if (converted == NULL) {
+        return -1;
+    }
+    value = PyFloat_AsDouble(converted);
+    Py_DECREF(converted);
+    if (value == -1.0 && PyErr_Occurred()) {
+        return -1;
+    }
+    *out = value;
+    return 0;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

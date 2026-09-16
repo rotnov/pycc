@@ -556,7 +556,36 @@ pub(crate) fn infer_expr_in(
                         Span::new(0, 0),
                     ).with_help("pass exactly 1 argument"));
                 }
-                if !matches!(arg_tys[0], Ty::Int | Ty::Float | Ty::Bool) {
+                // Part 4 of #1026 (PR 4a of #1083) admits `Ty::Object`: an
+                // explicit `float(o)` runs CPython's own `PyNumber_Float`
+                // protocol through the shim. That is not the implicit
+                // thunk-seam crossing D-244 rule 7 closes -- the author named
+                // the destination type -- see `docs/TYPE_SYSTEM.md`'s `object`
+                // row.
+                //
+                // The message below deliberately does *not* enumerate
+                // `object`: it is unspellable in an annotation (D-137) and
+                // exists only because a foreign `import` bound it, so
+                // "pass an `object`" is advice nobody can act on by writing a
+                // type. `tests::float_of_a_str_is_rejected_as_t0021` pins the
+                // exact text, so the omission reads as deliberate rather than
+                // as an oversight.
+                //
+                // Reviewer finding (codex, PR 4a of #1083): the `Ty::Object`
+                // admission must not preempt a user-defined `class float`.
+                // MIR resolves a call whose callee names a class as an
+                // instantiation, so without this guard a module defining
+                // `class float` and calling `float(o)` passes `pycc check`
+                // with `Ty::Float` and then panics in codegen. The guard is
+                // deliberately confined to the `Ty::Object` arm this change
+                // introduces: `class float` with an `int` argument already
+                // diverges the same way on `main` (`pycc check` accepts,
+                // `pycc build` panics) and is tracked separately, so widening
+                // the guard to the whole arm would change behavior this change
+                // does not own.
+                let object_admitted =
+                    matches!(arg_tys[0], Ty::Object) && env.lookup_class(callee).is_none();
+                if !(matches!(arg_tys[0], Ty::Int | Ty::Float | Ty::Bool) || object_admitted) {
                     return Err(Diagnostic::error(
                         "T0021",
                         format!(
@@ -567,6 +596,33 @@ pub(crate) fn infer_expr_in(
                     ).with_help("pass an `int`, `float`, or `bool` value"));
                 }
                 return Ok(Ty::Float);
+            }
+            if callee == "bool"
+                && env.lookup_function(callee).is_none()
+                && env.lookup_class(callee).is_none()
+            {
+                // Part 4 of #1026 (PR 4a of #1083): `bool` is admitted for a
+                // `Ty::Object` argument *only*. Every other argument type falls
+                // through to `unsupported_callable_builtin` below and keeps its
+                // C0001 verbatim, so `bool(1)` is refused exactly as it was --
+                // the residual incoherence (`bool(o)` compiles, `bool(1)` does
+                // not) is stated openly in `docs/TYPE_SYSTEM.md` and tracked by
+                // #1017/#1018, which own the general builtin-conversion story.
+                //
+                // The user-defined-function guard is `float`'s, for `float`'s
+                // reason: a `def bool(...)` is a valid, working program on
+                // `main` today, so `env.lookup_function` takes priority. The
+                // class guard is codex's PR 4a finding, also `float`'s: MIR
+                // resolves a call naming a class as an instantiation, so a
+                // module defining `class bool` would otherwise pass
+                // `pycc check` here and panic in codegen. It sits on the whole
+                // arm rather than on the `Ty::Object` test alone because this
+                // arm admits nothing else -- every other argument already falls
+                // through to `C0001` -- so the two placements are equivalent
+                // and the outer one reads plainly.
+                if arg_tys.len() == 1 && matches!(arg_tys[0], Ty::Object) {
+                    return Ok(Ty::Bool);
+                }
             }
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses this same generic `HirExpr::Call` node -- there is no
