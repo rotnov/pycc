@@ -794,6 +794,18 @@ pub enum MirStmt {
         list: String,
         body: Vec<MirStmt>,
     },
+    /// `for var in <object expression>:` (mirrors `HirStmt::ForObject`,
+    /// PR 3c of #1082). Unlike every other `For*` node here the iterable is
+    /// a lowered expression rather than a variable name, because the two
+    /// admitted source shapes (`o.attr`, `o.method(...)`) are expressions.
+    /// `var` holds each item as an opaque `PyObject *` (`Ty::Object`), and
+    /// `pycc_codegen` drives the loop through `PyObject_GetIter` /
+    /// `PyIter_Next` behind the D-244 shim.
+    ForObject {
+        var: String,
+        iter: MirExpr,
+        body: Vec<MirStmt>,
+    },
     /// `d[k] = v` (mirrors `HirStmt::DictSet`, PR-11 Task 4/D-123). `dict` is
     /// carried as the plain variable name, exactly like `ForList`'s `list`
     /// field and `ListAppend`'s `list` field -- there is no sub-expression to
@@ -1287,6 +1299,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             MirStmt::While { body, .. }
             | MirStmt::ForRange { body, .. }
             | MirStmt::ForList { body, .. }
+            | MirStmt::ForObject { body, .. }
             | MirStmt::ForDict { body, .. }
             | MirStmt::ForSet { body, .. } => set_frame_function(body, frame_name),
             MirStmt::Seq(stmts) => set_frame_function(stmts, frame_name),

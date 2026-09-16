@@ -200,6 +200,7 @@ pub(super) fn block_always_terminates(body: &[MirStmt]) -> bool {
             | MirStmt::While { .. }
             | MirStmt::ForRange { .. }
             | MirStmt::ForList { .. }
+            | MirStmt::ForObject { .. }
             | MirStmt::DictSet { .. }
             | MirStmt::ForDict { .. }
             | MirStmt::ForSet { .. }

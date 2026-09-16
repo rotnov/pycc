@@ -768,11 +768,25 @@ pub(crate) fn lower_stmt(
     // nothing here for a walrus to be nested inside -- folding it into this
     // arm keeps that reasoning on record without leaving an unreachable arm
     // of its own for the coverage gate to flag.
+    //
+    // `HirStmt::ForObject` (PR 3c of #1082) gets a real arm instead: its
+    // `iter` field is an expression that can nest a walrus, and unlike
+    // `ForList`'s bare list name the arm is genuinely reached --
+    // `ForRange`'s own arm below proves the `Stmt::For` result reaches this
+    // match. Leaving it in the never-a-violation group admitted a walrus
+    // that `killed_names` does not see: that function's `ForObject` arm
+    // records the loop target and the body but not the iterable, so a kill
+    // written there survived `apply_kill_prescan` and a read at the top of
+    // a re-enterable narrowed region was checked against the pre-kill
+    // narrowing. Refusing the placement here keeps the iterable exactly
+    // where `ForRange`'s `range(...)` arguments already are, so no shape
+    // reaches the prescan with a kill it cannot report.
     let violates_walrus_placement = match &lowered {
         HirStmt::If { .. }
         | HirStmt::While { .. }
         | HirStmt::ExprStmt(_)
         | HirStmt::ForList { .. } => false,
+        HirStmt::ForObject { iter, .. } => contains_named_expr(iter),
         HirStmt::Assign { value, .. } => contains_named_expr(value),
         HirStmt::AnnAssign { value, .. } => value.as_ref().is_some_and(contains_named_expr),
         HirStmt::ForRange {

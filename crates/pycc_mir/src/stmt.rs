@@ -465,6 +465,37 @@ pub(super) fn lower_stmt(
                 ),
             }
         }
+        // PR 3c of #1082: `for x in o.attr:` / `for x in o.method(...):`.
+        // `pycc_types` has already proved the iterable is `Ty::Object`, so
+        // there is no type dispatch to make here -- unlike `ForList` above,
+        // this node's shape is fixed by the check pass.
+        HirStmt::ForObject { var, iter, body } => {
+            let iter = super::lower_expr(iter, scopes, classes, current_class);
+            // `bind`, not `bind_variable`: this is the first loop construct
+            // whose target type can differ from a prior binding of the same
+            // name (`ForList`/`ForRange` always bind `Ty::Int`, so
+            // `bind_variable`'s `or_insert` was harmless for them).
+            // `pycc_types`' own `ForObject` arm calls `env.bind`, which
+            // overwrites, so `x = 5` followed by `for x in <object>:` leaves
+            // `x` as `Ty::Object` in the checker; `or_insert` here would keep
+            // the stale `Ty::Int` and make the body lower against the wrong
+            // type (a `len(x)` in the body took the list path and panicked in
+            // `pycc_codegen`). Scoped to this arm deliberately: making
+            // `bind_variable` itself unconditional would change the recorded
+            // type of every other construct that calls it, whereas
+            // `HirStmt::ForObject` is new in this pull request, so no program
+            // that compiles today can observe this change.
+            bind(scopes, var.clone(), Ty::Object);
+            // D-068 re-review of #780 (sixth round): see the `ForRange` arm's
+            // identical comment above.
+            super::kill_narrowing(scopes, var);
+            let body = lower_loop_body(body, scopes, classes, current_class);
+            MirStmt::ForObject {
+                var: var.clone(),
+                iter,
+                body,
+            }
+        }
         HirStmt::ListCompAssign {
             target,
             var,

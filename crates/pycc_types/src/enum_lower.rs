@@ -307,7 +307,19 @@ fn unroll_enum_loops_in_stmts(
                     body: unroll_enum_loops_in_stmts(body, enum_members),
                 });
             }
-            // Other statement kinds don't contain nested ForList loops.
+            // PR 3c of #1082 (Part 3 of #1026): `for x in <object>:` carries
+            // a body exactly like every other loop above, so an enum `for`
+            // loop nested inside it must be unrolled here too. Without this
+            // arm the `other` catch-all below would clone the node whole and
+            // a `ForList`-over-enum inside it would reach MIR lowering
+            // unexpanded, panicking on the enum class name's missing type.
+            HirStmt::ForObject { var, iter, body } => {
+                result.push(HirStmt::ForObject {
+                    var: var.clone(),
+                    iter: iter.clone(),
+                    body: unroll_enum_loops_in_stmts(body, enum_members),
+                });
+            }
             HirStmt::Try {
                 body,
                 handlers,
@@ -353,6 +365,14 @@ fn unroll_enum_loops_in_stmts(
                     finalbody: unroll_enum_loops_in_stmts(finalbody, enum_members),
                 });
             }
+            // Every statement kind that carries a nested statement body is
+            // enumerated above. The remaining kinds are body-less, so they
+            // cannot contain a nested enum `for` loop and are cloned whole.
+            // `HirStmt::Match` is the one exception: it carries case bodies
+            // and reaches this catch-all, so an enum `for` loop inside a
+            // `case` arm is not unrolled. That gap is pre-existing -- it
+            // predates this arm and this pull request -- and is deliberately
+            // not fixed here.
             other => result.push(other.clone()),
         }
     }

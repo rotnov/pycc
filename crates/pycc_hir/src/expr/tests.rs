@@ -370,6 +370,23 @@ fn a_walrus_outside_if_while_or_a_bare_expression_statement_is_rejected() {
     );
 }
 
+/// PR 3c of #1082 (Part 3 of #1026): a `for` over a foreign `object`
+/// value carries a real expression as its iterable, so a walrus can nest
+/// inside it -- and `killed_names`'s `ForObject` arm records only the loop
+/// target and the body, never the iterable. A kill written there would
+/// therefore survive `apply_kill_prescan` and leave a read at the top of a
+/// re-enterable narrowed region checked against the pre-kill narrowing.
+/// The placement check refuses it instead, exactly as it already refuses a
+/// walrus among `ForRange`'s `range(...)` arguments.
+#[test]
+fn a_walrus_inside_a_foreign_object_loop_iterable_is_rejected() {
+    let message = lower_err_message("xs = [1]\nfor y in xs.count((x := 1)):\n    pass\n");
+    assert!(
+        message.contains("only supported in an `if`/`while`"),
+        "unexpected message: {message}"
+    );
+}
+
 #[test]
 fn contains_named_expr_finds_a_top_level_walrus() {
     let expr = HirExpr::NamedExpr {

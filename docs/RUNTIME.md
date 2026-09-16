@@ -666,6 +666,35 @@ to the four packable scalars, so the packer choice is total. The load is
 admitted only in a module body, on the identical positional rule and for the
 identical reason, so it needs no exception bridge either.
 
+**A `for` loop fails on that same edge twice, and inherits that same bound.**
+PR 3c of [#1082](https://github.com/rotnov/pycc/issues/1082) added the last two
+shim helpers. `pycc_ext_obj_get_iter` wraps `PyObject_GetIter` and reports
+failure as `NULL`, so iterating a non-iterable surfaces the host's own
+`TypeError`. `pycc_ext_obj_iter_next` is the one helper with a **three-valued**
+contract: `long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)`
+returns `1` with the next item written to `*out`, `0` for clean exhaustion, and
+`-1` for an error. `PyIter_Next` answers `NULL` for both exhaustion and
+failure, and only `PyErr_Occurred()` tells the two apart; that discrimination
+lives **inside the C helper** rather than in emitted IR, so the compiler emits
+one three-way switch over a status word instead of reproducing a CPython
+protocol rule per call site.
+`crates/pycc_codegen/src/foreign_call.rs` lowers the loop into the blocks its
+own `a_foreign_for_loop_emits_its_full_block_structure` test enumerates, which is
+the authority for the exact list: `get_iter` runs in the current block and its
+`NULL` edge goes through the shared `fail_on_null` helper, which appends the
+`foreign_iter_get_fail` / `foreign_iter_get_cont` pair every foreign call
+already uses; then come `foreign_iter_header`, which calls `iter_next` and
+switches `-1` to `foreign_iter_next_fail`, `0` to `foreign_iter_after` and `1`
+to `foreign_iter_body`; `foreign_iter_body`; `foreign_iter_after`; and
+`foreign_iter_next_fail`. **Exhaustion is not a failure edge**: an empty iterable runs the body zero
+times and the module body continues. The loop therefore adds exactly **two**
+new `-1` returns from `Py_mod_exec` — one for a non-iterable, one for an
+iterator that raises mid-iteration — and no more.
+The out-parameter the item is written through is a single pointer slot hoisted
+into the module-exec entry block, so a loop does not grow the host's stack. The
+loop is admitted only in a module body, on the identical positional rule and
+for the identical reason, so it needs no exception bridge either.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -677,7 +706,12 @@ call's *result* is governed by the same rule for the same reason:
 `PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
 returns it to compiled code unreleased. So is a subscript load's:
 `PyObject_GetItem` hands back a new reference and `pycc_ext_obj_getitem`
-returns it unreleased.
+returns it unreleased. Iteration adds two producers on the same terms:
+`PyObject_GetIter` hands back a new reference to the iterator, leaked once per
+loop, and `PyIter_Next` hands back a new reference to each item, which
+`pycc_ext_obj_iter_next` writes through `*out` unreleased — so **`for` makes
+the leak trip-count-linear by construction**, where an attribute load in a loop
+body merely happens to be written inside one.
 
 **The key slot repeats the argument slot's rule rather than inventing a second
 one.** `pycc_ext_obj_getitem` *borrows* the object and **consumes the key
@@ -733,13 +767,14 @@ iteration — the leak is trip-count-linear rather than bounded by process exit.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
-a subscript load, `len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
+a subscript load, `for` iteration, `len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
 attribute load, a foreign method call or a foreign subscript load until the
-release protocol lands**,
+release protocol lands, and must not measure a foreign `for` loop at all**,
+since that one leaks an item per trip whatever its body contains --
 because the resident-set
 growth, not the compiled code, would dominate the result. An *unbound* `str`
 argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a

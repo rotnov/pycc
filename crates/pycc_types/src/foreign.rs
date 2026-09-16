@@ -26,7 +26,10 @@
 //!    (`HirExpr::AttrGet` over a `Ty::Object` base), a call to an
 //!    unannotated private helper whose inferred return is `Ty::Object`
 //!    (`constraints.rs`'s `AttrGet` term), `o.method(...)` (PR 2b of
-//!    #1081), and `o[k]` (PR 3b of #1082, below). Every refusal must
+//!    #1081), `o[k]` (PR 3b of #1082), and the loop variable of
+//!    `for x in <object>:` (`HirStmt::ForObject`, PR 3c of #1082, which
+//!    binds `x` to `Ty::Object` directly rather than through
+//!    `check_assignment`). Every refusal must
 //!    therefore key on the **type**, never on the producing expression
 //!    shape, and the list is expected to keep growing.
 //!
@@ -133,8 +136,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
-             scalar-argument method calls, `len`, truth testing and a \
-             scalar-key subscript load on it and nothing else"
+             scalar-argument method calls, `len`, truth testing, a \
+             scalar-key subscript load and `for` iteration on it and \
+             nothing else"
         ),
         Span::new(0, 0),
     )

@@ -335,7 +335,15 @@ later in the same function. This is distinct from `T0025` (an annotated \
 assignment's initializer disagreeing with its own declared annotation) and \
 `T0026` (an assignment disagreeing with an earlier value-less `x: <type>` \
 declaration): T0023 is specifically \"this name was already inferred to \
-have a type from a real value, and this new value doesn't fit it\".",
+have a type from a real value, and this new value doesn't fit it\". \
+A `for` target is a reassignment of this kind too: iterating a foreign \
+`object` value binds the loop variable to `object`, so \
+`for x in obj.items:` reports T0023 when `x` already holds another type \
+in the same module scope -- a name keeps one type for its whole scope, \
+and the loop target cannot re-type it. That loop is only accepted in a \
+module body at all: inside a function body it is refused with `I0404` \
+before its target is ever examined, so this T0023 case never arises \
+there.",
         example: "\
 def f() -> None:
     x = 1
@@ -1279,13 +1287,17 @@ def scale(x: float) -> float:
 I0404 reports an unsupported operation on a value whose type is the opaque \
 CPython object type `object` -- a module bound by a CPython `import` under \
 `--ext`, or an attribute loaded from one. Reading such a value is not \
-itself an error, and #1026 implements five operations on it: loading a \
+itself an error, and #1026 implements six operations on it: loading a \
 further attribute, calling a method with positional \
 `int`/`float`/`bool`/`str` arguments, `len`, using it as an \
-`if`/`while` condition or comprehension guard, and *loading* a subscript \
-`o[k]` whose key is an `int`, `float`, `bool` or `str`. Everything else is \
+`if`/`while` condition or comprehension guard, *loading* a subscript \
+`o[k]` whose key is an `int`, `float`, `bool` or `str`, and iterating it \
+with `for` -- the last only when the iterable is written as an attribute \
+load (`for x in o.attr:`) or a method call (`for x in o.method(...):`), \
+the two shapes that can produce an object. Everything else is \
 still refused, including printing or f-string interpolation, binding the \
-value to a name, `isinstance`, a `match` subject, iterating with `for`, \
+value to a name, `isinstance`, a `match` subject, iterating over a bare \
+imported module or over a subscript load (`for x in o[k]:`), \
 calling the object itself, passing an argument of any other type to one of \
 its methods, and indexing with a key of any other type. Storing through a \
 subscript (`o[k] = v`) and slicing (`o[a:b]`) are still refused too, but \

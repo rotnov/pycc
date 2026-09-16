@@ -610,7 +610,7 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                 }
                 collect_local_names(body, names);
             }
-            HirStmt::ForList { var, body, .. } => {
+            HirStmt::ForList { var, body, .. } | HirStmt::ForObject { var, body, .. } => {
                 if !is_local(names, var) {
                     names.push(var);
                 }
@@ -2131,6 +2131,116 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
+        // PR 3c of #1082 (Part 3 of #1026): `for x in o.attr:` and
+        // `for x in o.method(...):`, the two iterable shapes `pycc_hir`
+        // admits without type information. This is the point where the
+        // iterable's real type decides, and the dispatch is on that
+        // resolved type and nothing else.
+        HirStmt::ForObject { var, iter, body } => {
+            let iter_ty = infer_expr(env, iter)?;
+            if !matches!(iter_ty, Ty::Object) {
+                // Reachable: an attribute load whose base is not a foreign
+                // object lowers to this node too, so `for x in C.value:`
+                // over an `int` class attribute lands here and reports
+                // `got `int``. (`for x in xs.copy():` over a `list` also
+                // lowers to this node, but its receiver is rejected with
+                // `T0043` while `iter` is inferred above, so it never
+                // reaches this arm.) Iterating any of those is not
+                // supported by another arm either, so the refusal is
+                // correct -- only its wording is specific to this shape.
+                return Err(Diagnostic::error(
+                    "I0404",
+                    format!(
+                        "`for ... in <attribute or method call>` is only supported when the \
+                         iterable is a CPython object (Part 3 of #1026), got `{}`",
+                        iter_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            // The loop variable holds each item as another opaque
+            // `PyObject *`. It is bound directly rather than through
+            // `check_assignment`, which refuses `Ty::Object` outright (the
+            // K1 guard on binding a foreign value to a name): that guard
+            // exists to stop a *user-written* assignment from capturing an
+            // object, and a `for` target is this construct's own binding,
+            // not a user assignment of a read value.
+            // A loop target that already names a binding of some *other*
+            // type is refused rather than overwritten. `env.bind` overwrites,
+            // so without this guard `x = 5` followed by `for x in <object>:`
+            // would leave `x` as `Ty::Object` for the rest of the module
+            // while the reads above it stay `Ty::Int` -- and `pycc_codegen`
+            // allocates exactly one storage slot per name per function
+            // (`collect_stmt_bindings`), asserting at every scalar read that
+            // the slot's type still equals the expression's
+            // (`local type drifted`). One name with two types is therefore
+            // unrepresentable downstream: whichever type won the slot, the
+            // other access site would either trip that assertion or -- since
+            // it is a `debug_assert`, compiled out in release -- silently
+            // store a `PyObject *` into an `i64` slot. Refusing the shape in
+            // the checker is the only resolution that leaves no program
+            // compiling to wrong code. `T0023` is reused rather than a new
+            // code minted: a `for` target *is* an assignment in Python, and
+            // the message ("cannot assign ... previously inferred as ...")
+            // describes this rebinding exactly. The mirror case -- the loop
+            // first, then `x = 5` -- already reports `T0023` from
+            // `check_assignment`, so this makes the pair symmetric.
+            // A *declared but never assigned* target is the other half of
+            // the same rule, and `lookup_any` does not see it: `x: int`
+            // puts `x` in `declared`, not `bindings`. `check_assignment`
+            // consults `declared_ty` for exactly this case and reports
+            // `T0026`, and a `for` target is an assignment, so it reports
+            // the same. The refusal is unconditional because no declared
+            // type can accept an object item: `object` is not a writable
+            // annotation (`pycc_hir` refuses it with `C0001`), so
+            // `declared_ty` never yields `Ty::Object`. A value-less
+            // `Final[int]` declaration lands here too rather than in
+            // `T0045`, which only fires once the name has a runtime value.
+            if let Some(declared) = env.declared_ty(var) {
+                return Err(Diagnostic::error(
+                    "T0026",
+                    format!(
+                        "cannot assign `object` to `{var}`, previously declared as `{var}: {}`",
+                        declared.name()
+                    ),
+                    Span::new(0, 0),
+                )
+                .with_help(format!(
+                    "use a different name for the `for` target: `{var}` is declared as `{}`, and a name has one type for its whole scope",
+                    declared.name()
+                )));
+            }
+            if let Some(previous) = env.lookup_any(var)
+                && !matches!(previous, Ty::Object)
+            {
+                return Err(Diagnostic::error(
+                        "T0023",
+                        format!(
+                            "cannot assign `object` to `{var}`, previously inferred as `{}`",
+                            previous.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(format!(
+                        "use a different name for the `for` target: `{var}` is already bound as `{}`, and a name has one type for its whole scope",
+                        previous.name()
+                    )));
+            }
+            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
+            env.bind(var.clone(), Ty::Object);
+            let mut body_env = env.clone();
+            narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::check_stmt_sequence(&mut body_env, body)?;
+            join_loop_body(env, &body_env);
+            // The loop may execute zero times, so a newly introduced loop
+            // variable is only maybe-bound afterwards -- exactly as in the
+            // `ForList` arm above, and load-bearing here because reading a
+            // `Ty::Object` name in a module body is itself admitted.
+            if !was_definite {
+                env.bind_maybe(var.to_string(), Ty::Object);
+            }
+            Ok(())
+        }
         // PR-12 Task 3 (D-117): `target = [elt for var in iter [if cond]]`
         // at module scope. `var` is resolved and bound exactly like
         // `ForList`'s own loop variable above (via the shared
@@ -2446,6 +2556,7 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::While { .. }
             | HirStmt::ForRange { .. }
             | HirStmt::ForList { .. }
+            | HirStmt::ForObject { .. }
             | HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
             // PR-12 Task 3 (D-117): a comprehension statement never contains a
@@ -2775,6 +2886,30 @@ fn check_stmt_in_function(
             }
             Ok(())
         }
+        // PR 3c of #1082: refused unconditionally inside a function body.
+        // A function body cannot read a foreign object at all (PR 2a of
+        // #1081: D-041 checks a body against the module environment as it
+        // stands after all top-level code, so it cannot tell whether the
+        // call site precedes the `import`, and `pycc_codegen`'s module-exec
+        // failure edge does not exist inside a function). The iterable is
+        // therefore never inferred here -- there is no shape of it this arm
+        // could accept.
+        //
+        // The message states that bound and stops there. `pycc_hir` routes
+        // *every* attribute and attribute-callee-call iterable to
+        // `ForObject`, so this arm also fires for `d.keys()` and
+        // `xs.copy()`, which a module body refuses too (with `T0036` and
+        // `T0043`). A message promising that a module body implements the
+        // construct would send those callers to a scope where their program
+        // fails differently.
+        HirStmt::ForObject { .. } => Err(Diagnostic::error(
+            "I0404",
+            "`for ... in <attribute or method call>` is not supported inside a function body \
+             -- a function body has no module-exec failure edge, so the statement is refused \
+             here whatever the iterable turns out to be"
+                .to_string(),
+            Span::new(0, 0),
+        )),
         // PR-12 Task 3 (D-117): function-scope counterparts of the
         // module-scope `check_stmt` arms above, `local_names`-aware
         // (`resolve_comp_iter`/`infer_expr_in` in place of the module-scope
@@ -3213,6 +3348,13 @@ fn reject_generic_calls_in_stmt(
             blocks.push(body);
         }
         HirStmt::ForList { body, .. } => blocks.push(body),
+        // Unlike `ForList`, a `ForObject`'s iterable is a real expression
+        // (`o.m(gen(1))`), so it must be walked here too or a generic call
+        // inside the iterable escapes this pass (PR 3c of #1082).
+        HirStmt::ForObject { iter, body, .. } => {
+            exprs.push(iter);
+            blocks.push(body);
+        }
         HirStmt::DictSet { key, value, .. } => {
             exprs.push(key);
             exprs.push(value);

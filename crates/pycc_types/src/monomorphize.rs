@@ -883,6 +883,20 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        // PR 3c of #1082: the iterable is a real expression and may hold a
+        // generic call, so it is walked. It is also the whole arm: the
+        // check pass has already proved the iterable is `Ty::Object`, so
+        // its root is a foreign name, and this pass seeds no foreign name
+        // into its own environment -- a pre-existing gap that refuses
+        // `len(numpy.pi)` in a module with a generic function exactly as it
+        // refuses this loop. The walk therefore always returns `T0021` here
+        // and the loop body is unreachable. It is kept as the walk rather
+        // than a no-op precisely so that closing that gap cannot silently
+        // let a generic call inside the iterable escape this pass.
+        HirStmt::ForObject { iter, .. } => {
+            rewrite_generic_calls_in_expr(env, local_names, iter, instantiations, seen)?;
+            Ok(())
+        }
         HirStmt::DictSet { key, value, .. } => {
             for sub in [key, value] {
                 rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
@@ -1308,6 +1322,14 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
         HirStmt::ForList { body, .. } => {
             // `list` is a bare `String` (variable name), not an `HirExpr`,
             // so it cannot contain a `GenericClassInstantiate`.
+            for s in body {
+                collect_generic_class_instantiations_from_stmt(s, out);
+            }
+        }
+        HirStmt::ForObject { iter, body, .. } => {
+            // PR 3c of #1082: unlike `ForList`'s `list`, this iterable is an
+            // `HirExpr` and can hold a `GenericClassInstantiate`.
+            collect_generic_class_instantiations_from_expr(iter, out);
             for s in body {
                 collect_generic_class_instantiations_from_stmt(s, out);
             }
