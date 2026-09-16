@@ -621,7 +621,7 @@ a further attribute load is refused with `I0404`. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
 attribute load until the release protocol lands**, because the resident-set
-growth, not the compiled code, would dominate the result. A follow-up issue
+growth, not the compiled code, would dominate the result. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
 tracks releasing object temporaries.
 
 The same rule decides what a *duplicate* foreign import does, and that
