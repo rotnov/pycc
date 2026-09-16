@@ -46,17 +46,24 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // The guard this answer emits is not what *handles* that failure:
         // it reads pycc's own pending state (D-173), which a CPython-set
         // exception leaves untouched, so `foreign_attr::emit` emits its own
-        // `NULL` check ahead of it (PR 2a of #1081 review finding 1). The
-        // classification stays `true` because it becomes load-bearing the
-        // moment PR 2b's shim translates CPython's exception into pycc's
-        // pending state, and because the conservative answer is the
-        // fail-closed one for a node that really can raise.
+        // `NULL` check ahead of it (PR 2a of #1081 review finding 1).
         //
         // `ObjMethodCall` (PR 2b of #1081) joins it for exactly the same
-        // reasons and with exactly the same caveat: a missing method or a
-        // method that raises makes `pycc_ext_obj_call` return `NULL` with
-        // CPython's error indicator set, and `foreign_call::emit` owns the
-        // `NULL` check that actually stops the module body.
+        // reason: a missing method or a method that raises makes
+        // `pycc_ext_obj_call` return `NULL` with CPython's error indicator
+        // set, and `foreign_call::emit` owns the `NULL` check that actually
+        // stops the module body.
+        //
+        // So for both nodes the `true` answer is fail-closed conservatism
+        // rather than a live dependency, and it is not waiting on a future
+        // part either: PR 2b did *not* translate CPython's exception into
+        // pycc's pending state, and needs no such bridge, because both
+        // nodes are admitted only in a module body -- the one function with
+        // a `-1` edge to take. `foreign_call.rs`'s module documentation and
+        // `docs/RUNTIME.md` own that reasoning. A part that lifts the
+        // positional bound is what would need the bridge, and this
+        // classification is what makes the D-173 guard correct on the day
+        // it exists.
         MirExpr::Call { .. }
         | MirExpr::DictGet { .. }
         | MirExpr::Instantiate(_)

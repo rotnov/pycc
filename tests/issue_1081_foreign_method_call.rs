@@ -353,3 +353,50 @@ fn a_str_argument_may_be_passed_twice_without_a_premature_release() {
         stderr_of(&run)
     );
 }
+
+/// An `int` argument outside the D-141 inline range reaches the host as an
+/// `OverflowError` naming the range, and the module body stops there.
+///
+/// This is the one refusal the *type* checker cannot make: `n` is an `int`
+/// like any other, and only its run-time word tells `pycc_rt_ext_int_classify`
+/// it is a heap bigint. `pycc_ext_obj_pack_int` therefore raises rather than
+/// truncating or aborting, on the same edge a failed call takes -- the shim
+/// sees a `NULL` argument, skips the attribute lookup and the vectorcall
+/// entirely, and hands the module-exec slot its `-1`. `#1040` is the issue
+/// that would widen the boundary to a real bigint; until it lands this arm is
+/// the documented boundary behavior, not a defect.
+///
+/// The C shim is outside `cargo llvm-cov`'s denominator, so this test is the
+/// only thing that exercises the arm at all.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_bigint_int_argument_raises_overflow_error_in_the_host() {
+    let dir = ScratchDir::new("foreign_call_bigint_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_bigint_arg_mod",
+        // 2**62 -- the first value the inline range excludes.
+        "import gc\n\nn: int = 4611686018427387904\ngc.set_threshold(n)\nprint(\"ran past the call\")\n",
+    );
+    let run = python(
+        &dir,
+        "try:\n\
+         \x20   import pycc_bigint_arg_mod\n\
+         except OverflowError as e:\n\
+         \x20   assert '2**62' in str(e), str(e)\n\
+         \x20   assert '#1040' in str(e), str(e)\n\
+         else:\n\
+         \x20   raise AssertionError('the bigint argument should have been refused')\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert!(
+        !stdout_of(&run).contains("ran past the call"),
+        "the module body must stop at the refused call: {}",
+        stdout_of(&run)
+    );
+}

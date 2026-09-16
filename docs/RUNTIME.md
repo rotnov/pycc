@@ -649,7 +649,16 @@ is exactly one reference per call rather than one per argument plus two.
 `pycc_ext_obj_call` owns the bound method object `PyObject_GetAttrString`
 produced and `Py_XDECREF`s it on every path, and it consumes the packed
 argument array — releasing each element on every path, including the early ones
-where a packer failed or the attribute lookup did. The four argument packers
+where a packer failed or the attribute lookup did. One argument shape has no CPython value to build, and it
+raises rather than aborting: a D-141 heap-bigint `int` word reaching
+`pycc_ext_obj_pack_int` sets `OverflowError` naming the inline range and
+returns `NULL`, which the shim treats exactly as a failed call -- it skips the
+attribute lookup and the vectorcall, and the module body stops. That is the
+same boundary narrowing the `ext` export ABI already applies to an `int`
+parameter or return, on the same terms and until the same issue
+([#1040](https://github.com/rotnov/pycc/issues/1040)) widens it; the type
+checker cannot pre-empt it, because only the run-time word distinguishes a
+bigint from any other `int`. The four argument packers
 (`pycc_ext_obj_pack_int`, `_pack_float`, `_pack_bool`, `_pack_str`) *borrow*
 their pycc-side input: each builds a new CPython object from the pycc value and
 leaves the pycc value alone. That is deliberately the opposite of the `str`
