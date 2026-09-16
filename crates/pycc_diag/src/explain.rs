@@ -1279,16 +1279,17 @@ def scale(x: float) -> float:
 I0404 reports an unsupported operation on a value whose type is the opaque \
 CPython object type `object` -- a module bound by a CPython `import` under \
 `--ext`, or an attribute loaded from one. Reading such a value is not \
-itself an error, and Part 2 of #1026 implements two operations on it: \
-loading a further attribute, and calling a method with positional \
-`int`/`float`/`bool`/`str` arguments. Everything else is still refused, \
-including printing or f-string interpolation, binding the value to a name, \
-using it as an `if`/`while` condition or comprehension guard, `isinstance`, \
-a `match` subject, calling the object itself, and passing an argument of \
-any other type to one of its methods. A method named `append`, `pop`, \
+itself an error, and #1026 implements four operations on it: loading a \
+further attribute, calling a method with positional \
+`int`/`float`/`bool`/`str` arguments, `len`, and using it as an \
+`if`/`while` condition or comprehension guard. Everything else is still \
+refused, including printing or f-string interpolation, binding the value \
+to a name, `isinstance`, a `match` subject, subscripting, iterating with \
+`for`, calling the object itself, and passing an argument of any other \
+type to one of its methods. A method named `append`, `pop`, \
 `get` or `add` is also still refused: container lowering claims those four \
 spellings before the foreign path sees them, so they do not reach it even \
-with admitted arguments. Both supported operations are \
+with admitted arguments. Every supported operation is \
 admitted only in a *module body below the import*: inside a function body \
 the read is this same error, because the compiler cannot prove the import \
 has already run. The refusal narrows as the later parts of #1026 land -- \

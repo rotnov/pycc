@@ -346,6 +346,29 @@ pub enum MirExpr {
         method: String,
         args: Vec<MirExpr>,
     },
+    /// `len(base)` where `base` is a foreign CPython object (D-244, Part 3
+    /// of #1026, PR 3a of #1082). The result is always [`Ty::Int`], so the
+    /// variant carries no `ty` field -- the same size argument
+    /// [`MirExpr::ObjMethodCall`] records above, for a value that is a true
+    /// invariant rather than a narrowing.
+    ///
+    /// A dedicated node rather than the ordinary `len` `MirExpr::Call`
+    /// lowering because the two produce different things: `list`/`dict`/`set`
+    /// `len` yields a *raw* `i64` that codegen re-tags, while this one is
+    /// answered by the shim's `pycc_ext_obj_len`, which hands back an
+    /// already-D-141-encoded word through an out-parameter and can fail. The
+    /// failure edge is what really separates them -- it needs the
+    /// module-exec entry-point assertion that `foreign_attr.rs` and
+    /// `foreign_len.rs` share, and which the scalar `len` path has no notion
+    /// of.
+    ///
+    /// The call can fail: an operand with no `__len__` makes
+    /// `PyObject_Size` raise, which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for this node.
+    ObjLen {
+        base: Box<MirExpr>,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -550,6 +573,9 @@ impl MirExpr {
             // which also records why it carries no field where `ObjAttrGet`
             // does).
             MirExpr::ObjMethodCall { .. } => Ty::Object,
+            // Likewise hardcoded: `len` is an `int` for every operand the
+            // shim can answer for. See the variant's own documentation.
+            MirExpr::ObjLen { .. } => Ty::Int,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -658,9 +684,9 @@ impl MirExpr {
                     arg.collect_named_expr_bindings(out);
                 }
             }
-            MirExpr::AttrGet { base, .. } | MirExpr::ObjAttrGet { base, .. } => {
-                base.collect_named_expr_bindings(out)
-            }
+            MirExpr::AttrGet { base, .. }
+            | MirExpr::ObjAttrGet { base, .. }
+            | MirExpr::ObjLen { base } => base.collect_named_expr_bindings(out),
             // Both sides, unlike `ObjAttrGet` directly above: a walrus can
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never

@@ -135,6 +135,22 @@ pub(super) fn lower_expr(
                     }
                 })
                 .collect();
+            // Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object
+            // becomes its own node rather than the `Call { callee: "len" }`
+            // below. The two are not interchangeable at codegen -- the
+            // scalar path yields a raw `i64` the caller re-tags, while the
+            // shim hands back an already-encoded word and can fail -- so the
+            // split happens here, where the argument's type is still known.
+            // See `MirExpr::ObjLen`'s own doc comment.
+            if callee == "len"
+                && args.len() == 1
+                && matches!(args[0].ty(), Ty::Object)
+                && !scopes.iter().any(|scope| scope.contains_key("$fn:len"))
+            {
+                return MirExpr::ObjLen {
+                    base: Box::new(args.into_iter().next().expect("checked len() == 1")),
+                };
+            }
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
             // it (`pycc_hir::class`'s own doc comment) -- so it is resolved

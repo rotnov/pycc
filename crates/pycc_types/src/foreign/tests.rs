@@ -365,23 +365,24 @@ fn a_module_body_read_above_the_import_is_unbound() {
 /// Every consuming site the refusal migration moved the `I0404` to, in
 /// both producer shapes.
 ///
-/// The five module-body condition entries are not redundant with one
-/// another: `crate::lib`'s module-body pass carries its own `if`, `while`
-/// and three comprehension-guard call sites, and only a per-site case can
-/// prove none of them was missed.
-///
 /// Every snippet here sits at **module scope**, which is the whole set of
 /// positions a `Ty::Object` can still occupy after PR 2a of #1081 narrowed
-/// the read inside a function body. The in-function condition sites keep
-/// the same guard -- `crate::lib`'s in-function pass carries five call
-/// sites of its own, and PR 2b's function-level failure protocol is what
-/// makes an `object` reachable there again -- but they cannot be reached
-/// with one today, so
-/// [`a_function_body_may_not_read_a_foreign_object`] pins what those
-/// programs report instead.
+/// the read inside a function body.
+///
+/// PR 3a of #1082 removed this table's five condition rows -- `if`,
+/// `while` and the three comprehension guards -- along with the ten
+/// `reject_object_condition` call sites they pinned. A truth test on a
+/// CPython object is a supported operation now
+/// (`crates/pycc_codegen/src/foreign_len.rs`), so there is no refusal left
+/// to assert; `tests/issue_1082_foreign_len_and_truth.rs` asserts the
+/// acceptance in its place. What remains here is the rendering, binding,
+/// walrus and `match` group, which PR 3a does not touch. The in-function
+/// shapes of all five condition sites still report the function-body read
+/// refusal, which
+/// [`the_in_function_condition_sites_report_the_function_body_read_refusal`]
+/// pins unchanged.
 #[test]
 fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_shapes() {
-    const CONDITION: &str = "using a CPython object as a condition";
     for (phrase, snippet) in [
         // Rendering: `print` and f-string interpolation both route through
         // `reject_unrenderable`.
@@ -398,12 +399,6 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
             "matching on a CPython object",
             "match numpy.pi:\n    case 1:\n        print(1)\n",
         ),
-        // The five module-body condition sites.
-        (CONDITION, "if numpy.pi:\n    print(1)\n"),
-        (CONDITION, "while numpy.pi:\n    print(1)\n"),
-        (CONDITION, "xs = [i for i in range(3) if numpy.pi]\n"),
-        (CONDITION, "ys = {i for i in range(3) if numpy.pi}\n"),
-        (CONDITION, "zs = {\"k\": i for i in range(3) if numpy.pi}\n"),
     ] {
         for (shape, source) in both_producer_shapes(snippet) {
             assert_refused(shape, &source, "I0404", phrase);
@@ -411,9 +406,14 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
     }
 }
 
-/// The same five condition sites inside a function body, which is a
-/// separate pass in `crate::lib`, all report the function-body read
-/// refusal now -- one rule, reached before any of them.
+/// The five condition sites inside a function body, which is a separate
+/// pass in `crate::lib`, all report the function-body read refusal -- one
+/// rule, reached before any of them.
+///
+/// Unchanged by PR 3a of #1082. A truth test on a CPython object is now
+/// supported *in a module body*; PR 2a's positional bound is what still
+/// stops it here, and only the module-exec entry point has the failure
+/// edge a raising `PyObject_IsTrue` takes.
 #[test]
 fn the_in_function_condition_sites_report_the_function_body_read_refusal() {
     for snippet in [
