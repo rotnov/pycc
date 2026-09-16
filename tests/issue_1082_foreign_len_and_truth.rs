@@ -9,7 +9,8 @@
 //! `int`, that PR 2a's positional bound is inherited unchanged by both, and
 //! -- in the `#[ignore]`d hosted tests at the bottom -- that a real CPython
 //! interpreter observes the right length, the right truth value, and the
-//! right exception.
+//! right exception on each of the two failing calls (`PyObject_Size` and
+//! `PyObject_IsTrue`).
 //!
 //! The hosted tests contribute no line coverage (CI's coverage job runs
 //! `llvm-cov` without `--include-ignored`); they are run by the Tier-1
@@ -262,4 +263,86 @@ fn a_len_of_an_unsized_object_raises_type_error_in_the_host() {
         stdout_of(&run)
     );
     assert!(!stdout_of(&run).contains("99"), "{}", stdout_of(&run));
+}
+
+/// A truth test whose `__bool__` raises surfaces that exception in the host,
+/// and the module body stops there.
+///
+/// The `-1` edge `foreign_len::emit_truthy` emits, end to end -- the mirror
+/// of `a_len_of_an_unsized_object_raises_type_error_in_the_host` for the
+/// other failing call: `PyObject_IsTrue` runs arbitrary user code, so it is
+/// at least as likely to raise as `PyObject_Size`. `pycc_ext_obj_truthy`
+/// returns `-1` with the exception set, and the `Py_mod_exec` slot returns
+/// `-1` without clearing it. The two absent sentinels below are what prove
+/// the body stopped at the condition rather than merely reported: neither
+/// the `if` body nor the statement after it runs.
+///
+/// The operand is a `ValueError`, not the sibling test's `TypeError`, so a
+/// host that observed the wrong exception class could not pass both tests
+/// with one hard-coded answer.
+///
+/// The helper module lives in a **subdirectory** of the scratch dir rather
+/// than beside the fixture source: a `.py` next to the source is resolved
+/// as a *project* import, which is still `C0001` (`import <project module>`
+/// binds a module namespace), so it would never reach the foreign-object
+/// path this test exists to exercise. Putting it out of the driver's reach
+/// and onto the host's `sys.path` at run time is what makes the import
+/// foreign at compile time and resolvable at run time.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_truth_test_that_raises_propagates_the_exception_in_the_host() {
+    let dir = ScratchDir::new("foreign_truthy_raises_hosted").expect("scratch");
+    let helper_dir = dir.join("host_only");
+    std::fs::create_dir_all(&helper_dir).expect("create the helper directory");
+    std::fs::write(
+        helper_dir.join("pycc_boom_helper.py"),
+        "class _Boom:\n\
+         \x20   def __bool__(self) -> bool:\n\
+         \x20       raise ValueError(\"no truth value\")\n\
+         \n\
+         \n\
+         boom = _Boom()\n",
+    )
+    .expect("write the helper module");
+    build_ext(
+        &dir,
+        "pycc_truthy_raises_mod",
+        "import pycc_boom_helper\n\
+         \n\
+         if pycc_boom_helper.boom:\n\
+         \x20   print(\"if-body reached\")\n\
+         print(\"after the if\")\n",
+    );
+    let run = python(
+        &dir,
+        "import sys\n\
+         sys.path.insert(0, 'host_only')\n\
+         try:\n\
+         \x20   import pycc_truthy_raises_mod\n\
+         except ValueError as e:\n\
+         \x20   print('ValueError', e)\n\
+         else:\n\
+         \x20   raise AssertionError('the import should have raised')\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert!(
+        stdout_of(&run).starts_with("ValueError"),
+        "{}",
+        stdout_of(&run)
+    );
+    assert!(
+        !stdout_of(&run).contains("if-body reached"),
+        "{}",
+        stdout_of(&run)
+    );
+    assert!(
+        !stdout_of(&run).contains("after the if"),
+        "{}",
+        stdout_of(&run)
+    );
 }
