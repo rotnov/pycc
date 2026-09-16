@@ -45,6 +45,26 @@
 //!
 //! `docs/TYPE_SYSTEM.md` carries the user-facing statement of both.
 //!
+//! **PR 2b of #1081 added the second supported operation: a method call.**
+//! `expr::infer_expr_in`'s `HirExpr::MethodCall` arm now answers
+//! [`Ty::Object`] for a `Ty::Object` base, where it previously fell through
+//! to `class::resolve_method_call`'s "not a class instance" `T0043`. The
+//! branch admits only *positional* arguments (`HirExpr::MethodCall` carries
+//! no keyword arguments at all) whose types are `int`, `float`, `bool` or
+//! `str` -- the four scalars the shim has a `pycc_ext_obj_pack_*` helper
+//! for -- and refuses every other argument type with
+//! [`object_operation_unsupported`], including a second `Ty::Object`. The
+//! call inherits PR 2a's positional bound unchanged: the base is read
+//! through the same `HirExpr::Name` arm, so a call inside a function body
+//! is still `I0404` and a call above the `import` is still `T0021`.
+//!
+//! The arm is not reached for four method names. `pycc_hir`'s
+//! `CONTAINER_METHOD_NAMES` (`append`, `pop`, `get`, `add`) claims those
+//! spellings while lowering, so `gc.get(1, 2)` never becomes a
+//! `HirExpr::MethodCall` at all and is refused here through a different
+//! consumer. `docs/TYPE_SYSTEM.md`'s `object` row owns that statement,
+//! and #1095 tracks routing them to foreign dispatch.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -76,7 +96,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         "I0404",
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
-             value, and Part 2 of #1026 implements attribute access on it and nothing else"
+             value, and Part 2 of #1026 implements attribute access and positional \
+             scalar-argument method calls on it and nothing else"
         ),
         Span::new(0, 0),
     )

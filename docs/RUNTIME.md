@@ -614,9 +614,27 @@ separate, and pycc's state is unset while CPython's is set, so before PR 2a of
 CPython reported `SystemError: execution of module <name> raised unreported
 exception` instead. Translating CPython's exception into pycc's pending state —
 which is what a function body would need, since only the module-body entry point
-may return `-1` — is PR 2b's work, together with `MirExpr::ObjMethodCall`; until
-then the type checker refuses reading a foreign object anywhere but a module
-body ([TYPE_SYSTEM.md](./TYPE_SYSTEM.md)).
+may return `-1` — is not implemented, and the type checker refuses reading a
+foreign object anywhere but a module body ([TYPE_SYSTEM.md](./TYPE_SYSTEM.md)).
+
+**A method call fails on that same edge, and inherits that same bound.** PR 2b
+of [#1081](https://github.com/rotnov/pycc/issues/1081) added
+`MirExpr::ObjMethodCall`, which emits two shim calls in CPython's own
+evaluation order: `pycc_ext_obj_getattr` resolves the method *before* the
+argument expressions are evaluated, then the packed arguments and the resolved
+callable go to `pycc_ext_obj_call`, which does the `PyObject_Vectorcall`.
+Resolving first is observable and required — `obj.missing(1 // 0)` must raise
+`AttributeError`, not `ZeroDivisionError`. Either shim call returns `NULL` with
+CPython's error indicator set, and
+`crates/pycc_codegen/src/foreign_call.rs` tests each result exactly as
+`foreign_attr.rs` does and returns `-1` from `Py_mod_exec`, so a missing method
+surfaces as the real `AttributeError` and a method that raises surfaces its own
+exception, with the remaining module-body statements never running. Because a
+call is admitted only in a module body — the same positional rule that governs
+a load, for the same two reasons — PR 2b needed no CPython-to-pycc exception
+bridge at all: the one function a call can appear in is the one function with a
+`-1` edge. Lifting the bound is what would require the bridge, alongside the
+ordering-aware name resolution TYPE_SYSTEM.md describes.
 
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
@@ -624,20 +642,60 @@ module object is reachable from `sys.modules` for the life of the interpreter
 regardless, and the `object` binding is a module-level global with no scope to
 leave. Part 2 of #1026 keeps that rule and extends it to the values an
 attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttrString`,
-whose result is also a new reference, and it too is never released.
+whose result is also a new reference, and it too is never released. A method
+call's *result* is governed by the same rule for the same reason:
+`PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
+returns it to compiled code unreleased.
+
+Everything the call creates *internally*, by contrast, is released, so the leak
+is exactly one reference per call rather than one per argument plus two.
+`pycc_ext_obj_call` owns the bound method object `pycc_ext_obj_getattr`
+produced and `Py_XDECREF`s it on every path, and it consumes the packed
+argument array — releasing each element on every path, including the early one
+where a packer failed. That release is measured, not merely asserted: one
+million calls passing a *named* `str` grow the resident set no faster than one
+million calls passing an `int`, once the leaked result is accounted for. One argument shape has no CPython value to build, and it
+raises rather than aborting: a D-141 heap-bigint `int` word reaching
+`pycc_ext_obj_pack_int` sets `OverflowError` naming the inline range and
+returns `NULL`, which the shim treats exactly as a failed call -- it skips the
+vectorcall, and the module body stops. That is the
+same boundary narrowing the `ext` export ABI already applies to an `int`
+parameter or return, on the same terms and until the same issue
+([#1040](https://github.com/rotnov/pycc/issues/1040)) widens it; the type
+checker cannot pre-empt it, because only the run-time word distinguishes a
+bigint from any other `int`. The four argument packers
+(`pycc_ext_obj_pack_int`, `_pack_float`, `_pack_bool`, `_pack_str`) *borrow*
+their pycc-side input: each builds a new CPython object from the pycc value and
+leaves the pycc value alone. That is deliberately the opposite of the `str`
+*result* packer D-244's 2026-09-13 `str`-ingress amendment describes, which
+consumes the `PyStrObj` it is handed, and it is what lets the same `str`
+local be passed to two calls in a row: were the argument packer to consume, the
+second call would read freed memory. Nothing crossing into the shim transfers
+ownership, so codegen needs no D-208 `pending_int_releases` bookkeeping around
+a call — the mark/truncate pair that exists for pycc's own int temporaries has
+nothing to guard here.
 
 That extension is a deliberate, bounded regression and is recorded as one. A
 module object leaks at most once per process; an attribute load sits inside
 ordinary control flow, so `numpy.pi` written in a loop leaks one reference per
 iteration — the leak is trip-count-linear rather than bounded by process exit.
-Part 2 accepts it because releasing correctly requires the borrowed-versus-owned
-distinction that only arrives with argument marshalling, and because nothing in
-Part 2 can yet hand such a value to a host: every consuming operation other than
-a further attribute load is refused with `I0404`. **A benchmark run under
+Part 2 accepts it because releasing correctly requires a release protocol that
+is not yet built, and because nothing in Part 2 can hand such a value to a host:
+every consuming operation other than a further attribute load or a method call
+is refused with `I0404`, and the `ext` export boundary refuses an `object`
+parameter or return (`C0003`). A method call's result leaks on exactly the same
+terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
-attribute load until the release protocol lands**, because the resident-set
-growth, not the compiled code, would dominate the result. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
+attribute load or a foreign method call until the release protocol lands**,
+because the resident-set
+growth, not the compiled code, would dominate the result. An *unbound* `str`
+argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a
+second, unrelated growth term on top: pycc's own pre-existing unbound-`str`-temporary
+leak, which the "Language surface" row of [ROADMAP.md](./ROADMAP.md) already
+records and which a native build with no foreign call reproduces identically.
+It is not owned by this boundary, but it compounds here, so prefer a named
+`str` local when measuring. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
 tracks releasing object temporaries.
 
 The same rule decides what a *duplicate* foreign import does, and that

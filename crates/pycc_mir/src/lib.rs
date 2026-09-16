@@ -308,6 +308,44 @@ pub enum MirExpr {
         attr: String,
         ty: Ty,
     },
+    /// `base.method(args)` where `base` is a foreign CPython object (D-244,
+    /// Part 2 of #1026, PR 2b of #1081) -- the *call* counterpart of
+    /// [`MirExpr::ObjAttrGet`] directly above, and String-keyed for exactly
+    /// the same reason: a foreign object has no `HirClassDef`, so `method`
+    /// resolves to no mangled symbol and must survive lowering as a
+    /// `String`. It is deliberately *not* lowered as an `ObjAttrGet` feeding
+    /// a separate call node: the shim performs the attribute load and the
+    /// vectorcall in one helper (`pycc_ext_obj_call`), so the bound method
+    /// object never becomes a pycc value and the whole operation has one
+    /// failure edge instead of two.
+    ///
+    /// `args` are already-checked scalars (`pycc_types`' `HirExpr::MethodCall`
+    /// arm admits `int`/`float`/`bool`/`str` and refuses everything else with
+    /// `I0404`); codegen marshals each one into a `PyObject *` before the
+    /// call.
+    ///
+    /// The call can fail -- a missing method, or a method that raises --
+    /// which is why `pycc_codegen::exception::expression_can_set_exception`
+    /// answers `true` for this node.
+    ///
+    /// Unlike [`MirExpr::ObjAttrGet`] directly above, this variant carries
+    /// **no `ty` field**: [`MirExpr::ty`] answers [`Ty::Object`] for it
+    /// unconditionally. The reason is size rather than taste. The two would
+    /// otherwise be symmetric -- both results are opaque for the same reason,
+    /// and `ObjAttrGet` keeps the field so a later part that learns an
+    /// attribute's real type needs no shape change -- but this variant is
+    /// one `Vec` wider, which makes it the widest in the enum, and `MirExpr`
+    /// is embedded twice over in `MirStmt`, which `MirItem::TopLevelStmt`
+    /// holds by value. Carrying a field whose value is a constant costs 16
+    /// bytes here and 16 bytes in `MirStmt`, which is enough to push
+    /// `MirItem` past `clippy::large_enum_variant`'s threshold and fail the
+    /// workspace lint gate. A later part that learns a foreign call's return
+    /// type adds the field back and boxes something else in the same change.
+    ObjMethodCall {
+        base: Box<MirExpr>,
+        method: String,
+        args: Vec<MirExpr>,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -507,6 +545,11 @@ impl MirExpr {
             MirExpr::SetAdd { .. } => Ty::None,
             MirExpr::Instantiate(inst) => inst.ty.clone(),
             MirExpr::AttrGet { ty, .. } | MirExpr::ObjAttrGet { ty, .. } => ty.clone(),
+            // No `ty` field to read: a foreign method call's result is
+            // opaque by construction (see the variant's own documentation,
+            // which also records why it carries no field where `ObjAttrGet`
+            // does).
+            MirExpr::ObjMethodCall { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -617,6 +660,16 @@ impl MirExpr {
             }
             MirExpr::AttrGet { base, .. } | MirExpr::ObjAttrGet { base, .. } => {
                 base.collect_named_expr_bindings(out)
+            }
+            // Both sides, unlike `ObjAttrGet` directly above: a walrus can
+            // hide in an argument (`numpy.seed((n := 1))`) just as easily as
+            // in the base, and a binding missed here is a name codegen never
+            // allocates storage for.
+            MirExpr::ObjMethodCall { base, args, .. } => {
+                base.collect_named_expr_bindings(out);
+                for arg in args {
+                    arg.collect_named_expr_bindings(out);
+                }
             }
             MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)

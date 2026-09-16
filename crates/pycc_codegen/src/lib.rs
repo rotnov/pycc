@@ -35,6 +35,7 @@ use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
 mod ext_thunk;
 mod foreign_attr;
+mod foreign_call;
 mod foreign_import;
 mod target_machine;
 pub use ext::{
@@ -42,7 +43,11 @@ pub use ext::{
     ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
     ext_thunk_symbol, is_ext_exportable_name,
 };
-use ext::{EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, entry_fn_name, is_module_entry_symbol};
+use ext::{
+    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
+    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, entry_fn_name,
+    is_module_entry_symbol,
+};
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -2218,7 +2223,8 @@ fn emit_expr_unchecked<'ctx>(
                 // -- `pycc_types` refuses binding a CPython object to a
                 // name, so no *local* can carry one -- but a foreign
                 // import's module global is a storage slot like any other,
-                // and `MirExpr::ObjAttrGet`'s base is a plain
+                // and `MirExpr::ObjAttrGet`'s base -- like
+                // `MirExpr::ObjMethodCall`'s, added by PR 2b -- is a plain
                 // `MirExpr::Name` read of it. Without this arm the one
                 // shape PR 2a actually compiles (`numpy.pi`) panics here
                 // before reaching `foreign_attr::emit`.
@@ -3640,6 +3646,27 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjAttrGet { base, attr, .. } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_attr::emit(context, builder, module, base_scalar, attr)
+        }
+        // Part 2 of #1026 (PR 2b of #1081): the call counterpart of
+        // `ObjAttrGet` directly above. The order below is CPython's own --
+        // base, then the callable, then each argument left to right -- and
+        // resolving the callable *here*, rather than inside the call shim,
+        // is the whole reason `foreign_call` exposes two functions:
+        // `obj.missing(1 // 0)` must raise `AttributeError`, not
+        // `ZeroDivisionError`. `foreign_call` carries the rest of the
+        // contract, including the argument marshalling, the ownership rule,
+        // and the two `NULL` checks that route a failure to the
+        // module-exec failure edge.
+        MirExpr::ObjMethodCall {
+            base, method, args, ..
+        } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let bound = foreign_call::emit_lookup(context, builder, module, base_scalar, method);
+            let arg_scalars: Vec<Scalar<'ctx>> = args
+                .iter()
+                .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
+                .collect();
+            foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());

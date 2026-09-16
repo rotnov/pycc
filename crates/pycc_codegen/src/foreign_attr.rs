@@ -43,18 +43,19 @@ fn obj_getattr_fn<'ctx>(
     )
 }
 
-/// The base of a foreign attribute load, as a `PyObject *`.
+/// The base of a foreign attribute load or method call, as a `PyObject *`.
 ///
 /// `pycc_mir`'s lowering builds `MirExpr::ObjAttrGet` only where the base's
 /// inferred type is `Ty::Object` (`pycc_mir::expr`'s `HirExpr::AttrGet`
 /// arm), and `ty_to_basic_type` maps that to a pointer, so every other
 /// `Scalar` here is a lowering defect rather than a program the front end
 /// let through.
-fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
+pub(super) fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
     let Scalar::Object(ptr) = scalar else {
         panic!(
             "pycc_codegen: internal error: a foreign attribute base did not evaluate to a \
-             CPython object -- pycc_mir lowers `ObjAttrGet` only for a `Ty::Object` base"
+             CPython object -- pycc_mir lowers `ObjAttrGet`/`ObjMethodCall` only for a \
+             `Ty::Object` base"
         )
     };
     ptr
@@ -155,7 +156,7 @@ pub(super) fn emit<'ctx>(
 /// [`emit`]'s own doc comment for why every admitted `ObjAttrGet` really is
 /// emitted here -- it is a `pycc_types` refusal, so reaching this arm from
 /// anywhere else is a front-end defect.
-fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
+pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
     let function = builder
         .get_insert_block()
         .expect("the builder is positioned inside a block")

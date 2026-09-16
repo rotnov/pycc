@@ -712,6 +712,148 @@ PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name)
     return PyObject_GetAttrString(obj, name);
 }
 
+/*
+ * Part 2 of #1026, PR 2b of #1081: argument marshalling for
+ * `pycc_ext_obj_call` below.
+ *
+ * Four packers, one per scalar `pycc_types` admits as an argument to a
+ * foreign method call. Each takes a pycc-side value and returns a *new*
+ * reference to its CPython equivalent, or NULL with a CPython exception
+ * already set. They are non-`static` for the same reason their `obj_`
+ * neighbours are: LLVM-generated code declares and calls them by these
+ * exact names (`EXT_OBJ_PACK_*_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * **Every packer borrows its argument.** This is the one place where they
+ * deliberately differ from the result packers above (`pycc_ext_pack_int`'s
+ * bigint arm releases, `pycc_ext_pack_str` releases unconditionally), which
+ * receive an already-transferred return value. An argument is an ordinary
+ * module-body temporary that pycc's own machinery still owns, so consuming
+ * it here would mean the boundary and `pycc_rt` both believe they hold the
+ * last reference. Borrowing keeps ownership entirely on the pycc side, and
+ * the price -- a bigint word that reaches the overflow arm is not released
+ * -- is the same leak-only rule `docs/RUNTIME.md` already records for this
+ * boundary, on a path that aborts the module load anyway.
+ */
+PyObject *pycc_ext_obj_pack_int(long long encoded)
+{
+    switch (pycc_rt_ext_int_classify(encoded)) {
+    case PYCC_EXT_INT_SMALLINT:
+        return PyLong_FromLongLong(pycc_rt_ext_int_decode(encoded));
+    case PYCC_EXT_INT_FALSE:
+        Py_RETURN_FALSE;
+    case PYCC_EXT_INT_TRUE:
+        Py_RETURN_TRUE;
+    case PYCC_EXT_INT_BIGINT:
+        PyErr_SetString(PyExc_OverflowError,
+                        "an int argument to a CPython object's method is outside the "
+                        "inline-integer range [-2**62, 2**62-1] this pycc version's `ext` "
+                        "boundary supports (see #1040)");
+        return NULL;
+    default:
+        PyErr_SetString(PyExc_SystemError,
+                        "an int argument to a CPython object's method was an "
+                        "unrecognized int word");
+        return NULL;
+    }
+}
+
+PyObject *pycc_ext_obj_pack_float(double value)
+{
+    return PyFloat_FromDouble(value);
+}
+
+/*
+ * `PyBool_FromLong` hands back one of the two interned singletons, so
+ * `x is True` holds on the host side exactly as `pycc_ext_pack_bool`
+ * already guarantees for a returned `bool`.
+ */
+PyObject *pycc_ext_obj_pack_bool(char value)
+{
+    return PyBool_FromLong(value != 0);
+}
+
+/*
+ * Borrowing, unlike `pycc_ext_pack_str` above: see the block comment on
+ * `pycc_ext_obj_pack_int`. The `PyStrObj` stays owned by the compiled
+ * module body, and `PyUnicode_FromStringAndSize` copies the bytes, so the
+ * CPython string is an independent object with no shared identity (#1043).
+ */
+PyObject *pycc_ext_obj_pack_str(void *value)
+{
+    const unsigned char *bytes;
+    size_t len = 0;
+
+    if (value == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "a str argument to a CPython object's method was NULL");
+        return NULL;
+    }
+    bytes = pycc_rt_ext_str_bytes(value, &len);
+    return PyUnicode_FromStringAndSize((const char *)bytes, (Py_ssize_t)len);
+}
+
+/*
+ * Part 2 of #1026, PR 2b of #1081: the method-call helper compiled code
+ * calls for `gc.disable()` on a value whose static type is the opaque
+ * `object`.
+ *
+ * Deliberately *not* fused with the attribute load. An earlier revision
+ * took `(obj, method)` and performed the `PyObject_GetAttrString` here, so
+ * that the bound method never became a pycc value and the whole operation
+ * presented one failure edge instead of two. That ordering is observable
+ * and wrong: CPython resolves a call's callable *before* it evaluates the
+ * arguments, so `obj.missing(1 // 0)` must raise `AttributeError`, while
+ * the fused shim raised `ZeroDivisionError` -- the generated code had
+ * already evaluated every argument by the time the lookup ran. Codegen now
+ * emits `pycc_ext_obj_getattr` before the argument expressions and passes
+ * the resulting callable here, which costs a second NULL test and a second
+ * failure edge and buys back CPython's own evaluation order. The bound
+ * method still never becomes a pycc value: it lives in an LLVM temporary
+ * that dominates this call, and this function releases it.
+ *
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_OBJ_CALL_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `bound` is an *owned* reference -- the one `pycc_ext_obj_getattr`
+ * returned -- and this function releases it on every path. `args` points at
+ * `nargs` slots of owned references produced by the `pycc_ext_obj_pack_*`
+ * helpers above; this function consumes every one of them on every path, so
+ * the generated code never has to. The returned reference is deliberately
+ * never released, on the leak-only rule `docs/RUNTIME.md` records for this
+ * boundary -- the *result* is the only thing that leaks, because it is the
+ * only thing that escapes into compiled code as an `object` value.
+ *
+ * A packer that failed stored NULL in its slot with a CPython exception
+ * already set. Scanning for that here rather than testing each packer's
+ * result in LLVM keeps the emitted code one straight line per argument, and
+ * propagating the *first* exception unchanged is the correct CPython state:
+ * a second, synthetic error would overwrite the real one.
+ *
+ * A NULL `bound` is defence in depth: the caller's own NULL check on the
+ * lookup already routed a failed attribute load to the module-exec failure
+ * edge before this call is reached.
+ */
+PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
+{
+    PyObject *result;
+    long long i;
+    int packed = 1;
+
+    for (i = 0; i < nargs; i++) {
+        if (args[i] == NULL) {
+            packed = 0;
+        }
+    }
+    result = (bound == NULL || !packed)
+                 ? NULL
+                 : PyObject_Vectorcall(bound, args, (size_t)nargs, NULL);
+    Py_XDECREF(bound);
+    for (i = 0; i < nargs; i++) {
+        Py_XDECREF(args[i]);
+    }
+    return result;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

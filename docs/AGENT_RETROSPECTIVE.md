@@ -33,6 +33,69 @@ never a merge gate.
 
 ---
 
+## 2026-09-16 — A continuation summary described work the branch already contained
+
+**What happened.** A session resumed from a compaction summary whose
+"pending" section named the implementation of PR 2b of #1081. The session
+dispatched an `Agent` to implement it. The repository owner interrupted
+the tool call; the git status attached to that interruption showed three
+commits already on the branch implementing exactly that work.
+
+**Root cause.** A compaction summary is a snapshot of a conversation, not
+of the repository. Work committed after the summarized portion — or
+committed by the summarized portion and described there as planned —
+reads as pending. Nothing in the summary is dated against a commit.
+
+**What fixed it.** Abandoning the dispatch and reading `git log` against
+the branch.
+
+**Lesson.** On resuming from a summary, run `git log --oneline` against
+the task branch and compare it with the summary's pending list *before*
+dispatching any implementation agent. A duplicate implementation is worse
+than a wasted read: it either conflicts with the existing commits or
+silently reverts them.
+
+## 2026-09-16 — A local gate set that omitted `cargo fmt --check`
+
+**What happened.** A branch passed every local gate the session ran —
+diff coverage at 100%, clippy with warnings denied, the full test suite,
+the `scripts/` unittest suite, both agent validators, the decision-immutability
+and site-pin checks — and then failed CI on `rustfmt`, for a four-line
+call the formatter wanted wrapped.
+
+**Root cause.** The session's local gate list was assembled from the gates
+that had previously failed it. `cargo fmt --check` had never failed, so it
+was never added, and clippy's green verdict read as "formatting is fine"
+although the two lints share nothing.
+
+**What fixed it.** `cargo fmt --all`, one commit, one push.
+
+**Lesson.** `cargo fmt --all -- --check` belongs in the local gate set
+beside clippy, always, and it costs about a second. More generally: a local
+gate set derived from remembered failures is a list of what has already gone
+wrong, not a model of what CI runs — derive it from the workflow file
+instead.
+
+## 2026-09-16 — A CI log full of `error:` lines pointed at the wrong failure, for the third time
+
+**What happened.** A Windows `native-build-test` job failed. The first
+several `error:` matches in its log were C compile errors
+(`use of undeclared identifier 'exc_type'`). Those belong to a deliberate
+negative fixture whose own test *passed*. The real cause was seven hosted
+tests panicking on an `--ext` module-name contract, at the tail of the
+log.
+
+**Root cause.** This repository's test suite deliberately compiles code
+that must fail, so `error:` is a normal, expected token in a green run.
+Grepping for it selects fixtures before failures.
+
+**Lesson.** This is the third recurrence, so it is stated as a procedure
+rather than an observation: read a failing CI log by grepping for
+`##[error]` and reading the tail, never by reading the first `error:`
+match. The same rule covers `warning:` and `panicked at`.
+
+---
+
 ## 2026-09-14 — A documented cleanup lived in a `trap` that an agent-driven loop can never reach
 
 **What happened.** The session's temp root had grown to 51 GB. Twelve

@@ -115,6 +115,34 @@ pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 /// either side is a crash at first call rather than a link error.
 pub const EXT_OBJ_GETATTR_SYMBOL: &str = "pycc_ext_obj_getattr";
 
+/// The fixed C shim's method-call helper (Part 2 of #1026, PR 2b of #1081):
+/// it takes a borrowed `PyObject *`, a NUL-terminated method name, an array
+/// of `nargs` *owned* argument references, and returns a *new* reference to
+/// the call's result, or `NULL` with the CPython exception already set. It
+/// consumes every argument reference on every path.
+///
+/// Fused rather than "getattr then call" so the bound method object never
+/// becomes a pycc value and the whole operation has one failure edge; the C
+/// side's own comment carries the full rationale. Spelled once here for
+/// exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_CALL_SYMBOL: &str = "pycc_ext_obj_call";
+
+/// The shim's `int` argument packer: a D-141 encoded int word in, a new
+/// `PyObject *` reference out, or `NULL` with an `OverflowError` set for a
+/// bigint (#1040). Borrows its argument -- see the C side's own comment.
+pub const EXT_OBJ_PACK_INT_SYMBOL: &str = "pycc_ext_obj_pack_int";
+
+/// The shim's `float` argument packer (`PyFloat_FromDouble`).
+pub const EXT_OBJ_PACK_FLOAT_SYMBOL: &str = "pycc_ext_obj_pack_float";
+
+/// The shim's `bool` argument packer (`PyBool_FromLong`, so the result is
+/// one of the two interned singletons).
+pub const EXT_OBJ_PACK_BOOL_SYMBOL: &str = "pycc_ext_obj_pack_bool";
+
+/// The shim's `str` argument packer: a borrowed `PyStrObj` in, an
+/// independent CPython `str` out.
+pub const EXT_OBJ_PACK_STR_SYMBOL: &str = "pycc_ext_obj_pack_str";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]
