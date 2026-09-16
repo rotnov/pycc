@@ -206,3 +206,72 @@ fn a_chained_attribute_load_stays_opaque_at_every_level() {
     };
     assert_eq!(inner, "linalg");
 }
+
+// ---------------------------------------------------------------------
+// PR 2b of #1081: method calls on the bound object.
+//
+// Same rationale as the two attribute-load tests above -- this is the
+// only place the `HirExpr::MethodCall` -> `MirExpr::ObjMethodCall`
+// lowering runs on real HIR. `pycc_codegen`'s `foreign_call.rs` tests
+// hand-build the node, and the integration tests either stop at
+// `pycc check` (which never lowers) or need a hosting interpreter.
+// ---------------------------------------------------------------------
+
+fn method_call(
+    base: pycc_hir::HirExpr,
+    method: &str,
+    args: Vec<pycc_hir::HirExpr>,
+) -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::MethodCall {
+        base: Box::new(base),
+        method: method.to_string(),
+        args,
+    }
+}
+
+#[test]
+fn a_method_call_on_a_foreign_object_lowers_to_obj_method_call() {
+    // `import numpy` / `numpy.sqrt(2.0)`. The `Ty::Object` base makes the
+    // arm above `class_def_of` fire: a foreign object has no
+    // `HirClassDef`, so every later branch in that arm would fail to
+    // resolve a mangled symbol.
+    let hir = module_with_discarded(method_call(
+        pycc_hir::HirExpr::Name("numpy".to_string()),
+        "sqrt",
+        vec![pycc_hir::HirExpr::FloatLiteral(2.0)],
+    ));
+    let expr = only_discarded_expr(&hir);
+    // The node carries no `ty` field, so `ty()` is the only way to ask --
+    // and answering `Ty::Object` unconditionally is the contract that
+    // replaces the field.
+    assert_eq!(expr.ty(), Ty::Object);
+    let MirExpr::ObjMethodCall { base, method, args } = expr else {
+        panic!("expected an `ObjMethodCall`");
+    };
+    assert_eq!(method, "sqrt");
+    assert_eq!(args.len(), 1);
+    assert!(matches!(args[0], MirExpr::FloatLiteral(f) if f == 2.0));
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+}
+
+#[test]
+fn a_method_call_on_a_foreign_attribute_keeps_the_load_as_its_base() {
+    // `numpy.linalg.norm(1)`: the base is itself an `ObjAttrGet`, which is
+    // what proves the arm keys on the base's *type* rather than on the
+    // base being a bare name. Zero-or-more arguments also means the
+    // argument vector is lowered element by element rather than reused.
+    let hir = module_with_discarded(method_call(
+        attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "linalg"),
+        "norm",
+        Vec::new(),
+    ));
+    let MirExpr::ObjMethodCall { base, method, args } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjMethodCall`");
+    };
+    assert_eq!(method, "norm");
+    assert!(args.is_empty());
+    let MirExpr::ObjAttrGet { attr, .. } = *base else {
+        panic!("expected the base to stay an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "linalg");
+}

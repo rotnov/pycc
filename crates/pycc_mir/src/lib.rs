@@ -322,17 +322,29 @@ pub enum MirExpr {
     /// `args` are already-checked scalars (`pycc_types`' `HirExpr::MethodCall`
     /// arm admits `int`/`float`/`bool`/`str` and refuses everything else with
     /// `I0404`); codegen marshals each one into a `PyObject *` before the
-    /// call. `ty` is always [`Ty::Object`] in Part 2, for the same reason
-    /// `ObjAttrGet`'s is.
+    /// call.
     ///
     /// The call can fail -- a missing method, or a method that raises --
     /// which is why `pycc_codegen::exception::expression_can_set_exception`
     /// answers `true` for this node.
+    ///
+    /// Unlike [`MirExpr::ObjAttrGet`] directly above, this variant carries
+    /// **no `ty` field**: [`MirExpr::ty`] answers [`Ty::Object`] for it
+    /// unconditionally. The reason is size rather than taste. The two would
+    /// otherwise be symmetric -- both results are opaque for the same reason,
+    /// and `ObjAttrGet` keeps the field so a later part that learns an
+    /// attribute's real type needs no shape change -- but this variant is
+    /// one `Vec` wider, which makes it the widest in the enum, and `MirExpr`
+    /// is embedded twice over in `MirStmt`, which `MirItem::TopLevelStmt`
+    /// holds by value. Carrying a field whose value is a constant costs 16
+    /// bytes here and 16 bytes in `MirStmt`, which is enough to push
+    /// `MirItem` past `clippy::large_enum_variant`'s threshold and fail the
+    /// workspace lint gate. A later part that learns a foreign call's return
+    /// type adds the field back and boxes something else in the same change.
     ObjMethodCall {
         base: Box<MirExpr>,
         method: String,
         args: Vec<MirExpr>,
-        ty: Ty,
     },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
@@ -532,9 +544,12 @@ impl MirExpr {
             // gate, so this is hardcoded on purpose.
             MirExpr::SetAdd { .. } => Ty::None,
             MirExpr::Instantiate(inst) => inst.ty.clone(),
-            MirExpr::AttrGet { ty, .. }
-            | MirExpr::ObjAttrGet { ty, .. }
-            | MirExpr::ObjMethodCall { ty, .. } => ty.clone(),
+            MirExpr::AttrGet { ty, .. } | MirExpr::ObjAttrGet { ty, .. } => ty.clone(),
+            // No `ty` field to read: a foreign method call's result is
+            // opaque by construction (see the variant's own documentation,
+            // which also records why it carries no field where `ObjAttrGet`
+            // does).
+            MirExpr::ObjMethodCall { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),

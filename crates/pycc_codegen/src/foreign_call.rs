@@ -232,7 +232,6 @@ mod tests {
                 }),
                 method: method.to_string(),
                 args,
-                ty: Ty::Object,
             })),
         ]
     }
@@ -388,7 +387,6 @@ mod tests {
                     base: Box::new(MirExpr::IntLiteral(1)),
                     method: "disable".to_string(),
                     args: Vec::new(),
-                    ty: Ty::Object,
                 },
             ))],
         );

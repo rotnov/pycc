@@ -989,7 +989,6 @@ pub(super) fn lower_expr(
                         .iter()
                         .map(|a| lower_expr(a, scopes, classes, current_class))
                         .collect(),
-                    ty: Ty::Object,
                 };
             }
             let class_def = class_def_of(&base, classes);
