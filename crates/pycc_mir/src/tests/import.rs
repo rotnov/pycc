@@ -334,3 +334,36 @@ fn len_of_a_foreign_attribute_keeps_the_load_as_its_base() {
     };
     assert_eq!(attr, "linalg");
 }
+
+#[test]
+fn len_of_a_foreign_object_ignores_a_module_level_len_definition() {
+    // The regression PR 3a's original guard caused: a module-level
+    // `def len(...)` put `$fn:len` in scope, the guard declined the
+    // `ObjLen` split, and `len(<object>)` reached codegen as an ordinary
+    // `Call` whose `Scalar::Object` argument tripped `expect_list_pointer`.
+    // `pycc_types::check` resolves `len` as the reserved builtin either
+    // way, so the lowering must not second-guess it. The divergence from
+    // CPython -- that the shadow is ignored rather than refused -- is
+    // #1098, not this node's concern.
+    let hir = HirModule {
+        items: vec![
+            HirItem::Function {
+                name: "len".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                    "x".to_string(),
+                )))],
+            },
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(call(
+                "len",
+                vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+            ))),
+        ],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    };
+    let MirExpr::ObjLen { base } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjLen` despite the shadowing `def len`");
+    };
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+}

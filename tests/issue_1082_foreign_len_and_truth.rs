@@ -19,6 +19,12 @@
 //! unit tests in `crates/pycc_codegen/src/foreign_len.rs`, which assert the
 //! emitted IR for all five condition sites and both failure edges without
 //! needing a CPython on `PATH`.
+//!
+//! One further hosted test, `a_shadowing_len_definition_still_builds_in_the_host`,
+//! pins that a module-level `def len` does not divert `len(<object>)` away
+//! from the `MirExpr::ObjLen` lowering and into a codegen panic. Its
+//! non-ignored counterpart -- the line coverage for that fix -- is
+//! `pycc_mir`'s `len_of_a_foreign_object_ignores_a_module_level_len_definition`.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
@@ -345,4 +351,50 @@ fn a_truth_test_that_raises_propagates_the_exception_in_the_host() {
         "{}",
         stdout_of(&run)
     );
+}
+
+/// A module-level `def len` does not derail `len(<foreign object>)`.
+///
+/// The regression PR 3a's original MIR guard caused: it declined the
+/// `MirExpr::ObjLen` split whenever `$fn:len` was in scope, but
+/// `pycc_types::check` resolves `len` as the reserved builtin regardless,
+/// so the call reached codegen as an ordinary `Call` and tripped
+/// `expect_list_pointer`'s internal-error assertion -- a `pycc check` that
+/// exits 0 followed by a compiler panic in `pycc build --ext`.
+///
+/// The printed value is `1`, not `2`: `python3 -c` gives `sys.argv` one
+/// element and the shadowing definition is deliberately *not* honoured, so
+/// this asserts the builtin's answer. That CPython would print `2` here is
+/// the divergence filed as #1098; this test pins the compiler's current,
+/// non-panicking behavior rather than that open question.
+///
+/// The non-ignored coverage for the same fix lives in `pycc_mir`'s
+/// `len_of_a_foreign_object_ignores_a_module_level_len_definition`, so the
+/// changed lines are covered without a hosting interpreter.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_shadowing_len_definition_still_builds_in_the_host() {
+    let dir = ScratchDir::new("foreign_len_shadowed_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_len_shadowed_mod",
+        "import sys\n\
+         \n\
+         \n\
+         def len(x: int) -> int:\n\
+         \x20   return x + 1\n\
+         \n\
+         \n\
+         n: int = 0\n\
+         n = len(sys.argv)\n\
+         print(n)\n",
+    );
+    let run = python(&dir, "import pycc_len_shadowed_mod\n");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert_eq!(stdout_of(&run), "1\n", "stderr: {}", stderr_of(&run));
 }
