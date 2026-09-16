@@ -22,11 +22,13 @@
 //!    below names the **operation** instead ([`object_operation_unsupported`]),
 //!    because the consumer knows what it was about to do while the value
 //!    it holds is an anonymous temporary.
-//! 2. There are now two producer shapes, not one: `o.attr`
-//!    (`HirExpr::AttrGet` over a `Ty::Object` base) and a call to an
+//! 2. There are now several producer shapes, not one: `o.attr`
+//!    (`HirExpr::AttrGet` over a `Ty::Object` base), a call to an
 //!    unannotated private helper whose inferred return is `Ty::Object`
-//!    (`constraints.rs`'s `AttrGet` term). Every refusal must therefore
-//!    key on the **type**, never on the producing expression shape.
+//!    (`constraints.rs`'s `AttrGet` term), `o.method(...)` (PR 2b of
+//!    #1081), and `o[k]` (PR 3b of #1082, below). Every refusal must
+//!    therefore key on the **type**, never on the producing expression
+//!    shape, and the list is expected to keep growing.
 //!
 //! **PR 2a of #1081 bounded the admitted read by position.** A foreign
 //! object may be read only where the compiler can tell the `import` has
@@ -80,6 +82,25 @@
 //! `not o` is *not* part of this: `unop.rs`'s `Not` arm answers `T0021` for
 //! a non-`bool` operand, which it did before PR 3a and still does.
 //!
+//! **PR 3b of #1082 added another producer shape: a subscript load.**
+//! `o[k]` type-checks to [`Ty::Object`] (`expr.rs`'s `HirExpr::Subscript`
+//! arm has a `Ty::Object` base arm ahead of the `T0033` catch-all, and
+//! `constraints.rs`'s own `Subscript` arm lifts the term exactly as its
+//! `AttrGet` arm does), so a key is now a fourth place a foreign value can
+//! be consumed. The admitted keys are the same four scalars a method call's
+//! arguments are -- `int`, `float`, `bool`, `str`, the ones with a
+//! `pycc_ext_obj_pack_*` helper -- and every other key type, including a
+//! second [`Ty::Object`], is refused with
+//! [`object_operation_unsupported`] naming the key's type.
+//!
+//! Only the **load** is admitted. `o[k] = v` stays refused: it is a
+//! different HIR shape, which `pycc_hir` rejects with `C0001` ("only
+//! assigning to a bare-name subscript target") before this crate sees it,
+//! and `check_assignment`'s own `reject_object_operand` guard keeps
+//! `x = o[k]` an `I0404` besides. A *slice* (`o[a:b]`) is a third shape
+//! again and keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The positional
+//! bound is inherited unchanged.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -112,8 +133,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
-             scalar-argument method calls, `len` and truth testing on it and \
-             nothing else"
+             scalar-argument method calls, `len`, truth testing and a \
+             scalar-key subscript load on it and nothing else"
         ),
         Span::new(0, 0),
     )

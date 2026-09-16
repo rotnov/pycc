@@ -73,7 +73,12 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `PyObject_Size` raises `TypeError` for an operand with no length,
         // and `foreign_len::emit_len` owns the `-1` check that actually
         // stops the module body.
-        | MirExpr::ObjLen { .. } => true,
+        | MirExpr::ObjLen { .. }
+        // PR 3b of #1082: `ObjSubscript` joins them on the identical
+        // argument -- `PyObject_GetItem` raises `KeyError`, `IndexError` or
+        // `TypeError`, and `foreign_call::emit_subscript` owns the `NULL`
+        // check that actually stops the module body.
+        | MirExpr::ObjSubscript { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod

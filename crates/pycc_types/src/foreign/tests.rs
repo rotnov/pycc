@@ -480,13 +480,120 @@ fn the_operations_with_a_pre_existing_refusal_keep_it() {
             "unary operator Not is not defined",
             "if not numpy.pi:\n    print(1)\n",
         ),
-        ("T0033", "does not support indexing", "x = numpy.pi[0]\n"),
         (
             "T0039",
             "tuple element type `object`",
             "t = (numpy.pi, 1)\n",
         ),
+        // PR 3b of #1082 admits a subscript *load* but not a slice:
+        // `HirExpr::Slice` is a different shape with its own arm, which
+        // still reports `T0033`. Pinned here so a later part cannot admit
+        // one by admitting the other.
+        ("T0033", "does not support slicing", "numpy.pi[0:2]\n"),
     ] {
         assert_refused("`numpy.pi`", snippet, code, phrase);
     }
+}
+
+/// PR 3b of #1082: a discarded subscript *load* on a CPython object at
+/// module scope is admitted, and so is a consumer that needs a real value
+/// out of it.
+///
+/// This is the positive half of the migration, and the second snippet is
+/// the one that matters: a bare `numpy.pi[0]` would still pass if the arm
+/// merely stopped reporting `T0033`, while `len(numpy.pi[0])` only
+/// type-checks if the arm actually answers `Ty::Object`.
+#[test]
+fn a_module_scope_subscript_of_a_cpython_object_is_admitted() {
+    for source in [
+        "numpy.pi[0]\n",
+        "print(len(numpy.pi[0]))\n",
+        "numpy.pi[1.5]\n",
+        "numpy.pi[True]\n",
+        "numpy.pi[\"k\"]\n",
+    ] {
+        assert!(check_foreign(source).is_none(), "{source}");
+    }
+}
+
+/// Only the four scalars with a `pycc_ext_obj_pack_*` helper may be a key.
+///
+/// The second row is the one the plan singles out: a second `Ty::Object`
+/// key looks like an ordinary foreign value and would reach codegen with no
+/// packer at all, so it is refused here by the same rule a second
+/// `Ty::Object` *argument* to a method call is.
+#[test]
+fn a_subscript_key_outside_the_packable_scalars_is_refused() {
+    for snippet in [
+        "numpy.pi[None]\n",
+        "numpy.pi[numpy.e]\n",
+        "numpy.pi[[1]]\n",
+        "numpy.pi[(1, 2)]\n",
+    ] {
+        assert_refused(
+            "`numpy.pi`",
+            snippet,
+            "I0404",
+            "indexing a CPython object with a",
+        );
+    }
+}
+
+/// C6/K1 of the #1082 plan: binding the *result* of a subscript load to a
+/// name is still refused, and the code it reports moved from `T0033`
+/// ("`object` does not support indexing", which the load itself no longer
+/// draws) to the `check_assignment` entry guard's own `I0404`.
+///
+/// This is a deliberate scope decision rather than an oversight: admitting
+/// the binding needs the name-binding work the rest of #1026 carries, and
+/// nothing in PR 3b changes `check_assignment`.
+#[test]
+fn binding_a_subscript_load_to_a_name_is_still_refused() {
+    assert_refused(
+        "`numpy.pi`",
+        "x = numpy.pi[0]\n",
+        "I0404",
+        "binding a CPython object to a name",
+    );
+}
+
+/// K7 of the #1082 plan: a subscript *store* is explicitly out of scope.
+///
+/// `o[k] = v` is a different HIR shape, refused by `pycc_hir` with `C0001`
+/// before this crate ever sees it, so admitting the load cannot admit the
+/// store by accident. Pinned so a later part has to change this assertion
+/// deliberately.
+#[test]
+fn a_subscript_store_on_a_cpython_object_is_still_refused() {
+    let source = "numpy.pi[0] = 1\n";
+    let module = pycc_parser::parse(source).expect("test source must parse");
+    let diagnostic = pycc_hir::lower_checked(&module).expect_err("a store target is refused");
+    assert_eq!(diagnostic.code, "C0001", "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("only assigning to a bare-name subscript target"),
+        "{diagnostic:?}"
+    );
+}
+
+/// The solver-side mirror (C4 of the #1082 plan): `constraints.rs`'s own
+/// `Subscript` arm lifts a `Ty::Object` base to a `Ty::Object` term, so an
+/// unannotated private helper returning one materializes its signature and
+/// the user sees the real `I0404` for the in-function read.
+///
+/// Without the lift the helper's return variable stays unresolved and
+/// signature materialization reports a `T0021` asking for an annotation
+/// `object` cannot be spelled in (D-137) -- the exact dead end the
+/// `AttrGet` arm's own comment describes. The assertion is therefore on
+/// *which diagnostic* the user gets, not on the program being admitted:
+/// PR 2a's positional bound still refuses the helper body.
+#[test]
+fn a_private_helper_returning_a_subscript_load_reports_the_read_refusal() {
+    assert_refused(
+        HELPER_SHAPE,
+        "def _h():\n    return numpy.pi[0]\n\n\nx = 1\n",
+        "I0404",
+        FUNCTION_BODY_READ,
+    );
 }

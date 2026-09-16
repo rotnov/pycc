@@ -168,6 +168,24 @@ pub const EXT_OBJ_LEN_SYMBOL: &str = "pycc_ext_obj_len";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
 
+/// The fixed C shim's subscript-load helper (Part 3 of #1026, PR 3b of
+/// #1082): it takes a borrowed `PyObject *` and an *owned* key reference
+/// produced by one of the `pycc_ext_obj_pack_*` helpers above, and returns a
+/// *new* reference to `o[k]`, or `NULL` with the CPython exception already
+/// set.
+///
+/// **It consumes the key on every path**, including the one where `o` or
+/// `k` is itself `NULL`. That is deliberately the same arg-slot contract
+/// [`EXT_OBJ_CALL_SYMBOL`] already imposes on the values the packers
+/// produce, so the packer contract stays one rule rather than two: whatever
+/// a packer creates is handed to a shim helper and is that helper's to
+/// release. Folding the failed-packer test into the helper as well is what
+/// leaves this operation with exactly *one* module-exec failure edge, for
+/// the reason [`EXT_OBJ_LEN_SYMBOL`] records for its own fused encode.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_GETITEM_SYMBOL: &str = "pycc_ext_obj_getitem";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

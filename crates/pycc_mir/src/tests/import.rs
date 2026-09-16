@@ -367,3 +367,100 @@ fn len_of_a_foreign_object_ignores_a_module_level_len_definition() {
     };
     assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
 }
+
+// ---------------------------------------------------------------------
+// PR 3b of #1082 (Part 3 of #1026): a subscript load on the bound object.
+//
+// Same rationale as the tests above: `expr.rs`'s `HirExpr::Subscript`
+// arm dispatches on the lowered base's `ty()`, and this is the only
+// place that dispatch runs on real HIR. `pycc_codegen`'s
+// `foreign_call.rs` tests hand-build the node because they are about
+// what LLVM receives.
+// ---------------------------------------------------------------------
+
+fn subscript(base: pycc_hir::HirExpr, index: pycc_hir::HirExpr) -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::Subscript {
+        base: Box::new(base),
+        index: Box::new(index),
+    }
+}
+
+#[test]
+fn a_subscript_of_a_foreign_object_lowers_to_obj_subscript() {
+    // `import numpy` / `numpy[0]`. The base's `Ty::Object` is what
+    // diverts this away from the `Ty::Dict`/`Ty::List`/`Ty::Str` arms
+    // below it, so the base type -- not the index -- is the subject.
+    let hir = module_with_discarded(subscript(
+        pycc_hir::HirExpr::Name("numpy".to_string()),
+        pycc_hir::HirExpr::IntLiteral(0),
+    ));
+    let expr = only_discarded_expr(&hir);
+    // The node carries no `ty` field for the same reason `ObjMethodCall`
+    // does not: `ty()` answering `Ty::Object` unconditionally is the
+    // contract, because `PyObject_GetItem` tells us nothing more.
+    assert_eq!(expr.ty(), Ty::Object);
+    let MirExpr::ObjSubscript { base, index } = expr else {
+        panic!("expected an `ObjSubscript`");
+    };
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+    assert!(matches!(*index, MirExpr::IntLiteral(0)));
+}
+
+#[test]
+fn a_subscript_of_a_foreign_attribute_keeps_the_load_as_its_base() {
+    // `numpy.garbage["k"]`: the base is itself an `ObjAttrGet` and the
+    // key is a `str` rather than an `int`, which together prove the arm
+    // keys on the lowered base's type and admits every packable scalar.
+    let hir = module_with_discarded(subscript(
+        attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "garbage"),
+        pycc_hir::HirExpr::StringLiteral("k".to_string()),
+    ));
+    let MirExpr::ObjSubscript { base, index } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjSubscript`");
+    };
+    let MirExpr::ObjAttrGet { attr, .. } = *base else {
+        panic!("expected the base to stay an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "garbage");
+    assert!(matches!(*index, MirExpr::StringLiteral(ref s) if s == "k"));
+}
+
+#[test]
+fn a_walrus_in_a_foreign_subscript_key_binds_for_the_next_statement() {
+    // PEP 572 (#774): `MirExpr::collect_named_expr_bindings` has to
+    // recurse into *both* sides of the new node. A walrus can hide in
+    // the key as easily as in the base, and `stmt.rs`'s `ExprStmt` arm
+    // binds whatever that walk finds -- so without the `index` recursion
+    // the following `print(n)` would lower against an unbound `n`.
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(subscript(
+                pycc_hir::HirExpr::Name("numpy".to_string()),
+                pycc_hir::HirExpr::NamedExpr {
+                    name: "n".to_string(),
+                    value: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
+                },
+            ))),
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(pycc_hir::HirExpr::Name(
+                "n".to_string(),
+            ))),
+        ],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    };
+    let mir = build(&hir);
+    let lowered: Vec<&MirExpr> = mir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(expr)) => Some(expr),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lowered.len(), 2, "{lowered:?}");
+    assert!(matches!(lowered[0], MirExpr::ObjSubscript { .. }));
+    assert!(
+        matches!(lowered[1], MirExpr::Name { name, ty: Ty::Int } if name == "n"),
+        "{:?}",
+        lowered[1]
+    );
+}

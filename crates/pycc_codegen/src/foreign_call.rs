@@ -1,4 +1,12 @@
-//! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081).
+//! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081)
+//! and `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082).
+//!
+//! The two share this module because they share the *packer contract*: each
+//! marshals a pycc scalar into a `PyObject *` through a `pycc_ext_obj_pack_*`
+//! helper and hands the resulting owned reference to a shim helper that
+//! releases it. `emit_subscript` reuses `packer_for`, `shim_fn` and
+//! `fail_on_null` unchanged rather than re-deriving them, so that contract
+//! cannot fork into two spellings.
 //!
 //! The call counterpart of `foreign_attr.rs`, which this module reuses for
 //! everything the two share -- `expect_object_pointer`, and the
@@ -57,10 +65,11 @@ fn shim_fn<'ctx>(
 /// argument.
 ///
 /// Every admitted scalar has exactly one packer, and the mapping is total
-/// over what `pycc_types`' `HirExpr::MethodCall` arm admits for a
-/// `Ty::Object` base (`int`/`float`/`bool`/`str`). Any other `Scalar` is a
-/// front-end defect: the checker refuses a container, an instance, `None`,
-/// and a second `Ty::Object` before lowering ever runs.
+/// over what `pycc_types`' `HirExpr::MethodCall` and `HirExpr::Subscript`
+/// arms admit for a `Ty::Object` base (`int`/`float`/`bool`/`str` -- an
+/// argument in the first case, a key in the second). Any other `Scalar` is
+/// a front-end defect: the checker refuses a container, an instance,
+/// `None`, and a second `Ty::Object` before lowering ever runs.
 fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>) {
     match scalar {
         Scalar::Int(value) => (EXT_OBJ_PACK_INT_SYMBOL, value.into()),
@@ -68,7 +77,7 @@ fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>
         Scalar::Bool(value) => (EXT_OBJ_PACK_BOOL_SYMBOL, value.into()),
         Scalar::Str(value) => (EXT_OBJ_PACK_STR_SYMBOL, value.into()),
         _ => panic!(
-            "pycc_codegen: internal error: an argument to a foreign method call did not \
+            "pycc_codegen: internal error: an operand of a foreign object operation did not \
              evaluate to a marshallable scalar -- pycc_types admits only `int`, `float`, \
              `bool` and `str` there"
         ),
@@ -301,6 +310,63 @@ pub(super) fn emit_call<'ctx>(
     Scalar::Object(result)
 }
 
+/// Emits one `o[k]` load, yielding the result as an opaque
+/// [`Scalar::Object`].
+///
+/// Lives here rather than in a module of its own because it reuses this
+/// one's three primitives unchanged -- [`packer_for`] for the key,
+/// [`shim_fn`] for the declaration, [`fail_on_null`] for the failure edge --
+/// and because the *packer contract* is the thing that must not fork:
+/// `pycc_ext_obj_getitem` consumes the packed key exactly as
+/// `pycc_ext_obj_call` consumes a packed argument, so whatever a packer
+/// creates is always released by the shim helper it is handed to.
+///
+/// That is also why no NULL check is emitted on the packed key. A failed
+/// packer stores `NULL`, the shim tests for it and propagates the
+/// already-set exception, and the operation therefore has exactly *one*
+/// module-exec failure edge rather than two. The result is a new reference
+/// that is deliberately never released, on the leak-only rule
+/// `foreign_attr.rs` documents for an attribute load.
+pub(super) fn emit_subscript<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base: Scalar<'ctx>,
+    index: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let base_ptr = expect_object_pointer(base);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+
+    let (symbol, value) = packer_for(index);
+    let packer = shim_fn(
+        module,
+        symbol,
+        ptr.fn_type(&[value.get_type().into()], false),
+    );
+    let key = builder
+        .build_call(packer, &[value.into()], "foreign_subscript_key")
+        .unwrap_or_else(|_| panic!("build_call should not fail for {symbol}"))
+        .try_as_basic_value()
+        .expect_basic("a pycc_ext_obj_pack_* helper returns PyObject *")
+        .into_pointer_value();
+
+    let getitem = shim_fn(
+        module,
+        EXT_OBJ_GETITEM_SYMBOL,
+        ptr.fn_type(&[ptr.into(), ptr.into()], false),
+    );
+    let result = builder
+        .build_call(getitem, &[base_ptr.into(), key.into()], "foreign_subscript")
+        .expect("build_call should not fail for pycc_ext_obj_getitem")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_getitem returns PyObject *")
+        .into_pointer_value();
+
+    fail_on_null(context, builder, entry_fn, result, "foreign_subscript");
+    Scalar::Object(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +589,132 @@ mod tests {
                     args: Vec::new(),
                 },
             ))],
+        );
+    }
+
+    /// `import <module>` followed by one discarded `<module>[index]`
+    /// load -- the subscript counterpart of [`call`] above, and for the
+    /// same reason: a discarded `ExprStmt` is the only statement position
+    /// PR 3b admits end to end.
+    fn subscript(module: &str, index: MirExpr) -> Vec<MirItem> {
+        vec![
+            MirItem::ForeignImport {
+                local_name: module.to_string(),
+                module_path: module.to_string(),
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjSubscript {
+                base: Box::new(MirExpr::Name {
+                    name: module.to_string(),
+                    ty: Ty::Object,
+                }),
+                index: Box::new(index),
+            })),
+        ]
+    }
+
+    /// The subscript load reaches the shim by its shared symbol, and does
+    /// so without emitting the attribute lookup or the call helper: `o[k]`
+    /// is one `PyObject_GetItem`, not a `__getitem__` lookup followed by a
+    /// call.
+    ///
+    /// The symbol is asserted through [`EXT_OBJ_GETITEM_SYMBOL`] rather
+    /// than against a literal for the same reason the call test gives: the
+    /// C definition and this declaration are resolved lazily at load time,
+    /// so a literal spelled twice would be a crash at first call rather
+    /// than a link error.
+    #[test]
+    fn a_foreign_subscript_reaches_the_shim_by_its_shared_symbol() {
+        let ir = entry_ir(
+            "foreign_subscript_symbol",
+            subscript("gc", MirExpr::IntLiteral(0)),
+        );
+        assert!(ir.contains(EXT_OBJ_GETITEM_SYMBOL), "{ir}");
+        assert!(ir.contains(EXT_OBJ_PACK_INT_SYMBOL), "{ir}");
+        assert!(!ir.contains(EXT_OBJ_GETATTR_SYMBOL), "{ir}");
+        assert!(!ir.contains(EXT_OBJ_CALL_SYMBOL), "{ir}");
+    }
+
+    /// One packer per admitted key type, each exercised through its own
+    /// key, so a regression naming the wrong packer for one type cannot
+    /// hide behind another's symbol being present.
+    ///
+    /// `packer_for` is shared with the method-call path, but the *key*
+    /// slot is a second caller of it, and it is the slot whose ownership
+    /// rule the shim implements (`pycc_ext_obj_getitem` consumes the
+    /// reference the packer returns, on every path).
+    #[test]
+    fn each_admitted_key_type_reaches_its_own_packer() {
+        for (label, key, symbol) in [
+            ("int", MirExpr::IntLiteral(7), EXT_OBJ_PACK_INT_SYMBOL),
+            (
+                "float",
+                MirExpr::FloatLiteral(1.5),
+                EXT_OBJ_PACK_FLOAT_SYMBOL,
+            ),
+            ("bool", MirExpr::BoolLiteral(true), EXT_OBJ_PACK_BOOL_SYMBOL),
+            (
+                "str",
+                MirExpr::StringLiteral("k".to_string()),
+                EXT_OBJ_PACK_STR_SYMBOL,
+            ),
+        ] {
+            let ir = entry_ir(
+                &format!("foreign_subscript_key_{label}"),
+                subscript("gc", key),
+            );
+            assert!(ir.contains(symbol), "{label}: {ir}");
+            assert!(ir.contains("foreign_subscript_key"), "{label}: {ir}");
+            assert!(ir.contains(EXT_OBJ_GETITEM_SYMBOL), "{label}: {ir}");
+        }
+    }
+
+    /// A failed load stops the module body on the module-exec failure
+    /// edge, rather than continuing with a `NULL` object.
+    ///
+    /// This is the one new unconditional `EXT_MODULE_EXEC_FAILED` edge PR
+    /// 3b adds (#1096): a failed *key packer* does not get its own, because
+    /// `pycc_ext_obj_getitem` tolerates a `NULL` key and returns `NULL`
+    /// itself, folding that case into this same branch.
+    #[test]
+    fn a_failed_foreign_subscript_returns_on_the_module_exec_failure_edge() {
+        let ir = entry_ir(
+            "foreign_subscript_fail_edge",
+            subscript("gc", MirExpr::IntLiteral(0)),
+        );
+        assert!(ir.contains("foreign_subscript_failed"), "{ir}");
+        assert!(ir.contains("foreign_subscript_fail:"), "{ir}");
+        assert!(ir.contains("foreign_subscript_cont:"), "{ir}");
+        assert!(
+            ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+            "{ir}"
+        );
+    }
+
+    /// The defensive arm in `foreign_attr::expect_object_pointer` reached
+    /// through the *subscript* node, which has its own call to it.
+    #[test]
+    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    fn a_non_object_subscript_base_is_an_internal_error() {
+        entry_ir(
+            "foreign_subscript_bad_base",
+            vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(
+                MirExpr::ObjSubscript {
+                    base: Box::new(MirExpr::IntLiteral(1)),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                },
+            ))],
+        );
+    }
+
+    /// The defensive arm in [`packer_for`] reached through the key slot:
+    /// `pycc_types` refuses every key type that has no packer, so reaching
+    /// it is a front-end defect.
+    #[test]
+    #[should_panic(expected = "did not evaluate to a marshallable scalar")]
+    fn an_unmarshallable_subscript_key_is_an_internal_error() {
+        entry_ir(
+            "foreign_subscript_bad_key",
+            subscript("gc", MirExpr::NoneLiteral),
         );
     }
 
