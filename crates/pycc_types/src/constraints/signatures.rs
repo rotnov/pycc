@@ -341,15 +341,16 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // misleading return-type mismatch.
             //
             // Part 2 of #1026 (#1081) re-derived this strip rather than
-            // relaxing it. It is narrower than "a function-local can never
-            // be `Ty::Object`" -- a local *may* now carry that type, when
-            // the solver's `AttrGet` arm hands back a real `Ok(Ty::Object)`
-            // term for `numpy.pi` and an assignment records it in
-            // `bindings`. What the strip removes is only the *provenance
-            // marker*, which answers a different question ("is this name a
-            // foreign global?") and whose stale answer was never about the
-            // local's actual value. The two cases are pinned separately in
-            // this crate's tests.
+            // relaxing it. The solver runs before the check phase, so it
+            // still sees bodies the checker goes on to refuse: the
+            // `AttrGet` arm hands back a real `Ok(Ty::Object)` term for
+            // `numpy.pi`, and an assignment inside a function body records
+            // it in `bindings` here even though `crate::expr` then rejects
+            // that body outright (PR 2a of #1081). What the strip removes
+            // is only the *provenance marker*, which answers a different
+            // question ("is this name a foreign global?") and whose stale
+            // answer was never about the local's actual value. The two
+            // cases are pinned separately in this crate's tests.
             env.foreign_objects.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted

@@ -13,7 +13,7 @@
 //! supports `numpy.pi`, and `infer_expr_in` is context-free -- it cannot
 //! see whether the read it is answering feeds an attribute load or a
 //! `print` -- so a conditional relaxation of the read is not expressible.
-//! The read is therefore unconditionally admitted and each *consuming*
+//! The read is therefore admitted *in a module body* and each **consuming**
 //! site refuses on its own.
 //!
 //! Two consequences follow, and both are load-bearing:
@@ -28,8 +28,25 @@
 //!    (`constraints.rs`'s `AttrGet` term). Every refusal must therefore
 //!    key on the **type**, never on the producing expression shape.
 //!
-//! [`reject_object_read`] survives for the two sites that still key on a
-//! *named* binding and are not expressible as a consumer:
+//! **PR 2a of #1081 bounded the admitted read by position.** A foreign
+//! object may be read only where the compiler can tell the `import` has
+//! already run and can report a failed lookup: a module body. Two shapes
+//! Part 2 briefly admitted are refused again, both of which had turned a
+//! compile error into a run-time trap --
+//!
+//! * a read inside a *function body*, refused by
+//!   [`reject_object_read`] from `expr::infer_expr_in`'s `HirExpr::Name`
+//!   arm, because D-041 checks a body against the module environment as it
+//!   stands after all top-level code and so cannot see whether the call
+//!   site precedes the `import` (and because `pycc_codegen`'s module-exec
+//!   failure edge does not exist inside one);
+//! * a module-body read placed *above* the `import`, which is now an
+//!   ordinary unbound-name `T0021` -- see [`bind_foreign_objects`].
+//!
+//! `docs/TYPE_SYSTEM.md` carries the user-facing statement of both.
+//!
+//! [`reject_object_read`] serves the three sites that key on a *named*
+//! binding rather than on a consumed value:
 //!
 //! 1. `lookup_bound_name` (D-105's `ForList`/`ListAppend` HIR shape carries
 //!    its list as a plain `String`, so it never becomes a `HirExpr::Name`),
@@ -39,7 +56,9 @@
 //!    environment does not record whether a `Ty::Object` came from a
 //!    foreign global or from an attribute load, so admitting `f(2.0)`
 //!    would also admit `numpy(1)`, which CPython itself answers with
-//!    `TypeError: 'module' object is not callable`.
+//!    `TypeError: 'module' object is not callable`,
+//! 3. the in-function read above, which is the one site that keys on
+//!    *position* as well as on the type.
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
@@ -65,11 +84,11 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
 
 /// `Err(I0404)` when `ty` is the opaque object type, `Ok(())` otherwise.
 ///
-/// The guard for the two sites that still key on a *named* binding rather
-/// than on a consumed value -- `lookup_bound_name` and the `HirExpr::Call`
-/// value-binding gate (module doc). A consuming site calls
-/// [`object_operation_unsupported`] directly instead, because it knows the
-/// operation and its operand has no name.
+/// The guard for the three sites that key on a *named* binding rather than
+/// on a consumed value -- `lookup_bound_name`, the `HirExpr::Call`
+/// value-binding gate, and the in-function-body read (module doc). A
+/// consuming site calls [`object_operation_unsupported`] directly instead,
+/// because it knows the operation and its operand has no name.
 pub(crate) fn reject_object_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
     if matches!(ty, Ty::Object) {
         return Err(object_operation_unsupported(&format!(
@@ -106,28 +125,29 @@ pub(crate) fn foreign_object_names(imports: &[ImportBinding]) -> Vec<&str> {
         .collect()
 }
 
-/// Seeds every foreign import as a definitely-bound `Ty::Object` global.
+/// Seeds every foreign import as a definitely-bound `Ty::Object` global,
+/// with no regard for the import's own position.
 ///
-/// Seeding happens *before* the source-order top-level pass (D-041 pass 2)
-/// so that a read placed above the `import` is refused too: an `import`
-/// statement produces no `HirItem`, so there is no item at its own position
-/// for the pass to seed from. The observable consequence is that a
-/// module-body read of a foreign name placed *above* its `import` is
-/// `I0404` rather than the `T0021` CPython's own `NameError` would justify
-/// -- a fail-closed divergence: both are compile errors, and the program is
-/// refused either way. Recorded in `docs/TYPE_SYSTEM.md`.
+/// **The check phase no longer uses this.** Part 1 of #1026 seeded here
+/// before the source-order top-level pass (D-041 pass 2), which made a read
+/// placed *above* the `import` `I0404` rather than the `T0021` CPython's
+/// `NameError` would justify -- sound only while Part 1 refused the read
+/// unconditionally. Part 2 admitted the read, and the seed then admitted
+/// the whole program: it lowered, built, and trapped at run time
+/// (`llvm.trap`, rc 133) on the global-initialization failure edge. PR 2a
+/// of #1081 removed the seed from `crate::module`, so such a read is now an
+/// ordinary unbound-name `T0021` -- which is also the closer answer.
+/// [`bind_foreign_objects_at`] does the positional binding the checker
+/// keeps, and `docs/TYPE_SYSTEM.md` records the outcome.
 ///
-/// The seed alone is not enough, because it cannot supersede a binding the
-/// source-order pass makes *later*: a `def numpy()` above the import used
-/// to leave `numpy` def-rebound, which made the call gate skip the `I0404`
-/// refusal and let the artifact call a function CPython would have replaced
-/// with a module object (PR 1c of #1080 review finding 2). The pass
-/// therefore re-applies each binding at its recorded position, via
-/// [`bind_foreign_objects_at`].
+/// The one remaining caller is [`crate::empty_container`]'s pre-pass, which
+/// wants the position-blind form on purpose: it reports no diagnostic, so a
+/// wider module scope than the checker's is the safe direction for it (that
+/// call site carries the full argument).
 ///
-/// D-040's sticky-representation rule then does the rest: a later
-/// `numpy = 3` in the same module is `T0023`, because the name's recorded
-/// representation is `object` and `int` is not assignable to it.
+/// D-040's sticky-representation rule is unaffected: a later `numpy = 3` in
+/// the same module is `T0023`, because the name's recorded representation
+/// is `object` and `int` is not assignable to it.
 pub(crate) fn bind_foreign_objects(env: &mut Environment, imports: &[ImportBinding]) {
     for name in foreign_object_names(imports) {
         env.bind(name.to_string(), Ty::Object);

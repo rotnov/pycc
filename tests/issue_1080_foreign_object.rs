@@ -15,7 +15,11 @@
 //!   binding to each consuming site, so `numpy.pi` itself could be admitted
 //!   -- but not which programs it refuses, which is why every row of the
 //!   table below still holds. `crates/pycc_types/src/foreign.rs` documents
-//!   the migration. The one exception is a general method call
+//!   the migration. PR 2a's review then bounded the admitted set by
+//!   *position* as well: a read of a foreign object is admitted only in a
+//!   module body, never inside a function body, and never above the
+//!   `import` itself -- both were compile errors before this change and
+//!   both had become run-time traps. The one exception is a general method call
 //!   (`numpy.sqrt(2.0)`), which is refused as `T0043` rather than `I0404`
 //!   because PR 2a adds no `Ty::Object` branch ahead of
 //!   `class::resolve_method_call`; the plan assigns that branch to PR 2b,
@@ -231,13 +235,15 @@ fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
 /// Part 2 of #1026 (#1081): the same helper, returning an *attribute* of
 /// the module rather than the module itself.
 ///
-/// This is the second producer shape of a `Ty::Object` value and the one
-/// Part 2 introduces: the solver's `AttrGet` term types `numpy.pi` as
-/// `object` exactly as its `Name` term types `numpy`, so the refusal at the
-/// consuming site (`x = ...`) is reached the same way. Pinned end to end
-/// because it is the shape a type-level regression would break silently --
-/// the value would simply stop being an `object` and the refusal would
-/// disappear along with it.
+/// The solver's `AttrGet` term types `numpy.pi` as `object` exactly as its
+/// `Name` term types `numpy`, which is what keeps the diagnostic right:
+/// without the term, signature materialization reports the `T0021` this
+/// test rules out. PR 2a of #1081 then narrowed which pass reports the
+/// refusal -- reading a foreign object inside a function body is itself
+/// `I0404` now, so the helper's own body is rejected and the consuming
+/// site is never reached. The assertion is unchanged, deliberately: both
+/// halves of it are still the contract, and the solver term is still what
+/// makes the second half true.
 #[test]
 fn an_unannotated_helper_returning_a_foreign_attribute_is_i0404_not_t0021() {
     let dir = ScratchDir::new("foreign_helper_attr_return").expect("scratch");
@@ -263,6 +269,50 @@ fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
     let dir = ScratchDir::new("foreign_attr_accepted").expect("scratch");
     let output = check(&dir, "import numpy\n\nnumpy.pi\n");
     assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
+/// The same load *inside a function body* is refused (PR 2a of #1081
+/// review finding 2).
+///
+/// D-041 checks a body against the module environment as it stands after
+/// all top-level code, so the check phase cannot see that this call site
+/// precedes the `import`. CPython raises `NameError` here. Before the
+/// refusal, the eager module-scope `Ty::Object` bind
+/// (`pycc_mir::build`, plan deviation 9) made the program type-check,
+/// lower and build, and the artifact died with `SIGTRAP` (rc 133) on the
+/// global-initialization failure edge -- a regression against `main`,
+/// where the program was refused at compile time. Refusing the read
+/// restores that, and costs nothing: PR 2a ships no user-visible
+/// capability either way.
+#[test]
+fn a_helper_reading_a_foreign_object_before_its_import_is_refused() {
+    let dir = ScratchDir::new("foreign_helper_before_import").expect("scratch");
+    let output = check(
+        &dir,
+        "def _pi():\n    return numpy.pi\n\n_pi()\n\nimport numpy\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+}
+
+/// The direct form of the same regression: a module-body read placed above
+/// its own `import`.
+///
+/// Part 1 refused this through the unconditional `reject_object_read`,
+/// which Part 2 removed along with the positional guarantee that rested on
+/// it -- the pre-seed in `pycc_types::module` kept the name *bound*, so
+/// the read was admitted and trapped at run time just as the helper shape
+/// did. Removing the pre-seed makes it an ordinary unbound name, which is
+/// also the closer answer: CPython raises `NameError`.
+#[test]
+fn a_module_body_read_above_its_foreign_import_is_refused() {
+    let dir = ScratchDir::new("foreign_read_above_import").expect("scratch");
+    let output = check(&dir, "numpy.pi\n\nimport numpy\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+    assert!(rendered.contains("`numpy` is not defined"), "{rendered}");
 }
 
 /// A general method call on the object is refused, but not with `I0404`.

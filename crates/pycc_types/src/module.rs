@@ -274,11 +274,17 @@ pub(super) fn check_with_environment_all(
     // exactly once rather than in each constructor -- a fully annotated
     // module takes the concrete path and would otherwise never see it.
     env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
-    // Part 1 of #1026: seed every foreign import as a definitely-bound
-    // `Ty::Object` in the same common sink, for the same reason -- both
-    // `Environment` constructors reach here, and a fully annotated module
-    // takes the concrete path that never runs the solver.
-    crate::foreign::bind_foreign_objects(&mut env, &hir.imports);
+    // Part 1 of #1026 pre-seeded every foreign import as a definitely-bound
+    // `Ty::Object` here, before the source-order pass. PR 2a of #1081
+    // removed that seed: Part 1's refusal of the *read* was what made the
+    // seed harmless, and Part 2 lifted the read (`expr.rs`'s `Name` arm),
+    // so the seed started admitting a module-body read placed *above* its
+    // own `import` -- which then compiled into a global-initialization trap
+    // instead of the compile error CPython's `NameError` justifies.
+    // `bind_foreign_objects_at` below binds each import at its recorded
+    // position instead, so such a read is now an ordinary unbound-name
+    // `T0021`. Function bodies are unaffected: D-041's pass 3 runs after
+    // the whole loop, by which point every import is bound.
     // Issue #22: clear `defined_functions` before the top-level source-order
     // pass. `bind_function` (called by `check_with_signatures_all`'s pass 1
     // or `concrete_function_environment`) adds every function to this set,

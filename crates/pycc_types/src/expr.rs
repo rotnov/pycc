@@ -192,14 +192,43 @@ pub(crate) fn infer_expr_in(
                 // own doc comment).
                 Some(BindingState::Definitely(ty)) => {
                     // Part 2 of #1026 (#1081) removed Part 1's
-                    // `reject_object_read` call from this arm. A read of a
-                    // foreign binding now yields `Ty::Object` like any
-                    // other read: this function is context-free, so it
-                    // cannot tell an `numpy.pi` base apart from a
-                    // `print(numpy)` operand, and Part 2 must admit the
-                    // first. Every *consumer* refuses on its own instead --
-                    // `crate::foreign`'s module doc carries the full rule.
-                    Ok(env.narrowed_ty(name).unwrap_or_else(|| ty.clone()))
+                    // unconditional `reject_object_read` call from this
+                    // arm. A read of a foreign binding at *module* scope
+                    // now yields `Ty::Object` like any other read: this
+                    // function is context-free, so it cannot tell a
+                    // `numpy.pi` base apart from a `print(numpy)` operand,
+                    // and Part 2 must admit the first. Every *consumer*
+                    // refuses on its own instead -- `crate::foreign`'s
+                    // module doc carries the full rule.
+                    let ty = env.narrowed_ty(name).unwrap_or_else(|| ty.clone());
+                    // The read stays refused inside a *function body*,
+                    // though, which is what `in_function_body` buys here.
+                    // Two independent reasons, both found by PR 2a's
+                    // review:
+                    //
+                    // 1. D-041 checks a body against the module
+                    //    environment as it stands after *all* top-level
+                    //    code, so this arm cannot tell whether the call
+                    //    site precedes the `import`. `def _pi(): return
+                    //    numpy.pi` called above `import numpy` is a
+                    //    `NameError` in CPython; admitting the read
+                    //    compiled it into a global-initialization trap
+                    //    (`llvm.trap`, rc 133) instead of a compile error.
+                    // 2. `pycc_codegen`'s `foreign_attr::emit` routes a
+                    //    failed lookup to the module-exec failure edge,
+                    //    which exists only inside
+                    //    `pycc_ext_module_exec`. A function body has no
+                    //    such edge, so a load emitted there would have no
+                    //    way to report CPython's error.
+                    //
+                    // PR 2a ships no user-visible capability, so refusing
+                    // the narrower set costs nothing; lifting it needs the
+                    // ordering analysis and the function-level failure
+                    // protocol that PR 2b's exception transition brings.
+                    if env.in_function_body {
+                        crate::foreign::reject_object_read(name, &ty)?;
+                    }
+                    Ok(ty)
                 }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
                 None => {

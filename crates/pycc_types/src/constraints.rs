@@ -540,18 +540,25 @@ pub(crate) fn collect_expr_constraints(
                 //
                 // Part 2 of #1026 (#1081) rewrote the paragraph that stood
                 // here. Part 1 claimed this arm was the only way
-                // `Ty::Object` could enter the solver, and that no
-                // `Object`-typed signature could survive, because the check
+                // `Ty::Object` could enter the solver, and that the check
                 // phase refused every expression-position read of a foreign
-                // binding. Both claims are now false: the read is admitted
-                // (`crate::foreign`'s module doc), the `AttrGet` arm below
-                // is a second entry point, and an unannotated private
-                // helper returning `numpy.pi` really does materialize an
-                // `Object`-typed return that reaches `pycc_codegen`. What
-                // keeps that sound is no longer containment but the
-                // consumer-side refusals: nothing may be *done* with such a
-                // value except load another attribute from it, so it cannot
-                // be printed, bound, branched on or handed to a host.
+                // binding. Both claims are now false: a *module-scope* read
+                // is admitted (`crate::foreign`'s module doc) and the
+                // `AttrGet` arm below is a second entry point.
+                //
+                // The solver runs before the check phase, and this arm is
+                // load-bearing precisely there: a body it can offer no term
+                // for is reported as `T0021: cannot infer return type`,
+                // which would pre-empt the `I0404` the check phase owes an
+                // unannotated `def _helper(): return numpy.pi`. What the
+                // term does *not* do any more is let such a signature reach
+                // `pycc_codegen`: PR 2a of #1081 refuses reading a foreign
+                // object inside a function body at all (`crate::expr`'s
+                // `Name` arm), so the helper is rejected right after the
+                // solver hands its return type over. At module scope, where
+                // the read stays admitted, the consumer-side refusals are
+                // what keep a `Ty::Object` sound: nothing may be *done*
+                // with one except load another attribute from it.
                 //
                 // The names still deliberately stay out of `bindings`: the
                 // `Call` arm below refuses any bound non-`def` callee with
@@ -1169,8 +1176,11 @@ pub(crate) fn collect_expr_constraints(
             // would report `T0021: ... add an annotation` -- advice no
             // annotation can satisfy, because `object` is unspellable
             // (D-137's amendment rejects it with `C0001`). Offering the
-            // term lets the return materialize as `Ty::Object`, so the real
-            // refusal comes from whichever consumer the value reaches.
+            // term lets the return materialize as `Ty::Object`, so the
+            // refusal the user sees is the `I0404` the check phase reports
+            // for the read itself. The term therefore keeps the
+            // *diagnostic* right; since PR 2a of #1081 it no longer keeps
+            // the program admitted, because that helper body is refused.
             //
             // Only `Ty::Object` is lifted. Every other base keeps the
             // container-shaped "no unification term" default described

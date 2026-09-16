@@ -903,12 +903,20 @@ pub fn build(hir: &HirModule) -> MirModule {
     // without this bind the first admitted program would hit that panic.
     //
     // Bound eagerly, before any statement lowers, rather than at the import's
-    // own position: a read above the `import` is already refused by the check
-    // phase (D-041's sequential module walk), and Part 1's shadowing rule
-    // (`C0001`, `docs/TYPE_SYSTEM.md`) guarantees no other top-level statement
-    // ever rebinds the name, so there is no position at which the eager bind
-    // could differ from a positional one. A function body reads it through
-    // the same outward `lookup` walk, matching the constraint solver's own
+    // own position. That is sound only because the check phase refuses every
+    // read this bind could answer wrongly, and PR 2a of #1081 had to *restore*
+    // both halves of that after its review found the eager bind admitting
+    // programs Part 1 refused: `pycc_types::module` no longer pre-seeds the
+    // foreign name ahead of its own position, so a module-body read above the
+    // `import` is `T0021`, and `pycc_types::expr` refuses reading a foreign
+    // object inside a function body, so a helper called above the `import`
+    // is refused too. Both used to lower here and trap at run time
+    // (`llvm.trap`, rc 133) where CPython raises `NameError`. Part 1's
+    // shadowing rule (`C0001`, `docs/TYPE_SYSTEM.md`) then guarantees no
+    // other top-level statement ever rebinds the name, so with those
+    // refusals in place there is no position at which the eager bind could
+    // differ from a positional one. A function body reads it through the
+    // same outward `lookup` walk, matching the constraint solver's own
     // per-function `foreign_objects` copy.
     for import in &hir.imports {
         if let ImportBinding::Foreign { local_name, .. } = import {
