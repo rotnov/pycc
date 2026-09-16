@@ -6,15 +6,19 @@
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
-//! one `pycc_ext_obj_call` performs the attribute load and the vectorcall
-//! together.
+//! `pycc_ext_obj_call` vectorcalls the already-resolved bound method.
 //!
-//! **Why the shim fuses load and call.** An `ObjAttrGet` feeding a separate
-//! call node would put the bound method object into a pycc value (so it
-//! would join the boundary's leaked set instead of being released the
-//! moment the call returns) and would emit two `NULL` checks and two
-//! failure edges where one suffices. `src/ext/pycc_ext_module.c`'s own
-//! comment on `pycc_ext_obj_call` carries the full rationale.
+//! **Why the lookup is a separate step.** CPython resolves a call's
+//! callable before it evaluates the arguments, so `obj.missing(1 // 0)`
+//! raises `AttributeError` rather than `ZeroDivisionError`. `emit_lookup`
+//! therefore emits `pycc_ext_obj_getattr` and its NULL check, and
+//! `emit_expr`'s own arm runs it before the argument expressions; a fused
+//! shim that did the load itself would necessarily run it last. The price
+//! is a second NULL check and a second failure edge. The bound method still
+//! never becomes a pycc value -- it is an LLVM temporary that
+//! `pycc_ext_obj_call` releases -- so it does not join the boundary's
+//! leaked set. `src/ext/pycc_ext_module.c`'s own comment on
+//! `pycc_ext_obj_call` carries the full rationale.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The packers *borrow* their pycc-side
 //! arguments -- ownership of every argument stays with the compiled module
@@ -113,24 +117,19 @@ fn alloca_in_entry_block<'ctx>(
     arg_array
 }
 
-/// Emits one `obj.method(args)` call against a CPython object and yields
-/// the call's result as an opaque [`Scalar::Object`].
-///
-/// `base` and `args` are already-evaluated scalars: the caller
-/// (`emit_expr`'s own `MirExpr::ObjMethodCall` arm) walks the MIR, so this
-/// function never recurses into it and the evaluation order visible here is
-/// exactly source order -- base first, then each argument left to right.
+/// Routes a NULL `value` to the module-exec failure edge, leaving the
+/// builder positioned on the success continuation.
 ///
 /// # Which side owns the "CPython raised" transition
 ///
-/// The same answer `foreign_attr::emit` gives, and for the same reason.
-/// `pycc_ext_obj_call` returns `NULL` with *CPython's* error indicator set,
-/// which pycc's own pending-exception guard (D-173) cannot see, so this arm
-/// emits the `NULL` check itself and routes the failure to the module-exec
-/// failure edge: return [`EXT_MODULE_EXEC_FAILED`] immediately, leaving
-/// CPython's exception exactly as the shim left it. The host then reports
-/// the real `AttributeError` for a missing method, or whatever the method
-/// itself raised, and the remaining module-body statements never run.
+/// The same answer `foreign_attr::emit` gives, and for the same reason. A
+/// shim helper returns NULL with *CPython's* error indicator set, which
+/// pycc's own pending-exception guard (D-173) cannot see, so this arm emits
+/// the NULL check itself and routes the failure to the module-exec failure
+/// edge: return [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's
+/// exception exactly as the shim left it. The host then reports the real
+/// `AttributeError` for a missing method, or whatever the method itself
+/// raised, and the remaining module-body statements never run.
 ///
 /// This is why PR 2b needs no CPython-to-pycc exception bridge at all.
 /// `pycc_rt::exception` carries no `AttributeError` tag, and the plan
@@ -139,6 +138,48 @@ fn alloca_in_entry_block<'ctx>(
 /// foreign object is readable only in a *module body below its own import*
 /// -- every admitted call is emitted inside `pycc_ext_module_exec`, where
 /// this edge exists. The item dissolves rather than being deferred.
+fn fail_on_null<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    entry_fn: FunctionValue<'ctx>,
+    value: inkwell::values::PointerValue<'ctx>,
+    label: &str,
+) {
+    let failed = builder
+        .build_is_null(value, &format!("{label}_failed"))
+        .expect("build_is_null should not fail");
+    let fail_bb = context.append_basic_block(entry_fn, &format!("{label}_fail"));
+    let cont_bb = context.append_basic_block(entry_fn, &format!("{label}_cont"));
+    builder
+        .build_conditional_branch(failed, fail_bb, cont_bb)
+        .expect("build_conditional_branch should not fail");
+    builder.position_at_end(fail_bb);
+    builder
+        .build_return(Some(
+            &context
+                .i64_type()
+                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+        ))
+        .expect("build_return should not fail");
+    builder.position_at_end(cont_bb);
+}
+
+/// Emits the *callable lookup* of one `obj.method(args)` call, yielding the
+/// bound method as an owned `PyObject *` that [`emit_call`] consumes.
+///
+/// Split from [`emit_call`] so that `emit_expr`'s own arm can run it
+/// *before* it evaluates the argument expressions. CPython resolves a
+/// call's callable first and only then evaluates the arguments, so
+/// `obj.missing(1 // 0)` raises `AttributeError`; an earlier revision of
+/// this module performed the lookup inside the call shim, after every
+/// argument, and raised `ZeroDivisionError` instead.
+///
+/// The bound method still never becomes a pycc value: it is an LLVM
+/// temporary that dominates the `pycc_ext_obj_call` consuming it, so it is
+/// released rather than joining the boundary's leaked set. Keeping it in an
+/// SSA value rather than an `alloca` also matters -- an `alloca` here would
+/// grow a module-scope loop's stack per iteration, which is the defect
+/// [`alloca_in_entry_block`] exists to prevent.
 ///
 /// # Why the enclosing function is always the module-exec entry
 ///
@@ -146,16 +187,54 @@ fn alloca_in_entry_block<'ctx>(
 /// exactly `foreign_attr::emit`'s reasoning: `pycc_types` refuses reading a
 /// foreign object inside a function body (`I0404`), so the failure edge's
 /// `ret i64 -1` is always emitted into a function that returns `i64`.
-pub(super) fn emit<'ctx>(
+pub(super) fn emit_lookup<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     base: Scalar<'ctx>,
     method: &str,
+) -> inkwell::values::PointerValue<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let base_ptr = expect_object_pointer(base);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let name = builder
+        .build_global_string_ptr(method, &format!("pycc_foreign_method_{method}"))
+        .expect("build_global_string_ptr should not fail")
+        .as_pointer_value();
+    let getattr = shim_fn(
+        module,
+        EXT_OBJ_GETATTR_SYMBOL,
+        ptr.fn_type(&[ptr.into(), ptr.into()], false),
+    );
+    let bound = builder
+        .build_call(getattr, &[base_ptr.into(), name.into()], "foreign_call_bound")
+        .expect("build_call should not fail for pycc_ext_obj_getattr")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_getattr returns PyObject *")
+        .into_pointer_value();
+    fail_on_null(context, builder, entry_fn, bound, "foreign_call_lookup");
+    bound
+}
+
+/// Marshals `args` and calls `bound`, yielding the call's result as an
+/// opaque [`Scalar::Object`].
+///
+/// `bound` comes from [`emit_lookup`] and `args` are already-evaluated
+/// scalars, so this function never recurses into the MIR and the evaluation
+/// order visible in the emitted code is exactly CPython's: base, callable,
+/// then each argument left to right.
+///
+/// `pycc_ext_obj_call` consumes `bound` and every packed argument on every
+/// path; only the call's *result* outlives it, on the leak-only rule
+/// `foreign_attr.rs` documents for an attribute load.
+pub(super) fn emit_call<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    bound: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
 ) -> Scalar<'ctx> {
     let entry_fn = expect_module_exec_entry(builder);
-    let base_ptr = expect_object_pointer(base);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
 
@@ -194,24 +273,16 @@ pub(super) fn emit<'ctx>(
             .expect("build_store should not fail");
     }
 
-    let name = builder
-        .build_global_string_ptr(method, &format!("pycc_foreign_method_{method}"))
-        .expect("build_global_string_ptr should not fail")
-        .as_pointer_value();
     let call = shim_fn(
         module,
         EXT_OBJ_CALL_SYMBOL,
-        ptr.fn_type(
-            &[ptr.into(), ptr.into(), ptr.into(), i64_type.into()],
-            false,
-        ),
+        ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
     );
     let result = builder
         .build_call(
             call,
             &[
-                base_ptr.into(),
-                name.into(),
+                bound.into(),
                 arg_array.into(),
                 i64_type.const_int(args.len() as u64, false).into(),
             ],
@@ -222,23 +293,7 @@ pub(super) fn emit<'ctx>(
         .expect_basic("pycc_ext_obj_call returns PyObject *")
         .into_pointer_value();
 
-    let failed = builder
-        .build_is_null(result, "foreign_call_failed")
-        .expect("build_is_null should not fail");
-    let fail_bb = context.append_basic_block(entry_fn, "foreign_call_fail");
-    let cont_bb = context.append_basic_block(entry_fn, "foreign_call_cont");
-    builder
-        .build_conditional_branch(failed, fail_bb, cont_bb)
-        .expect("build_conditional_branch should not fail");
-    builder.position_at_end(fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
-    builder.position_at_end(cont_bb);
+    fail_on_null(context, builder, entry_fn, result, "foreign_call");
     Scalar::Object(result)
 }
 
@@ -375,6 +430,45 @@ mod tests {
             ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
             "{ir}"
         );
+    }
+
+    /// The *lookup*'s own failure edge, which the call edge above does not
+    /// cover: a missing method makes `pycc_ext_obj_getattr` return NULL
+    /// before any argument is packed, and that NULL must reach the same
+    /// `ret i64 -1`.
+    #[test]
+    fn a_failed_method_lookup_returns_on_the_module_exec_failure_edge() {
+        let ir = entry_ir(
+            "foreign_call_lookup_fail_edge",
+            call("gc", "definitely_not_there", vec![MirExpr::IntLiteral(1)]),
+        );
+        assert!(ir.contains("foreign_call_lookup_failed"), "{ir}");
+        assert!(ir.contains("foreign_call_lookup_fail:"), "{ir}");
+        assert!(ir.contains("foreign_call_lookup_cont:"), "{ir}");
+        assert!(
+            ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+            "{ir}"
+        );
+    }
+
+    /// CPython resolves a call's callable before it evaluates the
+    /// arguments, so `obj.missing(1 // 0)` raises `AttributeError` rather
+    /// than `ZeroDivisionError`. This pins that order where it is decided:
+    /// the `pycc_ext_obj_getattr` call site must precede every packer call
+    /// site in the emitted entry function.
+    #[test]
+    fn the_callable_is_resolved_before_any_argument_is_packed() {
+        let ir = entry_ir(
+            "foreign_call_lookup_order",
+            call("gc", "set_threshold", vec![MirExpr::IntLiteral(1)]),
+        );
+        let lookup_at = ir
+            .find(EXT_OBJ_GETATTR_SYMBOL)
+            .unwrap_or_else(|| panic!("no method lookup was emitted: {ir}"));
+        let pack_at = ir
+            .find(EXT_OBJ_PACK_INT_SYMBOL)
+            .unwrap_or_else(|| panic!("no argument packer was emitted: {ir}"));
+        assert!(lookup_at < pack_at, "{ir}");
     }
 
     /// Two calls in one module share one extern declaration per symbol.

@@ -3648,20 +3648,25 @@ fn emit_expr_unchecked<'ctx>(
             foreign_attr::emit(context, builder, module, base_scalar, attr)
         }
         // Part 2 of #1026 (PR 2b of #1081): the call counterpart of
-        // `ObjAttrGet` directly above. Base first, then each argument in
-        // source order, exactly as CPython evaluates them;
-        // `foreign_call::emit` carries the whole contract, including the
-        // argument marshalling, the ownership rule, and the single `NULL`
-        // check that routes a failure to the module-exec failure edge.
+        // `ObjAttrGet` directly above. The order below is CPython's own --
+        // base, then the callable, then each argument left to right -- and
+        // resolving the callable *here*, rather than inside the call shim,
+        // is the whole reason `foreign_call` exposes two functions:
+        // `obj.missing(1 // 0)` must raise `AttributeError`, not
+        // `ZeroDivisionError`. `foreign_call` carries the rest of the
+        // contract, including the argument marshalling, the ownership rule,
+        // and the two `NULL` checks that route a failure to the
+        // module-exec failure edge.
         MirExpr::ObjMethodCall {
             base, method, args, ..
         } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let bound = foreign_call::emit_lookup(context, builder, module, base_scalar, method);
             let arg_scalars: Vec<Scalar<'ctx>> = args
                 .iter()
                 .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
                 .collect();
-            foreign_call::emit(context, builder, module, base_scalar, method, &arg_scalars)
+            foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());

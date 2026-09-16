@@ -363,6 +363,47 @@ fn a_raising_method_surfaces_its_own_exception_in_the_host() {
     );
 }
 
+/// CPython resolves a call's callable before it evaluates the arguments, so
+/// a missing method raises `AttributeError` even when an argument
+/// expression would itself raise.
+///
+/// The regression pin for the review finding on PR 2b of #1081: while the
+/// shim performed the attribute lookup itself, the generated code had
+/// already evaluated every argument by the time the lookup ran, and this
+/// program raised `ZeroDivisionError` instead. Only a hosted run can see
+/// the difference -- both spellings build and both stop the module body.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_missing_method_raises_before_a_failing_argument_does() {
+    let dir = ScratchDir::new("foreign_call_order_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_call_order_mod",
+        "import gc
+
+d: int = 0
+gc.pycc_missing_1081(1 // d)
+",
+    );
+    let run = python(
+        &dir,
+        "try:\n\
+         \x20   import pycc_call_order_mod\n\
+         except AttributeError as e:\n\
+         \x20   assert 'pycc_missing_1081' in str(e), str(e)\n\
+         except ZeroDivisionError as e:\n\
+         \x20   raise AssertionError('arguments were evaluated before the lookup: ' + str(e))\n\
+         else:\n\
+         \x20   raise AssertionError('the missing method should have raised')\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+}
+
 /// A `str` argument crosses as an independent CPython `str` with the right
 /// contents, and the artifact stays usable afterwards.
 ///
@@ -405,8 +446,8 @@ fn a_str_argument_may_be_passed_twice_without_a_premature_release() {
 /// like any other, and only its run-time word tells `pycc_rt_ext_int_classify`
 /// it is a heap bigint. `pycc_ext_obj_pack_int` therefore raises rather than
 /// truncating or aborting, on the same edge a failed call takes -- the shim
-/// sees a `NULL` argument, skips the attribute lookup and the vectorcall
-/// entirely, and hands the module-exec slot its `-1`. `#1040` is the issue
+/// sees a `NULL` argument, skips the vectorcall entirely, and hands the
+/// module-exec slot its `-1`. `#1040` is the issue
 /// that would widen the boundary to a real bigint; until it lands this arm is
 /// the documented boundary behavior, not a defect.
 ///

@@ -797,27 +797,31 @@ PyObject *pycc_ext_obj_pack_str(void *value)
  * calls for `gc.disable()` on a value whose static type is the opaque
  * `object`.
  *
- * Fused on purpose -- the attribute load and the call happen here, in one
- * helper, rather than as a `pycc_ext_obj_getattr` whose result feeds a
- * separate call site. Three things follow. The bound method object never
- * becomes a pycc value, so it can be released here the moment the call
- * returns instead of joining the boundary's leaked-object set. The whole
- * operation presents *one* failure edge to the generated code, so codegen
- * emits a single NULL test and a single `ret i64 -1` rather than two of
- * each. And it matches the HIR, where `HirExpr::MethodCall` is already one
- * fused node rather than an attribute load feeding a call.
+ * Deliberately *not* fused with the attribute load. An earlier revision
+ * took `(obj, method)` and performed the `PyObject_GetAttrString` here, so
+ * that the bound method never became a pycc value and the whole operation
+ * presented one failure edge instead of two. That ordering is observable
+ * and wrong: CPython resolves a call's callable *before* it evaluates the
+ * arguments, so `obj.missing(1 // 0)` must raise `AttributeError`, while
+ * the fused shim raised `ZeroDivisionError` -- the generated code had
+ * already evaluated every argument by the time the lookup ran. Codegen now
+ * emits `pycc_ext_obj_getattr` before the argument expressions and passes
+ * the resulting callable here, which costs a second NULL test and a second
+ * failure edge and buys back CPython's own evaluation order. The bound
+ * method still never becomes a pycc value: it lives in an LLVM temporary
+ * that dominates this call, and this function releases it.
  *
  * Not `static`: LLVM-generated code declares and calls it by this name
  * (`EXT_OBJ_CALL_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
- * `obj` is borrowed, on exactly `pycc_ext_obj_getattr`'s contract. `args`
- * points at `nargs` slots of *owned* references produced by the
- * `pycc_ext_obj_pack_*` helpers above; this function consumes every one of
- * them on every path, so the generated code never has to. The returned
- * reference is deliberately never released, on the leak-only rule
- * `docs/RUNTIME.md` records for this boundary -- the *result* is the only
- * thing that leaks, because it is the only thing that escapes into compiled
- * code as an `object` value.
+ * `bound` is an *owned* reference -- the one `pycc_ext_obj_getattr`
+ * returned -- and this function releases it on every path. `args` points at
+ * `nargs` slots of owned references produced by the `pycc_ext_obj_pack_*`
+ * helpers above; this function consumes every one of them on every path, so
+ * the generated code never has to. The returned reference is deliberately
+ * never released, on the leak-only rule `docs/RUNTIME.md` records for this
+ * boundary -- the *result* is the only thing that leaks, because it is the
+ * only thing that escapes into compiled code as an `object` value.
  *
  * A packer that failed stored NULL in its slot with a CPython exception
  * already set. Scanning for that here rather than testing each packer's
@@ -825,14 +829,12 @@ PyObject *pycc_ext_obj_pack_str(void *value)
  * propagating the *first* exception unchanged is the correct CPython state:
  * a second, synthetic error would overwrite the real one.
  *
- * A NULL `obj` is defence in depth, exactly as in `pycc_ext_obj_getattr`:
- * `PyObject_GetAttrString` dereferences `Py_TYPE(obj)` with no guard of its
- * own, and the caller's own NULL check already stops an inner failure
- * before this call is reached.
+ * A NULL `bound` is defence in depth: the caller's own NULL check on the
+ * lookup already routed a failed attribute load to the module-exec failure
+ * edge before this call is reached.
  */
-PyObject *pycc_ext_obj_call(PyObject *obj, const char *method, PyObject **args, long long nargs)
+PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
 {
-    PyObject *bound;
     PyObject *result;
     long long i;
     int packed = 1;
@@ -842,8 +844,7 @@ PyObject *pycc_ext_obj_call(PyObject *obj, const char *method, PyObject **args, 
             packed = 0;
         }
     }
-    bound = (obj == NULL || !packed) ? NULL : PyObject_GetAttrString(obj, method);
-    result = (bound == NULL)
+    result = (bound == NULL || !packed)
                  ? NULL
                  : PyObject_Vectorcall(bound, args, (size_t)nargs, NULL);
     Py_XDECREF(bound);
