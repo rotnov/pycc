@@ -1408,8 +1408,11 @@ pub(crate) fn check_isinstance(
     // would be lost"; that guard matches on the expression shape and so does
     // not catch `AttrGet`. Keyed on the type here, which catches both
     // producer shapes.
+    // The guard above is also what now *reads* `obj_ty`; the explicit
+    // `let _ = obj_ty;` discard that used to sit here existed only to say
+    // "validated, but the MIR is what computes the result", and an unread
+    // binding is no longer what it would be describing.
     crate::foreign::reject_object_operand(&obj_ty, "testing a CPython object with `isinstance`")?;
-    let _ = obj_ty; // obj_ty is validated; the MIR uses it to compute the result
     Ok(Ty::Bool)
 }
 

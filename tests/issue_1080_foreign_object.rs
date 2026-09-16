@@ -10,11 +10,18 @@
 //! * a native `pycc build` refuses it with `I0403`, because a native
 //!   executable embeds no interpreter to import into;
 //! * every operation on the bound name other than an attribute load is
-//!   `I0404`. Part 2 of #1026 (#1081) changed *where* that refusal is
-//!   decided -- from the read of the binding to each consuming site, so
-//!   `numpy.pi` itself could be admitted -- but not which programs it
-//!   refuses, which is why every row of the table below still holds.
-//!   `crates/pycc_types/src/foreign.rs` documents the migration.
+//!   refused, and all but one of them with `I0404`. Part 2 of #1026 (#1081)
+//!   changed *where* that refusal is decided -- from the read of the
+//!   binding to each consuming site, so `numpy.pi` itself could be admitted
+//!   -- but not which programs it refuses, which is why every row of the
+//!   table below still holds. `crates/pycc_types/src/foreign.rs` documents
+//!   the migration. The one exception is a general method call
+//!   (`numpy.sqrt(2.0)`), which is refused as `T0043` rather than `I0404`
+//!   because PR 2a adds no `Ty::Object` branch ahead of
+//!   `class::resolve_method_call`; the plan assigns that branch to PR 2b,
+//!   where it *admits* the shape instead of refusing it, so 2a pins the
+//!   current code rather than pre-empting it
+//!   (`a_general_method_call_on_a_foreign_object_is_still_t0043`).
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
 //! coverage (CI's coverage job runs `llvm-cov` without `--include-ignored`);
@@ -256,6 +263,28 @@ fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
     let dir = ScratchDir::new("foreign_attr_accepted").expect("scratch");
     let output = check(&dir, "import numpy\n\nnumpy.pi\n");
     assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
+/// A general method call on the object is refused, but not with `I0404`.
+///
+/// `numpy.append(1)` is in the table above because the four D-105
+/// String-keyed container spellings (`append`/`pop`/`get`/`add`) are stolen
+/// ahead of the generic `MethodCall` fallback and reach `lookup_bound_name`.
+/// Any other method name falls through to `class::resolve_method_call`,
+/// whose `Ty::Instance` destructure reports `T0043` instead. The program is
+/// still refused, so no capability leaks; only the diagnostic differs.
+/// Pinned rather than fixed here on purpose: the plan's row C2 gives the
+/// `Ty::Object` branch to PR 2b, and there it *admits* the call as an
+/// `ObjMethodCall` rather than renaming its refusal, so changing the code
+/// now would be work 2b immediately deletes.
+#[test]
+fn a_general_method_call_on_a_foreign_object_is_still_t0043() {
+    let dir = ScratchDir::new("foreign_method_call_t0043").expect("scratch");
+    let output = check(&dir, "import numpy\n\nnumpy.sqrt(2.0)\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[T0043]"), "{rendered}");
+    assert!(!rendered.contains("I0404"), "{rendered}");
 }
 
 /// Every shape that *consumes* the binding, one row per refusing site.

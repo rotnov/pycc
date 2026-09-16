@@ -75,13 +75,20 @@ fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
 /// pending-exception guard immediately after this call -- but that guard
 /// reads pycc's pending state, which a CPython-set exception leaves
 /// untouched, so the no-exception edge is taken and a `NULL`
-/// `Scalar::Object` continues. In PR 2a that `NULL` is provably never
-/// dereferenced: `pycc_types` refuses a `Ty::Object` operand at every
-/// consuming site (`docs/TYPE_SYSTEM.md`'s `I0404` rules), which leaves
-/// exactly two shapes -- a discarded `ExprStmt` and the return of an
+/// `Scalar::Object` continues. In PR 2a that `NULL` is never dereferenced
+/// by pycc-generated code: `pycc_types` refuses a `Ty::Object` operand at
+/// every consuming site (`docs/TYPE_SYSTEM.md`'s `I0404` rules), which
+/// leaves exactly three shapes -- a discarded `ExprStmt`, the return of an
 /// unannotated private helper, which D-137's amendment makes unexportable
-/// because `object` cannot be spelled in an annotation. Neither can hand
-/// the value to a host.
+/// because `object` cannot be spelled in an annotation, and the base of a
+/// *further* `ObjAttrGet`, because `a.b.c` nests this node inside itself.
+/// The first two hand the value to nobody. The third does: it passes the
+/// `NULL` back into `pycc_ext_obj_getattr` as the next call's `obj`, and
+/// `PyObject_GetAttrString` dereferences its argument's type without a
+/// guard. That case is answered once, in the shim -- a NULL `obj` returns
+/// NULL unchanged, preserving the inner lookup's own `AttributeError` --
+/// rather than by a check emitted at every load site here; the shim's own
+/// comment in `src/ext/pycc_ext_module.c` carries the reasoning.
 ///
 /// PR 2b owns the transition, because `MirExpr::ObjMethodCall` is what
 /// first makes the loaded value reachable from a host call. It is the

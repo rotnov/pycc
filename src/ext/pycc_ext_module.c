@@ -690,9 +690,22 @@ PyObject *pycc_ext_obj_import(const char *name)
  * here. The two failure protocols are kept apart (the caller's own comment
  * in `crates/pycc_codegen/src/lib.rs`, `MirExpr::ObjAttrGet`, states which
  * side owns the transition and why Part 2a does not need it yet).
+ *
+ * A NULL `obj` is the one case this function does decide, because codegen
+ * emits no NULL check: `a.b.c` lowers to nested `ObjAttrGet` nodes, so a
+ * failed inner lookup hands its NULL straight back in as the next call's
+ * `obj`. `PyObject_GetAttrString` dereferences `Py_TYPE(obj)` with no guard
+ * of its own, which would crash the hosting interpreter instead of raising.
+ * Returning NULL unchanged instead is also the *correct* CPython state: the
+ * inner lookup already set its `AttributeError`, so propagating NULL leaves
+ * exactly one exception set, which is what the transition PR 2b adds will
+ * pick up. Overwriting it with a second, synthetic error would be worse.
  */
 PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name)
 {
+    if (obj == NULL) {
+        return NULL;
+    }
     return PyObject_GetAttrString(obj, name);
 }
 
