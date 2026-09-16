@@ -103,6 +103,18 @@ pub const EXT_THUNK_PREFIX: &str = "pycc_ext_thunk_";
 /// error. One constant, referenced by both sides, makes that impossible.
 pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 
+/// The fixed C shim's attribute-load helper (Part 2 of #1026): it takes a
+/// borrowed `PyObject *` and a NUL-terminated attribute name, and returns a
+/// *new* reference to the attribute's value, or `NULL` with the CPython
+/// exception already set.
+///
+/// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`]
+/// directly above is: the symbol is defined in `src/ext/pycc_ext_module.c`
+/// and declared by LLVM in `lib.rs`'s `MirExpr::ObjAttrGet` arm, and the
+/// `--ext` link resolves an undefined symbol lazily, so a misspelling on
+/// either side is a crash at first call rather than a link error.
+pub const EXT_OBJ_GETATTR_SYMBOL: &str = "pycc_ext_obj_getattr";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

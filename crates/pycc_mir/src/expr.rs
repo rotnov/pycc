@@ -732,6 +732,26 @@ pub(super) fn lower_expr(
                 );
             }
             let base = lower_expr(base, scopes, classes, current_class);
+            // Part 2 of #1026: `numpy.pi` -- the base is a CPython object,
+            // so there is no `HirClassDef` to resolve `attr` against and no
+            // slot index to compute. The attribute name survives lowering
+            // as a `String` (D-105's String-keyed-node precedent) and the
+            // load becomes a runtime `pycc_ext_obj_getattr` call.
+            //
+            // Placed immediately after `lower_expr` rather than beside the
+            // enum-member and class-name interceptions above because a
+            // foreign module's local name *is* a value binding in `scopes`
+            // (`pycc_mir::build` binds it as `Ty::Object`), so both of those
+            // interceptions already decline it on their own scope guards.
+            // It must come before `class_def_of`, whose `Ty::Object` input
+            // would reach `class.rs`'s internal-error panic.
+            if base.ty() == Ty::Object {
+                return MirExpr::ObjAttrGet {
+                    base: Box::new(base),
+                    attr: attr.clone(),
+                    ty: Ty::Object,
+                };
+            }
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
             // CPython's descriptor protocol precedence), then for regular

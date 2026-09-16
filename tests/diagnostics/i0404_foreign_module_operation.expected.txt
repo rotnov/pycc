@@ -1,5 +1,5 @@
-error[I0404]: `numpy` is a CPython object; operations on a CPython object are not supported yet -- Part 1 of #1026 binds the imported module but implements no operation on it
+error[I0404]: printing or formatting a CPython object is not supported yet -- pycc models a CPython object as an opaque value, and Part 2 of #1026 implements attribute access on it and nothing else
  --> tests/diagnostics/i0404_foreign_module_operation.py:1:1
   |
 1 | import numpy
-  | ^ `numpy` is a CPython object; operations on a CPython object are not supported yet -- Part 1 of #1026 binds the imported module but implements no operation on it
+  | ^ printing or formatting a CPython object is not supported yet -- pycc models a CPython object as an opaque value, and Part 2 of #1026 implements attribute access on it and nothing else

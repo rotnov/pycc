@@ -339,6 +339,17 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // read back through the foreign-global provenance and infer as
             // `Ty::Object`, turning an unresolved-container inference into a
             // misleading return-type mismatch.
+            //
+            // Part 2 of #1026 (#1081) re-derived this strip rather than
+            // relaxing it. It is narrower than "a function-local can never
+            // be `Ty::Object`" -- a local *may* now carry that type, when
+            // the solver's `AttrGet` arm hands back a real `Ok(Ty::Object)`
+            // term for `numpy.pi` and an assignment records it in
+            // `bindings`. What the strip removes is only the *provenance
+            // marker*, which answers a different question ("is this name a
+            // foreign global?") and whose stale answer was never about the
+            // local's actual value. The two cases are pinned separately in
+            // this crate's tests.
             env.foreign_objects.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted

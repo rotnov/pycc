@@ -1396,6 +1396,19 @@ pub(crate) fn check_isinstance(
     // is computed by `eval_isinstance_single` at MIR lowering time.
     // (We could compute it here too, but the type checker's job is just
     // validation — the MIR computes the constant.)
+    // Part 2 of #1026 (#1081): `isinstance(numpy.pi, float)` stays refused,
+    // and this is the one hole where admitting it would be *wrong* rather
+    // than merely unimplemented. `pycc_mir`'s lowering reads only the
+    // argument's `.ty()`, discards the lowered expression, and folds the
+    // answer through `eval_isinstance_single`, whose catch-all is `false` --
+    // so an object first argument would compile to a constant `False` where
+    // CPython answers `True`, *and* would drop the attribute load's side
+    // effect. This extends the `C0001` decision two dozen lines above, which
+    // already refuses a `HirExpr::Call` first argument because "side effects
+    // would be lost"; that guard matches on the expression shape and so does
+    // not catch `AttrGet`. Keyed on the type here, which catches both
+    // producer shapes.
+    crate::foreign::reject_object_operand(&obj_ty, "testing a CPython object with `isinstance`")?;
     let _ = obj_ty; // obj_ty is validated; the MIR uses it to compute the result
     Ok(Ty::Bool)
 }

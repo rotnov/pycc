@@ -37,7 +37,15 @@ impl ExceptionCodegenState<'_> {
 /// operations converted to catchable Python exceptions remain fail-closed.
 pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
     match expr {
-        MirExpr::Call { .. } | MirExpr::DictGet { .. } | MirExpr::Instantiate(_) => true,
+        // `ObjAttrGet` joins the `true` group (D-244, Part 2 of #1026):
+        // unlike `AttrGet`'s compile-time-resolved slot load below, a
+        // foreign attribute load is a real `PyObject_GetAttrString` call
+        // that returns `NULL` with a CPython exception set whenever the
+        // attribute is missing or its descriptor raises.
+        MirExpr::Call { .. }
+        | MirExpr::DictGet { .. }
+        | MirExpr::Instantiate(_)
+        | MirExpr::ObjAttrGet { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod

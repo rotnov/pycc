@@ -9,8 +9,12 @@
 //!   bound-but-unused module object is not an error there;
 //! * a native `pycc build` refuses it with `I0403`, because a native
 //!   executable embeds no interpreter to import into;
-//! * every operation on the bound name is `I0404`, at each of the three
-//!   choke points `crates/pycc_types/src/foreign.rs` documents.
+//! * every operation on the bound name other than an attribute load is
+//!   `I0404`. Part 2 of #1026 (#1081) changed *where* that refusal is
+//!   decided -- from the read of the binding to each consuming site, so
+//!   `numpy.pi` itself could be admitted -- but not which programs it
+//!   refuses, which is why every row of the table below still holds.
+//!   `crates/pycc_types/src/foreign.rs` documents the migration.
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
 //! coverage (CI's coverage job runs `llvm-cov` without `--include-ignored`);
@@ -217,13 +221,52 @@ fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
     assert!(!rendered.contains("T0021"), "{rendered}");
 }
 
-/// Every shape that reads the binding, one row per choke point.
+/// Part 2 of #1026 (#1081): the same helper, returning an *attribute* of
+/// the module rather than the module itself.
+///
+/// This is the second producer shape of a `Ty::Object` value and the one
+/// Part 2 introduces: the solver's `AttrGet` term types `numpy.pi` as
+/// `object` exactly as its `Name` term types `numpy`, so the refusal at the
+/// consuming site (`x = ...`) is reached the same way. Pinned end to end
+/// because it is the shape a type-level regression would break silently --
+/// the value would simply stop being an `object` and the refusal would
+/// disappear along with it.
+#[test]
+fn an_unannotated_helper_returning_a_foreign_attribute_is_i0404_not_t0021() {
+    let dir = ScratchDir::new("foreign_helper_attr_return").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy\n\ndef _helper():\n    return numpy.pi\n\nx = _helper()\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
+/// The one operation Part 2 of #1026 adds: a discarded attribute load.
+///
+/// It is the only statement position an `object`-typed attribute load can
+/// occupy end to end, because every consuming site still refuses the value
+/// (the table below). PR 2a therefore ships no user-visible capability --
+/// that is the intended state, and this test is what distinguishes "not yet
+/// wired up" from "still refused".
+#[test]
+fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
+    let dir = ScratchDir::new("foreign_attr_accepted").expect("scratch");
+    let output = check(&dir, "import numpy\n\nnumpy.pi\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
+/// Every shape that *consumes* the binding, one row per refusing site.
 ///
 /// `tests/diagnostics/i0404_foreign_module_operation.py` pins the exact
-/// rendering of one of them; this states the *set*. A shape that silently
-/// started compiling instead of being refused is what Part 1's containment
-/// invariant forbids -- a `Ty::Object` value must not escape into any
-/// operation, because no operation on one is implemented yet.
+/// rendering of one of them; this states the *set*. Part 1 guaranteed the
+/// set by refusing the read itself, so no `Ty::Object` value could escape
+/// into any operation at all. Part 2 admits the read and refuses each
+/// consumer separately, which makes this table the invariant rather than a
+/// consequence of one: a row that silently started compiling is now a real
+/// hole rather than an impossibility.
 #[test]
 fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");

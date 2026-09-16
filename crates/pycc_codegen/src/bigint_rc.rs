@@ -553,7 +553,13 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // it can never reach this function as the `Ty::Int`-classified
         // expression `int_temporary_word` passes in; it joins the combined
         // "owning" answer for the same reason.
-        | MirExpr::Not(_) => false,
+        | MirExpr::Not(_)
+        // D-244, Part 2 of #1026: `ObjAttrGet`'s own `.ty()` is always
+        // `Ty::Object`, never `Ty::Int`, so like `OptionalWrap`/`Not` above
+        // it can never reach this function as the `Ty::Int`-classified
+        // expression `int_temporary_word` passes in; it joins the combined
+        // "not a duplicate reference" answer for the same reason.
+        | MirExpr::ObjAttrGet { .. } => false,
     }
 }
 

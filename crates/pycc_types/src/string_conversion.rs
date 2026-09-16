@@ -106,6 +106,19 @@ pub(crate) fn reject_unrenderable(
             }
         }
         Ty::Protocol(name) => Err(unrenderable_protocol(name, site)),
+        // Part 2 of #1026 (#1081). Before Part 2 this fell into the
+        // catch-all and was *accepted*: `print(numpy)` was refused one
+        // level up, by the read of the binding itself, so no renderer ever
+        // saw a `Ty::Object`. With that producer-side refusal gone the
+        // catch-all would admit `print(numpy.pi)` all the way to
+        // `pycc_codegen`'s `to_str`, which has no object arm -- a compiler
+        // panic where the user should have had a diagnostic. `I0404`
+        // rather than this module's own `T0021` family, because the reason
+        // is "pycc implements nothing on a CPython object yet", not
+        // "this type has no `__str__`".
+        Ty::Object => Err(crate::foreign::object_operation_unsupported(
+            "printing or formatting a CPython object",
+        )),
         _ => Ok(()),
     }
 }

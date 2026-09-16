@@ -167,14 +167,21 @@ pub(super) fn call_result_scalar<'ctx>(
         // what makes "only these three remain unhandled" a mechanically
         // checked claim instead of a comment.
         //
-        // `Ty::Object` (Part 1 of #1026) joins them for a fourth reason: a
-        // foreign binding's opaque CPython object is the one `Ty::Object`
-        // value Part 1 produces, and it is never a *call result* -- calling
-        // a foreign object is refused by `pycc_types` (`I0404`) and no
-        // user function can be annotated to return `object`, which is
-        // unspellable in an annotation. Part 2's call support has to
-        // replace this arm with a real extraction.
-        ty @ (Ty::Infer | Ty::Param(_) | Ty::Protocol(_) | Ty::Object) => {
+        // Part 2 of #1026 moved `Ty::Object` out of that panic group and
+        // gave it the real extraction Part 1's comment said it would need.
+        // It is no longer unreachable: `object` is still unspellable in an
+        // annotation (D-137's amendment, `C0001`), but an *unannotated*
+        // private helper whose body returns a foreign attribute now infers
+        // a `Ty::Object` return, so a call to it is a `Ty::Object`-typed
+        // call result. The value is an opaque `PyObject *` and stays one --
+        // `Scalar::Object` is the pointer and nothing here inspects it.
+        Ty::Object => Scalar::Object(
+            call_site
+                .try_as_basic_value()
+                .expect_basic("this function is declared to return a CPython object")
+                .into_pointer_value(),
+        ),
+        ty @ (Ty::Infer | Ty::Param(_) | Ty::Protocol(_)) => {
             panic!(
                 "pycc_codegen: a `{}`-typed call result is not supported yet",
                 ty.name()

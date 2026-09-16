@@ -191,11 +191,14 @@ pub(crate) fn infer_expr_in(
                 // `check_assignment`'s target checking (see `env.narrowed`'s
                 // own doc comment).
                 Some(BindingState::Definitely(ty)) => {
-                    // Part 1 of #1026, choke point 1: an expression-position
-                    // read of a foreign import is the single producer of a
-                    // `Ty::Object` value, so refusing it here refuses every
-                    // operation derived from it at once.
-                    crate::foreign::reject_object_read(name, ty)?;
+                    // Part 2 of #1026 (#1081) removed Part 1's
+                    // `reject_object_read` call from this arm. A read of a
+                    // foreign binding now yields `Ty::Object` like any
+                    // other read: this function is context-free, so it
+                    // cannot tell an `numpy.pi` base apart from a
+                    // `print(numpy)` operand, and Part 2 must admit the
+                    // first. Every *consumer* refuses on its own instead --
+                    // `crate::foreign`'s module doc carries the full rule.
                     Ok(env.narrowed_ty(name).unwrap_or_else(|| ty.clone()))
                 }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -1229,6 +1232,23 @@ pub(crate) fn infer_expr_in(
                     ),
                     Span::new(0, 0),
                 ));
+            }
+            // Part 2 of #1026 (#1081): `numpy.pi`. A CPython object has no
+            // `HirClassDef`, so `class::resolve_attr_get`'s
+            // `let Ty::Instance(..) else` just below would report `T0043`
+            // ("not a class instance") -- a message that describes pycc's
+            // own representation rather than the user's program, and a
+            // user-visible regression the moment the `Name` arm above stops
+            // refusing the read. The load itself is what Part 2 implements,
+            // so it is admitted here, opaquely: the result is another
+            // `Ty::Object`, because pycc knows nothing about the attribute's
+            // real type either.
+            //
+            // Placed after the `Super` (#433) and `ClassName.attr` (#436)
+            // guards above so neither changes meaning: both key on the
+            // *syntactic* base, which a foreign read never matches.
+            if matches!(base_ty, Ty::Object) {
+                return Ok(Ty::Object);
             }
             class::resolve_attr_get(env, &base_ty, attr)
         }
