@@ -624,6 +624,42 @@ pub(crate) fn infer_expr_in(
                     return Ok(Ty::Bool);
                 }
             }
+            if (callee == "int" || callee == "str")
+                && env.lookup_function(callee).is_none()
+                && env.lookup_class(callee).is_none()
+            {
+                // Part 4 of #1026 (PR 4b of #1083): `int` and `str` are
+                // admitted for a `Ty::Object` argument *only*, exactly as
+                // `bool` above is. Every other argument type falls through to
+                // `unsupported_callable_builtin` and keeps its `C0001`
+                // verbatim, so `int(1)` and `str(1)` are refused precisely as
+                // they were -- the residual asymmetry (`str(o)` compiles,
+                // `str(1)` does not) is stated openly in `docs/TYPE_SYSTEM.md`
+                // and left to #1017/#1018, which own the general
+                // builtin-conversion story.
+                //
+                // Both guards are `bool`'s, for `bool`'s reasons: a
+                // `def int(...)`/`def str(...)` is a valid working program on
+                // `main` today and must keep winning, and MIR resolves a call
+                // naming a class as an instantiation, so a module defining
+                // `class int` would otherwise type-check here and panic in
+                // codegen.
+                //
+                // **Placement of the class guard.** It sits on the whole arm,
+                // like `bool`'s and unlike `float`'s. `float`'s is confined to
+                // its `Ty::Object` admission because that arm already admitted
+                // `int`/`float`/`bool` on `main`, and widening the guard would
+                // have changed behavior PR 4a did not own. These two arms are
+                // new and admit nothing else, so every other argument already
+                // falls through to `C0001` and the two placements are
+                // equivalent -- the outer one simply reads plainly. (The
+                // general precedence divergence between a class-shadowed
+                // builtin in `pycc check` and in `pycc build` is #1107's, not
+                // this change's.)
+                if arg_tys.len() == 1 && matches!(arg_tys[0], Ty::Object) {
+                    return Ok(if callee == "int" { Ty::Int } else { Ty::Str });
+                }
+            }
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses this same generic `HirExpr::Call` node -- there is no
             // dedicated HIR shape for it (`pycc_hir::class`'s own doc

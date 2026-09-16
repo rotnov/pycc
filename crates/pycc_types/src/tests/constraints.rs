@@ -3101,3 +3101,76 @@ fn constraint_collection_honors_a_user_defined_bool_signature_over_the_builtin()
         Some(Ok(Ty::Int))
     );
 }
+
+#[test]
+fn constraint_collection_int_and_str_calls_admit_a_foreign_object_argument() {
+    // Part 4 of #1026 (PR 4b of #1083): the solver-side mirrors. Without
+    // them a module-scope `int(o)` reaches `unsupported_callable_builtin`
+    // here and is refused with `C0001` before `infer_expr_in` ever runs.
+    for (callee, expected) in [("int", Ty::Int), ("str", Ty::Str)] {
+        assert_eq!(
+            collect_conversion_of_a_foreign_object(callee).unwrap(),
+            Some(Ok(expected)),
+            "{callee}"
+        );
+    }
+}
+
+#[test]
+fn constraint_collection_int_and_str_calls_keep_c0001_for_a_non_object_argument() {
+    for callee in ["int", "str"] {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment::empty(&[]);
+        let expr = HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001", "{callee}");
+    }
+}
+
+#[test]
+fn constraint_collection_honors_a_user_defined_int_or_str_signature_over_the_builtin() {
+    // The C4 guard, mirrored for PR 4b's two names: a registered signature
+    // must resolve through the ordinary lookup rather than through the
+    // hand-recognized builtin arm.
+    for callee in ["int", "str"] {
+        let signatures = HashMap::from([(
+            callee.to_string(),
+            (vec!["x".to_string()], vec![Ok(Ty::Int)], Ok(Ty::Float)),
+        )]);
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment::empty(&[]);
+        let expr = HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        assert_eq!(
+            collect_expr_constraints(
+                &signatures,
+                &mut parents,
+                &mut concrete,
+                &mut binops,
+                &env,
+                &expr,
+            )
+            .unwrap(),
+            Some(Ok(Ty::Float)),
+            "{callee}"
+        );
+    }
+}

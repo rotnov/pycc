@@ -1,5 +1,6 @@
-//! Emission for `len(o)`, truth testing and `float(o)` on a CPython object
-//! value (Part 3 of #1026, PR 3a of #1082; Part 4 of #1026, PR 4a of #1083).
+//! Emission for `len(o)`, truth testing and the `float(o)`, `int(o)` and
+//! `str(o)` conversions on a CPython object value (Part 3 of #1026, PR 3a of
+//! #1082; Part 4 of #1026, PRs 4a and 4b of #1083).
 //!
 //! The third sibling of `foreign_attr.rs` and `foreign_call.rs`, carved out
 //! of `lib.rs` for the same reason (AGENTS.md's "Keep source files
@@ -11,15 +12,21 @@
 //! `fail_on_null`. PR 4a's `float(o)` is the third member of that family and
 //! lives here for the same reason; `bool(o)` needs no emitter of its own at
 //! all, because it is exactly [`emit_truthy`] widened to a `Scalar::Bool`.
+//! PR 4b's `int(o)` and `str(o)` are the fourth and fifth: identical shape
+//! again, differing only in the out-slot's type -- an `i64` holding a D-141
+//! encoded word, exactly like [`emit_len`]'s, and a pointer holding the
+//! `PyStrObj *` a `str` literal's own emission produces.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). None of these helpers lets a reference
 //! escape -- `pycc_ext_obj_len` answers a D-141 encoded `int` word,
-//! `pycc_ext_obj_truthy` answers a C `int`, and `pycc_ext_obj_to_float`
-//! answers a `double` after releasing the temporary `PyNumber_Float` handed
-//! it, on *every* exit rather than only the successful one -- and none
-//! touches its operand's refcount. So unlike an attribute load or a method
-//! call, none of these adds anything to the #1092 leak-only set: there is
-//! nothing to leak in compiled code and nothing left for it to release.
+//! `pycc_ext_obj_truthy` answers a C `int`, `pycc_ext_obj_to_float`
+//! answers a `double`, `pycc_ext_obj_to_int` answers a D-141 encoded word
+//! and `pycc_ext_obj_to_str` answers a `PyStrObj *` copied out of CPython's
+//! own buffer -- each after releasing the CPython temporary its conversion
+//! protocol handed it, on *every* exit rather than only the successful one
+//! -- and none touches its operand's refcount. So unlike an attribute load
+//! or a method call, none of these adds anything to the #1092 leak-only set:
+//! there is nothing to leak in compiled code and nothing left to release.
 //!
 //! **Failure** (`docs/RUNTIME.md`). Every helper here leaves *CPython's*
 //! error indicator set, which pycc's own pending-exception guard (D-173) cannot
@@ -83,6 +90,40 @@ fn obj_to_float_fn<'ctx>(
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     module.add_function(
         EXT_OBJ_TO_FLOAT_SYMBOL,
+        context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
+        None,
+    )
+}
+
+/// Declares the shim's `int pycc_ext_obj_to_int(PyObject *, long long *)`
+/// once per module, on [`obj_len_fn`]'s pattern and for its reason.
+fn obj_to_int_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_TO_INT_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_TO_INT_SYMBOL,
+        context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
+        None,
+    )
+}
+
+/// Declares the shim's `int pycc_ext_obj_to_str(PyObject *, void **)` once
+/// per module, on [`obj_len_fn`]'s pattern and for its reason.
+fn obj_to_str_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_TO_STR_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_TO_STR_SYMBOL,
         context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
         None,
     )
@@ -297,6 +338,103 @@ pub(super) fn emit_to_float<'ctx>(
         .expect("build_load should not fail")
         .into_float_value();
     Scalar::Float(value)
+}
+
+/// Emits one `int(o)` against a CPython object and yields the result as an
+/// already-D-141-encoded [`Scalar::Int`].
+///
+/// [`emit_len`]'s shape exactly, and for its reason: `pycc_ext_obj_to_int`
+/// fuses `PyNumber_Long`, CPython's own overflow check and
+/// `pycc_rt_ext_int_encode` behind one `-1` return, so a finished word
+/// arrives through the out-parameter and one failure edge is emitted here
+/// instead of three. Nothing is re-tagged at this call site -- unlike
+/// `lib.rs`'s scalar `len`, which receives a *raw* `i64`.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing** --
+/// [`emit_to_float`]'s paragraph, unchanged, recorded on
+/// [`EXT_OBJ_TO_INT_SYMBOL`], in the helper's C comment and in
+/// `docs/TYPE_SYSTEM.md`'s `object` row. In particular this is *not*
+/// `pycc_ext_unpack_int_at`: that helper's `PyBool_Check`/`PyLong_Check`
+/// guards exist because the thunk seam is closed, and an explicit
+/// conversion is the seam where CPython's own answers are the contract.
+///
+/// Failure is `-1` with CPython's error indicator set, taking
+/// [`fail_on_negative`]'s module-exec failure edge: `PyNumber_Long` raises
+/// for an operand with no integer conversion and for an unparseable string,
+/// and a result outside pycc's inline-integer range raises `OverflowError`
+/// (#1040) -- none of which pycc can rule out at compile time for an opaque
+/// pointee.
+///
+/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
+pub(super) fn emit_to_int<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let to_int_fn = obj_to_int_fn(context, module);
+    let base_ptr = expect_object_pointer(base);
+    let out = out_slot_in_entry_block(builder, entry_fn, context.i64_type(), "foreign_to_int_out");
+    let status = builder
+        .build_call(to_int_fn, &[base_ptr.into(), out.into()], "foreign_to_int")
+        .expect("build_call should not fail for pycc_ext_obj_to_int")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_to_int returns int")
+        .into_int_value();
+    fail_on_negative(context, builder, entry_fn, status, "foreign_to_int");
+    let encoded = builder
+        .build_load(context.i64_type(), out, "foreign_to_int_value")
+        .expect("build_load should not fail")
+        .into_int_value();
+    Scalar::Int(encoded)
+}
+
+/// Emits one `str(o)` against a CPython object and yields the result as a
+/// [`Scalar::Str`].
+///
+/// [`emit_to_int`]'s shape with a pointer out-slot. The handle the shim
+/// writes comes from `pycc_rt_str_from_literal` -- the identical call
+/// `emit_string_literal` makes for a `str` literal -- so it arrives as this
+/// module's own reference at refcount 1 and every downstream consumer
+/// (`to_str`'s `Scalar::Str(v) => v`, an f-string, a `print`) handles it
+/// exactly as it handles a literal-derived one. No new ownership rule is
+/// needed in this crate; the load-bearing ordering (copy before release)
+/// lives on the C side, where the buffer belongs to the `PyObject_Str`
+/// result.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing** --
+/// [`emit_to_float`]'s paragraph, unchanged. `PyObject_Str` *is* `str()`.
+///
+/// Failure is `-1` with CPython's error indicator set, taking
+/// [`fail_on_negative`]'s module-exec failure edge: a `__str__` that raises
+/// and a result holding a lone surrogate (no UTF-8 encoding) are both real
+/// and neither is decidable at compile time for an opaque pointee.
+///
+/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
+pub(super) fn emit_to_str<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let to_str_fn = obj_to_str_fn(context, module);
+    let base_ptr = expect_object_pointer(base);
+    let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
+    let out = out_slot_in_entry_block(builder, entry_fn, ptr_ty, "foreign_to_str_out");
+    let status = builder
+        .build_call(to_str_fn, &[base_ptr.into(), out.into()], "foreign_to_str")
+        .expect("build_call should not fail for pycc_ext_obj_to_str")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_to_str returns int")
+        .into_int_value();
+    fail_on_negative(context, builder, entry_fn, status, "foreign_to_str");
+    let value = builder
+        .build_load(ptr_ty, out, "foreign_to_str_value")
+        .expect("build_load should not fail")
+        .into_pointer_value();
+    Scalar::Str(value)
 }
 
 #[cfg(test)]
@@ -692,6 +830,100 @@ mod tests {
     /// `bool(o)` adds no symbol of its own: it is PR 3a's truth test widened
     /// to the `i8` a `Scalar::Bool` carries, and it inherits that helper's
     /// module-exec failure edge unchanged.
+    /// `int(o)` and `str(o)` each reach their own Part 4 shim helper and
+    /// take the module-exec failure edge when it raises.
+    ///
+    /// Asserted through the shared constants rather than against literals
+    /// for the lazy-link reason [`EXT_OBJ_TO_INT_SYMBOL`] records. The two
+    /// names share one `lib.rs` emission arm, so driving both through one
+    /// table is what proves the dispatch picks a different emitter per name
+    /// rather than the same one twice -- hence the negative assertion that
+    /// neither reaches the other's symbol.
+    #[test]
+    fn the_part_4b_conversions_call_their_shim_helpers_and_can_fail() {
+        for (callee, ty, symbol, other) in [
+            ("int", Ty::Int, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL),
+            ("str", Ty::Str, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TO_INT_SYMBOL),
+        ] {
+            let ir = entry_ir(
+                &format!("foreign_to_{callee}_call"),
+                convert("numpy", callee, ty),
+            );
+            assert!(ir.contains(symbol), "{callee}: {ir}");
+            assert!(!ir.contains(other), "{callee}: {ir}");
+            assert!(ir.contains(&format!("foreign_to_{callee}_failed")), "{ir}");
+            assert!(ir.contains(&format!("foreign_to_{callee}_fail:")), "{ir}");
+            assert!(ir.contains(&format!("foreign_to_{callee}_cont:")), "{ir}");
+            assert!(
+                ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+                "{callee}: {ir}"
+            );
+        }
+    }
+
+    /// Each Part 4b conversion's out-slot carries the type its helper writes
+    /// and is hoisted into the entry block.
+    ///
+    /// `the_out_slot_alloca_is_hoisted_into_the_entry_block`'s claim for the
+    /// third and fourth slot types `out_slot_in_entry_block` now serves: an
+    /// `i64` holding a D-141 encoded word, and a pointer holding the
+    /// `PyStrObj *` the shim copied out of CPython. The `while` wrapper is
+    /// what makes the hoist observable -- a conversion inside a module-scope
+    /// loop must not grow the host's stack.
+    #[test]
+    fn the_part_4b_conversion_out_slots_are_typed_and_in_the_entry_block() {
+        for (callee, ty, slot) in [("int", Ty::Int, "i64"), ("str", Ty::Str, "ptr")] {
+            let ir = entry_ir(
+                &format!("foreign_to_{callee}_in_loop"),
+                program("numpy", |base| {
+                    vec![MirStmt::While {
+                        test: MirExpr::BoolLiteral(false),
+                        body: vec![MirStmt::Assign {
+                            target: "converted".to_string(),
+                            value: MirExpr::Call {
+                                callee: callee.to_string(),
+                                args: vec![base],
+                                ty: ty.clone(),
+                            },
+                        }],
+                    }]
+                }),
+            );
+            let needle = format!("foreign_to_{callee}_out = alloca {slot}");
+            let alloca_at = ir
+                .find(&needle)
+                .unwrap_or_else(|| panic!("no `{needle}`: {ir}"));
+            let first_label_at = ir
+                .find("\n\n")
+                .unwrap_or_else(|| panic!("no second basic block: {ir}"));
+            assert!(alloca_at < first_label_at, "{callee}: {ir}");
+        }
+    }
+
+    /// Two conversions of one kind in one module share one extern
+    /// declaration -- `obj_to_int_fn`/`obj_to_str_fn`'s early return.
+    ///
+    /// The needle carries the call's own `(` for the reason
+    /// `a_second_foreign_float_conversion_reuses_the_one_extern_declaration`
+    /// records: LLVM renames a duplicate declaration rather than rejecting
+    /// it, so the bare symbol would still match.
+    #[test]
+    fn a_second_part_4b_conversion_reuses_the_one_extern_declaration() {
+        for (callee, ty, symbol) in [
+            ("int", Ty::Int, EXT_OBJ_TO_INT_SYMBOL),
+            ("str", Ty::Str, EXT_OBJ_TO_STR_SYMBOL),
+        ] {
+            let mut items = convert("numpy", callee, ty.clone());
+            items.extend(convert("scipy", callee, ty));
+            let ir = entry_ir(&format!("foreign_to_{callee}_twice"), items);
+            assert_eq!(
+                occurrences(&ir, &format!("@{symbol}(")),
+                2,
+                "{callee}: one call site per conversion, both on the one declaration: {ir}"
+            );
+        }
+    }
+
     #[test]
     fn a_foreign_bool_conversion_reuses_the_truth_testing_helper() {
         let ir = entry_ir("foreign_bool_call", convert("numpy", "bool", Ty::Bool));

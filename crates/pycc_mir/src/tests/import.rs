@@ -638,3 +638,73 @@ fn a_user_defined_bool_function_is_lowered_as_a_real_call_not_the_builtin() {
     };
     assert_eq!(*ty, Ty::Int, "the user function's return type must win");
 }
+
+#[test]
+fn int_and_str_of_a_foreign_object_stay_calls_typed_int_and_str() {
+    // Part 4 of #1026 (PR 4b of #1083), `bool_of_a_foreign_object_stays_a_
+    // call_typed_bool`'s claim for the other two conversions: without the
+    // lowering arm the call falls to `lookup`, finds no `$fn:int`, and
+    // panics on a program `pycc check` has already accepted.
+    for (callee, expected) in [("int", Ty::Int), ("str", Ty::Str)] {
+        let hir = module_with_discarded(call(
+            callee,
+            vec![pycc_hir::HirExpr::Name("numpy".to_string())],
+        ));
+        let MirExpr::Call {
+            callee: c,
+            args,
+            ty,
+        } = only_discarded_expr(&hir)
+        else {
+            panic!("{callee}: expected a plain `Call`");
+        };
+        assert_eq!(c, callee);
+        assert_eq!(ty, expected);
+        assert!(matches!(
+            args.as_slice(),
+            [MirExpr::Name { ty: Ty::Object, .. }]
+        ));
+    }
+}
+
+#[test]
+fn a_user_defined_int_or_str_function_is_lowered_as_a_real_call_not_the_builtin() {
+    // `a_user_defined_bool_function_is_lowered_as_a_real_call_not_the_
+    // builtin`'s claim for PR 4b's two names: `pycc_types` honours a
+    // `def int(...)`/`def str(...)` and refuses the builtin arm outright, so
+    // a lowering that ignored the shadow would type the call `Ty::Int`/
+    // `Ty::Str` against the user function's own registered `Ty::Float`
+    // return.
+    for callee in ["int", "str"] {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: callee.to_string(),
+                    params: vec![("x".to_string(), Ty::Float)],
+                    return_ty: Ty::Float,
+                    body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                        "x".to_string(),
+                    )))],
+                },
+                HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(call(
+                    callee,
+                    vec![pycc_hir::HirExpr::FloatLiteral(1.0)],
+                ))),
+            ],
+            ..module_with_imports(vec![foreign("numpy", 0)])
+        };
+        let mir = build(&hir);
+        let MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call { ty, .. })) = &mir.items[2]
+        else {
+            panic!(
+                "{callee}: expected the shadowing call to stay a `Call`: {:?}",
+                mir.items
+            );
+        };
+        assert_eq!(
+            *ty,
+            Ty::Float,
+            "{callee}: the user function's return type must win"
+        );
+    }
+}

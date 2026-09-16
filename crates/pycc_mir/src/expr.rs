@@ -269,6 +269,24 @@ pub(super) fn lower_expr(
                 // finds no `$fn:bool`, and panics -- a `pycc check` that exits
                 // 0 followed by a `pycc build --ext` that aborts.
                 Ty::Bool
+            } else if (callee == "int" || callee == "str")
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                // Part 4 of #1026 (PR 4b of #1083), the `bool` arm above
+                // repeated for the other two conversions and for its reasons:
+                // `pycc_types` admits each for a `Ty::Object` argument only,
+                // under the same user-defined-function-takes-priority guard, so
+                // the mirror carries that guard rather than `len`'s unguarded
+                // one -- a user `def int(...)`/`def str(...)` really does win in
+                // `pycc_types`, and a mirror that disagreed would lower a user
+                // call to the builtin. Always `Ty::Int`/`Ty::Str` respectively,
+                // since the argument type is fixed.
+                //
+                // Without this branch `int(o)` falls to the `lookup` below,
+                // finds no `$fn:int`, and panics.
+                if callee == "int" { Ty::Int } else { Ty::Str }
             } else {
                 lookup(scopes, &format!("$fn:{callee}"))
             };

@@ -21501,3 +21501,61 @@ fn bool_of_a_foreign_object_with_a_second_argument_keeps_its_c0001_refusal() {
     };
     assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "C0001");
 }
+
+#[test]
+fn int_and_str_of_a_foreign_object_are_admitted_as_int_and_str() {
+    // Part 4 of #1026 (PR 4b of #1083), `bool_of_a_foreign_object_is_
+    // admitted_as_bool`'s claim for the other two conversions.
+    for (callee, expected) in [("int", Ty::Int), ("str", Ty::Str)] {
+        let mut env = Environment::new();
+        env.bind("o".to_string(), Ty::Object);
+        let expr = HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![HirExpr::Name("o".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap(), expected, "{callee}");
+    }
+}
+
+#[test]
+fn int_and_str_of_a_non_object_keep_their_c0001_refusal() {
+    // Fork 1 of the plan, stated openly: PR 4b relaxes exactly the object
+    // case, so `int(1)` and `str(1)` are still the capability-gap refusals
+    // they were.
+    for callee in ["int", "str"] {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(
+            infer_expr(&env, &expr).unwrap_err().code,
+            "C0001",
+            "{callee}"
+        );
+    }
+}
+
+#[test]
+fn int_and_str_of_a_foreign_object_with_a_second_argument_keep_their_c0001_refusal() {
+    // Each arm admits exactly one argument, so a mis-arity call falls through
+    // to the same C0001 every other unsupported shape of that name gets
+    // rather than inventing a T0021 of its own.
+    for callee in ["int", "str"] {
+        let mut env = Environment::new();
+        env.bind("o".to_string(), Ty::Object);
+        let expr = HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![
+                HirExpr::Name("o".to_string()),
+                HirExpr::Name("o".to_string()),
+            ],
+        };
+        assert_eq!(
+            infer_expr(&env, &expr).unwrap_err().code,
+            "C0001",
+            "{callee}"
+        );
+    }
+}

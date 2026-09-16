@@ -26,8 +26,20 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirExpr, Ty};
 
 /// The two surfaces that hand a value to `pycc_codegen`'s `to_str`
-/// (`crates/pycc_codegen/src/lib.rs`, the f-string and `print` lowering);
-/// the `str()` builtin is already `C0001` via `KNOWN_CALLABLE_BUILTINS`.
+/// (`crates/pycc_codegen/src/lib.rs`, the f-string and `print` lowering).
+///
+/// The `str()` builtin is not a third surface. It is `C0001` via
+/// `KNOWN_CALLABLE_BUILTINS` for every argument type **except**
+/// [`Ty::Object`], which PR 4b of #1083 (Part 4 of #1026) admits as an
+/// explicit conversion out of the opaque type. That admission needs nothing
+/// from this module: `str(o)` infers to [`Ty::Str`], which reaches
+/// [`reject_unrenderable`]'s catch-all arm and is renderable, and codegen's
+/// `to_str` returns a `Scalar::Str` unchanged -- so the heap `PyStrObj` the
+/// shim copies out of CPython is handled identically to a literal-derived
+/// one. The visible consequence is an asymmetry worth naming: `print(str(o))`
+/// compiles while `print(o)` stays `I0404`, because this module's
+/// [`Ty::Object`] arm below is deliberately unchanged. The refusal is on the
+/// object, not on a `str` derived from one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StringConversionSite {
     /// An argument of a `print(...)` call.
