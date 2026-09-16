@@ -207,7 +207,11 @@ pub(super) fn emit_lookup<'ctx>(
         ptr.fn_type(&[ptr.into(), ptr.into()], false),
     );
     let bound = builder
-        .build_call(getattr, &[base_ptr.into(), name.into()], "foreign_call_bound")
+        .build_call(
+            getattr,
+            &[base_ptr.into(), name.into()],
+            "foreign_call_bound",
+        )
         .expect("build_call should not fail for pycc_ext_obj_getattr")
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_getattr returns PyObject *")
