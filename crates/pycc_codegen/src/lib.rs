@@ -3634,9 +3634,9 @@ fn emit_expr_unchecked<'ctx>(
         }
         // Part 2 of #1026: the string-keyed runtime sibling of the
         // compile-time-slot `AttrGet` directly above. `foreign_attr::emit`
-        // carries the whole contract, including which side owns the
-        // "CPython raised" transition and why this arm emits no `NULL`
-        // check.
+        // carries the whole contract, including the `NULL` check it emits,
+        // the module-exec failure edge that check branches to, and which
+        // side owns the "CPython raised" transition.
         MirExpr::ObjAttrGet { base, attr, .. } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_attr::emit(context, builder, module, base_scalar, attr)

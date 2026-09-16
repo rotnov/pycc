@@ -687,19 +687,22 @@ PyObject *pycc_ext_obj_import(const char *name)
  * names the deferral.
  *
  * Deliberately *not* translated into `pycc_rt`'s pending-exception state
- * here. The two failure protocols are kept apart (the caller's own comment
- * in `crates/pycc_codegen/src/lib.rs`, `MirExpr::ObjAttrGet`, states which
- * side owns the transition and why Part 2a does not need it yet).
+ * here. The two failure protocols are kept apart; the caller's own contract
+ * (`crates/pycc_codegen/src/foreign_attr.rs`) states which side owns the
+ * transition, and why Part 2a does not need it: it tests this function's
+ * result for NULL and returns `-1` from the `Py_mod_exec` slot with
+ * CPython's exception left exactly as set here.
  *
- * A NULL `obj` is the one case this function does decide, because codegen
- * emits no NULL check: `a.b.c` lowers to nested `ObjAttrGet` nodes, so a
- * failed inner lookup hands its NULL straight back in as the next call's
- * `obj`. `PyObject_GetAttrString` dereferences `Py_TYPE(obj)` with no guard
- * of its own, which would crash the hosting interpreter instead of raising.
- * Returning NULL unchanged instead is also the *correct* CPython state: the
- * inner lookup already set its `AttributeError`, so propagating NULL leaves
- * exactly one exception set, which is what the transition PR 2b adds will
- * pick up. Overwriting it with a second, synthetic error would be worse.
+ * A NULL `obj` is still decided here. `a.b.c` lowers to nested
+ * `ObjAttrGet` nodes, and although the caller's own NULL check now stops an
+ * inner failure before the outer call is reached, this guard is what makes
+ * that a defence in depth rather than the only line: `PyObject_GetAttrString`
+ * dereferences `Py_TYPE(obj)` with no guard of its own, so any caller that
+ * reaches here with NULL would crash the hosting interpreter instead of
+ * raising. Returning NULL unchanged is also the *correct* CPython state --
+ * the inner lookup already set its `AttributeError`, so propagating NULL
+ * leaves exactly one exception set. Overwriting it with a second, synthetic
+ * error would be worse.
  */
 PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name)
 {

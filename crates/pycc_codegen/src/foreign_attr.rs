@@ -67,39 +67,45 @@ fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
 ///
 /// `pycc_ext_obj_getattr` returns `NULL` with *CPython's* error indicator
 /// set. That is a second failure protocol next to pycc's own pending state
-/// (D-173, `pycc_rt_exception_active`), and this arm deliberately does not
-/// bridge them, so no `NULL` check is emitted here at all.
+/// (D-173, `pycc_rt_exception_active`), and the standard pending-exception
+/// guard `emit_expr` emits right after this call -- `expression_can_set_exception`
+/// answers `true` for this node -- reads pycc's state, which a CPython-set
+/// exception leaves untouched. It therefore takes the no-exception edge and
+/// cannot stop the module body on its own. PR 2a's own review found what
+/// that costs: `import numpy` followed by `numpy.definitely_not_there` ran
+/// the whole module body to completion and CPython reported `SystemError:
+/// execution of module n raised unreported exception` instead of the real
+/// `AttributeError`.
 ///
-/// The reason is reachability, not convenience. `expression_can_set_exception`
-/// answers `true` for this node, so `emit_expr` already emits the standard
-/// pending-exception guard immediately after this call -- but that guard
-/// reads pycc's pending state, which a CPython-set exception leaves
-/// untouched, so the no-exception edge is taken and a `NULL`
-/// `Scalar::Object` continues. In PR 2a that `NULL` is never dereferenced
-/// by pycc-generated code: `pycc_types` refuses a `Ty::Object` operand at
-/// every consuming site (`docs/TYPE_SYSTEM.md`'s `I0404` rules), which
-/// leaves exactly three shapes -- a discarded `ExprStmt`, the return of an
-/// unannotated private helper, which D-137's amendment makes unexportable
-/// because `object` cannot be spelled in an annotation, and the base of a
-/// *further* `ObjAttrGet`, because `a.b.c` nests this node inside itself.
-/// The first two hand the value to nobody. The third does: it passes the
-/// `NULL` back into `pycc_ext_obj_getattr` as the next call's `obj`, and
-/// `PyObject_GetAttrString` dereferences its argument's type without a
-/// guard. That case is answered once, in the shim -- a NULL `obj` returns
-/// NULL unchanged, preserving the inner lookup's own `AttributeError` --
-/// rather than by a check emitted at every load site here; the shim's own
-/// comment in `src/ext/pycc_ext_module.c` carries the reasoning.
+/// So this arm emits the `NULL` check itself and routes the failure to the
+/// **module-exec failure edge** `foreign_import.rs` already uses for a
+/// failed `pycc_ext_obj_import`: return [`EXT_MODULE_EXEC_FAILED`]
+/// immediately, leaving CPython's own exception set and unmodified. The
+/// remaining statements never run, and the interpreter reports the real
+/// exception. Bridging the two protocols -- naming the exception in
+/// `pycc_rt::exception`, which carries no `AttributeError` tag -- stays PR
+/// 2b's, together with `MirExpr::ObjMethodCall`; nothing here needs pycc to
+/// name it.
 ///
-/// PR 2b owns the transition, because `MirExpr::ObjMethodCall` is what
-/// first makes the loaded value reachable from a host call. It is the
-/// *shim's* side to own when it lands -- translating CPython's exception
-/// into pycc's pending state there keeps every CPython API call inside
-/// `src/ext/pycc_ext_module.c`, and the reverse trip already exists as
-/// `pycc_ext_raise_pending`. Note that pycc's builtin exception tags
-/// (`pycc_rt::exception`) carry no `AttributeError`, so 2b must either add
-/// one or accept a documented downgrade -- a CPython-semantics deviation,
-/// and therefore D-242 rule 3 decision-file work rather than something this
-/// arm may settle silently.
+/// # Why the enclosing function is always the module-exec entry
+///
+/// That failure edge exists only inside `pycc_ext_module_exec`, so this
+/// asserts it is the function being emitted into. PR 2a's review settled
+/// the reachability question with evidence rather than argument: `import
+/// numpy` + `def _helper(): return numpy.pi` + `_helper()` built *and ran*
+/// on this branch, so an `ObjAttrGet` really could be emitted inside a
+/// function body, where returning an `i64` from a function of another
+/// return type would not even verify. The answer is at the `pycc_types`
+/// layer -- `expr.rs`'s `HirExpr::Name` arm refuses reading a foreign
+/// object inside a function body at all (`docs/TYPE_SYSTEM.md`), which PR
+/// 2a can afford because it ships no user-visible capability. That leaves
+/// exactly two admitted shapes, both at module scope: a discarded
+/// `ExprStmt`, and the base of a *further* `ObjAttrGet`, because `a.b.c`
+/// nests this node inside itself. The nested case is answered twice over
+/// now -- this check stops the outer load from ever seeing the inner
+/// `NULL`, and the shim's own NULL-`obj` guard in
+/// `src/ext/pycc_ext_module.c` still holds the line for any caller that
+/// reaches it another way.
 pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -107,6 +113,7 @@ pub(super) fn emit<'ctx>(
     base: Scalar<'ctx>,
     attr: &str,
 ) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
     let getattr = obj_getattr_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let name = builder
@@ -119,7 +126,50 @@ pub(super) fn emit<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_getattr returns PyObject *")
         .into_pointer_value();
+    let failed = builder
+        .build_is_null(loaded, "foreign_attr_failed")
+        .expect("build_is_null should not fail");
+    let fail_bb = context.append_basic_block(entry_fn, "foreign_attr_fail");
+    let cont_bb = context.append_basic_block(entry_fn, "foreign_attr_cont");
+    builder
+        .build_conditional_branch(failed, fail_bb, cont_bb)
+        .expect("build_conditional_branch should not fail");
+    builder.position_at_end(fail_bb);
+    builder
+        .build_return(Some(
+            &context
+                .i64_type()
+                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+        ))
+        .expect("build_return should not fail");
+    builder.position_at_end(cont_bb);
     Scalar::Object(loaded)
+}
+
+/// The function `builder` is currently emitting into, once it is known to
+/// be the `--ext` module-body entry point.
+///
+/// The guard runs *before* any block is appended: the failure edge returns
+/// `i64 -1`, so emitting it into a function with a different return type
+/// would be an LLVM verifier error rather than a diagnosable one. See
+/// [`emit`]'s own doc comment for why every admitted `ObjAttrGet` really is
+/// emitted here -- it is a `pycc_types` refusal, so reaching this arm from
+/// anywhere else is a front-end defect.
+fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
+    let function = builder
+        .get_insert_block()
+        .expect("the builder is positioned inside a block")
+        .get_parent()
+        .expect("every basic block belongs to a function");
+    if function.get_name().to_bytes() != EXT_MODULE_EXEC_SYMBOL.as_bytes() {
+        panic!(
+            "pycc_codegen: internal error: a foreign attribute load was emitted outside \
+             `{EXT_MODULE_EXEC_SYMBOL}` -- pycc_types refuses reading a CPython object \
+             anywhere but a module body, and only the module-exec entry has the failure \
+             edge a failed lookup takes"
+        )
+    }
+    function
 }
 
 #[cfg(test)]
@@ -195,6 +245,28 @@ mod tests {
         let ir = entry_ir("foreign_attr_call", load("numpy", "pi"));
         assert!(ir.contains(EXT_OBJ_GETATTR_SYMBOL), "{ir}");
         assert!(ir.contains("pycc_foreign_attr_pi"), "{ir}");
+    }
+
+    /// A failed lookup stops the module body on the module-exec failure
+    /// edge, rather than continuing with a `NULL` object.
+    ///
+    /// PR 2a's review finding 1: without this, `numpy.definitely_not_there`
+    /// left CPython's `AttributeError` set, ran the rest of the module
+    /// body, and surfaced as `SystemError: execution of module n raised
+    /// unreported exception`. The assertion is on the emitted edge --
+    /// a null test on the shim's result, and a `ret i64 -1`
+    /// ([`EXT_MODULE_EXEC_FAILED`]) on its failure arm, which is the same
+    /// edge `foreign_import.rs` takes for a failed import.
+    #[test]
+    fn a_failed_attribute_load_returns_on_the_module_exec_failure_edge() {
+        let ir = entry_ir("foreign_attr_fail_edge", load("numpy", "pi"));
+        assert!(ir.contains("foreign_attr_failed"), "{ir}");
+        assert!(ir.contains("foreign_attr_fail:"), "{ir}");
+        assert!(ir.contains("foreign_attr_cont:"), "{ir}");
+        assert!(
+            ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+            "{ir}"
+        );
     }
 
     /// Two attribute loads in one module share one extern declaration.

@@ -15392,22 +15392,59 @@ fn passing_a_cpython_object_as_a_call_argument_is_an_internal_error() {
 
 #[test]
 fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
-    // The two *reachable* `Ty::Object` codegen paths, together in the one
-    // program shape PR 2a actually admits end to end: an unannotated private
-    // helper whose solver-inferred return type is `object` (the second
-    // producer shape, alongside `o.attr` itself), called for effect at
-    // module scope.
+    // The two `Ty::Object` codegen paths that survive PR 2a's narrowing,
+    // together in one program: `emit_stmt`'s `MirStmt::Return`
+    // pass-through carries a `PyObject *` out of `_module`, and
+    // `call_result_scalar`'s `Ty::Object` arm turns the call site's result
+    // back into a `Scalar::Object`. Nothing dereferences it -- the
+    // `ExprStmt` discards it.
     //
-    // `emit_stmt`'s `MirStmt::Return` pass-through carries the loaded
-    // `PyObject *` out of `_pi`, and `call_result_scalar`'s `Ty::Object` arm
-    // turns the call site's result back into a `Scalar::Object`. Nothing
-    // dereferences it: the `ExprStmt` discards it, which is exactly why
-    // `foreign_attr::emit` needs no `NULL` check in PR 2a.
+    // The returned value is the foreign module global itself rather than a
+    // `numpy.pi` load, because `pycc_types` now refuses reading a CPython
+    // object inside a function body at all (see
+    // `foreign_attr::expect_module_exec_entry`), so a body containing an
+    // `ObjAttrGet` is no longer a shape any type-checked program produces.
+    // The MIR here is therefore already past what the front end admits;
+    // it exists to select these two codegen arms, which PR 2b's method
+    // calls will make reachable from real source again.
     //
-    // D-137's amendment keeps `object` unspellable in an annotation, so such
-    // a helper can never be public and never reaches an `ext` export thunk.
+    // D-137's amendment keeps `object` unspellable in an annotation, so
+    // such a helper can never be public and never reaches an `ext` export
+    // thunk.
     compile_ext_items(
         "object_returning_helper",
+        with_foreign_numpy(vec![
+            MirItem::Function {
+                name: "_module".to_string(),
+                params: vec![],
+                return_ty: Ty::Object,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "numpy".to_string(),
+                    ty: Ty::Object,
+                }))],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "_module".to_string(),
+                args: vec![],
+                ty: Ty::Object,
+            })),
+        ]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a foreign attribute load was emitted outside")]
+fn a_foreign_attribute_load_inside_a_function_body_is_an_internal_error() {
+    // The guard `foreign_attr::expect_module_exec_entry` exists for. This
+    // exact program -- `import numpy`, `def _pi(): return numpy.pi`,
+    // `_pi()` -- compiled and ran on PR 2a's branch before its review, so
+    // the arm is a real front-end contract rather than a hypothetical:
+    // `pycc_types` refuses the read inside a function body, and reaching
+    // codegen with one anyway means that refusal regressed. A failed
+    // lookup there would have no failure edge to take, since only
+    // `pycc_ext_module_exec` may return `EXT_MODULE_EXEC_FAILED`.
+    compile_ext_items(
+        "object_attr_in_function_body",
         with_foreign_numpy(vec![
             MirItem::Function {
                 name: "_pi".to_string(),

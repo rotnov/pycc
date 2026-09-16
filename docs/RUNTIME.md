@@ -602,6 +602,22 @@ not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
 so the import statement that loaded the artifact fails and no partially
 initialized module is left in `sys.modules`.
 
+An attribute load fails the same way and takes the same edge.
+`pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and
+`crates/pycc_codegen/src/foreign_attr.rs` tests that result and returns `-1`
+from `Py_mod_exec` immediately, leaving the exception untouched, so a missing
+attribute surfaces to the host as the real `AttributeError` and the remaining
+module-body statements never run. That check is what pycc's *own*
+pending-exception guard (D-173) cannot do: the two failure protocols are
+separate, and pycc's state is unset while CPython's is set, so before PR 2a of
+[#1081](https://github.com/rotnov/pycc/pull/1093) the body ran to completion and
+CPython reported `SystemError: execution of module <name> raised unreported
+exception` instead. Translating CPython's exception into pycc's pending state —
+which is what a function body would need, since only the module-body entry point
+may return `-1` — is PR 2b's work, together with `MirExpr::ObjMethodCall`; until
+then the type checker refuses reading a foreign object anywhere but a module
+body ([TYPE_SYSTEM.md](./TYPE_SYSTEM.md)).
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter

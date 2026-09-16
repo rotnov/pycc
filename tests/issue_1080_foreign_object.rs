@@ -677,6 +677,53 @@ assert m.answer() == 42, m.answer()
     );
 }
 
+/// PR 2a of #1081 review finding 1, end to end: a failed attribute lookup
+/// must surface to the host as CPython's own `AttributeError`, and the
+/// module body must stop there.
+///
+/// Before the fix, `foreign_attr::emit` emitted no `NULL` check and the
+/// pending-exception guard that follows the load reads pycc's own state
+/// (D-173), which CPython's error indicator leaves untouched. The body ran
+/// to completion with CPython's exception still set, and the interpreter
+/// reported `SystemError: execution of module ... raised unreported
+/// exception` with the real `AttributeError` visible only as a chained
+/// cause. The load now takes the same module-exec failure edge a failed
+/// `pycc_ext_obj_import` takes, so the exception CPython set is the
+/// exception the host sees.
+///
+/// The side effect written below the load is what proves the body stopped
+/// rather than merely reported: it must not have run.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_failed_attribute_lookup_raises_attribute_error_in_the_host() {
+    let dir = ScratchDir::new("foreign_attr_failure_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_missing_attr_mod",
+        "import json\n\njson.pycc_no_such_attribute_1081\nprint(\"ran past the load\")\n",
+    );
+    let run = python(
+        &dir,
+        "try:\n\
+         \x20   import pycc_missing_attr_mod\n\
+         except AttributeError as e:\n\
+         \x20   assert 'pycc_no_such_attribute_1081' in str(e), str(e)\n\
+         else:\n\
+         \x20   raise AssertionError('the attribute load should have failed')\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert!(
+        !stdout_of(&run).contains("ran past the load"),
+        "the module body must stop at the failed load: {}",
+        stdout_of(&run)
+    );
+}
+
 /// The hosted half of the #1080 ordering obligation
 /// (issuecomment-5658356849), and the only form of it that is *observable*
 /// rather than structural: a module-body statement with a side effect,
