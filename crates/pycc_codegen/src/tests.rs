@@ -4501,6 +4501,41 @@ fn a_float_call_with_the_wrong_argument_count_is_an_internal_error() {
 }
 
 #[test]
+#[should_panic(expected = "`bool` takes exactly 1 argument, got 0")]
+fn a_bool_call_with_the_wrong_argument_count_is_an_internal_error() {
+    // Part 4 of #1026 (PR 4a of #1083). `pycc_types` admits the `bool`
+    // builtin only for exactly one `Ty::Object` argument and leaves every
+    // other shape to C0001, so this is hand-built malformed MIR exercising
+    // codegen's own defensive backstop, mirroring
+    // `a_float_call_with_the_wrong_argument_count_is_an_internal_error`
+    // immediately above.
+    let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![],
+        ty: Ty::Bool,
+    })]);
+    let dir = pycc_scratch::ScratchDir::new("bool_wrong_arity_panics")
+        .expect("failed to create scratch dir");
+    let _ = compile_to_object(&mir, &dir.join("bool_wrong_arity_panics.o"), None, false);
+}
+
+#[test]
+#[should_panic(expected = "`bool` takes a CPython object argument")]
+fn a_bool_call_on_a_non_object_argument_is_an_internal_error() {
+    // Part 4 of #1026 (PR 4a of #1083). `bool(1)` keeps its C0001 refusal in
+    // `pycc_types`, so reaching codegen at all means the MIR is malformed;
+    // this pins the second of the `bool` arm's two backstops.
+    let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![MirExpr::IntLiteral(1)],
+        ty: Ty::Bool,
+    })]);
+    let dir = pycc_scratch::ScratchDir::new("bool_non_object_panics")
+        .expect("failed to create scratch dir");
+    let _ = compile_to_object(&mir, &dir.join("bool_non_object_panics.o"), None, false);
+}
+
+#[test]
 #[should_panic(expected = "`math.sqrt` takes exactly 1 argument, got 0")]
 fn a_math_sqrt_call_with_the_wrong_argument_count_is_an_internal_error() {
     // `pycc_types` already rejects a mis-arity `math.sqrt` call with

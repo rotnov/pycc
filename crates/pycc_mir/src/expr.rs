@@ -251,6 +251,24 @@ pub(super) fn lower_expr(
                 // `pycc_types::infer_expr_in`'s comment for why `float` (unlike
                 // `len`/`print`) needs this. Always `Ty::Float`.
                 Ty::Float
+            } else if callee == "bool"
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                // Part 4 of #1026 (PR 4a of #1083). `pycc_types` admits the
+                // `bool` builtin for a `Ty::Object` argument only, under the
+                // same user-defined-function-takes-priority guard `float`
+                // carries immediately above, so this arm mirrors that guard
+                // exactly rather than `len`'s unguarded one -- a user
+                // `def bool(...)` really does win in `pycc_types`, and a
+                // mirror that disagreed would lower a user call to the
+                // builtin. Always `Ty::Bool`.
+                //
+                // Without this branch `bool(o)` falls to the `lookup` below,
+                // finds no `$fn:bool`, and panics -- a `pycc check` that exits
+                // 0 followed by a `pycc build --ext` that aborts.
+                Ty::Bool
             } else {
                 lookup(scopes, &format!("$fn:{callee}"))
             };

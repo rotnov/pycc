@@ -2994,3 +2994,110 @@ fn collect_block_constraints_propagates_an_error_from_a_logical_not_operand() {
 
     assert_eq!(err.code, "T0021");
 }
+
+// ---------------------------------------------------------------------
+// PR 4a of #1083 (Part 4 of #1026). The solver mirrors `infer_expr_in`'s
+// two arms, and the two must not drift: the solver runs first, so an arm
+// missing here reports its own error before the check pass can answer.
+// ---------------------------------------------------------------------
+
+/// A solver environment in which `o` is a foreign-import-bound object.
+fn foreign_object_env<'scope, 'hir>() -> ConstraintEnvironment<'scope, 'hir> {
+    let mut env = ConstraintEnvironment::empty(&[]);
+    env.opaque_bindings.insert("o".to_string());
+    env.foreign_objects.insert("o".to_string());
+    env
+}
+
+/// Collects `<callee>(o)` against [`foreign_object_env`].
+fn collect_conversion_of_a_foreign_object(
+    callee: &str,
+) -> Result<Option<Result<Ty, usize>>, Diagnostic> {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut binops = Vec::new();
+    let env = foreign_object_env();
+    let expr = HirExpr::Call {
+        callee: callee.to_string(),
+        args: vec![HirExpr::Name("o".to_string())],
+    };
+    collect_expr_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut binops,
+        &env,
+        &expr,
+    )
+}
+
+#[test]
+fn constraint_collection_float_call_admits_a_foreign_object_argument() {
+    assert_eq!(
+        collect_conversion_of_a_foreign_object("float").unwrap(),
+        Some(Ok(Ty::Float))
+    );
+}
+
+#[test]
+fn constraint_collection_bool_call_admits_a_foreign_object_argument() {
+    assert_eq!(
+        collect_conversion_of_a_foreign_object("bool").unwrap(),
+        Some(Ok(Ty::Bool))
+    );
+}
+
+#[test]
+fn constraint_collection_bool_call_keeps_c0001_for_a_non_object_argument() {
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut binops = Vec::new();
+    let env = ConstraintEnvironment::empty(&[]);
+    let expr = HirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![HirExpr::IntLiteral(1)],
+    };
+    let err = collect_expr_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut binops,
+        &env,
+        &expr,
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+#[test]
+fn constraint_collection_honors_a_user_defined_bool_signature_over_the_builtin() {
+    // The C4 guard, mirrored: a registered `bool` signature must resolve
+    // through the ordinary signature lookup rather than through the
+    // hand-recognized builtin arm -- `float`'s own case immediately above.
+    let signatures = HashMap::from([(
+        "bool".to_string(),
+        (vec!["x".to_string()], vec![Ok(Ty::Int)], Ok(Ty::Int)),
+    )]);
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut binops = Vec::new();
+    let env = ConstraintEnvironment::empty(&[]);
+    let expr = HirExpr::Call {
+        callee: "bool".to_string(),
+        args: vec![HirExpr::IntLiteral(1)],
+    };
+    assert_eq!(
+        collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap(),
+        Some(Ok(Ty::Int))
+    );
+}
