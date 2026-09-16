@@ -58,6 +58,13 @@
 //! through the same `HirExpr::Name` arm, so a call inside a function body
 //! is still `I0404` and a call above the `import` is still `T0021`.
 //!
+//! The arm is not reached for four method names. `pycc_hir`'s
+//! `CONTAINER_METHOD_NAMES` (`append`, `pop`, `get`, `add`) claims those
+//! spellings while lowering, so `gc.get(1, 2)` never becomes a
+//! `HirExpr::MethodCall` at all and is refused here through a different
+//! consumer. `docs/TYPE_SYSTEM.md`'s `object` row owns that statement,
+//! and #1095 tracks routing them to foreign dispatch.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!

@@ -1285,7 +1285,10 @@ loading a further attribute, and calling a method with positional \
 including printing or f-string interpolation, binding the value to a name, \
 using it as an `if`/`while` condition or comprehension guard, `isinstance`, \
 a `match` subject, calling the object itself, and passing an argument of \
-any other type to one of its methods. Both supported operations are \
+any other type to one of its methods. A method named `append`, `pop`, \
+`get` or `add` is also still refused: container lowering claims those four \
+spellings before the foreign path sees them, so they do not reach it even \
+with admitted arguments. Both supported operations are \
 admitted only in a *module body below the import*: inside a function body \
 the read is this same error, because the compiler cannot prove the import \
 has already run. The refusal narrows as the later parts of #1026 land -- \

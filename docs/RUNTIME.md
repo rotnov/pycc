@@ -619,11 +619,14 @@ foreign object anywhere but a module body ([TYPE_SYSTEM.md](./TYPE_SYSTEM.md)).
 
 **A method call fails on that same edge, and inherits that same bound.** PR 2b
 of [#1081](https://github.com/rotnov/pycc/issues/1081) added
-`MirExpr::ObjMethodCall` and the shim's `pycc_ext_obj_call`, which fuses the
-attribute load and the call: it does `PyObject_GetAttrString` for the method
-name, then `PyObject_Vectorcall` on the result, and returns `NULL` — with
-CPython's error indicator set by whichever of the two failed — if either does.
-`crates/pycc_codegen/src/foreign_call.rs` tests that result exactly as
+`MirExpr::ObjMethodCall`, which emits two shim calls in CPython's own
+evaluation order: `pycc_ext_obj_getattr` resolves the method *before* the
+argument expressions are evaluated, then the packed arguments and the resolved
+callable go to `pycc_ext_obj_call`, which does the `PyObject_Vectorcall`.
+Resolving first is observable and required — `obj.missing(1 // 0)` must raise
+`AttributeError`, not `ZeroDivisionError`. Either shim call returns `NULL` with
+CPython's error indicator set, and
+`crates/pycc_codegen/src/foreign_call.rs` tests each result exactly as
 `foreign_attr.rs` does and returns `-1` from `Py_mod_exec`, so a missing method
 surfaces as the real `AttributeError` and a method that raises surfaces its own
 exception, with the remaining module-body statements never running. Because a
@@ -646,14 +649,16 @@ returns it to compiled code unreleased.
 
 Everything the call creates *internally*, by contrast, is released, so the leak
 is exactly one reference per call rather than one per argument plus two.
-`pycc_ext_obj_call` owns the bound method object `PyObject_GetAttrString`
+`pycc_ext_obj_call` owns the bound method object `pycc_ext_obj_getattr`
 produced and `Py_XDECREF`s it on every path, and it consumes the packed
-argument array — releasing each element on every path, including the early ones
-where a packer failed or the attribute lookup did. One argument shape has no CPython value to build, and it
+argument array — releasing each element on every path, including the early one
+where a packer failed. That release is measured, not merely asserted: one
+million calls passing a *named* `str` grow the resident set no faster than one
+million calls passing an `int`, once the leaked result is accounted for. One argument shape has no CPython value to build, and it
 raises rather than aborting: a D-141 heap-bigint `int` word reaching
 `pycc_ext_obj_pack_int` sets `OverflowError` naming the inline range and
 returns `NULL`, which the shim treats exactly as a failed call -- it skips the
-attribute lookup and the vectorcall, and the module body stops. That is the
+vectorcall, and the module body stops. That is the
 same boundary narrowing the `ext` export ABI already applies to an `int`
 parameter or return, on the same terms and until the same issue
 ([#1040](https://github.com/rotnov/pycc/issues/1040)) widens it; the type
@@ -684,7 +689,13 @@ terms and is trip-count-linear in exactly the same way. **A benchmark run under
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
 attribute load or a foreign method call until the release protocol lands**,
 because the resident-set
-growth, not the compiled code, would dominate the result. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
+growth, not the compiled code, would dominate the result. An *unbound* `str`
+argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a
+second, unrelated growth term on top: pycc's own pre-existing unbound-`str`-temporary
+leak, which the "Language surface" row of [ROADMAP.md](./ROADMAP.md) already
+records and which a native build with no foreign call reproduces identically.
+It is not owned by this boundary, but it compounds here, so prefer a named
+`str` local when measuring. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
 tracks releasing object temporaries.
 
 The same rule decides what a *duplicate* foreign import does, and that
