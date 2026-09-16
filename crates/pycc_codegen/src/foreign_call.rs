@@ -71,6 +71,48 @@ fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>
     }
 }
 
+/// Allocates `slots` argument pointers in the *entry block* of `entry_fn`,
+/// leaving the builder positioned exactly where it was.
+///
+/// An `alloca` is only reclaimed when its function returns, so emitting one
+/// at the call site would make a module body's own loop grow the stack
+/// without bound: `for i in range(n): gc.disable()` is an admitted program
+/// -- the positional bound refuses a foreign read in a *function body*, and
+/// a top-level loop is not one -- and it segfaulted the hosting interpreter
+/// at twenty million iterations before this hoist. The size is a compile-time
+/// constant that depends on nothing in scope, so the entry block is always a
+/// legal position for it, and LLVM's own convention is that every `alloca`
+/// belongs there.
+fn alloca_in_entry_block<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    entry_fn: FunctionValue<'ctx>,
+    slots: usize,
+) -> inkwell::values::PointerValue<'ctx> {
+    let resume_at = builder
+        .get_insert_block()
+        .expect("the builder is positioned inside a block");
+    let entry_block = entry_fn
+        .get_first_basic_block()
+        .expect("a function being emitted into has an entry block");
+    // The entry block is never empty here: a foreign object exists only
+    // because an `import` bound it, and that import's own call was emitted
+    // into this block before any expression could read the binding.
+    let first = entry_block
+        .get_first_instruction()
+        .expect("the module-exec entry block already holds the foreign import's own call");
+    builder.position_before(&first);
+    let arg_array = builder
+        .build_array_alloca(
+            context.ptr_type(inkwell::AddressSpace::default()),
+            context.i64_type().const_int(slots as u64, false),
+            "foreign_call_args",
+        )
+        .expect("build_array_alloca should not fail");
+    builder.position_at_end(resume_at);
+    arg_array
+}
+
 /// Emits one `obj.method(args)` call against a CPython object and yields
 /// the call's result as an opaque [`Scalar::Object`].
 ///
@@ -123,13 +165,7 @@ pub(super) fn emit<'ctx>(
     // exactly the zero-argument shape this PR's acceptance test exercises.
     // One slot is always allocated and simply left unread.
     let slots = args.len().max(1);
-    let arg_array = builder
-        .build_array_alloca(
-            ptr,
-            i64_type.const_int(slots as u64, false),
-            "foreign_call_args",
-        )
-        .expect("build_array_alloca should not fail");
+    let arg_array = alloca_in_entry_block(context, builder, entry_fn, slots);
     for (index, arg) in args.iter().enumerate() {
         let (symbol, value) = packer_for(*arg);
         let packer = shim_fn(

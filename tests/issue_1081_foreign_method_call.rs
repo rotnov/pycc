@@ -279,6 +279,44 @@ fn a_missing_method_raises_attribute_error_in_the_host() {
     );
 }
 
+/// A call inside a module-scope loop does not grow the stack per iteration.
+///
+/// The positional bound refuses a foreign read in a *function body*, but a
+/// top-level `for` is not one, so this shape is admitted -- and an `alloca`
+/// emitted at the call site is only reclaimed when `pycc_ext_module_exec`
+/// returns. Twenty million iterations segfaulted the hosting interpreter
+/// until `alloca_in_entry_block` hoisted the argument array; the loop below
+/// is the same shape with an argument, so it also proves the packers are
+/// driven once per iteration against a single reused slot.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_call_in_a_module_scope_loop_does_not_exhaust_the_stack() {
+    let dir = ScratchDir::new("foreign_call_loop_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_loop_call_mod",
+        "import gc\n\nfor i in range(20000000):\n    gc.set_threshold(500)\n",
+    );
+    let run = python(
+        &dir,
+        "import pycc_loop_call_mod\n\
+         import gc\n\
+         assert gc.get_threshold()[0] == 500, gc.get_threshold()\n\
+         print(\"survived the loop\")\n",
+    );
+    assert!(
+        run.status.success(),
+        "a module-scope loop must not exhaust the stack -- stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert!(
+        stdout_of(&run).contains("survived the loop"),
+        "{}",
+        stdout_of(&run)
+    );
+}
+
 /// A method that *raises* surfaces its own exception, not an
 /// `AttributeError` and not a `SystemError`.
 ///
