@@ -157,15 +157,13 @@ fn module_with_discarded(base_expr: pycc_hir::HirExpr) -> HirModule {
 /// The lowered form of the single top-level statement in `hir`.
 fn only_discarded_expr(hir: &HirModule) -> MirExpr {
     let mir = build(hir);
-    let stmt = mir
-        .items
+    mir.items
         .iter()
         .find_map(|item| match item {
             MirItem::TopLevelStmt(MirStmt::ExprStmt(expr)) => Some(expr.clone()),
             _ => None,
         })
-        .expect("the module has exactly one top-level statement");
-    stmt
+        .expect("the module has exactly one top-level statement")
 }
 
 fn attr_get(base: pycc_hir::HirExpr, attr: &str) -> pycc_hir::HirExpr {
