@@ -55,6 +55,27 @@ dispatching any implementation agent. A duplicate implementation is worse
 than a wasted read: it either conflicts with the existing commits or
 silently reverts them.
 
+## 2026-09-16 — A local gate set that omitted `cargo fmt --check`
+
+**What happened.** A branch passed every local gate the session ran —
+diff coverage at 100%, clippy with warnings denied, the full test suite,
+the `scripts/` unittest suite, both agent validators, the decision-immutability
+and site-pin checks — and then failed CI on `rustfmt`, for a four-line
+call the formatter wanted wrapped.
+
+**Root cause.** The session's local gate list was assembled from the gates
+that had previously failed it. `cargo fmt --check` had never failed, so it
+was never added, and clippy's green verdict read as "formatting is fine"
+although the two lints share nothing.
+
+**What fixed it.** `cargo fmt --all`, one commit, one push.
+
+**Lesson.** `cargo fmt --all -- --check` belongs in the local gate set
+beside clippy, always, and it costs about a second. More generally: a local
+gate set derived from remembered failures is a list of what has already gone
+wrong, not a model of what CI runs — derive it from the workflow file
+instead.
+
 ## 2026-09-16 — A CI log full of `error:` lines pointed at the wrong failure, for the third time
 
 **What happened.** A Windows `native-build-test` job failed. The first
