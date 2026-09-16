@@ -1850,6 +1850,34 @@ pub(crate) fn collect_block_constraints(
                     env.maybe_bindings.insert(var.clone());
                 }
             }
+            // PR 3c of #1082: `for x in o.attr:` / `for x in o.method(...):`.
+            // The iterable is a real expression, unlike `ForList`'s bare
+            // name, so it is walked; the loop variable gets a fresh
+            // unconstrained term for exactly the reason `ForList`'s does
+            // (this solver has no `Ty::Object` fact to unify against).
+            HirStmt::ForObject { var, iter, body } => {
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    iter,
+                )?;
+                if !env.bindings.contains_key(var) {
+                    let term = fresh_term(parents, concrete);
+                    env.bindings.insert(var.clone(), term);
+                }
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    constraints,
+                    env,
+                    body,
+                    return_term.clone(),
+                )?;
+            }
             HirStmt::Return(value) => {
                 let Some(return_term) = return_term.clone() else {
                     continue;
@@ -2416,7 +2444,8 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         HirStmt::If { body, orelse, .. } => contains_return(body) || contains_return(orelse),
         HirStmt::While { body, .. }
         | HirStmt::ForRange { body, .. }
-        | HirStmt::ForList { body, .. } => contains_return(body),
+        | HirStmt::ForList { body, .. }
+        | HirStmt::ForObject { body, .. } => contains_return(body),
         HirStmt::Match { cases, .. } => cases.iter().any(|case| contains_return(&case.body)),
         HirStmt::ExprStmt(_)
         | HirStmt::Assign { .. }
@@ -2466,7 +2495,9 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
         }
         HirStmt::While { body, .. } => introduces_bindings(body),
         HirStmt::ForRange { body, .. } => introduces_bindings(body),
-        HirStmt::ForList { body, .. } => introduces_bindings(body),
+        HirStmt::ForList { body, .. } | HirStmt::ForObject { body, .. } => {
+            introduces_bindings(body)
+        }
         HirStmt::Match { cases, .. } => cases.iter().any(|case| introduces_bindings(&case.body)),
         HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
         HirStmt::Try {

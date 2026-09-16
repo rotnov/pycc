@@ -41,8 +41,8 @@ use std::collections::HashSet;
 /// `target`). `DictSet`/`AttrSet` do not rebind a bare name (they mutate
 /// a container/attribute the name still refers to) and are correctly
 /// excluded. Recurses into every nested body this HIR can hold --
-/// `If`/`While`/`ForRange`/`ForList`/`Match`/`Try` -- so a kill nested
-/// arbitrarily deep (e.g. `while ...: if flag: x = None`) is still
+/// `If`/`While`/`ForRange`/`ForList`/`ForObject`/`Match`/`Try` -- so a
+/// kill nested arbitrarily deep (e.g. `while ...: if flag: x = None`) is still
 /// found. This match is intentionally exhaustive over every `HirStmt`
 /// variant (no wildcard arm): adding a new statement kind that can kill a
 /// binding forces this function to be updated rather than silently
@@ -68,7 +68,7 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
                 killed.insert(var.clone());
                 collect_killed_names(body, killed);
             }
-            HirStmt::ForList { var, body, .. } => {
+            HirStmt::ForList { var, body, .. } | HirStmt::ForObject { var, body, .. } => {
                 killed.insert(var.clone());
                 collect_killed_names(body, killed);
             }

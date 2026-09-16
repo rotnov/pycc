@@ -1303,12 +1303,57 @@ fn calling_something_other_than_range_in_a_for_is_not_supported_yet() {
     );
 }
 
+/// PR 3c of #1082 narrowed this arm: `for i in a.b(3):` is now one of the
+/// two admitted foreign-`object` iterable shapes and lowers to
+/// `HirStmt::ForObject` (the type checker refuses a non-`object` one), so
+/// the arm survives only for a callee that is neither a name nor an
+/// attribute.
 #[test]
-fn calling_via_an_attribute_in_a_for_is_not_supported_yet() {
+fn calling_via_a_subscript_in_a_for_is_not_supported_yet() {
     assert_capability_error_message(
-        "for i in a.b(3):\n    print(i)\n",
+        "for i in a[0](3):\n    print(i)\n",
         "only `for x in range(...)` is supported so far",
     );
+}
+
+/// The iterable of an admitted shape is lowered as a real expression, so
+/// a lowering failure inside it has to propagate rather than be swallowed
+/// -- a `lambda` argument is the smallest expression `lower_expr` refuses.
+#[test]
+fn a_lowering_failure_inside_a_for_object_iterable_propagates() {
+    assert_capability_error_message(
+        "for x in a.b(lambda: 1):\n    pass\n",
+        "expression kind not supported yet: a `lambda`",
+    );
+}
+
+/// The same for the loop body, which the new arm lowers itself.
+#[test]
+fn a_lowering_failure_inside_a_for_object_body_propagates() {
+    assert_capability_error_message(
+        "for x in a.b:\n    import os\n",
+        "an `import` inside a function or block body",
+    );
+}
+
+/// The other half of that narrowing: both admitted shapes lower rather
+/// than being refused here, since `pycc_hir` has no types to refuse them
+/// with.
+#[test]
+fn both_foreign_object_iterable_shapes_lower_to_for_object() {
+    for source in [
+        "for x in a.b:\n    print(x)\n",
+        "for x in a.b(3):\n    print(x)\n",
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower_checked(&module).expect("the shape lowers");
+        let [HirItem::TopLevelStmt(HirStmt::ForObject { var, body, .. })] = hir.items.as_slice()
+        else {
+            panic!("{source:?} must lower to one `ForObject`: {:?}", hir.items);
+        };
+        assert_eq!(var, "x");
+        assert_eq!(body.len(), 1, "{source:?}");
+    }
 }
 
 #[test]
@@ -6278,8 +6323,8 @@ fn a_literal_for_iterable_names_its_kind() {
 #[test]
 fn a_for_call_with_a_non_bare_name_callee_names_the_callee_kind() {
     assert_capability_error_message(
-        "d = {1: 2}\nfor k in d.keys():\n    pass\n",
-        "only `for x in range(...)` is supported so far, got a call whose callee is an attribute expression (`obj.attr`)",
+        "xs = [1, 2]\nfor k in xs[0]():\n    pass\n",
+        "only `for x in range(...)` is supported so far, got a call whose callee is a subscript expression (`obj[key]`)",
     );
 }
 
@@ -6400,7 +6445,7 @@ fn no_capability_message_renders_an_ast_debug_dump() {
         "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
         "for a, b in pairs:\n    pass\n",
         "for x in [1]:\n    pass\n",
-        "d = {1: 2}\nfor k in d.keys():\n    pass\n",
+        "xs = [1, 2]\nfor k in xs[0]():\n    pass\n",
         "def f() -> int:\n    return g()()\n",
         "xs = [k for k in [1]]\n",
         "from typing import Protocol\nclass P(Protocol):\n    x = 1\n",

@@ -15521,3 +15521,35 @@ fn a_foreign_attribute_load_inside_a_function_body_is_an_internal_error() {
         ]),
     );
 }
+
+// -- PR 3c of #1082: the `ForObject` storage-slot type ----------------------
+
+/// `collect_stmt_bindings` produces exactly one storage-slot type per name,
+/// so a `for x in <object>:` target must claim an `Object` (pointer) slot
+/// even when an earlier statement in the same body already bound the name to
+/// a narrower scalar. An `or_insert` here would keep the `Int` and leave the
+/// loop storing a `PyObject *` into an `i64` slot -- a miscompilation the
+/// `local type drifted` `debug_assert` cannot catch in a release build.
+/// `pycc_types` refuses that source shape with `T0023`, so this unit test is
+/// the only place the choice is observable.
+#[test]
+fn a_for_object_target_claims_an_object_slot_over_an_earlier_int_binding() {
+    let mut bindings = BTreeMap::new();
+    collect_stmt_bindings(
+        &MirStmt::Assign {
+            target: "x".to_string(),
+            value: MirExpr::IntLiteral(5),
+        },
+        &mut bindings,
+    );
+    assert_eq!(bindings.get("x"), Some(&Ty::Int));
+    collect_stmt_bindings(
+        &MirStmt::ForObject {
+            var: "x".to_string(),
+            iter: numpy_pi(),
+            body: Vec::new(),
+        },
+        &mut bindings,
+    );
+    assert_eq!(bindings.get("x"), Some(&Ty::Object));
+}

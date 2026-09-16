@@ -186,6 +186,41 @@ pub const EXT_OBJ_TRUTHY_SYMBOL: &str = "pycc_ext_obj_truthy";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_GETITEM_SYMBOL: &str = "pycc_ext_obj_getitem";
 
+/// The fixed C shim's iterator-acquisition helper (Part 3 of #1026, PR 3c
+/// of #1082): it takes a borrowed `PyObject *` and returns a *new*
+/// reference to `iter(o)` -- `PyObject_GetIter` -- or `NULL` with the
+/// CPython exception already set (a non-iterable operand raises
+/// `TypeError` there, which is exactly the behaviour pycc wants to
+/// surface).
+///
+/// The iterator is read once, in the loop preheader, and is never
+/// released: one leaked reference per `for` statement, on the same
+/// leak-only rule the rest of this boundary follows (#1092).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_GET_ITER_SYMBOL: &str = "pycc_ext_obj_get_iter";
+
+/// The fixed C shim's iterator-advance helper (Part 3 of #1026, PR 3c of
+/// #1082). Unlike every other helper here it is *three-valued*: given a
+/// borrowed iterator and an out-parameter, it returns `1` having written a
+/// *new* reference to the next item through `*out`, `0` on clean
+/// exhaustion, or `-1` with a CPython exception already set.
+///
+/// **The discrimination lives in C, not in LLVM IR.** `PyIter_Next`
+/// signals both exhaustion and failure with `NULL`, and only
+/// `PyErr_Occurred()` tells the two apart; open-coding that in emitted IR
+/// would put a second, independently-maintained copy of a CPython calling
+/// convention into this crate. Collapsing the two into one value here is
+/// what keeps exhaustion off the module-exec failure edge: a `for` loop
+/// that simply ends is not a failure.
+///
+/// Each item written through `*out` is a new reference that is never
+/// released, which is what makes the boundary's leak **trip-count-linear**
+/// for a `for` loop (#1092, `docs/RUNTIME.md`).
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

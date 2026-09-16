@@ -10,7 +10,9 @@ use pycc_ast::{Expr, StmtFor};
 use pycc_diag::Diagnostic;
 
 /// Lowers a `for` loop: `for x in <name>:` to `HirStmt::ForList`, `for x
-/// in range(...)` to `HirStmt::ForRange`; every other iterable shape is a
+/// in range(...)` to `HirStmt::ForRange`, and the two foreign-`object`
+/// producer shapes `for x in o.attr:` / `for x in o.method(...):` to
+/// `HirStmt::ForObject` (PR 3c of #1082); every other iterable shape is a
 /// `C0001`. `async for` is context-invalid (D-148) because no `async def`
 /// body is ever lowered today.
 #[allow(clippy::too_many_arguments)]
@@ -81,6 +83,25 @@ pub(super) fn lower_for(
             )?,
         });
     }
+    // `for x in o.attr:` -- one of the two producer shapes admitted as a
+    // possible foreign `object` iterable (PR 3c of #1082). HIR has no
+    // types, so this admits *every* attribute iterable; `pycc_types`
+    // refuses a non-`Ty::Object` one with `I0404`. Written as an `if let`
+    // ahead of the `Expr::Call` binding below so that every other
+    // iterable shape keeps reaching its existing `C0001` verbatim.
+    if let Expr::Attribute(_) = for_stmt.iter.as_ref() {
+        return lower_for_object(
+            for_stmt,
+            var.id.as_str(),
+            aliases,
+            in_function,
+            except_star,
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+        );
+    }
     let Expr::Call(call) = for_stmt.iter.as_ref() else {
         return Err(unsupported(
             format!(
@@ -90,6 +111,20 @@ pub(super) fn lower_for(
             pycc_ast::expr_range(&for_stmt.iter),
         ));
     };
+    // `for x in o.method(...):` -- the second admitted producer shape.
+    if let Expr::Attribute(_) = call.func.as_ref() {
+        return lower_for_object(
+            for_stmt,
+            var.id.as_str(),
+            aliases,
+            in_function,
+            except_star,
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+        );
+    }
     let Expr::Name(callee) = call.func.as_ref() else {
         return Err(unsupported(
             format!(
@@ -129,6 +164,47 @@ pub(super) fn lower_for(
             // CPython-verified shielding rule applies here too.
             false,
             // #795 (PEP 654): and the same `except*` demotion.
+            except_star.shielded_by_loop(),
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+        )?,
+    })
+}
+
+/// Lowers one of the two admitted foreign-`object` iterable shapes
+/// (`for x in o.attr:` and `for x in o.method(...):`) to
+/// `HirStmt::ForObject`. Shared by both `lower_for` call sites so the two
+/// shapes cannot drift apart. The body lowering is `ForList`'s verbatim,
+/// including the loop flag, the CPython-verified shielding argument and
+/// the #795 `except*` demotion.
+#[allow(clippy::too_many_arguments)]
+fn lower_for_object(
+    for_stmt: &StmtFor,
+    var: &str,
+    aliases: &[(String, Ty)],
+    in_function: bool,
+    except_star: ExceptStarCtx,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
+    class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
+) -> Result<HirStmt, Diagnostic> {
+    Ok(HirStmt::ForObject {
+        var: var.to_string(),
+        iter: Box::new(crate::expr::lower_expr(
+            for_stmt.iter.as_ref(),
+            in_function,
+            class_name,
+            imports,
+        )?),
+        body: lower_body(
+            &for_stmt.body,
+            aliases,
+            true,
+            in_function,
+            false,
             except_star.shielded_by_loop(),
             class_name,
             type_param,

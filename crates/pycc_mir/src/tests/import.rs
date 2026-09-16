@@ -464,3 +464,98 @@ fn a_walrus_in_a_foreign_subscript_key_binds_for_the_next_statement() {
         lowered[1]
     );
 }
+
+// -- PR 3c of #1082: `for` over an `object` value --------------------------
+//
+// The statement only ever reaches lowering with a `Ty::Object` iterable --
+// `pycc_types` refuses every other one with `I0404` -- so these pin the
+// three things the arm itself owns: the iterable is lowered as an ordinary
+// expression, the loop variable is bound as `Ty::Object` for the body, and
+// the body is lowered as a loop body.
+
+/// A module importing `numpy` at index 0 whose single top-level statement
+/// is `for x in numpy.pi:` with `body`.
+fn for_object_module(body: Vec<pycc_hir::HirStmt>) -> HirModule {
+    HirModule {
+        items: vec![HirItem::TopLevelStmt(pycc_hir::HirStmt::ForObject {
+            var: "x".to_string(),
+            iter: Box::new(attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "pi")),
+            body,
+        })],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    }
+}
+
+/// The lowered form of `hir`'s single top-level `ForObject`.
+fn only_for_object(hir: &HirModule) -> (MirExpr, Vec<MirStmt>) {
+    let mir = build(hir);
+    mir.items
+        .iter()
+        .find_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::ForObject { var, iter, body }) => {
+                assert_eq!(var, "x");
+                Some((iter.clone(), body.clone()))
+            }
+            _ => None,
+        })
+        .expect("the module has exactly one `for` loop")
+}
+
+#[test]
+fn a_for_loop_over_a_foreign_object_lowers_its_iterable_as_an_expression() {
+    // Unlike `ForList`'s bare list name, the iterable is a real
+    // expression and goes through `lower_expr` -- here reaching the same
+    // `ObjAttrGet` arm an `ExprStmt` would.
+    let (iter, body) = only_for_object(&for_object_module(Vec::new()));
+    let MirExpr::ObjAttrGet { base, attr, ty } = iter else {
+        panic!("expected the iterable to lower to an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "pi");
+    assert_eq!(ty, Ty::Object);
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+    assert!(body.is_empty(), "{body:?}");
+}
+
+#[test]
+fn a_for_loop_over_a_foreign_object_binds_its_variable_as_an_object() {
+    // The bind is what the body is lowered against: without it, `lookup`
+    // panics on the `x` read rather than resolving it, and the item
+    // codegen stores into the loop slot would have no type.
+    let (_, body) = only_for_object(&for_object_module(vec![pycc_hir::HirStmt::ExprStmt(
+        pycc_hir::HirExpr::Name("x".to_string()),
+    )]));
+    let [MirStmt::ExprStmt(MirExpr::Name { name, ty })] = body.as_slice() else {
+        panic!("expected the body to lower to a single name read: {body:?}");
+    };
+    assert_eq!(name, "x");
+    assert_eq!(*ty, Ty::Object);
+}
+
+#[test]
+fn a_for_loop_over_a_foreign_object_overwrites_an_earlier_binding_of_its_variable() {
+    // The arm calls `bind`, not `bind_variable`: `ForObject` is the first
+    // loop construct whose target type can differ from a name's earlier
+    // binding (`ForList`/`ForRange` always bind `Ty::Int`), so
+    // `bind_variable`'s `or_insert` would keep the stale `Ty::Int` here and
+    // lower the body against the wrong type. `pycc_types` rejects this
+    // source shape outright (`T0023`), so this is defence in depth against a
+    // future caller that hands MIR the shape directly -- and it is the only
+    // discriminating test for the choice, since the checker never lets the
+    // CLI reach it.
+    let mut hir = for_object_module(vec![pycc_hir::HirStmt::ExprStmt(pycc_hir::HirExpr::Name(
+        "x".to_string(),
+    ))]);
+    hir.items.insert(
+        0,
+        HirItem::TopLevelStmt(pycc_hir::HirStmt::Assign {
+            target: "x".to_string(),
+            value: pycc_hir::HirExpr::IntLiteral(5),
+        }),
+    );
+    let (_, body) = only_for_object(&hir);
+    let [MirStmt::ExprStmt(MirExpr::Name { name, ty })] = body.as_slice() else {
+        panic!("expected the body to lower to a single name read: {body:?}");
+    };
+    assert_eq!(name, "x");
+    assert_eq!(*ty, Ty::Object, "the loop must overwrite the earlier `int`");
+}

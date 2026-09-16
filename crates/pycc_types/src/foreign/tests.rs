@@ -597,3 +597,364 @@ fn a_private_helper_returning_a_subscript_load_reports_the_read_refusal() {
         FUNCTION_BODY_READ,
     );
 }
+
+// -- PR 3c of #1082: `for` over an `object` value --------------------------
+
+/// Both admitted iterable shapes type-check at module scope, with the loop
+/// variable readable inside the body.
+///
+/// The body operation is `len(x)` because binding `x` to another name is
+/// still refused (`check_assignment`'s K1 guard), so a `len` is the shape
+/// that proves the loop variable really is bound to `Ty::Object` rather
+/// than merely accepted and dropped.
+#[test]
+fn both_admitted_for_iterable_shapes_over_a_cpython_object_are_admitted() {
+    for source in [
+        "for x in numpy.pi:\n    print(len(x))\n",
+        "for x in numpy.array(1):\n    print(len(x))\n",
+        "for x in numpy.pi:\n    pass\n",
+    ] {
+        assert!(check_foreign(source).is_none(), "{source}");
+    }
+}
+
+/// F8 of the #1082 plan: the iterable's *type*, not its syntactic shape,
+/// is what decides. A class instance's `int` attribute and its `int`-
+/// returning method call are an `Expr::Attribute` and an `Expr::Call`
+/// iterable, so both lower to `HirStmt::ForObject` and are refused here
+/// rather than by `pycc_hir`.
+///
+/// This is also where the admitted shapes cost something, and the cost is
+/// wider than one spelling: **every** attribute or attribute-call iterable
+/// now lowers to `ForObject` and reaches the type checker, where all of
+/// them used to be `pycc_hir`'s own `C0001`. Which diagnostic each one
+/// draws depends on the receiver, not on the loop -- `for x in C.value:`
+/// over an `int` attribute reaches this arm and is the `I0404` asserted
+/// below, `for x in xs.copy():` over a `list[int]` and `for k in
+/// d.keys():` over a `dict[str, int]` are `T0043` ("cannot call a method
+/// on `...`: it is not a class instance") from inferring the iterable, and
+/// a receiver carrying its own pre-existing refusal reports that first, so
+/// an `int`-keyed `d.keys()` is `T0036`. The `C0001` arm survives only for
+/// a callee that is neither a name nor an attribute
+/// (`tests/diagnostics/c0001_for_call_not_bare_name.py`).
+#[test]
+fn a_non_object_iterable_in_either_shape_is_refused_by_the_checker() {
+    for (shape, source) in [
+        (
+            "a non-object attribute iterable",
+            "class C:\n    v: int = 1\n\n\nc = C()\nfor x in c.v:\n    pass\n",
+        ),
+        (
+            "a non-object method-call iterable",
+            "class C:\n    def m(self) -> int:\n        return 1\n\n\nc = C()\nfor x in c.m():\n    pass\n",
+        ),
+    ] {
+        assert_refused(
+            shape,
+            source,
+            "I0404",
+            "is only supported when the iterable is a CPython object",
+        );
+    }
+}
+
+/// The loop inherits PR 2a's positional bound: a function body has no
+/// module-exec failure edge, so the statement is refused there whatever
+/// the iterable turns out to be.
+#[test]
+fn a_for_loop_over_an_attribute_iterable_is_refused_inside_a_function() {
+    assert_refused(
+        "a function-body `for` over an attribute iterable",
+        "def _h() -> int:\n    for x in numpy.pi:\n        print(len(x))\n    return 1\n\n\nprint(_h())\n",
+        "I0404",
+        "is not supported inside a function body",
+    );
+}
+
+/// The same refusal covers an iterable that is not a foreign object at all.
+///
+/// `pycc_hir` routes every attribute and attribute-callee-call iterable to
+/// `ForObject` on shape alone, so `d.keys()` and `xs.copy()` reach this arm
+/// too, and it refuses them without ever inferring the iterable. A module
+/// body refuses both as well, with their own diagnostics -- which is why
+/// the message states the function-body bound and promises nothing about
+/// moving the loop to module scope.
+#[test]
+fn a_function_body_for_over_a_non_object_iterable_gets_the_same_refusal() {
+    for (shape, source) in [
+        (
+            "a method call on a local `dict`",
+            "def _h() -> int:\n    d = {\"a\": 2}\n    for k in d.keys():\n        print(k)\n    return 1\n\n\nprint(_h())\n",
+        ),
+        (
+            "a method call on a local `list`",
+            "def _h() -> int:\n    xs = [1, 2]\n    for x in xs.copy():\n        print(x)\n    return 1\n\n\nprint(_h())\n",
+        ),
+    ] {
+        assert_refused(
+            shape,
+            source,
+            "I0404",
+            "is not supported inside a function body",
+        );
+        let diagnostics = check_foreign(source).expect(shape);
+        assert!(
+            !diagnostics[0].message.contains("module body"),
+            "{shape}: the refusal must not point at a scope that refuses it too: \
+             {diagnostics:?}",
+        );
+    }
+}
+
+/// A target that was *declared* but never assigned is refused too.
+///
+/// `x: int` records the name in `declared`, not `bindings`, so the
+/// `lookup_any` guard above does not see it -- yet the representation
+/// conflict is identical, and `pycc_codegen` still allocates one slot per
+/// name. `check_assignment` answers a declared target with `T0026`, so a
+/// `for` target does the same. A value-less `Final[int]` declaration is the
+/// same shape and takes the same path: `T0045` only fires once the name has
+/// a runtime value, which a declaration alone does not give it.
+#[test]
+fn a_declared_but_unassigned_loop_target_is_refused() {
+    for (shape, source) in [
+        (
+            "a plain declaration",
+            "x: int\n\nfor x in numpy.pi:\n    pass\n",
+        ),
+        (
+            "a value-less `Final` declaration",
+            "x: Final[int]\n\nfor x in numpy.pi:\n    pass\n",
+        ),
+    ] {
+        assert_refused(shape, source, "T0026", "previously declared as `x: int`");
+    }
+}
+
+/// The loop variable is only *maybe* bound after the loop, because the
+/// loop may run zero times -- and a module-body read of a `Ty::Object`
+/// name is otherwise admitted, so without the downgrade the read would
+/// compile against a slot the loop never wrote.
+#[test]
+fn the_loop_variable_is_maybe_bound_after_the_loop() {
+    assert_refused(
+        "a read of the loop variable after the loop",
+        "for x in numpy.pi:\n    pass\n\nprint(len(x))\n",
+        "T0041",
+        "may not be bound on every path",
+    );
+}
+
+/// The other side of that branch -- a loop variable already bound before the
+/// loop -- is not a definite-assignment question at all but a
+/// representation one, and it is refused.
+///
+/// This test previously asserted the opposite. `ForObject` binds its target
+/// with `env.bind`, which overwrites, so `x = 1` followed by
+/// `for x in numpy.pi:` left `x` as `int` for the reads above the loop and
+/// `object` for those below it -- and `pycc_codegen` allocates exactly one
+/// storage slot per name per function, so one of those two access sets is
+/// always wrong. D-040's sticky-representation rule is what the refusal
+/// restores, and reusing `T0023` keeps this ordering and its mirror
+/// (`for x in numpy.pi:` first, then `x = 1`, which `check_assignment`
+/// already refused) reporting the same thing.
+#[test]
+fn a_pre_bound_loop_variable_of_another_type_is_refused() {
+    for (shape, source) in [
+        (
+            "a definite `int` binding",
+            "x = 1\n\nfor x in numpy.pi:\n    pass\n",
+        ),
+        (
+            "a definite `float` binding",
+            "x = 1.5\n\nfor x in numpy.pi:\n    pass\n",
+        ),
+        (
+            "a binding made on only one branch",
+            "b = True\nif b:\n    x = 1\n\nfor x in numpy.pi:\n    pass\n",
+        ),
+    ] {
+        assert_refused(shape, source, "T0023", "cannot assign `object` to `x`");
+    }
+}
+
+/// K6/K10/K11 of the #1082 plan, pinned: the iterable shapes PR 3c
+/// deliberately leaves out keep the exact refusals they already had, so
+/// admitting the attribute and method-call shapes widened none of them.
+///
+/// The two `C0001`s are `pycc_hir`'s, word for word -- the new routes were
+/// added as guards *ahead* of those `let ... else` bindings rather than by
+/// restructuring them, so a regression that moved a diagnostic into the
+/// type checker fails here.
+#[test]
+fn the_deferred_for_iterable_shapes_keep_their_own_refusals() {
+    for (source, phrase) in [
+        (
+            "for x in numpy.pi[0]:\n    pass\n",
+            "got a subscript expression (`obj[key]`) as the iterable",
+        ),
+        (
+            "for x in (1, 2):\n    pass\n",
+            "got a tuple as the iterable",
+        ),
+    ] {
+        let module = pycc_parser::parse(source).expect("test source must parse");
+        let diagnostic = pycc_hir::lower_checked(&module).expect_err("the shape is refused");
+        assert_eq!(diagnostic.code, "C0001", "{source}: {diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(phrase),
+            "{source}: {diagnostic:?}"
+        );
+    }
+    // A bare foreign name is an `Expr::Name` iterable, so it lowers to
+    // `HirStmt::ForList` and `lookup_bound_name`'s own `reject_object_read`
+    // refuses it -- a module object is not iterable, and PR 3c does not
+    // change that.
+    assert_refused(
+        "a bare foreign-name iterable",
+        "for x in numpy:\n    pass\n",
+        "I0404",
+        FUNCTION_BODY_READ,
+    );
+}
+
+/// The in-function constraint solver walks a `ForObject` before the
+/// positional refusal above is reported (both diagnostics are collected
+/// and merged), so both of its own walks have to propagate a failure.
+///
+/// An unbound local is the smallest expression the solver refuses, and
+/// placing it once in the iterable and once in the body separates the two
+/// walks: a regression that stopped walking either position would report
+/// this loop's `I0404` instead of the `T0021`, because the solver would
+/// no longer see the unbound read at all.
+#[test]
+fn the_in_function_solver_propagates_a_failure_from_either_position() {
+    for (position, source) in [
+        (
+            "the iterable",
+            "def _h() -> int:\n    for x in numpy.wrap(later):\n        return 1\n    later = 2\n    return 0\n\n\nprint(_h())\n",
+        ),
+        (
+            "the body",
+            "def _h() -> int:\n    for x in numpy.pi:\n        y = later\n    later = 2\n    return 0\n\n\nprint(_h())\n",
+        ),
+    ] {
+        assert_refused(position, source, "T0021", "is not bound before this use");
+    }
+}
+
+/// The other side of `the_monomorphization_pass_walks_a_for_loop_iterable`:
+/// when the iterable's own names *do* resolve in `monomorphize`'s
+/// environment, the rewrite succeeds and the pass keeps walking.
+///
+/// `check_all` refuses this module (`c.v` is an `int`, not a CPython
+/// object, so the loop is an `I0404`), which is why the pass is driven
+/// directly rather than through `check_and_resolve_all_keyed`. That is
+/// the point: it pins the arm's success path against the day the foreign
+/// seeding gap closes, and the non-empty body pins the pre-scan's own
+/// descent into the body statements.
+#[test]
+fn the_monomorphization_pass_rewrites_a_for_iterable_whose_names_resolve() {
+    let source = "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n\nclass C:\n    v: int = 1\n\n\nb = Box[int](1)\nc = C()\nfor x in c.v:\n    print(1)\n";
+    let hir = lower(source);
+    crate::monomorphize::monomorphize(&hir).expect("the rewrite sweep walks the loop");
+}
+
+/// The generic-call *rejection* walk over a generic function's own body
+/// has to descend into the iterable, not just the body: unlike `ForList`'s
+/// bare name, a `ForObject`'s iterable is a real expression and can hold a
+/// call. Without that descent the `T0042` below is never reported and the
+/// recursive generic instantiation reaches monomorphization.
+#[test]
+fn a_generic_call_hidden_in_the_iterable_is_still_rejected() {
+    assert_refused(
+        "a generic call inside a `for` iterable",
+        "def _gen[T](x: T) -> T:\n    for y in numpy.wrap(_gen(1)):\n        pass\n    return x\n\n\nprint(_gen(1))\n",
+        "T0042",
+        "calls itself",
+    );
+}
+
+/// `monomorphize` walks every top-level statement, and a `ForObject`'s
+/// iterable -- unlike a `ForList`'s bare name -- is a real expression the
+/// pass has to descend into. This fixture reaches both of its walks over
+/// that position: `instantiate_generic_class_methods`'s pre-scan for
+/// `(class, type argument)` pairs runs first, then the rewrite sweep.
+///
+/// The rewrite sweep always fails on this statement, and that failure is
+/// the assertion. `monomorphize` seeds no foreign name into its own
+/// environment -- a pre-existing gap that refuses `print(len(numpy.pi))`
+/// (PR 3a) and `print(len(numpy.pi[0]))` (PR 3b) in a module that also
+/// has a generic function or class, exactly as it refuses this loop. PR
+/// 3c neither introduced nor widens it. The `T0021` can only be reported
+/// by the walk of the iterable itself, so it is what proves the descent
+/// happens at all; the loop body is unreachable behind it, which is why
+/// the rewrite arm is the walk and nothing else.
+#[test]
+fn the_monomorphization_pass_walks_a_for_loop_iterable() {
+    let source = "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n\nb = Box[int](1)\nfor x in numpy.pi:\n    pass\n";
+    let hir = with_foreign_import(lower(source));
+    // The check phase admits the loop -- `numpy.pi` is a `Ty::Object`
+    // there -- so the failure below really is monomorphization's.
+    assert!(crate::check_all(&hir).is_ok(), "the check phase admits it");
+    let Err(diagnostics) = crate::check_and_resolve_all_keyed(&hir) else {
+        panic!("monomorphization refuses the iterable");
+    };
+    let [(_, diagnostic)] = diagnostics.as_slice() else {
+        panic!("exactly one diagnostic: {diagnostics:?}");
+    };
+    assert_eq!(diagnostic.code, "T0021", "{diagnostic:?}");
+    assert!(
+        diagnostic.message.contains("`numpy` is not defined"),
+        "{diagnostic:?}"
+    );
+}
+
+/// An enum `for` loop nested inside a `for x in <object>:` body is unrolled
+/// like one nested inside any other loop.
+///
+/// `unroll_enum_loops_in_stmts` recurses into every body-carrying statement
+/// kind by hand, and `HirStmt::ForObject` is new in PR 3c of #1082, so
+/// before this arm existed the catch-all cloned the loop whole and left the
+/// inner `for c in Color:` unexpanded. `pycc_types` accepted that module and
+/// MIR lowering then panicked on the enum class name having no recorded
+/// type -- the `pycc check` / `pycc build` divergence D-245 exists to stop.
+#[test]
+fn an_enum_loop_nested_inside_a_for_object_body_is_unrolled() {
+    let source = "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor x in numpy.pi:\n    for c in Color:\n        print(c.value)\n";
+    let resolved = crate::check_and_resolve_all_keyed(&with_foreign_import(lower(source)))
+        .expect("the fixture type-checks");
+    let body = resolved
+        .items
+        .iter()
+        .find_map(|item| match item {
+            pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::ForObject { body, .. }) => {
+                Some(body)
+            }
+            _ => None,
+        })
+        .expect("the module has exactly one `for` over an object");
+    assert!(
+        !body.iter().any(|stmt| matches!(
+            stmt,
+            pycc_hir::HirStmt::ForList { list, .. } if list == "Color"
+        )),
+        "the nested enum loop survived unrolling: {body:?}"
+    );
+    // Two members, each contributing one `c = Color.<M>` assignment plus the
+    // one-statement body, so the unrolled sequence is exactly four
+    // statements. Pinning the count keeps the test from passing on an arm
+    // that merely dropped the loop.
+    assert_eq!(body.len(), 4, "{body:?}");
+}
+
+/// The converse of the test above: a target the loop introduces itself, and
+/// one already bound to `Ty::Object` by an earlier loop, are both admitted.
+/// Without this the refusal could be satisfied by rejecting every
+/// `ForObject`.
+#[test]
+fn a_for_object_target_may_rebind_a_name_already_bound_to_an_object() {
+    assert!(
+        check_foreign("for x in numpy.pi:\n    pass\n\nfor x in numpy.pi:\n    pass\n").is_none()
+    );
+}

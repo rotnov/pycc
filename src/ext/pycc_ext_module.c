@@ -953,6 +953,75 @@ PyObject *pycc_ext_obj_getitem(PyObject *o, PyObject *k)
     return result;
 }
 
+/*
+ * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
+ * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `o` is borrowed. The result is a *new* reference that is deliberately
+ * never released -- one leaked iterator per `for` statement, on the same
+ * leak-only rule `docs/RUNTIME.md` records for the rest of this boundary.
+ *
+ * A non-iterable operand makes `PyObject_GetIter` set `TypeError` and
+ * return NULL, which the caller routes to the module-exec failure edge, so
+ * "this object cannot be iterated" needs no compile-time test: pycc knows
+ * nothing about the pointee and could not perform one.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+PyObject *pycc_ext_obj_get_iter(PyObject *o)
+{
+    if (o == NULL) {
+        return NULL;
+    }
+    return PyObject_GetIter(o);
+}
+
+/*
+ * Part 3 of #1026 (PR 3c of #1082): one step of a `for x in <object>:` loop
+ * (`EXT_OBJ_ITER_NEXT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Three-valued, unlike every other helper here:
+ *
+ *   1  -- a *new* reference to the next item has been written to `*out`;
+ *   0  -- the iterator is cleanly exhausted, `*out` untouched;
+ *  -1  -- iteration failed with a CPython exception already set.
+ *
+ * `PyIter_Next` collapses the last two into NULL and only `PyErr_Occurred()`
+ * tells them apart. That discrimination lives here rather than in emitted
+ * LLVM IR on purpose: it is a CPython calling convention, and open-coding it
+ * in the code generator would put a second, independently maintained copy of
+ * that convention in a place where it could silently drift. It is also what
+ * keeps *exhaustion off the failure edge* -- a loop that simply ends is not
+ * a module-exec failure, and fusing the two would have made every `for` loop
+ * over a foreign object terminate the module body.
+ *
+ * Each item written through `*out` is a new reference that is never
+ * released, which is what makes the leak trip-count-linear for a `for` loop
+ * rather than a fixed cost per statement (#1092).
+ *
+ * `it` and `out` are NULL-guarded as defence in depth, exactly like
+ * `pycc_ext_obj_len`'s own operand: returning -1 without setting an
+ * exception would be wrong, so this path sets one itself -- unlike the
+ * NULL-returning helpers above, whose caller has already seen a real
+ * CPython exception from the producer that returned NULL.
+ */
+long long pycc_ext_obj_iter_next(PyObject *it, PyObject **out)
+{
+    PyObject *item;
+
+    if (it == NULL || out == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc_ext_obj_iter_next called with a NULL argument");
+        return -1;
+    }
+    item = PyIter_Next(it);
+    if (item != NULL) {
+        *out = item;
+        return 1;
+    }
+    return PyErr_Occurred() == NULL ? 0 : -1;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

@@ -1,5 +1,6 @@
-//! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081)
-//! and `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082).
+//! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
+//! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082) and
+//! `MirStmt::ForObject` (PR 3c of #1082).
 //!
 //! The two share this module because they share the *packer contract*: each
 //! marshals a pycc scalar into a `PyObject *` through a `pycc_ext_obj_pack_*`
@@ -171,6 +172,127 @@ fn fail_on_null<'ctx>(
         ))
         .expect("build_return should not fail");
     builder.position_at_end(cont_bb);
+}
+
+/// The blocks and per-iteration item of a lowered `for x in <object>:`
+/// loop, handed back to `emit_stmt` so it can emit the body between them.
+pub(super) struct ForeignIterLoop<'ctx> {
+    /// The block holding the `pycc_ext_obj_iter_next` call and the
+    /// three-way switch; the body's back-edge targets it.
+    pub header_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    /// Where control resumes after clean exhaustion.
+    pub after_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    /// A *new* reference to this iteration's item, deliberately never
+    /// released -- this is the reference that makes the boundary's leak
+    /// trip-count-linear (#1092).
+    pub item: PointerValue<'ctx>,
+}
+
+/// Emits the preheader and header of `for x in <object>:` (Part 3 of
+/// #1026, PR 3c of #1082), leaving the builder positioned at the start of
+/// the loop body with the first item already loaded.
+///
+/// # Shape
+///
+/// The preheader calls [`EXT_OBJ_GET_ITER_SYMBOL`] once -- Python binds the
+/// iterator the `for` statement evaluated, so a body-level rebinding cannot
+/// retarget the loop, exactly the reasoning `MirStmt::ForList`'s own
+/// `list_ptr` read carries -- and routes a NULL through the module-exec
+/// failure edge. The header calls [`EXT_OBJ_ITER_NEXT_SYMBOL`] and
+/// **switches** on its three-valued result: `1` enters the body, `0` exits
+/// the loop, and anything else -- `-1` and, fail-closed, any value the shim
+/// could not produce -- takes a second failure edge of its own.
+///
+/// Those two are the only new unconditional `EXT_MODULE_EXEC_FAILED`
+/// returns this PR adds; **exhaustion is deliberately not one of them**,
+/// which is the entire reason the shim helper is three-valued rather than
+/// NULL-signalling (see [`EXT_OBJ_ITER_NEXT_SYMBOL`]).
+///
+/// The out-parameter is a single `alloca` hoisted into the entry block via
+/// [`alloca_in_entry_block`], never the header: an `alloca` in a block that
+/// executes once per iteration grows the frame without bound, which is the
+/// defect that helper exists to prevent.
+pub(super) fn emit_iter_loop<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    iterable: Scalar<'ctx>,
+) -> ForeignIterLoop<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let iterable_ptr = expect_object_pointer(iterable);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+
+    let out_slot = alloca_in_entry_block(context, builder, entry_fn, 1);
+
+    let get_iter = shim_fn(
+        module,
+        EXT_OBJ_GET_ITER_SYMBOL,
+        ptr.fn_type(&[ptr.into()], false),
+    );
+    let iterator = builder
+        .build_call(get_iter, &[iterable_ptr.into()], "foreign_iter_get")
+        .expect("build_call should not fail for pycc_ext_obj_get_iter")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_get_iter returns PyObject *")
+        .into_pointer_value();
+    fail_on_null(context, builder, entry_fn, iterator, "foreign_iter_get");
+
+    let header_bb = context.append_basic_block(entry_fn, "foreign_iter_header");
+    let body_bb = context.append_basic_block(entry_fn, "foreign_iter_body");
+    let after_bb = context.append_basic_block(entry_fn, "foreign_iter_after");
+    let next_fail_bb = context.append_basic_block(entry_fn, "foreign_iter_next_fail");
+
+    builder
+        .build_unconditional_branch(header_bb)
+        .expect("build_unconditional_branch should not fail entering the loop header");
+
+    builder.position_at_end(header_bb);
+    let iter_next = shim_fn(
+        module,
+        EXT_OBJ_ITER_NEXT_SYMBOL,
+        context.i64_type().fn_type(&[ptr.into(), ptr.into()], false),
+    );
+    let status = builder
+        .build_call(
+            iter_next,
+            &[iterator.into(), out_slot.into()],
+            "foreign_iter_status",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_iter_next")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_iter_next returns long long")
+        .into_int_value();
+    builder
+        .build_switch(
+            status,
+            next_fail_bb,
+            &[
+                (context.i64_type().const_int(1, false), body_bb),
+                (context.i64_type().const_zero(), after_bb),
+            ],
+        )
+        .expect("build_switch should not fail for an i64 selector");
+
+    builder.position_at_end(next_fail_bb);
+    builder
+        .build_return(Some(
+            &context
+                .i64_type()
+                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+        ))
+        .expect("build_return should not fail");
+
+    builder.position_at_end(body_bb);
+    let item = builder
+        .build_load(ptr, out_slot, "foreign_iter_item")
+        .expect("build_load should not fail for a slot this function allocated")
+        .into_pointer_value();
+
+    ForeignIterLoop {
+        header_bb,
+        after_bb,
+        item,
+    }
 }
 
 /// Emits the *callable lookup* of one `obj.method(args)` call, yielding the
@@ -687,6 +809,229 @@ mod tests {
         assert!(
             ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
             "{ir}"
+        );
+    }
+
+    /// `import <module>` followed by `for x in <module>.attr:` with a
+    /// body that consumes the loop variable.
+    ///
+    /// `ObjLen` is the body statement because it is the one operation on
+    /// the loop variable that produces a value a discarded `ExprStmt` can
+    /// hold, so the target store is provably read rather than dead.
+    fn iter_loop(module: &str, body: Vec<MirStmt>) -> Vec<MirItem> {
+        vec![
+            MirItem::ForeignImport {
+                local_name: module.to_string(),
+                module_path: module.to_string(),
+            },
+            MirItem::TopLevelStmt(MirStmt::ForObject {
+                var: "x".to_string(),
+                iter: MirExpr::ObjAttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: module.to_string(),
+                        ty: Ty::Object,
+                    }),
+                    attr: "garbage".to_string(),
+                    ty: Ty::Object,
+                },
+                body,
+            }),
+        ]
+    }
+
+    /// The body used by every loop test here: `len(x)`, discarded.
+    fn iter_body() -> Vec<MirStmt> {
+        vec![MirStmt::ExprStmt(MirExpr::ObjLen {
+            base: Box::new(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Object,
+            }),
+        })]
+    }
+
+    /// **The block structure of a `for x in <object>:` loop**, asserted as
+    /// a shape rather than as a set of symbols.
+    ///
+    /// Six appended blocks, listed in the order emission creates them: the
+    /// `get_iter` NULL test's own fail/continuation pair (appended by the
+    /// shared `fail_on_null` helper), then the header, body, after and
+    /// next-failure blocks. The `get_iter` call itself is emitted into the
+    /// current block and appends none. The array below is the list; do not
+    /// restate its length in prose here or in `docs/RUNTIME.md`. Naming each one and asserting on the label is
+    /// what makes a regression that collapses two of them -- most
+    /// dangerously, routing exhaustion into the failure block -- fail here
+    /// instead of only in the `#[ignore]`d hosted test.
+    #[test]
+    fn a_foreign_for_loop_emits_its_full_block_structure() {
+        let ir = entry_ir("foreign_iter_blocks", iter_loop("gc", iter_body()));
+        for label in [
+            "foreign_iter_get_fail:",
+            "foreign_iter_get_cont:",
+            "foreign_iter_header:",
+            "foreign_iter_body:",
+            "foreign_iter_after:",
+            "foreign_iter_next_fail:",
+        ] {
+            assert!(ir.contains(label), "missing {label}: {ir}");
+        }
+        assert!(ir.contains(EXT_OBJ_GET_ITER_SYMBOL), "{ir}");
+        assert!(ir.contains(EXT_OBJ_ITER_NEXT_SYMBOL), "{ir}");
+    }
+
+    /// **The three-way switch.** `1` enters the body, `0` leaves the loop,
+    /// and every other value -- `-1` and anything the shim could not
+    /// produce -- takes the failure block, because it is the `switch`'s
+    /// *default*.
+    ///
+    /// Asserted against the emitted `switch` instruction itself, not
+    /// against a pair of comparisons: a regression that replaced the
+    /// switch with two `icmp`s could keep all six block labels above and
+    /// still send an unexpected status somewhere harmless.
+    #[test]
+    fn a_foreign_for_loop_switches_three_ways_on_the_iterator_status() {
+        let ir = entry_ir("foreign_iter_switch", iter_loop("gc", iter_body()));
+        let switch = ir
+            .lines()
+            .find(|line| line.trim_start().starts_with("switch i64 "))
+            .unwrap_or_else(|| panic!("no switch instruction was emitted: {ir}"));
+        assert!(
+            switch.contains("label %foreign_iter_next_fail"),
+            "the default destination is the failure block: {switch}"
+        );
+        let cases: String = ir
+            .lines()
+            .skip_while(|line| !line.trim_start().starts_with("switch i64 "))
+            .take(4)
+            .collect();
+        assert!(
+            cases.contains("i64 1, label %foreign_iter_body"),
+            "a written item enters the body: {cases}"
+        );
+        assert!(
+            cases.contains("i64 0, label %foreign_iter_after"),
+            "clean exhaustion leaves the loop: {cases}"
+        );
+    }
+
+    /// **Two** new unconditional `EXT_MODULE_EXEC_FAILED` edges, and
+    /// exactly two (#1096): a `NULL` from `pycc_ext_obj_get_iter` and a
+    /// `-1` from `pycc_ext_obj_iter_next`. Clean exhaustion is
+    /// deliberately not one of them, which is why the shim helper is
+    /// three-valued rather than NULL-signalling.
+    #[test]
+    fn a_foreign_for_loop_adds_exactly_two_module_exec_failure_edges() {
+        let ir = entry_ir("foreign_iter_fail_edges", iter_loop("gc", iter_body()));
+        assert!(ir.contains("foreign_iter_get_failed"), "{ir}");
+        // Each of the two named failure blocks carries exactly one
+        // `ret i64 EXT_MODULE_EXEC_FAILED`, and they are the only blocks
+        // this statement adds that do. Counted per named block rather than
+        // over the whole entry point, because the iterable expression and
+        // the loop body carry pre-existing edges of their own.
+        for label in ["foreign_iter_get_fail:", "foreign_iter_next_fail:"] {
+            let block: String = ir
+                .lines()
+                .skip_while(|line| !line.starts_with(label))
+                .skip(1)
+                .take_while(|line| !line.trim().is_empty())
+                .collect();
+            assert_eq!(
+                block
+                    .matches(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}"))
+                    .count(),
+                1,
+                "{label} returns the module-exec failure value exactly once: {ir}"
+            );
+        }
+    }
+
+    /// The out-parameter is allocated **once**, in the entry block, not
+    /// once per iteration: an `alloca` inside the header would grow the
+    /// frame without bound on a long iteration, which is exactly the
+    /// defect [`alloca_in_entry_block`] exists to prevent.
+    #[test]
+    fn a_foreign_for_loop_allocates_its_out_parameter_in_the_entry_block() {
+        let ir = entry_ir("foreign_iter_alloca", iter_loop("gc", iter_body()));
+        let header_start = ir
+            .find("foreign_iter_header:")
+            .unwrap_or_else(|| panic!("no header block: {ir}"));
+        assert!(
+            !ir[header_start..].contains("alloca"),
+            "no alloca may appear at or after the loop header: {ir}"
+        );
+        assert_eq!(
+            ir.matches("= alloca ptr, i64 1").count(),
+            1,
+            "exactly one out-parameter slot is allocated: {ir}"
+        );
+    }
+
+    /// A `Return` inside the loop body already terminates its block, so
+    /// the back-edge must not be built on top of it -- the same
+    /// terminator-safety guard `MirStmt::ForList` carries. LLVM's verifier
+    /// runs inside `entry_ir`, so a second terminator would fail the
+    /// compile rather than this assertion.
+    ///
+    /// A module body cannot contain a `return`, so the terminating
+    /// statement here is a `raise`, which reaches the same guard.
+    #[test]
+    fn a_foreign_for_loop_body_that_already_terminates_gets_no_back_edge() {
+        let ir = entry_ir(
+            "foreign_iter_terminated_body",
+            iter_loop("gc", vec![MirStmt::Unreachable]),
+        );
+        assert!(ir.contains("foreign_iter_after:"), "{ir}");
+    }
+
+    /// A codegen error raised *inside* the loop body propagates out of the
+    /// `ForObject` arm instead of being swallowed, exactly as the `ForList`
+    /// and `try*` arms propagate theirs.
+    ///
+    /// `MirExceptionValue::Constructed` with a non-string message is the
+    /// standard way to make `emit_body` fail (`crates/pycc_codegen/src/
+    /// tests.rs`'s `a_codegen_error_in_a_try_star_body_propagates_...`),
+    /// and it is the only error `emit_body` can return at all.
+    #[test]
+    fn a_codegen_error_in_a_foreign_for_loop_body_propagates() {
+        let dir = pycc_scratch::ScratchDir::new("foreign_iter_body_codegen_error")
+            .expect("failed to create scratch dir");
+        let err = compile_to_object_with_observer(
+            &MirModule {
+                items: iter_loop(
+                    "gc",
+                    vec![MirStmt::Raise {
+                        exception: pycc_mir::MirExceptionValue::Constructed {
+                            type_tag: 1,
+                            class_name: "ValueError".to_string(),
+                            message: MirExpr::IntLiteral(42),
+                        },
+                        frame_function: "test_fn".to_string(),
+                    }],
+                ),
+                ..Default::default()
+            },
+            &dir.join("foreign_iter_body_codegen_error.o"),
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            None,
+        )
+        .expect_err("a codegen error in the loop body must propagate");
+        assert!(err.contains("message must be a string"), "{err}");
+    }
+
+    /// The defensive arm in `foreign_attr::expect_object_pointer` reached
+    /// through the *loop* node, which has its own call to it.
+    #[test]
+    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    fn a_non_object_for_loop_iterable_is_an_internal_error() {
+        entry_ir(
+            "foreign_iter_bad_iterable",
+            vec![MirItem::TopLevelStmt(MirStmt::ForObject {
+                var: "x".to_string(),
+                iter: MirExpr::IntLiteral(1),
+                body: Vec::new(),
+            })],
         );
     }
 

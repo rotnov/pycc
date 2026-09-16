@@ -663,6 +663,22 @@ pub enum HirStmt {
         list: String,
         body: Vec<HirStmt>,
     },
+    /// `for var in <expression>:` where the expression is syntactically an
+    /// attribute load (`o.attr`) or a method call (`o.method(...)`), the two
+    /// shapes that can produce a foreign `object` value under D-244's `ext`
+    /// artifact mode (Part 3 of #1026, PR 3c of #1082). HIR carries no
+    /// types, so this node records only that syntactic shape: `pycc_types`
+    /// resolves `iter` and refuses it with `I0404` unless it is `Ty::Object`
+    /// -- `for x in xs.copy():` over a `list` lowers here too and is
+    /// rejected there, not here. Unlike `ForList`, the iterable is a full
+    /// `HirExpr` rather than a name (D-105's `String` field cannot carry
+    /// `o.attr`), so every pass that walks statement sub-expressions must
+    /// walk `iter` as well as `body`.
+    ForObject {
+        var: String,
+        iter: Box<HirExpr>,
+        body: Vec<HirStmt>,
+    },
     /// `<bare name>[key] = value`, PR-11 Task 3 (D-123 supersedes D-105's
     /// "no subscript assignment target anywhere in this file" consequence
     /// for `list[int]`; see `Stmt::Assign`'s own lowering arm below). `dict`

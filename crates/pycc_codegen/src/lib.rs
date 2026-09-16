@@ -45,10 +45,10 @@ pub use ext::{
     ext_thunk_symbol, is_ext_exportable_name,
 };
 use ext::{
-    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL,
-    EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name,
-    is_module_entry_symbol,
+    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
+    EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
+    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
+    EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -4986,6 +4986,29 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 collect_stmt_bindings(stmt, bindings);
             }
         }
+        // PR 3c of #1082: a `for x in <object>:` target holds each item as
+        // an opaque `PyObject *`, so its slot is `Ty::Object` -- a pointer
+        // under `ty_to_basic_type`. Hardcoding `Ty::Int` the way `ForList`
+        // does above would allocate an `i64` slot and then store a pointer
+        // into it.
+        // Inserted unconditionally rather than through `or_insert` the way
+        // every arm above does, matching `pycc_mir`'s own `ForObject` arm,
+        // which calls `bind` rather than `bind_variable` for the same
+        // reason. `or_insert` would keep a narrower type a name was bound to
+        // earlier in the same function (`x = 5`) and allocate an `i64` slot
+        // this loop then stores a `PyObject *` into -- a silent
+        // miscompilation, since the `local type drifted` guard below is a
+        // `debug_assert` and vanishes in a release build. That shape is
+        // refused in `pycc_types` (`T0023`), which is what actually makes it
+        // unreachable; this arm and `pycc_mir`'s agree with that refusal
+        // instead of contradicting it, so a future relaxation of the checker
+        // cannot silently reintroduce the pun here.
+        MirStmt::ForObject { var, body, .. } => {
+            bindings.insert(var.clone(), pycc_mir::Ty::Object);
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
         // `d[k] = v` (PR-11 Task 4) reassigns an existing binding's
         // contents, not a name -- mirrors `pycc_types::collect_local_names`'s
         // own identical `HirStmt::DictSet` arm and its comment. Unlike
@@ -6814,6 +6837,63 @@ fn emit_stmt<'ctx>(
             }
 
             builder.position_at_end(after_bb);
+            Ok(())
+        }
+        // PR 3c of #1082: `for x in o.attr:` / `for x in o.method(...):`.
+        // `foreign_call::emit_iter_loop` builds the preheader and header --
+        // the `pycc_ext_obj_get_iter` call with its NULL failure edge, and
+        // the `pycc_ext_obj_iter_next` call with the three-way switch whose
+        // default is a second failure edge -- and leaves the builder in the
+        // body block with this iteration's item loaded. Only the target
+        // store, the body and the back-edge are emitted here.
+        MirStmt::ForObject { var, iter, body } => {
+            let iterable = emit_expr(context, builder, module, rt, user_functions, locals, iter);
+            let loop_blocks = foreign_call::emit_iter_loop(context, builder, module, iterable);
+            // Stored directly rather than through `emit_assign`, whose own
+            // `Scalar::Object` arm panics: that arm refuses a *user*
+            // assignment of a foreign value to a name (`pycc_types`'
+            // `check_assignment` K1 guard), while a `for` target is this
+            // construct's own binding. The store carries no refcount
+            // traffic -- the item is a new reference this boundary
+            // deliberately leaks (#1092), so there is nothing to release
+            // when the next iteration overwrites the slot.
+            let slot = locals
+                .get(var)
+                .cloned()
+                .expect("every for-target must have a predeclared storage slot");
+            builder
+                .build_store(slot.ptr, loop_blocks.item)
+                .expect("build_store should not fail for a slot this function itself allocated");
+            if let Some(initialized_ptr) = slot.initialized {
+                builder
+                    .build_store(initialized_ptr, context.i8_type().const_int(1, false))
+                    .expect("build_store should not fail for a declared global flag");
+            }
+            emit_body(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                body,
+                expected_return_ty,
+                finally_stack,
+            )?;
+            // `ForList`'s own terminator-safety guard, for the identical
+            // reason: a `Return` inside `body` already terminated the block
+            // and a second terminator would be invalid IR.
+            if builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_none()
+            {
+                builder.build_unconditional_branch(loop_blocks.header_bb).expect(
+                    "build_unconditional_branch should not fail on a block with no terminator yet",
+                );
+            }
+            builder.position_at_end(loop_blocks.after_bb);
             Ok(())
         }
         MirStmt::Return(value) => {
