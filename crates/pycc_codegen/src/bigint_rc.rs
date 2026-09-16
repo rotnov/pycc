@@ -559,7 +559,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // it can never reach this function as the `Ty::Int`-classified
         // expression `int_temporary_word` passes in; it joins the combined
         // "not a duplicate reference" answer for the same reason.
-        | MirExpr::ObjAttrGet { .. } => false,
+        | MirExpr::ObjAttrGet { .. }
+        // PR 2b of #1081: `ObjMethodCall` joins `ObjAttrGet` directly above
+        // on the identical argument -- its own `.ty()` is always
+        // `Ty::Object`, never `Ty::Int`.
+        | MirExpr::ObjMethodCall { .. } => false,
     }
 }
 

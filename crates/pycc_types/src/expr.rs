@@ -1323,6 +1323,30 @@ pub(crate) fn infer_expr_in(
                 .iter()
                 .map(|arg| infer_expr_in(env, local_names, arg))
                 .collect::<Result<Vec<_>, _>>()?;
+            // Part 2 of #1026 (PR 2b of #1081): a method call on a foreign
+            // CPython object. Placed after `base_ty`/`arg_tys` are computed
+            // -- both still need their ordinary inference, and an argument
+            // that is itself an unsupported operation must report its own
+            // diagnostic rather than this one -- and before
+            // `resolve_method_call`, whose `Ty::Object` base reports the
+            // `T0043` ("not a class instance") that this branch replaces.
+            //
+            // Only the already-admitted scalars can be marshalled: each has
+            // a `pycc_ext_obj_pack_*` helper in the shim. Anything else --
+            // a container, an instance, `None`, or a second `Ty::Object` --
+            // has no boundary representation yet and is refused here rather
+            // than reaching codegen.
+            if matches!(base_ty, Ty::Object) {
+                for arg_ty in &arg_tys {
+                    if !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+                        return Err(crate::foreign::object_operation_unsupported(&format!(
+                            "passing a `{}` argument to a CPython object's method",
+                            arg_ty.name()
+                        )));
+                    }
+                }
+                return Ok(Ty::Object);
+            }
             // #436: static and class methods can also be called on an
             // instance. Check the static/class method tables before the
             // regular instance-method resolution.

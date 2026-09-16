@@ -308,6 +308,32 @@ pub enum MirExpr {
         attr: String,
         ty: Ty,
     },
+    /// `base.method(args)` where `base` is a foreign CPython object (D-244,
+    /// Part 2 of #1026, PR 2b of #1081) -- the *call* counterpart of
+    /// [`MirExpr::ObjAttrGet`] directly above, and String-keyed for exactly
+    /// the same reason: a foreign object has no `HirClassDef`, so `method`
+    /// resolves to no mangled symbol and must survive lowering as a
+    /// `String`. It is deliberately *not* lowered as an `ObjAttrGet` feeding
+    /// a separate call node: the shim performs the attribute load and the
+    /// vectorcall in one helper (`pycc_ext_obj_call`), so the bound method
+    /// object never becomes a pycc value and the whole operation has one
+    /// failure edge instead of two.
+    ///
+    /// `args` are already-checked scalars (`pycc_types`' `HirExpr::MethodCall`
+    /// arm admits `int`/`float`/`bool`/`str` and refuses everything else with
+    /// `I0404`); codegen marshals each one into a `PyObject *` before the
+    /// call. `ty` is always [`Ty::Object`] in Part 2, for the same reason
+    /// `ObjAttrGet`'s is.
+    ///
+    /// The call can fail -- a missing method, or a method that raises --
+    /// which is why `pycc_codegen::exception::expression_can_set_exception`
+    /// answers `true` for this node.
+    ObjMethodCall {
+        base: Box<MirExpr>,
+        method: String,
+        args: Vec<MirExpr>,
+        ty: Ty,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -506,7 +532,9 @@ impl MirExpr {
             // gate, so this is hardcoded on purpose.
             MirExpr::SetAdd { .. } => Ty::None,
             MirExpr::Instantiate(inst) => inst.ty.clone(),
-            MirExpr::AttrGet { ty, .. } | MirExpr::ObjAttrGet { ty, .. } => ty.clone(),
+            MirExpr::AttrGet { ty, .. }
+            | MirExpr::ObjAttrGet { ty, .. }
+            | MirExpr::ObjMethodCall { ty, .. } => ty.clone(),
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -617,6 +645,16 @@ impl MirExpr {
             }
             MirExpr::AttrGet { base, .. } | MirExpr::ObjAttrGet { base, .. } => {
                 base.collect_named_expr_bindings(out)
+            }
+            // Both sides, unlike `ObjAttrGet` directly above: a walrus can
+            // hide in an argument (`numpy.seed((n := 1))`) just as easily as
+            // in the base, and a binding missed here is a name codegen never
+            // allocates storage for.
+            MirExpr::ObjMethodCall { base, args, .. } => {
+                base.collect_named_expr_bindings(out);
+                for arg in args {
+                    arg.collect_named_expr_bindings(out);
+                }
             }
             MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)

@@ -969,6 +969,29 @@ pub(super) fn lower_expr(
                 }
             }
             let base = lower_expr(base, scopes, classes, current_class);
+            // Part 2 of #1026 (PR 2b of #1081): a method call on a foreign
+            // CPython object, which has no `HirClassDef` and so no mangled
+            // symbol to dispatch to. Placed exactly where the
+            // `HirExpr::AttrGet` arm places its own `ObjAttrGet` branch:
+            // after `lower_expr` (a foreign module's local name *is* a value
+            // binding in `scopes`, so lowering it is correct and necessary)
+            // and before `class_def_of`, whose `Ty::Object` input would hit
+            // `class.rs`'s "not a class instance" panic. Every earlier
+            // branch in this arm is unreachable for such a base: `Super` is
+            // a distinct HIR node, and the class-name guard requires a name
+            // that is *not* in `scopes`, which a foreign import's local name
+            // always is.
+            if base.ty() == Ty::Object {
+                return MirExpr::ObjMethodCall {
+                    base: Box::new(base),
+                    method: method.clone(),
+                    args: args
+                        .iter()
+                        .map(|a| lower_expr(a, scopes, classes, current_class))
+                        .collect(),
+                    ty: Ty::Object,
+                };
+            }
             let class_def = class_def_of(&base, classes);
             // #436: check static_methods and class_methods before regular
             // method resolution. Static methods can be called on both

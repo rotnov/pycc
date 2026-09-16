@@ -19,13 +19,14 @@
 //!   *position* as well: a read of a foreign object is admitted only in a
 //!   module body, never inside a function body, and never above the
 //!   `import` itself -- both were compile errors before this change and
-//!   both had become run-time traps. The one exception is a general method call
-//!   (`numpy.sqrt(2.0)`), which is refused as `T0043` rather than `I0404`
-//!   because PR 2a adds no `Ty::Object` branch ahead of
-//!   `class::resolve_method_call`; the plan assigns that branch to PR 2b,
-//!   where it *admits* the shape instead of refusing it, so 2a pins the
-//!   current code rather than pre-empting it
-//!   (`a_general_method_call_on_a_foreign_object_is_still_t0043`).
+//!   both had become run-time traps. The one exception is a general method
+//!   call (`numpy.sqrt(2.0)`), which PR 2a refused as `T0043` rather than
+//!   `I0404` because it added no `Ty::Object` branch ahead of
+//!   `class::resolve_method_call`. **PR 2b of #1081 admits that shape**: the
+//!   branch exists now and answers `Ty::Object`, so the program type-checks
+//!   (`a_general_method_call_on_a_foreign_object_is_accepted`).
+//!   `tests/issue_1081_foreign_method_call.rs` owns the rest of that
+//!   capability -- what it refuses, and what it does in a real host.
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
 //! coverage (CI's coverage job runs `llvm-cov` without `--include-ignored`);
@@ -315,26 +316,26 @@ fn a_module_body_read_above_its_foreign_import_is_refused() {
     assert!(rendered.contains("`numpy` is not defined"), "{rendered}");
 }
 
-/// A general method call on the object is refused, but not with `I0404`.
+/// A general method call on the object is now *accepted*.
 ///
-/// `numpy.append(1)` is in the table above because the four D-105
-/// String-keyed container spellings (`append`/`pop`/`get`/`add`) are stolen
-/// ahead of the generic `MethodCall` fallback and reach `lookup_bound_name`.
-/// Any other method name falls through to `class::resolve_method_call`,
-/// whose `Ty::Instance` destructure reports `T0043` instead. The program is
-/// still refused, so no capability leaks; only the diagnostic differs.
-/// Pinned rather than fixed here on purpose: the plan's row C2 gives the
-/// `Ty::Object` branch to PR 2b, and there it *admits* the call as an
-/// `ObjMethodCall` rather than renaming its refusal, so changing the code
-/// now would be work 2b immediately deletes.
+/// PR 2a pinned this exact program as `T0043` ("not a class instance"),
+/// reached by falling through to `class::resolve_method_call`, and recorded
+/// that PR 2b would admit it rather than rename the refusal. It does: the
+/// `Ty::Object` branch added ahead of that call answers `Ty::Object`, so
+/// the program type-checks and lowers to a `MirExpr::ObjMethodCall`.
+///
+/// `numpy.append(1)` stays in the refusal table above and is unaffected --
+/// the four D-105 String-keyed container spellings
+/// (`append`/`pop`/`get`/`add`) are stolen ahead of the generic
+/// `MethodCall` fallback and reach `lookup_bound_name`, which still refuses
+/// a `Ty::Object` read with `I0404`. Admitting other method names does not
+/// reach that path, so the theft stays as narrow as it was.
 #[test]
-fn a_general_method_call_on_a_foreign_object_is_still_t0043() {
-    let dir = ScratchDir::new("foreign_method_call_t0043").expect("scratch");
+fn a_general_method_call_on_a_foreign_object_is_accepted() {
+    let dir = ScratchDir::new("foreign_method_call_ok").expect("scratch");
     let output = check(&dir, "import numpy\n\nnumpy.sqrt(2.0)\n");
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[T0043]"), "{rendered}");
-    assert!(!rendered.contains("I0404"), "{rendered}");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert_eq!(stdout_of(&output), "");
 }
 
 /// Every shape that *consumes* the binding, one row per refusing site.

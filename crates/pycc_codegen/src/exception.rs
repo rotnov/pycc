@@ -51,10 +51,17 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // moment PR 2b's shim translates CPython's exception into pycc's
         // pending state, and because the conservative answer is the
         // fail-closed one for a node that really can raise.
+        //
+        // `ObjMethodCall` (PR 2b of #1081) joins it for exactly the same
+        // reasons and with exactly the same caveat: a missing method or a
+        // method that raises makes `pycc_ext_obj_call` return `NULL` with
+        // CPython's error indicator set, and `foreign_call::emit` owns the
+        // `NULL` check that actually stops the module body.
         MirExpr::Call { .. }
         | MirExpr::DictGet { .. }
         | MirExpr::Instantiate(_)
-        | MirExpr::ObjAttrGet { .. } => true,
+        | MirExpr::ObjAttrGet { .. }
+        | MirExpr::ObjMethodCall { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod
