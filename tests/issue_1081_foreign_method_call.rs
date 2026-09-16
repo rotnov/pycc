@@ -159,7 +159,13 @@ fn a_native_build_of_a_method_call_is_still_refused_with_i0403() {
     assert!(rendered.contains("error[I0403]"), "{rendered}");
 }
 
-/// Builds `body` as `<module>.so` in `dir` with `pycc build --ext`.
+/// Builds `body` as an extension module named `module` inside `dir`.
+///
+/// The output path carries **no** suffix, exactly as `issue_1080_foreign_object.rs`'s
+/// own helper writes it: `pycc build --ext` appends the one its target
+/// triple calls for. Spelling `.so` here builds on macOS and then fails the
+/// `--ext` name contract on Windows, where the module name would come out
+/// as `<module>.so` and is not an identifier.
 fn build_ext(dir: &Path, module: &str, body: &str) {
     let src = dir.join(format!("{module}.py"));
     std::fs::write(&src, body).expect("write the fixture source");
@@ -167,7 +173,7 @@ fn build_ext(dir: &Path, module: &str, body: &str) {
         .arg("build")
         .arg(&src)
         .arg("-o")
-        .arg(dir.join(format!("{module}.so")))
+        .arg(dir.join(module))
         .arg("--ext")
         .output()
         .expect("pycc should spawn");
