@@ -22,11 +22,13 @@
 //!    below names the **operation** instead ([`object_operation_unsupported`]),
 //!    because the consumer knows what it was about to do while the value
 //!    it holds is an anonymous temporary.
-//! 2. There are now two producer shapes, not one: `o.attr`
-//!    (`HirExpr::AttrGet` over a `Ty::Object` base) and a call to an
+//! 2. There are now several producer shapes, not one: `o.attr`
+//!    (`HirExpr::AttrGet` over a `Ty::Object` base), a call to an
 //!    unannotated private helper whose inferred return is `Ty::Object`
-//!    (`constraints.rs`'s `AttrGet` term). Every refusal must therefore
-//!    key on the **type**, never on the producing expression shape.
+//!    (`constraints.rs`'s `AttrGet` term), `o.method(...)` (PR 2b of
+//!    #1081), and `o[k]` (PR 3b of #1082, below). Every refusal must
+//!    therefore key on the **type**, never on the producing expression
+//!    shape, and the list is expected to keep growing.
 //!
 //! **PR 2a of #1081 bounded the admitted read by position.** A foreign
 //! object may be read only where the compiler can tell the `import` has
@@ -80,7 +82,7 @@
 //! `not o` is *not* part of this: `unop.rs`'s `Not` arm answers `T0021` for
 //! a non-`bool` operand, which it did before PR 3a and still does.
 //!
-//! **PR 3b of #1082 added the third producer shape: a subscript load.**
+//! **PR 3b of #1082 added another producer shape: a subscript load.**
 //! `o[k]` type-checks to [`Ty::Object`] (`expr.rs`'s `HirExpr::Subscript`
 //! arm has a `Ty::Object` base arm ahead of the `T0033` catch-all, and
 //! `constraints.rs`'s own `Subscript` arm lifts the term exactly as its
