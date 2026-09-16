@@ -23,6 +23,13 @@
 //! loop in `compile_to_object`, which is `!options.ext`-guarded for the
 //! same reason -- there is no "program exit" in a hosted extension module.
 //!
+//! Part 2 of #1026 kept that rule but removed its old justification: a
+//! `Py_DECREF` path used to be *unreachable* because no operation on the
+//! bound name was implemented at all, and now `foreign_attr.rs` implements
+//! one. The leak here is still once per process; the one an attribute load
+//! introduces is trip-count-linear, and `docs/RUNTIME.md` carries the
+//! consequence for D-244 rule 6 benchmarking.
+//!
 //! **Native mode.** A foreign import cannot reach codegen outside `--ext`:
 //! `src/main.rs` refuses it with `I0403` after typed HIR. This file
 //! therefore *ignores* a `ForeignImport` item when `options.ext` is false

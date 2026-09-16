@@ -15206,3 +15206,257 @@ fn a_tuple_typed_call_result_is_returned_as_a_struct() {
     );
     assert_eq!(stdout, b"9\n");
 }
+
+// ---------------------------------------------------------------------------
+// D-244, Part 2 of #1026: the `Scalar::Object` arms.
+//
+// Every arm below is defensive: `pycc_types`' Part 2 refusal migration
+// rejects a `Ty::Object` operand at each of these consuming sites (see
+// `docs/TYPE_SYSTEM.md`'s `object` row), so no type-checked program reaches
+// them. Each is pinned directly with a hand-built `Scalar::Object` carrying
+// a null `PyObject *` -- the same convention the `Scalar::List` defensive
+// tests above use, and for the same reason: it pins the panic to the
+// function that owns the gap rather than to whichever caller reaches it
+// first. The two *reachable* `Ty::Object` paths (`MirStmt::Return`'s
+// pass-through and `call_result_scalar`'s arm) are covered by real MIR at
+// the end of this section instead.
+// ---------------------------------------------------------------------------
+
+/// A null `PyObject *` as a [`Scalar::Object`]. None of the defensive tests
+/// below dereferences it -- each panics inside its function's own `match`
+/// before any `build_*` call runs.
+fn null_object_scalar(context: &Context) -> Scalar<'_> {
+    Scalar::Object(
+        context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null(),
+    )
+}
+
+#[test]
+#[should_panic(expected = "expected an int-or-bool operand, got object")]
+fn to_numeric_encoded_int_rejects_a_cpython_object_operand() {
+    let context = Context::create();
+    let builder = context.create_builder();
+    to_numeric_encoded_int(&context, &builder, null_object_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "expected a numeric operand, got object")]
+fn to_float_rejects_a_cpython_object_operand() {
+    let context = Context::create();
+    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    to_float(&context, &builder, &rt, null_object_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "string conversion of a CPython object value is not supported yet")]
+fn to_str_rejects_a_cpython_object_operand() {
+    // Rendering a foreign object needs `PyObject_Str`, which only a
+    // `pycc_ext_obj_*` shim may call and Part 2 ships none --
+    // `reject_unrenderable` refuses a `Ty::Object` `print` argument and
+    // f-string interpolation instead (`I0404`).
+    let context = Context::create();
+    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    to_str(&builder, &rt, null_object_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "truthiness of a CPython object value is not supported yet")]
+fn truthiness_of_a_cpython_object_value_is_an_internal_error() {
+    // Unlike `truthiness_of_a_list_value_panics_honestly` above, this gap
+    // is *not* reachable from a type-checked program: Part 2 refuses a
+    // `Ty::Object` condition at all ten condition-position sites, precisely
+    // so that CPython's `__bool__`/`__len__` protocol is never silently
+    // approximated.
+    let context = Context::create();
+    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    truthy(&context, &builder, &rt, null_object_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "assigning a CPython object value to a binding is not supported yet")]
+fn assigning_a_cpython_object_to_a_binding_is_an_internal_error() {
+    // `check_assignment` refuses a `Ty::Object` value source outright,
+    // because a binding would make the object outlive the expression that
+    // produced it and Part 2's leak-only ownership policy has no release
+    // story for that.
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    // `emit_assign` reads `slot.ty` before it matches on the value, so the
+    // slot must exist; a positioned block is needed because the `Ty::Int`
+    // release path it checks first would build IR for an `int` slot.
+    let function = module.add_function(
+        "assign_object",
+        context.void_type().fn_type(&[], false),
+        None,
+    );
+    let entry = context.append_basic_block(function, "entry");
+    builder.position_at_end(entry);
+    let ptr = builder
+        .build_alloca(context.ptr_type(inkwell::AddressSpace::default()), "o")
+        .expect("build_alloca should not fail for a fresh block");
+    let locals = HashMap::from([(
+        "o".to_string(),
+        StorageSlot {
+            ptr,
+            ty: Ty::Object,
+            initialized: None,
+        },
+    )]);
+    emit_assign(
+        &context,
+        &builder,
+        &rt,
+        &locals,
+        "o",
+        null_object_scalar(&context),
+    );
+}
+
+/// `import numpy` spliced ahead of `items`, so a `MirExpr::Name` read of
+/// `numpy` typed `Ty::Object` resolves to the module global the foreign
+/// import emits.
+fn with_foreign_numpy(mut items: Vec<MirItem>) -> Vec<MirItem> {
+    items.insert(
+        0,
+        MirItem::ForeignImport {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+        },
+    );
+    items
+}
+
+/// `numpy.pi` as a `MirExpr`, the one producer shape PR 2a emits.
+fn numpy_pi() -> MirExpr {
+    MirExpr::ObjAttrGet {
+        base: Box::new(MirExpr::Name {
+            name: "numpy".to_string(),
+            ty: Ty::Object,
+        }),
+        attr: "pi".to_string(),
+        ty: Ty::Object,
+    }
+}
+
+/// Compiles `items` as a D-244 `ext` object, which is the only mode a
+/// foreign import is emitted in.
+fn compile_ext_items(label: &str, items: Vec<MirItem>) {
+    let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
+    compile_to_object_with_options(
+        &MirModule {
+            items,
+            ..Default::default()
+        },
+        &dir.join(format!("{label}.o")),
+        &CompileOptions {
+            ext: true,
+            ..CompileOptions::default()
+        },
+    )
+    .expect("ext codegen should succeed");
+}
+
+#[test]
+#[should_panic(expected = "a CPython object argument is not supported yet")]
+fn passing_a_cpython_object_as_a_call_argument_is_an_internal_error() {
+    // Reached through real MIR rather than a direct call, because this arm
+    // lives inside `build_call_to_with_leading_args`' per-argument loop over
+    // `MirExpr`s and only a `MirExpr` that *evaluates* to `Scalar::Object`
+    // can select it. `pycc_types` admits no `object`-annotated parameter
+    // (D-137's amendment) and refuses passing a `Ty::Object` value to a
+    // parameter of any other type, so the deliberately mistyped `int`
+    // parameter below is a shape no type-checked program can produce.
+    compile_ext_items(
+        "object_call_argument",
+        with_foreign_numpy(vec![
+            MirItem::Function {
+                name: "takes_int".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![MirStmt::Return(None)],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "takes_int".to_string(),
+                args: vec![numpy_pi()],
+                ty: Ty::None,
+            })),
+        ]),
+    );
+}
+
+#[test]
+fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
+    // The two `Ty::Object` codegen paths that survive PR 2a's narrowing,
+    // together in one program: `emit_stmt`'s `MirStmt::Return`
+    // pass-through carries a `PyObject *` out of `_module`, and
+    // `call_result_scalar`'s `Ty::Object` arm turns the call site's result
+    // back into a `Scalar::Object`. Nothing dereferences it -- the
+    // `ExprStmt` discards it.
+    //
+    // The returned value is the foreign module global itself rather than a
+    // `numpy.pi` load, because `pycc_types` now refuses reading a CPython
+    // object inside a function body at all (see
+    // `foreign_attr::expect_module_exec_entry`), so a body containing an
+    // `ObjAttrGet` is no longer a shape any type-checked program produces.
+    // The MIR here is therefore already past what the front end admits;
+    // it exists to select these two codegen arms, which PR 2b's method
+    // calls will make reachable from real source again.
+    //
+    // D-137's amendment keeps `object` unspellable in an annotation, so
+    // such a helper can never be public and never reaches an `ext` export
+    // thunk.
+    compile_ext_items(
+        "object_returning_helper",
+        with_foreign_numpy(vec![
+            MirItem::Function {
+                name: "_module".to_string(),
+                params: vec![],
+                return_ty: Ty::Object,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "numpy".to_string(),
+                    ty: Ty::Object,
+                }))],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "_module".to_string(),
+                args: vec![],
+                ty: Ty::Object,
+            })),
+        ]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a foreign attribute load was emitted outside")]
+fn a_foreign_attribute_load_inside_a_function_body_is_an_internal_error() {
+    // The guard `foreign_attr::expect_module_exec_entry` exists for. This
+    // exact program -- `import numpy`, `def _pi(): return numpy.pi`,
+    // `_pi()` -- compiled and ran on PR 2a's branch before its review, so
+    // the arm is a real front-end contract rather than a hypothetical:
+    // `pycc_types` refuses the read inside a function body, and reaching
+    // codegen with one anyway means that refusal regressed. A failed
+    // lookup there would have no failure edge to take, since only
+    // `pycc_ext_module_exec` may return `EXT_MODULE_EXEC_FAILED`.
+    compile_ext_items(
+        "object_attr_in_function_body",
+        with_foreign_numpy(vec![
+            MirItem::Function {
+                name: "_pi".to_string(),
+                params: vec![],
+                return_ty: Ty::Object,
+                body: vec![MirStmt::Return(Some(numpy_pi()))],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "_pi".to_string(),
+                args: vec![],
+                ty: Ty::Object,
+            })),
+        ]),
+    );
+}

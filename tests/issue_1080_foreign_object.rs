@@ -9,8 +9,23 @@
 //!   bound-but-unused module object is not an error there;
 //! * a native `pycc build` refuses it with `I0403`, because a native
 //!   executable embeds no interpreter to import into;
-//! * every operation on the bound name is `I0404`, at each of the three
-//!   choke points `crates/pycc_types/src/foreign.rs` documents.
+//! * every operation on the bound name other than an attribute load is
+//!   refused, and all but one of them with `I0404`. Part 2 of #1026 (#1081)
+//!   changed *where* that refusal is decided -- from the read of the
+//!   binding to each consuming site, so `numpy.pi` itself could be admitted
+//!   -- but not which programs it refuses, which is why every row of the
+//!   table below still holds. `crates/pycc_types/src/foreign.rs` documents
+//!   the migration. PR 2a's review then bounded the admitted set by
+//!   *position* as well: a read of a foreign object is admitted only in a
+//!   module body, never inside a function body, and never above the
+//!   `import` itself -- both were compile errors before this change and
+//!   both had become run-time traps. The one exception is a general method call
+//!   (`numpy.sqrt(2.0)`), which is refused as `T0043` rather than `I0404`
+//!   because PR 2a adds no `Ty::Object` branch ahead of
+//!   `class::resolve_method_call`; the plan assigns that branch to PR 2b,
+//!   where it *admits* the shape instead of refusing it, so 2a pins the
+//!   current code rather than pre-empting it
+//!   (`a_general_method_call_on_a_foreign_object_is_still_t0043`).
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
 //! coverage (CI's coverage job runs `llvm-cov` without `--include-ignored`);
@@ -217,13 +232,120 @@ fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
     assert!(!rendered.contains("T0021"), "{rendered}");
 }
 
-/// Every shape that reads the binding, one row per choke point.
+/// Part 2 of #1026 (#1081): the same helper, returning an *attribute* of
+/// the module rather than the module itself.
+///
+/// The solver's `AttrGet` term types `numpy.pi` as `object` exactly as its
+/// `Name` term types `numpy`, which is what keeps the diagnostic right:
+/// without the term, signature materialization reports the `T0021` this
+/// test rules out. PR 2a of #1081 then narrowed which pass reports the
+/// refusal -- reading a foreign object inside a function body is itself
+/// `I0404` now, so the helper's own body is rejected and the consuming
+/// site is never reached. The assertion is unchanged, deliberately: both
+/// halves of it are still the contract, and the solver term is still what
+/// makes the second half true.
+#[test]
+fn an_unannotated_helper_returning_a_foreign_attribute_is_i0404_not_t0021() {
+    let dir = ScratchDir::new("foreign_helper_attr_return").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy\n\ndef _helper():\n    return numpy.pi\n\nx = _helper()\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert!(!rendered.contains("T0021"), "{rendered}");
+}
+
+/// The one operation Part 2 of #1026 adds: a discarded attribute load.
+///
+/// It is the only statement position an `object`-typed attribute load can
+/// occupy end to end, because every consuming site still refuses the value
+/// (the table below). PR 2a therefore ships no user-visible capability --
+/// that is the intended state, and this test is what distinguishes "not yet
+/// wired up" from "still refused".
+#[test]
+fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
+    let dir = ScratchDir::new("foreign_attr_accepted").expect("scratch");
+    let output = check(&dir, "import numpy\n\nnumpy.pi\n");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+}
+
+/// The same load *inside a function body* is refused (PR 2a of #1081
+/// review finding 2).
+///
+/// D-041 checks a body against the module environment as it stands after
+/// all top-level code, so the check phase cannot see that this call site
+/// precedes the `import`. CPython raises `NameError` here. Before the
+/// refusal, the eager module-scope `Ty::Object` bind
+/// (`pycc_mir::build`, plan deviation 9) made the program type-check,
+/// lower and build, and the artifact died with `SIGTRAP` (rc 133) on the
+/// global-initialization failure edge -- a regression against `main`,
+/// where the program was refused at compile time. Refusing the read
+/// restores that, and costs nothing: PR 2a ships no user-visible
+/// capability either way.
+#[test]
+fn a_helper_reading_a_foreign_object_before_its_import_is_refused() {
+    let dir = ScratchDir::new("foreign_helper_before_import").expect("scratch");
+    let output = check(
+        &dir,
+        "def _pi():\n    return numpy.pi\n\n_pi()\n\nimport numpy\n",
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[I0404]"), "{rendered}");
+}
+
+/// The direct form of the same regression: a module-body read placed above
+/// its own `import`.
+///
+/// Part 1 refused this through the unconditional `reject_object_read`,
+/// which Part 2 removed along with the positional guarantee that rested on
+/// it -- the pre-seed in `pycc_types::module` kept the name *bound*, so
+/// the read was admitted and trapped at run time just as the helper shape
+/// did. Removing the pre-seed makes it an ordinary unbound name, which is
+/// also the closer answer: CPython raises `NameError`.
+#[test]
+fn a_module_body_read_above_its_foreign_import_is_refused() {
+    let dir = ScratchDir::new("foreign_read_above_import").expect("scratch");
+    let output = check(&dir, "numpy.pi\n\nimport numpy\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+    assert!(rendered.contains("`numpy` is not defined"), "{rendered}");
+}
+
+/// A general method call on the object is refused, but not with `I0404`.
+///
+/// `numpy.append(1)` is in the table above because the four D-105
+/// String-keyed container spellings (`append`/`pop`/`get`/`add`) are stolen
+/// ahead of the generic `MethodCall` fallback and reach `lookup_bound_name`.
+/// Any other method name falls through to `class::resolve_method_call`,
+/// whose `Ty::Instance` destructure reports `T0043` instead. The program is
+/// still refused, so no capability leaks; only the diagnostic differs.
+/// Pinned rather than fixed here on purpose: the plan's row C2 gives the
+/// `Ty::Object` branch to PR 2b, and there it *admits* the call as an
+/// `ObjMethodCall` rather than renaming its refusal, so changing the code
+/// now would be work 2b immediately deletes.
+#[test]
+fn a_general_method_call_on_a_foreign_object_is_still_t0043() {
+    let dir = ScratchDir::new("foreign_method_call_t0043").expect("scratch");
+    let output = check(&dir, "import numpy\n\nnumpy.sqrt(2.0)\n");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    let rendered = stdout_of(&output);
+    assert!(rendered.contains("error[T0043]"), "{rendered}");
+    assert!(!rendered.contains("I0404"), "{rendered}");
+}
+
+/// Every shape that *consumes* the binding, one row per refusing site.
 ///
 /// `tests/diagnostics/i0404_foreign_module_operation.py` pins the exact
-/// rendering of one of them; this states the *set*. A shape that silently
-/// started compiling instead of being refused is what Part 1's containment
-/// invariant forbids -- a `Ty::Object` value must not escape into any
-/// operation, because no operation on one is implemented yet.
+/// rendering of one of them; this states the *set*. Part 1 guaranteed the
+/// set by refusing the read itself, so no `Ty::Object` value could escape
+/// into any operation at all. Part 2 admits the read and refuses each
+/// consumer separately, which makes this table the invariant rather than a
+/// consequence of one: a row that silently started compiling is now a real
+/// hole rather than an impossibility.
 #[test]
 fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");
@@ -552,6 +674,53 @@ assert m.answer() == 42, m.answer()
         "stdout: {}\nstderr: {}",
         stdout_of(&run),
         stderr_of(&run)
+    );
+}
+
+/// PR 2a of #1081 review finding 1, end to end: a failed attribute lookup
+/// must surface to the host as CPython's own `AttributeError`, and the
+/// module body must stop there.
+///
+/// Before the fix, `foreign_attr::emit` emitted no `NULL` check and the
+/// pending-exception guard that follows the load reads pycc's own state
+/// (D-173), which CPython's error indicator leaves untouched. The body ran
+/// to completion with CPython's exception still set, and the interpreter
+/// reported `SystemError: execution of module ... raised unreported
+/// exception` with the real `AttributeError` visible only as a chained
+/// cause. The load now takes the same module-exec failure edge a failed
+/// `pycc_ext_obj_import` takes, so the exception CPython set is the
+/// exception the host sees.
+///
+/// The side effect written below the load is what proves the body stopped
+/// rather than merely reported: it must not have run.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_failed_attribute_lookup_raises_attribute_error_in_the_host() {
+    let dir = ScratchDir::new("foreign_attr_failure_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_missing_attr_mod",
+        "import json\n\njson.pycc_no_such_attribute_1081\nprint(\"ran past the load\")\n",
+    );
+    let run = python(
+        &dir,
+        "try:\n\
+         \x20   import pycc_missing_attr_mod\n\
+         except AttributeError as e:\n\
+         \x20   assert 'pycc_no_such_attribute_1081' in str(e), str(e)\n\
+         else:\n\
+         \x20   raise AssertionError('the attribute load should have failed')\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert!(
+        !stdout_of(&run).contains("ran past the load"),
+        "the module body must stop at the failed load: {}",
+        stdout_of(&run)
     );
 }
 

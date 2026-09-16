@@ -130,3 +130,79 @@ fn two_foreign_imports_straddling_a_statement_keep_their_order() {
     );
     assert!(matches!(mir.items[1], MirItem::TopLevelStmt(_)));
 }
+
+// ---------------------------------------------------------------------
+// Part 2 of #1026 (#1081): attribute loads on the bound object.
+//
+// The two tests below are the only place the `HirExpr::AttrGet` ->
+// `MirExpr::ObjAttrGet` lowering is exercised from real HIR. The codegen
+// crate's own tests hand-build `MirExpr::ObjAttrGet` (they are about what
+// LLVM receives, not about how the node is produced), and the integration
+// tests stop at `pycc check`, which never lowers. Lowering is also where
+// the module-scope `Ty::Object` bind in `build` is proved: without it,
+// `lookup` panics on the `numpy` read rather than producing a base.
+// ---------------------------------------------------------------------
+
+/// A module that imports `numpy` at index 0 and then evaluates and
+/// discards `base_expr` as its single statement.
+fn module_with_discarded(base_expr: pycc_hir::HirExpr) -> HirModule {
+    HirModule {
+        items: vec![HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(
+            base_expr,
+        ))],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    }
+}
+
+/// The lowered form of the single top-level statement in `hir`.
+fn only_discarded_expr(hir: &HirModule) -> MirExpr {
+    let mir = build(hir);
+    mir.items
+        .iter()
+        .find_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(expr)) => Some(expr.clone()),
+            _ => None,
+        })
+        .expect("the module has exactly one top-level statement")
+}
+
+fn attr_get(base: pycc_hir::HirExpr, attr: &str) -> pycc_hir::HirExpr {
+    pycc_hir::HirExpr::AttrGet {
+        base: Box::new(base),
+        attr: attr.to_string(),
+    }
+}
+
+#[test]
+fn an_attribute_load_on_a_foreign_object_lowers_to_obj_attr_get() {
+    // `import numpy` / `numpy.pi`. The base resolves to `Ty::Object`
+    // through the module-scope bind, so the load takes the string-keyed
+    // path instead of `class_def_of`, which has no `HirClassDef` to find.
+    let hir = module_with_discarded(attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "pi"));
+    let MirExpr::ObjAttrGet { base, attr, ty } = only_discarded_expr(&hir) else {
+        panic!("expected an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "pi");
+    assert_eq!(ty, Ty::Object);
+    assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+}
+
+#[test]
+fn a_chained_attribute_load_stays_opaque_at_every_level() {
+    // `numpy.linalg.norm`: the inner load's own result is `Ty::Object`, so
+    // the outer load re-enters the same arm rather than falling through to
+    // the slot-resolving path. This is what makes the node's `ty` field
+    // load-bearing rather than decorative.
+    let hir = module_with_discarded(attr_get(
+        attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "linalg"),
+        "norm",
+    ));
+    let MirExpr::ObjAttrGet { base, attr, .. } = only_discarded_expr(&hir) else {
+        panic!("expected an outer `ObjAttrGet`");
+    };
+    assert_eq!(attr, "norm");
+    let MirExpr::ObjAttrGet { attr: inner, .. } = *base else {
+        panic!("expected an inner `ObjAttrGet`");
+    };
+    assert_eq!(inner, "linalg");
+}

@@ -1276,18 +1276,20 @@ def scale(x: float) -> float:
         severity: Severity::Error,
         summary: "operation on a CPython object is not supported yet",
         explanation: "\
-I0404 reports an operation on a value whose type is the opaque CPython \
-object type `object` -- today, always a module bound by a CPython `import` \
-under `--ext`. Part 1 of #1026 binds the imported module and implements no \
-operation on it at all, so every read of such a binding is refused: \
-attribute access, calls, iteration, formatting and arithmetic alike. The \
-refusal narrows as the later parts of #1026 land -- attribute load and \
-call, then the protocol operations, then the boundary conversions -- and \
-this code is retired when they have.",
+I0404 reports an unsupported operation on a value whose type is the opaque \
+CPython object type `object` -- a module bound by a CPython `import` under \
+`--ext`, or an attribute loaded from one. Reading such a value is not \
+itself an error, and Part 2 of #1026 implements one operation on it: \
+loading a further attribute. Everything else is still refused, including \
+printing or f-string interpolation, binding the value to a name, using it \
+as an `if`/`while` condition or comprehension guard, `isinstance`, a \
+`match` subject, and calling it. The refusal narrows as the later parts of \
+#1026 land -- method calls, then the boundary conversions -- and this code \
+is retired when they have.",
         example: "\
 import numpy
 
-x = numpy.pi  # error[I0404]: `numpy` is a CPython object
+print(numpy.pi)  # error[I0404]: printing a CPython object
 ",
     },
     DiagnosticExplanation {

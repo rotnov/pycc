@@ -578,11 +578,11 @@ Part 1 of [#1026](https://github.com/rotnov/pycc/issues/1026) makes a plain,
 unaliased, undotted `import <name>` a *foreign* import when `<name>` is neither
 a project module nor a `pycc_std` registration: it binds the CPython module
 object itself, typed `object` (see
-[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). This is the only
-construct in the language that produces an `object`, and the admissibility
-table above is why one can never leave: an `object` parameter or return on an
-exported function is a `C0003` capability gap, so the value stays inside the
-artifact.
+[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). Part 2 of the same
+issue adds a second producer — an attribute load on such a value, `numpy.pi`,
+which is itself an `object` — but the admissibility table above is still why one
+can never leave: an `object` parameter or return on an exported function is a
+`C0003` capability gap, so the value stays inside the artifact.
 
 **Position, not a prologue.** D-244 rule 3 binds the artifact to CPython's
 statement-by-statement module body, so each foreign import runs *where it was
@@ -602,14 +602,43 @@ not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
 so the import statement that loaded the artifact fails and no partially
 initialized module is left in `sys.modules`.
 
+An attribute load fails the same way and takes the same edge.
+`pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and
+`crates/pycc_codegen/src/foreign_attr.rs` tests that result and returns `-1`
+from `Py_mod_exec` immediately, leaving the exception untouched, so a missing
+attribute surfaces to the host as the real `AttributeError` and the remaining
+module-body statements never run. That check is what pycc's *own*
+pending-exception guard (D-173) cannot do: the two failure protocols are
+separate, and pycc's state is unset while CPython's is set, so before PR 2a of
+[#1081](https://github.com/rotnov/pycc/pull/1093) the body ran to completion and
+CPython reported `SystemError: execution of module <name> raised unreported
+exception` instead. Translating CPython's exception into pycc's pending state —
+which is what a function body would need, since only the module-body entry point
+may return `-1` — is PR 2b's work, together with `MirExpr::ObjMethodCall`; until
+then the type checker refuses reading a foreign object anywhere but a module
+body ([TYPE_SYSTEM.md](./TYPE_SYSTEM.md)).
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
-regardless, the `object` binding is a module-level global with no scope to
-leave, and the language offers no operation that could drop or alias it
-(every operation on the name is `I0404`). A `Py_DECREF` path is therefore not
-merely unimplemented but unreachable, and adding one belongs with the first
-construct that can actually consume an `object`.
+regardless, and the `object` binding is a module-level global with no scope to
+leave. Part 2 of #1026 keeps that rule and extends it to the values an
+attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttrString`,
+whose result is also a new reference, and it too is never released.
+
+That extension is a deliberate, bounded regression and is recorded as one. A
+module object leaks at most once per process; an attribute load sits inside
+ordinary control flow, so `numpy.pi` written in a loop leaks one reference per
+iteration — the leak is trip-count-linear rather than bounded by process exit.
+Part 2 accepts it because releasing correctly requires the borrowed-versus-owned
+distinction that only arrives with argument marshalling, and because nothing in
+Part 2 can yet hand such a value to a host: every consuming operation other than
+a further attribute load is refused with `I0404`. **A benchmark run under
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 6's 5× kill criterion must not measure a hot loop containing a foreign
+attribute load until the release protocol lands**, because the resident-set
+growth, not the compiled code, would dominate the result. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
+tracks releasing object temporaries.
 
 The same rule decides what a *duplicate* foreign import does, and that
 outcome is a recorded decision rather than an unexercised side effect. A
@@ -624,8 +653,7 @@ the slot ends up holding a valid, correctly typed module object, and the
 first reference is simply never released — exactly what every foreign
 import does. Collapsing the duplicate to one call, or releasing the
 overwritten reference, would be an optimization of an already-correct
-program, and belongs with the first construct that can consume an
-`object`.
+program, and belongs with the release protocol described above.
 
 **The bound name does not cross a module boundary yet.** The binding is
 positional — `ImportBinding::Foreign` carries the index of the item the

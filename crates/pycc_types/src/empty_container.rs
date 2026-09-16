@@ -216,6 +216,18 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
     // not an admitted container element type, so no producer here can
     // resolve a container through it -- parity is the property, not a
     // reachable defect.
+    //
+    // PR 2a of #1081 removed the checker's matching pre-seed, so the two
+    // are no longer identical: this pass binds every foreign name up
+    // front, while the checker binds each at its own recorded position
+    // (`crate::foreign::bind_foreign_objects_at`). The difference is
+    // entirely in the safe direction. It can only make this scope *wider*,
+    // which is the side the invariant above permits, and this pass reports
+    // nothing -- it either rewrites a resolvable empty container or hands
+    // the module back for the checker to judge -- so a name bound here
+    // earlier than the checker would bind it cannot turn into a
+    // diagnostic, only into a container resolution that `Ty::Object` can
+    // never supply.
     crate::foreign::bind_foreign_objects(&mut module_env, &hir.imports);
     let top_level_stmts: Vec<HirStmt> = hir
         .items

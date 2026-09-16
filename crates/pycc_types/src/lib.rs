@@ -977,7 +977,37 @@ fn check_range_operand_in(
     }
 }
 
+/// Refuses a CPython object in condition position (Part 2 of #1026, #1081).
+///
+/// The checker deliberately places no type constraint on an `if`/`while`
+/// test or a comprehension guard -- Python's own truthiness has no static
+/// type restriction -- so every one of those ten sites infers the test and
+/// drops the result. `Ty::Object` is the one type that cannot be dropped:
+/// `pycc_codegen`'s `truthy` has no object arm, so an admitted
+/// `if numpy.pi:` would reach codegen and panic there instead of producing
+/// a diagnostic here. Factored into one function so the ten call sites
+/// cannot drift into ten spellings of the rule.
+fn reject_object_condition(ty: &Ty) -> Result<(), Diagnostic> {
+    foreign::reject_object_operand(ty, "using a CPython object as a condition")
+}
+
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
+    // Part 2 of #1026 (#1081): binding a CPython object to a name stays
+    // refused. Placed at the entry, *before* the `env.lookup_any(target)`
+    // branch below, because that branch is the only thing that runs
+    // `class::is_assignable_env` -- a *first* `x = numpy.pi` has no previous
+    // binding and would otherwise be bound with no check at all, and a
+    // second one would pass anyway on `is_assignable`'s `from == to` path.
+    // The entry placement also covers `AnnAssign` and the
+    // `HirPattern::Capture` caller further down, which are the same rule.
+    //
+    // Refused rather than admitted deliberately: admitting the binding
+    // makes `f(2.0)` reachable on a name bound to an object, which the
+    // `HirExpr::Call` value-binding gate refuses (`crate::foreign`'s module
+    // doc), and admitting one while refusing the other is incoherent.
+    // Releasing the object would also become this crate's problem, which is
+    // the ownership question Part 2 explicitly defers (`docs/RUNTIME.md`).
+    foreign::reject_object_operand(&ty, "binding a CPython object to a name")?;
     // PEP 591 (#383): reject reassignment of a `Final` name. The `finals`
     // set is populated *after* the initial assignment's `check_assignment`
     // call returns (in `check_stmt`/`check_stmt_in_function`'s `AnnAssign`
@@ -1406,6 +1436,14 @@ fn check_match(
     return_ty: Option<&Ty>,
 ) -> Result<(), Diagnostic> {
     let subject_ty = infer_expr_in(env, local_names, subject)?;
+    // Part 2 of #1026 (#1081): `match numpy.pi:` stays refused. A
+    // `HirPattern::Wildcard` returns no bindings and satisfies
+    // `check_exhaustive`, so before this guard the statement type-checked
+    // and reached `pycc_mir`'s `lower_match`, which has no `Ty::Object`
+    // handling at all. (`HirPattern::Capture` is already covered by
+    // `check_assignment`'s own entry guard through the `bindings` loop
+    // below -- this guard is what covers every other pattern.)
+    foreign::reject_object_operand(&subject_ty, "matching on a CPython object")?;
     let mut case_envs = Vec::with_capacity(cases.len());
     for case in cases {
         let mut case_env = env.clone();
@@ -1954,7 +1992,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // always executes, so this binding is unconditional relative to
             // the branch join below.
             collect_named_expr_bindings(env, &[], test)?;
-            infer_expr(env, test)?; // any type is accepted as truthy for v0.1 -- Python's own truthiness has no static type restriction
+            reject_object_condition(&infer_expr(env, test)?)?;
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe` (the orelse clone is empty, so every body
@@ -1995,7 +2033,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // PEP 572 (#774): bind before validating -- see the `ExprStmt`
             // arm's doc comment above for why this order is required.
             collect_named_expr_bindings(env, &[], test)?;
-            infer_expr(env, test)?;
+            reject_object_condition(&infer_expr(env, test)?)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
             // Fast path: if the body introduces no bindings, check in-place.
@@ -2126,7 +2164,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr(env, cond)?)?;
             }
             let elt_ty = infer_expr(env, elt)?;
             if elt_ty != Ty::Int {
@@ -2155,7 +2193,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr(env, cond)?)?;
             }
             let elt_ty = infer_expr(env, elt)?;
             if elt_ty != Ty::Int {
@@ -2185,7 +2223,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = resolve_comp_iter(env, &[], iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr(env, cond)?)?;
             }
             let key_ty = infer_expr(env, key)?;
             let value_ty = infer_expr(env, value)?;
@@ -2593,7 +2631,7 @@ fn check_stmt_in_function(
             // `local_names`. The test always executes, so this binding is
             // unconditional relative to the branch join below.
             collect_named_expr_bindings(env, local_names, test)?;
-            infer_expr_in(env, local_names, test)?;
+            reject_object_condition(&infer_expr_in(env, local_names, test)?)?;
             // Issue #118 Part 1: check each branch in an independent clone of
             // env, then join the results. A no-else `if` makes all body-only
             // bindings `Maybe`.
@@ -2641,7 +2679,7 @@ fn check_stmt_in_function(
             // PEP 572 (#774): bind before validating, mirroring the `If`
             // arm just above.
             collect_named_expr_bindings(env, local_names, test)?;
-            infer_expr_in(env, local_names, test)?;
+            reject_object_condition(&infer_expr_in(env, local_names, test)?)?;
             // Issue #118 Part 1: the loop body may execute zero times, so
             // every body-only binding joins back as `Maybe`.
             // Fast path: if the body introduces no bindings, check in-place.
@@ -2767,7 +2805,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
             }
             let elt_ty = infer_expr_in(env, local_names, elt)?;
             if elt_ty != Ty::Int {
@@ -2792,7 +2830,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
             }
             let elt_ty = infer_expr_in(env, local_names, elt)?;
             if elt_ty != Ty::Int {
@@ -2818,7 +2856,7 @@ fn check_stmt_in_function(
             let var_ty = resolve_comp_iter(env, local_names, iter)?;
             check_assignment(env, var, var_ty)?;
             if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+                reject_object_condition(&infer_expr_in(env, local_names, cond)?)?;
             }
             let key_ty = infer_expr_in(env, local_names, key)?;
             let value_ty = infer_expr_in(env, local_names, value)?;

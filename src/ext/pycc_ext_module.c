@@ -666,6 +666,52 @@ PyObject *pycc_ext_obj_import(const char *name)
     return PyImport_ImportModule(name);
 }
 
+/*
+ * Part 2 of #1026: the attribute-load helper compiled code calls for
+ * `numpy.pi` on a value whose static type is the opaque `object`.
+ *
+ * As thin as its neighbour above, and for the same reason: every decision
+ * about the lookup -- the descriptor protocol, `__getattr__`, the
+ * `AttributeError` a missing name raises -- stays with CPython. It returns a
+ * new reference to the attribute's value, or NULL with the CPython
+ * exception already set.
+ *
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_OBJ_GETATTR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `obj` is borrowed -- the caller holds the reference for at least the
+ * duration of this call, because in Part 2 the only object a load can be
+ * rooted at is a module global that is never released. The returned
+ * reference is deliberately never released either, on the same leak-only
+ * rule `pycc_ext_obj_import` documents; `docs/RUNTIME.md` records it and
+ * names the deferral.
+ *
+ * Deliberately *not* translated into `pycc_rt`'s pending-exception state
+ * here. The two failure protocols are kept apart; the caller's own contract
+ * (`crates/pycc_codegen/src/foreign_attr.rs`) states which side owns the
+ * transition, and why Part 2a does not need it: it tests this function's
+ * result for NULL and returns `-1` from the `Py_mod_exec` slot with
+ * CPython's exception left exactly as set here.
+ *
+ * A NULL `obj` is still decided here. `a.b.c` lowers to nested
+ * `ObjAttrGet` nodes, and although the caller's own NULL check now stops an
+ * inner failure before the outer call is reached, this guard is what makes
+ * that a defence in depth rather than the only line: `PyObject_GetAttrString`
+ * dereferences `Py_TYPE(obj)` with no guard of its own, so any caller that
+ * reaches here with NULL would crash the hosting interpreter instead of
+ * raising. Returning NULL unchanged is also the *correct* CPython state --
+ * the inner lookup already set its `AttributeError`, so propagating NULL
+ * leaves exactly one exception set. Overwriting it with a second, synthetic
+ * error would be worse.
+ */
+PyObject *pycc_ext_obj_getattr(PyObject *obj, const char *name)
+{
+    if (obj == NULL) {
+        return NULL;
+    }
+    return PyObject_GetAttrString(obj, name);
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

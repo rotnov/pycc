@@ -284,6 +284,30 @@ pub enum MirExpr {
         slot: usize,
         ty: Ty,
     },
+    /// `base.attr` where `base` is a foreign CPython object (D-244, Part 2
+    /// of #1026) -- a *string-keyed* attribute load performed at runtime by
+    /// the `pycc_ext_obj_getattr` shim, in contrast to [`MirExpr::AttrGet`]
+    /// directly above, whose `slot: usize` is resolved at compile time
+    /// against a `HirClassDef`. A foreign object has no `HirClassDef` and
+    /// therefore no slot to resolve, so the two shapes cannot share a node:
+    /// the attribute name must survive lowering as a `String` (D-105's own
+    /// String-keyed-node precedent).
+    ///
+    /// `ty` is always [`Ty::Object`] in Part 2 -- `pycc_types` knows nothing
+    /// about a foreign attribute's type, so the result is opaque exactly
+    /// like the base. The field is kept rather than hardcoded so a later
+    /// part that learns an attribute's type (a typed stub, say) needs no
+    /// shape change here.
+    ///
+    /// The load can fail: a missing attribute makes `PyObject_GetAttrString`
+    /// return `NULL` with a CPython exception set, which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for this node.
+    ObjAttrGet {
+        base: Box<MirExpr>,
+        attr: String,
+        ty: Ty,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -482,7 +506,7 @@ impl MirExpr {
             // gate, so this is hardcoded on purpose.
             MirExpr::SetAdd { .. } => Ty::None,
             MirExpr::Instantiate(inst) => inst.ty.clone(),
-            MirExpr::AttrGet { ty, .. } => ty.clone(),
+            MirExpr::AttrGet { ty, .. } | MirExpr::ObjAttrGet { ty, .. } => ty.clone(),
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -591,7 +615,9 @@ impl MirExpr {
                     arg.collect_named_expr_bindings(out);
                 }
             }
-            MirExpr::AttrGet { base, .. } => base.collect_named_expr_bindings(out),
+            MirExpr::AttrGet { base, .. } | MirExpr::ObjAttrGet { base, .. } => {
+                base.collect_named_expr_bindings(out)
+            }
             MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)
             }
@@ -867,6 +893,36 @@ pub fn build(hir: &HirModule) -> MirModule {
     // recursive call" shape, but never mutated the way `scopes` is (a
     // class's declared shape does not change while lowering a module).
     let classes: HashMap<String, HirClassDef> = hir.class_defs.iter().cloned().collect();
+    // Part 2 of #1026 (#1081): a foreign import's local name is a *value*
+    // binding of type `object` for the rest of the module, so `lower_expr`'s
+    // `HirExpr::Name` arm can resolve it through `lookup` like any other.
+    // Part 1 needed no such binding -- the check phase refused every
+    // expression-position read of a foreign name, so lowering never saw one
+    // and `lookup`'s "pycc_types::check should have rejected this" panic was
+    // correct. Part 2 admits `numpy.pi`, which makes the read reachable, and
+    // without this bind the first admitted program would hit that panic.
+    //
+    // Bound eagerly, before any statement lowers, rather than at the import's
+    // own position. That is sound only because the check phase refuses every
+    // read this bind could answer wrongly, and PR 2a of #1081 had to *restore*
+    // both halves of that after its review found the eager bind admitting
+    // programs Part 1 refused: `pycc_types::module` no longer pre-seeds the
+    // foreign name ahead of its own position, so a module-body read above the
+    // `import` is `T0021`, and `pycc_types::expr` refuses reading a foreign
+    // object inside a function body, so a helper called above the `import`
+    // is refused too. Both used to lower here and trap at run time
+    // (`llvm.trap`, rc 133) where CPython raises `NameError`. Part 1's
+    // shadowing rule (`C0001`, `docs/TYPE_SYSTEM.md`) then guarantees no
+    // other top-level statement ever rebinds the name, so with those
+    // refusals in place there is no position at which the eager bind could
+    // differ from a positional one. A function body reads it through the
+    // same outward `lookup` walk, matching the constraint solver's own
+    // per-function `foreign_objects` copy.
+    for import in &hir.imports {
+        if let ImportBinding::Foreign { local_name, .. } = import {
+            bind(&mut scopes, local_name.clone(), Ty::Object);
+        }
+    }
     // First pass: register every function's mangled `$fn:name` signature
     // before lowering any item body -- mirrors `pycc_types::check`'s own
     // two-pass fix (D-038/D-039) so a forward reference, a sibling call, or

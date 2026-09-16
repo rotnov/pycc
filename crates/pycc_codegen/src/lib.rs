@@ -34,6 +34,7 @@ mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
 mod ext_thunk;
+mod foreign_attr;
 mod foreign_import;
 mod target_machine;
 pub use ext::{
@@ -41,7 +42,7 @@ pub use ext::{
     ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
     ext_thunk_symbol, is_ext_exportable_name,
 };
-use ext::{EXT_OBJ_IMPORT_SYMBOL, entry_fn_name, is_module_entry_symbol};
+use ext::{EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, entry_fn_name, is_module_entry_symbol};
 #[cfg(test)]
 mod tests;
 pub use pycc_artifact_layout as artifact_layout;
@@ -225,6 +226,37 @@ enum Scalar<'ctx> {
     /// `pycc_rt::instance`'s own doc comment): leak-only, identically to
     /// `List`/`Dict`/`Set`.
     Instance(PointerValue<'ctx>),
+    /// A borrowed `PyObject *` owned by the hosting CPython interpreter
+    /// (D-244, Part 2 of #1026) -- the runtime carrier for [`Ty::Object`],
+    /// the opaque foreign-object type a `pycc build --ext` artifact obtains
+    /// from `pycc_ext_obj_import` and, from this part on, from
+    /// `pycc_ext_obj_getattr`. Entirely opaque to this crate: it is never
+    /// `GEP`'d into, never inspected, and never handed to any `pycc_rt_*`
+    /// function -- the only operations on it are the `pycc_ext_obj_*`
+    /// shims in `src/ext/pycc_ext_module.c`, which are the sole place a
+    /// CPython C-API call may appear.
+    ///
+    /// Its own variant rather than a reuse of `Instance`'s or any other
+    /// pointer-holding variant's (D-107's rule, applied unchanged: a new
+    /// pointer kind gets a new variant): a `PyObject *` obeys CPython's
+    /// refcounting protocol and has no `pycc_rt` layout at all, so every
+    /// exhaustive `Scalar` match (`truthy`/`to_str`/`to_numeric_encoded_int`/
+    /// `to_float`/`coerce_scalar_to_type`/`emit_assign`/slot marshalling)
+    /// would otherwise hand it straight to a `pycc_rt_str_*` or
+    /// `pycc_rt_instance_*` function. Those arms are all refusals here --
+    /// `pycc_types` refuses every operation on a `Ty::Object` value except
+    /// the attribute load this part adds, so reaching one means the checker
+    /// let something through.
+    ///
+    /// Ownership is leak-only, exactly as `foreign_import`'s module objects
+    /// already are: `pycc_ext_obj_getattr` returns a new reference and
+    /// nothing ever calls `Py_DECREF` on it. That is never a premature free
+    /// or a double free, but unlike a module object -- of which a program
+    /// holds a fixed handful -- an attribute load inside a loop leaks once
+    /// per iteration, so the leak is trip-count-linear. Releasing object
+    /// temporaries is deferred to its own follow-up; see `docs/RUNTIME.md`'s
+    /// "Foreign imports in the module body" ownership subsection.
+    Object(PointerValue<'ctx>),
 }
 
 struct UserFunction<'ctx> {
@@ -583,6 +615,14 @@ fn to_numeric_encoded_int<'ctx>(
         Scalar::Optional(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got optional")
         }
+        // Defensive for the same reason as every arm above, extended to a
+        // foreign CPython object (D-244, Part 2 of #1026): `pycc_types`
+        // refuses arithmetic on a `Ty::Object` operand at the consumer
+        // sites the Part 2 refusal migration added, so no type-checked
+        // program reaches this arm.
+        Scalar::Object(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got object")
+        }
     }
 }
 
@@ -767,7 +807,14 @@ fn scalar_to_slot_word<'ctx>(
         // encoding has no room for the `{ i64, i8 }` struct's extra
         // present/absent byte, and this PR ships no class-attribute use of
         // `Optional[int]` for `slot_ty_from_init_rhs` to have exercised.
-        | Scalar::Optional(_) => panic!(
+        | Scalar::Optional(_)
+        // D-244, Part 2 of #1026: a foreign CPython object joins the same
+        // or-pattern for the identical reason the aggregate variants above
+        // do -- `slot_ty_from_init_rhs` admits only `int`/`bool`/`float`/
+        // `str` slots, so a `Ty::Object` attribute is never built. Folded
+        // into the existing group rather than given its own arm so it adds
+        // no separate, permanently-unexecutable region.
+        | Scalar::Object(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
              attribute slot -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
              this before codegen"
@@ -1345,7 +1392,13 @@ fn range_operand_to_normalized_int<'ctx>(
         // or-pattern for the identical `numeric_result_type`/`as_numeric`
         // reason -- `range()` operands are type-checked as plain numeric
         // types before codegen, and an `Optional[int]` is never one.
-        | Scalar::Optional(_) => {
+        | Scalar::Optional(_)
+        // D-244, Part 2 of #1026: a foreign CPython object joins this same
+        // or-pattern for the identical reason -- `range()` operands are
+        // type-checked as plain numeric types before codegen, and a
+        // `Ty::Object` never is. Folded in rather than given its own arm
+        // so it adds no separate, permanently-unexecutable region.
+        | Scalar::Object(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
     }
@@ -1468,6 +1521,12 @@ fn to_float<'ctx>(
         // #747).
         Scalar::Optional(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got optional")
+        }
+        // Defensive for the same reason as every arm above, extended to a
+        // foreign CPython object (D-244, Part 2 of #1026): `pycc_types`
+        // refuses arithmetic on a `Ty::Object` operand.
+        Scalar::Object(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got object")
         }
     }
 }
@@ -1633,6 +1692,19 @@ fn to_str<'ctx>(
         // `PyStrObj` pointer.
         Scalar::Optional(_) => {
             panic!("pycc_codegen: string conversion of an Optional[int] value is not supported yet")
+        }
+        // Defensive rather than a reachable feature gap, unlike the
+        // container arms above (D-244, Part 2 of #1026): `pycc_types`'
+        // `reject_unrenderable` refuses a `Ty::Object` `print` argument and
+        // f-string interpolation explicitly (Part 2's R2 hole), so no
+        // type-checked program reaches this arm. Rendering a foreign object
+        // needs `PyObject_Str`, which only a `pycc_ext_obj_*` shim may call
+        // -- and Part 2 ships none.
+        Scalar::Object(_) => {
+            panic!(
+                "pycc_codegen: internal error: string conversion of a CPython object value is \
+                 not supported yet -- pycc_types::string_conversion should have refused this"
+            )
         }
     };
     builder
@@ -2138,6 +2210,34 @@ fn emit_expr_unchecked<'ctx>(
                             "build_load should not fail for a slot this function itself allocated",
                         );
                     Scalar::Optional(loaded.into_struct_value())
+                }
+                // Part 2 of #1026 (#1081). The same pointer-slot read as
+                // `Ty::Instance(_)` above, for the global a foreign
+                // `import numpy` binds. The plan for this PR expected the
+                // catch-all below to stay the only `Ty::Object` answer here
+                // -- `pycc_types` refuses binding a CPython object to a
+                // name, so no *local* can carry one -- but a foreign
+                // import's module global is a storage slot like any other,
+                // and `MirExpr::ObjAttrGet`'s base is a plain
+                // `MirExpr::Name` read of it. Without this arm the one
+                // shape PR 2a actually compiles (`numpy.pi`) panics here
+                // before reaching `foreign_attr::emit`.
+                //
+                // No reference-count traffic accompanies the read: the
+                // global owns the one reference the import created and
+                // never releases it (`docs/RUNTIME.md`), so a read is a
+                // borrow with nothing to balance.
+                Ty::Object => {
+                    let loaded = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            slot.ptr,
+                            "load",
+                        )
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    Scalar::Object(loaded.into_pointer_value())
                 }
                 other => {
                     panic!(
@@ -3532,6 +3632,15 @@ fn emit_expr_unchecked<'ctx>(
                 .into_int_value();
             slot_word_to_scalar(context, builder, raw, ty)
         }
+        // Part 2 of #1026: the string-keyed runtime sibling of the
+        // compile-time-slot `AttrGet` directly above. `foreign_attr::emit`
+        // carries the whole contract, including the `NULL` check it emits,
+        // the module-exec failure edge that check branches to, and which
+        // side owns the "CPython raised" transition.
+        MirExpr::ObjAttrGet { base, attr, .. } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            foreign_attr::emit(context, builder, module, base_scalar, attr)
+        }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
             let null_ptr = ptr_type.const_null();
@@ -3867,6 +3976,20 @@ fn build_call_to_with_leading_args<'ctx>(
                 // further conversion, only the same `Into` `BasicMetadataValueEnum`
                 // has for any `StructValue`.
                 Scalar::Optional(v) => v.into(),
+                // NOT a pass-through, unlike every arm above (D-244, Part 2
+                // of #1026): a `Ty::Object` argument would have to be
+                // marshalled into a CPython call, which only a
+                // `pycc_ext_obj_*` shim may perform, and Part 2's attribute
+                // half ships no such shim. `pycc_types` admits no
+                // `object`-annotated parameter (D-137's amendment) and
+                // refuses passing a `Ty::Object` value to a parameter of
+                // any other type, so this arm is defensive.
+                Scalar::Object(_) => {
+                    panic!(
+                        "pycc_codegen: internal error: a CPython object argument is not supported \
+                         yet -- pycc_types should have refused this before codegen"
+                    )
+                }
             }
         })
         .collect();
@@ -4113,6 +4236,20 @@ fn truthy<'ctx>(
                 .build_and(present, payload_truthy, "opt_truthy")
                 .expect("build_and should not fail for two i8 operands")
         }
+        // Defensive rather than a reachable feature gap (D-244, Part 2 of
+        // #1026): CPython's own `bool(x)` for an arbitrary object consults
+        // `__bool__`/`__len__`, which needs a `PyObject_IsTrue` call no
+        // `pycc_ext_obj_*` shim provides in Part 2. `pycc_types` therefore
+        // refuses a `Ty::Object` condition explicitly at all ten
+        // condition-position sites (Part 2's R11 hole), so no type-checked
+        // program reaches this arm -- which is what makes the panic honest
+        // rather than a crash on input the checker accepted.
+        Scalar::Object(_) => {
+            panic!(
+                "pycc_codegen: internal error: truthiness of a CPython object value is not \
+                 supported yet -- pycc_types should have refused this before codegen"
+            )
+        }
     };
     builder
         .build_int_compare(
@@ -4331,6 +4468,18 @@ fn emit_assign<'ctx>(
         // accompanies it either, for the identical D-182-acknowledged
         // reason `Tuple`'s own comment already gives.
         Scalar::Optional(v) => v.into(),
+        // NOT a pass-through, unlike every arm above (D-244, Part 2 of
+        // #1026): storing a foreign object into a named slot would make the
+        // binding outlive the expression that produced it, which Part 2's
+        // leak-only ownership policy has no release story for.
+        // `pycc_types`' `check_assignment` refuses a `Ty::Object` value
+        // source outright (Part 2's R6 hole), so this arm is defensive.
+        Scalar::Object(_) => {
+            panic!(
+                "pycc_codegen: internal error: assigning a CPython object value to a binding is \
+                 not supported yet -- pycc_types::check_assignment should have refused this"
+            )
+        }
     };
     builder
         .build_store(slot.ptr, basic_value)
@@ -6716,6 +6865,22 @@ fn emit_stmt<'ctx>(
                         // already gave the function's LLVM signature that
                         // same struct return type.
                         Scalar::Optional(v) => v.into(),
+                        // Pass-through, identical to `List`'s/`Dict`'s/
+                        // `Set`'s/`Instance`'s arms above (D-244, Part 2 of
+                        // #1026): returning a foreign CPython object
+                        // returns one opaque `PyObject *`, and
+                        // `ty_to_basic_type`'s own `Ty::Object` arm already
+                        // gave the function's LLVM signature the same
+                        // pointer return type. Unlike every other
+                        // `Scalar::Object` site in this file this arm is
+                        // genuinely reachable: an unannotated private
+                        // helper whose body is `return numpy.pi` infers a
+                        // `Ty::Object` return type, which is the second
+                        // producer shape Part 2's refusal migration admits.
+                        // No refcount traffic accompanies it -- Part 2's
+                        // object ownership is leak-only, see `Scalar`'s own
+                        // `Object` doc comment.
+                        Scalar::Object(v) => v.into(),
                     };
                     if let Some(ft) = finally_target {
                         // Route through finally: store the return value,

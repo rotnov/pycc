@@ -37,7 +37,24 @@ impl ExceptionCodegenState<'_> {
 /// operations converted to catchable Python exceptions remain fail-closed.
 pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
     match expr {
-        MirExpr::Call { .. } | MirExpr::DictGet { .. } | MirExpr::Instantiate(_) => true,
+        // `ObjAttrGet` joins the `true` group (D-244, Part 2 of #1026):
+        // unlike `AttrGet`'s compile-time-resolved slot load below, a
+        // foreign attribute load is a real `PyObject_GetAttrString` call
+        // that returns `NULL` with a CPython exception set whenever the
+        // attribute is missing or its descriptor raises.
+        //
+        // The guard this answer emits is not what *handles* that failure:
+        // it reads pycc's own pending state (D-173), which a CPython-set
+        // exception leaves untouched, so `foreign_attr::emit` emits its own
+        // `NULL` check ahead of it (PR 2a of #1081 review finding 1). The
+        // classification stays `true` because it becomes load-bearing the
+        // moment PR 2b's shim translates CPython's exception into pycc's
+        // pending state, and because the conservative answer is the
+        // fail-closed one for a node that really can raise.
+        MirExpr::Call { .. }
+        | MirExpr::DictGet { .. }
+        | MirExpr::Instantiate(_)
+        | MirExpr::ObjAttrGet { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod
