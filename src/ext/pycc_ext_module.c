@@ -915,6 +915,44 @@ int pycc_ext_obj_truthy(PyObject *o)
     return PyObject_IsTrue(o);
 }
 
+/*
+ * Part 3 of #1026 (PR 3b of #1082): `o[k]` on a CPython object value
+ * (`EXT_OBJ_GETITEM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `o` is borrowed, exactly as `pycc_ext_obj_getattr` borrows its own base.
+ * `k` is an *owned* reference produced by one of the `pycc_ext_obj_pack_*`
+ * helpers above, and this function releases it on every path -- the same
+ * arg-slot contract `pycc_ext_obj_call` imposes on the values those helpers
+ * produce. Keeping one rule for every packed value is the point: generated
+ * code creates a packed reference and hands it to a shim helper, and the
+ * shim helper is what releases it, so codegen never has to.
+ *
+ * The result is a *new* reference that is deliberately never released, on
+ * the leak-only rule `docs/RUNTIME.md` records for this boundary --
+ * `PyObject_GetItem` hands back a new reference exactly as
+ * `PyObject_GetAttrString` does, and the result is the only thing that
+ * escapes into compiled code as an `object` value.
+ *
+ * A NULL `k` means the packer already failed with a CPython exception set
+ * (an out-of-range `int`, #1040). Testing for that here rather than in LLVM
+ * keeps the emitted code one straight line for the key and leaves the whole
+ * operation with one failure edge instead of two, which is the identical
+ * argument `pycc_ext_obj_call`'s own NULL scan records. A NULL `o` is
+ * defence in depth: `PyObject_GetItem` dereferences `Py_TYPE(o)` with no
+ * guard of its own, and the caller's own NULL check already routed a failed
+ * producer to the module-exec failure edge with its exception set, so
+ * returning NULL without setting a second one leaves exactly one exception
+ * pending.
+ */
+PyObject *pycc_ext_obj_getitem(PyObject *o, PyObject *k)
+{
+    PyObject *result;
+
+    result = (o == NULL || k == NULL) ? NULL : PyObject_GetItem(o, k);
+    Py_XDECREF(k);
+    return result;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

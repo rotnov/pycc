@@ -572,7 +572,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // D-141's inline range, so the word is always an inline smallint and
         // the release this classification emits is an unconditional runtime
         // no-op.
-        | MirExpr::ObjLen { .. } => false,
+        | MirExpr::ObjLen { .. }
+        // PR 3b of #1082: `ObjSubscript` joins `ObjMethodCall` rather than
+        // `ObjLen` -- its own `.ty()` is always `Ty::Object`, never
+        // `Ty::Int`, so it can never reach this function either.
+        | MirExpr::ObjSubscript { .. } => false,
     }
 }
 

@@ -45,9 +45,10 @@ pub use ext::{
     ext_thunk_symbol, is_ext_exportable_name,
 };
 use ext::{
-    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
-    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
+    EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL,
+    EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name,
+    is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -3676,6 +3677,17 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjLen { base } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_len::emit_len(context, builder, module, base_scalar)
+        }
+        // Part 3 of #1026 (PR 3b of #1082): `o[k]`. The evaluation order
+        // below is CPython's own -- base, then key -- and
+        // `foreign_call::emit_subscript` carries the rest of the contract,
+        // including why the packed key needs no `NULL` check of its own and
+        // why that leaves exactly one module-exec failure edge.
+        MirExpr::ObjSubscript { base, index } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let index_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, index);
+            foreign_call::emit_subscript(context, builder, module, base_scalar, index_scalar)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());

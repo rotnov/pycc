@@ -513,6 +513,21 @@ pub(super) fn lower_expr(
             let base = lower_expr(base, scopes, classes, current_class);
             let index = lower_expr(index, scopes, classes, current_class);
             match base.ty() {
+                // Part 3 of #1026 (PR 3b of #1082): a foreign CPython
+                // object base routes to its own node, in exactly the
+                // position `Ty::Dict` occupies and for exactly the same
+                // reason -- `MirExpr::Subscript`'s own `ty()` arm panics on
+                // any base that is neither list nor tuple, so the split has
+                // to happen here, where the lowered base's type is known.
+                // The dispatch is on `base.ty()` and nothing else: a
+                // foreign name is always in scope, so the PEP 560
+                // class-name interception above cannot fire for one, and an
+                // extra guard would only desynchronise this lowering from
+                // the checker (the lesson #1098 records for `len`).
+                Ty::Object => MirExpr::ObjSubscript {
+                    base: Box::new(base),
+                    index: Box::new(index),
+                },
                 Ty::Dict(_) => MirExpr::DictGet {
                     dict: Box::new(base),
                     key: Box::new(index),

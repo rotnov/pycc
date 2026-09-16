@@ -1062,6 +1062,19 @@ pub(crate) fn collect_expr_constraints(
             // carrier is destructured, never unified. Otherwise keep the
             // historical `Ok(None)` behavior (the base/index recursion above
             // already propagated genuine errors).
+            // Part 3 of #1026 (PR 3b of #1082): `o[k]` is a term, not a
+            // hole, on exactly the `AttrGet` arm's own reasoning below --
+            // `object` is unspellable in an annotation (D-137), so
+            // discarding the term would leave an unannotated
+            // `def _h(): return gc.garbage[0]` reporting a `T0021` asking
+            // for an annotation no source can write, in place of the
+            // `I0404` the check phase reports for the read itself. The term
+            // keeps the *diagnostic* right; the helper body stays refused.
+            // Changing this arm without the `AttrGet` one, or the reverse,
+            // is the drift both comments exist to prevent.
+            if matches!(base_term, Some(Ok(Ty::Object))) {
+                return Ok(Some(Ok(Ty::Object)));
+            }
             if let Some(Ok(Ty::List(element_ty))) = base_term {
                 Ok(Some(Ok(*element_ty)))
             } else {

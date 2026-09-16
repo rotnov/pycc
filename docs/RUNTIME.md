@@ -651,6 +651,21 @@ than two, and the encode arm is unreachable for a real container.
 admitted only in a module body, on the identical positional rule and for the
 identical reason, so neither needs the exception bridge either.
 
+**A subscript load fails on that same edge too, and inherits that same bound.**
+PR 3b of [#1082](https://github.com/rotnov/pycc/issues/1082) added one more shim
+helper, `pycc_ext_obj_getitem`, which wraps `PyObject_GetItem` and — answering a
+`PyObject *` rather than a scalar — reports failure as `NULL`, like the two
+helpers above it rather than like the two below. `o[k]` therefore surfaces the
+host's own `KeyError`, `IndexError` or `TypeError`, and the remaining
+module-body statements never run.
+`crates/pycc_codegen/src/foreign_call.rs` emits exactly **one** failure edge for
+the whole operation: the helper tolerates a `NULL` key and answers `NULL`
+itself, so a failed key packer needs no branch of its own, the same fusing
+`pycc_ext_obj_len`'s encode arm uses for the same reason. The key is restricted
+to the four packable scalars, so the packer choice is total. The load is
+admitted only in a module body, on the identical positional rule and for the
+identical reason, so it needs no exception bridge either.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -660,7 +675,20 @@ attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttrString`,
 whose result is also a new reference, and it too is never released. A method
 call's *result* is governed by the same rule for the same reason:
 `PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
-returns it to compiled code unreleased.
+returns it to compiled code unreleased. So is a subscript load's:
+`PyObject_GetItem` hands back a new reference and `pycc_ext_obj_getitem`
+returns it unreleased.
+
+**The key slot repeats the argument slot's rule rather than inventing a second
+one.** `pycc_ext_obj_getitem` *borrows* the object and **consumes the key
+reference on every path**, including the one where either argument is already
+`NULL` — exactly as `pycc_ext_obj_call` consumes each element of the packed
+argument array on every path, including the early one where a packer failed.
+The four packers therefore keep one contract at both call sites: each borrows
+its pycc-side value, returns a new reference, and the shim helper it is handed
+to owns that reference from then on. Codegen consequently emits no release of
+its own around a subscript load, and a failed packer's `NULL` is safe to pass
+straight through.
 
 `len` and a truth test are the two operations that add nothing to that leaked
 set. `pycc_ext_obj_len` answers a `Py_ssize_t` and `pycc_ext_obj_truthy` answers
@@ -705,12 +733,13 @@ iteration — the leak is trip-count-linear rather than bounded by process exit.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
-`len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
+a subscript load, `len` or a truth test is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
 rule 6's 5× kill criterion must not measure a hot loop containing a foreign
-attribute load or a foreign method call until the release protocol lands**,
+attribute load, a foreign method call or a foreign subscript load until the
+release protocol lands**,
 because the resident-set
 growth, not the compiled code, would dominate the result. An *unbound* `str`
 argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a

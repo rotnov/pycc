@@ -369,6 +369,40 @@ pub enum MirExpr {
     ObjLen {
         base: Box<MirExpr>,
     },
+    /// `base[index]` where `base` is a foreign CPython object (D-244, Part 3
+    /// of #1026, PR 3b of #1082) -- the subscript sibling of
+    /// [`MirExpr::ObjAttrGet`], and a dedicated node rather than
+    /// [`MirExpr::Subscript`] for the same reason [`MirExpr::ObjLen`] is not
+    /// an ordinary `len` call: the two produce different things.
+    /// `MirExpr::Subscript` indexes a pycc-owned `list`/`tuple` whose
+    /// element type is known statically, while this one is answered by the
+    /// shim's `pycc_ext_obj_getitem` and can fail. `MirExpr::Subscript`'s
+    /// own `ty()` arm would panic on a `Ty::Object` base, which is exactly
+    /// why the split happens during lowering rather than at codegen.
+    ///
+    /// `index` is an already-checked scalar (`pycc_types`' `HirExpr::Subscript`
+    /// arm admits `int`/`float`/`bool`/`str` over a `Ty::Object` base and
+    /// refuses everything else with `I0404`); codegen marshals it into a
+    /// `PyObject *` through the same `pycc_ext_obj_pack_*` helper a method
+    /// call's arguments use.
+    ///
+    /// Like [`MirExpr::ObjMethodCall`], this variant carries **no `ty`
+    /// field**: [`MirExpr::ty`] answers [`Ty::Object`] for it
+    /// unconditionally, because pycc knows nothing about what `o[k]` really
+    /// is. The size argument that variant records applies here too.
+    ///
+    /// The load can fail -- a missing key, an unindexable operand, or a
+    /// `__getitem__` that raises -- which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for this node.
+    ///
+    /// Only the *load* is modelled. A store (`o[k] = v`) is a separate HIR
+    /// shape that `pycc_hir` still refuses with `C0001`, so no node for it
+    /// exists.
+    ObjSubscript {
+        base: Box<MirExpr>,
+        index: Box<MirExpr>,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -576,6 +610,10 @@ impl MirExpr {
             // Likewise hardcoded: `len` is an `int` for every operand the
             // shim can answer for. See the variant's own documentation.
             MirExpr::ObjLen { .. } => Ty::Int,
+            // No `ty` field to read either: a foreign subscript's result is
+            // opaque by construction, exactly as `ObjMethodCall`'s is. See
+            // the variant's own documentation.
+            MirExpr::ObjSubscript { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -696,6 +734,12 @@ impl MirExpr {
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
                 }
+            }
+            // Both sides too, for the identical reason: a walrus can hide in
+            // the key (`gc.garbage[(n := 0)]`) just as easily as in the base.
+            MirExpr::ObjSubscript { base, index } => {
+                base.collect_named_expr_bindings(out);
+                index.collect_named_expr_bindings(out);
             }
             MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)

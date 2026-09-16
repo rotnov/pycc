@@ -966,6 +966,39 @@ pub(crate) fn infer_expr_in(
                     };
                     Ok(elem_ty.clone())
                 }
+                // Part 3 of #1026 (PR 3b of #1082): `o[k]` on a foreign
+                // CPython object. Placed before the `other` catch-all,
+                // which reported the `T0033` ("`object` does not support
+                // indexing") this branch replaces, and after both operands
+                // have had their ordinary inference -- an index that is
+                // itself an unsupported operation must report its own
+                // diagnostic rather than this one, exactly as the
+                // `MethodCall` arm below orders the same two concerns.
+                //
+                // Only the already-admitted scalars can be marshalled into
+                // a key: each has a `pycc_ext_obj_pack_*` helper in the
+                // shim, and the packer contract is the same one a method
+                // call's arguments use. Anything else -- a container, an
+                // instance, `None`, or a second `Ty::Object` -- has no
+                // boundary representation yet and is refused here rather
+                // than reaching codegen.
+                //
+                // The *result* is `Ty::Object`: pycc knows nothing about
+                // what `o[k]` really is, exactly as it knows nothing about
+                // `o.attr` or `o.m()`. `o[k] = v` is deliberately not part
+                // of this -- a store target is a separate HIR shape with
+                // its own pre-existing refusal (`C0001`), and
+                // `docs/TYPE_SYSTEM.md`'s `object` row records the
+                // asymmetry.
+                Ty::Object => {
+                    if !matches!(index_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+                        return Err(crate::foreign::object_operation_unsupported(&format!(
+                            "indexing a CPython object with a `{}` key",
+                            index_ty.name()
+                        )));
+                    }
+                    Ok(Ty::Object)
+                }
                 // PR-11 Task 7 (D-123): `Ty::Set` deliberately has no
                 // explicit arm here and falls through to this rejection --
                 // real Python sets are not subscriptable either (`s[0]`
