@@ -228,14 +228,17 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// *public* function's signature failing to cross the boundary, which a
 /// private one is not. This is the same versioned capability gap
 /// `crates/pycc_types`'s `reject_memoryview_declaration` and
-/// `reject_memoryview_read` report, for the same underlying reason: Part 1
-/// of #1027 adds no expression that *produces* a `memoryview`, so there is
-/// nothing a function could return.
+/// `reject_memoryview_read` report, for the same underlying reason: #1027
+/// adds no expression that *produces* a `memoryview`, so there is nothing a
+/// function could return.
 ///
 /// Only the return position is checked. A `memoryview` *parameter* on a
-/// private function is already closed by `reject_memoryview_read`: any use
-/// of that parameter is a `C0001`, and one that is never used carries no
-/// value into codegen. And native mode is not this function's concern --
+/// private function carries no value into codegen either way: for the same
+/// reason there is nothing to return, there is nothing to pass, so no call
+/// to such a function can be written at all -- whether its body reads the
+/// parameter with the `b[i]` load Part 2 of #1027 admits or is refused a
+/// `C0001` for reading it any other way. And native mode is not this
+/// function's concern --
 /// [`refuse_in_native_mode`] refuses both positions there, private
 /// functions included.
 ///

@@ -1144,6 +1144,27 @@ pub(crate) fn collect_expr_constraints(
             }
         }
         HirExpr::Subscript { base, index } => {
+            // Part 2 of #1027, the solver half of `crate::expr`'s own
+            // `Subscript` interception: `b[i]` on a `memoryview`-bound name
+            // is a `Ty::Float` element load. It must run before the base
+            // recursion below, because that recursion reaches the `Name`
+            // seam above, which calls `reject_memoryview_read` and would
+            // report the `C0001` capability gap for the expression that
+            // closes it.
+            //
+            // The binding is read raw out of `env.bindings` and resolved
+            // with `resolved_term`, the same shape that seam uses. The
+            // index is still collected -- an undefined name or an
+            // unsatisfiable constraint inside it is a real error and must
+            // surface -- but its *term* is discarded exactly as the list
+            // path discards it: the index type gate is the check phase's.
+            if let HirExpr::Name(buffer_name) = base.as_ref()
+                && let Some(term) = env.bindings.get(buffer_name).cloned()
+                && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
+            {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
+                return Ok(Some(Ok(Ty::Float)));
+            }
             let base_term =
                 collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
             collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;

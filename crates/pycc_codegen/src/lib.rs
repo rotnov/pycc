@@ -279,6 +279,26 @@ enum Scalar<'ctx> {
     /// temporaries is deferred to its own follow-up; see `docs/RUNTIME.md`'s
     /// "Foreign imports in the module body" ownership subsection.
     Object(PointerValue<'ctx>),
+    /// A pointer to the `PyccExtBufferView` -- `pycc_rt`'s `{ ptr, len }`
+    /// pair -- that a `pycc build --ext` wrapper passed for a `memoryview`
+    /// parameter (Part 1/Part 2 of #1027). Opaque to this crate, exactly as
+    /// `Object` is: the only thing generated code may do with it is hand it
+    /// to `pycc_rt_buffer_f64_get`. No GEP, no load of either field, no
+    /// arithmetic -- the bounds check and the element read both live behind
+    /// that one call.
+    ///
+    /// Its own variant rather than a reuse of `Object`'s or any container's
+    /// (D-107/D-124's "a new pointer kind gets a new variant"): the pointee
+    /// is a wrapper-owned C struct, not a `PyObject *` and not a `pycc_rt`
+    /// heap object, so every exhaustive `Scalar` match would otherwise hand
+    /// it to a `pycc_ext_obj_*` or `pycc_rt_*` function that would misread
+    /// it. Keeping it distinct makes each such operation a deliberate
+    /// compile error until it is answered.
+    ///
+    /// No refcounting, and nothing to leak: the buffer is acquired and
+    /// released entirely wrapper-side, around the compiled call. Its
+    /// lifetime strictly contains the value's.
+    MemoryView(PointerValue<'ctx>),
 }
 
 struct UserFunction<'ctx> {
@@ -654,6 +674,15 @@ fn to_numeric_encoded_int<'ctx>(
         Scalar::Object(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got object")
         }
+        // Defensive for the same reason as every arm above, extended to a
+        // `memoryview` (Part 2 of #1027): `numeric_result_type` maps no
+        // `Ty::MemoryView` to a numeric type, and `reject_memoryview_read`
+        // refuses the bare name an arithmetic operand would have to be.
+        // Its own arm rather than folding into `Object`'s, so the message
+        // names the type it actually got.
+        Scalar::MemoryView(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got memoryview")
+        }
     }
 }
 
@@ -845,6 +874,11 @@ fn scalar_to_slot_word<'ctx>(
         // `str` slots, so a `Ty::Object` attribute is never built. Folded
         // into the existing group rather than given its own arm so it adds
         // no separate, permanently-unexecutable region.
+        // Part 2 of #1027: a `memoryview` joins the same or-pattern for
+        // the identical reason -- `slot_ty_from_init_rhs` admits only
+        // `int`/`bool`/`float`/`str` slots, and a `memoryview` cannot be
+        // stored anywhere at all, so no such attribute is ever built.
+        | Scalar::MemoryView(_)
         | Scalar::Object(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
              attribute slot -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
@@ -1429,6 +1463,11 @@ fn range_operand_to_normalized_int<'ctx>(
         // type-checked as plain numeric types before codegen, and a
         // `Ty::Object` never is. Folded in rather than given its own arm
         // so it adds no separate, permanently-unexecutable region.
+        // Part 2 of #1027: a `memoryview` joins this same or-pattern for
+        // the identical reason -- `range()` operands are type-checked as
+        // plain numeric types before codegen, and a `Ty::MemoryView` never
+        // is.
+        | Scalar::MemoryView(_)
         | Scalar::Object(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
@@ -1558,6 +1597,12 @@ fn to_float<'ctx>(
         // refuses arithmetic on a `Ty::Object` operand.
         Scalar::Object(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got object")
+        }
+        // Defensive for the same reason as every arm above, extended to a
+        // `memoryview` (Part 2 of #1027). A buffer *element* is a `float`
+        // and reaches this function freely; the buffer itself never does.
+        Scalar::MemoryView(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got memoryview")
         }
     }
 }
@@ -1735,6 +1780,17 @@ fn to_str<'ctx>(
             panic!(
                 "pycc_codegen: internal error: string conversion of a CPython object value is \
                  not supported yet -- pycc_types::string_conversion should have refused this"
+            )
+        }
+        // Defensive, unlike the `List`/`Dict` arms above and like
+        // `Object`'s: `print(b)` and `f"{b}"` are both bare reads of a
+        // `memoryview`-bound name, which `reject_memoryview_read` refuses
+        // with `C0001` before codegen runs (Part 2 of #1027 admits `b[i]`
+        // and nothing else).
+        Scalar::MemoryView(_) => {
+            panic!(
+                "pycc_codegen: internal error: string conversion of a memoryview value is not \
+                 supported yet -- pycc_types should have refused this before codegen"
             )
         }
     };
@@ -2270,6 +2326,29 @@ fn emit_expr_unchecked<'ctx>(
                             "build_load should not fail for a slot this function itself allocated",
                         );
                     Scalar::Object(loaded.into_pointer_value())
+                }
+                // Part 2 of #1027: the same pointer-slot read again, for a
+                // `pycc build --ext` export's `memoryview` parameter. Its
+                // slot holds the `PyccExtBufferView *` the generated wrapper
+                // passed; `ty_to_basic_type` already maps `Ty::MemoryView`
+                // to a plain pointer, so only this load was missing.
+                //
+                // The one expression that reaches it is a `BufferGet` base,
+                // which is the whole of the admitted read surface -- every
+                // other read of the name is `reject_memoryview_read`'s
+                // `C0001`. No refcount traffic: the buffer is borrowed and
+                // wrapper-released, so the read owns nothing.
+                Ty::MemoryView => {
+                    let loaded = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            slot.ptr,
+                            "load",
+                        )
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    Scalar::MemoryView(loaded.into_pointer_value())
                 }
                 other => {
                     panic!(
@@ -3791,6 +3870,44 @@ fn emit_expr_unchecked<'ctx>(
                 emit_expr(context, builder, module, rt, user_functions, locals, index);
             foreign_call::emit_subscript(context, builder, module, base_scalar, index_scalar)
         }
+        // Part 2 of #1027: `b[i]` on a `pycc build --ext` export's
+        // `memoryview` parameter. Base then index, CPython's own order and
+        // the list-subscript arm's own, and then a single call: the bounds
+        // check, the D-173 `IndexError` raise and the element read all live
+        // inside `pycc_rt_buffer_f64_get`. No GEP and no comparison is
+        // emitted here, deliberately -- an inline check would be IR this
+        // crate's own tests could only observe as text, where the runtime
+        // helper is directly unit-testable in `pycc_rt`.
+        //
+        // The index is decoded exactly as a list index is: `Ty::Int` (or
+        // `bool`, per D-086) arrives D-141 encoded, and `build_untag_checked`
+        // is what rejects a bigint or malformed word. The raise this node
+        // can leave pending is declared by `expression_can_set_exception`,
+        // which emits the guard that reads it.
+        MirExpr::BufferGet { base, index } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let Scalar::MemoryView(base_ptr) = base_scalar else {
+                panic!(
+                    "pycc_codegen: internal error: a buffer element load's base did not evaluate \
+                     to a memoryview"
+                )
+            };
+            let index_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, index);
+            let encoded_index = to_numeric_encoded_int(context, builder, index_scalar);
+            let raw_index = build_untag_checked(builder, rt, encoded_index, "buffer_untag_index");
+            let element = builder
+                .build_call(
+                    rt.buffer_f64_get,
+                    &[base_ptr.into(), raw_index.into()],
+                    "buffer_get",
+                )
+                .expect("build_call should not fail for a declared runtime function")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_buffer_f64_get returns a non-void f64")
+                .into_float_value();
+            Scalar::Float(element)
+        }
         // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
         // o` at module scope, and the same at any other fixed arity -- the
         // PEP 585 variadic `tuple[float, ...]` stays refused and never
@@ -4151,6 +4268,17 @@ fn build_call_to_with_leading_args<'ctx>(
                          yet -- pycc_types should have refused this before codegen"
                     )
                 }
+                // Defensive for the same reason (Part 2 of #1027): passing
+                // `b` to another function is a bare read of the name, which
+                // `reject_memoryview_read` refuses with `C0001`. A
+                // `memoryview` parameter exists only on an `--ext` export,
+                // which CPython calls, never compiled code.
+                Scalar::MemoryView(_) => {
+                    panic!(
+                        "pycc_codegen: internal error: a memoryview argument is not supported \
+                         yet -- pycc_types should have refused this before codegen"
+                    )
+                }
             }
         })
         .collect();
@@ -4417,6 +4545,13 @@ fn truthy<'ctx>(
                 .build_int_z_extend(bit, context.i8_type(), "bool_from_object_truthy")
                 .expect("build_int_z_extend should not fail widening i1 to i8")
         }
+        // Defensive, not a capability gap (Part 2 of #1027): `if b:` is a
+        // bare read of a `memoryview`-bound name, which
+        // `reject_memoryview_read` refuses with `C0001`. CPython would
+        // answer `len(b) != 0`, and `len(b)` is itself still refused.
+        Scalar::MemoryView(_) => {
+            panic!("pycc_codegen: truthiness of a memoryview value is not supported yet")
+        }
     };
     builder
         .build_int_compare(
@@ -4645,6 +4780,17 @@ fn emit_assign<'ctx>(
             panic!(
                 "pycc_codegen: internal error: assigning a CPython object value to a binding is \
                  not supported yet -- pycc_types::check_assignment should have refused this"
+            )
+        }
+        // NOT a pass-through either, and for a stricter reason than
+        // `Object`'s (Part 2 of #1027): the buffer is borrowed only for the
+        // duration of the `--ext` call, so a binding that outlived the
+        // expression would outlive the storage itself. `c = b` is a bare
+        // read of the name, refused with `C0001` before codegen runs.
+        Scalar::MemoryView(_) => {
+            panic!(
+                "pycc_codegen: internal error: assigning a memoryview value to a binding is not \
+                 supported yet -- pycc_types should have refused this before codegen"
             )
         }
     };
@@ -7128,6 +7274,14 @@ fn emit_stmt<'ctx>(
                         // object ownership is leak-only, see `Scalar`'s own
                         // `Object` doc comment.
                         Scalar::Object(v) => v.into(),
+                        // Defensive (Part 2 of #1027): a `-> memoryview`
+                        // return annotation is refused outright, and
+                        // `return b` is a bare read of the name refused
+                        // with `C0001`. Nothing else has the type.
+                        Scalar::MemoryView(_) => panic!(
+                            "pycc_codegen: internal error: returning a memoryview value is not \
+                             supported yet -- pycc_types should have refused this before codegen"
+                        ),
                     };
                     if let Some(ft) = finally_target {
                         // Route through finally: store the return value,

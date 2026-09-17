@@ -581,7 +581,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // than `ObjLen` -- its own `.ty()` is always a `Ty::Tuple` of
         // `float`s, never `Ty::Int`, so it can never reach this function
         // either.
-        | MirExpr::ObjUnpackFloatTuple { .. } => false,
+        | MirExpr::ObjUnpackFloatTuple { .. }
+        // Part 2 of #1027: `BufferGet` joins them for the same structural
+        // reason -- its own `.ty()` is always `Ty::Float`, never `Ty::Int`,
+        // so it can never reach this function at all.
+        | MirExpr::BufferGet { .. } => false,
     }
 }
 

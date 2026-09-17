@@ -568,6 +568,16 @@ pub(super) fn lower_expr(
                     dict: Box::new(base),
                     key: Box::new(index),
                 },
+                // Part 2 of #1027, in that same position and for that same
+                // reason: without an arm of its own a `memoryview` base
+                // reaches the catch-all below and `MirExpr::Subscript`'s
+                // `ty()` panics on it. The dispatch is on `base.ty()` alone
+                // here too -- the type checker has already refused every
+                // `memoryview` subscript this arm must not see.
+                Ty::MemoryView => MirExpr::BufferGet {
+                    base: Box::new(base),
+                    index: Box::new(index),
+                },
                 _ => MirExpr::Subscript {
                     base: Box::new(base),
                     index: Box::new(index),

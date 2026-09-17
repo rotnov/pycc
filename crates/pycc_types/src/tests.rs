@@ -237,6 +237,292 @@ fn declaring_a_memoryview_with_an_initializer_is_the_same_capability_gap() {
     assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
 }
 
+// ---------------------------------------------------------------------------
+// Part 2 of #1027: `b[i]` on a `memoryview` parameter.
+//
+// The carve-out is an interception ahead of base inference, so each test
+// below pins one half of it: the shapes it admits, and the shapes that must
+// still reach `reject_memoryview_read`'s `C0001` unchanged. The surface it
+// opens is exactly one expression, which is why the refusal cluster is the
+// larger half.
+// ---------------------------------------------------------------------------
+
+/// Builds `def f(b: memoryview, i: int) -> <ret>: <body>`, the one shape a
+/// `memoryview` can appear in, for the Part 2 cluster below.
+fn memoryview_subject(return_ty: Ty, body: Vec<HirStmt>) -> HirModule {
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("b".to_string(), Ty::MemoryView),
+                ("i".to_string(), Ty::Int),
+            ],
+            return_ty,
+            body,
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    }
+}
+
+/// `b[i]` is a `float`, and reaches that answer without the `C0001` the
+/// bare name would get -- the interception runs before the base is inferred.
+#[test]
+fn indexing_a_memoryview_parameter_yields_a_float() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            index: Box::new(HirExpr::Name("i".to_string())),
+        }))],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// D-086: `bool` is accepted wherever `int` is expected at an operand
+/// boundary, and an index is exactly that boundary -- `b[True]` is ordinary
+/// Python, not a type error. The same `is_assignable` reasoning the list
+/// arm records.
+#[test]
+fn a_bool_index_into_a_memoryview_is_accepted() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            index: Box::new(HirExpr::BoolLiteral(true)),
+        }))],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// A non-int-compatible index reuses `T0021`, the same operand-mismatch
+/// code the list arm reuses. No new diagnostic code is introduced.
+#[test]
+fn a_non_int_index_into_a_memoryview_is_t0021() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            index: Box::new(HirExpr::StringLiteral("k".to_string())),
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("`memoryview` index"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("`str`"), "{}", err.message);
+}
+
+/// The carve-out admits one level and no more: `b[i][j]` subscripts a
+/// `float`, which is `T0033` -- "does not support indexing" -- and not a
+/// second buffer read. Pinned because the interception keys on the *base
+/// expression*, so a nested subscript must fall through to the ordinary
+/// path.
+#[test]
+fn indexing_the_result_of_a_buffer_read_is_t0033() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Subscript {
+                base: Box::new(HirExpr::Name("b".to_string())),
+                index: Box::new(HirExpr::Name("i".to_string())),
+            }),
+            index: Box::new(HirExpr::Name("i".to_string())),
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0033");
+    assert!(err.message.contains("`float`"), "{}", err.message);
+}
+
+/// PEP 572 (#774), the walrus on the *value* side: `y := b[i]` binds a
+/// `float`, so the buffer read has to answer before D-141's own walrus
+/// value gate runs. Without the interception this is a `C0001`.
+#[test]
+fn a_walrus_over_a_buffer_read_binds_a_float() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::NamedExpr {
+            name: "y".to_string(),
+            value: Box::new(HirExpr::Subscript {
+                base: Box::new(HirExpr::Name("b".to_string())),
+                index: Box::new(HirExpr::Name("i".to_string())),
+            }),
+        }))],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The walrus on the *index* side: `b[(n := 0)]`. The interception still
+/// infers the index, so the binding is recorded -- `pycc_mir`'s
+/// `collect_named_expr_bindings` walks both sides of `BufferGet` for the
+/// same reason, and a slot that is never allocated is a miscompile.
+#[test]
+fn a_walrus_inside_a_buffer_index_is_still_bound() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            index: Box::new(HirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(HirExpr::IntLiteral(0)),
+            }),
+        }))],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The monomorphizer walks every expression of every item when the module
+/// holds a generic function, and its own `Subscript` arm recurses into the
+/// base -- which would call `infer_expr_in` on the bare name and report the
+/// `C0001` the carve-out exists to avoid. `is_memoryview_base` is the
+/// second, separate guard that stops it.
+#[test]
+fn a_buffer_read_survives_a_module_that_holds_a_generic_function() {
+    let mut hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            index: Box::new(HirExpr::Name("i".to_string())),
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "ident".to_string(),
+        params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+        return_ty: Ty::Param(Box::new("T".to_string())),
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+    });
+    assert!(check(&hir).is_ok());
+}
+
+/// `b.attr` in that same generic-bearing module stays refused: the
+/// monomorphizer's `AttrGet` arm shares `is_class_name_base` with the
+/// `Subscript` one, and widening that predicate instead of adding a second
+/// would have silently opened this shape too.
+#[test]
+fn an_attribute_read_of_a_memoryview_stays_refused_beside_a_generic() {
+    let mut hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::AttrGet {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            attr: "nbytes".to_string(),
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "ident".to_string(),
+        params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+        return_ty: Ty::Param(Box::new("T".to_string())),
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+    });
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+/// And so does `b.tolist()`, the `MethodCall` half of that same pair.
+#[test]
+fn a_method_call_on_a_memoryview_stays_refused_beside_a_generic() {
+    let mut hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::MethodCall {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            method: "tolist".to_string(),
+            args: Vec::new(),
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "ident".to_string(),
+        params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+        return_ty: Ty::Param(Box::new("T".to_string())),
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+    });
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+/// `len(b)` stays refused in Part 2. This is a decision, not a deferral
+/// (the plan's correction C5): the length is available in the view's own
+/// `len` word, but admitting it needs its own answer for how a `memoryview`
+/// reaches `len`'s argument position at all, and a follow-up issue carries
+/// it.
+#[test]
+fn len_of_a_memoryview_is_still_a_capability_gap() {
+    let hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("using `b`, which is bound to a `memoryview`"),
+        "{}",
+        err.message
+    );
+}
+
+/// Aliasing stays refused: `c = b` would let the borrowed view outlive the
+/// expression that produced it.
+#[test]
+fn aliasing_a_memoryview_into_a_local_is_still_a_capability_gap() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![
+            HirStmt::Assign {
+                target: "c".to_string(),
+                value: HirExpr::Name("b".to_string()),
+            },
+            HirStmt::Return(Some(HirExpr::FloatLiteral(0.0))),
+        ],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+/// Passing it onward stays refused.
+#[test]
+fn passing_a_memoryview_to_another_function_is_still_a_capability_gap() {
+    let mut hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "g".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "g".to_string(),
+        params: vec![("v".to_string(), Ty::Int)],
+        return_ty: Ty::Int,
+        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+    });
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
+/// Slicing stays refused: `b[0:1]` is a separate HIR node with no Part 2
+/// lowering, and its base inference is the ordinary one.
+#[test]
+fn slicing_a_memoryview_is_still_a_capability_gap() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(0))),
+            stop: Some(Box::new(HirExpr::IntLiteral(1))),
+            step: None,
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+}
+
 // PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
 // expr` walk records a walrus target as a function-local name wherever it is
 // nested -- including inside a unary operand and a slice bound, which no

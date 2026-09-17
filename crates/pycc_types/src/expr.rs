@@ -974,6 +974,49 @@ pub(crate) fn infer_expr_in(
                     &[index_ty],
                 );
             }
+            // Part 2 of #1027: `b[i]` on a name bound to a `memoryview` is a
+            // native `float` element load, the one read of such a name this
+            // compiler admits. Like the PEP 560 interception above, it must
+            // run *before* the ordinary base inference -- `infer_expr_in`'s
+            // own `Name` arm calls `reject_memoryview_read`, so inferring the
+            // base first would report the `C0001` capability gap for the very
+            // expression that closes it.
+            //
+            // The binding is therefore read raw, through `binding_state`,
+            // rather than through `lookup_bound_name`, which calls that same
+            // refusal. `Definitely` and not `BindingState::ty()`: a
+            // possibly-unbound name is left to the ordinary path, which
+            // reports the unbound-local diagnostic it already has.
+            //
+            // Only a bare `HirExpr::Name` base is intercepted, which is the
+            // whole of the admitted surface -- a `memoryview` cannot be
+            // aliased, stored, returned or produced, so no other expression
+            // can have the type. `b[i][j]` therefore falls through to the
+            // `Ty::Float` catch-all below and is refused with `T0033`.
+            if let HirExpr::Name(buffer_name) = base.as_ref()
+                && matches!(
+                    env.binding_state(buffer_name),
+                    Some(BindingState::Definitely(Ty::MemoryView))
+                )
+            {
+                let index_ty = infer_expr_in(env, local_names, index)?;
+                // Reuses T0021 and `is_assignable` for exactly the reasons
+                // the `Ty::List` arm below records: a non-int-compatible
+                // index is that same operand mismatch, and D-086 admits
+                // `bool` wherever `int` is expected.
+                if !is_assignable(index_ty.clone(), Ty::Int) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`memoryview` index must be `int`, found `{}`",
+                            index_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help("use an `int` value"));
+                }
+                return Ok(Ty::Float);
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
             match base_ty {
@@ -1605,8 +1648,8 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 
 /// `Err(C0001)` when `name` is bound to a `memoryview`.
 ///
-/// Part 1 of #1027 admits `memoryview` at exactly one position: a parameter
-/// of a function exported across a `pycc build --ext` boundary, where the
+/// #1027 admits `memoryview` at exactly one position: a parameter of a
+/// function exported across a `pycc build --ext` boundary, where the
 /// generated wrapper acquires the buffer, proves its shape and hands the
 /// compiled body a `{ ptr, len }` pair. The plan's section 3.5 states the
 /// other half of that admission -- "no aliasing into a local, no
@@ -1617,14 +1660,22 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// `memoryview` has no literal and no producing expression, so the only way
 /// a value of the type can reach any of those positions is through a read of
 /// its own parameter name; refusing the read therefore refuses every one of
-/// them at once, and any later one Part 2 invents along with them. Without
-/// it `pycc_codegen` reaches a local load it has no lowering for and panics
-/// (`reading a `memoryview`-typed local is not supported yet`) -- an ICE
-/// where the contract calls for a diagnostic.
+/// them at once. Without it `pycc_codegen` reaches a local load it has no
+/// lowering for and panics (`reading a `memoryview`-typed local is not
+/// supported yet`) -- an ICE where the contract calls for a diagnostic.
+///
+/// Part 2 of #1027 opens exactly one hole in that blanket refusal, and does
+/// it by *interception* rather than by weakening this function: `b[i]` on a
+/// `memoryview`-bound name is answered with `Ty::Float` in
+/// [`infer_expr_in`]'s own `Subscript` arm (and in the solver's) before the
+/// base is ever inferred, so this call is never reached for that one shape.
+/// Every other read -- `len(b)` included, which stays refused -- still
+/// arrives here. That is why the four call sites are untouched: the set of
+/// refusals is unchanged, and only the set of expressions that reach them
+/// narrowed.
 ///
 /// `C0001` rather than a new code: this is the crate's established "valid
-/// Python this compiler version does not implement yet" spelling, and
-/// indexing the buffer is exactly what Part 2 of #1027 adds.
+/// Python this compiler version does not implement yet" spelling.
 ///
 /// "Every read" is two seams, not one. `HirStmt::ForList` and
 /// `HirExpr::ListComp` hold their iterable as a plain `String` rather than a
@@ -1641,8 +1692,8 @@ pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnost
             "C0001",
             format!(
                 "using `{name}`, which is bound to a `memoryview`, is valid Python but not \
-                 implemented yet; Part 1 of #1027 admits a `memoryview` only as a parameter of \
-                 a `pycc build --ext` export"
+                 implemented yet; #1027 admits a `memoryview` only as a parameter of a \
+                 `pycc build --ext` export, read one element at a time with `{name}[i]`"
             ),
             Span::new(0, 0),
         ));

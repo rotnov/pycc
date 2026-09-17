@@ -1436,6 +1436,77 @@ pub unsafe extern "C" fn pycc_rt_int_list_get(list: *mut PyIntListObj, index: i6
     int_list_get(unsafe { &*list }, index)
 }
 
+/// The two words a `pycc build --ext` wrapper is allowed to carry across the
+/// boundary for a `memoryview` parameter (Part 2 of #1027).
+///
+/// This is the Rust view of `PyccExtBufferView` in `src/ext/pycc_ext_module.c`
+/// -- `{ void *ptr; long long len; }` -- and the layout must agree field for
+/// field, which `ext_buffer_view_layout_matches_the_c_struct` below pins.
+/// `len` is a *copy* of the exporter's `shape[0]`, taken while the buffer is
+/// held; the owning `Py_buffer` and `PyObject *` stay wrapper-side, so nothing
+/// here can outlive or reach them.
+///
+/// Compiled code never constructs one: the generated wrapper fills a stack
+/// local and passes its address as the `Ty::MemoryView` argument.
+#[repr(C)]
+pub struct PyccExtBufferView {
+    /// The exporter's data pointer, a C-contiguous one-dimensional `double`
+    /// array of `len` elements (the `"d"` format the unpack shim requires).
+    pub ptr: *mut core::ffi::c_void,
+    /// A copy of the exporter's `shape[0]`, in elements, never in bytes.
+    pub len: i64,
+}
+
+/// Private half of `pycc_rt_buffer_f64_get` below, split for the same reason
+/// `int_list_get` is: so this file's unit tests can drive the out-of-range
+/// raise and inspect the pending state directly.
+///
+/// # Safety
+/// `view.ptr` must point at `view.len` contiguous `f64` values.
+unsafe fn buffer_f64_get(view: &PyccExtBufferView, index: i64) -> f64 {
+    if index < 0 || index >= view.len {
+        // D-173: set the pending exception flag instead of panicking. The
+        // message is CPython's own sentence for this failure, so a subject
+        // that goes out of bounds reports what `memoryview.__getitem__`
+        // would have reported.
+        //
+        // D-108: a negative index raises here rather than wrapping. The
+        // deviation is exactly the range `[-len, -1]`, which CPython would
+        // have resolved from the end.
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "index out of bounds on dimension 1",
+        );
+        return 0.0;
+    }
+    unsafe { *(view.ptr as *const f64).offset(index as isize) }
+}
+
+/// Reads the element at `index` of a `pycc build --ext` export's `memoryview`
+/// parameter (Python's `b[i]`, Part 2 of #1027), bounds-checked against the
+/// `len` the wrapper copied out of the exporter's `shape[0]`.
+///
+/// Sets the pending `IndexError` flag (D-173) and returns a `0.0` sentinel on
+/// an out-of-range index -- a type-valid `f64`, never a trap representation,
+/// because the caller's generated code checks the flag after this call rather
+/// than inspecting the value. The `--ext` wrapper's D-173 bridge releases the
+/// buffer and re-raises it as a CPython `IndexError`.
+///
+/// # Element representation
+/// `index` is a raw element offset; generated code obtains it by decoding an
+/// int-compatible expression with `pycc_rt_int_untag_checked`. The return
+/// value is an ordinary unencoded `Ty::Float`.
+///
+/// # Safety
+/// `view` must be a live `PyccExtBufferView` whose `ptr` addresses `len`
+/// contiguous `f64` values -- which is what the generated wrapper guarantees
+/// for the whole duration of the compiled call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_buffer_f64_get(view: *const PyccExtBufferView, index: i64) -> f64 {
+    unsafe { buffer_f64_get(&*view, index) }
+}
+
 /// Returns `list`'s current element count (Python's `len(list)`, D-105's
 /// v0.2 `list[int]` slice).
 ///
@@ -3743,6 +3814,110 @@ mod tests {
             assert_eq!(untag_smallint(result), 0); // sentinel value
             pycc_rt_int_list_decref(list);
         }
+        pycc_rt_exception_clear();
+    }
+
+    /// Part 2 of #1027: the Rust `PyccExtBufferView` is the same two words,
+    /// in the same order and at the same offsets, as the C struct in
+    /// `src/ext/pycc_ext_module.c` -- `{ void *ptr; long long len; }`. A
+    /// silent disagreement here would misread every element, so it is pinned
+    /// rather than assumed.
+    #[test]
+    fn ext_buffer_view_layout_matches_the_c_struct() {
+        assert_eq!(
+            core::mem::size_of::<PyccExtBufferView>(),
+            core::mem::size_of::<*mut core::ffi::c_void>() + core::mem::size_of::<i64>()
+        );
+        assert_eq!(core::mem::align_of::<PyccExtBufferView>(), 8);
+        let storage = [0.0f64; 1];
+        let view = PyccExtBufferView {
+            ptr: storage.as_ptr() as *mut core::ffi::c_void,
+            len: 1,
+        };
+        let base = &view as *const PyccExtBufferView as usize;
+        assert_eq!(&view.ptr as *const _ as usize - base, 0);
+        assert_eq!(
+            &view.len as *const _ as usize - base,
+            core::mem::size_of::<*mut core::ffi::c_void>()
+        );
+    }
+
+    /// Builds a view over `storage` for the buffer-read tests below.
+    fn buffer_view_over(storage: &[f64]) -> PyccExtBufferView {
+        PyccExtBufferView {
+            ptr: storage.as_ptr() as *mut core::ffi::c_void,
+            len: storage.len() as i64,
+        }
+    }
+
+    #[test]
+    fn buffer_f64_get_reads_every_in_range_element() {
+        pycc_rt_exception_clear();
+        let storage = [1.5f64, 2.5, 3.5];
+        let view = buffer_view_over(&storage);
+        unsafe {
+            assert_eq!(buffer_f64_get(&view, 0), 1.5);
+            assert_eq!(buffer_f64_get(&view, 1), 2.5);
+            assert_eq!(buffer_f64_get(&view, 2), 3.5);
+        }
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    #[test]
+    fn buffer_f64_get_past_the_end_sets_the_index_error_flag() {
+        // D-173: the pending-exception flag plus a type-valid sentinel, not
+        // a panic across the FFI boundary.
+        pycc_rt_exception_clear();
+        let storage = [1.5f64, 2.5];
+        let view = buffer_view_over(&storage);
+        let result = unsafe { buffer_f64_get(&view, 2) };
+        assert_eq!(result, 0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_INDEX_ERROR)
+        );
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn buffer_f64_get_rejects_negative_indices_with_exception_flag() {
+        // D-108: `b[-1]` is refused rather than resolved from the end.
+        pycc_rt_exception_clear();
+        let storage = [1.5f64, 2.5];
+        let view = buffer_view_over(&storage);
+        let result = unsafe { buffer_f64_get(&view, -1) };
+        assert_eq!(result, 0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn buffer_f64_get_on_an_empty_view_refuses_index_zero() {
+        pycc_rt_exception_clear();
+        let view = PyccExtBufferView {
+            ptr: core::ptr::null_mut(),
+            len: 0,
+        };
+        let result = unsafe { buffer_f64_get(&view, 0) };
+        assert_eq!(result, 0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        pycc_rt_exception_clear();
+    }
+
+    /// The `extern "C"` wrapper is what generated code actually calls, so it
+    /// is exercised directly rather than only through its private half.
+    #[test]
+    fn pycc_rt_buffer_f64_get_wrapper_reads_and_raises() {
+        pycc_rt_exception_clear();
+        let storage = [4.25f64, 8.5];
+        let view = buffer_view_over(&storage);
+        unsafe {
+            assert_eq!(pycc_rt_buffer_f64_get(&view, 1), 8.5);
+            assert_eq!(pycc_rt_exception_active(), 0);
+            assert_eq!(pycc_rt_buffer_f64_get(&view, 99), 0.0);
+        }
+        assert_eq!(pycc_rt_exception_active(), 1);
         pycc_rt_exception_clear();
     }
 

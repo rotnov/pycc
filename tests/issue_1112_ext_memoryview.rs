@@ -347,6 +347,10 @@ def f() -> int:
 
 /// Every *read* of the parameter, through both seams that reach a binding.
 ///
+/// "Every read" means every read Part 2 of #1027 (#1113) did *not* admit:
+/// the one element load `v[i]` is now a real capability and is pinned by
+/// `tests/issue_1113_ext_buffer_index.rs` instead.
+///
 /// Round 3 of the pinned review: `HirStmt::ForList` and `HirExpr::ListComp`
 /// keep their iterable as a plain `String` rather than a `HirExpr::Name`
 /// (D-105's HIR shape), so `for x in v` resolves through
@@ -369,9 +373,17 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
 ",
         ),
         (
-            "1112_read_subscript",
+            // Part 2 of #1027 (#1113) admitted `v[0]` as a *load*, so the
+            // subscript this arm used to spell is no longer a capability
+            // gap. An element **store** is: Part 2 reads only, the
+            // wrapper requests no `PyBUF_WRITABLE`, and the target of an
+            // assignment is still an ordinary read of `v` reaching the
+            // same seam -- so the arm keeps its subject and moves to the
+            // subscript form that is still refused.
+            "1112_write_subscript",
             "def total(v: memoryview) -> int:
-    return v[0]
+    v[0] = 1.0
+    return 0
 ",
         ),
         (
