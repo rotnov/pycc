@@ -755,8 +755,9 @@ times are possible, and the boundary blocks only one of them:
   That the input holds 2,000,000 records does not make one record's signature
   inadmissible; it only means the host, not the subject, does the iterating.
 
-Three prerequisites remain; the first two are not the same for the two
-readings, and the third is independent of both:
+Three prerequisites were recorded here; the first is now met and two
+remain. The first two are stated per reading — they are not the same for
+the sweep and the per-record shapes — and the third is independent of both:
 
 1. **The sweep reading needs the boundary to be able to carry the committed
    input in one call.** That is the buffer-protocol bridge (#1027), which
@@ -769,13 +770,15 @@ readings, and the third is independent of both:
    ([#1113](https://github.com/rotnov/pycc/issues/1113)) added the element load
    itself — `b[i]`, a bounds-checked native `float` load — so the committed
    input does now cross in one call and its elements do compile to native
-   loads. What is still missing is the *length*: `len(b)` remains a `C0001`
-   capability gap, so a subject cannot yet write the `for i in
-   range(len(b)):` loop that reads the whole buffer, which is the shape this
-   protocol's sweep reading actually needs. The prerequisite is therefore not
-   fully met, and what remains of it is that one gap rather than the bridge.
-   None of this applies to the per-record reading, which the boundary already
-   admitted.
+   loads. The length half is met as well, by
+   [#1116](https://github.com/rotnov/pycc/issues/1116): `len(b)` answers the
+   buffer's element count as an `int` instead of the `C0001` capability gap it
+   was, so a subject can now write the `for i in range(len(b)):` loop that
+   reads the whole buffer — the shape this protocol's sweep reading actually
+   needs — and the whole committed input crosses the boundary in one call.
+   This prerequisite is therefore met, for the sweep reading as well as the
+   per-record one the boundary already admitted; what still refuses a scored
+   run is prerequisites 2 and 3, not the bridge.
 2. **Either reading needs an admissible subject to exist at all**, and none
    does — but not for the reason this subsection recorded before 2026-09-17,
    which measurement has refuted. Reported as counts, so that nothing about

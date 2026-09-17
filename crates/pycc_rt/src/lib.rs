@@ -1507,6 +1507,32 @@ pub unsafe extern "C" fn pycc_rt_buffer_f64_get(view: *const PyccExtBufferView, 
     unsafe { buffer_f64_get(&*view, index) }
 }
 
+/// Returns the element count of a `pycc build --ext` export's `memoryview`
+/// parameter (Python's `len(b)`, Part 4 of #1027).
+///
+/// This is the `len` word of the `PyccExtBufferView` the wrapper filled in --
+/// a copy of the exporter's `shape[0]`, in elements and never in bytes -- so
+/// it agrees with CPython's own `len(view)` for the one-dimensional `"d"`
+/// buffers this artifact mode admits.
+///
+/// Unlike `pycc_rt_buffer_f64_get`, this cannot fail: there is no index to
+/// range-check and no pending exception to set (D-173), which is why
+/// `pycc_codegen`'s `expression_can_set_exception` answers `false` for the
+/// node that calls it.
+///
+/// # Element representation
+/// The returned count is a **raw, untagged** `i64`, matching
+/// `pycc_rt_int_list_len`. Generated code re-tags it with D-141's
+/// `raw_i64_to_tagged_int` before the value becomes a user-visible `Ty::Int`.
+///
+/// # Safety
+/// `view` must be a live `PyccExtBufferView`, which is what the generated
+/// wrapper guarantees for the whole duration of the compiled call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_buffer_len(view: *const PyccExtBufferView) -> i64 {
+    unsafe { (*view).len }
+}
+
 /// Returns `list`'s current element count (Python's `len(list)`, D-105's
 /// v0.2 `list[int]` slice).
 ///
@@ -3919,6 +3945,23 @@ mod tests {
         }
         assert_eq!(pycc_rt_exception_active(), 1);
         pycc_rt_exception_clear();
+    }
+
+    /// `len(b)` is the `len` word verbatim, in elements, and never raises.
+    #[test]
+    fn pycc_rt_buffer_len_returns_the_element_count_and_never_raises() {
+        pycc_rt_exception_clear();
+        let storage = [1.0f64, 2.0, 3.0, 4.0];
+        let view = buffer_view_over(&storage);
+        let empty = PyccExtBufferView {
+            ptr: core::ptr::null_mut(),
+            len: 0,
+        };
+        unsafe {
+            assert_eq!(pycc_rt_buffer_len(&view), 4);
+            assert_eq!(pycc_rt_buffer_len(&empty), 0);
+        }
+        assert_eq!(pycc_rt_exception_active(), 0);
     }
 
     #[test]

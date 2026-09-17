@@ -15641,19 +15641,21 @@ fn a_for_object_target_claims_an_object_slot_over_an_earlier_int_binding() {
 }
 
 // ---------------------------------------------------------------------------
-// Part 2 of #1027: the `Scalar::MemoryView` arms and `MirExpr::BufferGet`.
+// Part 2 of #1027 and #1116: the `Scalar::MemoryView` arms,
+// `MirExpr::BufferGet` and `MirExpr::BufferLen`.
 //
 // A `memoryview` reaches codegen only as a parameter of a `pycc build --ext`
 // export (D-244), and `reject_memoryview_read` refuses every *use* of such a
-// name except the `b[i]` element load this part admits. Every consuming arm
+// name except the `b[i]` element load and the `len(b)` count these parts
+// admit. Every consuming arm
 // below is therefore defensive, and each is pinned directly with a
 // hand-built `Scalar::MemoryView` carrying a null `PyccExtBufferView *` --
 // the same convention the `Scalar::List` and `Scalar::Object` defensive
 // tests above use, and for the same reason: it pins the panic to the
 // function that owns the gap rather than to whichever caller reaches it
-// first. The two *reachable* paths -- `MirExpr::Name`'s pointer-slot load
-// and the `BufferGet` emission itself -- are covered by real MIR at the end
-// of this section.
+// first. The *reachable* paths -- `MirExpr::Name`'s pointer-slot load and
+// the `BufferGet`/`BufferLen` emissions themselves -- are covered by real
+// MIR at the end of this section.
 // ---------------------------------------------------------------------------
 
 /// A null `PyccExtBufferView *` as a [`Scalar::MemoryView`]. None of the
@@ -15784,6 +15786,16 @@ fn buffer_get_b_i() -> MirExpr {
     }
 }
 
+/// `len(b)` as a `MirExpr`, the buffer shape #1116 adds.
+fn buffer_len_b() -> MirExpr {
+    MirExpr::BufferLen {
+        base: Box::new(MirExpr::Name {
+            name: "b".to_string(),
+            ty: Ty::MemoryView,
+        }),
+    }
+}
+
 /// Compiles `items` as a D-244 `ext` object and hands the whole module's IR
 /// to `check`.
 fn compile_ext_items_checking_ir(label: &str, items: Vec<MirItem>, check: impl Fn(&str)) {
@@ -15826,6 +15838,75 @@ fn a_buffer_element_load_untags_its_index_and_calls_the_runtime_helper() {
             assert!(ir.contains("call i64 @pycc_rt_int_untag_checked"), "{ir}");
             assert!(ir.contains("call double @pycc_rt_buffer_f64_get"), "{ir}");
         },
+    );
+}
+
+#[test]
+fn a_buffer_length_read_calls_the_runtime_helper_and_tags_the_count() {
+    // #1116, end to end through real MIR. Two properties, both of which a
+    // `return len(b)` test alone would pass without: the raw `i64` count is
+    // re-tagged into D-141's form before it becomes a user-visible `int`
+    // (`list_tag_shl`/`list_tag_or`, the same pair `raw_i64_to_tagged_int`
+    // emits for `pycc_rt_int_list_len`), and no untag of an index is
+    // emitted, because there is no index. An untagged count would compile,
+    // return plausibly, and then produce a wrong iteration count the moment
+    // it is used as a `range` bound.
+    compile_ext_items_checking_ir(
+        "buffer_length_read",
+        buffer_fn_items(vec![MirStmt::Return(Some(buffer_len_b()))], Ty::Int),
+        |ir| {
+            assert!(ir.contains("call i64 @pycc_rt_buffer_len"), "{ir}");
+            assert!(ir.contains("list_tag_shl"), "{ir}");
+            assert!(ir.contains("list_tag_or"), "{ir}");
+        },
+    );
+}
+
+#[test]
+fn a_buffer_length_read_emits_no_pending_exception_check() {
+    // `pycc_rt_buffer_len` cannot raise, so `expression_can_set_exception`
+    // answers `false` for this node where it answers `true` for both its
+    // siblings. Asserted as a pair so a regression in either direction is
+    // caught: the same function shape emits exactly one D-173 guard when its
+    // body is the fallible element load, and none at all when it is the
+    // length read. A `true` classification here would emit a never-taken
+    // branch after every `len(b)`.
+    let guard = "call i8 @pycc_rt_exception_active()";
+    compile_ext_items_checking_ir(
+        "buffer_length_no_guard",
+        buffer_fn_items(vec![MirStmt::Return(Some(buffer_len_b()))], Ty::Int),
+        |ir| {
+            assert_eq!(ir.matches(guard).count(), 0, "{ir}");
+        },
+    );
+    compile_ext_items_checking_ir(
+        "buffer_load_has_guard",
+        buffer_fn_items(vec![MirStmt::Return(Some(buffer_get_b_i()))], Ty::Float),
+        |ir| {
+            assert_eq!(ir.matches(guard).count(), 1, "{ir}");
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "a buffer length read's base did not evaluate to a memoryview")]
+fn a_buffer_length_read_whose_base_is_not_a_memoryview_is_an_internal_error() {
+    // The same argument the element load's own defensive arm records:
+    // `MirExpr::BufferLen` is produced by exactly one lowering arm, which
+    // keys on the lowered argument's `Ty::MemoryView`, so a base of any
+    // other type means that dispatch regressed.
+    compile_ext_items_checking_ir(
+        "buffer_length_bad_base",
+        buffer_fn_items(
+            vec![MirStmt::Return(Some(MirExpr::BufferLen {
+                base: Box::new(MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                }),
+            }))],
+            Ty::Int,
+        ),
+        |_| unreachable!("codegen should have panicked"),
     );
 }
 

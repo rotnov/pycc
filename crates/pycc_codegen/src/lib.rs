@@ -3908,6 +3908,29 @@ fn emit_expr_unchecked<'ctx>(
                 .into_float_value();
             Scalar::Float(element)
         }
+        // #1116: `len(b)`. One call and no arithmetic, exactly as the load
+        // above -- and no D-173 exception check after it, because
+        // `pycc_rt_buffer_len` cannot raise (`expression_can_set_exception`
+        // answers `false` for this node, so no guard block is emitted).
+        MirExpr::BufferLen { base } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let Scalar::MemoryView(base_ptr) = base_scalar else {
+                panic!(
+                    "pycc_codegen: internal error: a buffer length read's base did not evaluate \
+                     to a memoryview"
+                )
+            };
+            let raw_len = builder
+                .build_call(rt.buffer_len, &[base_ptr.into()], "buffer_len")
+                .expect("build_call should not fail for a declared runtime function")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_buffer_len returns a non-void i64")
+                .into_int_value();
+            // D-141: the raw element count becomes a user-visible `Ty::Int`
+            // expression value here, so it is tagged exactly as the scalar
+            // `len` arm tags `pycc_rt_int_list_len`'s own raw count.
+            Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len))
+        }
         // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
         // o` at module scope, and the same at any other fixed arity -- the
         // PEP 585 variadic `tuple[float, ...]` stays refused and never

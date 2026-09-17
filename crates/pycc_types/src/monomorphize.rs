@@ -598,6 +598,20 @@ pub(crate) fn rewrite_generic_calls_in_expr(
                 );
                 return infer_expr_in(env, local_names, expr);
             }
+            // #1116: `len(b)` on a `memoryview`-bound name skips the
+            // argument recursion below entirely, for the reason the
+            // `Subscript` arm's own `is_memoryview_base` guard records --
+            // that recursion tails into `infer_expr_in` on the bare name,
+            // which reaches `reject_memoryview_read` and reports `C0001`
+            // for an expression `crate::expr`'s `len` interception admits.
+            // A bare `memoryview` name is never a generic-call argument
+            // (there is nothing to instantiate), so nothing is lost by not
+            // descending. The `infer_expr_in` on the whole expression below
+            // then resolves the call through that interception, exactly as
+            // the `isinstance` arm above does.
+            if callee == "len" && args.len() == 1 && is_memoryview_base(env, &args[0]) {
+                return infer_expr_in(env, local_names, expr);
+            }
             // Each arg's `Ty` comes directly from this same rewriting
             // recursion's own return value -- not a second, separate
             // `infer_expr_in` pass over the now-rewritten args -- since

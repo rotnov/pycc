@@ -85,6 +85,13 @@ pub(super) struct RtFns<'ctx> {
     /// `[0, len)` leaves the D-173 pending `IndexError` set and returns a
     /// `0.0` sentinel, which the caller's `exception_exit` block checks for.
     pub(super) buffer_f64_get: FunctionValue<'ctx>,
+    /// #1116's buffer element count (`pycc_rt_buffer_len`): takes the same
+    /// `PyccExtBufferView` pointer and returns the `len` word as a **raw,
+    /// untagged** `i64`, exactly as `int_list_len` below does for a list.
+    ///
+    /// Unlike `buffer_f64_get` above it cannot fail, so the emitted call
+    /// carries no D-173 exception check.
+    pub(super) buffer_len: FunctionValue<'ctx>,
     pub(super) int_list_len: FunctionValue<'ctx>,
     /// PR-12 Task 9's own new `pycc_rt_int_list_slice` declaration
     /// (`base[start:stop:step]`, D-118) -- takes the `list` pointer plus
@@ -366,6 +373,10 @@ pub(super) fn declare_rt_functions<'ctx>(
         buffer_f64_get: declare(
             "pycc_rt_buffer_f64_get",
             f64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        buffer_len: declare(
+            "pycc_rt_buffer_len",
+            i64_type.fn_type(&[ptr_type.into()], false),
         ),
         int_list_len: declare(
             "pycc_rt_int_list_len",

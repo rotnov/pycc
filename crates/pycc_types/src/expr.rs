@@ -400,6 +400,31 @@ pub(crate) fn infer_expr_in(
             // argument before validating arity or compatibility. Most Python
             // calls are small, so keep up to four inferred types on the stack
             // and reserve a heap vector only for wider calls.
+            // #1116: `len(b)` on a name bound to a `memoryview` is the
+            // buffer's `Ty::Int` element count -- the second read of such a
+            // name this compiler admits, after Part 2's `b[i]`. Like the
+            // `Subscript` interception further below it must run *before*
+            // the argument inference that follows, because `infer_expr_in`'s
+            // own `Name` arm calls `reject_memoryview_read`, so inferring
+            // the argument first would report the `C0001` capability gap for
+            // the very expression that closes it.
+            //
+            // Only the one-argument shape is claimed, so `len(b, x)` still
+            // reaches the `callee == "len"` block's own `T0033` arity
+            // refusal below. There is deliberately no `$fn:len` shadow check
+            // here, for the reason that block records: D-105 point 3 makes
+            // `len` a hand-recognized builtin, not a user-declarable
+            // signature.
+            if args.len() == 1
+                && callee == "len"
+                && let HirExpr::Name(buffer_name) = &args[0]
+                && matches!(
+                    env.binding_state(buffer_name),
+                    Some(BindingState::Definitely(Ty::MemoryView))
+                )
+            {
+                return Ok(Ty::Int);
+            }
             const INLINE_ARG_TYPES: usize = 4;
             let mut inline_arg_tys = [const { Ty::Infer }; INLINE_ARG_TYPES];
             let heap_arg_tys;
@@ -1664,15 +1689,15 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// lowering for and panics (`reading a `memoryview`-typed local is not
 /// supported yet`) -- an ICE where the contract calls for a diagnostic.
 ///
-/// Part 2 of #1027 opens exactly one hole in that blanket refusal, and does
-/// it by *interception* rather than by weakening this function: `b[i]` on a
-/// `memoryview`-bound name is answered with `Ty::Float` in
-/// [`infer_expr_in`]'s own `Subscript` arm (and in the solver's) before the
-/// base is ever inferred, so this call is never reached for that one shape.
-/// Every other read -- `len(b)` included, which stays refused -- still
-/// arrives here. That is why the four call sites are untouched: the set of
-/// refusals is unchanged, and only the set of expressions that reach them
-/// narrowed.
+/// Part 2 of #1027 opened the first hole in that blanket refusal, and #1116
+/// the second. Both do it by *interception* rather than by weakening this
+/// function: `b[i]` on a `memoryview`-bound name is answered with `Ty::Float`
+/// in [`infer_expr_in`]'s own `Subscript` arm (and in the solver's), and
+/// `len(b)` with `Ty::Int` in its `Call` arm (and in the solver's), each
+/// before the base or argument is ever inferred, so this call is never
+/// reached for those two shapes. Every other read still arrives here. That is
+/// why the four call sites are untouched: the set of refusals is unchanged,
+/// and only the set of expressions that reach them narrowed.
 ///
 /// `C0001` rather than a new code: this is the crate's established "valid
 /// Python this compiler version does not implement yet" spelling.
@@ -1693,7 +1718,8 @@ pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnost
             format!(
                 "using `{name}`, which is bound to a `memoryview`, is valid Python but not \
                  implemented yet; #1027 admits a `memoryview` only as a parameter of a \
-                 `pycc build --ext` export, read one element at a time with `{name}[i]`"
+                 `pycc build --ext` export, read one element at a time with `{name}[i]` \
+                 over `range(len({name}))`"
             ),
             Span::new(0, 0),
         ));

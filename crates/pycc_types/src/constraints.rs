@@ -734,6 +734,25 @@ pub(crate) fn collect_expr_constraints(
             if is_local(env.local_names, callee) {
                 return Err(unbound_local(callee));
             }
+            // #1116, the solver half of `crate::expr`'s own `len`
+            // interception: `len(b)` on a `memoryview`-bound name is a
+            // `Ty::Int` element count. Like the `Subscript` interception
+            // further below it must run *before* the argument recursion
+            // that follows, because that recursion reaches the `Name` seam
+            // above, which calls `reject_memoryview_read` and would report
+            // the `C0001` capability gap for the very expression that
+            // closes it. The arity is checked here rather than deferred to
+            // the `callee == "len"` block below for the same ordering
+            // reason -- a two-argument `len(b, x)` must still reach that
+            // block's `T0033`, so only the one-argument shape is claimed.
+            if args.len() == 1
+                && callee == "len"
+                && let HirExpr::Name(buffer_name) = &args[0]
+                && let Some(term) = env.bindings.get(buffer_name).cloned()
+                && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
+            {
+                return Ok(Some(Ok(Ty::Int)));
+            }
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
                 arg_terms.push(collect_expr_constraints(
