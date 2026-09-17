@@ -127,6 +127,14 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
 /// it again would name `Q` for a signature `P` declares. The declaring class
 /// is the one that gets the diagnostic, exactly as for the return position.
 ///
+/// "Inherited" means the *whole member* matches an ancestor's, not merely
+/// its name. A derived protocol may override an ancestor's method with a
+/// different signature -- `lower_protocol_class` replaces the copied entry
+/// when the body redeclares the name -- so `class P(Protocol): def f(self,
+/// x: int)` followed by `class Q(P): def f(self, v: memoryview)` leaves `Q`
+/// as the declaring class of an offending signature that `P` never had.
+/// Comparing by name alone would skip it and let the native build through.
+///
 /// Span-less and parameter-name-less, both for the same reason as
 /// [`gap`]: `ProtocolMember::Method` carries `param_tys: Vec<Ty>` and no
 /// names at all, so the position is named by its 1-based index with `self`
@@ -151,11 +159,9 @@ pub(crate) fn refuse_protocol_methods_in_native_mode(
             let Some(position) = param_tys.iter().position(|ty| *ty == Ty::MemoryView) else {
                 continue;
             };
-            if def
-                .mro
-                .iter()
-                .any(|ancestor| ancestor != class_name && declares_method(&by_name, ancestor, name))
-            {
+            if def.mro.iter().any(|ancestor| {
+                ancestor != class_name && declares_member(&by_name, ancestor, member)
+            }) {
                 continue;
             }
             gaps.push((
@@ -173,19 +179,19 @@ pub(crate) fn refuse_protocol_methods_in_native_mode(
     Err(gaps)
 }
 
-/// Whether `class_name` names a protocol class that itself declares a
-/// method member called `method`. A name the class table does not hold
-/// (a builtin base, `Protocol` itself) declares nothing.
-fn declares_method(
+/// Whether `class_name` names a protocol class that declares `member`
+/// itself -- the same name *and* the same signature, so that the copy in
+/// the derived class really is the ancestor's and not an override of it.
+/// A name the class table does not hold (a builtin base, `Protocol`
+/// itself) declares nothing.
+fn declares_member(
     by_name: &HashMap<&str, &Vec<ProtocolMember>>,
     class_name: &str,
-    method: &str,
+    member: &ProtocolMember,
 ) -> bool {
-    by_name.get(class_name).is_some_and(|members| {
-        members
-            .iter()
-            .any(|m| matches!(m, ProtocolMember::Method { name, .. } if name == method))
-    })
+    by_name
+        .get(class_name)
+        .is_some_and(|members| members.iter().any(|m| m == member))
 }
 
 /// Names the first part of a signature that mentions `memoryview`, as the

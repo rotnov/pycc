@@ -686,7 +686,20 @@ pub(crate) fn collect_expr_constraints(
             // and pass 3's own gate would still catch the shadowing later --
             // there this mirror is fail-fast defense-in-depth, not the only
             // line of defense.
-            if env.bindings.contains_key(callee) && !env.defs_rebound.contains(callee) {
+            if let Some(term) = env.bindings.get(callee).cloned()
+                && !env.defs_rebound.contains(callee)
+            {
+                // Part 1 of #1027: this gate, not `infer_expr_in`'s own
+                // D-110 arm, is the one a `memoryview` *parameter* reaches
+                // -- the solver runs first, and a parameter's annotation is
+                // already a binding here while the check phase never gets to
+                // look at the call. Calling the name is a *read* of it, so
+                // it is the capability gap every other use of a `memoryview`
+                // is (`C0001`), not D-110's "no value in the current subset
+                // is callable" (`T0021`).
+                if let Some(ty) = resolved_term(term, parents, concrete) {
+                    crate::expr::reject_memoryview_read(callee, &ty)?;
+                }
                 return Err(non_callable_binding(callee));
             }
             // Part 1 of #1026: a foreign import binds its name to a

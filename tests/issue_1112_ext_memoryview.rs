@@ -356,7 +356,21 @@ def f() -> int:
 /// as a type error. Both seams now answer with the one `C0001`.
 #[test]
 fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
-    const CASES: [(&str, &str); 2] = [
+    const CASES: [(&str, &str); 3] = [
+        (
+            // Round 7 of the pinned review: a call target is a read of the
+            // name too. The gate this one reaches is the solver's D-110
+            // mirror in `crates/pycc_types/src/constraints.rs`, not
+            // `infer_expr_in`'s own arm -- the solver runs first and a
+            // parameter's annotation is already a binding there -- so
+            // without the refusal at *that* site the call was reported as
+            // the generic `T0021` non-callable binding instead of the
+            // capability gap every other read of `v` is.
+            "1112_read_call",
+            "def total(v: memoryview) -> int:
+    return v()
+",
+        ),
         (
             "1112_read_alias",
             "def total(v: memoryview) -> int:
@@ -619,4 +633,89 @@ def plain(x: int) -> int:
         err.contains("`Sink.total`'s parameter 1 `memoryview`"),
         "{err}"
     );
+}
+
+/// Round 7 of the pinned review: a derived protocol's *override* is the
+/// derived class's own declaration, not an inherited copy.
+///
+/// `lower_protocol_class` copies a base protocol's members into the derived
+/// class and a body redeclaration replaces the copied entry, so the
+/// "report it once, at the class that declares it" dedup in
+/// `src/memoryview_mode.rs` cannot key on the method *name*: `P.f` and
+/// `Q.f` share one, while only `Q`'s names a `memoryview`. Keying on the
+/// whole `ProtocolMember` is what makes the ancestor's differing signature
+/// stop matching, so the override is reported at `Q` -- the only class
+/// that declares it.
+#[test]
+fn a_protocol_override_adding_a_memoryview_parameter_is_refused() {
+    let dir = fixture(
+        "1112_protocol_override",
+        "\
+from typing import Protocol
+
+
+class Base(Protocol):
+    def total(self, x: int) -> int: ...
+
+
+class Sink(Base):
+    def total(self, v: memoryview) -> int: ...
+
+
+def plain(x: int) -> int:
+    return x + 1
+",
+    );
+    let build = protocol_build(&dir, false);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert_eq!(err.matches("error[I0405]").count(), 1, "{err}");
+    assert!(
+        err.contains("`Sink.total`'s parameter 1 `memoryview`"),
+        "{err}"
+    );
+}
+
+/// Round 7 of the pinned review: the wrapper's format refusal names the
+/// whole PEP 3118 format string the exporter declared.
+///
+/// `pycc_ext_unpack_memoryview` used to copy `out->format` into a
+/// 16-character buffer before releasing the buffer, so a `ctypes.Structure`
+/// array's format -- routinely past thirty characters -- reached the
+/// message as a prefix plus `...`, contradicting `docs/RUNTIME.md`'s
+/// promise that the refusal names what it saw. The message is now built
+/// while the buffer is still held and the release moved after it. Hosted,
+/// for the reason every `--ext` build-and-load test here is: `--ext`
+/// requires a CPython 3.13+ with development headers, and CI's interpreter
+/// is older.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_format_refusal_names_a_long_format_in_full() {
+    let dir = fixture("1112_long_format", SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import ctypes, view_probe\n\
+             class Pair(ctypes.Structure):\n\
+             \x20   _fields_ = [('abcdefghij', ctypes.c_double), ('klmnopqrst', ctypes.c_double)]\n\
+             view = memoryview((Pair * 2)())\n\
+             assert len(view.format) > 16, view.format\n\
+             try:\n\
+             \x20   view_probe.take_view(view)\n\
+             except TypeError as error:\n\
+             \x20   message = str(error)\n\
+             else:\n\
+             \x20   raise AssertionError('the wrapper accepted a non-float64 format')\n\
+             assert view.format in message, (view.format, message)\n\
+             assert '...' not in message, message\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
 }

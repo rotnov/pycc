@@ -710,8 +710,6 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
 {
     PyObject *type_name;
     const char *declared;
-    size_t declared_length;
-    char format[16];
     int ndim;
 
     if (!PyMemoryView_Check(obj)) {
@@ -739,29 +737,25 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
         return -1;
     }
     /*
-     * Copied whole before the release below, because `out->format` points
-     * into storage the exporter owns and the message below names what it
-     * was actually handed (D-244 statement (e)). A PEP 3118 format is a
-     * handful of characters -- `'<d'` from a `ctypes` array is the shape
-     * this length actually serves -- but the exporter chooses it, so an
-     * over-long one is truncated with a visible `...` rather than trusted
-     * to fit. A truncated format is never `"d"`, so the comparison below
-     * still refuses it.
+     * `out->format` points into storage the exporter owns, and the message
+     * below names what this boundary was actually handed (D-244 statement
+     * (e)). The exporter chooses that string and a `ctypes.Structure`'s is
+     * routinely dozens of characters (`T{<d:x:<d:y:}`), so it is *not*
+     * copied into a fixed buffer first -- that only ever named a prefix.
+     * The message is built while the buffer is still held instead, and the
+     * release moved after it: `PyErr_Format` copies the characters it reads
+     * as it formats, and it runs no interpreted code that could invalidate
+     * the view in between, so the release below cannot leave the exception
+     * naming freed storage. The same reasoning already governs the
+     * non-`memoryview` arm's `%U` above.
      */
     declared = (out->format == NULL) ? "" : out->format;
-    declared_length = strlen(declared);
-    if (declared_length < sizeof(format)) {
-        memcpy(format, declared, declared_length + 1);
-    } else {
-        memcpy(format, declared, sizeof(format) - 4);
-        memcpy(format + sizeof(format) - 4, "...", 4);
-    }
-    if (strcmp(format, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {
-        PyBuffer_Release(out);
+    if (strcmp(declared, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {
         PyErr_Format(PyExc_TypeError,
                      "%s() argument %zd: a memoryview of format '%s' is not supported -- "
                      "only format 'd' (a contiguous float64 buffer) is",
-                     fn_name, index + 1, format);
+                     fn_name, index + 1, declared);
+        PyBuffer_Release(out);
         return -1;
     }
     return 0;
