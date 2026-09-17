@@ -728,7 +728,9 @@ Nothing above is amended by this subsection, and nothing above has been
 amended since it was committed. The protocol is unchanged, the
 pre-registration record is unchanged, and `subject_sha256` is still `null`.
 This records why no run has been scored against it, so that a later session
-does not re-derive the same three findings.
+does not re-derive the same findings. It was corrected on 2026-09-17: the
+count prerequisite 2 reports was measured rather than asserted, and the
+measurement refuted what this subsection previously recorded as the cause.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
@@ -753,7 +755,8 @@ times are possible, and the boundary blocks only one of them:
   That the input holds 2,000,000 records does not make one record's signature
   inadmissible; it only means the host, not the subject, does the iterating.
 
-Two prerequisites remain, and they are not the same for the two readings:
+Three prerequisites remain; the first two are not the same for the two
+readings, and the third is independent of both:
 
 1. **The sweep reading needs the boundary to be able to carry the committed
    input in one call.** That is the buffer-protocol bridge (#1027), which
@@ -774,22 +777,66 @@ Two prerequisites remain, and they are not the same for the two readings:
    None of this applies to the per-record reading, which the boundary already
    admitted.
 2. **Either reading needs an admissible subject to exist at all**, and none
-   does. Reported as a count, so that nothing about the proprietary codebase
-   is published beyond one ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6): the number of functions in
-   the reference codebase that both [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1 would export and the
-   current `ext` boundary admits is **zero**. What fails there is the export
-   test, not the carrier: the candidate functions are not visible where rule 1
-   looks, and no boundary work changes a function's visibility or its source
-   bytes. The **Subject** bullet's "byte-identical across all three arms" is
-   what the count is taken against.
+   does — but not for the reason this subsection recorded before 2026-09-17,
+   which measurement has refuted. Reported as counts, so that nothing about
+   the proprietary codebase is published beyond them
+   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6). Of the **133** module-level fully annotated
+   functions the pre-registered denominator enumerates, **101** pass
+   [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1's export test, **23** of those also have a signature
+   the current `ext` boundary admits, and **3** of those 23 compile
+   byte-identically under `pycc build --ext` and export one callable each
+   (verified by importing the built artifact, not inferred from the build's
+   exit status). The remaining 20 fail *compilation*, on ordinary capability
+   gaps rather than on anything specific to this protocol: keyword call
+   arguments (7), an undefined name or function (5), a method call on a
+   non-instance (2), a two-argument-only builtin form (2), and one each of
+   tuple-target assignment, f-string format spec, f-string conversion flag,
+   and an unsupported boolean-expression kind.
 
-The operative blocker is therefore the second prerequisite, for both readings.
-It has no issue tracking it, because it may not be a compiler gap at all: the
-**Subject** bullet requires a byte-identical function from a codebase that
-currently has none to offer, so closing it could equally mean revising what
-the protocol takes as its subject. That is left open here rather than settled,
-but it must be settled before #1039 can resume — and landing #1027 alone does
-not settle it.
+   So the export test is *not* what fails, and the earlier claim that "the
+   candidate functions are not visible where rule 1 looks" was wrong. What
+   fails is the **Subject** bullet's other half: all 3 that compile take a
+   `str` or no argument, run to at most 11 lines, and contain zero loops and
+   zero calls. None of them can consume the committed input — 2,000,000
+   `float` triangles — and a function with no computation cannot produce a
+   ratio of medians that measures anything. Timing one of them would be the
+   post-hoc subject substitution the **Input** bullet exists to forbid, and
+   an exported `str` parameter leaks one object per call
+   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)'s 2026-09-13 amendment), so a long timed loop would be
+   corrupted as well as meaningless. The conclusion "no admissible subject"
+   therefore stands; its stated cause is corrected here.
+
+3. **The pre-registered machine pin no longer matches this host**, which
+   would refuse a scored run on its own even with a subject in hand. The
+   **Arms** bullet binds the run to the five fields
+   `scripts/bench_hosted_ext_precommit.json` records, and the runner's
+   `assert_hosts_the_arms` compares each as an exact string. Four still match
+   (`Mac15,9`, `Apple M3 Max`, 16 cores, 137438953472 bytes); the fifth does
+   not — the record pins `macOS 26.5.1 (build 25F80)` and this host composes
+   `macOS 27.0 (build 26A428)`. Resolving this is a separate decision from
+   the subject: it means either re-pinning the record (which is itself a
+   pre-registration change, with the same "chosen after a result is seen"
+   hazard the protocol's preamble names) or running on a host that still
+   matches.
+
+One thing did hold and does not need re-verifying. The denominator was
+re-derived at commit `8ad29658` with the same command and subtree the record
+names, and returned `count=133` with a digest byte-identical to the committed
+`compile_unchanged_set_sha256`. There is no drift in the "compiles unchanged"
+denominator.
+
+The operative blocker is therefore prerequisite 2, for both readings, now
+joined by prerequisite 3. Neither has an issue tracking it, because neither
+is straightforwardly a compiler gap: the **Subject** bullet requires a
+byte-identical function that both compiles *and* consumes the committed
+input, from a codebase that currently offers none, so closing it could
+equally mean revising what the protocol takes as its subject — and a subject
+revised now, with the 3.41x figure from #1114 already in hand, decides the
+bet instead of measuring it. That is left open here rather than settled, but
+it must be settled before #1039 can resume — and landing #1027 alone does
+not settle it. The 20 compilation diagnostics are the actionable residue:
+they are ordinary capability gaps, sized here for the first time with a real
+numerator against a real codebase.
 
 The protocol's **Input** bullet forbids choosing a different workload after
 meeting either obstacle, so the committed generator, seed and digest stand as
