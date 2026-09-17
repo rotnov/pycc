@@ -181,6 +181,15 @@ pub enum Ty {
     /// A unit variant adds no payload, so `size_of::<Ty>()` stays at the
     /// D-109 16-byte ceiling.
     Object,
+    /// A one-dimensional `memoryview` over contiguous `float` (C `double`)
+    /// elements, admitted only at a `pycc build --ext` boundary (Part 1 of
+    /// #1027, D-244). Carries no shape: what the boundary guarantees is
+    /// exactly what the four refusal arms in `src/ext_build.rs` check at
+    /// run time -- an exact `memoryview`, C-contiguous, `ndim == 1`, format
+    /// `"d"` -- so no payload could add information the wrapper has not
+    /// already proved. A unit variant adds no payload, so `size_of::<Ty>()`
+    /// stays at the D-109 16-byte ceiling.
+    MemoryView,
 }
 
 impl Ty {
@@ -204,6 +213,7 @@ impl Ty {
             Ty::Protocol(name) => name.to_string(),
             Ty::Optional(inner) => format!("{} | None", inner.name()),
             Ty::Object => "object".to_string(),
+            Ty::MemoryView => "memoryview".to_string(),
         }
     }
 }

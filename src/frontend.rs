@@ -210,8 +210,9 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
 
-/// [`resolve_frontend`] plus the native-mode foreign-import gate, for a
-/// `pycc build` without `--ext` (Part 1 of #1026).
+/// [`resolve_frontend`] plus the native-mode artifact gates, for a
+/// `pycc build` without `--ext`: the foreign-import gate (Part 1 of #1026)
+/// and the `memoryview`-annotation gate (Part 1 of #1027).
 ///
 /// The gate runs here rather than in `main.rs` for one reason: only this
 /// module holds the `ProgramSources` that says which *file* an import
@@ -228,17 +229,30 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
 /// former `main.rs` call site did.
 pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, FrontendFailure> {
     let (hir, sources) = link_frontend(path)?;
-    let native_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
+    let import_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
+    // Keyed by *item* index rather than import position: a `memoryview`
+    // annotation lives on an `HirItem::Function`, not in the import table,
+    // so it resolves to its owning file through the item bounds.
+    let memoryview_gaps = crate::memoryview_mode::refuse_in_native_mode(&hir);
     let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
-    match native_gaps {
-        Ok(()) => Ok(resolved),
-        Err(gaps) => Err(sources.group(
+    let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
+    if let Err(gaps) = import_gaps {
+        keyed.extend(
             gaps.into_iter()
-                .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic))
-                .collect(),
-        )),
+                .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
+        );
     }
+    if let Err(gaps) = memoryview_gaps {
+        keyed.extend(
+            gaps.into_iter()
+                .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
+        );
+    }
+    if keyed.is_empty() {
+        return Ok(resolved);
+    }
+    Err(sources.group(keyed))
 }
 
 fn attribute(

@@ -469,7 +469,8 @@ fn ty_contains_param(ty: &Ty) -> bool {
         | Ty::Infer
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => false,
+        | Ty::Object
+        | Ty::MemoryView => false,
     }
 }
 
@@ -3202,7 +3203,8 @@ fn scan_signature_ty_for_param(
         | Ty::Infer
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => Ok(()),
+        | Ty::Object
+        | Ty::MemoryView => Ok(()),
     }
 }
 

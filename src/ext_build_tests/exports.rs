@@ -262,8 +262,9 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
     // not shown a scalar-only list that reads as "no tuple at all".
     assert!(
         message.contains(
-            "a parameter must be `int`, `float`, `bool`, `str` or a `tuple` of \
-             `int`/`float`/`bool`, and a return type must be one of those or `None`"
+            "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` or a `tuple` \
+             of `int`/`float`/`bool`, and a return type must be one of those except \
+             `memoryview`, or `None`"
         ),
         "{message}"
     );
@@ -399,6 +400,7 @@ fn every_ty_the_gap_message_can_name_renders_a_python_spelling() {
         (Ty::Set(Box::new(Ty::Int)), "set"),
         (Ty::Tuple(Box::new(vec![Ty::Int])), "tuple"),
         (Ty::Object, "object"),
+        (Ty::MemoryView, "memoryview"),
         (Ty::Param(Box::new("T".to_string())), "that type"),
     ];
     for (ty, spelling) in cases {

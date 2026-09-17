@@ -74,6 +74,55 @@ fn bare_super_in_check_returns_c0001() {
     assert_eq!(err.code, "C0001");
 }
 
+// Part 1 of #1027: a `memoryview` parameter is admitted at a
+// `pycc build --ext` boundary, and the plan's section 3.5 admits *no*
+// operation on the value it binds. `reject_memoryview_read` states that by
+// refusing the read itself, which is the only expression that can produce a
+// `memoryview` at all -- there is no literal and no producing call. Without
+// it `pycc_codegen` reaches a local load it has no lowering for and panics
+// instead of diagnosing.
+#[test]
+fn reading_a_memoryview_parameter_is_a_capability_gap_rather_than_an_ice() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::MemoryView)],
+            return_ty: Ty::MemoryView,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`v`"), "{}", err.message);
+    assert!(err.message.contains("`memoryview`"), "{}", err.message);
+    assert!(err.message.contains("pycc build --ext"), "{}", err.message);
+}
+
+// The companion negative: the guard keys on the type, not on the name, so a
+// parameter of any other type still reads normally. Without this arm the
+// `Ok(())` fall-through of `reject_memoryview_read` is never executed by a
+// read that reaches it with a non-`memoryview` binding.
+#[test]
+fn reading_a_parameter_of_any_other_type_is_unaffected_by_the_memoryview_guard() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok());
+}
+
 // PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
 // expr` walk records a walrus target as a function-local name wherever it is
 // nested -- including inside a unary operand and a slice bound, which no

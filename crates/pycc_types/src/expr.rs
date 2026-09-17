@@ -228,6 +228,7 @@ pub(crate) fn infer_expr_in(
                     if env.in_function_body {
                         crate::foreign::reject_object_read(name, &ty)?;
                     }
+                    reject_memoryview_read(name, &ty)?;
                     Ok(ty)
                 }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -1597,6 +1598,44 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
         | Ty::Tuple(_)
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => false,
+        | Ty::Object
+        | Ty::MemoryView => false,
     }
+}
+
+/// `Err(C0001)` when `name` is bound to a `memoryview`.
+///
+/// Part 1 of #1027 admits `memoryview` at exactly one position: a parameter
+/// of a function exported across a `pycc build --ext` boundary, where the
+/// generated wrapper acquires the buffer, proves its shape and hands the
+/// compiled body a `{ ptr, len }` pair. The plan's section 3.5 states the
+/// other half of that admission -- "no aliasing into a local, no
+/// reassignment, no storing into a container, no passing to another
+/// function" -- and this is where it is enforced.
+///
+/// Refusing the *read* is what makes that list closed rather than a list.
+/// `memoryview` has no literal and no producing expression, so the only way
+/// a value of the type can reach any of those positions is through a read of
+/// its own parameter name; refusing the read therefore refuses every one of
+/// them at once, and any later one Part 2 invents along with them. Without
+/// it `pycc_codegen` reaches a local load it has no lowering for and panics
+/// (`reading a `memoryview`-typed local is not supported yet`) -- an ICE
+/// where the contract calls for a diagnostic.
+///
+/// `C0001` rather than a new code: this is the crate's established "valid
+/// Python this compiler version does not implement yet" spelling, and
+/// indexing the buffer is exactly what Part 2 of #1027 adds.
+fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
+    if matches!(ty, Ty::MemoryView) {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "using `{name}`, which is bound to a `memoryview`, is valid Python but not \
+                 implemented yet; Part 1 of #1027 admits a `memoryview` only as a parameter of \
+                 a `pycc build --ext` export"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    Ok(())
 }

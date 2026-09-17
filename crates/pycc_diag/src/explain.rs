@@ -1317,6 +1317,28 @@ print(numpy.pi)  # error[I0404]: printing a CPython object
 ",
     },
     DiagnosticExplanation {
+        code: "I0405",
+        severity: Severity::Error,
+        summary: "`memoryview` annotation in native mode; `pycc build --ext` is required",
+        explanation: "\
+I0405 reports a function whose signature names `memoryview` in a build that \
+produces a standalone native executable. A `memoryview` is a borrowed view \
+of storage a CPython interpreter owns: the value exists only because the \
+generated `pycc build --ext` wrapper acquired a `Py_buffer` from a real \
+`memoryview` object before the call and released it again afterwards. A \
+native artifact embeds no interpreter, so there is nothing to acquire a \
+buffer from and no way such a function could ever be called. Rebuild with \
+`pycc build --ext`, or change the annotation to a type a native artifact \
+can carry. Under `--ext` the parameter position is admitted and the return \
+position is not -- a `memoryview` return is the `C0003` capability gap \
+instead, because the wrapper has released the buffer by the time it would \
+have to hand one back.",
+        example: "\
+def total(xs: memoryview) -> float:  # error[I0405]: requires `pycc build --ext`
+    return 0.0
+",
+    },
+    DiagnosticExplanation {
         code: "W1001",
         severity: Severity::Warning,
         summary: "unreachable code",

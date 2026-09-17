@@ -640,6 +640,123 @@ static PyObject *pycc_ext_pack_str(void *result)
 }
 
 /*
+ * The `{ ptr, len }` pair a `memoryview` parameter crosses into compiled
+ * code as (Part 1 of #1027, D-244). Declared here rather than derived from
+ * `Py_buffer` on purpose, and it is the *whole* of what the compiled body
+ * ever sees of an acquired buffer.
+ *
+ * `len` is a copy of `buf.shape[0]`, the element count -- not `buf.len`,
+ * which is a byte count (a 27-element `float64` view reports `len == 216`
+ * and `itemsize == 8`). `shape[0]` is what CPython's own `len()` and
+ * `IndexError` bound use, so it is the authoritative bound for the indexing
+ * Part 2 adds.
+ *
+ * It is a copy because `Py_buffer.shape` is a `Py_ssize_t *` owned by the
+ * *exporter* and valid only until `PyBuffer_Release`. Carrying the pointer
+ * would make every generated wrapper's own release a use-after-free for
+ * anything that read through it afterwards. `pycc_ext_obj_*`-style opacity
+ * applies here too: nothing on the compiled side may reach the `Py_buffer`
+ * or the owning `PyObject *` at all, which is what keeps the buffer's
+ * lifetime wholly wrapper-owned.
+ *
+ * `long long` and not `Py_ssize_t` so the field matches the `i64` that
+ * `pycc_codegen`'s `ty_to_basic_type` gives every pycc `int`, exactly as
+ * `boundary_carrier`'s `Ty::Int` slot does.
+ */
+typedef struct {
+    void *ptr;
+    long long len;
+} PyccExtBufferView;
+
+/*
+ * Unpacks one argument at a `memoryview` parameter. Returns 0 with `*out`
+ * holding an acquired buffer the caller must release, or -1 with a CPython
+ * exception set and nothing acquired.
+ *
+ * Four refusals, in this order, and the order is the contract:
+ *
+ * 1. Not an exact `memoryview` -- a pycc-authored `TypeError`, nothing
+ *    acquired. `PyMemoryView_Check` and not `PyObject_CheckBuffer`: D-244
+ *    rule 7 defers to `docs/TYPE_SYSTEM.md` rule 4 (D-086), so `bytes`, an
+ *    `array.array` and a NumPy array are all refused here even though each
+ *    exports a buffer. Admitting them later is a widening, which is always
+ *    available; starting wide and narrowing would not be.
+ * 2. `PyObject_GetBuffer` fails -- CPython's own exception is propagated
+ *    verbatim (in practice `BufferError: memoryview: underlying buffer is
+ *    not C-contiguous`), because it says more about the operand than a
+ *    translated message could, and nothing is acquired when it fails.
+ * 3. `ndim != 1` -- released first, then a pycc-authored `TypeError`.
+ *    Part 1 admits one dimension only.
+ * 4. The element format is not `"d"` -- released first, then a
+ *    pycc-authored `TypeError` naming the format seen and the one required.
+ *    This is the arm an exact but wrongly-typed `memoryview` takes, e.g.
+ *    `memoryview(b"abc")`, whose format is `'B'`. `itemsize` is checked
+ *    alongside the format string rather than instead of it: the format is
+ *    the exporter's own claim, and the size is the arithmetic the compiled
+ *    code would do.
+ *
+ * `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` is the request. C-contiguity is what
+ * makes a plain pointer walk correct at all, and it implies `PyBUF_STRIDES`
+ * and so `PyBUF_ND`, which is what makes `ndim` and `shape` populated for
+ * arms 3 and 4 to read. `PyBUF_WRITABLE` is deliberately *not* requested:
+ * Part 1 never writes through the pointer, and requesting it would refuse
+ * the read-only views this boundary is meant to accept.
+ *
+ * Every symbol used here is in the limited API at this shim's
+ * `Py_LIMITED_API 0x030D0000` floor.
+ */
+static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssize_t index,
+                                      Py_buffer *out)
+{
+    PyObject *type_name;
+    char format[2];
+    int ndim;
+
+    if (!PyMemoryView_Check(obj)) {
+        type_name = PyType_GetName(Py_TYPE(obj));
+        if (type_name == NULL) {
+            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a memoryview");
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() argument %zd: '%U' object cannot be interpreted as a memoryview",
+                         fn_name, index + 1, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    if (PyObject_GetBuffer(obj, out, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) != 0) {
+        return -1;
+    }
+    ndim = out->ndim;
+    if (ndim != 1) {
+        PyBuffer_Release(out);
+        PyErr_Format(PyExc_TypeError,
+                     "%s() argument %zd: a memoryview with ndim %d is not supported yet -- "
+                     "only a one-dimensional memoryview is",
+                     fn_name, index + 1, ndim);
+        return -1;
+    }
+    /*
+     * Copied before the release below, because `out->format` points into
+     * storage the exporter owns. One character plus the terminator is
+     * enough to tell the admitted format apart from every other one: a
+     * longer format string is by definition not "d".
+     */
+    format[0] = (out->format == NULL) ? '\0' : out->format[0];
+    format[1] = '\0';
+    if (strcmp(format, "d") != 0 || (out->format != NULL && out->format[1] != '\0')
+        || out->itemsize != (Py_ssize_t)sizeof(double)) {
+        PyBuffer_Release(out);
+        PyErr_Format(PyExc_TypeError,
+                     "%s() argument %zd: a memoryview of format '%s' is not supported -- "
+                     "only format 'd' (a contiguous float64 buffer) is",
+                     fn_name, index + 1, format);
+        return -1;
+    }
+    return 0;
+}
+
+/*
  * Part 1 of #1026: the module-import helper compiled code calls for a
  * foreign `import numpy`.
  *

@@ -456,6 +456,14 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // the artifact retains for its whole lifetime; `docs/RUNTIME.md`
         // owns that rule).
         pycc_mir::Ty::Object => context.ptr_type(inkwell::AddressSpace::default()).into(),
+        // A `memoryview` parameter at a `pycc build --ext` boundary (Part 1
+        // of #1027, D-244): a pointer to the wrapper's own stack-resident
+        // `PyccExtBufferView` -- the `{ void *ptr, long long len }` pair the
+        // generated C fills from the acquired `Py_buffer` and keeps alive
+        // for the whole call. Compiled code never dereferences CPython's
+        // `Py_buffer` itself, so the pointee layout is pycc's own and the
+        // representation is just the pointer `Str`/`Object` already get.
+        pycc_mir::Ty::MemoryView => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // Deviation from the task brief: the brief's own version of this
         // catch-all's message read "(only int/float/bool/str/list[int] do)"
         // -- but that parenthetical is inaccurate twice over. This function
@@ -491,7 +499,8 @@ fn default_value_for_type<'ctx>(
         | pycc_mir::Ty::Set(_)
         | pycc_mir::Ty::Instance(_)
         | pycc_mir::Ty::Protocol(_)
-        | pycc_mir::Ty::Object => context
+        | pycc_mir::Ty::Object
+        | pycc_mir::Ty::MemoryView => context
             .ptr_type(inkwell::AddressSpace::default())
             .const_null()
             .into(),
