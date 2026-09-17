@@ -1639,3 +1639,36 @@ fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
     }
     Ok(())
 }
+
+/// `Err(C0001)` when a declaration's annotation is `memoryview`.
+///
+/// The companion to [`reject_memoryview_read`], at the one position that
+/// read cannot cover. `pycc_hir`'s `annotation_to_ty` is both the parser of
+/// a signature's types *and* the parser of a bare `x: T` declaration, so
+/// admitting `Ty::MemoryView` there widened every annotation position at
+/// once -- including a value-less `AnnAssign`, which `env.declare` then
+/// records with no scalar-type restriction and `pycc_mir` lowers to a
+/// `MirStmt::NoOp`. The program compiled silently, where `x: object` -- any
+/// other annotation this compiler does not implement -- is still refused.
+///
+/// This restores that refusal, so `src/memoryview_mode.rs`'s native-mode
+/// gate keeps its narrow job: the *signature* positions, which are the only
+/// ones `pycc build --ext` admits at all. The declaration is refused in both
+/// modes, because neither has anything to bind to the name.
+pub(crate) fn reject_memoryview_declaration(
+    target: &str,
+    annotation: &Ty,
+) -> Result<(), Diagnostic> {
+    if matches!(annotation, Ty::MemoryView) {
+        return Err(Diagnostic::error(
+            "C0001",
+            format!(
+                "declaring `{target}: memoryview` is valid Python but not implemented yet; \
+                 Part 1 of #1027 admits a `memoryview` only as a parameter of a \
+                 `pycc build --ext` export"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    Ok(())
+}

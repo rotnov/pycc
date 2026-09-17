@@ -54,6 +54,13 @@ pub(crate) const NATIVE_MEMORYVIEW_CODE: &str = "I0405";
 /// Private functions are gated too, unlike the `--ext` export set: the
 /// refusal is about the artifact having no interpreter, which a `_`-prefixed
 /// name does not change.
+///
+/// A *signature* is the whole of this gate's job. `pycc_hir`'s
+/// `annotation_to_ty` also parses a bare `x: memoryview` declaration, which
+/// this walk never reaches -- it visits `params` and `return_ty`, not
+/// statement bodies -- and which no artifact mode admits at all;
+/// `crates/pycc_types`'s `reject_memoryview_declaration` refuses that
+/// position with `C0001` in both modes.
 pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, Diagnostic)>> {
     let gaps: Vec<(usize, Diagnostic)> = hir
         .items

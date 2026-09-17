@@ -123,6 +123,60 @@ fn reading_a_parameter_of_any_other_type_is_unaffected_by_the_memoryview_guard()
     assert!(check(&hir).is_ok());
 }
 
+// Part 1 of #1027, round 1 of the pinned review: `annotation_to_ty` parses a
+// bare `x: T` declaration as well as a signature, so admitting
+// `Ty::MemoryView` there admitted the declaration too -- and a value-less
+// `AnnAssign` lowers to a `MirStmt::NoOp`, so the program compiled silently
+// where `x: object` is still refused. Both `AnnAssign` arms are covered: the
+// function-scope one here, the module-scope one below.
+#[test]
+fn declaring_a_memoryview_local_is_a_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: Vec::new(),
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::MemoryView,
+                    value: None,
+                    is_final: false,
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(1))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`x: memoryview`"), "{}", err.message);
+    assert!(err.message.contains("pycc build --ext"), "{}", err.message);
+}
+
+// The module-scope arm of the same refusal: a top-level `y: memoryview`.
+#[test]
+fn declaring_a_memoryview_at_module_scope_is_a_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::MemoryView,
+            value: None,
+            is_final: false,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+}
+
 // PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
 // expr` walk records a walrus target as a function-local name wherever it is
 // nested -- including inside a unary operand and a slice bound, which no

@@ -28,7 +28,7 @@ use exception::{
     check_raise_stmt, check_try_star_stmt, check_try_stmt, is_unshadowed_builtin_exception,
 };
 pub use expr::infer_expr;
-pub(crate) use expr::infer_expr_in;
+pub(crate) use expr::{infer_expr_in, reject_memoryview_declaration};
 pub(crate) use redeclaration::{
     check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
 };
@@ -1880,6 +1880,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             value,
             is_final,
         } => {
+            // Part 1 of #1027: a `memoryview` annotation is admitted only in
+            // a signature, never on a declaration -- see
+            // `expr::reject_memoryview_declaration`. Checked ahead of the
+            // value/no-value split so both shapes route through the one
+            // contract.
+            reject_memoryview_declaration(target, annotation)?;
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
                 // Part 4 of #1026 (PR 4c of #1083): a foreign CPython
@@ -3034,6 +3040,12 @@ fn check_stmt_in_function(
             value,
             is_final,
         } => {
+            // Part 1 of #1027: a `memoryview` annotation is admitted only in
+            // a signature, never on a declaration -- see
+            // `expr::reject_memoryview_declaration`. Checked ahead of the
+            // value/no-value split so both shapes route through the one
+            // contract.
+            reject_memoryview_declaration(target, annotation)?;
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)
                     .map_err(|d| empty_container::name_binding(d, target, value))?;
