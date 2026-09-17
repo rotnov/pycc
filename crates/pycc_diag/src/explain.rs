@@ -1332,7 +1332,10 @@ buffer from and no way such a function could ever be called. Rebuild with \
 can carry. Under `--ext` the parameter position is admitted and the return \
 position is not -- a `memoryview` return is the `C0003` capability gap \
 instead, because the wrapper has released the buffer by the time it would \
-have to hand one back. A signature is the only position the type is \
+have to hand one back -- that `C0003` is the export walk's own refusal, so \
+it covers a *public* function; the same return type on a function the walk \
+never visits (a private one, a method, a specialization) is the `C0001` \
+capability gap a declaration gets. A signature is the only position the type is \
 admitted at in either mode: a `memoryview` *declaration* (`x: memoryview`, \
 at module scope or in a function body) is a `C0001` capability gap in both, \
 because nothing produces a value to bind to such a name yet.",

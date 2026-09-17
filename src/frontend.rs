@@ -270,7 +270,10 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
 ///
 /// The foreign-import gate is *reported* after, so a program with both a
 /// type error and a foreign import still reports the type error first,
-/// exactly as the former `main.rs` call site did. The `memoryview` gate
+/// exactly as the former `main.rs` call site did -- when no `memoryview`
+/// gap fires in the same program. When one does, the early return below
+/// reports the collected gaps and the type check never runs at all, so
+/// there is no type error to order against. The `memoryview` gate
 /// cannot be: `crates/pycc_types`'s `reject_memoryview_read` refuses every
 /// *use* of a `memoryview`-typed name with `C0001`, so a body that so much
 /// as reads its own parameter fails the type check first, and the
