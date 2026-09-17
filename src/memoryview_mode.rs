@@ -223,6 +223,12 @@ mod tests {
             // A `memoryview` parameter is not this gate's business: the
             // read refusal in `crates/pycc_types` already closes it.
             func("total", vec![("v".to_string(), Ty::MemoryView)], Ty::Int),
+            // A non-function item is skipped: only a signature can name a
+            // return type at all.
+            HirItem::TopLevelStmt(pycc_hir::HirStmt::Assign {
+                target: "n".to_string(),
+                value: pycc_hir::HirExpr::IntLiteral(1),
+            }),
             func("_make", Vec::new(), Ty::MemoryView),
             func("Buf.view", Vec::new(), Ty::MemoryView),
         ]))
