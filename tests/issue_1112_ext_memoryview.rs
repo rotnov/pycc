@@ -356,7 +356,30 @@ def f() -> int:
 /// as a type error. Both seams now answer with the one `C0001`.
 #[test]
 fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
-    const CASES: [(&str, &str); 3] = [
+    const CASES: [(&str, &str); 6] = [
+        (
+            // Round 8 of the pinned review: an operation that inspects its
+            // argument's concrete term reported its own type error about a
+            // `memoryview` (`len` its `T0033`) before the capability gap
+            // could fire. The refusal sits at the solver's shared `Name`
+            // read seam, so these three arms are one fix, not three.
+            "1112_read_len",
+            "def total(v: memoryview) -> int:
+    return len(v)
+",
+        ),
+        (
+            "1112_read_subscript",
+            "def total(v: memoryview) -> int:
+    return v[0]
+",
+        ),
+        (
+            "1112_read_argument",
+            "def total(v: memoryview) -> int:
+    return int(v)
+",
+        ),
         (
             // Round 7 of the pinned review: a call target is a read of the
             // name too. The gate this one reaches is the solver's D-110
