@@ -147,6 +147,49 @@ def make() -> memoryview:
     assert!(err.contains("its return type `-> memoryview`"), "{err}");
 }
 
+/// The same return type on a *private* function, which `collect_exports`
+/// skips: before the round-4 fix nothing refused it, and `--ext` lowered
+/// the call's result into `pycc_codegen`'s "a `memoryview`-typed call
+/// result is not supported yet" panic -- a compiler crash on valid Python.
+/// Native mode was never affected, because `refuse_in_native_mode` walks
+/// private functions too; both halves are asserted here so a later fix
+/// cannot silently replace the documented `I0405` with the new `C0001`.
+#[test]
+fn a_private_memoryview_return_type_is_refused_rather_than_crashing_the_compiler() {
+    const PRIVATE_VIEW: &str = "def _make() -> memoryview:
+    return _make()
+
+
+def total() -> int:
+    _make()
+    return 0
+";
+    let dir = fixture("1112_private_return", PRIVATE_VIEW);
+    let ext = build_ext(&dir);
+    assert!(!ext.status.success(), "{}", stdout_of(&ext));
+    let err = stderr_of(&ext);
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(
+        err.contains("`_make`'s return type `-> memoryview`"),
+        "{err}"
+    );
+
+    let native = pycc()
+        .arg("build")
+        .arg(dir.join("view_probe.py"))
+        .arg("-o")
+        .arg(dir.join("view_probe"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    assert!(
+        stderr_of(&native).contains("error[I0405]"),
+        "{}",
+        stderr_of(&native)
+    );
+}
+
 /// Every position that is *not* a signature, refused end to end.
 ///
 /// Round 2 of the pinned review: `annotation_to_ty` is one parser for every

@@ -103,6 +103,72 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
     None
 }
 
+/// The `--ext` counterpart: one `C0001` per function whose *return* type is
+/// `memoryview`, or `Ok(())` when none is.
+///
+/// `src/ext_build.rs`'s `collect_exports` already refuses that return type
+/// on a *public* function, with `C0003` and the export-boundary wording.
+/// This closes the rest of the program: a private `def _make() ->
+/// memoryview`, a method, or a monomorphized specialization is skipped by
+/// that walk entirely, so nothing refused the signature and lowering the
+/// call's result reached `pycc_codegen`'s "a `memoryview`-typed call result
+/// is not supported yet" panic -- a compiler crash on valid Python, not a
+/// diagnostic. The `C0003` message's own advice ("rename it to `_name` to
+/// keep it out of the export set") pointed straight at that crash.
+///
+/// `C0001` rather than `C0003`: `docs/DIAGNOSTICS.md` defines `C0003` as a
+/// *public* function's signature failing to cross the boundary, which a
+/// private one is not. This is the same versioned capability gap
+/// `crates/pycc_types`'s `reject_memoryview_declaration` and
+/// `reject_memoryview_read` report, for the same underlying reason: Part 1
+/// of #1027 adds no expression that *produces* a `memoryview`, so there is
+/// nothing a function could return.
+///
+/// Only the return position is checked. A `memoryview` *parameter* on a
+/// private function is already closed by `reject_memoryview_read`: any use
+/// of that parameter is a `C0001`, and one that is never used carries no
+/// value into codegen. And native mode is not this function's concern --
+/// [`refuse_in_native_mode`] refuses both positions there, private
+/// functions included.
+///
+/// Called after `collect_exports`, so a public offender has already been
+/// reported as the `C0003` its documented boundary owes it and never
+/// reaches this walk.
+pub(crate) fn refuse_in_ext_mode(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
+    let gaps: Vec<Diagnostic> = hir
+        .items
+        .iter()
+        .filter_map(|item| {
+            let HirItem::Function {
+                name, return_ty, ..
+            } = item
+            else {
+                return None;
+            };
+            (*return_ty == Ty::MemoryView).then(|| ext_return_gap(name))
+        })
+        .collect();
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    Err(gaps)
+}
+
+fn ext_return_gap(name: &str) -> Diagnostic {
+    Diagnostic {
+        code: "C0001",
+        severity: Severity::Error,
+        message: format!(
+            "`{name}`'s return type `-> memoryview` is valid Python but not implemented yet; \
+             Part 1 of #1027 admits a `memoryview` only as a parameter of a `pycc build --ext` \
+             export, so no expression produces one to return"
+        ),
+        span: None,
+        label: None,
+        help: None,
+    }
+}
+
 fn gap(name: &str, position: &str) -> Diagnostic {
     Diagnostic {
         code: NATIVE_MEMORYVIEW_CODE,
@@ -149,6 +215,43 @@ mod tests {
             Ty::Float,
         )]);
         assert!(refuse_in_native_mode(&admitted).is_ok());
+    }
+
+    #[test]
+    fn ext_mode_refuses_a_memoryview_return_type_on_a_function_no_export_walk_visits() {
+        let gaps = refuse_in_ext_mode(&hir(vec![
+            // A `memoryview` parameter is not this gate's business: the
+            // read refusal in `crates/pycc_types` already closes it.
+            func("total", vec![("v".to_string(), Ty::MemoryView)], Ty::Int),
+            func("_make", Vec::new(), Ty::MemoryView),
+            func("Buf.view", Vec::new(), Ty::MemoryView),
+        ]))
+        .expect_err("a `memoryview` return type is refused under --ext");
+        let messages: Vec<&str> = gaps.iter().map(|gap| gap.message.as_str()).collect();
+        assert_eq!(gaps.len(), 2, "{messages:?}");
+        assert!(
+            gaps.iter()
+                .all(|gap| gap.code == "C0001" && gap.span.is_none()),
+            "{messages:?}"
+        );
+        assert!(
+            messages[0].contains("`_make`'s return type `-> memoryview`"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].contains("`Buf.view`'s return type `-> memoryview`"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn ext_mode_admits_a_program_that_returns_no_memoryview() {
+        let admitted = hir(vec![func(
+            "total",
+            vec![("v".to_string(), Ty::MemoryView)],
+            Ty::Float,
+        )]);
+        assert!(refuse_in_ext_mode(&admitted).is_ok());
     }
 
     #[test]

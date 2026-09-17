@@ -709,7 +709,9 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
                                       Py_buffer *out)
 {
     PyObject *type_name;
-    char format[2];
+    const char *declared;
+    size_t declared_length;
+    char format[16];
     int ndim;
 
     if (!PyMemoryView_Check(obj)) {
@@ -737,15 +739,24 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
         return -1;
     }
     /*
-     * Copied before the release below, because `out->format` points into
-     * storage the exporter owns. One character plus the terminator is
-     * enough to tell the admitted format apart from every other one: a
-     * longer format string is by definition not "d".
+     * Copied whole before the release below, because `out->format` points
+     * into storage the exporter owns and the message below names what it
+     * was actually handed (D-244 statement (e)). A PEP 3118 format is a
+     * handful of characters -- `'<d'` from a `ctypes` array is the shape
+     * this length actually serves -- but the exporter chooses it, so an
+     * over-long one is truncated with a visible `...` rather than trusted
+     * to fit. A truncated format is never `"d"`, so the comparison below
+     * still refuses it.
      */
-    format[0] = (out->format == NULL) ? '\0' : out->format[0];
-    format[1] = '\0';
-    if (strcmp(format, "d") != 0 || (out->format != NULL && out->format[1] != '\0')
-        || out->itemsize != (Py_ssize_t)sizeof(double)) {
+    declared = (out->format == NULL) ? "" : out->format;
+    declared_length = strlen(declared);
+    if (declared_length < sizeof(format)) {
+        memcpy(format, declared, declared_length + 1);
+    } else {
+        memcpy(format, declared, sizeof(format) - 4);
+        memcpy(format + sizeof(format) - 4, "...", 4);
+    }
+    if (strcmp(format, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {
         PyBuffer_Release(out);
         PyErr_Format(PyExc_TypeError,
                      "%s() argument %zd: a memoryview of format '%s' is not supported -- "

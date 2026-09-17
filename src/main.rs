@@ -411,6 +411,17 @@ fn plan_ext(
             gaps,
         )))
     })?;
+    // The rest of the program, which `collect_exports` never visits: a
+    // private function, a method, or a specialization whose return type is
+    // `memoryview` would otherwise reach codegen's own panic for a
+    // `memoryview`-typed call result (Part 1 of #1027).
+    memoryview_mode::refuse_in_ext_mode(typed_hir).map_err(|gaps| {
+        ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
+            &source_path.display().to_string(),
+            "",
+            gaps,
+        )))
+    })?;
     let probe = toolchain.probe().map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)

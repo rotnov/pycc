@@ -320,6 +320,18 @@ refuse(m.take_view, (memoryview(bytearray(8)),), {}, TypeError,
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 
+# 28b: a multi-character format. A `ctypes` array of `c_double` exports
+# `'<d'` -- the right itemsize and a format that is still not `'d'` -- so
+# it exercises the one arm where the message must name more than a single
+# character (D-244 statement (e): the `TypeError` names what it saw).
+import ctypes
+wide = memoryview((ctypes.c_double * 2)())
+assert wide.format == '<d' and wide.itemsize == 8
+refuse(m.take_view, (wide,), {}, TypeError,
+       "take_view() argument 1: a memoryview of format '<d' is not supported -- "
+       "only format 'd' (a contiguous float64 buffer) is",
+       True, (good_view,), 7)
+
 # The release property, which no refusal shape can state on its own: the
 # wrapper owns the `Py_buffer` for exactly the duration of the call, on the
 # success path as well as on every bail. `bytearray.append` raises
