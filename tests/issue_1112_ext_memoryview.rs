@@ -366,10 +366,16 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
             // argument's concrete term reported its own type error about a
             // `memoryview` (`len` its `T0033`) before the capability gap
             // could fire. The refusal sits at the solver's shared `Name`
-            // read seam, so these three arms are one fix, not three.
-            "1112_read_len",
+            // read seam, so these arms are one fix, not several.
+            //
+            // #1116 admitted `len(v)`, so the arm that used to spell it
+            // moves to an attribute read -- the same substitution #1113
+            // forced on the subscript arm below, and for the same reason:
+            // the arm's subject is the shared seam, not the operation that
+            // happens to reach it.
+            "1112_read_attribute",
             "def total(v: memoryview) -> int:
-    return len(v)
+    return v.nbytes
 ",
         ),
         (
