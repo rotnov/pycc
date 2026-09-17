@@ -110,6 +110,68 @@ fn a_memoryview_parameter_is_refused_by_a_native_build() {
     assert!(err.contains("pycc build --ext"), "{err}");
 }
 
+/// Round 5 of the pinned review: the signature refusal survives a body
+/// that *reads* the parameter.
+///
+/// `crates/pycc_types`' `reject_memoryview_read` refuses every use of a
+/// `memoryview`-typed name with `C0001`, and the type check used to run
+/// before `resolve_frontend_native` reported its artifact gates -- so a
+/// native build of a function that merely assigned its own parameter got
+/// the read-side `C0001` and never the `I0405` that `docs/RUNTIME.md` and
+/// the D-244 amendment promise for a `memoryview` in a signature in any
+/// build without `--ext`. The gate is now reported before the type check,
+/// and this pins that the documented code is what a user actually sees.
+#[test]
+fn a_memoryview_parameter_is_refused_with_i0405_even_when_the_body_reads_it() {
+    const READS_THE_VIEW: &str = "\
+def total(v: memoryview) -> int:
+    w = v
+    return 0
+";
+    let dir = fixture("1112_native_param_read", READS_THE_VIEW);
+    let build = pycc()
+        .arg("build")
+        .arg(dir.join("view_probe.py"))
+        .arg("-o")
+        .arg(dir.join("view_probe"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(err.contains("`total`'s parameter `v: memoryview`"), "{err}");
+    // The read refusal must not be what reaches the user instead: it
+    // describes a use, not the signature the artifact mode refuses.
+    assert!(!err.contains("error[C0001]"), "{err}");
+}
+
+/// Prioritizing the `memoryview` gate must not swallow the `I0403` it
+/// shares a call site with. A program carrying both a foreign import and a
+/// `memoryview` signature reports both, exactly as it did while the two
+/// gates were reported together after the type check.
+#[test]
+fn a_foreign_import_is_still_reported_alongside_the_memoryview_refusal() {
+    const BOTH: &str = "\
+import numpy
+
+
+def total(v: memoryview) -> int:
+    return 0
+";
+    let dir = fixture("1112_native_import_and_view", BOTH);
+    let build = pycc()
+        .arg("build")
+        .arg(dir.join("view_probe.py"))
+        .arg("-o")
+        .arg(dir.join("view_probe"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0403]"), "{err}");
+    assert!(err.contains("error[I0405]"), "{err}");
+}
+
 /// The other position, and the other mode: a `-> memoryview` return is
 /// refused in *both*. Natively it is the same `I0405`; under `--ext` it is
 /// `C0003`, because `BoundaryCarrier::into_scalar` answers `None` for the

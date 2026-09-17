@@ -220,13 +220,30 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
 /// against that dependency, not against the entry path (PR 1c of #1080
 /// review finding 2).
 ///
-/// Order matters twice. The refusal is *computed* before the type check,
-/// against the linked HIR whose item indices still line up with the
-/// per-file bounds -- `check_and_resolve_all_keyed` runs monomorphization
-/// and enum lowering, which rewrite the item list and recompute those
-/// positions. It is *reported* after, so a program with both a type error
-/// and a foreign import still reports the type error first, exactly as the
-/// former `main.rs` call site did.
+/// Order matters twice, and the two gates resolve it differently.
+///
+/// Both are *computed* before the type check, against the linked HIR whose
+/// item indices still line up with the per-file bounds --
+/// `check_and_resolve_all_keyed` runs monomorphization and enum lowering,
+/// which rewrite the item list and recompute those positions.
+///
+/// The foreign-import gate is *reported* after, so a program with both a
+/// type error and a foreign import still reports the type error first,
+/// exactly as the former `main.rs` call site did. The `memoryview` gate
+/// cannot be: `crates/pycc_types`'s `reject_memoryview_read` refuses every
+/// *use* of a `memoryview`-typed name with `C0001`, so a body that so much
+/// as reads its own parameter fails the type check first, and the
+/// signature-level `I0405` that `docs/RUNTIME.md` and D-244 promise for
+/// "a `memoryview` in a signature in a build without `--ext`" would never
+/// be emitted (#1115 review round 5). It is therefore reported *before*
+/// the type check -- together with any foreign-import gap found in the
+/// same program, so prioritizing it never swallows an `I0403` that would
+/// otherwise have been reported.
+///
+/// `pycc check` selects no artifact mode and so runs neither gate:
+/// [`check_frontend`] reports the `C0001` read refusal there, which is
+/// correct, because `I0405`'s contract is scoped to a *build* without
+/// `--ext`.
 pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, FrontendFailure> {
     let (hir, sources) = link_frontend(path)?;
     let import_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
@@ -234,8 +251,6 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     // annotation lives on an `HirItem::Function`, not in the import table,
     // so it resolves to its owning file through the item bounds.
     let memoryview_gaps = crate::memoryview_mode::refuse_in_native_mode(&hir);
-    let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
-        .map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
     if let Err(gaps) = import_gaps {
         keyed.extend(
@@ -243,12 +258,18 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
         );
     }
+    let refused_a_memoryview_signature = memoryview_gaps.is_err();
     if let Err(gaps) = memoryview_gaps {
         keyed.extend(
             gaps.into_iter()
                 .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
         );
     }
+    if refused_a_memoryview_signature {
+        return Err(sources.group(keyed));
+    }
+    let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
+        .map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
     if keyed.is_empty() {
         return Ok(resolved);
     }

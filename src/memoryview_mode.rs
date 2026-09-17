@@ -55,6 +55,13 @@ pub(crate) const NATIVE_MEMORYVIEW_CODE: &str = "I0405";
 /// refusal is about the artifact having no interpreter, which a `_`-prefixed
 /// name does not change.
 ///
+/// `src/frontend.rs`'s `resolve_frontend_native` reports these gaps *before*
+/// the type check, unlike the foreign-import gate beside it: otherwise a body
+/// that reads its own `memoryview` parameter fails
+/// `crates/pycc_types`'s `reject_memoryview_read` first and the signature
+/// never gets the code it is documented to get. That call site owns the
+/// reasoning.
+///
 /// A *signature* is the whole of this gate's job. `pycc_hir`'s
 /// `annotation_to_ty` also parses a bare `x: memoryview` declaration, which
 /// this walk never reaches -- it visits `params` and `return_ty`, not
