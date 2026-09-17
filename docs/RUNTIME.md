@@ -895,6 +895,37 @@ It is not owned by this boundary, but it compounds here, so prefer a named
 `str` local when measuring. [Issue #1092](https://github.com/rotnov/pycc/issues/1092)
 tracks releasing object temporaries.
 
+**The loop shape these parts were built for is now covered end to end, and
+the cost is measured rather than estimated.** Part 5 of
+[#1026](https://github.com/rotnov/pycc/issues/1026) adds two harnesses.
+`tests/issue_1084_loop_shape.rs` compiles a module-scope `for` loop that
+calls a method on a foreign object, unpacks its result into a
+`tuple[float, float, float]` and accumulates a `float`, then compares the
+extension module's answer against CPython's own execution of the identical
+source under the identical interpreter; the two agree byte for byte. That
+oracle is admissible for that subject specifically because its exported
+thunk takes no arguments and so never reaches
+[D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+rule 7's NEG-005 deviation. `tests/issue_1084_refcount_probe.rs` measures
+the price with `sys.getrefcount`, and states it as a differential: across a
+loop of `N` trips the reference count of a foreign module attribute grows
+by exactly `producing_operations * N`, where a producing operation is an
+attribute load. Measured per trip over 1000 and 2000 trips, and again for a
+lone `len` loop that isolates the producing side: `float(o)`, `bool(o)`,
+`int(o)`, `str(o)`, `len(o)` and the fixed-arity tuple unpack each add
+**+1** for the attribute load that feeds them and **+0** for the conversion
+itself. The instrument reads the foreign module's own attributes, so what it
+shows is that the conversion adds nothing *there*; a helper's internal
+temporaries — `pycc_ext_obj_unpack_float_tuple`'s per-element
+`PyNumber_Float`, say — stay covered by construction, as the D-244
+amendments record them. The consuming operation is therefore not what leaks
+across the boundary — #1092 is,
+and its closing change is expected to edit that test, since every absolute
+in it becomes `0`. A `#[cfg(unix)]` peak-RSS arm covers the blind spot the
+refcount instrument leaves, checking that a hundredfold increase in trips
+does not move the resident set on pycc's own heap for a *bound* `str(o)`;
+a discarded one stays #1109's, as above.
+
 The same rule decides what a *duplicate* foreign import does, and that
 outcome is a recorded decision rather than an unexercised side effect. A
 module's imports are not definitions to `pycc_hir::program::link`, so two
