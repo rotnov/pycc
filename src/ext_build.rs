@@ -1014,13 +1014,6 @@ fn wrapper_for(export: &ExtExport) -> String {
     out
 }
 
-/// The C parameter-type list of the call a wrapper makes into the compiled
-/// program: every declared parameter flattened to the slots it occupies,
-/// then one out-pointer per element of a returned `tuple`.
-///
-/// `"void"` and not `""` for the empty list, because an empty C parameter
-/// list means "unspecified", not "none". The rule applies to the *combined*
-/// list: only a nullary export with no `tuple` return has one.
 /// One `PyBuffer_Release` line per `memoryview` slot, indented with
 /// `indent`, or the empty string when the export has none.
 ///
@@ -1036,6 +1029,13 @@ fn buffer_releases(slots: &[BoundaryCarrier], indent: &str) -> String {
         .collect()
 }
 
+/// The C parameter-type list of the call a wrapper makes into the compiled
+/// program: every declared parameter flattened to the slots it occupies,
+/// then one out-pointer per element of a returned `tuple`.
+///
+/// `"void"` and not `""` for the empty list, because an empty C parameter
+/// list means "unspecified", not "none". The rule applies to the *combined*
+/// list: only a nullary export with no `tuple` return has one.
 fn c_param_list(slots: &[BoundaryCarrier], out_slots: &[(&'static str, &'static str)]) -> String {
     let mut types: Vec<String> = Vec::new();
     for slot in slots {
