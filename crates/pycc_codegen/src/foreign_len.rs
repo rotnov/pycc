@@ -1,6 +1,7 @@
-//! Emission for `len(o)`, truth testing and the `float(o)`, `int(o)` and
-//! `str(o)` conversions on a CPython object value (Part 3 of #1026, PR 3a of
-//! #1082; Part 4 of #1026, PRs 4a and 4b of #1083).
+//! Emission for `len(o)`, truth testing, the `float(o)`, `int(o)` and
+//! `str(o)` conversions and the fixed-arity all-`float` tuple unpack on a
+//! CPython object value (Part 3 of #1026, PR 3a of #1082; Part 4 of #1026,
+//! PRs 4a, 4b and 4c of #1083).
 //!
 //! The third sibling of `foreign_attr.rs` and `foreign_call.rs`, carved out
 //! of `lib.rs` for the same reason (AGENTS.md's "Keep source files
@@ -17,16 +18,27 @@
 //! encoded word, exactly like [`emit_len`]'s, and a pointer holding the
 //! `PyStrObj *` a `str` literal's own emission produces.
 //!
+//! PR 4c's [`emit_unpack_float_tuple`] is the sixth, and the first whose
+//! out-slot is not a single scalar: the helper fills an array of `arity`
+//! `double`s, which this module then rebuilds into the D-115/D-116 by-value
+//! LLVM struct the fixed-arity all-`float` tuple annotation denotes (the
+//! PEP 585 variadic `tuple[float, ...]` stays refused, so no arity is ever
+//! unknown here). The family resemblance is otherwise exact -- one call to
+//! a fixed shim helper, `-1` for failure, no reference escaping -- which is
+//! why it lives here and not in a module of its own.
+//!
 //! **Ownership** (`docs/RUNTIME.md`). None of these helpers lets a reference
 //! escape -- `pycc_ext_obj_len` answers a D-141 encoded `int` word,
 //! `pycc_ext_obj_truthy` answers a C `int`, `pycc_ext_obj_to_float`
 //! answers a `double`, `pycc_ext_obj_to_int` answers a D-141 encoded word
 //! and `pycc_ext_obj_to_str` answers a `PyStrObj *` copied out of CPython's
-//! own buffer -- each after releasing the CPython temporary its conversion
-//! protocol handed it, on *every* exit rather than only the successful one
-//! -- and none touches its operand's refcount. So unlike an attribute load
-//! or a method call, none of these adds anything to the #1092 leak-only set:
-//! there is nothing to leak in compiled code and nothing left to release.
+//! own buffer, and `pycc_ext_obj_unpack_float_tuple` writes plain `double`s
+//! through an out-param -- each after releasing the CPython temporary its
+//! conversion protocol handed it, on *every* exit rather than only the
+//! successful one -- and none touches its operand's refcount. So unlike an
+//! attribute load or a method call, none of these adds anything to the #1092
+//! leak-only set: there is nothing to leak in compiled code and nothing left
+//! to release.
 //!
 //! **Failure** (`docs/RUNTIME.md`). Every helper here leaves *CPython's*
 //! error indicator set, which pycc's own pending-exception guard (D-173) cannot
@@ -125,6 +137,26 @@ fn obj_to_str_fn<'ctx>(
     module.add_function(
         EXT_OBJ_TO_STR_SYMBOL,
         context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
+        None,
+    )
+}
+
+/// Declares the shim's
+/// `int pycc_ext_obj_unpack_float_tuple(PyObject *, long long, double *)`
+/// once per module, on [`obj_len_fn`]'s pattern and for its reason.
+fn obj_unpack_float_tuple_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL,
+        context
+            .i32_type()
+            .fn_type(&[ptr.into(), context.i64_type().into(), ptr.into()], false),
         None,
     )
 }
@@ -435,6 +467,107 @@ pub(super) fn emit_to_str<'ctx>(
         .expect("build_load should not fail")
         .into_pointer_value();
     Scalar::Str(value)
+}
+
+/// Emits the unpack of a CPython object into a fixed-arity all-`float`
+/// tuple and yields the assembled [`Scalar::Tuple`] (Part 4 of #1026, PR 4c
+/// of #1083).
+///
+/// The one emitter here whose result is an *aggregate*. D-115 holds a tuple
+/// as a by-value LLVM struct of fixed-width scalars, so the shim cannot
+/// hand one back through a scalar out-parameter: the out-slot is an
+/// `[arity x double]` array, and the struct is reassembled here field by
+/// field with `build_insert_value` -- exactly how `ext_thunk.rs` rebuilds a
+/// tuple parameter out of its flattened slots, and for the same reason
+/// (pycc's aggregate convention is not the platform C struct ABI, so no
+/// aggregate may cross this seam).
+///
+/// `arity` is passed to the helper as an `i64` argument rather than baked
+/// into the symbol: the admission rule is any fixed arity with every
+/// element `float`, so nothing on either side may hard-code a three.
+///
+/// **Strict container, converting elements** -- the paragraph
+/// [`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL`] records. The runtime object's
+/// items are never type-checked by pycc; a bad item fails at run time with
+/// whatever exception CPython's own `PyNumber_Float` raises, on
+/// [`fail_on_negative`]'s module-exec failure edge together with a wrong
+/// container type and a wrong arity.
+///
+/// The module-exec entry assertion is [`emit_len`]'s, unchanged: `pycc_types`
+/// admits this shape only at a *module-level* annotated assignment.
+pub(super) fn emit_unpack_float_tuple<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    base: Scalar<'ctx>,
+    arity: usize,
+) -> Scalar<'ctx> {
+    let entry_fn = expect_module_exec_entry(builder);
+    let unpack_fn = obj_unpack_float_tuple_fn(context, module);
+    let base_ptr = expect_object_pointer(base);
+    let element_ty = context.f64_type();
+    let array_ty = element_ty.array_type(u32::try_from(arity).expect("a tuple's arity fits a u32"));
+    let out = out_slot_in_entry_block(
+        builder,
+        entry_fn,
+        array_ty,
+        "foreign_unpack_float_tuple_out",
+    );
+    let status = builder
+        .build_call(
+            unpack_fn,
+            &[
+                base_ptr.into(),
+                context.i64_type().const_int(arity as u64, false).into(),
+                out.into(),
+            ],
+            "foreign_unpack_float_tuple",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_unpack_float_tuple")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_unpack_float_tuple returns int")
+        .into_int_value();
+    fail_on_negative(
+        context,
+        builder,
+        entry_fn,
+        status,
+        "foreign_unpack_float_tuple",
+    );
+    let struct_ty = ty_to_basic_type(
+        context,
+        pycc_mir::Ty::Tuple(Box::new(vec![pycc_mir::Ty::Float; arity])),
+    )
+    .into_struct_type();
+    let mut aggregate = struct_ty.get_undef();
+    for field in 0..arity {
+        // The out-slot is one `[arity x double]` allocation, so each field
+        // is a GEP into it rather than its own slot: one `alloca` hoisted
+        // into the entry block keeps a module-scope loop around this
+        // assignment from growing the host's stack, which is
+        // `out_slot_in_entry_block`'s whole reason for existing.
+        let element_ptr = unsafe {
+            builder
+                .build_in_bounds_gep(
+                    array_ty,
+                    out,
+                    &[
+                        context.i32_type().const_zero(),
+                        context.i32_type().const_int(field as u64, false),
+                    ],
+                    "foreign_unpack_float_tuple_elem",
+                )
+                .expect("build_in_bounds_gep should not fail for a constant array index")
+        };
+        let element = builder
+            .build_load(element_ty, element_ptr, "foreign_unpack_float_tuple_value")
+            .expect("build_load should not fail");
+        aggregate = builder
+            .build_insert_value(aggregate, element, field as u32, "tuple_insert")
+            .expect("build_insert_value should not fail for a well-typed tuple field")
+            .into_struct_value();
+    }
+    Scalar::Tuple(aggregate)
 }
 
 #[cfg(test)]
@@ -922,6 +1055,127 @@ mod tests {
                 "{callee}: one call site per conversion, both on the one declaration: {ir}"
             );
         }
+    }
+
+    /// `x: tuple[float, float, float] = <object>` at module scope, for the
+    /// PR 4c arm: the MIR the front end produces for an annotated assignment
+    /// of a foreign object to a fixed-arity all-`float` tuple. The example is
+    /// spelled out rather than elided, because the PEP 585 variadic
+    /// `tuple[float, ...]` is the one spelling this arm never sees.
+    fn unpack(module: &str, arity: usize) -> Vec<MirItem> {
+        program(module, |base| {
+            vec![MirStmt::Assign {
+                target: "unpacked".to_string(),
+                value: MirExpr::ObjUnpackFloatTuple {
+                    base: Box::new(base),
+                    arity,
+                },
+            }]
+        })
+    }
+
+    /// The unpack reaches the shim through the shared constant, passes the
+    /// arity as a call argument, and takes the module-exec failure edge.
+    ///
+    /// Asserted through [`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL`] rather than
+    /// against a literal for the lazy-link reason that constant records.
+    /// The arity is asserted as an *argument* because the whole point of
+    /// the helper's `long long arity` parameter is that nothing hard-codes
+    /// the three of `tuple[float, float, float]`; driving two different
+    /// arities through one table is what proves it.
+    #[test]
+    fn a_foreign_float_tuple_unpack_calls_the_shim_helper_with_its_arity() {
+        for arity in [1usize, 3] {
+            let ir = entry_ir(
+                &format!("foreign_unpack_float_tuple_call_{arity}"),
+                unpack("numpy", arity),
+            );
+            assert!(
+                ir.contains(EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL),
+                "{arity}: {ir}"
+            );
+            assert!(
+                ir.contains(&format!(
+                    "i64 {arity}, ptr %foreign_unpack_float_tuple_out)"
+                )),
+                "{arity}: the arity travels as an argument: {ir}"
+            );
+            assert!(ir.contains("foreign_unpack_float_tuple_failed"), "{ir}");
+            assert!(ir.contains("foreign_unpack_float_tuple_fail:"), "{ir}");
+            assert!(ir.contains("foreign_unpack_float_tuple_cont:"), "{ir}");
+            assert!(
+                ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
+                "{arity}: {ir}"
+            );
+        }
+    }
+
+    /// The out-slot is one `[arity x double]` array hoisted into the entry
+    /// block, and the tuple is reassembled from it by value.
+    ///
+    /// Two claims in one module, because they are the same design decision
+    /// seen from both ends. The array `alloca` must sit in the entry block
+    /// for `the_out_slot_alloca_is_hoisted_into_the_entry_block`'s reason --
+    /// this is the fifth slot type `out_slot_in_entry_block` serves, and the
+    /// first that is an aggregate -- and the result must leave the emitter
+    /// as an `insertvalue`-built struct rather than a pointer, because D-115
+    /// holds a tuple by value and no aggregate may cross the shim seam.
+    #[test]
+    fn the_unpack_out_slot_is_an_array_in_the_entry_block_rebuilt_by_value() {
+        let ir = entry_ir(
+            "foreign_unpack_float_tuple_in_loop",
+            program("numpy", |base| {
+                vec![MirStmt::While {
+                    test: MirExpr::BoolLiteral(false),
+                    body: vec![MirStmt::Assign {
+                        target: "unpacked".to_string(),
+                        value: MirExpr::ObjUnpackFloatTuple {
+                            base: Box::new(base),
+                            arity: 3,
+                        },
+                    }],
+                }]
+            }),
+        );
+        let alloca_at = ir
+            .find("foreign_unpack_float_tuple_out = alloca [3 x double]")
+            .unwrap_or_else(|| panic!("no array out-slot alloca: {ir}"));
+        let first_label_at = ir
+            .find("\n\n")
+            .unwrap_or_else(|| panic!("no second basic block: {ir}"));
+        assert!(alloca_at < first_label_at, "{ir}");
+        // One load and one `insertvalue` per element, and the aggregate the
+        // last one produces is the emitter's whole result.
+        assert_eq!(
+            occurrences(&ir, "load double, ptr %foreign_unpack"),
+            3,
+            "{ir}"
+        );
+        assert_eq!(
+            occurrences(&ir, "insertvalue { double, double, double }"),
+            3,
+            "{ir}"
+        );
+    }
+
+    /// Two unpacks in one module share one extern declaration --
+    /// `obj_unpack_float_tuple_fn`'s early return, proved the way
+    /// `a_second_foreign_float_conversion_reuses_the_one_extern_declaration`
+    /// proves its own: LLVM renames a duplicate declaration rather than
+    /// rejecting it, so the needle carries the call's own `(`.
+    ///
+    /// The two arities differ deliberately: one declaration has to serve
+    /// every arity, which is exactly why the arity is a parameter.
+    #[test]
+    fn a_second_foreign_unpack_reuses_the_one_extern_declaration() {
+        let mut items = unpack("numpy", 3);
+        items.extend(unpack("scipy", 2));
+        let ir = entry_ir("foreign_unpack_float_tuple_twice", items);
+        assert_eq!(
+            occurrences(&ir, &format!("@{EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL}(")),
+            2,
+            "one call site per unpack, both on the one declaration: {ir}"
+        );
     }
 
     #[test]

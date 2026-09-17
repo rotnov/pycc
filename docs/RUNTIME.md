@@ -741,6 +741,32 @@ Neither is the thunk seam's unpacker: `pycc_ext_unpack_int_at` and
 closed, and refusing a duck type is what an explicit conversion must not do.
 The rule-7 paragraph above covers all four conversions unchanged.
 
+**The `tuple` unpack is the sixth helper on that edge, and the first with a
+non-scalar out-slot.** PR 4c of
+[#1083](https://github.com/rotnov/pycc/issues/1083) added exactly one shim
+helper, `pycc_ext_obj_unpack_float_tuple`, which admits a module-level
+annotated assignment of an `object` to a fixed-arity all-`float` `tuple`. Its
+admission rule is **strict container, converting elements**: it checks
+`PyTuple_Check` — not `CheckExact`, so a structseq such as `sys.version_info`
+is admitted — with exactly the declared arity, then converts each item with
+`PyNumber_Float` and writes the `double`s through an out-parameter. The
+container half is strict because D-115/D-116 fix the destination's shape at
+compile time and no arity makes a differently sized sequence representable;
+the element half converts for the reason the rule-7 paragraph above states,
+so the items are never type-checked and a non-numeric one surfaces CPython's
+own exception. The arity is a `long long` **parameter**, never a constant, so
+one helper serves every admitted arity. Failure is reported as `-1` with a
+CPython exception set, on the same unconditional `Py_mod_exec` edge every
+helper in this section uses, so the unpack adds exactly **three** new `-1`
+returns — a non-tuple operand, a wrong-length tuple, and an item CPython
+declines to convert — and no more. The out-parameter is an `[arity x double]`
+array hoisted as a single slot into the module-exec entry block, on the rule
+`len`'s `i64` slot follows, so a module-scope loop around one does not grow
+the host's stack; codegen then rebuilds the D-115/D-116 by-value struct from
+that slot with `insertvalue`. Like every other operation in this section it
+is admitted only in a module body, on the identical positional rule, so it
+needs no exception bridge either.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -770,8 +796,8 @@ to owns that reference from then on. Codegen consequently emits no release of
 its own around a subscript load, and a failed packer's `NULL` is safe to pass
 straight through.
 
-`len`, a truth test and Part 4's two conversions are the operations that add
-nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
+`len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
+the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither
 touches the operand's refcount on any path, so `len(o)` or `if o:` inside a
 module-scope loop is refcount-neutral no matter the trip count. The
@@ -788,7 +814,14 @@ failing return as well as the successful one; `pycc_ext_obj_to_str` carries the
 one additional ordering constraint, that the `pycc_rt_str_from_literal` copy
 must complete **before** the `Py_DECREF`, because `PyUnicode_AsUTF8AndSize`
 points into the temporary's own buffer and that buffer dies with it. Only an
-encoded `i64` and a pycc-owned `str` handle escape into compiled code.
+encoded `i64` and a pycc-owned `str` handle escape into compiled code. PR
+4c's `pycc_ext_obj_unpack_float_tuple` follows the same rule once per item:
+each `PyNumber_Float` temporary is released inside the iteration that
+produced it, before the next item is read and before any failing return, so
+the failing exit holds nothing and an operand of any arity leaves no
+reference behind. It borrows its operand, whose items it reads with the
+borrowing `PyTuple_GetItem`, and only plain `double`s escape into compiled
+code.
 **Part 4 therefore does not grow
 [#1092](https://github.com/rotnov/pycc/issues/1092)**, and
 `float(o)`/`bool(o)`/`int(o)`/`str(o)` in a module-scope loop hold no CPython

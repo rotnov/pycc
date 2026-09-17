@@ -164,6 +164,24 @@ pub(super) fn lower_stmt(
                 // to `int` via `IntBoundary` (D-141), preserving the
                 // runtime `bool` identity while reporting `Ty::Int`.
                 MirExpr::IntBoundary(Box::new(value))
+            } else if let Some(arity) = float_tuple_annotation_arity(annotation)
+                .filter(|_| matches!(value.ty(), Ty::Object))
+            {
+                // Part 4 of #1026 (PR 4c of #1083): a foreign CPython object
+                // under a fixed-arity all-`float` tuple annotation. Unlike
+                // the two widenings above this is a *converting* node with
+                // a failure edge, not a representation fix-up -- see
+                // `MirExpr::ObjUnpackFloatTuple`'s own documentation. The
+                // arity comes back from the predicate itself rather than
+                // from a second destructuring of `annotation`: this is the
+                // one place it is still visible, and a separate `let
+                // Ty::Tuple(..) = annotation else { unreachable!() }` would
+                // be an unreachable line the D-242 coverage gate cannot
+                // account for.
+                MirExpr::ObjUnpackFloatTuple {
+                    base: Box::new(value),
+                    arity,
+                }
             } else if let Ty::Optional(inner) = annotation {
                 // `T | None` (PEP 604, D-197, #763, Part 1 of #747): a bare
                 // `None` initializer, or a bare `inner`-typed (or
@@ -864,5 +882,34 @@ pub(super) fn lower_stmt(
             }
         }
         HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
+    }
+}
+
+/// The arity of `ty` when it is a fixed-arity tuple annotation whose every
+/// element is `float` -- the shape a foreign CPython object may be assigned
+/// to at a module-level annotated assignment (Part 4 of #1026, PR 4c of
+/// #1083) -- and `None` otherwise. The arity is returned rather than a bare
+/// `bool` so the caller never has to destructure `annotation` a second time
+/// on a path it has already proved is a tuple.
+///
+/// The **canonical statement of this admission rule is
+/// `pycc_types::foreign::is_object_float_tuple_annotation`**, which is what
+/// actually decides whether the program compiles; this is its lowering-side
+/// mirror and the two must not drift. It is restated rather than shared
+/// because this crate does not depend on `pycc_types` -- the same split
+/// `pycc_hir`'s shape checks and `pycc_types`' type checks already live on.
+///
+/// Arity zero is excluded here as well as there: `tuple[()]` never reaches
+/// this crate at all (`pycc_hir` refuses it with `T0053`), so the guard is
+/// defence in depth against a hand-built HIR module rather than a reachable
+/// user program.
+fn float_tuple_annotation_arity(ty: &Ty) -> Option<usize> {
+    match ty {
+        Ty::Tuple(elems)
+            if !elems.is_empty() && elems.iter().all(|elem| matches!(elem, Ty::Float)) =>
+        {
+            Some(elems.len())
+        }
+        _ => None,
     }
 }

@@ -1107,3 +1107,82 @@ fn a_non_exception_base_is_dropped_from_the_synthesized_class() {
     assert!(!inc.contains("PyTuple_Pack"), "{inc}");
     assert!(!inc.contains("Mixin"), "{inc}");
 }
+
+#[test]
+fn the_shims_float_tuple_unpack_is_a_strict_container_with_converting_elements() {
+    // PR 4c of #1083's admission rule, read off the shim itself. The two
+    // halves answer two different questions and a reviewer must be able to
+    // see both: `PyTuple_Check` plus an exact-arity gate for the container
+    // (D-115/D-116 leave no shape for a differently sized sequence), and
+    // `PyNumber_Float` for the elements (the author wrote `float` in the
+    // annotation, so CPython's own conversion is the contract -- PR 4a's
+    // rule-7 paragraph).
+    let shim = shim_c();
+    let body = &shim[shim
+        .find("int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)")
+        .expect("the unpack helper")..];
+    // Bounded at this helper's own closing brace, the way the `unpack_str`
+    // test above bounds its own: the assertions below would otherwise read
+    // every later helper's prose too.
+    let end = body.find("\n}\n").expect("the helper's end");
+    let body = &body[..end];
+    let container = body.find("!PyTuple_Check(o)").expect("the container check");
+    let arity = body
+        .find("if (size != (Py_ssize_t)arity) {")
+        .expect("the exact-arity gate");
+    let convert = body
+        .find("converted = PyNumber_Float(PyTuple_GetItem(o, index));")
+        .expect("the element conversion");
+    assert!(
+        container < arity && arity < convert,
+        "the container must be settled before any element is converted:\n{body}"
+    );
+    // `PyTuple_Check`, never `PyTuple_CheckExact`: a `tuple` subclass is a
+    // tuple, and the elements are copied out by value.
+    assert!(!body.contains("PyTuple_CheckExact"), "{body}");
+    // The elements are converted, never type-checked: a `PyFloat_Check`
+    // here would be the closed-seam rule applied to an explicit conversion.
+    assert!(!body.contains("PyFloat_Check"), "{body}");
+    // Each temporary is released inside the iteration that produced it, so
+    // the failing exit holds nothing (#1092 stays where it is).
+    let release = body.find("Py_DECREF(converted);").expect("the release");
+    let store = body.find("out[index] = value;").expect("the store");
+    assert!(
+        convert < release && release < store,
+        "the temporary must be released before the next iteration:\n{body}"
+    );
+    // Two distinct refusals, each naming the declared arity: a reviewer
+    // reading "strict container" must find exactly the wrong-type and the
+    // wrong-length message, and neither may borrow the thunk seam's
+    // function-name-and-argument-index phrasing, which has no meaning at an
+    // assignment.
+    assert!(
+        body.contains("\"expected a tuple of %zd floats, got a '%U' object\""),
+        "{body}"
+    );
+    assert!(
+        body.contains("\"expected a tuple of %zd floats, got a tuple of length %zd\""),
+        "{body}"
+    );
+    assert!(!body.contains("() argument"), "{body}");
+}
+
+#[test]
+fn the_shims_float_tuple_unpack_takes_its_arity_as_a_parameter() {
+    // The admission rule is *any* fixed arity with every element `float`,
+    // so no side of this seam may hard-code the three of
+    // `tuple[float, float, float]`. The declaration carries `long long
+    // arity`, matching the `i64` argument
+    // `crates/pycc_codegen/src/foreign_len.rs` emits, and the helper's name
+    // is `pycc_ext_obj_unpack_float_tuple` -- never `pycc_ext_unpack_*`,
+    // whose prefix `refusal_completeness.rs` scans and whose suffix set it
+    // pins exactly.
+    let shim = shim_c();
+    assert!(
+        shim.contains(
+            "int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)"
+        ),
+        "{shim}"
+    );
+    assert!(!shim.contains("pycc_ext_unpack_float_tuple"), "{shim}");
+}

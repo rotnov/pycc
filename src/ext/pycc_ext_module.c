@@ -1202,6 +1202,118 @@ int pycc_ext_obj_to_str(PyObject *o, void **out)
     return 0;
 }
 
+/*
+ * Part 4 of #1026 (PR 4c of #1083): unpacking a CPython object into a
+ * fixed-arity all-`float` `tuple` annotation at a module-level annotated
+ * assignment (`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Writes `arity` C doubles through `out[0..arity)` and answers `0`, or
+ * answers `-1` with a CPython exception already set.
+ *
+ * `arity` is a parameter rather than a compile-time constant on purpose:
+ * the admission rule is "any fixed arity, every element `float`", so
+ * nothing on either side of this seam may hard-code the three of
+ * `tuple[float, float, float]`.
+ *
+ * # Strict container, converting elements
+ *
+ * The *container* is checked and the *elements* are converted, and the two
+ * halves answer two different questions.
+ *
+ * `PyTuple_Check` with an exact-arity test is the same closed-boundary
+ * reading `pycc_ext_unpack_tuple` documents: D-116 fixes a tuple type's
+ * arity, pycc holds the result as a by-value LLVM struct of that exact
+ * width (D-115), and there is no shape to write a shorter or longer
+ * sequence into. `PyTuple_Check` and not `PyTuple_CheckExact` for that
+ * helper's reason too -- a `tuple` subclass *is* a tuple, and the elements
+ * are copied out by value so the subclass identity does not survive the
+ * crossing. A `list`, a generator or any other iterable is refused: this is
+ * an assignment to a declared `tuple`, not an unpacking protocol.
+ *
+ * The *elements*, by contrast, run `PyNumber_Float` -- the operand's own
+ * `__float__`, `__index__` or string parse -- which is the rule-7 paragraph
+ * on `pycc_ext_obj_to_float` above, unchanged: the author wrote `float` in
+ * the annotation, so CPython's own conversion to `float` is what they asked
+ * for. It is therefore deliberately *not* `pycc_ext_unpack_float_at`, whose
+ * `PyFloat_Check` refusal exists because the *thunk export seam* is closed.
+ *
+ * # Ownership
+ *
+ * Each `PyNumber_Float` temporary is released inside the same loop
+ * iteration that produced it, before the next one is created. So the
+ * failing exit holds nothing: an element that fails to convert leaves the
+ * previous iterations' temporaries already released and produces no
+ * temporary of its own. Nothing but doubles escapes into compiled code, and
+ * this helper adds nothing to the #1092 leak-only set -- Part 4's property,
+ * unchanged.
+ *
+ * `PyTuple_GetItem` returns a *borrowed* reference and is infallible here,
+ * because the exact-arity check above has already run --
+ * `pycc_ext_unpack_tuple` records that the arity gate exists precisely to
+ * make the later `GetItem`s infallible, and the same gate serves the same
+ * purpose here.
+ *
+ * `PyFloat_AsDouble` on the result of `PyNumber_Float` cannot itself fail,
+ * that result being a `float` by construction; its `-1.0`-plus-
+ * `PyErr_Occurred()` convention is still tested for the reason
+ * `pycc_ext_obj_to_float` records, as defence in depth and so that the
+ * ownership rule above holds on a path that is meant to be unreachable.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ * `arity` is guarded with it: codegen only ever emits a call for an arity
+ * of at least one (the type-checker's own admission rule requires a
+ * non-empty tuple), so a non-positive arity can only mean a corrupted call.
+ */
+int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
+{
+    PyObject *type_name;
+    PyObject *converted;
+    Py_ssize_t size;
+    Py_ssize_t index;
+    double value;
+
+    if (o == NULL || out == NULL || arity < 1) {
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc_ext_obj_unpack_float_tuple called with an invalid argument");
+        return -1;
+    }
+    if (!PyTuple_Check(o)) {
+        type_name = PyType_GetName(Py_TYPE(o));
+        if (type_name == NULL) {
+            PyErr_Format(PyExc_TypeError,
+                         "expected a tuple of %zd floats, got a non-tuple object",
+                         (Py_ssize_t)arity);
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "expected a tuple of %zd floats, got a '%U' object",
+                         (Py_ssize_t)arity, type_name);
+            Py_DECREF(type_name);
+        }
+        return -1;
+    }
+    size = PyTuple_Size(o);
+    if (size != (Py_ssize_t)arity) {
+        PyErr_Format(PyExc_TypeError,
+                     "expected a tuple of %zd floats, got a tuple of length %zd",
+                     (Py_ssize_t)arity, size);
+        return -1;
+    }
+    for (index = 0; index < size; index++) {
+        converted = PyNumber_Float(PyTuple_GetItem(o, index));
+        if (converted == NULL) {
+            return -1;
+        }
+        value = PyFloat_AsDouble(converted);
+        Py_DECREF(converted);
+        if (value == -1.0 && PyErr_Occurred()) {
+            return -1;
+        }
+        out[index] = value;
+    }
+    return 0;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

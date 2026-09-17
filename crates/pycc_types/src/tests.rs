@@ -25,6 +25,7 @@ mod constraints;
 mod empty_container_registry;
 mod enum_unrolling;
 mod exception_handling;
+mod foreign_float_tuple;
 mod generic_class_instantiation;
 mod generic_class_substitution;
 mod generic_method_dedup;

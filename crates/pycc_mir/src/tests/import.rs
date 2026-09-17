@@ -708,3 +708,159 @@ fn a_user_defined_int_or_str_function_is_lowered_as_a_real_call_not_the_builtin(
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// PR 4c of #1083 (Part 4 of #1026): a module-level annotated assignment
+// of the bound object to a fixed-arity all-`float` tuple.
+//
+// Same rationale as the sections above -- this is the only place the
+// `HirStmt::AnnAssign` -> `MirExpr::ObjUnpackFloatTuple` split runs on
+// real HIR. `pycc_codegen`'s `foreign_len.rs` tests hand-build the node
+// because they are about what LLVM receives, and the integration tests
+// either stop at `pycc check` (which never lowers) or need a hosting
+// interpreter.
+//
+// 4c adds **no HIR variant**: the HIR is an ordinary `AnnAssign` over an
+// ordinary value expression. That is why `monomorphize.rs`'s
+// `rewrite_protocol_calls_in_stmt`, `pycc_types`' `bind_local_types_in_stmt`
+// and the empty-container pre-pass need no new arm -- each already has an
+// `AnnAssign` arm, and the #1104/#1105 missing-arm defect class reproduces
+// only for a *new* statement or expression shape.
+// ---------------------------------------------------------------------
+
+/// A module importing `numpy` at index 0 whose single statement is
+/// `<target>: <annotation> = <value>`.
+fn module_with_ann_assign(target: &str, annotation: Ty, value: pycc_hir::HirExpr) -> HirModule {
+    HirModule {
+        items: vec![HirItem::TopLevelStmt(pycc_hir::HirStmt::AnnAssign {
+            target: target.to_string(),
+            annotation,
+            value: Some(value),
+            is_final: false,
+        })],
+        ..module_with_imports(vec![foreign("numpy", 0)])
+    }
+}
+
+/// The value of the single lowered top-level `Assign` in `hir`.
+fn only_assigned_value(hir: &HirModule) -> MirExpr {
+    let mir = build(hir);
+    mir.items
+        .iter()
+        .find_map(|item| match item {
+            MirItem::TopLevelStmt(MirStmt::Assign { value, .. }) => Some(value.clone()),
+            _ => None,
+        })
+        .expect("the module has exactly one top-level assignment")
+}
+
+fn float_tuple(arity: usize) -> Ty {
+    Ty::Tuple(Box::new(vec![Ty::Float; arity]))
+}
+
+#[test]
+fn an_annotated_assignment_of_a_foreign_object_lowers_to_an_unpack() {
+    // `import numpy` / `x: tuple[float, float, float] = numpy`. Two
+    // arities, because the node carries the arity rather than rediscovering
+    // it and nothing may hard-code the three.
+    for arity in [1usize, 3] {
+        let hir = module_with_ann_assign(
+            "x",
+            float_tuple(arity),
+            pycc_hir::HirExpr::Name("numpy".to_string()),
+        );
+        let value = only_assigned_value(&hir);
+        // The node carries no `ty` field: `ty()` rebuilds the annotation
+        // from the arity, which is the contract the variant documents.
+        assert_eq!(value.ty(), float_tuple(arity), "{arity}");
+        let MirExpr::ObjUnpackFloatTuple { base, arity: got } = value else {
+            panic!("{arity}: expected an `ObjUnpackFloatTuple`");
+        };
+        assert_eq!(got, arity);
+        assert!(matches!(*base, MirExpr::Name { ref name, ty: Ty::Object } if name == "numpy"));
+    }
+}
+
+#[test]
+fn an_annotated_assignment_of_a_foreign_attribute_keeps_the_load_as_its_base() {
+    // `x: tuple[float, float] = numpy.shape`: the initializer is an
+    // `ObjAttrGet` rather than a bare name, which proves the split keys on
+    // the lowered initializer's *type* and not on it being a module
+    // binding -- `foreign.rs`'s "every refusal must key on the type, never
+    // on the producing expression shape" rule, in its admitting direction.
+    let hir = module_with_ann_assign(
+        "x",
+        float_tuple(2),
+        attr_get(pycc_hir::HirExpr::Name("numpy".to_string()), "shape"),
+    );
+    let MirExpr::ObjUnpackFloatTuple { base, .. } = only_assigned_value(&hir) else {
+        panic!("expected an `ObjUnpackFloatTuple`");
+    };
+    let MirExpr::ObjAttrGet { attr, .. } = *base else {
+        panic!("expected the base to stay an `ObjAttrGet`");
+    };
+    assert_eq!(attr, "shape");
+}
+
+#[test]
+fn an_annotated_assignment_that_is_not_the_admitted_shape_is_left_alone() {
+    // The negative half of `float_tuple_annotation_arity`, driven through the
+    // lowering rather than through the predicate directly so the guard's
+    // placement in the widening chain is what is under test.
+    //
+    // Three shapes, one per clause. A non-object initializer under a float
+    // tuple annotation (the `matches!(value.ty(), Ty::Object)` half), an
+    // object under a *mixed* tuple (`elems.iter().all(...)`, which
+    // `pycc_types` refuses with `T0025` before lowering ever runs), and an
+    // object under a non-tuple annotation. None may become an unpack; the
+    // last is not even reachable from a real program, since `pycc_types`
+    // refuses it too -- lowering must simply not invent a node for it.
+    let numpy = || pycc_hir::HirExpr::Name("numpy".to_string());
+    for (label, annotation, value) in [
+        (
+            "a native tuple initializer",
+            float_tuple(2),
+            pycc_hir::HirExpr::TupleLiteral(vec![
+                pycc_hir::HirExpr::FloatLiteral(1.0),
+                pycc_hir::HirExpr::FloatLiteral(2.0),
+            ]),
+        ),
+        (
+            "a mixed tuple annotation",
+            Ty::Tuple(Box::new(vec![Ty::Float, Ty::Int])),
+            numpy(),
+        ),
+        ("a non-tuple annotation", Ty::Float, numpy()),
+    ] {
+        let hir = module_with_ann_assign("x", annotation, value);
+        assert!(
+            !matches!(
+                only_assigned_value(&hir),
+                MirExpr::ObjUnpackFloatTuple { .. }
+            ),
+            "{label}: must not lower to an unpack"
+        );
+    }
+}
+
+#[test]
+fn an_unpacks_walrus_binding_is_collected_from_its_base() {
+    // `MirExpr::collect_named_expr_bindings` is where the #1104/#1105
+    // defect class actually lands for a new expression node: a walrus the
+    // walk misses is a name codegen never allocates storage for. The node
+    // has exactly one child, so the base is the only place one can hide.
+    let mut found = Vec::new();
+    MirExpr::ObjUnpackFloatTuple {
+        base: Box::new(MirExpr::NamedExpr {
+            name: "o".to_string(),
+            value: Box::new(MirExpr::Name {
+                name: "numpy".to_string(),
+                ty: Ty::Object,
+            }),
+            ty: Ty::Object,
+        }),
+        arity: 3,
+    }
+    .collect_named_expr_bindings(&mut found);
+    assert_eq!(found, vec![("o".to_string(), Ty::Object)]);
+}
