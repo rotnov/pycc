@@ -476,16 +476,23 @@ fn a_protocol_method_s_memoryview_parameter_is_refused_by_a_native_build() {
 /// mode-agnostic refusal: a class really can satisfy the member under
 /// `--ext`, because an exported function receives the view and passes it
 /// inward. Pinned so a later round does not "fix" this into a refusal.
+///
+/// The assertion is that no *refusal* is reported, not that the build
+/// succeeds. What this test owns is a frontend decision -- both memoryview
+/// gates run before the toolchain is probed -- and asserting success would
+/// silently make it a CPython-headers test: the required legs run with a
+/// 3.9 interpreter, where `--ext` stops at the `Py_LIMITED_API` version
+/// check long after the gates have had their say. The arm that really
+/// builds and loads an `--ext` artifact is the `#[ignore]`d hosted test at
+/// the end of this file, as it is for every other `ext` assertion here.
 #[test]
-fn a_protocol_method_s_memoryview_parameter_is_admitted_by_an_ext_build() {
+fn a_protocol_method_s_memoryview_parameter_is_not_refused_by_an_ext_build() {
     let dir = fixture("1112_protocol_param_ext", PROTOCOL_PARAM);
     let build = protocol_build(&dir, true);
-    assert!(
-        build.status.success(),
-        "{}\n{}",
-        stdout_of(&build),
-        stderr_of(&build)
-    );
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0405]"), "{err}");
+    assert!(!err.contains("error[C0001]"), "{err}");
+    assert!(!err.contains("Sink.total"), "{err}");
 }
 
 const PROTOCOL_RETURN: &str = "\
