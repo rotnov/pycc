@@ -7008,3 +7008,14 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
         assert_eq!(param_tys[0].name(), expected);
     }
 }
+
+#[test]
+fn a_memoryview_ty_names_itself_with_its_python_spelling() {
+    // Part 1 of #1027. `Ty::name` is the spelling every *type-system*
+    // diagnostic renders a type with; `src/ext_build.rs`'s own `render_ty`
+    // is the separate `ext`-boundary spelling, pinned by
+    // `src/ext_build_tests/exports.rs`. The two must agree for the type to
+    // read the same in a `T00xx` and in a `C0003`, and nothing else in the
+    // crate reaches this arm today, so this is where that is stated.
+    assert_eq!(Ty::MemoryView.name(), "memoryview");
+}
