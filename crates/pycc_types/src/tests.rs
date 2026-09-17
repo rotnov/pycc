@@ -578,12 +578,16 @@ fn len_of_a_non_memoryview_name_is_unaffected_by_the_new_guard() {
 /// The monomorphizer is the third walker over the same expression, and its
 /// `Call` arm recurses into every argument -- which reaches the bare name
 /// and its `C0001` -- so it needs a guard of its own, exactly as its
-/// `Subscript` arm already does. Mirrors
-/// `a_buffer_read_survives_a_module_that_holds_a_generic_function`: the
-/// generic function is what makes the module take the monomorphizing path
-/// at all.
+/// `Subscript` arm already does.
+///
+/// `check_and_resolve` rather than `check`: the monomorphizer is a
+/// *post*-check phase (`module.rs`'s `check_and_resolve_all_keyed` runs it
+/// after signatures resolve), so `check` alone never reaches it and a
+/// module that passes `pycc check` could still fail in `pycc build`. The
+/// generic `ident` is what makes `monomorphize` walk the module at all
+/// rather than taking its no-generics early return.
 #[test]
-fn a_buffer_length_read_survives_a_module_that_holds_a_generic_function() {
+fn a_buffer_length_read_survives_monomorphization_beside_a_generic() {
     let mut hir = memoryview_subject(
         Ty::Int,
         vec![HirStmt::Return(Some(HirExpr::Call {
@@ -596,6 +600,32 @@ fn a_buffer_length_read_survives_a_module_that_holds_a_generic_function() {
         params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
         return_ty: Ty::Param(Box::new("T".to_string())),
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+    });
+    assert!(check_and_resolve(&hir).is_ok());
+}
+
+/// The solver is the second walker, and it runs only when something in the
+/// module forces it: any `Ty::Infer` signature routes `check` through
+/// `infer_function_signatures_with_solver_all` first, which runs
+/// `collect_expr_constraints` over every expression -- including this
+/// `len(b)`, whose argument recursion would otherwise reach the solver's
+/// own shared `Name` read seam and its `C0001`. The unannotated private
+/// helper is the established way this file forces that path (see
+/// `a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path`).
+#[test]
+fn len_of_a_memoryview_survives_the_solver_path() {
+    let mut hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "_constant".to_string(),
+        params: vec![],
+        return_ty: Ty::Infer,
+        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
     });
     assert!(check(&hir).is_ok());
 }
