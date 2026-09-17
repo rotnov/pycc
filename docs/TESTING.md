@@ -839,8 +839,9 @@ they are ordinary capability gaps, sized here for the first time with a real
 numerator against a real codebase.
 
 The protocol's **Input** bullet forbids choosing a different workload after
-meeting either obstacle, so the committed generator, seed and digest stand as
-they are and the run waits rather than the obstacles reshaping the run.
+meeting any of these obstacles, so the committed generator, seed and digest
+stand as they are and the run waits rather than the obstacles reshaping the
+run.
 
 #### What the boundary costs, measured (not part of the protocol)
 
