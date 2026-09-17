@@ -953,7 +953,12 @@ The supported consumer contract is now explicit and enforced:
   `docs/PYTHON_STANDARDS.md` -- spread across the three rather than taken
   from one, because `docs/ROADMAP.md` is the document that grows every
   milestone and a single donor would have become the next binding
-  constraint. D-227 rejected raising `budget_kib`
+  constraint. #1114 then raised `docs/ROADMAP.md` again, to 174080 bytes,
+  for the sentence recording that #1027's `memoryview` carrier is complete,
+  drawing 256 bytes each from `README.md` (17920 -> 17664) and
+  `docs/PYTHON_STANDARDS.md` (40960 -> 40704) -- the two documents carrying
+  the largest slack at that commit, spread for the same reason #1021's was.
+  D-227 rejected raising `budget_kib`
   a third time, so growth is absorbed by reallocation between documents
   rather than by a larger ceiling, and the 512 unallocated bytes are
   preserved across every such reallocation. Because the per-resource budgets now bind first by

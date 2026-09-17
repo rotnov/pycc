@@ -20,10 +20,15 @@
 //! thunk cannot carry. `total_x()` takes no arguments, so this subject never
 //! reaches that deviation, and the compiled artifact is therefore expected to
 //! agree with CPython's own execution of the same source *byte for byte*.
-//! That is what `the_loop_shape_matches_cpython` asserts. The reasoning does
-//! not generalize: a subject with an annotated parameter reaches rule 7's
-//! deviation and has no admissible oracle, which is why the #1067 harness
-//! carries none.
+//! That is what `the_loop_shape_matches_cpython` asserts. What does not
+//! generalize is narrower than "any annotated parameter": D-244's Part 1
+//! amendment, statement (e), records that rule 7's conforming-call oracle is
+//! unaffected by widening the admitted parameter set, so a subject whose
+//! every annotated parameter has a type the thunk *does* carry still has an
+//! admissible oracle -- `tests/issue_1114_numpy_oracle.rs` is one, over a
+//! `memoryview` and an `int`. It is a parameter whose type the thunk
+//! **cannot** carry that reaches NEG-005's deviation and has no oracle,
+//! which is why the #1067 harness carries none.
 //!
 //! **The fixture layout is deliberate.** The foreign stub `pycc_p5_mesh.py`
 //! sits in the scratch directory root and the pycc entry module in `src/`
