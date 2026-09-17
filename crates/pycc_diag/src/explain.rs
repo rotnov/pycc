@@ -1319,7 +1319,7 @@ print(numpy.pi)  # error[I0404]: printing a CPython object
     DiagnosticExplanation {
         code: "I0405",
         severity: Severity::Error,
-        summary: "`memoryview` annotation in native mode; `pycc build --ext` is required",
+        summary: "`memoryview` in a signature in native mode; `pycc build --ext` is required",
         explanation: "\
 I0405 reports a function whose signature names `memoryview` in a build that \
 produces a standalone native executable. A `memoryview` is a borrowed view \
@@ -1332,7 +1332,10 @@ buffer from and no way such a function could ever be called. Rebuild with \
 can carry. Under `--ext` the parameter position is admitted and the return \
 position is not -- a `memoryview` return is the `C0003` capability gap \
 instead, because the wrapper has released the buffer by the time it would \
-have to hand one back.",
+have to hand one back. A signature is the only position the type is \
+admitted at in either mode: a `memoryview` *declaration* (`x: memoryview`, \
+at module scope or in a function body) is a `C0001` capability gap in both, \
+because nothing produces a value to bind to such a name yet.",
         example: "\
 def total(xs: memoryview) -> float:  # error[I0405]: requires `pycc build --ext`
     return 0.0

@@ -177,6 +177,29 @@ fn declaring_a_memoryview_at_module_scope_is_a_capability_gap() {
     assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
 }
 
+// The guard sits *ahead* of each arm's value/no-value split, so the valued
+// shape routes through the same contract -- without this the guard could be
+// moved below the split and both value-less tests above would still pass,
+// while `x: memoryview = <expr>` silently reported something else.
+#[test]
+fn declaring_a_memoryview_with_an_initializer_is_the_same_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::MemoryView,
+            value: Some(HirExpr::IntLiteral(1)),
+            is_final: false,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+}
+
 // PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
 // expr` walk records a walrus target as a function-local name wherever it is
 // nested -- including inside a unary operand and a slice bound, which no

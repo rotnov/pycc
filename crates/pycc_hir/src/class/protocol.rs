@@ -258,6 +258,30 @@ pub(super) fn lower_protocol_class(
                         ann.range,
                     ));
                 }
+                // Part 1 of #1027: the same argument, for the same
+                // reason, one type further out. A slot is a single `i64`
+                // word (D-154) and `is_scalar_slot_type` restricts every
+                // path that establishes one, so no class could satisfy a
+                // `memoryview` attribute either -- and unlike a container
+                // there is no producing expression to satisfy it *with*.
+                // Kept as its own arm rather than folded into the container
+                // list above because the message's reasoning differs: a
+                // `memoryview` is admitted at a `pycc build --ext`
+                // signature and nowhere else, which is the sentence a
+                // reader needs here.
+                if matches!(attr_ty, Ty::MemoryView) {
+                    return Err(unsupported(
+                        format!(
+                            "protocol attribute `{class_name}.{attr_name}` has type \
+                             `memoryview`, which is not supported yet -- no class could \
+                             satisfy it, because every class attribute slot is restricted to \
+                             a scalar type (`int`, `float`, `bool`, `str`); Part 1 of #1027 \
+                             admits a `memoryview` only as a parameter of a \
+                             `pycc build --ext` export"
+                        ),
+                        ann.range,
+                    ));
+                }
                 // A protocol attribute cannot have a default value.
                 if ann.value.is_some() {
                     return Err(unsupported(

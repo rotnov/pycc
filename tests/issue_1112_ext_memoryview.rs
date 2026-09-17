@@ -147,6 +147,99 @@ def make() -> memoryview:
     assert!(err.contains("its return type `-> memoryview`"), "{err}");
 }
 
+/// Every position that is *not* a signature, refused end to end.
+///
+/// Round 2 of the pinned review: `annotation_to_ty` is one parser for every
+/// annotation position, so admitting `Ty::MemoryView` for a signature
+/// admitted it everywhere at once. Three of the five non-signature
+/// positions were already closed by gates that predate this branch -- a
+/// class attribute and a dataclass field are both restricted to a scalar
+/// slot type -- so what this pins is the two that were not: the bare
+/// declaration (`crates/pycc_types`' `reject_memoryview_declaration`, at
+/// module scope and in a function body alike) and the protocol attribute
+/// (`crates/pycc_hir`'s own D-228 arm in `class/protocol.rs`). All of them
+/// are `C0001`, in both artifact modes, because Part 1 adds no expression
+/// that produces a `memoryview` value to bind to any of these names.
+#[test]
+fn every_non_signature_memoryview_position_is_refused() {
+    const CASES: [(&str, &str, &str); 5] = [
+        (
+            "1112_decl_module",
+            "y: memoryview
+
+def f() -> int:
+    return 1
+",
+            "declaring `y: memoryview`",
+        ),
+        (
+            "1112_decl_local",
+            "def f() -> int:
+    x: memoryview
+    return 1
+",
+            "declaring `x: memoryview`",
+        ),
+        (
+            "1112_protocol_attr",
+            "from typing import Protocol
+
+
+class P(Protocol):
+    x: memoryview
+
+
+def f() -> int:
+    return 1
+",
+            "protocol attribute `P.x` has type `memoryview`",
+        ),
+        (
+            "1112_class_attr",
+            "class C:
+    x: memoryview
+
+    def __init__(self) -> None:
+        pass
+
+
+def f() -> int:
+    return 1
+",
+            "class attribute `x` has type `memoryview`",
+        ),
+        (
+            "1112_dataclass_field",
+            "from dataclasses import dataclass
+
+
+@dataclass
+class D:
+    x: memoryview
+
+
+def f() -> int:
+    return 1
+",
+            "dataclass field `x` has type `memoryview`",
+        ),
+    ];
+    for (name, source, expected) in CASES {
+        let dir = fixture(name, source);
+        let build = pycc()
+            .arg("build")
+            .arg(dir.join("view_probe.py"))
+            .arg("-o")
+            .arg(dir.join("view_probe"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!build.status.success(), "{name}: {}", stdout_of(&build));
+        let err = stderr_of(&build);
+        assert!(err.contains("error[C0001]"), "{name}: {err}");
+        assert!(err.contains(expected), "{name}: {err}");
+    }
+}
+
 /// The hosted arm: the same annotation the two arms above refuse builds as
 /// an extension module, and the host calls it with a real `memoryview`.
 ///
