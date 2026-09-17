@@ -260,7 +260,7 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 ## product-sprint-1 — annotated code callable from CPython
 
-A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core: the hosted `ext` artifact, foreign imports (#1026 Parts 1-3 landed, 4 partial), a buffer-protocol bridge and an embedded executable, as #1025-#1028 under parent #1014, with #1017 (containers) and #1018 (statements and expressions) also in the sprint as blockers of the first acceptance item below; `docs/DELIVERY_PLAN.md` owns the six-issue closure condition. The corpus metric (CI's non-blocking `corpus-compile-rate` job) stays a report, not the contract.
+A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core: the hosted `ext` artifact, foreign imports (#1026 Parts 1-4 landed, 5 open), a buffer-protocol bridge and an embedded executable, as #1025-#1028 under parent #1014, with #1017 (containers) and #1018 (statements and expressions) also in the sprint as blockers of the first acceptance item below; `docs/DELIVERY_PLAN.md` owns the six-issue closure condition. The corpus metric (CI's non-blocking `corpus-compile-rate` job) stays a report, not the contract.
 
 **Accept:**
 

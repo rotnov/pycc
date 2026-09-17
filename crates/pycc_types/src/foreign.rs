@@ -149,6 +149,33 @@
 //! is untouched, because the refusal is on the object and not on a `str`
 //! derived from one.
 //!
+//! **PR 4c of #1083 admits the opaque type at one *annotated assignment*.**
+//! `x: tuple[float, float, float] = <object>` in a module body -- and more
+//! generally any fixed-arity annotation whose every element is `float` --
+//! now compiles. This is the first Part 4 operation that is not a call:
+//! `check_stmt`'s module-level `HirStmt::AnnAssign` arm tests
+//! [`is_object_float_tuple_annotation`] *ahead of* `is_assignable_env`, so
+//! the relaxation is a branch in that one arm rather than a widening of
+//! `is_assignable`, which would have admitted the pair everywhere a value
+//! flows into a declared type.
+//!
+//! **Strict container, converting elements.** The shim checks
+//! `PyTuple_Check` with an exact-arity test and then runs `PyNumber_Float`
+//! on each item; the runtime object's items are never type-checked by pycc,
+//! and a bad item fails at run time with whatever CPython raises. The two
+//! halves answer two different questions -- D-115/D-116 leave no shape for
+//! a differently-sized sequence, while `float` is a type the author wrote,
+//! which makes converting to it the same explicit-conversion case PR 4a
+//! records.
+//!
+//! Everything else stays refused, and the refusals are two different
+//! diagnostics: a *mixed* annotation such as `tuple[float, int]` is the
+//! ordinary `T0025` this arm already produced, while PEP 585's variadic
+//! `tuple[float, ...]` never reaches this crate -- `pycc_hir` refuses the
+//! `...` type argument with `T0053` while lowering the annotation. The
+//! in-function arm gains no branch at all: the read of the foreign name is
+//! already `I0404` there, which PR 4c's own test pins.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -168,6 +195,32 @@ use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{ImportBinding, Ty};
 
+/// Whether a declared annotation is a fixed-arity tuple whose every
+/// element is `float` -- the one annotation a [`Ty::Object`] initializer
+/// may be assigned to (Part 4 of #1026, PR 4c of #1083).
+///
+/// This is the **canonical statement of that admission rule**. Two mirrors
+/// restate it and must not drift: `pycc_mir::stmt`'s
+/// `float_tuple_annotation_arity`, which decides whether the lowering emits
+/// `MirExpr::ObjUnpackFloatTuple`, and the shim helper's own exact-arity
+/// `PyTuple_Check`, which enforces the container half at run time. Neither
+/// can share this function -- `pycc_mir` does not depend on this crate, and
+/// the shim is C.
+///
+/// **Fixed arity only.** PEP 585's variadic `tuple[float, ...]` is not
+/// admitted and does not reach here at all: `pycc_hir` refuses the `...`
+/// type argument with `T0053` while lowering the annotation, which is a
+/// different diagnostic from the `T0025` a *mixed* annotation such as
+/// `tuple[float, int]` still gets from the caller below. Both stay refused.
+///
+/// The emptiness test guards `tuple[()]`, which `pycc_hir` also refuses
+/// with `T0053` before this crate runs; it is kept because the rule is
+/// "arity at least one", and because codegen's out-slot is an
+/// `[arity x double]` array that a zero arity would make degenerate.
+pub(crate) fn is_object_float_tuple_annotation(ty: &Ty) -> bool {
+    matches!(ty, Ty::Tuple(elems) if !elems.is_empty() && elems.iter().all(|elem| matches!(elem, Ty::Float)))
+}
+
 /// The diagnostic every unsupported operation on a CPython object gets.
 ///
 /// `operation` is a noun phrase naming what the *consumer* was about to
@@ -182,8 +235,10 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
              scalar-argument method calls, `len`, truth testing, a \
-             scalar-key subscript load, `for` iteration and the `float`, \
-             `bool`, `int` and `str` conversions on it and nothing else"
+             scalar-key subscript load, `for` iteration, the `float`, \
+             `bool`, `int` and `str` conversions and an annotated \
+             module-level assignment to a fixed-arity all-`float` `tuple` \
+             on it and nothing else"
         ),
         Span::new(0, 0),
     )

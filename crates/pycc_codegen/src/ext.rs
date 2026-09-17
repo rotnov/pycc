@@ -292,6 +292,36 @@ pub const EXT_OBJ_TO_INT_SYMBOL: &str = "pycc_ext_obj_to_int";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
 
+/// The fixed C shim's fixed-arity all-`float` tuple unpack helper (Part 4
+/// of #1026, PR 4c of #1083): it takes a borrowed `PyObject *`, the
+/// declared arity and a `double *` out-array, writes that many converted
+/// doubles and returns `0`, or returns `-1` with the CPython exception
+/// already set.
+///
+/// **Strict container, converting elements.** The helper checks
+/// `PyTuple_Check` with an *exact*-arity test and then converts each item
+/// with `PyNumber_Float`. The two halves answer two different questions:
+/// D-115/D-116 hold a tuple as a by-value LLVM struct of fixed width, so
+/// there is no shape a `list`, a generator or a differently-sized tuple
+/// could be written into -- while the elements' `float` is a type the
+/// author wrote in the annotation, which makes running CPython's own
+/// conversion protocol on them the same explicit-conversion case
+/// [`EXT_OBJ_TO_FLOAT_SYMBOL`] records. It is therefore *not*
+/// `pycc_ext_unpack_float_at`, whose `PyFloat_Check` refusal exists because
+/// the thunk export seam is closed.
+///
+/// **The arity is a parameter, never a constant.** The admission rule is
+/// any fixed arity with every element `float`, so neither this declaration
+/// nor the shim may hard-code the three of `tuple[float, float, float]`.
+///
+/// **Ownership.** Each `PyNumber_Float` temporary is released inside the
+/// same loop iteration that produced it, so the failing exit holds nothing
+/// and this operation adds nothing to the #1092 leak-only set -- Part 4's
+/// property, unchanged.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]

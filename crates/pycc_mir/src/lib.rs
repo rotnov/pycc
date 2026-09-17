@@ -403,6 +403,30 @@ pub enum MirExpr {
         base: Box<MirExpr>,
         index: Box<MirExpr>,
     },
+    /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
+    /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
+    /// into a fixed-arity all-`float` tuple.
+    ///
+    /// A dedicated node rather than a coercion bolted onto the `AnnAssign`
+    /// lowering's existing widening chain, for [`MirExpr::ObjLen`]'s reason:
+    /// this one *can fail* -- a non-tuple, a wrong arity, or an item
+    /// `PyNumber_Float` refuses -- so it needs the module-exec failure edge
+    /// that `IntBoundary` and `OptionalWrap` have no notion of.
+    ///
+    /// `arity` is carried rather than rediscovered, and is always at least
+    /// one: `pycc_types`' module-level `AnnAssign` arm admits this shape
+    /// only for a non-empty tuple annotation whose every element is
+    /// `Ty::Float`, which is also why [`MirExpr::ty`] can rebuild the
+    /// annotation from the arity alone and this variant needs no `ty`
+    /// field.
+    ///
+    /// Only a *module-level* annotated assignment produces it. The same
+    /// source inside a function body is `I0404` at the read of the foreign
+    /// name itself, long before this lowering runs.
+    ObjUnpackFloatTuple {
+        base: Box<MirExpr>,
+        arity: usize,
+    },
     /// #436: A null instance pointer used as the `cls` argument when a
     /// `@classmethod` is called on a class name (`ClassName.method(args)`)
     /// rather than an instance. In this compiler's static-dispatch model,
@@ -614,6 +638,13 @@ impl MirExpr {
             // opaque by construction, exactly as `ObjMethodCall`'s is. See
             // the variant's own documentation.
             MirExpr::ObjSubscript { .. } => Ty::Object,
+            // Rebuilt from `arity` rather than read from a field: the
+            // annotation this node exists for is a fixed-arity tuple whose
+            // every element is `float`, so the arity is the whole type.
+            // See the variant's own documentation.
+            MirExpr::ObjUnpackFloatTuple { arity, .. } => {
+                Ty::Tuple(Box::new(vec![Ty::Float; *arity]))
+            }
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
@@ -724,7 +755,11 @@ impl MirExpr {
             }
             MirExpr::AttrGet { base, .. }
             | MirExpr::ObjAttrGet { base, .. }
-            | MirExpr::ObjLen { base } => base.collect_named_expr_bindings(out),
+            | MirExpr::ObjLen { base }
+            // PR 4c of #1083: the base is the node's only child -- `arity`
+            // is a `usize`, not an expression -- so a walrus can hide only
+            // there (`x: tuple[float, float] = (o := numpy).pair`).
+            | MirExpr::ObjUnpackFloatTuple { base, .. } => base.collect_named_expr_bindings(out),
             // Both sides, unlike `ObjAttrGet` directly above: a walrus can
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never

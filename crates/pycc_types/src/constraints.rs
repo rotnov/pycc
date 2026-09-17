@@ -1576,6 +1576,31 @@ pub(crate) fn collect_block_constraints(
                 annotation,
                 is_final: _,
             } => {
+                // Part 4 of #1026 (PR 4c of #1083) deliberately adds **no
+                // branch here**, unlike PRs 4a and 4b, whose `float`/`bool`/
+                // `int`/`str` arms this solver mirrors above. The relaxation
+                // is in `check_stmt`'s own `AnnAssign` arm only, and two
+                // independent facts keep this arm correct without it --
+                // both re-verified against this tree:
+                //
+                // 1. A foreign name's term is `Ok(Ty::Object)`, never
+                //    `Err(var)`, so the `AnnotationDefaultConstraint` pushed
+                //    below is skipped by `apply_annotation_defaults`' very
+                //    first statement (`let Err(var) = ... else { continue }`).
+                // 2. Even for an `Err(var)` initializer, the annotation a
+                //    4c assignment carries is a `Ty::Tuple`, and
+                //    `is_private_solver_scalar` is `Int | Float | Bool |
+                //    Str | None` -- so the same loop's second guard skips it
+                //    anyway. That guard is not incidental: private-helper
+                //    inference is scalar-only on purpose, so an annotated
+                //    local cannot leak a container type into an otherwise
+                //    unresolved signature.
+                //
+                // A third fact makes the question moot in practice: this
+                // solver runs only over unannotated private helpers (#142),
+                // i.e. inside a function body, where reading a foreign name
+                // is `I0404` before any of this is reached.
+                //
                 // Issue #359 (Part 2 of #118): an unconditional annotated
                 // assignment upgrades a maybe-bound name back to definitely
                 // bound, same as a plain `Assign`.

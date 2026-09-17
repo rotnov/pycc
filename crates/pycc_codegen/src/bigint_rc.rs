@@ -576,7 +576,12 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // PR 3b of #1082: `ObjSubscript` joins `ObjMethodCall` rather than
         // `ObjLen` -- its own `.ty()` is always `Ty::Object`, never
         // `Ty::Int`, so it can never reach this function either.
-        | MirExpr::ObjSubscript { .. } => false,
+        | MirExpr::ObjSubscript { .. }
+        // PR 4c of #1083: `ObjUnpackFloatTuple` joins `ObjSubscript` rather
+        // than `ObjLen` -- its own `.ty()` is always a `Ty::Tuple` of
+        // `float`s, never `Ty::Int`, so it can never reach this function
+        // either.
+        | MirExpr::ObjUnpackFloatTuple { .. } => false,
     }
 }
 

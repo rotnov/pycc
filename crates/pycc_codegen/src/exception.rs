@@ -78,7 +78,14 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // argument -- `PyObject_GetItem` raises `KeyError`, `IndexError` or
         // `TypeError`, and `foreign_call::emit_subscript` owns the `NULL`
         // check that actually stops the module body.
-        | MirExpr::ObjSubscript { .. } => true,
+        | MirExpr::ObjSubscript { .. }
+        // PR 4c of #1083: `ObjUnpackFloatTuple` joins them on the identical
+        // argument -- the shim raises `TypeError` for a non-tuple operand
+        // and for a wrong arity, and propagates whatever `PyNumber_Float`
+        // raises for an item it cannot convert;
+        // `foreign_len::emit_unpack_float_tuple` owns the `-1` check that
+        // actually stops the module body.
+        | MirExpr::ObjUnpackFloatTuple { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod

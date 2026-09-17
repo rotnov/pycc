@@ -1881,7 +1881,28 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
-                if !class::is_assignable_env(env, &inferred, annotation) {
+                // Part 4 of #1026 (PR 4c of #1083): a foreign CPython
+                // object under a fixed-arity all-`float` tuple annotation
+                // is admitted here, ahead of the assignability test, rather
+                // than by widening `is_assignable`. The distinction is the
+                // whole design: `is_assignable` is consulted wherever a
+                // value flows into a declared type -- a parameter, a
+                // `return`, a class attribute -- and widening it would
+                // admit the pair at every one of them, while what Part 4
+                // supports is exactly this statement, in exactly a module
+                // body (an in-function occurrence is already `I0404` at the
+                // read of the foreign name, so that arm needs no branch).
+                // `foreign::is_object_float_tuple_annotation` owns the rule
+                // and records what stays refused.
+                //
+                // Nothing below needs a second branch: `bind_ty` already
+                // resolves to the annotation for a `Ty::Tuple`, so the name
+                // binds to the tuple type the unpack really produces.
+                let unpacks_into_float_tuple = matches!(inferred, Ty::Object)
+                    && foreign::is_object_float_tuple_annotation(annotation);
+                if !unpacks_into_float_tuple
+                    && !class::is_assignable_env(env, &inferred, annotation)
+                {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
                     let diag = if matches!(annotation, Ty::Protocol(_))

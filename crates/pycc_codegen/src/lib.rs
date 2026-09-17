@@ -63,7 +63,7 @@ use ext::{
     EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
-    entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -3781,6 +3781,17 @@ fn emit_expr_unchecked<'ctx>(
             let index_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, index);
             foreign_call::emit_subscript(context, builder, module, base_scalar, index_scalar)
+        }
+        // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
+        // o` at module scope, and the same at any other fixed arity -- the
+        // PEP 585 variadic `tuple[float, ...]` stays refused and never
+        // reaches here. `foreign_len::emit_unpack_float_tuple` carries the
+        // contract -- why the out-slot is an array rather than a scalar,
+        // why the struct is reassembled here with `build_insert_value`, and
+        // why the arity travels as a call argument.
+        MirExpr::ObjUnpackFloatTuple { base, arity } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            foreign_len::emit_unpack_float_tuple(context, builder, module, base_scalar, *arity)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
