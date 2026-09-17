@@ -1685,6 +1685,17 @@ mod tests {
                 ty: pycc_mir::Ty::Instance(Box::new("C".to_string())),
             },)
         )));
+        // Part 2 of #1027: a buffer element load is always raising -- its
+        // base is a `memoryview`, so `pycc_rt_buffer_f64_get`'s bounds check
+        // can always set an `IndexError`. Unlike `Subscript` above there is
+        // no false direction to pin: no base shape makes it non-raising.
+        assert!(expression_can_set_exception(&MirExpr::BufferGet {
+            base: Box::new(MirExpr::Name {
+                name: "b".to_string(),
+                ty: pycc_mir::Ty::MemoryView,
+            }),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }
 }
