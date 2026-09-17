@@ -427,6 +427,25 @@ pub enum MirExpr {
         base: Box<MirExpr>,
         index: Box<MirExpr>,
     },
+    /// `len(b)` where `b` is a `pycc build --ext` export's `memoryview`
+    /// parameter (#1116): the element count the wrapper copied out of the
+    /// exporter's `shape[0]`, in elements and never in bytes.
+    ///
+    /// A node of its own rather than the ordinary scalar `len` lowering
+    /// (which stays a `MirExpr::Call`) for [`MirExpr::BufferGet`]'s reason:
+    /// the operand is not a pycc-owned `list`/`dict`/`set` pointer, so the
+    /// runtime entry point and the pointer's meaning both differ. It carries
+    /// no `ty` field because the result is always [`Ty::Int`], exactly as
+    /// [`MirExpr::ObjLen`] does.
+    ///
+    /// Unlike both its siblings, this one *cannot* fail: there is no index
+    /// to range-check and `pycc_rt_buffer_len` never raises, which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `false` for this node where it answers `true` for `ObjLen` and
+    /// `BufferGet`.
+    BufferLen {
+        base: Box<MirExpr>,
+    },
     /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
     /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
     /// into a fixed-arity all-`float` tuple.
@@ -668,6 +687,10 @@ impl MirExpr {
             // formatted by the unpack shim's own contract, so every element
             // is a `float`. See the variant's own documentation.
             MirExpr::BufferGet { .. } => Ty::Float,
+            // Hardcoded for `ObjLen`'s reason as well: a buffer's element
+            // count is an `int` unconditionally. See the variant's own
+            // documentation.
+            MirExpr::BufferLen { .. } => Ty::Int,
             // Rebuilt from `arity` rather than read from a field: the
             // annotation this node exists for is a fixed-arity tuple whose
             // every element is `float`, so the arity is the whole type.
@@ -786,6 +809,9 @@ impl MirExpr {
             MirExpr::AttrGet { base, .. }
             | MirExpr::ObjAttrGet { base, .. }
             | MirExpr::ObjLen { base }
+            // The base is this node's only child too -- `len(b)` takes no
+            // index -- so a walrus can hide only there.
+            | MirExpr::BufferLen { base }
             // PR 4c of #1083: the base is the node's only child -- `arity`
             // is a `usize`, not an expression -- so a walrus can hide only
             // there (`x: tuple[float, float] = (o := numpy).pair`).

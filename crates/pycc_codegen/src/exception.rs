@@ -161,7 +161,15 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // and an xor, both infallible. The wrapped operand is not
         // re-inspected here either, matching every other arm's own
         // "classify only this node's operation" rule.
-        | MirExpr::Not(_) => false,
+        | MirExpr::Not(_)
+        // #1116: `BufferLen` deliberately diverges from *both* its siblings
+        // `ObjLen` and `BufferGet`, which are `true` above. A buffer's
+        // length read is a plain load of the `len` word the `--ext` wrapper
+        // already filled in: there is no index to range-check, no
+        // `PyObject_Size` to call, and `pycc_rt_buffer_len` has no path that
+        // sets D-173's pending state. Classifying it `true` would emit a
+        // never-taken exception-check branch after every `len(b)`.
+        | MirExpr::BufferLen { .. } => false,
     }
 }
 

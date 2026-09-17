@@ -444,19 +444,109 @@ fn a_method_call_on_a_memoryview_stays_refused_beside_a_generic() {
     assert_eq!(err.code, "C0001");
 }
 
-/// `len(b)` stays refused in Part 2. This is a decision, not a deferral
-/// (the plan's correction C5): the length is available in the view's own
-/// `len` word, but admitting it needs its own answer for how a `memoryview`
-/// reaches `len`'s argument position at all, and a follow-up issue carries
-/// it.
+// ---------------------------------------------------------------------------
+// #1116: `len(b)` on a `memoryview` parameter.
+//
+// The second interception, built the same way as `b[i]` above and pinned the
+// same way: the shapes it admits, the shapes that must still reach
+// `reject_memoryview_read`, and the three walkers it has to hold for at once
+// (the check phase, the constraint solver, and the monomorphizer).
+// ---------------------------------------------------------------------------
+
+/// `len(b)` is an `int`, and reaches that answer without the `C0001` the
+/// bare name would get -- the interception runs before the argument is
+/// inferred. This test is the inversion of Part 2's own
+/// `len_of_a_memoryview_is_still_a_capability_gap`, whose refusal #1116
+/// closes.
 #[test]
-fn len_of_a_memoryview_is_still_a_capability_gap() {
+fn len_of_a_memoryview_parameter_yields_an_int() {
     let hir = memoryview_subject(
         Ty::Int,
         vec![HirStmt::Return(Some(HirExpr::Call {
             callee: "len".to_string(),
             args: vec![HirExpr::Name("b".to_string())],
         }))],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The whole point of the issue: `len(b)` has to *compose*, not merely
+/// type-check. A `range(len(b))` loop whose body indexes `b` is the sweep
+/// shape `docs/TESTING.md`'s prerequisite 1 needs, and it exercises the
+/// interception at a position where the result is consumed as an `int`
+/// rather than immediately returned.
+#[test]
+fn len_of_a_memoryview_composes_as_a_range_bound() {
+    let hir = memoryview_subject(
+        Ty::Float,
+        vec![
+            HirStmt::Assign {
+                target: "s".to_string(),
+                value: HirExpr::FloatLiteral(0.0),
+            },
+            HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![HirExpr::Name("b".to_string())],
+                },
+                step: HirExpr::IntLiteral(1),
+                body: vec![HirStmt::Assign {
+                    target: "s".to_string(),
+                    value: HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("s".to_string())),
+                        right: Box::new(HirExpr::Subscript {
+                            base: Box::new(HirExpr::Name("b".to_string())),
+                            index: Box::new(HirExpr::Name("i".to_string())),
+                        }),
+                    },
+                }],
+            },
+            HirStmt::Return(Some(HirExpr::Name("s".to_string()))),
+        ],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The interception claims only the one-argument shape, so a mis-arity
+/// `len(b, i)` is not silently answered `int`: it falls through to the
+/// ordinary path, where the established diagnostic order (arguments are
+/// inferred before arity is validated -- see `infer_expr_in`'s own comment
+/// at the `arg_tys` construction) makes the bare-name read's `C0001` the
+/// first refusal reached. The `T0033` arity error is what a *non*-
+/// `memoryview` operand gets there; what this arm pins is that the guard
+/// releases the shape at all rather than claiming every `len` whose first
+/// argument is a buffer.
+#[test]
+fn a_two_argument_len_on_a_memoryview_is_still_refused() {
+    let hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![
+                HirExpr::Name("b".to_string()),
+                HirExpr::Name("i".to_string()),
+            ],
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001", "{}", err.message);
+}
+
+/// The interception keys on the *argument*, not on the callee alone: any
+/// other builtin taking the bare name still reaches `C0001`. Without this
+/// arm the `callee == "len"` half of the guard is never observed failing
+/// against a `memoryview` argument.
+#[test]
+fn another_builtin_taking_a_memoryview_is_still_a_capability_gap() {
+    let hir = memoryview_subject(
+        Ty::None,
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        })],
     );
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "C0001");
@@ -466,6 +556,48 @@ fn len_of_a_memoryview_is_still_a_capability_gap() {
         "{}",
         err.message
     );
+}
+
+/// And it keys on the binding's *type*: `len(i)` on the `int` parameter of
+/// the same subject falls through to the ordinary `len` block, which
+/// refuses a non-container operand with `T0033`. This pins that the new
+/// guard did not widen `len`'s accepted operand set beyond `memoryview`.
+#[test]
+fn len_of_a_non_memoryview_name_is_unaffected_by_the_new_guard() {
+    let hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("i".to_string())],
+        }))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0033", "{}", err.message);
+}
+
+/// The monomorphizer is the third walker over the same expression, and its
+/// `Call` arm recurses into every argument -- which reaches the bare name
+/// and its `C0001` -- so it needs a guard of its own, exactly as its
+/// `Subscript` arm already does. Mirrors
+/// `a_buffer_read_survives_a_module_that_holds_a_generic_function`: the
+/// generic function is what makes the module take the monomorphizing path
+/// at all.
+#[test]
+fn a_buffer_length_read_survives_a_module_that_holds_a_generic_function() {
+    let mut hir = memoryview_subject(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        }))],
+    );
+    hir.items.push(HirItem::Function {
+        name: "ident".to_string(),
+        params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+        return_ty: Ty::Param(Box::new("T".to_string())),
+        body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+    });
+    assert!(check(&hir).is_ok());
 }
 
 /// Aliasing stays refused: `c = b` would let the borrowed view outlive the

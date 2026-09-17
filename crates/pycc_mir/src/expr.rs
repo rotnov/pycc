@@ -163,6 +163,17 @@ pub(super) fn lower_expr(
                     base: Box::new(args.into_iter().next().expect("checked len() == 1")),
                 };
             }
+            // #1116: `len(b)` on a `pycc build --ext` export's `memoryview`
+            // parameter becomes its own node too, for the same reason and
+            // with the same shadow reasoning as the `ObjLen` split directly
+            // above -- the scalar `len` arm below reaches
+            // `expect_list_pointer`, and a `Scalar::MemoryView` is not a
+            // `PyIntListObj`. See `MirExpr::BufferLen`'s own doc comment.
+            if callee == "len" && args.len() == 1 && matches!(args[0].ty(), Ty::MemoryView) {
+                return MirExpr::BufferLen {
+                    base: Box::new(args.into_iter().next().expect("checked len() == 1")),
+                };
+            }
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
             // it (`pycc_hir::class`'s own doc comment) -- so it is resolved

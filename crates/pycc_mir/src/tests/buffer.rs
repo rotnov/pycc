@@ -1,4 +1,5 @@
-//! Buffer element loads (`MirExpr::BufferGet`, Part 2 of #1027).
+//! Buffer element loads (`MirExpr::BufferGet`, Part 2 of #1027) and buffer
+//! length reads (`MirExpr::BufferLen`, #1116).
 //!
 //! `b[i]` on a `memoryview`-typed name is the one expression #1027 admits
 //! over a buffer. Lowering routes it away from `MirExpr::Subscript` -- whose
@@ -99,4 +100,81 @@ fn a_walrus_in_a_buffer_index_binds_for_the_next_statement() {
         matches!(second, MirExpr::Name { name, ty: Ty::Int } if name == "n"),
         "{second:?}"
     );
+}
+
+/// `len(b)` routes away from the scalar `len` lowering -- which stays a
+/// `MirExpr::Call` whose codegen reaches `expect_list_pointer` -- into a node
+/// of its own whose `ty()` is unconditionally `Ty::Int`.
+#[test]
+fn a_len_of_a_memoryview_lowers_to_a_buffer_len_typed_int() {
+    let hir = module_with_buffer_fn(
+        Ty::Int,
+        vec![HirStmt::Return(Some(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        }))],
+    );
+    let mir = build(&hir);
+    let [MirStmt::Return(Some(expr))] = function_body(&mir) else {
+        panic!("expected a single `return`");
+    };
+    // No `ty` field here either: a buffer's element count is an `int`
+    // unconditionally, exactly as `ObjLen`'s is.
+    assert_eq!(expr.ty(), Ty::Int);
+    let MirExpr::BufferLen { base } = expr else {
+        panic!("expected a `BufferLen`, got {expr:?}");
+    };
+    assert!(
+        matches!(base.as_ref(), MirExpr::Name { name, ty: Ty::MemoryView } if name == "b"),
+        "{base:?}"
+    );
+}
+
+/// `len` on any other operand is untouched by the new interception: a
+/// `list` argument still lowers to the ordinary `MirExpr::Call`, whose
+/// codegen re-tags `pycc_rt_int_list_len`'s raw count.
+#[test]
+fn a_len_of_a_list_still_lowers_to_the_scalar_call() {
+    let hir = module_with_buffer_fn(
+        Ty::Int,
+        vec![
+            HirStmt::Assign {
+                target: "xs".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+            },
+            HirStmt::Return(Some(HirExpr::Call {
+                callee: "len".to_string(),
+                args: vec![HirExpr::Name("xs".to_string())],
+            })),
+        ],
+    );
+    let mir = build(&hir);
+    let [_, MirStmt::Return(Some(expr))] = function_body(&mir) else {
+        panic!("expected an assignment and a `return`");
+    };
+    assert!(
+        matches!(expr, MirExpr::Call { callee, .. } if callee == "len"),
+        "{expr:?}"
+    );
+}
+
+/// The walrus requirement again, for this node's one child: `len((n := b))`
+/// is not expressible -- a walrus cannot rebind a `memoryview` -- so the
+/// shape that reaches `BufferLen`'s `collect_named_expr_bindings` arm is a
+/// length read whose base carries one. This asserts the arm exists at all by
+/// driving the node through the same `ExprStmt` seam the index test uses.
+#[test]
+fn a_buffer_length_read_walks_its_base_for_walrus_bindings() {
+    let hir = module_with_buffer_fn(
+        Ty::None,
+        vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("b".to_string())],
+        })],
+    );
+    let mir = build(&hir);
+    let [MirStmt::ExprStmt(only)] = function_body(&mir) else {
+        panic!("expected one expression statement");
+    };
+    assert!(matches!(only, MirExpr::BufferLen { .. }), "{only:?}");
 }

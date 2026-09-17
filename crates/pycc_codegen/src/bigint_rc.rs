@@ -585,7 +585,16 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // Part 2 of #1027: `BufferGet` joins them for the same structural
         // reason -- its own `.ty()` is always `Ty::Float`, never `Ty::Int`,
         // so it can never reach this function at all.
-        | MirExpr::BufferGet { .. } => false,
+        | MirExpr::BufferGet { .. }
+        // #1116: `BufferLen` joins `ObjLen` rather than `BufferGet` -- its
+        // own `.ty()` *is* `Ty::Int`, so it really can reach this function,
+        // and it joins the "owning" answer because codegen builds its word
+        // with `raw_i64_to_tagged_int` from a raw `i64` count. That always
+        // yields an inline D-141 smallint (a buffer length is bounded by the
+        // exporter's `shape[0]`), so the release this classification emits
+        // is an unconditional runtime no-op, exactly as for the scalar
+        // `len` `Call` grouped above.
+        | MirExpr::BufferLen { .. } => false,
     }
 }
 
