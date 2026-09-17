@@ -75,6 +75,16 @@ pub(super) struct RtFns<'ctx> {
     pub(super) int_list_new: FunctionValue<'ctx>,
     pub(super) int_list_append: FunctionValue<'ctx>,
     pub(super) int_list_get: FunctionValue<'ctx>,
+    /// Part 2 of #1027's bounds-checked buffer element load
+    /// (`pycc_rt_buffer_f64_get`): takes the `PyccExtBufferView` pointer a
+    /// `pycc build --ext` wrapper passed for a `memoryview` parameter plus an
+    /// already-untagged raw `i64` index, and returns the `f64` element.
+    ///
+    /// The bounds check lives in `pycc_rt`, not in emitted IR -- one call and
+    /// no arithmetic here, exactly as `int_list_get` does it. An index outside
+    /// `[0, len)` leaves the D-173 pending `IndexError` set and returns a
+    /// `0.0` sentinel, which the caller's `exception_exit` block checks for.
+    pub(super) buffer_f64_get: FunctionValue<'ctx>,
     pub(super) int_list_len: FunctionValue<'ctx>,
     /// PR-12 Task 9's own new `pycc_rt_int_list_slice` declaration
     /// (`base[start:stop:step]`, D-118) -- takes the `list` pointer plus
@@ -352,6 +362,10 @@ pub(super) fn declare_rt_functions<'ctx>(
         int_list_get: declare(
             "pycc_rt_int_list_get",
             i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        buffer_f64_get: declare(
+            "pycc_rt_buffer_f64_get",
+            f64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
         ),
         int_list_len: declare(
             "pycc_rt_int_list_len",

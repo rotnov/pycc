@@ -5,6 +5,7 @@
 //! crate root, so its `use crate::*` reaches exactly the private items the
 //! single flat `mod tests` reached through `use super::*`.
 
+mod buffer;
 mod builtin;
 mod class_attr;
 mod class_dunder;

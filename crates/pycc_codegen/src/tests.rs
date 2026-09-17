@@ -15639,3 +15639,267 @@ fn a_for_object_target_claims_an_object_slot_over_an_earlier_int_binding() {
     );
     assert_eq!(bindings.get("x"), Some(&Ty::Object));
 }
+
+// ---------------------------------------------------------------------------
+// Part 2 of #1027: the `Scalar::MemoryView` arms and `MirExpr::BufferGet`.
+//
+// A `memoryview` reaches codegen only as a parameter of a `pycc build --ext`
+// export (D-244), and `reject_memoryview_read` refuses every *use* of such a
+// name except the `b[i]` element load this part admits. Every consuming arm
+// below is therefore defensive, and each is pinned directly with a
+// hand-built `Scalar::MemoryView` carrying a null `PyccExtBufferView *` --
+// the same convention the `Scalar::List` and `Scalar::Object` defensive
+// tests above use, and for the same reason: it pins the panic to the
+// function that owns the gap rather than to whichever caller reaches it
+// first. The two *reachable* paths -- `MirExpr::Name`'s pointer-slot load
+// and the `BufferGet` emission itself -- are covered by real MIR at the end
+// of this section.
+// ---------------------------------------------------------------------------
+
+/// A null `PyccExtBufferView *` as a [`Scalar::MemoryView`]. None of the
+/// defensive tests below dereferences it -- each panics inside its
+/// function's own `match` before any `build_*` call runs.
+fn null_memoryview_scalar(context: &Context) -> Scalar<'_> {
+    Scalar::MemoryView(
+        context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null(),
+    )
+}
+
+#[test]
+#[should_panic(expected = "expected an int-or-bool operand, got memoryview")]
+fn to_numeric_encoded_int_rejects_a_memoryview_operand() {
+    let context = Context::create();
+    let builder = context.create_builder();
+    to_numeric_encoded_int(&context, &builder, null_memoryview_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "expected a numeric operand, got memoryview")]
+fn to_float_rejects_a_memoryview_operand() {
+    // A buffer *element* is a `float`, but the buffer itself is not: there
+    // is no `float(b)` in CPython either.
+    let context = Context::create();
+    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    to_float(&context, &builder, &rt, null_memoryview_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "string conversion of a memoryview value is not supported yet")]
+fn to_str_rejects_a_memoryview_operand() {
+    // `print(b)` and `f"{b}"` are both bare reads of the name, which
+    // `reject_memoryview_read` refuses with `C0001` before codegen.
+    let context = Context::create();
+    let (_module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    to_str(&builder, &rt, null_memoryview_scalar(&context));
+}
+
+#[test]
+#[should_panic(expected = "truthiness of a memoryview value is not supported yet")]
+fn truthiness_of_a_memoryview_value_panics_honestly() {
+    // `if b:` is a bare read of the name, so `reject_memoryview_read`
+    // refuses it with `C0001`. CPython's own answer would be `len(b) != 0`,
+    // which #1027 does not ship -- an honest panic naming the gap is the
+    // correct behavior until it does.
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    truthy(
+        &context,
+        &builder,
+        &module,
+        &rt,
+        null_memoryview_scalar(&context),
+    );
+}
+
+#[test]
+#[should_panic(expected = "assigning a memoryview value to a binding is not supported yet")]
+fn assigning_a_memoryview_to_a_binding_is_an_internal_error() {
+    // `v = b` is a bare read of `b`, refused with `C0001`. The buffer is
+    // borrowed for the duration of one wrapper call, so a binding that
+    // outlived the expression would dangle -- which is why #1027 admits no
+    // such assignment rather than implementing one.
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    // `emit_assign` reads `slot.ty` before it matches on the value, so the
+    // slot must exist, and a positioned block is needed because the
+    // `Ty::Int` release path it checks first would build IR.
+    let function = module.add_function(
+        "assign_memoryview",
+        context.void_type().fn_type(&[], false),
+        None,
+    );
+    builder.position_at_end(context.append_basic_block(function, "entry"));
+    let ptr = builder
+        .build_alloca(context.ptr_type(inkwell::AddressSpace::default()), "b")
+        .expect("build_alloca should not fail for a fresh block");
+    let locals = HashMap::from([(
+        "b".to_string(),
+        StorageSlot {
+            ptr,
+            ty: Ty::MemoryView,
+            initialized: None,
+        },
+    )]);
+    emit_assign(
+        &context,
+        &builder,
+        &rt,
+        &locals,
+        "b",
+        null_memoryview_scalar(&context),
+    );
+}
+
+/// An `--ext` module holding one function whose first parameter is a
+/// `memoryview`, which is the only shape that binding can have.
+fn buffer_fn_items(body: Vec<MirStmt>, return_ty: Ty) -> Vec<MirItem> {
+    vec![MirItem::Function {
+        name: "element".to_string(),
+        params: vec![
+            ("b".to_string(), Ty::MemoryView),
+            ("i".to_string(), Ty::Int),
+        ],
+        return_ty,
+        body,
+    }]
+}
+
+/// `b[i]` as a `MirExpr`, the one buffer shape Part 2 of #1027 emits.
+fn buffer_get_b_i() -> MirExpr {
+    MirExpr::BufferGet {
+        base: Box::new(MirExpr::Name {
+            name: "b".to_string(),
+            ty: Ty::MemoryView,
+        }),
+        index: Box::new(MirExpr::Name {
+            name: "i".to_string(),
+            ty: Ty::Int,
+        }),
+    }
+}
+
+/// Compiles `items` as a D-244 `ext` object and hands the whole module's IR
+/// to `check`.
+fn compile_ext_items_checking_ir(label: &str, items: Vec<MirItem>, check: impl Fn(&str)) {
+    let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
+    let mut seen = String::new();
+    // D-029: never let the `LLVMString` temporary drop -- route it through
+    // `llvm_string_to_owned`, exactly as this crate's error paths do.
+    let mut observer = |module: &inkwell::module::Module<'_>, _| {
+        seen = llvm_string_to_owned(module.print_to_string());
+    };
+    compile_to_object_with_observer(
+        &MirModule {
+            items,
+            ..Default::default()
+        },
+        &dir.join(format!("{label}.o")),
+        &CompileOptions {
+            ext: true,
+            ..CompileOptions::default()
+        },
+        Some(&mut observer),
+    )
+    .expect("ext codegen should succeed");
+    check(&seen);
+}
+
+#[test]
+fn a_buffer_element_load_untags_its_index_and_calls_the_runtime_helper() {
+    // The whole admitted read surface, end to end through real MIR: the
+    // `memoryview` parameter's pointer slot is loaded (`MirExpr::Name`'s
+    // own `Ty::MemoryView` arm), the D-141-tagged index is decoded through
+    // the shared checked untag, and the pair is handed to the runtime
+    // helper that owns the bounds check. Nothing here dereferences the
+    // buffer: `pycc_rt_buffer_f64_get` does, after it has compared the
+    // index against the view's recorded length.
+    compile_ext_items_checking_ir(
+        "buffer_element_load",
+        buffer_fn_items(vec![MirStmt::Return(Some(buffer_get_b_i()))], Ty::Float),
+        |ir| {
+            assert!(ir.contains("call i64 @pycc_rt_int_untag_checked"), "{ir}");
+            assert!(ir.contains("call double @pycc_rt_buffer_f64_get"), "{ir}");
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "a buffer element load's base did not evaluate to a memoryview")]
+fn a_buffer_element_load_whose_base_is_not_a_memoryview_is_an_internal_error() {
+    // `MirExpr::BufferGet` is produced by exactly one lowering arm, which
+    // keys on the lowered base's `Ty::MemoryView` (`pycc_mir`'s
+    // `Subscript` arm), so a base of any other type means that dispatch
+    // regressed. The deliberately mistyped `int` base below is a shape no
+    // type-checked program can produce.
+    compile_ext_items_checking_ir(
+        "buffer_element_load_bad_base",
+        buffer_fn_items(
+            vec![MirStmt::Return(Some(MirExpr::BufferGet {
+                base: Box::new(MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                }),
+                index: Box::new(MirExpr::IntLiteral(0)),
+            }))],
+            Ty::Float,
+        ),
+        |_| unreachable!("codegen should have panicked"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "returning a memoryview value is not supported yet")]
+fn returning_a_memoryview_value_is_an_internal_error() {
+    // `-> memoryview` is refused as a return annotation outright, and
+    // `return b` is a bare read of the name refused with `C0001`, so
+    // nothing else can carry the type out of a function.
+    compile_ext_items_checking_ir(
+        "buffer_returned",
+        buffer_fn_items(
+            vec![MirStmt::Return(Some(MirExpr::Name {
+                name: "b".to_string(),
+                ty: Ty::MemoryView,
+            }))],
+            Ty::MemoryView,
+        ),
+        |_| unreachable!("codegen should have panicked"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a memoryview argument is not supported yet")]
+fn passing_a_memoryview_as_a_call_argument_is_an_internal_error() {
+    // Reached through real MIR rather than a direct call, because this arm
+    // lives inside `build_call_to_with_leading_args`' per-argument loop and
+    // only a `MirExpr` that *evaluates* to `Scalar::MemoryView` selects it.
+    // A `memoryview` parameter exists only on an `--ext` export, and
+    // passing the name on is a bare read refused with `C0001`, so the
+    // deliberately mistyped `int` parameter below is unreachable from
+    // source.
+    let mut items = buffer_fn_items(
+        vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "takes_int".to_string(),
+            args: vec![MirExpr::Name {
+                name: "b".to_string(),
+                ty: Ty::MemoryView,
+            }],
+            ty: Ty::None,
+        })],
+        Ty::None,
+    );
+    items.push(MirItem::Function {
+        name: "takes_int".to_string(),
+        params: vec![("n".to_string(), Ty::Int)],
+        return_ty: Ty::None,
+        body: vec![MirStmt::Return(None)],
+    });
+    compile_ext_items_checking_ir("buffer_call_argument", items, |_| {
+        unreachable!("codegen should have panicked")
+    });
+}

@@ -275,8 +275,9 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
 /// reports the collected gaps and the type check never runs at all, so
 /// there is no type error to order against. The `memoryview` gate
 /// cannot be: `crates/pycc_types`'s `reject_memoryview_read` refuses every
-/// *use* of a `memoryview`-typed name with `C0001`, so a body that so much
-/// as reads its own parameter fails the type check first, and the
+/// *use* of a `memoryview`-typed name with `C0001` except the `b[i]`
+/// element load Part 2 of #1027 admits, so a body that so much as reads
+/// its own parameter any other way fails the type check first, and the
 /// signature-level `I0405` that `docs/RUNTIME.md` and D-244 promise for
 /// "a `memoryview` in a signature in a build without `--ext`" would never
 /// be emitted (#1115 review round 5). It is therefore reported *before*

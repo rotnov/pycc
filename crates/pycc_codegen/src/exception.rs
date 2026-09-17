@@ -85,7 +85,15 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // raises for an item it cannot convert;
         // `foreign_len::emit_unpack_float_tuple` owns the `-1` check that
         // actually stops the module body.
-        | MirExpr::ObjUnpackFloatTuple { .. } => true,
+        | MirExpr::ObjUnpackFloatTuple { .. }
+        // Part 2 of #1027: `BufferGet` joins them, and here the dependency
+        // *is* live rather than conservative -- `pycc_rt_buffer_f64_get`
+        // sets pycc's own D-173 pending state and returns a `0.0` sentinel
+        // for an index outside `[0, len)`, so this guard is the whole of
+        // the failure handling. A by-name entry rather than a widening of
+        // the `Subscript` arm below, which asks its base's type: a
+        // `BufferGet` is always fallible, with no base type to consult.
+        | MirExpr::BufferGet { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod
@@ -1677,6 +1685,17 @@ mod tests {
                 ty: pycc_mir::Ty::Instance(Box::new("C".to_string())),
             },)
         )));
+        // Part 2 of #1027: a buffer element load is always raising -- its
+        // base is a `memoryview`, so `pycc_rt_buffer_f64_get`'s bounds check
+        // can always set an `IndexError`. Unlike `Subscript` above there is
+        // no false direction to pin: no base shape makes it non-raising.
+        assert!(expression_can_set_exception(&MirExpr::BufferGet {
+            base: Box::new(MirExpr::Name {
+                name: "b".to_string(),
+                ty: pycc_mir::Ty::MemoryView,
+            }),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }
 }

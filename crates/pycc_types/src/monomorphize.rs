@@ -32,9 +32,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Environment, bind_local_types_in_body, bind_local_types_in_stmt, function_local_names,
-    generic_type_param_name, infer_expr_in, is_assignable, is_generic_signature, is_local,
-    is_unshadowed_builtin_exception, module_function_local_names, t0042,
+    BindingState, Environment, bind_local_types_in_body, bind_local_types_in_stmt,
+    function_local_names, generic_type_param_name, infer_expr_in, is_assignable,
+    is_generic_signature, is_local, is_unshadowed_builtin_exception, module_function_local_names,
+    t0042,
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
@@ -522,6 +523,27 @@ fn is_class_name_base(env: &Environment, local_names: &[&str], expr: &HirExpr) -
             && env.lookup_class(name).is_some())
 }
 
+/// Whether `expr` is a bare name bound to a `memoryview` (Part 2 of #1027).
+///
+/// The `Subscript` arm's second do-not-recurse guard, deliberately *not*
+/// folded into [`is_class_name_base`]: that predicate's other two callers
+/// are the `AttrGet` and `MethodCall` arms, where `b.attr` and `b.tolist()`
+/// must keep reaching the `C0001` read refusal. Only the subscript position
+/// has a Part 2 lowering, so only the subscript position skips the base.
+///
+/// No `local_names` check, unlike `is_class_name_base`: there the binding
+/// state is the *shadow* being looked for, here it is the whole subject.
+/// `Definitely` matches `crate::expr`'s own interception -- a
+/// possibly-unbound name is left to the ordinary path and its own
+/// unbound-local diagnostic.
+fn is_memoryview_base(env: &Environment, expr: &HirExpr) -> bool {
+    matches!(expr, HirExpr::Name(name)
+    if matches!(
+        env.binding_state(name),
+        Some(BindingState::Definitely(Ty::MemoryView))
+    ))
+}
+
 pub(crate) fn rewrite_generic_calls_in_expr(
     env: &mut Environment,
     local_names: &[&str],
@@ -664,7 +686,21 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             // class-argument skip above exists to avoid. Rewrite only the
             // index in that case; `infer_expr_in` on the whole expression
             // below still resolves the hook and reports any error.
-            if !is_class_name_base(env, local_names, base.as_ref()) {
+            //
+            // Part 2 of #1027 adds a second base this arm must not recurse
+            // into, for the same reason and with the same remedy: a
+            // `memoryview`-bound name. `rewrite_generic_calls_in_expr`'s own
+            // tail calls `infer_expr_in` on each sub-expression, and on a
+            // bare `memoryview` name that is the `C0001` read refusal --
+            // reported here, in a module that happens to contain a generic
+            // function, for a `b[i]` the check phase admits. The guard is a
+            // separate predicate rather than a widening of
+            // `is_class_name_base`, whose two other callers (the `AttrGet`
+            // and `MethodCall` arms below) must keep refusing `b.attr` and
+            // `b.tolist()` exactly as they do today.
+            if !is_class_name_base(env, local_names, base.as_ref())
+                && !is_memoryview_base(env, base.as_ref())
+            {
                 rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
             }
             rewrite_generic_calls_in_expr(env, local_names, index, instantiations, seen)?;

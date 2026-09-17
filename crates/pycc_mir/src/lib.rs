@@ -403,6 +403,30 @@ pub enum MirExpr {
         base: Box<MirExpr>,
         index: Box<MirExpr>,
     },
+    /// `b[i]` where `b` is a `pycc build --ext` export's `memoryview`
+    /// parameter (Part 2 of #1027): a bounds-checked native `float` element
+    /// load out of the borrowed buffer.
+    ///
+    /// A node of its own rather than a [`MirExpr::Subscript`] with a
+    /// `Ty::MemoryView` base, because `Subscript::ty()` reads the *base's*
+    /// type to answer -- it destructures `Ty::List`/`Ty::Tuple` and panics on
+    /// anything else -- and a buffer element's type is not recoverable that
+    /// way: `Ty::MemoryView` carries no element type, the element type is
+    /// pinned to `float` by the unpack shim's `"d"` format requirement.
+    /// [`MirExpr::ty`] therefore answers [`Ty::Float`] here unconditionally,
+    /// exactly as [`MirExpr::ObjLen`] answers `Ty::Int`.
+    ///
+    /// The load can fail -- an index outside `[0, len)` -- which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers `true`
+    /// for this node. `pycc_rt`'s `pycc_rt_buffer_f64_get` owns the bounds
+    /// check and the D-173 raise; codegen emits one call and no arithmetic.
+    ///
+    /// Only the *load* is modelled. A store (`b[i] = v`) is a separate HIR
+    /// shape the type checker still refuses, so no node for it exists.
+    BufferGet {
+        base: Box<MirExpr>,
+        index: Box<MirExpr>,
+    },
     /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
     /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
     /// into a fixed-arity all-`float` tuple.
@@ -638,6 +662,12 @@ impl MirExpr {
             // opaque by construction, exactly as `ObjMethodCall`'s is. See
             // the variant's own documentation.
             MirExpr::ObjSubscript { .. } => Ty::Object,
+            // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
+            // element type is known, it is just not recoverable from the
+            // base. A `memoryview` parameter is one-dimensional and `"d"`-
+            // formatted by the unpack shim's own contract, so every element
+            // is a `float`. See the variant's own documentation.
+            MirExpr::BufferGet { .. } => Ty::Float,
             // Rebuilt from `arity` rather than read from a field: the
             // annotation this node exists for is a fixed-arity tuple whose
             // every element is `float`, so the arity is the whole type.
@@ -772,7 +802,11 @@ impl MirExpr {
             }
             // Both sides too, for the identical reason: a walrus can hide in
             // the key (`gc.garbage[(n := 0)]`) just as easily as in the base.
-            MirExpr::ObjSubscript { base, index } => {
+            // Both sides for that same reason. `b[(n := 0)]` is the shape
+            // that makes the index half load-bearing here: a walrus binding
+            // missed in the index is a local codegen never allocates
+            // storage for.
+            MirExpr::ObjSubscript { base, index } | MirExpr::BufferGet { base, index } => {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
             }

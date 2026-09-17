@@ -760,11 +760,19 @@ Two prerequisites remain, and they are not the same for the two readings:
    gives a subject a `memoryview` parameter whose elements compile to native
    loads — the one signature shape that expresses "2,000,000 triangles plus
    their query points" as a single call's argument. #1027 in turn depends on
-   foreign imports (#1026). The prerequisite is not met yet: Part 1
-   ([#1112](https://github.com/rotnov/pycc/issues/1112)) admits the parameter
-   and the boundary that carries it, while the element loads are Part 2's
-   work ([#1113](https://github.com/rotnov/pycc/issues/1113)). This prerequisite does not apply to the per-record
-   reading, which the boundary already admits.
+   foreign imports (#1026). The carrier half is met: Part 1
+   ([#1112](https://github.com/rotnov/pycc/issues/1112)) admitted the parameter
+   and the boundary that carries it, and Part 2
+   ([#1113](https://github.com/rotnov/pycc/issues/1113)) added the element load
+   itself — `b[i]`, a bounds-checked native `float` load — so the committed
+   input does now cross in one call and its elements do compile to native
+   loads. What is still missing is the *length*: `len(b)` remains a `C0001`
+   capability gap, so a subject cannot yet write the `for i in
+   range(len(b)):` loop that reads the whole buffer, which is the shape this
+   protocol's sweep reading actually needs. The prerequisite is therefore not
+   fully met, and what remains of it is that one gap rather than the bridge.
+   None of this applies to the per-record reading, which the boundary already
+   admitted.
 2. **Either reading needs an admissible subject to exist at all**, and none
    does. Reported as a count, so that nothing about the proprietary codebase
    is published beyond one ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6): the number of functions in
