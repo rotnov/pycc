@@ -940,6 +940,17 @@ mod tests {
     /// the Windows runner uses -- an access violation that kills the whole
     /// test binary rather than failing one test.
     fn refcount_calls_in(label: &str, mir: &MirModule) -> Vec<RefcountCall> {
+        refcount_calls_with_options(label, mir, &CompileOptions::default())
+    }
+
+    /// `refcount_calls_in` with an explicit [`CompileOptions`], for the one
+    /// fixture whose MIR only compiles under `ext: true` (a `memoryview`
+    /// parameter, which D-244 admits nowhere else).
+    fn refcount_calls_with_options(
+        label: &str,
+        mir: &MirModule,
+        options: &CompileOptions,
+    ) -> Vec<RefcountCall> {
         let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
         let obj_path = dir.join(format!("{label}.o"));
         let mut calls = Vec::new();
@@ -948,13 +959,8 @@ mod tests {
         let mut observer = |module: &inkwell::module::Module<'_>, _| {
             calls = guarded_bigint_refcount_calls(&llvm_string_to_owned(module.print_to_string()));
         };
-        compile_to_object_with_observer(
-            mir,
-            &obj_path,
-            &CompileOptions::default(),
-            Some(&mut observer),
-        )
-        .expect("codegen should succeed");
+        compile_to_object_with_observer(mir, &obj_path, options, Some(&mut observer))
+            .expect("codegen should succeed");
         calls
     }
 
@@ -2199,5 +2205,97 @@ mod tests {
             0,
             "a bool payload must never reach the bigint refcount path: {calls:?}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // #1116: `MirExpr::BufferLen`'s own `int_value_is_a_duplicate_reference`
+    // arm, exercised at the one site that actually consults it.
+    //
+    // That arm classifies the `len(b)` word as *owned*, which is what makes
+    // `int_temporary_word` hand `MirStmt::ForRange`'s emitter a word to
+    // release in `after_bb`. The classification fails in opposite
+    // directions -- a wrongly-"borrowed" answer leaks, a wrongly-"owning"
+    // one frees a live word -- so the arm is worth a deterministic,
+    // always-run exerciser. The three `tests.rs` buffer-length tests all use
+    // `return len(b)` as the whole body, a shape that never reaches this
+    // classification at all; the only other place it runs end to end is
+    // `tests/issue_1116_ext_buffer_len.rs`'s `#[ignore]`d hosted oracle,
+    // which needs CPython development headers and is therefore absent from
+    // an ordinary signal.
+    // -----------------------------------------------------------------
+
+    /// `for i in range(len(b)): pass` inside a D-244 `--ext` export, which
+    /// is the only shape that can bind a `memoryview` at all.
+    ///
+    /// Stated as retain/release counts, the same way
+    /// `a_range_loop_over_one_aliased_bound_emits_guarded_retains_and_
+    /// releases` pins `ForRange`'s ownership contract: the emitter's
+    /// treatment of a `BufferLen` `stop` is invisible in the program's
+    /// output and in its RSS (the count is always an inline D-141 smallint,
+    /// so the release it emits is a runtime no-op), so a count is the only
+    /// place the classification is observable.
+    #[test]
+    fn a_range_loop_over_a_buffer_length_releases_the_count_it_owns() {
+        // `start`/`step` are the lowering's own `0`/`1` literals. They are
+        // not compile-time constants by the time the guard sees them --
+        // every `range` operand is routed through
+        // `pycc_rt_range_normalize_operand` first -- so they carry their own
+        // guard sites, and the counts below account for all three operands.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "sweep".to_string(),
+                params: vec![("b".to_string(), Ty::MemoryView)],
+                return_ty: Ty::None,
+                body: vec![MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::BufferLen {
+                        base: Box::new(MirExpr::Name {
+                            name: "b".to_string(),
+                            ty: Ty::MemoryView,
+                        }),
+                    },
+                    step: MirExpr::IntLiteral(1),
+                    body: Vec::new(),
+                }],
+            }],
+            ..Default::default()
+        };
+        let calls = refcount_calls_with_options(
+            "bigint_rc_range_over_buffer_len",
+            &mir,
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+        );
+        let retains = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_retain")
+            .count();
+        let releases = calls
+            .iter()
+            .filter(|c| c.callee == "pycc_rt_bigint_release")
+            .count();
+        // `MirStmt::ForRange`'s ownership contract, as counts. Four
+        // retains: the loop's own unconditional retain of `start`, `stop`
+        // and `step` in the preheader, plus the induction word once per
+        // bind of the visible target. Eight releases: the three birth
+        // references `release_if_int_temporary` retires right after those
+        // retains -- and this is the one the `BufferLen` arm decides, since
+        // `stop` is the `len(b)` word -- the target slot's previous word
+        // inside `emit_assign`, the induction word once `next` is computed,
+        // and three in `for_after` (the surviving induction word, `stop`
+        // and `step`).
+        //
+        // Classifying `BufferLen` as a borrowed duplicate instead makes
+        // `int_temporary_word` answer `None` for `stop`, which drops
+        // exactly one release from this total and leaks the count's birth
+        // reference; the mirror error, classifying an operand the loop does
+        // not own as owning, frees a live word. Neither is visible in the
+        // program's output or in its RSS here -- a buffer length is always
+        // an inline D-141 smallint, so the release is a runtime no-op -- so
+        // this count is the only place the classification is observable.
+        assert_eq!((retains, releases), (4, 8), "got {calls:?}");
     }
 }
