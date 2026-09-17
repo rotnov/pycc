@@ -526,6 +526,13 @@ fn the_shims_str_ingress_checks_the_type_before_the_converter_and_carries_a_leng
     let body = &shim[shim
         .find("static int pycc_ext_unpack_str(PyObject *obj")
         .expect("the unpack helper")..];
+    // Bounded at this helper's own closing brace, the way the egress test
+    // above bounds `pack_str`: the negative `strlen` assertion below would
+    // otherwise read every later helper's prose too, and
+    // `pycc_ext_obj_to_str` documents the same no-`strlen` rule in its own
+    // comment.
+    let end = body.find("\n}\n").expect("the helper's end");
+    let body = &body[..end];
     let check = body.find("!PyUnicode_Check(obj)").expect("the type check");
     let type_error = body.find("PyExc_TypeError").expect("the refusal");
     let convert = body

@@ -38,6 +38,20 @@ mod foreign_attr;
 mod foreign_call;
 mod foreign_import;
 mod foreign_len;
+
+/// One Part 4 conversion emitter in `foreign_len.rs` (PR 4b of #1083).
+///
+/// Named so `emit_expr`'s `int`/`str` arm can pick between
+/// [`foreign_len::emit_to_int`] and [`foreign_len::emit_to_str`] by value
+/// instead of duplicating the arity and operand backstops around each. The
+/// `for<'a>` binder is what lets one alias serve both, since the emitters
+/// are generic over the LLVM context's lifetime rather than over a type.
+type ObjectConversionEmitter = for<'a> fn(
+    &'a Context,
+    &inkwell::builder::Builder<'a>,
+    &inkwell::module::Module<'a>,
+    Scalar<'a>,
+) -> Scalar<'a>;
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
@@ -48,7 +62,8 @@ use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
     EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
-    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL, entry_fn_name, is_module_entry_symbol,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -2859,6 +2874,40 @@ fn emit_expr_unchecked<'ctx>(
                         .build_int_z_extend(bit, context.i8_type(), "bool_from_object")
                         .expect("build_int_z_extend should not fail widening i1 to i8"),
                 );
+            }
+            // Part 4 of #1026 (PR 4b of #1083): `int(o)` and `str(o)`. Both
+            // are the `bool` arm above in every structural respect -- admitted
+            // by `pycc_types` for a `Ty::Object` argument *only*, under the
+            // same user-defined-function guard, so each sees exactly one shape
+            // and both backstops below are against malformed MIR -- and they
+            // differ only in which shim helper they reach and what it answers.
+            // One arm dispatching on the emitter rather than two near-identical
+            // arms, because at this layer the emission genuinely is the same
+            // code; `pycc_types` is where the two names diverge, and it already
+            // has.
+            let object_conversion: Option<ObjectConversionEmitter> = match callee.as_str() {
+                "int" => Some(foreign_len::emit_to_int),
+                "str" => Some(foreign_len::emit_to_str),
+                _ => None,
+            };
+            if let Some(emit) = object_conversion
+                && !user_functions.contains_key(callee.as_str())
+            {
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `{callee}` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                if !matches!(scalar, Scalar::Object(_)) {
+                    panic!(
+                        "pycc_codegen: internal error: `{callee}` takes a CPython object argument \
+                         -- pycc_types::check (C0001) should have rejected this before codegen"
+                    )
+                }
+                return emit(context, builder, module, scalar);
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error

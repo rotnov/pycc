@@ -131,6 +131,24 @@
 //! `print(float(o))` now type-checks where `print(o)` stays `I0404` --
 //! the refusal is on the object, not on a `float` derived from one.
 //!
+//! **PR 4b of #1083 adds the other two conversions out of the opaque type:
+//! `int(o)` and `str(o)`.** Both are new `expr.rs` arms (mirrored in
+//! `constraints.rs`) on the `bool` arm's exact shape -- [`Ty::Object`]
+//! **only**, both the user-defined-function and the user-defined-class guard
+//! on the whole arm, since neither arm admits anything else. `int(o)` runs
+//! `PyNumber_Long` and D-141-encodes the result, refusing a value outside the
+//! inline-integer range `[-2**62, 2**62-1]` with `OverflowError` (#1040, no
+//! bigint path); `str(o)` runs `PyObject_Str` and copies the UTF-8 out with
+//! `pycc_rt_str_from_literal`, producing exactly what a `str` literal
+//! produces. Both release their CPython temporary on every exit, so Part 4
+//! still adds nothing to #1092.
+//!
+//! The same asymmetry is inherited and stated: `str(o)` compiles while
+//! `str(1)` keeps its `C0001`, and `print(str(o))` type-checks where
+//! `print(o)` stays `I0404` -- `string_conversion.rs`'s [`Ty::Object`] arm
+//! is untouched, because the refusal is on the object and not on a `str`
+//! derived from one.
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
@@ -164,8 +182,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
              scalar-argument method calls, `len`, truth testing, a \
-             scalar-key subscript load, `for` iteration and the `float` \
-             and `bool` conversions on it and nothing else"
+             scalar-key subscript load, `for` iteration and the `float`, \
+             `bool`, `int` and `str` conversions on it and nothing else"
         ),
         Span::new(0, 0),
     )

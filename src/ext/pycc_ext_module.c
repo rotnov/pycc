@@ -1077,6 +1077,131 @@ int pycc_ext_obj_to_float(PyObject *o, double *out)
     return 0;
 }
 
+/*
+ * Part 4 of #1026 (PR 4b of #1083): `int(o)` on a CPython object value
+ * (`EXT_OBJ_TO_INT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Writes a D-141 *encoded* integer word through `*out` and answers `0`, or
+ * answers `-1` with a CPython exception already set.
+ *
+ * The rule-7 paragraph on `pycc_ext_obj_to_float` above governs this helper
+ * too: an explicit `int(o)` in user source names its destination type, so
+ * running CPython's own `PyNumber_Long` protocol -- the operand's
+ * `__int__`/`__index__` or a string parse -- is what the author asked for,
+ * not the implicit thunk-seam crossing D-244 rule 7 closes.
+ *
+ * # Why this is not `pycc_ext_unpack_int_at`
+ *
+ * That helper guards `PyBool_Check` and `PyLong_Check` before converting,
+ * because rule 7 closes the *thunk* boundary: a `bool` must keep its D-141
+ * marker word across an int-shaped parameter slot, and an `__index__` duck
+ * type is not an `int`. Neither applies to an explicit conversion, where
+ * CPython's own answers -- `int(True)` is `1`, `int(x)` honours
+ * `__index__` -- are precisely the contract. Only the *overflow tail* is
+ * shared, and it is shared verbatim: the inline-range gate runs after
+ * CPython's own overflow check and never against `i64`, because pycc's
+ * inline-integer range is [-2**62, 2**62-1] (D-244's 2026-09-12 amendment,
+ * #1040). There is deliberately no bigint path here.
+ *
+ * # Ownership
+ *
+ * `PyNumber_Long` hands back a *new* reference, released on *every* exit --
+ * including the `OverflowError` path, which still holds it at the point it
+ * decides to fail. Nothing but an encoded word escapes into compiled code,
+ * so this conversion adds nothing to the #1092 leak-only set.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+int pycc_ext_obj_to_int(PyObject *o, long long *out)
+{
+    PyObject *converted;
+    long long raw;
+    int overflow = 0;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    converted = PyNumber_Long(o);
+    if (converted == NULL) {
+        return -1;
+    }
+    raw = PyLong_AsLongLongAndOverflow(converted, &overflow);
+    Py_DECREF(converted);
+    /* `PyLong_AsLongLongAndOverflow` signals an out-of-range value through
+     * `overflow` *without* setting an exception, so this arm sees only a real
+     * failure -- `pycc_ext_unpack_int_at`'s own ordering, unchanged. */
+    if (raw == -1 && PyErr_Occurred()) {
+        return -1;
+    }
+    if (overflow != 0 || pycc_rt_ext_int_encode(raw, out) != 0) {
+        PyErr_SetString(PyExc_OverflowError,
+                        "int() of a CPython object is outside the inline-integer range "
+                        "[-2**62, 2**62-1] this pycc version's `ext` boundary supports "
+                        "(see #1040)");
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Part 4 of #1026 (PR 4b of #1083): `str(o)` on a CPython object value
+ * (`EXT_OBJ_TO_STR_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * Writes a pycc `PyStrObj *` (opaque `void *` on this side, exactly as in
+ * `pycc_ext_unpack_str`) through `*out` and answers `0`, or answers `-1`
+ * with a CPython exception already set. The handle arrives at refcount 1
+ * and becomes the compiled code's own, which is the identical ownership a
+ * `str` literal's own `pycc_rt_str_from_literal` produces -- so codegen
+ * needs no new rule for it.
+ *
+ * The rule-7 paragraph on `pycc_ext_obj_to_float` above governs this helper
+ * too; `PyObject_Str` *is* `str()`, so there is no other defensible answer.
+ * Unlike `pycc_ext_unpack_str` this does not `PyUnicode_Check` its operand:
+ * refusing a non-`str` is exactly what an explicit conversion must not do.
+ * A `__str__` that raises, and a result holding a lone surrogate (which
+ * `PyUnicode_AsUTF8AndSize` refuses with `UnicodeEncodeError`), are both
+ * propagated verbatim. The length is carried explicitly, never re-derived
+ * with `strlen`, because a Python `str` may contain embedded NUL bytes.
+ *
+ * # Ownership -- the copy must complete before the release
+ *
+ * `PyObject_Str` hands back a *new* reference, and `PyUnicode_AsUTF8AndSize`
+ * returns a pointer *into that object's own buffer*. So
+ * `pycc_rt_str_from_literal`, which copies those bytes, has to run *before*
+ * the `Py_DECREF`; releasing first and copying after is a use-after-free.
+ * That ordering is load-bearing and is why this helper is not a copy of
+ * `pycc_ext_unpack_str`, which merely borrows its caller's argument and may
+ * order the two calls freely. The reference is released on every exit,
+ * including the `PyUnicode_AsUTF8AndSize` failure path, so nothing here
+ * joins the #1092 leak-only set.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+int pycc_ext_obj_to_str(PyObject *o, void **out)
+{
+    PyObject *converted;
+    const char *utf8;
+    Py_ssize_t size;
+    void *copied;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    converted = PyObject_Str(o);
+    if (converted == NULL) {
+        return -1;
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(converted, &size);
+    if (utf8 == NULL) {
+        Py_DECREF(converted);
+        return -1;
+    }
+    copied = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)size);
+    Py_DECREF(converted);
+    *out = copied;
+    return 0;
+}
+
 /* Generated companion: module name macros, per-export wrappers, method table. */
 #include "pycc_ext_exports.inc"
 

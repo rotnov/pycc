@@ -4536,6 +4536,40 @@ fn a_bool_call_on_a_non_object_argument_is_an_internal_error() {
 }
 
 #[test]
+#[should_panic(expected = "`int` takes exactly 1 argument, got 0")]
+fn an_int_call_with_the_wrong_argument_count_is_an_internal_error() {
+    // Part 4 of #1026 (PR 4b of #1083). `int` and `str` share one emission
+    // arm, so this pins its arity backstop; the `str` spelling of the same
+    // call reaches the identical `panic!` and needs no second test, while
+    // the *operand* backstop below is a different line and does.
+    let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+        callee: "int".to_string(),
+        args: vec![],
+        ty: Ty::Int,
+    })]);
+    let dir = pycc_scratch::ScratchDir::new("int_wrong_arity_panics")
+        .expect("failed to create scratch dir");
+    let _ = compile_to_object(&mir, &dir.join("int_wrong_arity_panics.o"), None, false);
+}
+
+#[test]
+#[should_panic(expected = "`str` takes a CPython object argument")]
+fn a_str_call_on_a_non_object_argument_is_an_internal_error() {
+    // Part 4 of #1026 (PR 4b of #1083). `str(1)` keeps its C0001 refusal in
+    // `pycc_types`, so reaching codegen at all means the MIR is malformed.
+    // Spelled with `str` rather than `int` so the shared arm's `{callee}`
+    // interpolation is observed on both names across the two tests.
+    let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+        callee: "str".to_string(),
+        args: vec![MirExpr::IntLiteral(1)],
+        ty: Ty::Str,
+    })]);
+    let dir = pycc_scratch::ScratchDir::new("str_non_object_panics")
+        .expect("failed to create scratch dir");
+    let _ = compile_to_object(&mir, &dir.join("str_non_object_panics.o"), None, false);
+}
+
+#[test]
 #[should_panic(expected = "`math.sqrt` takes exactly 1 argument, got 0")]
 fn a_math_sqrt_call_with_the_wrong_argument_count_is_an_internal_error() {
     // `pycc_types` already rejects a mis-arity `math.sqrt` call with

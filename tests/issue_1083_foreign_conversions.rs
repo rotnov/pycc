@@ -1,25 +1,34 @@
-//! Part 4 of #1026 (PR 4a of #1083): `float(o)` and `bool(o)` on a CPython
-//! object.
+//! Part 4 of #1026: the scalar conversions out of a CPython object --
+//! `float(o)` and `bool(o)` (PR 4a of #1083), `int(o)` and `str(o)`
+//! (PR 4b).
 //!
 //! `tests/issue_1080_foreign_object.rs` owns what a foreign `import` binds
 //! and the refusal table around it; `tests/issue_1081_foreign_method_call.rs`
 //! owns the method call; `tests/issue_1082_foreign_len_and_truth.rs` owns
 //! `len`, truth testing, the subscript load and `for` iteration. This file
-//! owns the two conversions PR 4a adds.
+//! owns the four conversions.
 //!
 //! **These are explicit conversions, not implicit boundary crossings.**
 //! D-244 rule 7 keeps the type boundary closed at the *thunk export seam*,
 //! where a value crosses implicitly and its annotation is the whole
 //! contract. `float(o)` in user source names its destination type, so
 //! running CPython's own conversion protocol (`PyNumber_Float`,
-//! `PyObject_IsTrue`) is exactly what the author asked for.
-//! `docs/TYPE_SYSTEM.md`'s `object` row carries the same paragraph.
+//! `PyObject_IsTrue`, `PyNumber_Long`, `PyObject_Str`) is exactly what the
+//! author asked for. `docs/TYPE_SYSTEM.md`'s `object` row carries the same
+//! paragraph.
 //!
 //! **The relaxation is `Ty::Object`-only, and the residual incoherence is
-//! stated rather than hidden.** `bool(o)` compiles while `bool(1)` keeps its
-//! `C0001`; #1017/#1018 own the general builtin-conversion story. Every
-//! other argument type reaches the unchanged refusal, which the tests below
-//! pin in both directions.
+//! stated rather than hidden.** `bool(o)` and `str(o)` compile while
+//! `bool(1)` and `str(1)` keep their `C0001`; #1017/#1018 own the general
+//! builtin-conversion story. Every other argument type reaches the unchanged
+//! refusal, which the tests below pin in both directions.
+//!
+//! PR 4b's own two consequences are pinned here as well: `print(str(o))`
+//! type-checks (the `str` the shim copies out of CPython is an ordinary pycc
+//! `str`, so `string_conversion.rs` needs nothing for it, while `print(o)`
+//! stays `I0404`), and `int(o)` refuses a value outside the D-141
+//! inline-integer range with `OverflowError` rather than growing a bigint
+//! path (#1040).
 //!
 //! The hosted tests contribute no line coverage (CI's coverage job runs
 //! `llvm-cov` without `--include-ignored`); they are run by the Tier-1
@@ -278,18 +287,18 @@ fn a_conversion_inside_a_function_body_is_still_refused() {
     }
 }
 
-/// The `I0404` enumeration names the two new conversions.
+/// The `I0404` enumeration names every admitted conversion.
 ///
 /// It is narrowed once per PR, and a stale enumeration is a user-facing lie
 /// about what the compiler can do.
 #[test]
-fn the_refusal_message_lists_the_two_new_conversions() {
+fn the_refusal_message_lists_the_admitted_conversions() {
     let dir = ScratchDir::new("foreign_conversion_enumeration").expect("scratch");
     let out = check(&dir, "import gc\n\nprint(gc)\n");
     assert!(!out.status.success());
     let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
     assert!(
-        text.contains("the `float` and `bool` conversions"),
+        text.contains("the `float`, `bool`, `int` and `str` conversions"),
         "{text}"
     );
 }
@@ -403,4 +412,268 @@ fn a_shadowing_conversion_definition_still_builds_in_the_host() {
         stderr_of(&run)
     );
     assert_eq!(stdout_of(&run), "3\n", "stderr: {}", stderr_of(&run));
+}
+
+/// PR 4b's two conversions type-check, and their results are ordinary
+/// scalars.
+///
+/// `both_conversions_of_a_cpython_object_are_admitted`'s claim for `int` and
+/// `str`, with the same three shapes per row: the bare call, a binding, and
+/// a consumer that only accepts a real scalar. The last `str` row is the C6
+/// consequence in particular -- `print(str(o))` type-checks while `print(o)`
+/// stays `I0404`, and it needs nothing from `string_conversion.rs` because
+/// the value it sees is an ordinary `str`.
+#[test]
+fn the_other_two_conversions_of_a_cpython_object_are_admitted() {
+    let dir = ScratchDir::new("foreign_int_str_admitted").expect("scratch");
+    for body in [
+        "import gc\n\nprint(int(gc))\n",
+        "import gc\n\nx = int(gc)\nprint(x)\n",
+        "import gc\n\nx = int(gc) + 1\nprint(x)\n",
+        "import gc\n\nprint(str(gc))\n",
+        "import gc\n\ns = str(gc)\nprint(s)\n",
+        "import gc\n\ns = str(gc)\nprint(f\"[{s}]\")\n",
+    ] {
+        let out = check(&dir, body);
+        assert!(
+            out.status.success(),
+            "{body}: {}{}",
+            stdout_of(&out),
+            stderr_of(&out)
+        );
+    }
+}
+
+/// `int`/`str` on anything that is not a CPython object keep `C0001`
+/// verbatim.
+///
+/// `bool_of_a_non_object_keeps_its_unchanged_refusal`'s claim for the two
+/// names PR 4b adds, and the outside pin for fork 1's scope boundary: the
+/// arms are `Ty::Object`-only, so `str(1)` is refused exactly as it was.
+#[test]
+fn int_and_str_of_a_non_object_keep_their_unchanged_refusal() {
+    let dir = ScratchDir::new("foreign_int_str_non_object").expect("scratch");
+    for body in [
+        "print(int(1))\n",
+        "print(int(1.5))\n",
+        "print(int(\"3\"))\n",
+        "print(str(1))\n",
+        "print(str(1.5))\n",
+        "xs = [1]\nprint(str(xs))\n",
+    ] {
+        let out = check(&dir, body);
+        assert!(!out.status.success(), "{body} should still be refused");
+        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(text.contains("C0001"), "{body}: {text}");
+    }
+}
+
+/// A user-defined `def int`/`def str` still wins over the builtin.
+///
+/// `a_user_defined_conversion_function_still_wins`'s claim for PR 4b's two
+/// names. The `+ 1.0` is what discriminates -- it type-checks only if the
+/// call resolved to the user function's `float` return rather than to the
+/// builtin's `int`/`str`.
+#[test]
+fn a_user_defined_int_or_str_function_still_wins() {
+    let dir = ScratchDir::new("foreign_int_str_shadowed").expect("scratch");
+    for name in ["int", "str"] {
+        let body = format!(
+            "def {name}(x: float) -> float:\n\
+             \x20   return x + 1.0\n\
+             \n\
+             print({name}(2.0) + 1.0)\n"
+        );
+        let out = check(&dir, &body);
+        assert!(
+            out.status.success(),
+            "{name}: {}{}",
+            stdout_of(&out),
+            stderr_of(&out)
+        );
+    }
+}
+
+/// A user-defined `class int`/`class str` still wins over the builtin.
+///
+/// The class-shaped twin of the `def` guard, and `a_user_defined_conversion_
+/// class_still_wins`'s claim for PR 4b's two names. Each new arm consults the
+/// class table before admitting a `Ty::Object` argument, so the call resolves
+/// as an instantiation and the program gets the shadowing constructor's own
+/// parameter check -- which is precisely what `main` answered before PR 4b,
+/// where the arms did not exist at all. Asserting the message rather than
+/// just a non-zero exit is what pins "identical to `main`".
+///
+/// The constructor takes a `float` rather than an `int` deliberately: a class
+/// named `int` shadows the *annotation* `int` in its own module, so `x: int`
+/// would name the class being defined and draw an unrelated `C0001`.
+#[test]
+fn a_user_defined_int_or_str_class_still_wins() {
+    let dir = ScratchDir::new("foreign_int_str_shadowed_class").expect("scratch");
+    for name in ["int", "str"] {
+        let body = format!(
+            "import gc\n\
+             \n\
+             class {name}:\n\
+             \x20   def __init__(self, x: float) -> None:\n\
+             \x20       self.x = x\n\
+             \n\
+             v = {name}(gc)\n\
+             print(v.x)\n"
+        );
+        let out = check(&dir, &body);
+        assert!(
+            !out.status.success(),
+            "{name}: a class-shadowed conversion must be refused: {}{}",
+            stdout_of(&out),
+            stderr_of(&out)
+        );
+        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        let message = format!("argument 1 of `{name}` expects `float`, got `object`");
+        assert!(
+            text.contains(&message),
+            "{name}: expected `main`'s own refusal ({message}), got: {text}"
+        );
+    }
+}
+
+/// PR 2a's positional bound is inherited by PR 4b's conversions too.
+#[test]
+fn an_int_or_str_conversion_inside_a_function_body_is_still_refused() {
+    let dir = ScratchDir::new("foreign_int_str_in_function").expect("scratch");
+    for name in ["int", "str"] {
+        let body = format!(
+            "import gc\n\
+             \n\
+             def f() -> int:\n\
+             \x20   {name}(gc)\n\
+             \x20   return 1\n\
+             \n\
+             print(f())\n"
+        );
+        let out = check(&dir, &body);
+        assert!(!out.status.success(), "{name} should still be refused");
+        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(text.contains("I0404"), "{name}: {text}");
+    }
+}
+
+/// `int(o)` and `str(o)` reach a real CPython interpreter and answer what
+/// CPython itself would.
+///
+/// `sys.maxunicode` is an `int`, which `PyNumber_Long` returns unchanged and
+/// `PyObject_Str` renders; `sys` itself has no integer conversion but does
+/// have a `__str__`, which is what makes the second half of the table a test
+/// of `PyObject_Str` rather than of a number's formatting. The expectation is
+/// computed by the same interpreter, so the oracle stays CPython's.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_other_two_conversions_reach_the_host() {
+    let dir = ScratchDir::new("foreign_int_str_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_int_str_mod",
+        "import sys\n\
+         \n\
+         print(int(sys.maxunicode))\n\
+         print(str(sys.maxunicode))\n\
+         print(str(sys))\n",
+    );
+    let run = python(&dir, "import pycc_int_str_mod\n");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    let expected = python(
+        &dir,
+        "import sys\nprint(int(sys.maxunicode))\nprint(str(sys.maxunicode))\nprint(str(sys))\n",
+    );
+    assert_eq!(
+        stdout_of(&run),
+        stdout_of(&expected),
+        "stderr: {}",
+        stderr_of(&run)
+    );
+}
+
+/// An `int(o)` whose result is outside pycc's inline-integer range raises
+/// `OverflowError` in the host rather than silently truncating or growing a
+/// bigint path.
+///
+/// `sys.maxsize` is `2**63 - 1` on every 64-bit build, which is outside
+/// `[-2**62, 2**62-1]`, so this is the shim's own encode arm -- the same
+/// refusal `pycc_ext_unpack_int_at` gives at the thunk boundary, citing
+/// #1040. The trailing `print` proves the module body stopped rather than
+/// merely reported.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_out_of_range_int_conversion_raises_overflow_error_in_the_host() {
+    let dir = ScratchDir::new("foreign_int_overflow_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_int_overflow_mod",
+        "import sys\n\nprint(int(sys.maxsize))\nprint(99)\n",
+    );
+    let run = python(
+        &dir,
+        "try:\n\
+         \x20   import pycc_int_overflow_mod\n\
+         except OverflowError as e:\n\
+         \x20   print(\"OverflowError\", \"#1040\" in str(e))\n",
+    );
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert_eq!(
+        stdout_of(&run),
+        "OverflowError True\n",
+        "stderr: {}",
+        stderr_of(&run)
+    );
+}
+
+/// `str(o)` copies CPython's bytes into a pycc `str` that outlives the
+/// CPython temporary the conversion produced.
+///
+/// The §2 ordering, observed from the outside: `PyObject_Str` returns a *new*
+/// reference and `PyUnicode_AsUTF8AndSize` points into that object's own
+/// buffer, so the `pycc_rt_str_from_literal` copy has to complete before the
+/// `Py_DECREF`. The converted value is the module's only reference to those
+/// bytes -- CPython's own temporary is unreachable the moment the helper
+/// returns -- and the two conversions plus the `f`-string below all read it
+/// afterwards, so a release-then-copy inversion is a use-after-free this
+/// test's output would show. `gc` is used rather than `sys` because a
+/// built-in module's `repr` is short and fixed.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_str_conversion_outlives_the_cpython_temporary_in_the_host() {
+    let dir = ScratchDir::new("foreign_str_ownership_hosted").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_str_ownership_mod",
+        "import gc\n\
+         \n\
+         a = str(gc)\n\
+         b = str(gc)\n\
+         print(f\"[{a}][{b}]\")\n",
+    );
+    let run = python(&dir, "import pycc_str_ownership_mod\n");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    let expected = python(&dir, "import gc\nprint(f\"[{str(gc)}][{str(gc)}]\")\n");
+    assert_eq!(
+        stdout_of(&run),
+        stdout_of(&expected),
+        "stderr: {}",
+        stderr_of(&run)
+    );
 }

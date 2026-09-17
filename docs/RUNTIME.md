@@ -721,6 +721,26 @@ destination type, so running the operand's own `__float__` is what the author
 asked for. [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s `object` row carries the
 user-facing statement of the same distinction.
 
+**The `int` and `str` conversions join them on that edge.** PR 4b of
+[#1083](https://github.com/rotnov/pycc/issues/1083) added two more shim helpers,
+`pycc_ext_obj_to_int` and `pycc_ext_obj_to_str`, both shaped exactly like
+`pycc_ext_obj_to_float`: one out-parameter, `-1` with a CPython exception set on
+failure, and a single entry-block slot per conversion kind. `pycc_ext_obj_to_int`
+runs `PyNumber_Long` and reads the result with `PyLong_AsLongLongAndOverflow`,
+then encodes it with `pycc_rt_ext_int_encode`; a value outside the inline-integer
+range `[-2**62, 2**62-1]` raises `OverflowError` naming
+[#1040](https://github.com/rotnov/pycc/issues/1040), the same refusal and the
+same range the thunk boundary already applies, since there is no bigint path
+across this boundary. `pycc_ext_obj_to_str` runs `PyObject_Str` and
+`PyUnicode_AsUTF8AndSize`, then copies the bytes with `pycc_rt_str_from_literal`
+— the identical call a `str` literal compiles to — so the result is an ordinary
+pycc `str` with no new ownership rule; a lone surrogate, which has no UTF-8
+form, surfaces CPython's own `UnicodeEncodeError` on that same failing edge.
+Neither is the thunk seam's unpacker: `pycc_ext_unpack_int_at` and
+`pycc_ext_unpack_str` type-check their operand precisely because that seam is
+closed, and refusing a duck type is what an explicit conversion must not do.
+The rule-7 paragraph above covers all four conversions unchanged.
+
 **Ownership.** `pycc_ext_obj_import` returns the *new* reference
 `PyImport_ImportModule` hands back and the artifact never releases it: the
 module object is reachable from `sys.modules` for the life of the interpreter
@@ -762,9 +782,24 @@ temporary — `PyNumber_Float` hands back a new reference — and it is also the
 first that **releases what it owns on every exit, not only the successful
 one**: the `Py_DECREF` runs before the failing return as well, so a raising
 `PyFloat_AsDouble` leaks nothing either. Only a `double` escapes into compiled
-code. **Part 4 therefore does not grow
-[#1092](https://github.com/rotnov/pycc/issues/1092)**, and `float(o)`/`bool(o)`
-in a module-scope loop are refcount-neutral at any trip count.
+code. PR 4b's `pycc_ext_obj_to_int` and `pycc_ext_obj_to_str` follow that rule
+exactly, each releasing its `PyNumber_Long`/`PyObject_Str` temporary on the
+failing return as well as the successful one; `pycc_ext_obj_to_str` carries the
+one additional ordering constraint, that the `pycc_rt_str_from_literal` copy
+must complete **before** the `Py_DECREF`, because `PyUnicode_AsUTF8AndSize`
+points into the temporary's own buffer and that buffer dies with it. Only an
+encoded `i64` and a pycc-owned `str` handle escape into compiled code.
+**Part 4 therefore does not grow
+[#1092](https://github.com/rotnov/pycc/issues/1092)**, and
+`float(o)`/`bool(o)`/`int(o)`/`str(o)` in a module-scope loop hold no CPython
+reference at any trip count. `str(o)`'s pycc-side `str` handle is a separate
+matter: a *bound* one is retired by the ordinary store protocol, but a
+*discarded* one — `str(o)` in statement position — is never retired, because
+`MirStmt::ExprStmt` releases an `int` temporary and has no `str` counterpart.
+That is the general behavior of every discarded `str` temporary rather than
+anything Part 4 introduces (`a + b` in statement position leaks identically,
+measured at roughly 97 bytes per trip over 2,000,000 trips), and it is tracked
+as [#1109](https://github.com/rotnov/pycc/issues/1109).
 
 Everything the call creates *internally*, by contrast, is released, so the leak
 is exactly one reference per call rather than one per argument plus two.
@@ -801,8 +836,8 @@ iteration — the leak is trip-count-linear rather than bounded by process exit.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
-a subscript load, `for` iteration, `len`, a truth test or a `float`/`bool`
-conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
+a subscript load, `for` iteration, `len`, a truth test or a
+`float`/`bool`/`int`/`str` conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
@@ -810,8 +845,13 @@ rule 6's 5× kill criterion must not measure a hot loop containing a foreign
 attribute load, a foreign method call or a foreign subscript load until the
 release protocol lands, and must not measure a foreign `for` loop at all**,
 since that one leaks an item per trip whatever its body contains. **The caveat
-does not extend to Part 4's conversions**: `float(o)` and `bool(o)` leak
-nothing, so a hot loop containing only those is a legitimate measurement --
+does not extend to Part 4's conversions**: `float(o)`, `bool(o)` and `int(o)`
+produce only a `double` or an encoded `i64` and leak nothing, so a hot loop
+containing only those is a legitimate measurement. `str(o)` qualifies only when
+its result is bound; a discarded `str(o)` leaks its pycc `str` handle on
+[#1109](https://github.com/rotnov/pycc/issues/1109)'s general terms, exactly as
+a discarded `a + b` does, so a benchmark binds the conversion's result rather
+than discarding it --
 because the resident-set
 growth, not the compiled code, would dominate the result. An *unbound* `str`
 argument expression — `json.dumps(a + a)` rather than `json.dumps(s)` — adds a

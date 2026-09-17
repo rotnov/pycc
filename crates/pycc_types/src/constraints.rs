@@ -960,6 +960,30 @@ pub(crate) fn collect_expr_constraints(
                     return Ok(Some(Ok(Ty::Bool)));
                 }
             }
+            if (callee == "int" || callee == "str") && !signatures.contains_key(callee) {
+                // Part 4 of #1026 (PR 4b of #1083): the solver-side mirrors of
+                // `infer_expr_in`'s `int`/`str` arms, which own the reasoning
+                // -- `Ty::Object` only, a user-defined `int`/`str` first.
+                //
+                // They follow the `bool` arm above rather than the `float`
+                // one in not deferring an unresolved term, for the reason that
+                // arm states: each admits exactly one argument type, so every
+                // other argument -- resolved to something else or not yet
+                // resolved at all -- falls through to
+                // `unsupported_callable_builtin`'s `C0001` below, which is how
+                // issue #142 deliberately classifies a known callable builtin
+                // here.
+                //
+                // The user-defined-*class* guard `infer_expr_in`'s arms carry
+                // is absent here for the reason the `float` arm above states:
+                // this solver's environment has no class table, and `I0404`
+                // keeps a foreign object out of every function body it runs
+                // on. `infer_expr_in` is the authority for a class-shadowed
+                // name and refuses the program there.
+                if let [Some(Ok(Ty::Object))] = arg_terms.as_slice() {
+                    return Ok(Some(Ok(if callee == "int" { Ty::Int } else { Ty::Str })));
+                }
+            }
             let Some(signature) = signatures.get(callee) else {
                 // Issue #142: a private helper calling a known callable
                 // builtin (e.g. `ValueError("x")`) gets the same `C0001`

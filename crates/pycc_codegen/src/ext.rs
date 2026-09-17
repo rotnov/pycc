@@ -243,6 +243,55 @@ pub const EXT_OBJ_ITER_NEXT_SYMBOL: &str = "pycc_ext_obj_iter_next";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TO_FLOAT_SYMBOL: &str = "pycc_ext_obj_to_float";
 
+/// The fixed C shim's `int(o)` conversion helper (Part 4 of #1026, PR 4b
+/// of #1083): it takes a borrowed `PyObject *` and a `long long *`
+/// out-parameter, writes a **D-141 encoded** integer word and returns `0`,
+/// or returns `-1` with the CPython exception already set.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// The distinction [`EXT_OBJ_TO_FLOAT_SYMBOL`] records applies unchanged:
+/// D-244 rule 7 closes the type boundary at the *thunk export seam*, and
+/// `int(o)` in user source names its destination type, so running CPython's
+/// own `PyNumber_Long` protocol is what the author asked for. It is
+/// therefore *not* `pycc_ext_unpack_int_at`, whose `PyBool_Check` and
+/// `PyLong_Check` guards exist precisely because that seam is closed.
+///
+/// **Overflow.** The encode is fused into the helper, exactly as
+/// [`EXT_OBJ_LEN_SYMBOL`]'s is and for its reason (one failure edge rather
+/// than two). A value outside pycc's inline-integer range
+/// `[-2**62, 2**62-1]` raises `OverflowError` citing #1040 -- there is no
+/// bigint path across this boundary.
+///
+/// **Ownership.** The helper releases the `PyNumber_Long` temporary on
+/// *every* exit, including the `OverflowError` path that still holds it, so
+/// this operation adds nothing to the #1092 leak-only set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_INT_SYMBOL: &str = "pycc_ext_obj_to_int";
+
+/// The fixed C shim's `str(o)` conversion helper (Part 4 of #1026, PR 4b of
+/// #1083): it takes a borrowed `PyObject *` and a `void **` out-parameter,
+/// writes a pycc `PyStrObj *` at refcount 1 and returns `0`, or returns `-1`
+/// with the CPython exception already set.
+///
+/// **This is an explicit conversion, not an implicit boundary crossing.**
+/// See [`EXT_OBJ_TO_FLOAT_SYMBOL`]; `PyObject_Str` *is* `str()`, so no other
+/// answer is defensible. Unlike `pycc_ext_unpack_str` it does not
+/// `PyUnicode_Check` its operand -- refusing a non-`str` is exactly what an
+/// explicit conversion must not do.
+///
+/// **Ownership.** The handle written through the out-parameter is produced
+/// by `pycc_rt_str_from_literal`, the same call a `str` literal's own
+/// emission uses, and arrives as compiled code's own reference -- so this
+/// crate needs no new rule for it. On the C side the copy must complete
+/// *before* the `PyObject_Str` result is released, because
+/// `PyUnicode_AsUTF8AndSize` points into that result's buffer; the helper's
+/// own comment records why that ordering is load-bearing. The temporary is
+/// released on every exit, so nothing joins the #1092 leak-only set.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
 #[must_use]
