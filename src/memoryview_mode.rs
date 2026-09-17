@@ -26,7 +26,8 @@
 //! a message about something else.
 
 use pycc_diag::{Diagnostic, Severity};
-use pycc_hir::{HirItem, HirModule, Ty};
+use pycc_hir::{HirItem, HirModule, ProtocolMember, Ty};
+use std::collections::HashMap;
 
 /// The `I04xx` code this gate emits. The family is the CPython interop
 /// boundary (`docs/DIAGNOSTICS.md`): `I0403` is its nearest neighbour --
@@ -91,6 +92,100 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
         return Ok(());
     }
     Err(gaps)
+}
+
+/// The protocol-method half of [`refuse_in_native_mode`]: one
+/// [`NATIVE_MEMORYVIEW_CODE`] per protocol method whose *parameter* list
+/// names `memoryview`, paired with that class's index in `hir.class_defs`.
+///
+/// It needs its own walk because a protocol method is never lowered to an
+/// `HirItem::Function` -- `crates/pycc_hir/src/class/protocol.rs` records it
+/// as a `ProtocolMember::Method` and says so in its header -- so the
+/// `hir.items` walk above cannot see the signature at all, and a
+/// `class P(Protocol): def total(self, v: memoryview) -> int: ...` built
+/// natively escaped the documented `I0405` entirely.
+///
+/// Only the parameter position is checked here, and that split is the whole
+/// design: a `memoryview` *return* type is unsatisfiable in every artifact
+/// mode, so `protocol.rs` refuses it at the declaration with `C0001` for
+/// both modes at once, while a `memoryview` *parameter* is mode-dependent --
+/// under `pycc build --ext` a class really can satisfy it, because an
+/// exported wrapper acquires the buffer and passes the view inward (measured:
+/// a `def total(self, v: memoryview) -> int` method builds under `--ext`
+/// today). Native mode is exactly where it becomes impossible, which is this
+/// gate's own subject.
+///
+/// Keyed by class index rather than item index, so the caller resolves it
+/// through `ProgramSources::owner_of_class` instead of `owner_of_item`:
+/// `class_defs` is its own concatenated table with its own per-file bounds,
+/// and a protocol class defined in an imported module is contributed by that
+/// module, not by the entry file.
+///
+/// An *inherited* member is skipped. `lower_protocol_class` copies a base
+/// protocol's members into the derived class's own `protocol_members`, so a
+/// `class Q(P, Protocol)` carries `P`'s offending method verbatim; reporting
+/// it again would name `Q` for a signature `P` declares. The declaring class
+/// is the one that gets the diagnostic, exactly as for the return position.
+///
+/// Span-less and parameter-name-less, both for the same reason as
+/// [`gap`]: `ProtocolMember::Method` carries `param_tys: Vec<Ty>` and no
+/// names at all, so the position is named by its 1-based index with `self`
+/// already stripped -- the shape `protocol.rs` records.
+pub(crate) fn refuse_protocol_methods_in_native_mode(
+    hir: &HirModule,
+) -> Result<(), Vec<(usize, Diagnostic)>> {
+    let by_name: HashMap<&str, &Vec<ProtocolMember>> = hir
+        .class_defs
+        .iter()
+        .map(|(name, def)| (name.as_str(), &def.protocol_members))
+        .collect();
+    let mut gaps: Vec<(usize, Diagnostic)> = Vec::new();
+    for (index, (class_name, def)) in hir.class_defs.iter().enumerate() {
+        for member in &def.protocol_members {
+            let ProtocolMember::Method {
+                name, param_tys, ..
+            } = member
+            else {
+                continue;
+            };
+            let Some(position) = param_tys.iter().position(|ty| *ty == Ty::MemoryView) else {
+                continue;
+            };
+            if def
+                .mro
+                .iter()
+                .any(|ancestor| ancestor != class_name && declares_method(&by_name, ancestor, name))
+            {
+                continue;
+            }
+            gaps.push((
+                index,
+                gap(
+                    &format!("{class_name}.{name}"),
+                    &format!("parameter {} `memoryview`", position + 1),
+                ),
+            ));
+        }
+    }
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    Err(gaps)
+}
+
+/// Whether `class_name` names a protocol class that itself declares a
+/// method member called `method`. A name the class table does not hold
+/// (a builtin base, `Protocol` itself) declares nothing.
+fn declares_method(
+    by_name: &HashMap<&str, &Vec<ProtocolMember>>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    by_name.get(class_name).is_some_and(|members| {
+        members
+            .iter()
+            .any(|m| matches!(m, ProtocolMember::Method { name, .. } if name == method))
+    })
 }
 
 /// Names the first part of a signature that mentions `memoryview`, as the

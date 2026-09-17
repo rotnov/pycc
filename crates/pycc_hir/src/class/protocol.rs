@@ -176,6 +176,42 @@ pub(super) fn lower_protocol_class(
                         )?;
                         (p, r)
                     };
+                // Part 1 of #1027: a protocol method's `-> memoryview` is
+                // unsatisfiable in *every* artifact mode, so it is refused
+                // here at the declaration rather than by either of
+                // `src/memoryview_mode.rs`'s mode gates -- neither of which
+                // could see it anyway, because a protocol method is recorded
+                // as a `ProtocolMember::Method` and is never lowered to an
+                // `HirItem::Function` (see this module's header). Part 1 adds
+                // no expression that *produces* a `memoryview`, so no class
+                // could implement the member: natively the implementing
+                // method's own signature is refused (`I0405`), and under
+                // `pycc build --ext` its return type is refused too
+                // (`C0001`/`C0003`). The mirror image -- a `memoryview`
+                // *parameter* -- is deliberately not refused here, because a
+                // class genuinely can satisfy it under `--ext`, where an
+                // exported function receives the view and passes it inward;
+                // that position is mode-dependent and belongs to
+                // `src/memoryview_mode.rs`'s native gate.
+                //
+                // Placed at the construction site rather than on the
+                // assembled `protocol_members` vector so that a derived
+                // `class Q(P, Protocol)` does not re-report its inherited
+                // copy of the same member: the loop above copies base
+                // members in wholesale, and only the declaring class runs
+                // this arm.
+                if return_ty == Ty::MemoryView {
+                    return Err(unsupported(
+                        format!(
+                            "protocol method `{class_name}.{method_name}` returns \
+                             `memoryview`, which is not supported yet -- no class could \
+                             satisfy it, because Part 1 of #1027 adds no expression that \
+                             produces a `memoryview`; it admits one only as a parameter of \
+                             a `pycc build --ext` export"
+                        ),
+                        method_def.range,
+                    ));
+                }
                 // Protocol member signatures exclude `self` (already
                 // stripped above).
                 let param_tys: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();

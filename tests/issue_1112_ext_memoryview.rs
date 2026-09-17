@@ -421,3 +421,195 @@ fn a_memoryview_export_builds_and_releases_its_buffer_in_the_host() {
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// Round 6 of the pinned review: a `Protocol` method's signature is not an
+/// `HirItem::Function`.
+///
+/// `crates/pycc_hir/src/class/protocol.rs` records a protocol method as a
+/// `ProtocolMember::Method` and lowers no function for it, so both
+/// `src/memoryview_mode.rs` gates -- which walk `hir.items` -- saw nothing
+/// at all and a protocol method naming `memoryview` escaped every refusal
+/// this file pins for an ordinary one. The four assertions below are the
+/// four arms that split apart, and the split is the fix's whole shape:
+/// the *parameter* position is mode-dependent, so it is refused by the
+/// native gate only, while the *return* position is unsatisfiable in every
+/// mode and is refused at the declaration.
+fn protocol_build(dir: &Path, ext: bool) -> Output {
+    let mut cmd = pycc();
+    cmd.arg("build")
+        .arg(dir.join("view_probe.py"))
+        .arg("-o")
+        .arg(dir.join("view_probe"));
+    if ext {
+        cmd.arg("--ext");
+    }
+    cmd.output().expect("pycc should spawn")
+}
+
+const PROTOCOL_PARAM: &str = "\
+from typing import Protocol
+
+
+class Sink(Protocol):
+    def total(self, v: memoryview) -> int: ...
+
+
+def plain(x: int) -> int:
+    return x + 1
+";
+
+#[test]
+fn a_protocol_method_s_memoryview_parameter_is_refused_by_a_native_build() {
+    let dir = fixture("1112_protocol_param_native", PROTOCOL_PARAM);
+    let build = protocol_build(&dir, false);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("`Sink.total`'s parameter 1 `memoryview`"),
+        "{err}"
+    );
+    assert!(err.contains("pycc build --ext"), "{err}");
+}
+
+/// The mirror assertion, and the reason the parameter arm is *not* a
+/// mode-agnostic refusal: a class really can satisfy the member under
+/// `--ext`, because an exported function receives the view and passes it
+/// inward. Pinned so a later round does not "fix" this into a refusal.
+#[test]
+fn a_protocol_method_s_memoryview_parameter_is_admitted_by_an_ext_build() {
+    let dir = fixture("1112_protocol_param_ext", PROTOCOL_PARAM);
+    let build = protocol_build(&dir, true);
+    assert!(
+        build.status.success(),
+        "{}\n{}",
+        stdout_of(&build),
+        stderr_of(&build)
+    );
+}
+
+const PROTOCOL_RETURN: &str = "\
+from typing import Protocol
+
+
+class Source(Protocol):
+    def make(self) -> memoryview: ...
+
+
+def plain(x: int) -> int:
+    return x + 1
+";
+
+#[test]
+fn a_protocol_method_s_memoryview_return_is_refused_in_both_modes() {
+    for (name, ext) in [
+        ("1112_protocol_ret_native", false),
+        ("1112_protocol_ret_ext", true),
+    ] {
+        let dir = fixture(name, PROTOCOL_RETURN);
+        let build = protocol_build(&dir, ext);
+        assert!(!build.status.success(), "{name}: {}", stdout_of(&build));
+        let err = stderr_of(&build);
+        assert!(err.contains("error[C0001]"), "{name}: {err}");
+        assert!(
+            err.contains("protocol method `Source.make` returns `memoryview`"),
+            "{name}: {err}"
+        );
+    }
+}
+
+/// `lower_protocol_class` copies a base protocol's members into a derived
+/// protocol's own `protocol_members` (a class whose base is a protocol is
+/// itself lowered as one), so a walk over the assembled vector would report
+/// the same declaration twice -- once naming the base, once naming the
+/// derived class that merely inherits it. Exactly one diagnostic, naming
+/// the declaring class.
+#[test]
+fn an_inherited_protocol_method_is_reported_once_at_its_declaration() {
+    let dir = fixture(
+        "1112_protocol_inherited",
+        "\
+from typing import Protocol
+
+
+class Sink(Protocol):
+    def total(self, v: memoryview) -> int: ...
+
+
+class Counted(Sink):
+    def count(self) -> int: ...
+
+
+def plain(x: int) -> int:
+    return x + 1
+",
+    );
+    let build = protocol_build(&dir, false);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert_eq!(err.matches("error[I0405]").count(), 1, "{err}");
+    assert!(
+        err.contains("`Sink.total`'s parameter 1 `memoryview`"),
+        "{err}"
+    );
+    assert!(!err.contains("`Counted.total`"), "{err}");
+}
+
+/// The keying half: `hir.class_defs` is its own concatenated table, so a
+/// protocol class defined in an *imported* module is contributed by that
+/// module and the refusal must be grouped under that file, not the entry.
+/// Attributing it to the entry file is the defect Part 1 of #1026 fixed for
+/// the import table, one table over.
+///
+/// The assertion is an *ordering* one because the diagnostic is span-less
+/// (`ProtocolMember::Method` carries no source range), and
+/// `pycc_diag::render_human` prints a ` --> path:line:col` line only for a
+/// diagnostic that has a span. What the file key still decides is which
+/// per-file group the refusal lands in, and `src/frontend.rs`'s `group`
+/// emits those groups in file order -- dependency first, entry last. So an
+/// `I0403` planted in the *entry* module pins the attribution exactly: the
+/// protocol refusal precedes it when the class is keyed to `sink.py`, and
+/// would follow it if the class fell back to the entry file, because within
+/// one group the import gaps are pushed first.
+#[test]
+fn a_protocol_method_refusal_is_grouped_under_the_file_that_declares_the_class() {
+    let dir = ScratchDir::new("1112_protocol_multifile").expect("scratch");
+    std::fs::write(
+        dir.join("sink.py"),
+        "\
+from typing import Protocol
+
+
+class Sink(Protocol):
+    def total(self, v: memoryview) -> int: ...
+",
+    )
+    .expect("write the dependency");
+    std::fs::write(
+        dir.join("view_probe.py"),
+        "\
+import json
+
+from sink import Sink
+
+
+def plain(x: int) -> int:
+    return x + 1
+",
+    )
+    .expect("write the entry");
+    let build = protocol_build(&dir, false);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    let protocol_at = err
+        .find("error[I0405]")
+        .unwrap_or_else(|| panic!("no I0405 in {err}"));
+    let import_at = err
+        .find("error[I0403]")
+        .unwrap_or_else(|| panic!("no I0403 in {err}"));
+    assert!(protocol_at < import_at, "{err}");
+    assert!(
+        err.contains("`Sink.total`'s parameter 1 `memoryview`"),
+        "{err}"
+    );
+}

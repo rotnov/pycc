@@ -104,6 +104,17 @@ struct ProgramSources {
     /// files `0..=i`, the import-table analogue of `bounds` (Part 1 of
     /// #1026). Read by [`Self::owner_of_import`].
     import_bounds: Vec<usize>,
+    /// `class_bounds[i]` is the number of `class_defs` entries contributed
+    /// by files `0..=i`, the class-table analogue of `bounds`. Read by
+    /// [`Self::owner_of_class`].
+    ///
+    /// It is *not* each module's own `hir.class_defs.len()`:
+    /// `pycc_hir::link` drops a module's seeded builtin exception classes
+    /// as it concatenates and appends one set for the whole program at the
+    /// back, so a module's contribution is its non-seeded entry count. That
+    /// trailing program-wide block is past the last bound and falls to the
+    /// entry file, exactly as `bounds` treats `finalize`'s appended items.
+    class_bounds: Vec<usize>,
 }
 
 impl ProgramSources {
@@ -146,6 +157,20 @@ impl ProgramSources {
             .min(self.entry())
     }
 
+    /// The file that owns class `index` of the linked program's class table
+    /// (Part 1 of #1027).
+    ///
+    /// Same shape as [`Self::owner_of_item`] against the class bounds. The
+    /// `.min(entry())` clamp is load-bearing here for the same reason it is
+    /// there: `pycc_hir::link` appends the seeded builtin exception classes
+    /// once, after every module's own contribution, so their indices sit
+    /// past the last bound.
+    fn owner_of_class(&self, index: usize) -> usize {
+        self.class_bounds
+            .partition_point(|end| *end <= index)
+            .min(self.entry())
+    }
+
     /// Groups keyed diagnostics into per-file payloads, in program order.
     fn group(&self, keyed: Vec<(usize, Diagnostic)>) -> FrontendFailure {
         let mut files: Vec<FileDiagnostics> = self
@@ -172,14 +197,29 @@ fn link_frontend(path: &Path) -> Result<(HirModule, ProgramSources), FrontendFai
     let mut files = Vec::with_capacity(program.modules.len());
     let mut bounds = Vec::with_capacity(program.modules.len());
     let mut import_bounds = Vec::with_capacity(program.modules.len());
+    let mut class_bounds = Vec::with_capacity(program.modules.len());
     let mut inputs = Vec::with_capacity(program.modules.len());
     let mut total = 0;
     let mut imports_total = 0;
+    let mut classes_total = 0;
     for loaded in program.modules {
         total += loaded.module.hir.items.len();
         bounds.push(total);
         imports_total += loaded.module.hir.imports.len();
         import_bounds.push(imports_total);
+        // Mirrors `pycc_hir::link`'s own filter exactly: a seeded module's
+        // builtin exception classes are dropped as it concatenates, so
+        // counting this module's raw `class_defs` would misalign every
+        // later file's bound.
+        let seeded = loaded.module.hir.seeded_builtin_exception_classes;
+        classes_total += loaded
+            .module
+            .hir
+            .class_defs
+            .iter()
+            .filter(|(name, _)| !(seeded && pycc_hir::is_builtin_exception_class(name)))
+            .count();
+        class_bounds.push(classes_total);
         files.push((loaded.display_path.clone(), loaded.source));
         inputs.push(LinkInput {
             display_path: loaded.display_path,
@@ -190,6 +230,7 @@ fn link_frontend(path: &Path) -> Result<(HirModule, ProgramSources), FrontendFai
         files,
         bounds,
         import_bounds,
+        class_bounds,
     };
     let linked = pycc_hir::link(inputs).map_err(|keyed| sources.group(keyed))?;
     let hir = pycc_hir::finalize(linked).map_err(|diagnostics| {
@@ -251,6 +292,10 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     // annotation lives on an `HirItem::Function`, not in the import table,
     // so it resolves to its owning file through the item bounds.
     let memoryview_gaps = crate::memoryview_mode::refuse_in_native_mode(&hir);
+    // Keyed by *class* index: a protocol method's signature is a
+    // `ProtocolMember::Method` in `hir.class_defs`, never an
+    // `HirItem::Function`, so it resolves through the class bounds instead.
+    let protocol_gaps = crate::memoryview_mode::refuse_protocol_methods_in_native_mode(&hir);
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
     if let Err(gaps) = import_gaps {
         keyed.extend(
@@ -258,11 +303,17 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
         );
     }
-    let refused_a_memoryview_signature = memoryview_gaps.is_err();
+    let refused_a_memoryview_signature = memoryview_gaps.is_err() || protocol_gaps.is_err();
     if let Err(gaps) = memoryview_gaps {
         keyed.extend(
             gaps.into_iter()
                 .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
+        );
+    }
+    if let Err(gaps) = protocol_gaps {
+        keyed.extend(
+            gaps.into_iter()
+                .map(|(index, diagnostic)| (sources.owner_of_class(index), diagnostic)),
         );
     }
     if refused_a_memoryview_signature {
