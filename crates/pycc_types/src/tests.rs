@@ -382,6 +382,11 @@ fn a_walrus_inside_a_buffer_index_is_still_bound() {
 /// base -- which would call `infer_expr_in` on the bare name and report the
 /// `C0001` the carve-out exists to avoid. `is_memoryview_base` is the
 /// second, separate guard that stops it.
+///
+/// `check_and_resolve` rather than `check`: the monomorphizer is a
+/// *post-check* phase, reached from `check_and_resolve_all_keyed` alone, so a
+/// `check`-only assertion here never executes the guard it names (found while
+/// covering the same seam for `len(b)` in #1116).
 #[test]
 fn a_buffer_read_survives_a_module_that_holds_a_generic_function() {
     let mut hir = memoryview_subject(
@@ -397,7 +402,7 @@ fn a_buffer_read_survives_a_module_that_holds_a_generic_function() {
         return_ty: Ty::Param(Box::new("T".to_string())),
         body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
     });
-    assert!(check(&hir).is_ok());
+    assert!(check_and_resolve(&hir).is_ok());
 }
 
 /// `b.attr` in that same generic-bearing module stays refused: the
