@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-09-17 — Two writers in one worktree, because a resumed agent was treated as finished
+
+**What happened.** A dispatched implementation agent was resumed to fix one
+review finding. It reported back "the rest of the gate chain is still running.
+Waiting on it." and stopped. Reading that as a finished handoff, the
+orchestrating session committed the agent's working-tree changes itself
+(`git commit --amend`) and started its own gate chain. The agent then resumed,
+amended the same commit again, and reported its own gate results. The two
+amends produced different commit ids for the same intended content, and every
+gate verdict taken in that window — including the green ones — was collected
+while two writers shared the tree, which `AGENTS.md`'s one-writer rule voids.
+
+**Root cause.** A dispatched agent's *report* is not its *termination*, and
+this is doubly true for a resumed one: the resume returns as soon as the agent
+stops, and an agent that stops mid-wait will stop again later with more to say.
+The report's own text said the work was unfinished; it was read as a handoff
+anyway because a returned result reads like a completed one.
+
+**What fixed it.** Re-establishing a single-writer baseline: confirming the
+agent had stopped, taking the tree as it actually stood rather than as either
+writer described it, and re-running the whole gate set from that commit. The
+re-run also caught a failure the first chain had reported —
+`check_roadmap_evidence.rb` exiting 1 — which turned out to be a US-ASCII
+locale artifact of the session's own shell, not a defect in the diff; it exits
+0 under `LANG=en_US.UTF-8`.
+
+**Lesson.** Do not write to a worktree a dispatched agent is working in until
+that agent has stopped *and* its last report describes a finished state. When a
+report says work is still running, the correct next action is to wait for the
+next stop or inspect the tree read-only — never to commit on its behalf. And
+set a UTF-8 locale before running the Ruby checkers: under the default
+US-ASCII locale `check_roadmap_evidence.rb` raises
+`invalid byte sequence in US-ASCII` on any non-ASCII roadmap prose, which reads
+exactly like a real gate failure.
+
 ## 2026-09-16 — A continuation summary described work the branch already contained
 
 **What happened.** A session resumed from a compaction summary whose

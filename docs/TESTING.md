@@ -13,7 +13,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
-| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs` and `tests/issue_1066_ext_user_exceptions.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
+| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs` and `tests/issue_1114_numpy_oracle.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
@@ -830,6 +830,66 @@ argument-binding and return-path costs on both sides of the quotient and the
 resulting figure would isolate nothing. Neither row is evidence about D-244
 rule 6's 5x bar in either direction — only a run of the protocol above can be
 that.
+
+#### What the buffer path costs, measured (not part of the protocol)
+
+A second ad-hoc measurement, taken the same way and outside the protocol for
+the same reason: #1027 closed the `memoryview` carrier (#1112, #1113, #1114),
+and the question that follows is what a loop over a real third-party array
+costs once the boundary is crossed only once. Unlike the per-call subsection
+above, this one does carry replicates, a median, and a correctness
+precondition — all three arms had to agree exactly before any ratio was
+recorded — but it is still not pre-registered, its input is not committed, and
+it is not evidence for either `product-sprint-1` roadmap box or for D-244 rule
+6's kill criterion. Only a run of the protocol above, which #1039 owns, can be
+those things.
+
+The method: subject `dot9(b: memoryview, n: int) -> float`, summing
+`b[i * 9 + 0] * b[i * 9 + 1]` over `n` rows. Input
+`numpy.random.default_rng(20260917).random((200_000, 9))`, flattened
+zero-copy with `.reshape(-1)` and handed over as a `memoryview` — 1-D,
+C-contiguous, format `'d'`, 1,800,000 elements. `time.perf_counter_ns()`
+around a single `dot9(v, n)` call, seven replicates, median reported with
+min and max. Three whole process invocations of those seven replicates were
+taken, and the table below is the third. The first is discarded as cold-start:
+its pycc median was 5.74 ms (2.36x) against CPython and Cython medians within
+3% of every later run, so the outlier is in the arm that had just been built
+and first loaded. Invocations two and three agree to within 1% on every arm,
+which is the whole basis for reporting a single run rather than pooling them.
+Three arms on one machine and one interpreter: CPython running
+the subject's own source through `exec`, pycc built with `--ext --release`,
+and Cython 3.1.6 in pure-Python mode
+(`cythonize("buf_oracle.py", compiler_directives={"annotation_typing": True,
+"language_level": "3"})`, built with `CFLAGS="-O2"`). All three printed the
+identical `repr` `49910.61395118853`, which is the precondition the ratios
+below rest on. Machine: Apple M3 Max, macOS 27.0, arm64, CPython 3.13.9,
+numpy 2.4.2. No measurement script is committed — the numbers are a reading
+taken once, not a gate.
+
+| Arm | Median | Min | Max | Versus CPython |
+| --- | --- | --- | --- | --- |
+| CPython 3.13.9 (`exec`'d source) | 13.17 ms | 12.46 ms | 13.45 ms | 1.00x |
+| Cython 3.1.6 (pure-Python mode) | 14.74 ms | 13.67 ms | 15.09 ms | 0.89x |
+| pycc `--ext --release` | 3.86 ms | 3.82 ms | 4.01 ms | 3.41x |
+
+Two things are worth reading off this and nothing more. The compiled loop is
+about **3.41x** faster than the same source under CPython, and the per-call
+boundary cost the subsection above isolates is amortized here across the
+400,000 element reads this loop actually performs — two per row over 200,000
+rows, not one per element of the 1,800,000-element view — rather than paid
+per read; the crossing happens once. And
+Cython in pure-Python mode is **slower than CPython** on this shape, because
+`b: memoryview` types the parameter as the Python `memoryview` object, so each
+`b[i]` is still a Python-level subscript plus a boxed `float`; reaching
+Cython's own fast path would mean annotating `double[:]`, which is a different
+source file and therefore a different subject. Both readings are of this one
+shape at this one size. A loop with a different element count, a different
+number of reads per row, or a different amount of arithmetic between reads
+will give a different number, so no unlabelled "speedup" is derivable from
+this table. And neither reading is evidence about either
+`product-sprint-1` Accept box or D-244 rule 6's 5x bar in either direction —
+only a run of the protocol above, which #1039 owns, can be that.
+
 
 ## Planned CPython interop matrix (v0.7)
 

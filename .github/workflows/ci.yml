@@ -607,6 +607,24 @@ jobs:
             python3 -c "import os, sys; p = os.path.join(sys.base_prefix, 'libs', 'python3.lib'); sys.exit(0 if os.path.isfile(p) else 'missing ' + p)"
           fi
 
+      # `tests/issue_1114_numpy_oracle.rs` (Part 3 of #1027) checks a
+      # compiled buffer loop against CPython over a real `numpy.ndarray`,
+      # and skips itself with a message when numpy is not importable. This
+      # is the only leg that can verify it: `build-test-coverage` runs a
+      # different interpreter and no `--ext` build, so it is expected to
+      # skip there. Without this step the oracle would be green by skipping
+      # everywhere, which is why the second line asserts the import rather
+      # than merely reporting a version. `--only-binary=:all:` keeps a
+      # missing wheel a fast, legible failure instead of a source build.
+      #
+      # Deliberately no `shell:` here: on Windows an explicit bash forces
+      # Git Bash, whose PATH rewriting shadows the MSVC toolchain (D-030),
+      # and this step's commands have no bash-specific syntax.
+      - name: Install numpy into the hosted ext floor interpreter
+        run: |
+          python3 -m pip install --only-binary=:all: numpy
+          python3 -c "import numpy; print(numpy.__version__)"
+
       # No separate `cargo build --workspace` step here (removed by #631,
       # part 3 of #20): pycc_codegen/build.rs now runs `cargo build -p
       # pycc_rt` itself as a real build dependency, so the plain `cargo
