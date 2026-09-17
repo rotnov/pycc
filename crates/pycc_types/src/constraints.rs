@@ -518,7 +518,23 @@ pub(crate) fn collect_expr_constraints(
                 return Ok(None);
             }
             match env.bindings.get(name).cloned() {
-                Some(term) => Ok(Some(term)),
+                Some(term) => {
+                    // Part 1 of #1027: this arm is the solver's shared read
+                    // seam, and the solver runs first, so any operation that
+                    // inspects a concrete argument term -- `len(v)`, an
+                    // alias, a `for` -- would otherwise report its own type
+                    // error (`T0033`, ...) about a `memoryview` before the
+                    // check phase's documented capability gap could fire.
+                    // Reading the name is the gap wherever it appears, so it
+                    // is refused here for every reader at once rather than
+                    // one caller at a time. The `Call` arm's own gate below
+                    // stays: a call's callee is a bare string, not a `Name`
+                    // expression, so it never reaches this seam.
+                    if let Some(ty) = resolved_term(term.clone(), parents, concrete) {
+                        crate::expr::reject_memoryview_read(name, &ty)?;
+                    }
+                    Ok(Some(term))
+                }
                 // Issue #771: a definitely-assigned name whose initializer
                 // the solver couldn't represent as a term (see
                 // `opaque_bindings`'s doc comment) is not an unbound local
@@ -686,7 +702,20 @@ pub(crate) fn collect_expr_constraints(
             // and pass 3's own gate would still catch the shadowing later --
             // there this mirror is fail-fast defense-in-depth, not the only
             // line of defense.
-            if env.bindings.contains_key(callee) && !env.defs_rebound.contains(callee) {
+            if let Some(term) = env.bindings.get(callee).cloned()
+                && !env.defs_rebound.contains(callee)
+            {
+                // Part 1 of #1027: this gate, not `infer_expr_in`'s own
+                // D-110 arm, is the one a `memoryview` *parameter* reaches
+                // -- the solver runs first, and a parameter's annotation is
+                // already a binding here while the check phase never gets to
+                // look at the call. Calling the name is a *read* of it, so
+                // it is the capability gap every other use of a `memoryview`
+                // is (`C0001`), not D-110's "no value in the current subset
+                // is callable" (`T0021`).
+                if let Some(ty) = resolved_term(term, parents, concrete) {
+                    crate::expr::reject_memoryview_read(callee, &ty)?;
+                }
                 return Err(non_callable_binding(callee));
             }
             // Part 1 of #1026: a foreign import binds its name to a

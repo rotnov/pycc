@@ -396,6 +396,13 @@ fn the_embedded_shim_is_the_tracked_c_file_and_declares_the_limited_api_floor() 
         "static PyObject *pycc_ext_pack_bool(char value)",
         "static int pycc_ext_unpack_str(PyObject *obj",
         "static PyObject *pycc_ext_pack_str(void *result)",
+        // Part 1 of #1027. No packer: a `memoryview` is admitted at a
+        // parameter position only, so there is no symmetric pair here.
+        "static int pycc_ext_unpack_memoryview(PyObject *obj",
+        // The POD the wrapper hands to compiled code, typedef'd above the
+        // point the generated companion is included at, or every generated
+        // buffer local would be an undeclared type in clang.
+        "} PyccExtBufferView;",
     ] {
         assert!(SHIM_C.contains(helper), "{helper}");
     }
@@ -1185,4 +1192,175 @@ fn the_shims_float_tuple_unpack_takes_its_arity_as_a_parameter() {
         "{shim}"
     );
     assert!(!shim.contains("pycc_ext_unpack_float_tuple"), "{shim}");
+}
+
+/// One export taking `count` `memoryview` parameters and returning
+/// `return_ty`, as generated C.
+fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
+    inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: name.to_string(),
+            params: vec![Ty::MemoryView; count],
+            return_ty,
+        }],
+    )
+}
+
+#[test]
+fn a_memoryview_parameter_acquires_a_buffer_and_carries_only_a_copied_pair() {
+    let inc = memoryview_inc("total", 1, Ty::Float);
+    // The wrapper owns both locals for the whole call.
+    assert!(inc.contains("    Py_buffer b0;\n"), "{inc}");
+    assert!(inc.contains("    PyccExtBufferView a0;\n"), "{inc}");
+    // One refusal arm, ahead of the call, exactly like every other slot.
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_memoryview(args[0], \"total\", 0, &b0) != 0) {\n        \
+             return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // The pair is `buf.buf` plus a *copy* of `shape[0]`. Carrying
+    // `b0.shape` itself would be a use-after-free the moment the wrapper
+    // released the buffer, and nothing else in the tree would notice.
+    assert!(inc.contains("    a0.ptr = b0.buf;\n"), "{inc}");
+    assert!(
+        inc.contains("    a0.len = (long long)b0.shape[0];\n"),
+        "{inc}"
+    );
+    assert!(!inc.contains("a0.shape"), "{inc}");
+    // One C slot, spelled as the pycc-owned POD and never as `Py_buffer`,
+    // and the export still rides the `fnptr_` cast path -- no thunk.
+    assert!(
+        inc.contains("    result = ((double (*)(PyccExtBufferView *))fnptr_total)(&a0);\n"),
+        "{inc}"
+    );
+    assert!(!inc.contains("pycc_ext_thunk_total"), "{inc}");
+    assert!(!inc.contains("Py_buffer *"), "{inc}");
+}
+
+#[test]
+fn a_memoryview_parameter_is_released_on_the_success_path_and_on_the_pending_bail() {
+    let inc = memoryview_inc("total", 1, Ty::Float);
+    // The half nothing else in the tree would notice was missing: the
+    // buffer is still held when the compiled call returns normally.
+    assert!(
+        inc.contains("    PyBuffer_Release(&b0);\n    return pycc_ext_pack_float(result);\n}\n\n"),
+        "{inc}"
+    );
+    // And on the other exit past the acquisition -- a pycc exception the
+    // compiled body raised. Released before the CPython exception is set,
+    // so an exporter's own `releasebuffer` cannot run with one pending.
+    assert!(
+        inc.contains(
+            "    if (pycc_rt_ext_pending_type() >= 0) {\n        PyBuffer_Release(&b0);\n        \
+             pycc_ext_raise_pending();\n        return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // Exactly two releases: the two exits that can be reached with the
+    // buffer held. A third would be a double release.
+    assert_eq!(inc.matches("PyBuffer_Release(&b0);").count(), 2, "{inc}");
+}
+
+#[test]
+fn a_none_returning_memoryview_export_releases_before_py_return_none() {
+    // `Py_RETURN_NONE` is a `return` hidden in a macro, so the release has
+    // to precede it rather than sit anywhere after the pack.
+    let inc = memoryview_inc("consume", 1, Ty::None);
+    assert!(
+        inc.contains("    PyBuffer_Release(&b0);\n    Py_RETURN_NONE;\n}\n\n"),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_second_memoryview_argument_that_refuses_releases_the_first() {
+    let inc = memoryview_inc("dot", 2, Ty::Float);
+    // The bail path for argument 2 owes argument 1's buffer. Without it,
+    // every `TypeError` on the second argument leaks an exporter lock --
+    // invisible to the artifact and to every assertion that only checks
+    // that a refusal happened.
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_memoryview(args[1], \"dot\", 1, &b1) != 0) {\n        \
+             PyBuffer_Release(&b0);\n        return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // Argument 1's own bail owes nothing: nothing was acquired yet.
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_memoryview(args[0], \"dot\", 0, &b0) != 0) {\n        \
+             return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // And both are released on the way out.
+    assert!(
+        inc.contains("    PyBuffer_Release(&b0);\n    PyBuffer_Release(&b1);\n    return "),
+        "{inc}"
+    );
+    // One Python argument per declared parameter, not one per C slot.
+    assert!(inc.contains("if (nargs != 2)"), "{inc}");
+}
+
+#[test]
+fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
+    // The whole point of replacing #1049's `"str"` literal test with a
+    // carrier-level property: two cleanup classes in one wrapper, each
+    // emitted for the slots that actually owe it.
+    let inc = inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: "label".to_string(),
+            params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
+            return_ty: Ty::Int,
+        }],
+    );
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_memoryview(args[1], \"label\", 1, &b1) != 0) {\n        \
+             pycc_rt_str_decref(a0);\n        return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_int(args[2], \"label\", 2, &a2) != 0) {\n        \
+             pycc_rt_str_decref(a0);\n        PyBuffer_Release(&b1);\n        return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // A `str` owes nothing on the success path -- the compiled function's
+    // own parameter slot consumed it -- so only the buffer is released
+    // there.
+    assert!(
+        inc.contains("    PyBuffer_Release(&b1);\n    return pycc_ext_pack_int("),
+        "{inc}"
+    );
+    assert_eq!(inc.matches("pycc_rt_str_decref(a0);").count(), 2, "{inc}");
+}
+
+#[test]
+fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
+    // The byte-identity guard for every wrapper generated before Part 1 of
+    // #1027: the success-path cleanup block is empty when nothing owes it.
+    let inc = inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: "greet".to_string(),
+            params: vec![Ty::Str],
+            return_ty: Ty::Str,
+        }],
+    );
+    assert!(!inc.contains("PyBuffer_Release"), "{inc}");
+    assert!(
+        inc.contains(
+            "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
+             return NULL;\n    }\n    return pycc_ext_pack_str(result);\n"
+        ),
+        "{inc}"
+    );
 }

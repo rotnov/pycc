@@ -669,6 +669,22 @@ pub(crate) fn annotation_to_ty(
             "float" => Ok(Ty::Float),
             "bool" => Ok(Ty::Bool),
             "str" => Ok(Ty::Str),
+            // Part 1 of #1027: a one-dimensional `float` `memoryview`, the
+            // carrier a `pycc build --ext` boundary admits so a host can
+            // hand compiled code a NumPy-shaped array without copying it.
+            // Lowered unconditionally here, in both parameter and return
+            // position, because `pycc_hir` has no artifact-mode awareness
+            // at all -- the two mode-dependent refusals live where the mode
+            // is known: `src/ext_build.rs` refuses a `memoryview` *return*
+            // with `C0003`, and `src/memoryview_mode.rs` refuses a
+            // `memoryview` *signature* with `I0405` in a native build.
+            //
+            // This arm is also the parser of a bare `x: memoryview`
+            // declaration, which neither mode-dependent refusal reaches --
+            // both walk a `HirItem::Function`'s signature, not a statement
+            // body. `crates/pycc_types`'s `reject_memoryview_declaration`
+            // owns that position, in both modes.
+            "memoryview" => Ok(Ty::MemoryView),
             "Any" => Err(Diagnostic::error(
                 "T0002",
                 "`Any` is not permitted in pycc code outside a declared interop boundary"

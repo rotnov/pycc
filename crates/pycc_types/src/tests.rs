@@ -74,6 +74,169 @@ fn bare_super_in_check_returns_c0001() {
     assert_eq!(err.code, "C0001");
 }
 
+// Part 1 of #1027: a `memoryview` parameter is admitted at a
+// `pycc build --ext` boundary, and the plan's section 3.5 admits *no*
+// operation on the value it binds. `reject_memoryview_read` states that by
+// refusing the read itself, which is the only expression that can produce a
+// `memoryview` at all -- there is no literal and no producing call. Without
+// it `pycc_codegen` reaches a local load it has no lowering for and panics
+// instead of diagnosing.
+#[test]
+fn reading_a_memoryview_parameter_is_a_capability_gap_rather_than_an_ice() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::MemoryView)],
+            return_ty: Ty::MemoryView,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`v`"), "{}", err.message);
+    assert!(err.message.contains("`memoryview`"), "{}", err.message);
+    assert!(err.message.contains("pycc build --ext"), "{}", err.message);
+}
+
+// The companion negative: the guard keys on the type, not on the name, so a
+// parameter of any other type still reads normally. Without this arm the
+// `Ok(())` fall-through of `reject_memoryview_read` is never executed by a
+// read that reaches it with a non-`memoryview` binding.
+#[test]
+fn reading_a_parameter_of_any_other_type_is_unaffected_by_the_memoryview_guard() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok());
+}
+
+// Part 1 of #1027, round 1 of the pinned review: `annotation_to_ty` parses a
+// bare `x: T` declaration as well as a signature, so admitting
+// `Ty::MemoryView` there admitted the declaration too -- and a value-less
+// `AnnAssign` lowers to a `MirStmt::NoOp`, so the program compiled silently
+// where `x: object` is still refused. Both `AnnAssign` arms are covered: the
+// function-scope one here, the module-scope one below.
+#[test]
+fn declaring_a_memoryview_local_is_a_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: Vec::new(),
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::MemoryView,
+                    value: None,
+                    is_final: false,
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(1))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`x: memoryview`"), "{}", err.message);
+    assert!(err.message.contains("pycc build --ext"), "{}", err.message);
+}
+
+// Part 1 of #1027, round 3 of the pinned review: `HirStmt::ForList` holds
+// its iterable as a plain `String` (D-105), so `for x in v` resolves through
+// `lookup_bound_name` and never reaches `infer_expr_in`'s own `Name` arm.
+// Before the guard landed at that shared seam the loop was refused as a
+// `T0033` -- "`memoryview` cannot be iterated" -- which is false about
+// Python and mislabels a capability gap as a type error.
+#[test]
+fn iterating_a_memoryview_parameter_is_the_read_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::MemoryView)],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::ForList {
+                    var: "x".to_string(),
+                    list: "v".to_string(),
+                    body: Vec::new(),
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(1))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("using `v`, which is bound to a `memoryview`"),
+        "{}",
+        err.message
+    );
+}
+
+// The module-scope arm of the same refusal: a top-level `y: memoryview`.
+#[test]
+fn declaring_a_memoryview_at_module_scope_is_a_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::MemoryView,
+            value: None,
+            is_final: false,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+}
+
+// The guard sits *ahead* of each arm's value/no-value split, so the valued
+// shape routes through the same contract -- without this the guard could be
+// moved below the split and both value-less tests above would still pass,
+// while `x: memoryview = <expr>` silently reported something else.
+#[test]
+fn declaring_a_memoryview_with_an_initializer_is_the_same_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::MemoryView,
+            value: Some(HirExpr::IntLiteral(1)),
+            is_final: false,
+        })],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+}
+
 // PEP 572 (#774): `function_local_names`'s own `collect_named_expr_names_in_
 // expr` walk records a walrus target as a function-local name wherever it is
 // nested -- including inside a unary operand and a slice bound, which no

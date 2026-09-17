@@ -3439,6 +3439,23 @@ fn an_infer_typed_return_value_is_not_yet_supported() {
 }
 
 #[test]
+fn ty_to_basic_type_gives_a_memoryview_a_pointer_representation() {
+    // Part 1 of #1027. The one source shape that reaches this arm is a
+    // `memoryview` parameter of a `pycc build --ext` export, which needs
+    // CPython development headers and so lives in an `#[ignore]`d hosted
+    // test that contributes no coverage. The property is header-free
+    // though, and it is the one the whole call convention rests on: what
+    // crosses the boundary is a pointer to the wrapper's own
+    // `PyccExtBufferView`, not CPython's `Py_buffer`, so the emitted IR
+    // depends on no CPython struct layout and the representation is the
+    // same plain pointer `Ty::Str`/`Ty::Object` already get -- which is
+    // also why `ext_thunk_required` still answers `false` for such an
+    // export.
+    let context = Context::create();
+    assert!(ty_to_basic_type(&context, Ty::MemoryView).is_pointer_type());
+}
+
+#[test]
 fn ty_to_basic_type_gives_an_opaque_object_a_pointer_representation() {
     // Part 1 of #1026. No *source* reaches this arm today: an `object`
     // is only ever a module binding, `declare_module_globals` decides a

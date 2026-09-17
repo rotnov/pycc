@@ -60,6 +60,15 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
             });
             std::iter::once(head).chain(arms).collect()
         }
+        // One arm, exactly like a scalar's, but the helper is fixed rather
+        // than carried: `BoundaryCarrier::Buffer` names no suffix, because
+        // a `memoryview` has no packer and so no symmetric `pycc_ext_*`
+        // pair to name. The four run-time checks the helper applies (exact
+        // `memoryview`, C-contiguous, `ndim == 1`, format `"d"`) are all
+        // inside it, so this one arm is the whole refusal at this slot.
+        BoundaryCarrier::Buffer => vec![format!(
+            "if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, &b{index}) != 0) {{"
+        )],
     }
 }
 
@@ -77,6 +86,7 @@ fn call_site(name: &str, params: &[(&str, Ty)], return_ty: &Ty) -> String {
     let first = match boundary_carrier(&types[0]).expect("an admitted argument type") {
         BoundaryCarrier::Scalar(..) => "a0".to_string(),
         BoundaryCarrier::Tuple(_) => "a0_0".to_string(),
+        BoundaryCarrier::Buffer => "&a0".to_string(),
     };
     if pycc_codegen::ext_thunk_required(name, &types, return_ty) {
         format!("{}({first}", pycc_codegen::ext_thunk_symbol(name))
@@ -98,7 +108,15 @@ fn assert_arm_refuses(inc: &str, arm: &str) {
 #[test]
 fn the_shim_declares_exactly_the_unpack_helpers_the_boundary_refuses_through() {
     let expected: BTreeSet<String> = [
-        "bool", "bool_at", "float", "float_at", "int", "int_at", "str", "tuple",
+        "bool",
+        "bool_at",
+        "float",
+        "float_at",
+        "int",
+        "int_at",
+        "memoryview",
+        "str",
+        "tuple",
     ]
     .iter()
     .map(|suffix| (*suffix).to_string())
@@ -124,6 +142,11 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
         ),
         ("take_tuple_float", Ty::Tuple(Box::new(vec![Ty::Float]))),
         ("take_tuple_bool", Ty::Tuple(Box::new(vec![Ty::Bool]))),
+        // Part 1 of #1027's third carrier. Two parameters of it is the row
+        // that matters most: the bail cleanup for argument 2's refusal has
+        // to release argument 1's already-acquired `Py_buffer`, which the
+        // one-parameter shape cannot state at all.
+        ("take_memoryview", Ty::MemoryView),
     ];
     for (name, ty) in rows {
         let params = [("a", ty.clone()), ("b", ty.clone())];
@@ -191,6 +214,11 @@ fn expected_to_carry(ty: &Ty) -> bool {
         | Ty::Instance(_)
         | Ty::Protocol(_)
         | Ty::Optional(_) => false,
+        // Part 1 of #1027: admitted at a parameter position, and refused at
+        // a return position by `into_scalar` answering `None` for its
+        // carrier -- which is the asymmetry this predicate deliberately
+        // does not model, since it answers only the parameter question.
+        Ty::MemoryView => true,
         // Part 1 of #1026: an opaque CPython object is refused at the
         // export boundary (D-244 rule 2 admits only the scalar set). The
         // refusal is stated twice over: `collect_exports` rejects the
@@ -219,7 +247,10 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::Protocol(name()),
         Ty::Optional(Box::new(Ty::Int)),
         Ty::Object,
+        Ty::MemoryView,
         Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float, Ty::Bool])),
+        // No `_at` element shim, exactly like `tuple[str]` below.
+        Ty::Tuple(Box::new(vec![Ty::MemoryView])),
         // The two element shapes the boundary refuses: neither has an
         // `_at` helper, and both are unreachable from source today only
         // because `T0039` refuses the annotation first.

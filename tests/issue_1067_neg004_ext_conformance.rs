@@ -105,6 +105,14 @@ def bump2(x: int, y: int) -> int:
 
 def size() -> int:
     return len(_log)
+
+
+def take_view(v: memoryview) -> int:
+    return 7
+
+
+def view_then_int(v: memoryview, n: int) -> int:
+    return n
 "#;
 
 /// The host-side script. It runs under the loader, not under an oracle, so
@@ -270,6 +278,80 @@ back = m.take_float(SubFloat(1.5))
 assert back == 2.5, back
 assert type(back) is float, type(back)
 assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
+
+# Shapes 25-28: Part 1 of #1027's `memoryview` carrier -- one refusal per
+# arm of `pycc_ext_unpack_memoryview`, in the order the helper applies
+# them. pycc-authored text throughout except shape 26, whose message comes
+# out of CPython's own `PyObject_GetBuffer` and is propagated verbatim.
+#
+# `bytearray(8)` is the conforming witness's backing store rather than a
+# `bytes`: rule 7 admits a read-only buffer just as it admits a writable
+# one (Part 1 requests `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` and never
+# `PyBUF_WRITABLE`), and a `bytearray` is what the release probe below
+# needs.
+good_view = memoryview(bytearray(8)).cast('d')
+
+# 25: not a `memoryview` at all. Exact type, never the buffer protocol: a
+# `bytes` exports a buffer and is still refused, which is what makes rule
+# 7's boundary closed rather than duck-typed.
+refuse(m.take_view, (b'abcdefgh',), {}, TypeError,
+       "take_view() argument 1: 'bytes' object cannot be interpreted as a memoryview",
+       True, (good_view,), 7)
+
+# 26: a `memoryview` that is not C-contiguous. CPython-authored -- the
+# message is `PyObject_GetBuffer`'s own, propagated without rewriting.
+# Thirty-two bytes rather than sixteen: `[::2]` over a two-element buffer
+# yields one element, which *is* contiguous, so the smaller store would
+# assert nothing.
+strided = memoryview(bytearray(32)).cast('d')[::2]
+assert not strided.c_contiguous
+refuse(m.take_view, (strided,), {}, (TypeError, BufferError),
+       'contiguous', False, (good_view,), 7)
+
+# 27: the right format and the wrong rank.
+refuse(m.take_view, (memoryview(bytearray(16)).cast('d', (2, 1)),), {}, TypeError,
+       'take_view() argument 1: a memoryview with ndim 2 is not supported yet -- '
+       'only a one-dimensional memoryview is',
+       True, (good_view,), 7)
+
+# 28: the right rank and the wrong format.
+refuse(m.take_view, (memoryview(bytearray(8)),), {}, TypeError,
+       "take_view() argument 1: a memoryview of format 'B' is not supported -- "
+       "only format 'd' (a contiguous float64 buffer) is",
+       True, (good_view,), 7)
+
+# 28b: a multi-character format. A `ctypes` array of `c_double` exports
+# `'<d'` -- the right itemsize and a format that is still not `'d'` -- so
+# it exercises the one arm where the message must name more than a single
+# character (D-244 statement (e): the `TypeError` names what it saw).
+import ctypes
+wide = memoryview((ctypes.c_double * 2)())
+assert wide.format == '<d' and wide.itemsize == 8
+refuse(m.take_view, (wide,), {}, TypeError,
+       "take_view() argument 1: a memoryview of format '<d' is not supported -- "
+       "only format 'd' (a contiguous float64 buffer) is",
+       True, (good_view,), 7)
+
+# The release property, which no refusal shape can state on its own: the
+# wrapper owns the `Py_buffer` for exactly the duration of the call, on the
+# success path as well as on every bail. `bytearray.append` raises
+# `BufferError` while any export is outstanding, so a successful append
+# after each call is the proof that none was leaked.
+store = bytearray(8)
+probe = memoryview(store).cast('d')
+assert m.take_view(probe) == 7
+probe.release()
+store.append(0)
+
+# ...and the same after a refusal at argument 2, which must release the
+# buffer argument 1 already acquired.
+store2 = bytearray(8)
+probe2 = memoryview(store2).cast('d')
+refuse(m.view_then_int, (probe2, 'x'), {}, TypeError,
+       "view_then_int() argument 2: 'str' object cannot be interpreted as an integer",
+       True, (probe2, 3), 3)
+probe2.release()
+store2.append(0)
 
 # Refusal ordering: with two simultaneously non-conforming arguments, the
 # message names argument 1. Arguments are unpacked left to right and the

@@ -28,7 +28,7 @@ use exception::{
     check_raise_stmt, check_try_star_stmt, check_try_stmt, is_unshadowed_builtin_exception,
 };
 pub use expr::infer_expr;
-pub(crate) use expr::infer_expr_in;
+pub(crate) use expr::{infer_expr_in, reject_memoryview_declaration, reject_memoryview_read};
 pub(crate) use redeclaration::{
     check_incompatible_attribute_redeclarations, check_incompatible_redefinitions,
 };
@@ -424,6 +424,12 @@ fn lookup_bound_name(
             // (D-105), so they reach the binding through this helper
             // rather than through `infer_expr_in`'s `Name` arm.
             crate::foreign::reject_object_read(name, ty)?;
+            // Part 1 of #1027, the same choke point for the same reason: a
+            // `memoryview` parameter reached by `for x in v` bypasses the
+            // `Name` arm's own guard, and without this call the iteration is
+            // refused as a `T0033` type error instead of the `C0001`
+            // capability gap the type actually is.
+            reject_memoryview_read(name, ty)?;
             Ok(ty.clone())
         }
         Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -469,7 +475,8 @@ fn ty_contains_param(ty: &Ty) -> bool {
         | Ty::Infer
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => false,
+        | Ty::Object
+        | Ty::MemoryView => false,
     }
 }
 
@@ -1879,6 +1886,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             value,
             is_final,
         } => {
+            // Part 1 of #1027: a `memoryview` annotation is admitted only in
+            // a signature, never on a declaration -- see
+            // `expr::reject_memoryview_declaration`. Checked ahead of the
+            // value/no-value split so both shapes route through the one
+            // contract.
+            reject_memoryview_declaration(target, annotation)?;
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
                 // Part 4 of #1026 (PR 4c of #1083): a foreign CPython
@@ -3033,6 +3046,12 @@ fn check_stmt_in_function(
             value,
             is_final,
         } => {
+            // Part 1 of #1027: a `memoryview` annotation is admitted only in
+            // a signature, never on a declaration -- see
+            // `expr::reject_memoryview_declaration`. Checked ahead of the
+            // value/no-value split so both shapes route through the one
+            // contract.
+            reject_memoryview_declaration(target, annotation)?;
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)
                     .map_err(|d| empty_container::name_binding(d, target, value))?;
@@ -3202,7 +3221,8 @@ fn scan_signature_ty_for_param(
         | Ty::Infer
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => Ok(()),
+        | Ty::Object
+        | Ty::MemoryView => Ok(()),
     }
 }
 

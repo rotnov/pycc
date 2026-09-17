@@ -123,7 +123,8 @@ pub fn check_container_ty(ty: &Ty, span: Span) -> Result<(), Diagnostic> {
         | Ty::Instance(_)
         | Ty::Protocol(_)
         | Ty::Optional(_)
-        | Ty::Object => Ok(()),
+        | Ty::Object
+        | Ty::MemoryView => Ok(()),
     }
 }
 

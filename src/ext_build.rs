@@ -28,7 +28,7 @@
 //! from a macOS host at all.
 
 use crate::ext_output::ExtPlatform;
-use pycc_diag::{Diagnostic, Severity};
+use pycc_diag::Diagnostic;
 use pycc_hir::{
     BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirItem, HirModule, Ty,
     is_public_name,
@@ -493,209 +493,8 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     }
 }
 
-/// What one `Ty` the boundary admits occupies at a generated wrapper's
-/// parameter or result position.
-///
-/// A scalar occupies one C slot. A `tuple` occupies one slot per element
-/// and never a slot of its own (#1050): C cannot spell a pycc aggregate,
-/// because pycc's own convention for passing and returning one is not the
-/// platform C struct ABI. An enum rather than a `Vec` that happens to hold
-/// one entry, so every consumer has to say which case it is handling --
-/// this table is the entire seam between the driver's C and codegen's
-/// LLVM, and a width or a slot count that disagrees with the callee is a
-/// silent miscompile, never a compile error on either side.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BoundaryCarrier {
-    /// One C slot: its C type, and the `pycc_ext_*` helper suffix that
-    /// unpacks and packs a value of it.
-    Scalar(&'static str, &'static str),
-    /// A `tuple`, as one `Scalar`'s payload per element in declaration
-    /// order. D-116 fixes a tuple type's arity, so this is exactly its
-    /// element list and never a run-time length.
-    Tuple(Vec<(&'static str, &'static str)>),
-}
-
-impl BoundaryCarrier {
-    /// The single C slot this carrier occupies, or `None` for a `tuple`,
-    /// which occupies several.
-    fn into_scalar(self) -> Option<(&'static str, &'static str)> {
-        match self {
-            BoundaryCarrier::Scalar(c_type, helper) => Some((c_type, helper)),
-            BoundaryCarrier::Tuple(_) => None,
-        }
-    }
-}
-
-/// The C slots one type the boundary admits uses inside a generated
-/// wrapper, or `None` when this pycc version's boundary cannot carry `ty`
-/// in either position.
-///
-/// Each C type is chosen to match exactly what `pycc_codegen`'s
-/// `ty_to_basic_type` gives the compiled function, because the wrapper
-/// reaches that function through a seam no compiler can check: `Ty::Int`
-/// is `i64`, `Ty::Float` is `f64`, and `Ty::Bool` is a one-byte `i8`
-/// holding `0`/`1` at the parameter position as well as the return one --
-/// hence `char`, and deliberately not `int` or `_Bool`. A width that
-/// disagrees with the callee is a silent miscompile here, never a compile
-/// error.
-///
-/// `Ty::Str` is the one scalar entry that is not a number -- hence this
-/// function's name, which #1049 widened from `boundary_scalar`.
-/// `ty_to_basic_type` gives it an opaque pointer, so the C type is
-/// `void *` in both positions and the wrapper never reads through it:
-/// `pycc_ext_unpack_str` produces the `PyStrObj` and `pycc_ext_pack_str`
-/// consumes it.
-///
-/// `Ty::Tuple` (#1050) is the one entry that is not a single slot at all.
-/// Its elements are looked up through this same function, so their widths
-/// come from the same table rather than a parallel one, but only D-116's
-/// three element types are admitted: a tuple carrying anything else -- a
-/// nested tuple, `tuple[list[int]]`, or `tuple[str, int]`, none of which
-/// a `T0039`-checked program can express -- answers `None` exactly as any
-/// other uncarriable type does.
-fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
-    match ty {
-        Ty::Int => Some(BoundaryCarrier::Scalar("long long", "int")),
-        Ty::Float => Some(BoundaryCarrier::Scalar("double", "float")),
-        Ty::Bool => Some(BoundaryCarrier::Scalar("char", "bool")),
-        Ty::Str => Some(BoundaryCarrier::Scalar("void *", "str")),
-        Ty::Tuple(elements) => elements
-            .iter()
-            .map(|element| match element {
-                // The one type the two admissibility questions answer
-                // differently, and so the one arm `into_scalar` cannot
-                // decide. `str` occupies a single C slot at a top-level
-                // position (#1049), so it would pass `into_scalar`
-                // unchanged -- but the element shims are the `_at`
-                // variants, which take an element index and exist only
-                // for D-116's three element types. Admitting
-                // `tuple[str, int]` here would render C naming an
-                // undeclared `pycc_ext_unpack_str_at`: a clang error on
-                // the generated artifact instead of the `C0003`
-                // capability gap every other uncarriable shape gets.
-                // Unreachable from source today, exactly as
-                // `tuple[list[int]]` is -- `T0039` refuses the
-                // annotation -- which is why it is stated rather than
-                // left to a recursion that happens to work.
-                Ty::Str => None,
-                // Every other element goes through this same function,
-                // so its width comes from the table above rather than a
-                // parallel one, and a `list` element (no carrier at all)
-                // or a nested tuple (a carrier, but not a single slot)
-                // answers `None` on its own.
-                _ => boundary_carrier(element).and_then(BoundaryCarrier::into_scalar),
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(BoundaryCarrier::Tuple),
-        _ => None,
-    }
-}
-
-/// Whether the boundary can carry `ty` at a parameter position.
-///
-/// `Ty::None` is deliberately not admitted: a `None` parameter stays a
-/// capability gap, gated on #1047's call-argument ICE. Everything else the
-/// boundary carries at all, it carries in both directions, so this is
-/// [`boundary_carrier`] with no further narrowing -- the asymmetry lives
-/// entirely in [`return_c_type`].
-fn carries_param(ty: &Ty) -> bool {
-    boundary_carrier(ty).is_some()
-}
-
-/// The C return type of a wrapper's call into the compiled function, or
-/// `None` when the boundary cannot carry `ty` as a return type.
-///
-/// Two types answer `void`, for different reasons. Codegen emits a `None`
-/// return as LLVM `void`, so there is nothing to receive at all and the
-/// wrapper's egress becomes `Py_RETURN_NONE`. A `tuple` return does carry
-/// values, but they leave through `pycc_ext_thunk_<name>`'s trailing
-/// out-pointers rather than as a return value (#1050), so the call itself
-/// is still `void` and the elements are read out of the wrapper's own
-/// locals afterwards.
-fn return_c_type(ty: &Ty) -> Option<&'static str> {
-    match ty {
-        Ty::None => Some("void"),
-        // Still asked of `boundary_carrier`: `tuple[list[int]]` is a tuple
-        // whose element the boundary cannot carry, and answering `void`
-        // for it unconditionally would admit a signature no wrapper can
-        // unpack.
-        Ty::Tuple(_) => boundary_carrier(ty).map(|_| "void"),
-        _ => boundary_carrier(ty)
-            .and_then(BoundaryCarrier::into_scalar)
-            .map(|(c_type, _)| c_type),
-    }
-}
-
-/// Names the first part of a signature the `ext` boundary cannot carry, as
-/// the user would write it (`x: str`, `-> list`), or `None` when the whole
-/// signature is admissible.
-///
-/// Parameters and the return type are asked separately because the two
-/// admissible sets genuinely differ rather than sharing one widened list:
-/// see [`carries_param`] and [`return_c_type`].
-fn unsupported_boundary_ty(params: &[(String, Ty)], return_ty: &Ty) -> Option<String> {
-    if let Some((name, ty)) = params.iter().find(|(_, ty)| !carries_param(ty)) {
-        return Some(format!("parameter `{name}: {}`", render_ty(ty)));
-    }
-    if return_c_type(return_ty).is_none() {
-        return Some(format!("return type `-> {}`", render_ty(return_ty)));
-    }
-    None
-}
-
-/// A short Python-facing spelling of a `Ty`, for the `C0003` message only.
-///
-/// Deliberately coarse: the reader's fix is to change the signature, and
-/// the element type of the container that was refused adds nothing to that.
-/// The `Ty::Tuple(_)` arm survives #1050 rather than becoming dead, because
-/// a `tuple` is admitted by its elements: `tuple[list[int]]` and a nested
-/// `tuple[tuple[int], int]` still reach this function, and both are named
-/// `tuple` -- the element that failed is the same one D-116 already forbids
-/// spelling in a type annotation (T0039), so naming it would point at a
-/// program that cannot be written.
-fn render_ty(ty: &Ty) -> &'static str {
-    match ty {
-        Ty::Int => "int",
-        Ty::Float => "float",
-        Ty::Bool => "bool",
-        Ty::Str => "str",
-        Ty::None => "None",
-        Ty::List(_) => "list",
-        Ty::Dict(_) => "dict",
-        Ty::Set(_) => "set",
-        Ty::Tuple(_) => "tuple",
-        // Part 1 of #1026: the spelling `Ty::name()` uses, so the gap
-        // message names the same thing a `T0023` about the binding would.
-        Ty::Object => "object",
-        _ => "that type",
-    }
-}
-
-/// Builds the `C0003` diagnostic for one unexportable public function.
-///
-/// Span-less: `HirItem::Function` carries no source range (the whole point
-/// of `pycc_hir`'s lowered form), and `pycc_diag::render_human` renders a
-/// span-less diagnostic as exactly `error[C0003]: <message>`, which is what
-/// `report_build_failure` needs.
-fn capability_gap(name: &str, offender: &str) -> Diagnostic {
-    Diagnostic {
-        code: EXT_CAPABILITY_CODE,
-        severity: Severity::Error,
-        message: format!(
-            "--ext cannot export the public function `{name}`: its {offender} is not a type \
-             this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float`, `bool`, `str` or a `tuple` of `int`/`float`/`bool`, and a return type \
-             must be one of those or `None` \
-             (D-244 rule \
-             1 exports every public module-level function, so there is no way to opt one \
-             out) -- rename it to `_{name}` to keep it out of the export set, or build \
-             without --ext"
-        ),
-        span: None,
-        label: None,
-        help: None,
-    }
-}
+mod carrier;
+pub(crate) use carrier::*;
 
 /// The exact C declaration of the generated tag-to-class lookup.
 ///
@@ -1058,6 +857,14 @@ fn wrapper_for(export: &ExtExport) -> String {
                     out.push_str(&format!("    {c_type} a{index}_{element};\n"));
                 }
             }
+            // Two locals, both wrapper-owned for the whole call: the
+            // `Py_buffer` the shim acquires (and this wrapper releases on
+            // every exit past that point), and the `{ptr, len}` pair that is
+            // all the compiled body ever sees of it.
+            BoundaryCarrier::Buffer => {
+                out.push_str(&format!("    Py_buffer b{index};\n"));
+                out.push_str(&format!("    {BUFFER_VIEW_C_TYPE} a{index};\n"));
+            }
         }
     }
     out.push_str(&format!(
@@ -1078,8 +885,11 @@ fn wrapper_for(export: &ExtExport) -> String {
         let cleanup: String = slots[..index]
             .iter()
             .enumerate()
-            .filter(|(_, earlier)| matches!(earlier, BoundaryCarrier::Scalar(_, "str")))
-            .map(|(earlier, _)| format!("        pycc_rt_str_decref(a{earlier});\n"))
+            .filter_map(|(earlier, carrier)| Some((earlier, carrier.cleanup()?)))
+            .map(|(earlier, owed)| match owed {
+                SlotCleanup::StrDecref => format!("        pycc_rt_str_decref(a{earlier});\n"),
+                SlotCleanup::BufferRelease => format!("        PyBuffer_Release(&b{earlier});\n"),
+            })
             .collect();
         match slot {
             BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
@@ -1103,6 +913,24 @@ fn wrapper_for(export: &ExtExport) -> String {
                     ));
                 }
             }
+            // The shim refuses everything that is not an exact,
+            // C-contiguous, one-dimensional `float` `memoryview` and leaves
+            // nothing acquired when it does, so this arm owes no cleanup of
+            // its own -- only the earlier slots'. On success the wrapper
+            // takes the two words it is allowed to keep: the data pointer,
+            // and a *copy* of `shape[0]`. `b{index}.shape` itself is
+            // exporter-owned storage that dies at `PyBuffer_Release`, so it
+            // is never carried across the boundary.
+            BoundaryCarrier::Buffer => {
+                out.push_str(&format!(
+                    "    if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, \
+                     &b{index}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
+                ));
+                out.push_str(&format!("    a{index}.ptr = b{index}.buf;\n"));
+                out.push_str(&format!(
+                    "    a{index}.len = (long long)b{index}.shape[0];\n"
+                ));
+            }
         }
     }
     let mut call_args: Vec<String> = Vec::new();
@@ -1112,6 +940,7 @@ fn wrapper_for(export: &ExtExport) -> String {
             BoundaryCarrier::Tuple(elements) => {
                 call_args.extend((0..elements.len()).map(|element| format!("a{index}_{element}")))
             }
+            BoundaryCarrier::Buffer => call_args.push(format!("&a{index}")),
         }
     }
     call_args.extend((0..out_slots.len()).map(|index| format!("&r{index}")));
@@ -1143,10 +972,23 @@ fn wrapper_for(export: &ExtExport) -> String {
     // leaves every `r{index}` out-pointer local exactly as uninitialized as
     // it found it, so a pack that ran first would read indeterminate
     // storage -- undefined behaviour, not merely a wrong value.
-    out.push_str(
-        "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
-         return NULL;\n    }\n",
-    );
+    // The success-path half of the cleanup discipline, and the half nothing
+    // else in the tree would notice was missing: a `Py_buffer` acquired
+    // before the call is still held after it returns. Emitted once, at the
+    // single point every remaining exit passes through -- the pending-
+    // exception bail and the pack below both sit after it -- rather than
+    // duplicated at each `return`. Releasing before the pack is safe and
+    // deliberate: the pack reads only `result`/`r{index}`, machine words the
+    // compiled function already produced, never the buffer's storage.
+    //
+    // Empty for an export with no `memoryview` parameter, so every wrapper
+    // generated before Part 1 of #1027 is byte-identical to what it was.
+    let release: String = buffer_releases(&slots, "    ");
+    out.push_str(&format!(
+        "    if (pycc_rt_ext_pending_type() >= 0) {{\n{}        pycc_ext_raise_pending();\n        \
+         return NULL;\n    }}\n{release}",
+        buffer_releases(&slots, "        ")
+    ));
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
         Ty::Tuple(_) => out.push_str(&pack_tuple_return(name, &out_slots)),
@@ -1172,6 +1014,21 @@ fn wrapper_for(export: &ExtExport) -> String {
     out
 }
 
+/// One `PyBuffer_Release` line per `memoryview` slot, indented with
+/// `indent`, or the empty string when the export has none.
+///
+/// Shared by the two success-path emission points (inside the pending-
+/// exception block, and just before the egress) so the two can never
+/// release different sets.
+fn buffer_releases(slots: &[BoundaryCarrier], indent: &str) -> String {
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(_, carrier)| carrier.cleanup() == Some(SlotCleanup::BufferRelease))
+        .map(|(index, _)| format!("{indent}PyBuffer_Release(&b{index});\n"))
+        .collect()
+}
+
 /// The C parameter-type list of the call a wrapper makes into the compiled
 /// program: every declared parameter flattened to the slots it occupies,
 /// then one out-pointer per element of a returned `tuple`.
@@ -1187,6 +1044,7 @@ fn c_param_list(slots: &[BoundaryCarrier], out_slots: &[(&'static str, &'static 
             BoundaryCarrier::Tuple(elements) => {
                 types.extend(elements.iter().map(|(c_type, _)| (*c_type).to_string()));
             }
+            BoundaryCarrier::Buffer => types.push(format!("{BUFFER_VIEW_C_TYPE} *")),
         }
     }
     types.extend(out_slots.iter().map(|(c_type, _)| format!("{c_type} *")));

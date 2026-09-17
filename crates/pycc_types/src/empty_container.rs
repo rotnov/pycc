@@ -724,7 +724,8 @@ fn contains_infer(ty: &Ty) -> bool {
         | Ty::Param(_)
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => false,
+        | Ty::Object
+        | Ty::MemoryView => false,
     }
 }
 
@@ -750,7 +751,8 @@ fn contains_optional(ty: &Ty) -> bool {
         | Ty::Param(_)
         | Ty::Instance(_)
         | Ty::Protocol(_)
-        | Ty::Object => false,
+        | Ty::Object
+        | Ty::MemoryView => false,
     }
 }
 
