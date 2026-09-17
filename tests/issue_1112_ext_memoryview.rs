@@ -240,6 +240,48 @@ def f() -> int:
     }
 }
 
+/// Every *read* of the parameter, through both seams that reach a binding.
+///
+/// Round 3 of the pinned review: `HirStmt::ForList` and `HirExpr::ListComp`
+/// keep their iterable as a plain `String` rather than a `HirExpr::Name`
+/// (D-105's HIR shape), so `for x in v` resolves through
+/// `lookup_bound_name` and never reaches `infer_expr_in`'s own `Name` arm.
+/// The program was still refused, but as `T0033` -- "`memoryview` cannot be
+/// iterated" -- which is false about Python and mislabels a capability gap
+/// as a type error. Both seams now answer with the one `C0001`.
+#[test]
+fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
+    const CASES: [(&str, &str); 2] = [
+        (
+            "1112_read_alias",
+            "def total(v: memoryview) -> int:
+    w = v
+    return 0
+",
+        ),
+        (
+            "1112_read_for",
+            "def total(v: memoryview) -> int:
+    s = 0
+    for x in v:
+        s = s + 1
+    return s
+",
+        ),
+    ];
+    for (name, source) in CASES {
+        let dir = fixture(name, source);
+        let build = build_ext(&dir);
+        assert!(!build.status.success(), "{name}: {}", stdout_of(&build));
+        let err = stderr_of(&build);
+        assert!(err.contains("error[C0001]"), "{name}: {err}");
+        assert!(
+            err.contains("using `v`, which is bound to a `memoryview`"),
+            "{name}: {err}"
+        );
+    }
+}
+
 /// The hosted arm: the same annotation the two arms above refuse builds as
 /// an extension module, and the host calls it with a real `memoryview`.
 ///

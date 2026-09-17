@@ -1625,7 +1625,17 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// `C0001` rather than a new code: this is the crate's established "valid
 /// Python this compiler version does not implement yet" spelling, and
 /// indexing the buffer is exactly what Part 2 of #1027 adds.
-fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
+///
+/// "Every read" is two seams, not one. `HirStmt::ForList` and
+/// `HirExpr::ListComp` hold their iterable as a plain `String` rather than a
+/// `HirExpr::Name` (D-105's HIR shape), so `for x in v` never reaches
+/// `infer_expr_in`'s `Name` arm; `lib.rs`'s `lookup_bound_name` is the other
+/// caller, and it calls this for the same reason it calls
+/// [`crate::foreign::reject_object_read`]. Without that second call the
+/// iteration is still refused, but as `T0033` -- "`memoryview` cannot be
+/// iterated" -- which is false about Python and mislabels a capability gap
+/// as a type error.
+pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
     if matches!(ty, Ty::MemoryView) {
         return Err(Diagnostic::error(
             "C0001",

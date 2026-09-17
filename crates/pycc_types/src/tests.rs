@@ -157,6 +157,43 @@ fn declaring_a_memoryview_local_is_a_capability_gap() {
     assert!(err.message.contains("pycc build --ext"), "{}", err.message);
 }
 
+// Part 1 of #1027, round 3 of the pinned review: `HirStmt::ForList` holds
+// its iterable as a plain `String` (D-105), so `for x in v` resolves through
+// `lookup_bound_name` and never reaches `infer_expr_in`'s own `Name` arm.
+// Before the guard landed at that shared seam the loop was refused as a
+// `T0033` -- "`memoryview` cannot be iterated" -- which is false about
+// Python and mislabels a capability gap as a type error.
+#[test]
+fn iterating_a_memoryview_parameter_is_the_read_capability_gap() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("v".to_string(), Ty::MemoryView)],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::ForList {
+                    var: "x".to_string(),
+                    list: "v".to_string(),
+                    body: Vec::new(),
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(1))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("using `v`, which is bound to a `memoryview`"),
+        "{}",
+        err.message
+    );
+}
+
 // The module-scope arm of the same refusal: a top-level `y: memoryview`.
 #[test]
 fn declaring_a_memoryview_at_module_scope_is_a_capability_gap() {
