@@ -379,7 +379,7 @@ mod peak_rss {
                 .any(|(name, _)| *name == "BIGCOUNT")
         );
 
-        let small = probe_peak_rss("p5_rss_20000", "rss_20000", 20000);
+        let small = probe_peak_rss("p5_rss_2000", "rss_2000", 2000);
         let large = probe_peak_rss("p5_rss_200000", "rss_200000", 200000);
         assert!(small > 0, "peak RSS of the small probe was not measured");
         let ratio = large as f64 / small as f64;
