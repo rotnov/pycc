@@ -60,7 +60,6 @@ fn build_ext(dir: &Path) -> Output {
         .arg("-o")
         .arg(dir.join("view_probe"))
         .arg("--ext")
-        .arg("--release")
         .output()
         .expect("pycc should spawn")
 }

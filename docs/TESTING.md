@@ -758,7 +758,9 @@ Two prerequisites remain, and they are not the same for the two readings:
 1. **The sweep reading needs the boundary to be able to carry the committed
    input in one call.** That is the buffer-protocol bridge (#1027), which
    gives a subject a `memoryview` parameter whose elements compile to native
-   loads — the one signature shape that expresses "2,000,000 triangles plus
+   loads — Part 1 ([#1112](https://github.com/rotnov/pycc/issues/1112))
+   admits the parameter and the boundary that carries it; the element
+   loads are Part 2's work, so this prerequisite is not yet met — the one signature shape that expresses "2,000,000 triangles plus
    their query points" as a single call's argument. #1027 in turn depends on
    foreign imports (#1026). This prerequisite does not apply to the per-record
    reading, which the boundary already admits.
