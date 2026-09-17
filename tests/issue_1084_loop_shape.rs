@@ -114,12 +114,20 @@ fn fixture(category: &str) -> ScratchDir {
 
 /// Builds the subject as a CPython extension module directly into `dir`, so
 /// that a CPython run with `dir` as its working directory imports it.
+///
+/// The output path carries no extension suffix, exactly as
+/// `tests/issue_1081_foreign_method_call.rs`'s own helper writes it:
+/// `pycc build --ext` appends the one its target triple calls for, and it
+/// derives the exported `PyInit_<mod>` name from the path's own spelling.
+/// Spelling `.abi3.so` here builds on Unix and then fails the `--ext` name
+/// contract on Windows, where the module name would come out as
+/// `mesh_probe.abi3.so` and is not an identifier.
 fn build_ext(dir: &Path) -> Output {
     pycc()
         .arg("build")
         .arg(dir.join("src").join("mesh_probe.py"))
         .arg("-o")
-        .arg(dir.join("mesh_probe.abi3.so"))
+        .arg(dir.join("mesh_probe"))
         .arg("--ext")
         .output()
         .expect("pycc should spawn")

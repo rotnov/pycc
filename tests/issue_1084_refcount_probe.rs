@@ -141,12 +141,16 @@ fn fixture(category: &str, module: &str, source: &str) -> ScratchDir {
 }
 
 /// Builds `module` as an extension module directly into `dir`.
+///
+/// The output path carries no extension suffix; see
+/// `tests/issue_1084_loop_shape.rs`'s own `build_ext` for why spelling one
+/// breaks the `--ext` module-name contract on Windows.
 fn build_ext(dir: &Path, module: &str) -> Output {
     pycc()
         .arg("build")
         .arg(dir.join("src").join(format!("{module}.py")))
         .arg("-o")
-        .arg(dir.join(format!("{module}.abi3.so")))
+        .arg(dir.join(module))
         .arg("--ext")
         .output()
         .expect("pycc should spawn")
