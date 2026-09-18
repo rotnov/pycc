@@ -916,10 +916,22 @@ pub(crate) fn annotation_to_ty(
                     // that happens to share such a name must not win here
                     // either (`type int = C` + bare `x: int` is `Int`; `type
                     // Any = C` + `Any[str]` is `T0002`; both stay that way).
+                    //
+                    // #1129: `memoryview` is on that list for the same reason
+                    // -- it is a reserved keyword the `Expr::Name` arm answers
+                    // before either table, so `type memoryview = C` never
+                    // makes the name mean `C`, and `memoryview[...]` must not
+                    // be reported against `C` either. Its sibling spelling
+                    // `ndarray` is deliberately absent: that one is an
+                    // ordinary identifier resolved *after* both tables, so an
+                    // alias of that name genuinely does win here.
                     let name_resolves_before_aliases = Some(base) == type_param
                         || (base == "Self" && class_name.is_some())
                         || Some(base) == class_name
-                        || matches!(base, "int" | "float" | "bool" | "str" | "Any");
+                        || matches!(
+                            base,
+                            "int" | "float" | "bool" | "str" | "Any" | "memoryview"
+                        );
                     let alias_target = if name_resolves_before_aliases {
                         None
                     } else {

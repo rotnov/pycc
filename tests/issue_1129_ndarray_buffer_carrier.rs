@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The five tests below that need no interpreter at all — every refusal
+//! The six tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the sixth, which builds an artifact and
+//! inside the coverage job. Only the seventh, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -211,6 +211,41 @@ def f(a: {spelling}[float]) -> int:
             err.contains(&format!("{expected} is not subscriptable")),
             "{err}"
         );
+    }
+}
+
+/// The same precedence holds when the shadowing alias targets a class.
+///
+/// The subscript path resolves an alias to a class one step earlier than
+/// `subscripted_base_description` runs, through its own predicate, so a
+/// scalar-targeted alias cannot exercise this ladder at all. With
+/// `type memoryview = C` the reserved keyword still wins and the refusal
+/// must name the buffer type rather than `C`; with `type ndarray = C` the
+/// alias wins and naming `C` is the truthful answer.
+#[test]
+fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
+    for (spelling, expected) in [
+        (
+            "memoryview",
+            "buffer type `memoryview` is not subscriptable",
+        ),
+        ("ndarray", "class `C` does not define `__class_getitem__`"),
+    ] {
+        let dir = fixture(
+            "1129_subscript_class_alias",
+            &format!(
+                "class C:\n    pass\n\ntype {spelling} = C\n\ndef f(a: {spelling}[int]) -> int:\n    return 1\n"
+            ),
+        );
+        let out = pycc()
+            .arg("check")
+            .arg(dir.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[T0044]"), "{err}");
+        assert!(err.contains(expected), "{err}");
     }
 }
 
