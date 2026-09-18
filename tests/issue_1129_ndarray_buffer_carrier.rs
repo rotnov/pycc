@@ -480,7 +480,10 @@ fn every_non_parameter_ndarray_position_is_refused() {
     // name the second spelling too: a user who reached this message by
     // writing `ndarray` and is shown a list without it reads the list as
     // "not that type at all".
-    assert!(err.contains("(or its second spelling `ndarray`)"), "{err}");
+    assert!(
+        err.contains("(or its other spellings `ndarray` and `NDArray`)"),
+        "{err}"
+    );
 
     // A *private* `-> ndarray` return under `--ext`: `C0001`, from the
     // separate walk that closes what `collect_exports` never visits. The

@@ -330,8 +330,9 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// from here rather than restating the list. `ClassVar` is answered before
 /// both tables too but is deliberately absent: the subscript arm intercepts
 /// `ClassVar[...]` at the top of its own match, so it never reaches this
-/// helper. `ndarray` is deliberately absent too -- it is an ordinary
-/// identifier resolved *after* both tables (D-244 statement (h)).
+/// helper. The carrier's two lowercase-free spellings `ndarray` (#1129) and
+/// `NDArray` (#1134) are deliberately absent too -- both are ordinary
+/// identifiers resolved *after* both tables (D-244 statement (h)).
 fn name_resolves_before_class_defs(base: &str) -> bool {
     matches!(
         base,
@@ -738,8 +739,9 @@ pub(crate) fn annotation_to_ty(
                 {
                     return Ok(ty);
                 }
-                // #1129: `ndarray` is a *second spelling* of the same pycc
-                // type, not a new one. Both mean "a one-dimensional,
+                // #1129/#1134: `ndarray` and `NDArray` are *further
+                // spellings* of the same pycc type, not new ones. All three
+                // mean "a one-dimensional,
                 // C-contiguous, format `'d'` buffer exporter", which is
                 // exactly what `pycc_ext_unpack_memoryview` enforces at the
                 // boundary, so the two spellings have no run-time observable
@@ -747,7 +749,16 @@ pub(crate) fn annotation_to_ty(
                 // information no consumer could read. Diagnostics therefore
                 // render the canonical `memoryview` for either spelling,
                 // which is already what the alias table does for
-                // `type Arr = memoryview`.
+                // `type Arr = memoryview`. `NDArray` (#1134) is the
+                // capitalized `numpy.typing` spelling 18 of the 19
+                // array-parameter occurrences in the #1039 census use; it
+                // joins the set on exactly the terms `ndarray` did, and
+                // registering it does not by itself make any of those
+                // occurrences compile -- each also needs a name binding
+                // that does not exist yet (`from numpy.typing import
+                // NDArray` is refused by the foreign-import path, `import
+                // numpy as np` is #883, and an attribute-form base
+                // `np.ndarray` is #889).
                 //
                 // Recognized with **no import**, deliberately:
                 // `annotation_to_ty` receives `type_param`, `class_name`,
@@ -757,20 +768,23 @@ pub(crate) fn annotation_to_ty(
                 // an import that cannot be written. `Any`, `Annotated`,
                 // `TypeAlias` and `Self` are all recognized on those terms.
                 //
-                // It is resolved *here* rather than beside `memoryview` in
-                // the keyword list above, and that placement is the rule
+                // Both are resolved *here* rather than beside `memoryview`
+                // in the keyword list above, and that placement is the rule
                 // rather than a detail: every name in that list is a Python
-                // builtin or a `typing` name, while `ndarray` is an ordinary
-                // identifier a program may bind itself. Reserving it ahead
-                // of `class_defs` and `aliases` would make a module-level
-                // `class ndarray` or `type ndarray = ...` mean something
-                // Python does not -- in Python a local definition shadows an
-                // imported name, not the other way round -- and measurably
-                // refused programs that compiled before the spelling
-                // existed. The user's own definition therefore wins, and the
-                // buffer carrier is what a name nothing else binds falls
-                // back to.
-                if other == "ndarray" {
+                // builtin or a `typing` name, while `ndarray` and `NDArray`
+                // are ordinary identifiers a program may bind itself.
+                // Reserving one ahead of `class_defs` and `aliases` would
+                // make a module-level `class ndarray` or
+                // `type NDArray = ...` mean something Python does not -- in
+                // Python a local definition shadows an imported name, not
+                // the other way round -- and measurably refused programs
+                // that compiled before the spelling existed. The user's own
+                // definition therefore wins, and the buffer carrier is what
+                // a name nothing else binds falls back to. That is why
+                // neither spelling appears in `name_resolves_before_class_defs`
+                // nor, through it, in the subscript arm's own
+                // `name_resolves_before_aliases` ladder.
+                if matches!(other, "ndarray" | "NDArray") {
                     return Ok(Ty::MemoryView);
                 }
                 Err({
@@ -941,10 +955,11 @@ pub(crate) fn annotation_to_ty(
                     // -- it is a reserved keyword the `Expr::Name` arm answers
                     // before either table, so `type memoryview = C` never
                     // makes the name mean `C`, and `memoryview[...]` must not
-                    // be reported against `C` either. Its sibling spelling
-                    // `ndarray` is deliberately absent: that one is an
-                    // ordinary identifier resolved *after* both tables, so an
-                    // alias of that name genuinely does win here.
+                    // be reported against `C` either. Its sibling spellings
+                    // `ndarray` (#1129) and `NDArray` (#1134) are deliberately
+                    // absent: those are ordinary identifiers resolved *after*
+                    // both tables, so an alias of either name genuinely does
+                    // win here.
                     let name_resolves_before_aliases = Some(base) == type_param
                         || (base == "Self" && class_name.is_some())
                         || Some(base) == class_name
@@ -1099,11 +1114,14 @@ pub(crate) fn annotation_to_ty(
                     // for the buffer carrier, which is a nameable type.
                     // #1130: the buffer carrier is a nameable type, so a
                     // subscript on it is erased exactly as a class's is --
-                    // `memoryview[float]`, `ndarray[float]`, and
-                    // `type Arr = memoryview` + `Arr[float]` all lower to the
-                    // carrier. Keyed on the resolved `Ty` rather than on the
-                    // spelling, so a future carrier spelling (#1129 added the
-                    // second) is admitted by its registration alone.
+                    // `memoryview[float]`, `ndarray[float]`,
+                    // `NDArray[float]` and `type Arr = memoryview` +
+                    // `Arr[float]` all lower to the carrier. Keyed on the
+                    // resolved `Ty` rather than on the spelling, so a further
+                    // carrier spelling is admitted by its registration alone
+                    // -- which is exactly how #1134's `NDArray` reached this
+                    // arm without an edit here, as #1129's `ndarray` did
+                    // before it.
                     //
                     // Keying on the resolved type is safe only because the
                     // `Expr::Name` arm answers a PEP 695 type parameter

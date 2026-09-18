@@ -7022,9 +7022,9 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
 
 #[test]
 fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
-    // #1129: `ndarray` is a second *spelling* of `Ty::MemoryView`, not a
-    // second type, so what this states is an equality and not merely that
-    // the annotation is accepted.
+    // #1129 and #1134: `ndarray` and `NDArray` are further *spellings* of
+    // `Ty::MemoryView`, not further types, so what this states is an
+    // equality and not merely that the annotations are accepted.
     //
     // Both annotation positions are lowered and asserted on, not just the
     // parameter one. `annotation_to_ty` is one parser for every position,
@@ -7053,6 +7053,7 @@ fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
 
     for source in [
         "def f(a: ndarray, n: int) -> float:\n    return 0.0\n",
+        "def f(a: NDArray, n: int) -> float:\n    return 0.0\n",
         "def f(a: memoryview, n: int) -> float:\n    return 0.0\n",
     ] {
         let (params, return_ty) = signature(source);
@@ -7062,6 +7063,7 @@ fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
 
     for source in [
         "def f(n: int) -> ndarray:\n    return f(n)\n",
+        "def f(n: int) -> NDArray:\n    return f(n)\n",
         "def f(n: int) -> memoryview:\n    return f(n)\n",
     ] {
         let (params, return_ty) = signature(source);

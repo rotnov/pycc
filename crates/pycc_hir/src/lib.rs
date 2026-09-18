@@ -190,12 +190,12 @@ pub enum Ty {
     /// already proved. A unit variant adds no payload, so `size_of::<Ty>()`
     /// stays at the D-109 16-byte ceiling.
     ///
-    /// Two source spellings lower to this one variant: `memoryview` and,
-    /// since #1129, `ndarray`. They are one type because their run-time
-    /// contract is identical -- the boundary admits any object exporting a
-    /// conforming buffer, whichever way the parameter was spelled -- so
-    /// diagnostics render the canonical `memoryview` for both, exactly as
-    /// they already do for an alias of it.
+    /// Three source spellings lower to this one variant: `memoryview`,
+    /// since #1129 `ndarray`, and since #1134 `NDArray`. They are one type
+    /// because their run-time contract is identical -- the boundary admits
+    /// any object exporting a conforming buffer, whichever way the parameter
+    /// was spelled -- so diagnostics render the canonical `memoryview` for
+    /// all three, exactly as they already do for an alias of it.
     MemoryView,
 }
 

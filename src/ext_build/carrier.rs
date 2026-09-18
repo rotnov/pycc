@@ -273,7 +273,8 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         message: format!(
             "--ext cannot export the public function `{name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float`, `bool`, `str`, `memoryview` (or its second spelling `ndarray`) or a \
+             `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
+             `NDArray`) or a \
              `tuple` of `int`/`float`/`bool`, and a \
              return type must be one of those except the buffer, or `None` \
              (D-244 rule \

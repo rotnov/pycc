@@ -243,8 +243,9 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// #1027 nor #1129 adds an expression that *produces* a buffer, so there is
 /// nothing a function could return. The message is worded like those two
 /// siblings, and for the same reason: it names the type as "a buffer"
-/// rather than in either of its two spellings, so a user who wrote
-/// `ndarray` is not told about a `memoryview` they never mentioned. The
+/// rather than in any of its three spellings (#1134 added `NDArray`), so a
+/// user who wrote `ndarray` or `NDArray` is not told about a `memoryview`
+/// they never mentioned. The
 /// canonical-spelling rendering `offending_position` does is the *native*
 /// path's, whose `I0405` quotes a whole signature position back; this
 /// message quotes no annotation text at all.

@@ -945,6 +945,37 @@ the sweep and the per-record shapes — and the third is independent of both:
    is stale in the same two ways** and is read through this note rather than
    restated there.
 
+   **Fifth correction (2026-09-18): the two clauses the fourth correction
+   diagnosed but declined to fix are corrected here, and one of its own
+   closing claims has gone stale.** (a) Clause 4 of the gap list — "`ndarray`
+   is not registered as a buffer carrier at all" — is superseded: commit
+   `4d5a9677` ([#1129](https://github.com/rotnov/pycc/issues/1129)) registered
+   `ndarray`, and [#1134](https://github.com/rotnov/pycc/issues/1134) has now
+   registered `NDArray`, the capitalized `numpy.typing` spelling 18 of the 19
+   occurrences use, as a third source spelling of the same carrier. Read
+   clause 4 as closed. (b) The fourth correction's own closing sentence —
+   "What remains is that `NDArray` … is not registered, tracked as a
+   follow-up to #1130" — is the claim #1134 retires. (c) The clause "`from
+   numpy.typing import NDArray` is rejected (`C0001`, the #882 family)" is
+   corrected as diagnosed: numpy is not stdlib, so that refusal comes from
+   the **foreign-import** path and not from the `pycc_std` registry
+   [#882](https://github.com/rotnov/pycc/issues/882) widens. Widening
+   `pycc_std` would not admit it, and no #882-family issue closes that gap.
+   Read the clause as naming the foreign-import path wherever the `#882`
+   attribution appears above.
+
+   **What this does not change: the count stays 19, and the numerator does
+   not move.** Registering `NDArray` makes none of the 19 array-parameter
+   occurrences compile. Each of them still needs a name binding that does
+   not exist: `from numpy.typing import NDArray` (the foreign-import path,
+   per (c) above), `import numpy as np`
+   ([#883](https://github.com/rotnov/pycc/issues/883)), or an attribute-form
+   base `np.ndarray` ([#889](https://github.com/rotnov/pycc/issues/889)).
+   Registering the name is necessary, not sufficient — a reader must not
+   infer any progress on this prerequisite from it. The operative
+   consequence is unchanged: prerequisite 2 stays unmet, for both of the
+   independent blockers the third correction states.
+
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
    **Arms** bullet binds the run to the five fields
