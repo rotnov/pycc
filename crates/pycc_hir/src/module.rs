@@ -402,9 +402,11 @@ fn lower_top_level_item<'a>(
     position: FuturePosition,
 ) -> Result<(), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty`
-    // uses to resolve cross-class annotations; #611 (PEP 560) added the
-    // per-class subscriptability flag it carries. Recomputed per item so a
-    // later item sees every earlier class.
+    // uses to resolve cross-class annotations; #693 (PEP 560) added the
+    // per-class `__class_getitem__` return type it carries. #611's
+    // per-class subscriptability flag rode here too until #1130 deleted it
+    // along with the annotation-position gate it fed. Recomputed per item
+    // so a later item sees every earlier class.
     let class_name_defs = class::class_annotation_infos(&state.class_defs, &state.items);
     if let Some((name, ty)) = lower_type_alias_stmt(stmt, &state.aliases, &class_name_defs)? {
         // D-068 review finding on #385, second round: the class-vs-alias

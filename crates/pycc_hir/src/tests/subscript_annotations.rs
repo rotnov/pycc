@@ -117,9 +117,17 @@ fn a_subscripted_annotation_inside_the_class_s_own_body_resolves_to_the_enclosin
 
 #[test]
 fn a_subscripted_annotation_inside_a_hooked_class_s_own_body_is_accepted() {
-    // The accepting half of the self-reference gate above: the class's
-    // own `static_methods` table is still empty while its body is being
-    // lowered, so the hook is found by the class-body pre-scan.
+    // The hooked twin of the self-reference test above. The hook is not
+    // why this lowers: #1130 deleted the class-body pre-scan
+    // (`declares_own_class_getitem`) that used to find it, and the
+    // self-referential `ClassAnnotationInfo` entry carries
+    // `class_getitem_return: None` unconditionally. It lowers because
+    // `annotation_to_ty`'s subscript arm keeps the direct `class_defs`
+    // lookup for the enclosing class's own name (the `class_name`
+    // carve-out) and then falls through to the bare-name recursion, which
+    // resolves `C` through that self-referential entry. What it resolves
+    // *to* is pinned in
+    // `a_self_referential_annotation_inside_the_hook_s_own_class_body_still_falls_back_to_instance`.
     let module = pycc_parser_test_helper::parse(
         "class C:\n    @staticmethod\n    def __class_getitem__(key: int) -> int:\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n\n    def me(self) -> C[int]:\n        return self\n",
     );
