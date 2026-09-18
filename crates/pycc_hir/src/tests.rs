@@ -7021,7 +7021,7 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
 }
 
 #[test]
-fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
+fn every_ordinary_identifier_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
     // #1129 and #1134: `ndarray` and `NDArray` are further *spellings* of
     // `Ty::MemoryView`, not further types, so what this states is an
     // equality and not merely that the annotations are accepted.

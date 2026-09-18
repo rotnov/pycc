@@ -145,7 +145,7 @@ fn a_program_that_binds_ndarray_itself_keeps_its_own_meaning() {
 /// #1130 admits a subscripted annotation whose base resolves to a type pycc
 /// can name nominally, and the buffer carrier is one. This test used to
 /// assert a refusal with a per-spelling noun; it now asserts the acceptance,
-/// which is D-244 statement (b) -- the two spellings are one pycc type with
+/// which is D-244 statement (b) -- the spellings are one pycc type with
 /// no run-time observable difference -- restated for the subscripted form.
 /// The type argument is erased and never lowered, so `[float]` is not
 /// modelled and not checked.
@@ -191,17 +191,6 @@ fn a_subscripted_carrier_spelling_lowers_to_the_carrier_itself() {
     }
 }
 
-/// A program that binds a spelling itself gets the noun its own binding
-/// earns -- which is not the same answer for the two spellings.
-///
-/// `memoryview` is a reserved keyword the `Expr::Name` arm decides before it
-/// reads `class_defs` or the alias table, so `type memoryview = int` does
-/// **not** win: the bare name still lowers to the buffer carrier, and the
-/// refusal must not claim an alias resolved. `ndarray` is an ordinary
-/// identifier resolved only after both, so there the alias really does win
-/// and `type alias` is the truthful word. This is measured through the CLI
-/// rather than through the helper, because the helper cannot observe which
-/// of the two the pipeline actually resolved.
 /// A container of the carrier lowers its element like any other, and is
 /// then refused by the container capability gate rather than by name
 /// resolution.
@@ -353,7 +342,7 @@ fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
     assert!(err.contains("error[T0033]"), "{err}");
 }
 
-/// The two protocol-member refusals name the thing, not either spelling.
+/// The two protocol-member refusals name the thing, not any one spelling.
 ///
 /// They are capability gaps of the same family as `ext_return_gap`: nothing
 /// produces a buffer, so no class could satisfy the member. Both fired on

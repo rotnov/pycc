@@ -330,8 +330,8 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// from here rather than restating the list. `ClassVar` is answered before
 /// both tables too but is deliberately absent: the subscript arm intercepts
 /// `ClassVar[...]` at the top of its own match, so it never reaches this
-/// helper. The carrier's two lowercase-free spellings `ndarray` (#1129) and
-/// `NDArray` (#1134) are deliberately absent too -- both are ordinary
+/// helper. The carrier's two ordinary-identifier spellings `ndarray` (#1129)
+/// and `NDArray` (#1134) are deliberately absent too -- both are ordinary
 /// identifiers resolved *after* both tables (D-244 statement (h)).
 fn name_resolves_before_class_defs(base: &str) -> bool {
     matches!(
@@ -741,15 +741,14 @@ pub(crate) fn annotation_to_ty(
                 }
                 // #1129/#1134: `ndarray` and `NDArray` are *further
                 // spellings* of the same pycc type, not new ones. All three
-                // mean "a one-dimensional,
-                // C-contiguous, format `'d'` buffer exporter", which is
-                // exactly what `pycc_ext_unpack_memoryview` enforces at the
-                // boundary, so the two spellings have no run-time observable
-                // difference and a distinct `Ty` variant would carry
-                // information no consumer could read. Diagnostics therefore
-                // render the canonical `memoryview` for either spelling,
-                // which is already what the alias table does for
-                // `type Arr = memoryview`. `NDArray` (#1134) is the
+                // mean "a one-dimensional, C-contiguous, format `'d'` buffer
+                // exporter", which is exactly what
+                // `pycc_ext_unpack_memoryview` enforces at the boundary, so
+                // the three spellings have no run-time observable difference
+                // and a distinct `Ty` variant would carry information no
+                // consumer could read. Diagnostics therefore render the
+                // canonical `memoryview` for any spelling, which is already
+                // what the alias table does for `type Arr = memoryview`. `NDArray` (#1134) is the
                 // capitalized `numpy.typing` spelling 18 of the 19
                 // array-parameter occurrences in the #1039 census use; it
                 // joins the set on exactly the terms `ndarray` did, and

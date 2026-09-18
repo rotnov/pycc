@@ -5,7 +5,7 @@
 //!
 //! > In **annotation** position, a subscript whose base resolves to a type
 //! > pycc can name nominally -- a class in `class_defs`, a `type` alias to
-//! > one, or the buffer carrier (`Ty::MemoryView`, either spelling, directly
+//! > one, or the buffer carrier (`Ty::MemoryView`, any spelling, directly
 //! > or through an alias) -- is accepted, with the type argument **erased
 //! > without being lowered**. Inside a class's own body the enclosing class's
 //! > own name is answered before the six reserved names, so its subscripted

@@ -234,7 +234,7 @@ def total() -> int:
     assert!(err.contains("error[C0001]"), "{err}");
     // Spelling-neutral since #1129: this site names the *type*, and the
     // same message answers a `-> ndarray` return, so it says "a buffer"
-    // rather than either spelling. `C0003` above still quotes the whole
+    // rather than any one spelling. `C0003` above still quotes the whole
     // signature position back, which is why it still reads `-> memoryview`.
     assert!(err.contains("`_make`'s return type is a buffer"), "{err}");
 
