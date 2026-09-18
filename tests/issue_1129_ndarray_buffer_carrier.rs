@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The eight tests below that need no interpreter at all — every refusal
+//! The nine tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the ninth, which builds an artifact and
+//! inside the coverage job. Only the tenth, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -183,6 +183,43 @@ fn a_subscripted_ndarray_is_refused_as_a_buffer_type_rather_than_an_alias() {
 /// and `type alias` is the truthful word. This is measured through the CLI
 /// rather than through the helper, because the helper cannot observe which
 /// of the two the pipeline actually resolved.
+/// A container of the carrier lowers its element like any other, and is
+/// then refused by the container capability gate rather than by name
+/// resolution.
+///
+/// This is the shape `src/memoryview_mode.rs`'s `offending_position` relies
+/// on when it compares `*ty == Ty::MemoryView` flatly instead of recursing:
+/// `list[ndarray]` really does lower to `Ty::List(Ty::MemoryView)`, and what
+/// keeps it out of a lowered function's parameters is `check_container_ty`'s
+/// `T0034`, which admits only `Ty::Int` as a list element. Pinning it here
+/// means a later widening of that gate breaks this test rather than silently
+/// making the flat comparison miss a nested carrier.
+///
+/// It also states the canonical-rendering rule at one more surface: the
+/// `ndarray` spelling is echoed back as `memoryview`, because the message
+/// renders the resolved type rather than naming the carrier as its reason.
+#[test]
+fn a_container_of_the_carrier_is_refused_by_the_container_gate() {
+    for spelling in ["ndarray", "memoryview"] {
+        let dir = fixture(
+            "1129_container",
+            &format!("def f(xs: list[{spelling}]) -> int:\n    return 1\n"),
+        );
+        let out = pycc()
+            .arg("check")
+            .arg(dir.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[T0034]"), "{err}");
+        assert!(
+            err.contains("list[memoryview] is not compiled yet (D-105) -- only list[int] is"),
+            "{err}"
+        );
+    }
+}
+
 #[test]
 fn a_shadowed_spelling_is_named_by_whichever_binding_actually_wins() {
     for (spelling, expected) in [

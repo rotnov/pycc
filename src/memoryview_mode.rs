@@ -202,10 +202,16 @@ fn declares_member(
 /// the reason `Ty::MemoryView`'s own documentation gives: one type, one
 /// canonical name, exactly as for an alias of it.
 ///
-/// Both positions are checked, and only `Ty::MemoryView` itself matches: a
-/// container of one (`list[memoryview]`) cannot be spelled at all --
-/// `pycc_hir`'s `type_arg_name_to_ty` admits no such element -- so there is
-/// no nested shape to recurse into.
+/// Both positions are checked, and only `Ty::MemoryView` itself matches,
+/// with no recursion into a container's elements. A parameterized container
+/// annotation does lower its elements through the same `annotation_to_ty`
+/// recursion, so `list[memoryview]` -- and, since #1129, `list[ndarray]` --
+/// really does produce `Ty::List(Ty::MemoryView)`. What keeps that type out
+/// of a lowered function's `params` and `return_ty` is the capability gate
+/// one step later: `pycc_hir`'s `check_container_ty` admits only `Ty::Int`
+/// as a list element and rejects every other one with `T0034`. So the
+/// nested shape is unreachable here by a type-directed refusal, not by a
+/// name that fails to resolve.
 fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String> {
     if let Some((name, _)) = params.iter().find(|(_, ty)| *ty == Ty::MemoryView) {
         return Some(format!("parameter `{name}: memoryview`"));
