@@ -204,6 +204,13 @@ fn level_4_a_reserved_name_beats_a_shadow_class_in_a_subscript() {
     // `Ty::Int` -- a builtin scalar -- with the type argument silently
     // discarded, which is exactly the hole #931 closed.
     //
+    // Accept-to-reject is *not* the whole of this ladder, and this test is
+    // not the whole of the reserved-name story: the `memoryview` arm of the
+    // same six names goes the other way (reject -> accept, resolving to the
+    // buffer carrier), and `ndarray` -- not a reserved name at all -- flips
+    // reject -> accept resolving to the user's own class. Both are pinned in
+    // `level_4_the_carrier_spellings_flip_the_other_way_in_the_same_ladder`.
+    //
     // The shape matters: `class int: pass` (plain, hook-less) is *already*
     // `T0044` on the branch point, so it would pass identically before and
     // after and pin nothing. A PEP 695 generic shadow class exits 0 today
@@ -232,6 +239,48 @@ fn level_4_a_reserved_name_beats_a_shadow_class_in_a_subscript() {
         "1130_level4_any",
         "class Any:\n    @classmethod\n    def __class_getitem__(cls, item: int) -> float:\n        return 0.0\n\n\ndef f(a: Any[str]) -> float:\n    return 0.0\n",
         "T0002",
+    );
+}
+
+#[test]
+fn level_4_the_carrier_spellings_flip_the_other_way_in_the_same_ladder() {
+    // The reject-to-accept half of the reserved-name ladder, which the test
+    // above deliberately does not cover. Both cells are measured against the
+    // branch point (`4d5a9677`), where each was
+    // ``error[T0044]: class `<name>` does not define `__class_getitem__` ``.
+    //
+    // `memoryview` is one of the six names `name_resolves_before_class_defs`
+    // answers before the class table, so a plain hook-less shadow class does
+    // not win: the subscript resolves to the buffer carrier. Proven by use
+    // rather than by exit code -- an accept alone cannot tell the carrier
+    // from the shadow class -- with the carrier's own `--ext`-parameter
+    // diagnostic, which the user's class could never produce.
+    assert_accepts(
+        "1130_level4_memoryview_shadow",
+        "class memoryview:\n    pass\n\n\ndef f(a: memoryview[float]) -> float:\n    return 1.0\n",
+    );
+    let text = assert_rejects(
+        "1130_level4_memoryview_shadow_use",
+        "class memoryview:\n    def m(self) -> int:\n        return 1\n\n\ndef f(a: memoryview[float]) -> int:\n    return a.m()\n",
+        "C0001",
+    );
+    assert!(text.contains("bound to a buffer parameter"), "{text}");
+    // The bare form already resolved to the carrier on the branch point, so
+    // the subscripted form is not taking on a new meaning -- it is only
+    // ceasing to disagree with the bare one.
+    let bare = assert_rejects(
+        "1130_level4_memoryview_shadow_bare",
+        "class memoryview:\n    def m(self) -> int:\n        return 1\n\n\ndef f(a: memoryview) -> int:\n    return a.m()\n",
+        "C0001",
+    );
+    assert!(bare.contains("bound to a buffer parameter"), "{bare}");
+    // `ndarray`, the carrier's sibling spelling (#1129), is an ordinary
+    // identifier resolved *after* the class table, so the same shape flips
+    // reject -> accept resolving to the user's own class instead. `a.m()`
+    // type-checking is what proves which of the two won.
+    assert_accepts(
+        "1130_level4_ndarray_shadow_use",
+        "class ndarray:\n    def m(self) -> int:\n        return 1\n\n\ndef f(a: ndarray[float]) -> int:\n    return a.m()\n",
     );
 }
 
