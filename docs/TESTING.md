@@ -794,6 +794,15 @@ the sweep and the per-record shapes — and the third is independent of both:
    This prerequisite is therefore met, for the sweep reading as well as the
    per-record one the boundary already admitted; what still refuses a scored
    run is prerequisites 2 and 3, not the bridge.
+   Annotated 2026-09-18 ([#1129](https://github.com/rotnov/pycc/issues/1129)):
+   the carrier was widened, not extended. The boundary's first refusal arm
+   moved from `PyMemoryView_Check` to `PyObject_CheckBuffer` and the bare name
+   `ndarray` became a second spelling of the same parameter type, so a
+   conforming array now reaches the admitted slot without the
+   `memoryview(a.reshape(-1))` a host had to write at the call site. That
+   removes a wrapper; it does not change what this prerequisite reports, which
+   was already met, and it does not bear on prerequisite 2 — no count below is
+   re-measured by it, and none is restated here.
 2. **Either reading needs an admissible subject to exist at all**, and none
    does. Reported as counts, so that nothing about the proprietary codebase is
    published beyond them ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6). Of the **133** module-level fully

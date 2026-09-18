@@ -181,14 +181,21 @@ pub enum Ty {
     /// A unit variant adds no payload, so `size_of::<Ty>()` stays at the
     /// D-109 16-byte ceiling.
     Object,
-    /// A one-dimensional `memoryview` over contiguous `float` (C `double`)
+    /// A one-dimensional buffer over contiguous `float` (C `double`)
     /// elements, admitted only at a `pycc build --ext` boundary (Part 1 of
     /// #1027, D-244). Carries no shape: what the boundary guarantees is
     /// exactly what the four refusal arms in `src/ext_build.rs` check at
-    /// run time -- an exact `memoryview`, C-contiguous, `ndim == 1`, format
+    /// run time -- exports a buffer, C-contiguous, `ndim == 1`, format
     /// `"d"` -- so no payload could add information the wrapper has not
     /// already proved. A unit variant adds no payload, so `size_of::<Ty>()`
     /// stays at the D-109 16-byte ceiling.
+    ///
+    /// Two source spellings lower to this one variant: `memoryview` and,
+    /// since #1129, `ndarray`. They are one type because their run-time
+    /// contract is identical -- the boundary admits any object exporting a
+    /// conforming buffer, whichever way the parameter was spelled -- so
+    /// diagnostics render the canonical `memoryview` for both, exactly as
+    /// they already do for an alias of it.
     MemoryView,
 }
 

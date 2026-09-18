@@ -259,12 +259,15 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
     // The remediation enumerates what the boundary *does* carry, and Part 3
     // of #1037 (#1050) put `tuple` into that list. A reader who reaches this
     // message through a `tuple` gap has to be told which tuples are carried,
-    // not shown a scalar-only list that reads as "no tuple at all".
+    // not shown a scalar-only list that reads as "no tuple at all". #1129
+    // put the buffer's second spelling into it for the same reason: a
+    // reader who wrote `ndarray` and is shown a list naming only
+    // `memoryview` reads it as "not that type at all".
     assert!(
         message.contains(
-            "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` or a `tuple` \
-             of `int`/`float`/`bool`, and a return type must be one of those except \
-             `memoryview`, or `None`"
+            "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` (or its \
+             second spelling `ndarray`) or a `tuple` of `int`/`float`/`bool`, and a \
+             return type must be one of those except the buffer, or `None`"
         ),
         "{message}"
     );

@@ -168,7 +168,7 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
             .map(BoundaryCarrier::Tuple),
         // Part 1 of #1027: admitted at a parameter position only. The four
         // run-time refusals the boundary applies to the object itself --
-        // exact `memoryview`, C-contiguous, `ndim == 1`, format `"d"` --
+        // exports a buffer, C-contiguous, `ndim == 1`, format `"d"` --
         // live in `pycc_ext_unpack_memoryview`, because none of them is a
         // property of the *declared* type this table answers about.
         Ty::MemoryView => Some(BoundaryCarrier::Buffer),
@@ -273,8 +273,9 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
         message: format!(
             "--ext cannot export the public function `{name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
-             `float`, `bool`, `str`, `memoryview` or a `tuple` of `int`/`float`/`bool`, and a \
-             return type must be one of those except `memoryview`, or `None` \
+             `float`, `bool`, `str`, `memoryview` (or its second spelling `ndarray`) or a \
+             `tuple` of `int`/`float`/`bool`, and a \
+             return type must be one of those except the buffer, or `None` \
              (D-244 rule \
              1 exports every public module-level function, so there is no way to opt one \
              out) -- rename it to `_{name}` to keep it out of the export set, or build \

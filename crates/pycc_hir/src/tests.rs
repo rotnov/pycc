@@ -7016,6 +7016,38 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
 }
 
 #[test]
+fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
+    // #1129: `ndarray` is a second *spelling* of `Ty::MemoryView`, not a
+    // second type, so what this states is an equality and not merely that
+    // the annotation is accepted. Both parameter and return position are
+    // checked, because `annotation_to_ty` is one parser for every
+    // annotation position and the two mode-dependent refusals downstream
+    // (`C0003` on a return, `I0405` on a native signature) both key on the
+    // `Ty` this produces.
+    //
+    // No import: the source mentions numpy nowhere, which is the whole
+    // point of the arm -- `import numpy` is itself refused (`I0403`), so a
+    // spelling gated on one could not be written at all.
+    for (source, expected) in [
+        (
+            "def f(a: ndarray, n: int) -> float:\n    return 0.0\n",
+            Ty::MemoryView,
+        ),
+        (
+            "def f(a: memoryview, n: int) -> float:\n    return 0.0\n",
+            Ty::MemoryView,
+        ),
+    ] {
+        let module = pycc_parser_test_helper::parse(source);
+        let lowered = lower_checked(&module).expect("the buffer annotation should lower");
+        let HirItem::Function { params, .. } = &lowered.items[0] else {
+            panic!("expected a function: {:?}", lowered.items[0]);
+        };
+        assert_eq!(params[0].1, expected);
+    }
+}
+
+#[test]
 fn a_memoryview_ty_names_itself_with_its_python_spelling() {
     // Part 1 of #1027. `Ty::name` is the spelling every *type-system*
     // diagnostic renders a type with; `src/ext_build.rs`'s own `render_ty`

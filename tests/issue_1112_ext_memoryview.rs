@@ -275,7 +275,7 @@ fn every_non_signature_memoryview_position_is_refused() {
 def f() -> int:
     return 1
 ",
-            "declaring `y: memoryview`",
+            "declaring `y` as a buffer",
         ),
         (
             "1112_decl_local",
@@ -283,7 +283,7 @@ def f() -> int:
     x: memoryview
     return 1
 ",
-            "declaring `x: memoryview`",
+            "declaring `x` as a buffer",
         ),
         (
             "1112_protocol_attr",
@@ -436,7 +436,7 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
         let err = stderr_of(&build);
         assert!(err.contains("error[C0001]"), "{name}: {err}");
         assert!(
-            err.contains("using `v`, which is bound to a `memoryview`"),
+            err.contains("using `v`, which is bound to a buffer parameter"),
             "{name}: {err}"
         );
     }

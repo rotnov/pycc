@@ -194,10 +194,15 @@ fn declares_member(
         .is_some_and(|members| members.iter().any(|m| m == member))
 }
 
-/// Names the first part of a signature that mentions `memoryview`, as the
-/// user wrote it, or `None` when it mentions it nowhere.
+/// Names the first part of a signature that mentions the buffer type, in
+/// its canonical spelling, or `None` when it mentions it nowhere.
 ///
-/// Both positions are checked, and only an exact `memoryview` matches: a
+/// The rendered spelling is `memoryview` whichever of the two source
+/// spellings the user wrote (#1129 admits `ndarray` as the second), for
+/// the reason `Ty::MemoryView`'s own documentation gives: one type, one
+/// canonical name, exactly as for an alias of it.
+///
+/// Both positions are checked, and only `Ty::MemoryView` itself matches: a
 /// container of one (`list[memoryview]`) cannot be spelled at all --
 /// `pycc_hir`'s `type_arg_name_to_ty` admits no such element -- so there is
 /// no nested shape to recurse into.

@@ -98,7 +98,7 @@ fn reading_a_memoryview_parameter_is_a_capability_gap_rather_than_an_ice() {
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(err.message.contains("`v`"), "{}", err.message);
-    assert!(err.message.contains("`memoryview`"), "{}", err.message);
+    assert!(err.message.contains("buffer parameter"), "{}", err.message);
     assert!(err.message.contains("pycc build --ext"), "{}", err.message);
 }
 
@@ -153,7 +153,11 @@ fn declaring_a_memoryview_local_is_a_capability_gap() {
     };
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "C0001");
-    assert!(err.message.contains("`x: memoryview`"), "{}", err.message);
+    assert!(
+        err.message.contains("declaring `x` as a buffer"),
+        "{}",
+        err.message
+    );
     assert!(err.message.contains("pycc build --ext"), "{}", err.message);
 }
 
@@ -188,7 +192,7 @@ fn iterating_a_memoryview_parameter_is_the_read_capability_gap() {
     assert_eq!(err.code, "C0001");
     assert!(
         err.message
-            .contains("using `v`, which is bound to a `memoryview`"),
+            .contains("using `v`, which is bound to a buffer parameter"),
         "{}",
         err.message
     );
@@ -211,7 +215,11 @@ fn declaring_a_memoryview_at_module_scope_is_a_capability_gap() {
     };
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "C0001");
-    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+    assert!(
+        err.message.contains("declaring `y` as a buffer"),
+        "{}",
+        err.message
+    );
 }
 
 // The guard sits *ahead* of each arm's value/no-value split, so the valued
@@ -234,7 +242,11 @@ fn declaring_a_memoryview_with_an_initializer_is_the_same_capability_gap() {
     };
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "C0001");
-    assert!(err.message.contains("`y: memoryview`"), "{}", err.message);
+    assert!(
+        err.message.contains("declaring `y` as a buffer"),
+        "{}",
+        err.message
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +569,7 @@ fn another_builtin_taking_a_memoryview_is_still_a_capability_gap() {
     assert_eq!(err.code, "C0001");
     assert!(
         err.message
-            .contains("using `b`, which is bound to a `memoryview`"),
+            .contains("using `b`, which is bound to a buffer parameter"),
         "{}",
         err.message
     );

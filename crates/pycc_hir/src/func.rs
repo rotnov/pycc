@@ -694,6 +694,27 @@ pub(crate) fn annotation_to_ty(
             // body. `crates/pycc_types`'s `reject_memoryview_declaration`
             // owns that position, in both modes.
             "memoryview" => Ok(Ty::MemoryView),
+            // #1129: `ndarray` is a *second spelling* of the same pycc type,
+            // not a new one. Both mean "a one-dimensional, C-contiguous,
+            // format `'d'` buffer exporter", which is exactly what
+            // `pycc_ext_unpack_memoryview` enforces at the boundary, so the
+            // two spellings have no run-time observable difference and a
+            // distinct `Ty` variant would carry information no consumer
+            // could read. Diagnostics therefore render the canonical
+            // `memoryview` for either spelling, which is already what the
+            // alias table does for `type Arr = memoryview`.
+            //
+            // Recognized with **no import**, deliberately: `annotation_to_ty`
+            // receives `type_param`, `class_name`, `aliases` and
+            // `class_defs` and no import table at all, and `import numpy` is
+            // itself refused today (`I0403`), so requiring one would be new
+            // machinery gating a spelling on an import that cannot be
+            // written. `Any`, `Annotated`, `TypeAlias` and `Self` are all
+            // recognized here on the same terms. The visible consequence --
+            // `def f(a: ndarray)` compiles in a file that never mentions
+            // numpy -- is stated in D-244's #1129 amendment rather than
+            // left implicit.
+            "ndarray" => Ok(Ty::MemoryView),
             "Any" => Err(Diagnostic::error(
                 "T0002",
                 "`Any` is not permitted in pycc code outside a declared interop boundary"

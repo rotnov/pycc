@@ -1,0 +1,240 @@
+//! #1129: the bare name `ndarray` as a second spelling of the `ext`
+//! boundary's buffer carrier, and the widened admission predicate that
+//! makes a bare array reach it.
+//!
+//! Two halves, and they are one change: the annotation arm alone would
+//! compile a signature that fails at run time for every real array, and the
+//! run-time widening alone would be unreachable from any source program.
+//!
+//! What lives here rather than in `tests/issue_1114_numpy_oracle.rs` is
+//! exactly what that file cannot carry. It is numpy's oracle, so every
+//! assertion in it skips on a host without numpy; the annotation arm and
+//! the buffer-protocol arms must be stated on a host that has never heard
+//! of numpy, because the widened predicate is the *buffer protocol* and
+//! not numpy — an `array.array('d')` from the standard library is as much
+//! a conforming operand as an `ndarray` is, and CI installs numpy into one
+//! job only (`native-build-test`'s hosted ext floor interpreter).
+//!
+//! The scope boundary, so a later reader does not over-read this file:
+//! #1129 owns *carrier registration* — which pycc type the boundary admits
+//! and what the wrapper does with the object. How a user may *spell* a
+//! type is owned elsewhere: attribute-qualified `numpy.ndarray` by #889,
+//! subscripted `NDArray[...]` by #1130, import aliasing by #883/#963/#964.
+//! None of those is advanced here, and no numpy source file in the wild is
+//! made compilable by this change on its own.
+//!
+//! The first four arms need no interpreter at all — every refusal they
+//! assert is resolved on the program before `plan_ext` probes the host
+//! toolchain — so they are not `#[ignore]`d and are the arms that run
+//! inside the coverage job. Only the arm that builds and loads an artifact
+//! is hosted.
+
+use pycc_scratch::ScratchDir;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn pycc() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn stdout_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+}
+
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n")
+}
+
+/// Writes `source` as the entry module of a fresh scratch directory.
+fn fixture(category: &str, source: &str) -> ScratchDir {
+    let dir = ScratchDir::new(category).expect("scratch");
+    std::fs::write(dir.join("nd_probe.py"), source).expect("write the subject");
+    dir
+}
+
+/// Builds the entry module as a CPython extension module directly into
+/// `dir`, so a CPython run with `dir` as its working directory imports it.
+///
+/// The output path carries no extension suffix, for the reason
+/// `tests/issue_1114_numpy_oracle.rs`'s own helper records: `pycc build
+/// --ext` appends the one its target triple calls for and derives the
+/// exported `PyInit_<mod>` name from the path's own spelling.
+fn build_ext(dir: &Path) -> Output {
+    pycc()
+        .arg("build")
+        .arg(dir.join("nd_probe.py"))
+        .arg("-o")
+        .arg(dir.join("nd_probe"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn")
+}
+
+/// The subject: the same loop the buffer carrier has always admitted, at a
+/// parameter spelled `ndarray` instead of `memoryview`.
+///
+/// `len(b)` and `b[i]` are both in the body deliberately. Neither is a new
+/// capability (#1116 and Part 2 of #1027 own them) and neither branches on
+/// the spelling — the constraint solver's two interceptions dispatch on
+/// `Ty::MemoryView`, which is what `ndarray` lowers to — but "it should
+/// work for free" is a claim, so the subject exercises it rather than
+/// assuming it.
+const SUBJECT: &str = "\
+def total(b: ndarray) -> float:
+    s: float = 0.0
+    i: int = 0
+    for i in range(len(b)):
+        s = s + b[i]
+    return s
+";
+
+/// The annotation compiles, with no interpreter, no numpy, and no import.
+///
+/// The one assertion in this file that depends on nothing about the host
+/// at all. `import numpy` is itself refused today (`I0403`), so a spelling
+/// that required one could not be written; the bare name is recognized
+/// without it, exactly as `Any`, `Annotated`, `TypeAlias` and `Self` are.
+#[test]
+fn an_ndarray_parameter_type_checks_without_any_import() {
+    let dir = fixture("1129_check", SUBJECT);
+    let check = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(
+        check.status.success(),
+        "{}{}",
+        stdout_of(&check),
+        stderr_of(&check)
+    );
+}
+
+/// Every position that is *not* an `--ext` parameter is refused for the new
+/// spelling exactly as it is for the old one, in the canonical spelling.
+///
+/// This is the half of the change that is deliberately *not* a widening:
+/// `ndarray` lowers to `Ty::MemoryView`, so it inherits every existing
+/// refusal rather than opening a second, laxer path to them. Each message
+/// renders `memoryview`, because a `Ty` is the compiler's canonical name
+/// for a type — the same thing already happens for `type Arr = memoryview`,
+/// and #1129's D-244 amendment records it rather than leaving it to be
+/// discovered.
+#[test]
+fn every_non_parameter_ndarray_position_is_refused_in_the_canonical_spelling() {
+    // A bare declaration: `C0001`, in both modes, because nothing produces
+    // a buffer value to bind to the name. The message is the reworded,
+    // spelling-neutral one — a user who wrote `ndarray` must not be told
+    // about a `memoryview` they never mentioned.
+    let dir = fixture(
+        "1129_decl",
+        "def f() -> int:\n    x: ndarray\n    return 1\n",
+    );
+    let native = pycc()
+        .arg("build")
+        .arg(dir.join("nd_probe.py"))
+        .arg("-o")
+        .arg(dir.join("nd_probe"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    let err = stderr_of(&native);
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(err.contains("declaring `x` as a buffer"), "{err}");
+
+    // A public `-> ndarray` return under `--ext`: `C0003`. The wrapper has
+    // released the buffer by the time it would have to hand one back, and
+    // no development headers are needed to say so — `plan_ext` resolves the
+    // capability gap on the program before it probes the host toolchain.
+    let dir = fixture("1129_return", "def make() -> ndarray:\n    return make()\n");
+    let ext = build_ext(&dir);
+    assert!(!ext.status.success(), "{}", stdout_of(&ext));
+    let err = stderr_of(&ext);
+    assert!(err.contains("error[C0003]"), "{err}");
+    assert!(err.contains("its return type `-> memoryview`"), "{err}");
+    // The remediation enumerates what the boundary carries, so it has to
+    // name the second spelling too: a user who reached this message by
+    // writing `ndarray` and is shown a list without it reads the list as
+    // "not that type at all".
+    assert!(err.contains("(or its second spelling `ndarray`)"), "{err}");
+
+    // An `ndarray` *signature* in a build without `--ext`: `I0405`, the
+    // artifact-mode refusal, naming the parameter in the canonical
+    // spelling.
+    let dir = fixture("1129_native", SUBJECT);
+    let native = pycc()
+        .arg("build")
+        .arg(dir.join("nd_probe.py"))
+        .arg("-o")
+        .arg(dir.join("nd_probe"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    let err = stderr_of(&native);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(err.contains("parameter `b: memoryview`"), "{err}");
+}
+
+/// The widened admission predicate, stated on the standard library alone.
+///
+/// The boundary's first refusal arm moved from `PyMemoryView_Check` to
+/// `PyObject_CheckBuffer`, so what it admits is every conforming *buffer
+/// exporter* and not numpy: an `array.array('d')` and a `memoryview` are
+/// both accepted at a parameter spelled `ndarray`, a `bytes` passes arm 1
+/// and is refused by the format arm, and only an object that exports
+/// nothing at all is refused by arm 1 itself. That set is the deliberate
+/// consequence of the predicate, not a test convenience — `docs/RUNTIME.md`
+/// and D-244's #1129 amendment both state it in those terms.
+///
+/// Hosted, for the reason every `--ext` build-and-load test is: `--ext`
+/// requires a CPython 3.13+ with development headers, and CI's coverage
+/// interpreter is a different one.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_ndarray_parameter_admits_every_conforming_buffer_exporter() {
+    let dir = fixture("1129_exporters", SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import array, nd_probe\n\
+             assert not nd_probe.__file__.endswith('.py'), nd_probe.__file__\n\
+             data = array.array('d', [1.5, -2.25, 3.0])\n\
+             # A conforming exporter that is not a `memoryview`: accepted\n\
+             # bare, which is the whole statement of the widening.\n\
+             assert nd_probe.total(data) == 2.25, nd_probe.total(data)\n\
+             # And a `memoryview` over the same store, which the boundary\n\
+             # accepted before this change and must still accept.\n\
+             assert nd_probe.total(memoryview(data)) == 2.25\n\
+             def refused(arg):\n\
+             \x20   try:\n\
+             \x20       nd_probe.total(arg)\n\
+             \x20   except BaseException as error:\n\
+             \x20       return type(error).__name__, str(error)\n\
+             \x20   raise AssertionError('the thunk accepted %r' % (type(arg),))\n\
+             # A buffer exporter of the wrong element type reaches the\n\
+             # format arm now, not arm 1.\n\
+             kind, text = refused(b'abcdefgh')\n\
+             assert kind == 'TypeError', (kind, text)\n\
+             assert \"format 'B'\" in text, text\n\
+             # Exports no buffer at all: the one arm the widening did not\n\
+             # move, in its reworded pycc-authored text.\n\
+             kind, text = refused([1.5, 2.5])\n\
+             assert kind == 'TypeError', (kind, text)\n\
+             assert text == (\"total() argument 1: 'list' object \"\n\
+             \x20                'does not export a buffer'), text\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+    assert_eq!(stdout_of(&run), "ok\n");
+}
