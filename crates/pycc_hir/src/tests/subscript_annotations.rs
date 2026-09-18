@@ -654,21 +654,33 @@ fn subscripted_base_description_follows_the_bare_name_arm_s_precedence() {
         subscripted_base_description("A", Some("T"), Some("C"), &[]),
         "type alias `A`"
     );
-    // #1129: both spellings of the buffer carrier get their own noun, and a
-    // program that binds one of them gets the alias noun back.
+    // #1129: both spellings of the buffer carrier get their own noun, and
+    // each spelling's guard mirrors where the `Expr::Name` arm resolves it.
     for spelling in ["memoryview", "ndarray"] {
         assert_eq!(
             subscripted_base_description(spelling, Some("T"), Some("C"), &[]),
             format!("buffer type `{spelling}`")
         );
-        assert_eq!(
-            subscripted_base_description(
-                spelling,
-                Some("T"),
-                Some("C"),
-                &[(spelling.to_string(), Ty::Int)]
-            ),
-            format!("type alias `{spelling}`")
-        );
     }
+    // `memoryview` is decided before the alias table is read, so an alias of
+    // that name never wins and the noun must not claim it did.
+    assert_eq!(
+        subscripted_base_description(
+            "memoryview",
+            Some("T"),
+            Some("C"),
+            &[("memoryview".to_string(), Ty::Int)]
+        ),
+        "buffer type `memoryview`"
+    );
+    // `ndarray` is decided after it, so an alias of that name really does win.
+    assert_eq!(
+        subscripted_base_description(
+            "ndarray",
+            Some("T"),
+            Some("C"),
+            &[("ndarray".to_string(), Ty::Int)]
+        ),
+        "type alias `ndarray`"
+    );
 }

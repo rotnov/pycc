@@ -357,14 +357,16 @@ pub(crate) fn subscripted_base_description(
             "int" | "float" | "bool" | "str" => format!("builtin type `{base}`"),
             // #1129: the buffer carrier's two spellings are neither builtin
             // scalars nor aliases, so the catch-all noun below would call
-            // them something the program never wrote. `ndarray` reaches
-            // this helper only when nothing else binds the name -- a
-            // program that does bind it resolves through the alias table
-            // one link earlier and is still a `type alias` here, which is
-            // what the guard preserves.
-            "memoryview" | "ndarray"
-                if !aliases.iter().any(|(alias_name, _)| alias_name == base) =>
-            {
+            // them something the program never wrote. The two spellings are
+            // guarded differently because the `Expr::Name` arm resolves them
+            // at different points: `memoryview` is a reserved keyword decided
+            // before `class_defs` and the alias table are consulted, exactly
+            // like the scalars above, so its noun is unconditional; `ndarray`
+            // is an ordinary identifier resolved only after both, so a
+            // program that binds it really does get the alias and must still
+            // read `type alias` here.
+            "memoryview" => format!("buffer type `{base}`"),
+            "ndarray" if !aliases.iter().any(|(alias_name, _)| alias_name == base) => {
                 format!("buffer type `{base}`")
             }
             _ => format!("type alias `{base}`"),

@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The four tests below that need no interpreter at all — every refusal
+//! The five tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the fifth, which builds an artifact and
+//! inside the coverage job. Only the sixth, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -167,6 +167,48 @@ fn a_subscripted_ndarray_is_refused_as_a_buffer_type_rather_than_an_alias() {
         assert!(err.contains("error[T0044]"), "{err}");
         assert!(
             err.contains(&format!("buffer type `{spelling}` is not subscriptable")),
+            "{err}"
+        );
+    }
+}
+
+/// A program that binds a spelling itself gets the noun its own binding
+/// earns -- which is not the same answer for the two spellings.
+///
+/// `memoryview` is a reserved keyword the `Expr::Name` arm decides before it
+/// reads `class_defs` or the alias table, so `type memoryview = int` does
+/// **not** win: the bare name still lowers to the buffer carrier, and the
+/// refusal must not claim an alias resolved. `ndarray` is an ordinary
+/// identifier resolved only after both, so there the alias really does win
+/// and `type alias` is the truthful word. This is measured through the CLI
+/// rather than through the helper, because the helper cannot observe which
+/// of the two the pipeline actually resolved.
+#[test]
+fn a_shadowed_spelling_is_named_by_whichever_binding_actually_wins() {
+    for (spelling, expected) in [
+        ("memoryview", "buffer type `memoryview`"),
+        ("ndarray", "type alias `ndarray`"),
+    ] {
+        let dir = fixture(
+            "1129_subscript_shadow",
+            &format!(
+                "type {spelling} = int
+
+def f(a: {spelling}[float]) -> int:
+    return 1
+"
+            ),
+        );
+        let out = pycc()
+            .arg("check")
+            .arg(dir.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[T0044]"), "{err}");
+        assert!(
+            err.contains(&format!("{expected} is not subscriptable")),
             "{err}"
         );
     }
