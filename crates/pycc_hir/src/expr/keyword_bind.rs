@@ -25,8 +25,12 @@
 //! container or stdlib-intrinsic call, a class instantiation and a `**kwargs`
 //! unpacking all keep the old rejection — see [`is_bindable_call`].
 //!
-//! The four ways a bindable call can still be wrong are errors CPython itself
-//! raises as `TypeError`, so they are `T0021`, not `C0001` (`docs/DIAGNOSTICS.md`).
+//! The ways a bindable call can still be wrong -- more positional arguments
+//! than the callee has parameters, an unexpected keyword name, a
+//! positional-only parameter passed as a keyword, a parameter supplied both
+//! positionally and by keyword, and a parameter left unsupplied -- are errors
+//! CPython itself raises as `TypeError`, so they are `T0021`, not `C0001`
+//! (`docs/DIAGNOSTICS.md`).
 //! `pycc_hir` already emits `T0021` with a real source span at `import.rs`
 //! (D-222); `pycc_types`' positional-arity twin cannot, because HIR carries no
 //! spans by the time it runs.

@@ -477,11 +477,12 @@ Positional-only parameters (PEP 570, `def f(a, /, b)`) fill positionally
 like any other parameter but can never be named by a keyword, matching
 CPython.
 
-Within the bindable shape, the four ways a call can still be wrong are
-errors CPython itself raises as `TypeError`, so they are `T0021`, not
-`C0001`: an unexpected keyword name, a positional-only parameter passed as
-a keyword, a parameter supplied both positionally and by keyword, and a
-parameter left unsupplied. Each is reported at the offending keyword's own
+Within the bindable shape, the ways a call can still be wrong are errors
+CPython itself raises as `TypeError`, so they are `T0021`, not `C0001`:
+more positional arguments than the callee has parameters, an unexpected
+keyword name, a positional-only parameter passed as a keyword, a parameter
+supplied both positionally and by keyword, and a parameter left
+unsupplied. Each is reported at the offending keyword's own
 source span where one exists, and at the call's span otherwise.
 
 
