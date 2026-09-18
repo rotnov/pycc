@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The six tests below that need no interpreter at all — every refusal
+//! The eight tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the seventh, which builds an artifact and
+//! inside the coverage job. Only the ninth, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -247,6 +247,57 @@ fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
         assert!(err.contains("error[T0044]"), "{err}");
         assert!(err.contains(expected), "{err}");
     }
+}
+
+/// The two protocol-member refusals name the thing, not either spelling.
+///
+/// They are capability gaps of the same family as `ext_return_gap`: nothing
+/// produces a buffer, so no class could satisfy the member. Both fired on
+/// `Ty::MemoryView` and so already covered the second spelling, but their
+/// text was a hard-coded `memoryview` and their authority a bare "Part 1 of
+/// #1027" -- so a program that wrote `ndarray` was told about a type it
+/// never wrote, and cited a change that is no longer the whole rule.
+#[test]
+fn a_protocol_member_spelled_ndarray_is_refused_without_naming_a_spelling() {
+    for (name, source, expected) in [
+        (
+            "1129_protocol_ret",
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    def m(self) -> ndarray: ...\n\n\ndef f() -> int:\n    return 1\n",
+            "protocol method `P.m` returns a buffer",
+        ),
+        (
+            "1129_protocol_attr",
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    x: ndarray\n\n\ndef f() -> int:\n    return 1\n",
+            "protocol attribute `P.x` has a buffer type",
+        ),
+    ] {
+        let dir = fixture(name, source);
+        let out = pycc()
+            .arg("check")
+            .arg(dir.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{name}: {}", stdout_of(&out));
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[C0001]"), "{name}: {err}");
+        assert!(err.contains(expected), "{name}: {err}");
+        assert!(err.contains("#1027 and #1129"), "{name}: {err}");
+    }
+}
+
+/// `pycc explain I0405` is the code's second normative surface, and a user
+/// who hit it on an `ndarray` signature must be told that spelling exists.
+#[test]
+fn explain_i0405_names_both_source_spellings() {
+    let out = pycc()
+        .arg("explain")
+        .arg("I0405")
+        .output()
+        .expect("pycc should spawn");
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    let text = stdout_of(&out);
+    assert!(text.contains("ndarray"), "{text}");
+    assert!(text.contains("memoryview"), "{text}");
 }
 
 /// The annotation compiles, with no interpreter, no numpy, and no import.

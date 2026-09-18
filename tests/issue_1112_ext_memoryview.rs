@@ -298,7 +298,7 @@ class P(Protocol):
 def f() -> int:
     return 1
 ",
-            "protocol attribute `P.x` has type `memoryview`",
+            "protocol attribute `P.x` has a buffer type",
         ),
         (
             "1112_class_attr",
@@ -575,7 +575,7 @@ fn a_protocol_method_s_memoryview_return_is_refused_in_both_modes() {
         let err = stderr_of(&build);
         assert!(err.contains("error[C0001]"), "{name}: {err}");
         assert!(
-            err.contains("protocol method `Source.make` returns `memoryview`"),
+            err.contains("protocol method `Source.make` returns a buffer"),
             "{name}: {err}"
         );
     }

@@ -1323,13 +1323,16 @@ print(numpy.pi)  # error[I0404]: printing a CPython object
     DiagnosticExplanation {
         code: "I0405",
         severity: Severity::Error,
-        summary: "`memoryview` in a signature in native mode; `pycc build --ext` is required",
+        summary: "a buffer type in a signature in native mode; `pycc build --ext` is required",
         explanation: "\
-I0405 reports a function whose signature names `memoryview` in a build that \
-produces a standalone native executable. A `memoryview` is a borrowed view \
-of storage a CPython interpreter owns: the value exists only because the \
-generated `pycc build --ext` wrapper acquired a `Py_buffer` from a real \
-`memoryview` object before the call and released it again afterwards. A \
+I0405 reports a function whose signature names the buffer type in a build \
+that produces a standalone native executable. Either source spelling reaches \
+it: `memoryview`, and since #1129 the bare name `ndarray`, which lower to one \
+type and are rendered back with the canonical `memoryview` in the message \
+itself. A buffer parameter is a borrowed view of storage a CPython \
+interpreter owns: the value exists only because the generated \
+`pycc build --ext` wrapper acquired a `Py_buffer` from a real buffer \
+exporter before the call and released it again afterwards. A \
 native artifact embeds no interpreter, so there is nothing to acquire a \
 buffer from and no way such a function could ever be called. Rebuild with \
 `pycc build --ext`, or change the annotation to a type a native artifact \
@@ -1345,6 +1348,9 @@ at module scope or in a function body) is a `C0001` capability gap in both, \
 because nothing produces a value to bind to such a name yet.",
         example: "\
 def total(xs: memoryview) -> float:  # error[I0405]: requires `pycc build --ext`
+    return 0.0
+
+def mean(xs: ndarray) -> float:      # error[I0405]: the other spelling, same code
     return 0.0
 ",
     },
