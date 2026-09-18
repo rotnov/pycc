@@ -728,9 +728,10 @@ Nothing above is amended by this subsection, and nothing above has been
 amended since it was committed. The protocol is unchanged, the
 pre-registration record is unchanged, and `subject_sha256` is still `null`.
 This records why no run has been scored against it, so that a later session
-does not re-derive the same findings. It was corrected on 2026-09-17: the
-count prerequisite 2 reports was measured rather than asserted, and the
-measurement refuted what this subsection previously recorded as the cause.
+does not re-derive the same findings. It was corrected on 2026-09-17, when the
+count prerequisite 2 reports was measured rather than asserted, and again on
+2026-09-18, when a re-measurement against `f7f8748c` corrected that count
+itself and moved the operative blocker onto the subject's parameter shape.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
@@ -780,34 +781,48 @@ the sweep and the per-record shapes — and the third is independent of both:
    per-record one the boundary already admitted; what still refuses a scored
    run is prerequisites 2 and 3, not the bridge.
 2. **Either reading needs an admissible subject to exist at all**, and none
-   does — but not for the reason this subsection recorded before 2026-09-17,
-   which measurement has refuted. Reported as counts, so that nothing about
-   the proprietary codebase is published beyond them
-   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6). Of the **133** module-level fully annotated
-   functions the pre-registered denominator enumerates, **101** pass
-   [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1's export test, **23** of those also have a signature
-   the current `ext` boundary admits, and **3** of those 23 compile
-   byte-identically under `pycc build --ext` and export one callable each
-   (verified by importing the built artifact, not inferred from the build's
-   exit status). The remaining 20 fail *compilation*, on ordinary capability
-   gaps rather than on anything specific to this protocol: keyword call
-   arguments (7), an undefined name or function (5), a method call on a
-   non-instance (2), a two-argument-only builtin form (2), and one each of
-   tuple-target assignment, f-string format spec, f-string conversion flag,
-   and an unsupported boolean-expression kind.
+   does. Reported as counts, so that nothing about the proprietary codebase is
+   published beyond them ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6). Of the **133** module-level fully
+   annotated functions the pre-registered denominator enumerates, **101** pass
+   [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1's export test, **23** of those also have a signature the current
+   `ext` boundary admits, and **0** of those 23 compile and export under `pycc
+   build --ext` (verified by importing the built artifact, not inferred from the
+   build's exit status).
 
-   So the export test is *not* what fails, and the earlier claim that "the
-   candidate functions are not visible where rule 1 looks" was wrong. What
-   fails is the **Subject** bullet's other half: all 3 that compile take a
-   `str` or no argument, run to at most 11 lines, and contain zero loops and
-   zero calls. None of them can consume the committed input — 2,000,000
-   `float` triangles — and a function with no computation cannot produce a
-   ratio of medians that measures anything. Timing one of them would be the
-   post-hoc subject substitution the **Input** bullet exists to forbid, and
-   an exported `str` parameter leaks one object per call
-   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)'s 2026-09-13 amendment), so a long timed loop would be
-   corrupted as well as meaningless. The conclusion "no admissible subject"
-   therefore stands; its stated cause is corrected here.
+   This corrects the figure recorded on 2026-09-17, which read **3**. The drop
+   is not a regression: pycc rebuilt at `16cc340b` — the last commit before
+   #1116/#1121/#1054/#1125 — rejects those same three subjects with the same
+   diagnostic counts as `f7f8748c` does, and `921c548a` (project imports
+   resolved across files) landed 2026-09-03, two weeks before that triage. The
+   earlier count came from compiling subjects in extracted or isolated form
+   rather than through their containing module.
+
+   Two further corrections follow from the re-measurement. First, the failures
+   are overwhelmingly **not in the subjects**: 22 of the 23 have zero
+   diagnostics in their own line range, and the dominant families are
+   dependency-level import gaps (`C0001` import of module, `C0002` no
+   importable symbol). Second, that histogram measures **what pycc reports
+   first**, not the full set of capability gaps — `54738cca` emits one
+   diagnostic per top-level item and aborts before lowering a body whose
+   transitive dependency already failed, so the depth behind the first wall is
+   unmeasured and the family list must not be read as a queue with an end. The
+   full inventory, with templated messages, synthetic reproducers and the
+   tracker mapping, is published on
+   [#1039](https://github.com/rotnov/pycc/issues/1039#issuecomment-5724843390).
+
+   What fails the **Subject** bullet's other half is now measured directly, and
+   it is independent of compilation: across all 23 admissible subjects the
+   parameters are drawn only from `str` and `int` or absent entirely, with
+   **zero `memoryview` and zero `tuple` parameters**, and the only three that
+   contain loops take **zero parameters**. No admissible subject can consume the
+   committed input — 2,000,000 `float` triangles — whatever the compiler learns
+   next. Timing one of the parameterless or `str`-taking functions would be the
+   post-hoc subject substitution the **Input** bullet exists to forbid, and an
+   exported `str` parameter leaks one object per call ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)'s 2026-09-13
+   amendment), so a long timed loop would be corrupted as well as meaningless.
+   The conclusion "no admissible subject" therefore stands, and prerequisite 1's
+   carrier being met makes the asymmetry sharper: pycc has the buffer-parameter
+   shape, and the workload has no function that uses it.
 
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
@@ -837,9 +852,11 @@ equally mean revising what the protocol takes as its subject — and a subject
 revised now, with the 3.41x figure from #1114 already in hand, decides the
 bet instead of measuring it. That is left open here rather than settled, but
 it must be settled before #1039 can resume — and landing #1027 alone does
-not settle it. The 20 compilation diagnostics are the actionable residue:
-they are ordinary capability gaps, sized here for the first time with a real
-numerator against a real codebase.
+not settle it. The compilation diagnostics are the actionable residue: they
+are ordinary capability gaps, dominated by dependency-level import families and
+tracked chiefly by [#882](https://github.com/rotnov/pycc/issues/882), sized
+against a real codebase — but read them with prerequisite 2's cascade-suppression
+caveat, which is why their count is not a remaining total.
 
 The protocol's **Input** bullet forbids choosing a different workload after
 meeting any of these obstacles, so the committed generator, seed and digest
