@@ -295,8 +295,7 @@ fn a_shadowed_spelling_is_named_by_whichever_binding_actually_wins() {
 /// refused. That is four assertions where there used to be two nouns.
 #[test]
 fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
-    const CLASS: &str =
-        "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\n    def m(self) -> int:\n        return self.v\n\n";
+    const CLASS: &str = "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\n    def m(self) -> int:\n        return self.v\n\n";
 
     // `memoryview`: the keyword wins, so the parameter is the carrier.
     let dir = fixture(
@@ -342,9 +341,7 @@ fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
     // is refused because `C` does not support indexing.
     let dir = fixture(
         "1130_subscript_class_alias_ndarray_control",
-        &format!(
-            "{CLASS}type ndarray = C\n\ndef f(a: ndarray[int]) -> float:\n    return a[0]\n"
-        ),
+        &format!("{CLASS}type ndarray = C\n\ndef f(a: ndarray[int]) -> float:\n    return a[0]\n"),
     );
     let out = pycc()
         .arg("check")

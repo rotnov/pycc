@@ -335,7 +335,9 @@ fn a_subscripted_annotation_may_now_appear_on_the_right_of_a_type_alias() {
     );
     assert_accepts(
         "1130_alias_rhs_resubscripted",
-        &format!("{NOMINAL}\ntype A = NDArray[int]\n\n\ndef g(y: A[str]) -> int:\n    return y.m()\n"),
+        &format!(
+            "{NOMINAL}\ntype A = NDArray[int]\n\n\ndef g(y: A[str]) -> int:\n    return y.m()\n"
+        ),
     );
 }
 
@@ -394,7 +396,10 @@ fn a_body_error_under_a_newly_accepted_parameter_is_the_reported_one() {
         "class NDArray:\n    pass\n\n\ndef f(a: NDArray[int]) -> int:\n    return undefined_name\n",
         "T0021",
     );
-    assert!(text.contains("name `undefined_name` is not defined"), "{text}");
+    assert!(
+        text.contains("name `undefined_name` is not defined"),
+        "{text}"
+    );
     assert!(!text.contains("T0044"), "{text}");
 }
 
