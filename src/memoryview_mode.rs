@@ -197,10 +197,11 @@ fn declares_member(
 /// Names the first part of a signature that mentions the buffer type, in
 /// its canonical spelling, or `None` when it mentions it nowhere.
 ///
-/// The rendered spelling is `memoryview` whichever of the two source
-/// spellings the user wrote (#1129 admits `ndarray` as the second), for
-/// the reason `Ty::MemoryView`'s own documentation gives: one type, one
-/// canonical name, exactly as for an alias of it.
+/// The rendered spelling is `memoryview` whichever of the three source
+/// spellings the user wrote (#1129 admits `ndarray` as the second, #1134
+/// `NDArray` as the third), for the reason `Ty::MemoryView`'s own
+/// documentation gives: one type, one canonical name, exactly as for an
+/// alias of it.
 ///
 /// Both positions are checked, and only `Ty::MemoryView` itself matches,
 /// with no recursion into a container's elements. A parameterized container

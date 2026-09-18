@@ -669,8 +669,9 @@ typedef struct {
 } PyccExtBufferView;
 
 /*
- * Unpacks one argument at a buffer parameter -- spelled `memoryview` or
- * `ndarray` in the source, one pycc type either way. Returns 0 with `*out`
+ * Unpacks one argument at a buffer parameter -- spelled `memoryview`,
+ * `ndarray` or `NDArray` in the source, one pycc type whichever was
+ * written. Returns 0 with `*out`
  * holding an acquired buffer the caller must release, or -1 with a CPython
  * exception set and nothing acquired.
  *

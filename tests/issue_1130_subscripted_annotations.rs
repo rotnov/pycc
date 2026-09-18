@@ -277,11 +277,11 @@ fn level_4_the_carrier_spellings_flip_the_other_way_in_the_same_ladder() {
         "C0001",
     );
     assert!(bare.contains("bound to a buffer parameter"), "{bare}");
-    // `ndarray`, one of the carrier's two sibling spellings (#1129 and
+    // `ndarray`, one of the carrier's sibling spellings (#1129, joined by
     // #1134's `NDArray`), is an ordinary identifier resolved *after* the
-    // class table, so the same shape flips
-    // reject -> accept resolving to the user's own class instead. `a.m()`
-    // type-checking is what proves which of the two won.
+    // class table, so the same shape flips reject -> accept, resolving to
+    // the user's own class instead. `a.m()` type-checking is what proves
+    // the class won rather than the carrier.
     assert_accepts(
         "1130_level4_ndarray_shadow_use",
         "class ndarray:\n    def m(self) -> int:\n        return 1\n\n\ndef f(a: ndarray[float]) -> int:\n    return a.m()\n",
