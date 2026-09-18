@@ -33,6 +33,43 @@ never a merge gate.
 
 ---
 
+## 2026-09-18 — `cargo llvm-cov` reported a coverage verdict against a stale, partial export
+
+**What happened.** Four consecutive attempts to produce a local diff-coverage
+verdict on one branch failed or, worse, produced a confident wrong number.
+The first run exited 0 but wrote no lcov at all, and the gate only surfaced
+that as `[Errno 2] No such file or directory`. Adding `--no-fail-fast` changed
+nothing. Falling back to `cargo llvm-cov report --lcov` did write a file — a
+*partial* one, covering 16 files from a single crate — and the gate scored the
+diff against it and reported a plausible-looking shortfall for a file that was
+in fact fully covered. A fourth invocation died in under a second on an
+argument-conflict error, left the previous run's lcov untouched on disk, and
+the gate re-scored that stale file and printed byte-identical output to the
+run before it.
+
+**Root cause.** `cargo llvm-cov` does not write its report when the test run
+exits non-zero, and this host has a pre-existing unrelated test failure, so
+every plain invocation refused to export. `--ignore-run-fail` is the flag that
+forces the export, and it is mutually exclusive with `--no-fail-fast`. The
+`report` subcommand after a failed run exports only what happened to be
+profiled. None of this is visible in the exit status the shell echoes — only
+in the tool's own first line of output and in the artifact itself.
+
+**What fixed it.** Delete the stale lcov first, then run a single
+`cargo llvm-cov --workspace --ignore-run-fail --lcov --output-path <path>`,
+then confirm the artifact before reading the gate: `grep -c "^SF:"` against the
+lcov, and the workspace line total the gate prints. With 97 `SF:` records
+instead of 16, the same diff scored 100%.
+
+**Lesson.** A coverage verdict has two independent preconditions, and the exit
+status proves neither: the command must have actually run, and the artifact it
+scored must be the one this run produced. Before accepting any coverage
+number, read the tool's own log for an argument or refusal error, and count the
+`SF:` records in the lcov against the workspace's real file count. A gate that
+re-scores an untouched file from a previous attempt produces identical output
+to a genuine run, so identical output across attempts is evidence of a stale
+artifact, not of a stable result.
+
 ## 2026-09-17 — Two writers in one worktree, because a resumed agent was treated as finished
 
 **What happened.** A dispatched implementation agent was resumed to fix one
