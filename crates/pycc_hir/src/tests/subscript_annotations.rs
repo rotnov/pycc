@@ -1,14 +1,13 @@
-//! Unit tests for subscripted type annotations (`Base[...]`): the PEP 560
-//! `__class_getitem__` gate (#611) and hook return type (#693), `type` alias
-//! transparency, and #931's rejection of a subscript on a base that is not a
-//! class -- a PEP 695 type parameter, a builtin scalar, `Self`, or a
-//! non-class alias.
+//! Unit tests for subscripted type annotations (`Base[...]`): acceptance
+//! when the base names a type (#1130), the PEP 560 `__class_getitem__` hook
+//! return type (#693), `type` alias transparency, and #931's rejection of a
+//! subscript on a base that is not a nameable type -- a PEP 695 type
+//! parameter, a builtin scalar, `Self`, or a non-class alias.
 //!
 //! Extracted from `tests.rs` (#663) when #931 touched the block; the
-//! `class_with_hook`/`assert_type_error_message`/`annassign_ty` helpers and
-//! every caller moved together. `assert_capability_error_message` stays in
-//! the parent and is reached through `use super::*`.
-
+//! `class_with_hook`/`annassign_ty` helpers and every caller moved together.
+//! `assert_capability_error_message` stays in the parent and is reached
+//! through `use super::*`.
 use super::*;
 use crate::func::subscripted_base_description;
 
@@ -26,15 +25,6 @@ fn class_with_hook(decorator: &str) -> String {
     format!(
         "class C:\n    {decorator}\n    def __class_getitem__({cls_param}key: int) -> int:\n        return key\n\n    def __init__(self) -> None:\n        self.x = 1\n"
     )
-}
-
-fn assert_type_error_message(source: &str, expected_message: &str) {
-    let module = pycc_parser_test_helper::parse(source);
-    let diagnostic = lower_checked(&module).unwrap_err();
-
-    assert_eq!(diagnostic.code, "T0044");
-    assert!(diagnostic.message.contains(expected_message));
-    assert!(diagnostic.span.is_some());
 }
 
 #[test]
@@ -78,27 +68,45 @@ fn a_subscripted_annotation_on_a_generic_class_is_accepted() {
 }
 
 #[test]
-fn a_subscripted_annotation_on_a_class_without_the_hook_is_rejected() {
-    // #611: this is the over-acceptance the issue exists to close --
-    // `D[int]` was accepted for any known class name. CPython raises
-    // `TypeError: type 'D' is not subscriptable`, so this reuses the
-    // `T0044` the value-position path (#610) already reports.
-    assert_type_error_message(
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\nv: D[int] = D()\n",
-        "class `D` does not define `__class_getitem__`",
+fn a_subscripted_annotation_on_a_class_without_the_hook_is_accepted_with_the_argument_erased() {
+    // #1130 reverses #611's annotation-position gate: the same program the
+    // gate used to reject now lowers, resolving to `Ty::Instance(D)` with
+    // `[int]` erased and never lowered. CPython 3.14 evaluates annotations
+    // lazily (PEP 649/749), so no `TypeError` is raised at definition time
+    // and pycc builds no runtime `__annotations__` object through which one
+    // could surface; the value-position path (#610) keeps its own `T0044`
+    // and that asymmetry is CPython's own.
+    assert_eq!(
+        annassign_ty(
+            "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\nv: D[int] = D()\n"
+        ),
+        Ty::Instance(Box::new("D".to_string()))
     );
 }
 
 #[test]
-fn a_subscripted_annotation_inside_the_class_s_own_body_is_gated_too() {
-    // #611: the class being lowered is not yet in the already-defined
-    // class table, so `lower_class` adds an entry for it explicitly.
-    // Without that, a self-referential `D[int]` would slip past the gate
-    // that every other class name goes through.
-    assert_type_error_message(
+fn a_subscripted_annotation_inside_the_class_s_own_body_resolves_to_the_enclosing_class() {
+    // The self-referential `ClassAnnotationInfo` entry `lower_class` pushes
+    // is what makes the class's own name resolve inside its own body. #1130
+    // removed the subscriptability gate that entry used to feed, so the
+    // shape it now guards is the `class_name` carve-out in the subscript
+    // arm's direct `class_defs` lookup: `D[int]` inside `D`'s body is the
+    // class, with the argument erased.
+    let module = pycc_parser_test_helper::parse(
         "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\n    def me(self) -> D[int]:\n        return self\n",
-        "class `D` does not define `__class_getitem__`",
     );
+    let hir = lower_checked(&module).expect("a self-referential subscript must lower");
+    let return_ty = hir
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Function {
+                name, return_ty, ..
+            } if name == "D.me" => Some(return_ty.clone()),
+            _ => None,
+        })
+        .expect("expected `D.me` to lower to an `HirItem::Function`");
+    assert_eq!(return_ty, Ty::Instance(Box::new("D".to_string())));
 }
 
 #[test]
@@ -113,15 +121,19 @@ fn a_subscripted_annotation_inside_a_hooked_class_s_own_body_is_accepted() {
 }
 
 #[test]
-fn an_undecorated_class_getitem_does_not_make_a_class_subscriptable() {
+fn an_undecorated_class_getitem_does_not_route_the_annotation_through_its_return_type() {
     // pycc's value-position dispatch resolves `__class_getitem__` only
-    // through the static-method and class-method tables (#610), so a
-    // plain `def __class_getitem__(self)` is an ordinary method and does
-    // not make the class subscriptable. The annotation gate agrees,
-    // which is what keeps the two positions from disagreeing.
-    assert_type_error_message(
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\n    def __class_getitem__(self) -> int:\n        return 1\n\nv: D[int] = D()\n",
-        "class `D` does not define `__class_getitem__`",
+    // through the static-method and class-method tables (#610), so a plain
+    // `def __class_getitem__(self)` is an ordinary method and not a PEP 560
+    // hook. Since #1130 that no longer decides whether the annotation is
+    // *accepted* -- it decides what it resolves to. An undecorated method
+    // leaves `class_getitem_return` `None`, so `D[int]` falls through to the
+    // bare-name recursion and is the class itself, not the method's `-> int`.
+    assert_eq!(
+        annassign_ty(
+            "class D:\n    def __init__(self) -> None:\n        self.x = 1\n\n    def __class_getitem__(self) -> int:\n        return 1\n\nv: D[int] = D()\n"
+        ),
+        Ty::Instance(Box::new("D".to_string()))
     );
 }
 
@@ -545,33 +557,25 @@ fn an_alias_to_a_class_is_transparent_in_a_subscript() {
         ),
         Ty::Instance(Box::new("G".to_string()))
     );
-    // ...and a protocol or a plain non-subscriptable class to the
-    // class-flavored T0044, whose first clause names the class and whose
-    // trailing clause spells the written base.
-    for (source, class, base) in [
-        (
-            "from typing import Protocol\n\nclass P(Protocol):\n    def m(self) -> int: ...\n\ntype A = P\n\ndef f(x: A[int]) -> int:\n    return 1\n",
-            "P",
-            "A",
+    // ...and, since #1130, a protocol or a plain hook-less class to that
+    // class's own nominal type rather than to a `T0044`. The alias is still
+    // transparent: what the subscript resolves to is named after the alias
+    // *target*, never after the written base. The third row keeps the
+    // #918 precedence point -- `type list = C` beats the builtin container,
+    // so `list[int]` is `C` and not `Ty::List(Int)`.
+    assert_eq!(
+        param_ty(
+            "from typing import Protocol\n\nclass P(Protocol):\n    def m(self) -> int: ...\n\ntype A = P\n\ndef f(x: A[int]) -> int:\n    return 1\n"
         ),
-        (
-            "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\ntype A = C\nx: A[int] = C()\n",
-            "C",
-            "A",
-        ),
-        (
-            "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\ntype list = C\nx: list[int] = C()\n",
-            "C",
-            "list",
-        ),
+        Ty::Protocol(Box::new("P".to_string()))
+    );
+    for source in [
+        "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\ntype A = C\nx: A[int] = C()\n",
+        "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\ntype list = C\nx: list[int] = C()\n",
     ] {
-        let diagnostic = first_error(source);
-        assert_eq!(diagnostic.code, "T0044", "{source:?}");
         assert_eq!(
-            diagnostic.message,
-            format!(
-                "class `{class}` does not define `__class_getitem__`, so `{base}[...]` is not a valid type annotation"
-            ),
+            annassign_ty(source),
+            Ty::Instance(Box::new("C".to_string())),
             "{source:?}"
         );
     }
@@ -586,10 +590,15 @@ fn the_pre_931_subscript_outcomes_that_must_not_change_are_pinned() {
         ),
         Ty::Instance(Box::new("G".to_string()))
     );
-    // A known non-subscriptable class keeps the class-flavored message.
-    assert_type_error_message(
-        "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\nx: C[int] = C()\n",
-        "class `C` does not define `__class_getitem__`, so `C[...]` is not a valid type annotation",
+    // A known hook-less class is the one row #1130 deliberately moves: it
+    // used to carry the class-flavored `T0044` and is now the class itself.
+    // Every other row below is untouched, which is what makes this table the
+    // guard that #931 is not being reverted wholesale.
+    assert_eq!(
+        annassign_ty(
+            "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\nx: C[int] = C()\n"
+        ),
+        Ty::Instance(Box::new("C".to_string()))
     );
     // An undefined base keeps the exact C0001 `module::cascade_name` parses
     // back (D-219).

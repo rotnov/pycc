@@ -1089,11 +1089,6 @@ fn c0001_protocol_self_return() {
     assert_diagnostic_matches_fixture("c0001_protocol_self_return");
 }
 
-#[test]
-fn t0044_user_class_named_list_subscript() {
-    assert_diagnostic_matches_fixture("t0044_user_class_named_list_subscript");
-}
-
 // #931: a subscript on a base that is not a class -- a PEP 695 type
 // parameter, a builtin scalar, `Self`, or a non-class `type` alias -- is
 // rejected with the same `T0044` instead of silently discarding the type

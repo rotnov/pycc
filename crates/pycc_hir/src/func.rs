@@ -333,7 +333,10 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
 /// helper. `ndarray` is deliberately absent too -- it is an ordinary
 /// identifier resolved *after* both tables (D-244 statement (h)).
 fn name_resolves_before_class_defs(base: &str) -> bool {
-    matches!(base, "int" | "float" | "bool" | "str" | "Any" | "memoryview")
+    matches!(
+        base,
+        "int" | "float" | "bool" | "str" | "Any" | "memoryview"
+    )
 }
 
 /// The noun for [`annotation_to_ty`]'s non-class `T0044` (#931): what the
