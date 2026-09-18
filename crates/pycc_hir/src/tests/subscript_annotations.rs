@@ -29,10 +29,12 @@ fn class_with_hook(decorator: &str) -> String {
 
 #[test]
 fn a_subscripted_annotation_on_a_class_defining_the_hook_is_accepted() {
-    // #611: `C[int]` in annotation position is legal exactly when `C` is
-    // subscriptable. Both spellings CPython accepts for the hook -- the
-    // explicit `@staticmethod` and the `@classmethod` one -- are checked,
-    // mirroring `pycc_types`' own value-position dispatch (#610).
+    // A hook-bearing class stays accepted after #1130 removed the gate
+    // #611 put here -- the hook is now irrelevant to *whether* `C[int]` is
+    // accepted and matters only to what it resolves to (#693, below). Both
+    // spellings CPython accepts for the hook -- the explicit
+    // `@staticmethod` and the `@classmethod` one -- are checked, mirroring
+    // `pycc_types`' own value-position dispatch (#610), which still gates.
     for decorator in ["@staticmethod", "@classmethod"] {
         let src = format!("{}\nv: C[int] = C()\n", class_with_hook(decorator));
         let module = pycc_parser_test_helper::parse(&src);
@@ -45,8 +47,11 @@ fn a_subscripted_annotation_on_a_class_defining_the_hook_is_accepted() {
 
 #[test]
 fn a_subscripted_annotation_on_a_class_inheriting_the_hook_is_accepted() {
-    // #611: the gate walks the MRO, so a hook declared on a base class
-    // makes the derived class subscriptable too.
+    // A hook declared on a base class is reached through the MRO. After
+    // #1130 that no longer decides acceptance -- `D[int]` would be accepted
+    // with no hook anywhere -- but it still decides the resolved type, so
+    // the MRO walk is pinned here and its result in
+    // `an_annotation_subscript_on_an_inherited_hook_resolves_through_the_mro`.
     let src = format!(
         "{}\nclass D(C):\n    def value(self) -> int:\n        return self.x\n\nv: D[int] = D()\n",
         class_with_hook("@staticmethod")
@@ -57,10 +62,11 @@ fn a_subscripted_annotation_on_a_class_inheriting_the_hook_is_accepted() {
 
 #[test]
 fn a_subscripted_annotation_on_a_generic_class_is_accepted() {
-    // #611: a PEP 695 generic class (`class G[T]:`) declares no
+    // A PEP 695 generic class (`class G[T]:`) declares no
     // `__class_getitem__` of its own -- CPython gives it one implicitly
-    // through `Generic`. `G[int]` in an annotation lowers successfully
-    // today, and the gate must not regress that.
+    // through `Generic`. `G[int]` in an annotation lowered successfully
+    // under #611's gate and must keep doing so now that #1130 has removed
+    // it; nothing about the generic shape is special any more.
     let module = pycc_parser_test_helper::parse(
         "class G[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\nv: G[int] = G[int](1)\n",
     );
@@ -184,9 +190,8 @@ fn an_annotation_subscript_on_an_inherited_hook_resolves_through_the_mro() {
     // Issue #693: `D` defines no `__class_getitem__` of its own but
     // inherits `C`'s through the MRO -- the same inheritance
     // `a_subscripted_annotation_on_a_class_inheriting_the_hook_is_accepted`
-    // already proves is *subscriptable*; this proves the *resolved type*
-    // also correctly follows the MRO to `C`'s hook, not just the
-    // subscriptability bit.
+    // already exercises; this proves the *resolved type* follows the MRO to
+    // `C`'s hook. Since #1130 that is the only thing the MRO walk decides.
     let src = format!(
         "{}\nclass D(C):\n    def value(self) -> int:\n        return self.x\n\nv: D[3] = 1\n",
         class_with_hook("@staticmethod")
@@ -234,9 +239,9 @@ v: D[3] = 1
 
 #[test]
 fn a_generic_class_s_annotation_subscript_is_unaffected_by_the_hook_return_type_field() {
-    // Issue #693: a PEP 695 generic class (`class G[T]:`) is subscriptable
-    // through `Generic`, not through an explicit `__class_getitem__` hook,
-    // so `class_getitem_return` must stay `None` for it and `G[int]` must
+    // Issue #693: a PEP 695 generic class (`class G[T]:`) gets its
+    // subscript from `Generic`, not from an explicit `__class_getitem__`
+    // hook, so `class_getitem_return` must stay `None` for it and `G[int]` must
     // keep resolving to `Ty::Instance(G)` -- the `GenericClassInstantiate`
     // mechanism, not this issue's field, owns actual generic instantiation.
     // Guards against a regression where `type_param.is_some()` alone would
