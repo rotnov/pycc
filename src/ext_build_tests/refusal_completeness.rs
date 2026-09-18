@@ -63,8 +63,8 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
         // One arm, exactly like a scalar's, but the helper is fixed rather
         // than carried: `BoundaryCarrier::Buffer` names no suffix, because
         // a `memoryview` has no packer and so no symmetric `pycc_ext_*`
-        // pair to name. The four run-time checks the helper applies (exact
-        // `memoryview`, C-contiguous, `ndim == 1`, format `"d"`) are all
+        // pair to name. The four run-time checks the helper applies
+        // (exports a buffer, C-contiguous, `ndim == 1`, format `"d"`) are all
         // inside it, so this one arm is the whole refusal at this slot.
         BoundaryCarrier::Buffer => vec![format!(
             "if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, &b{index}) != 0) {{"

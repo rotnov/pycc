@@ -669,31 +669,49 @@ typedef struct {
 } PyccExtBufferView;
 
 /*
- * Unpacks one argument at a `memoryview` parameter. Returns 0 with `*out`
+ * Unpacks one argument at a buffer parameter -- spelled `memoryview` or
+ * `ndarray` in the source, one pycc type either way. Returns 0 with `*out`
  * holding an acquired buffer the caller must release, or -1 with a CPython
  * exception set and nothing acquired.
  *
  * Four refusals, in this order, and the order is the contract:
  *
- * 1. Not an exact `memoryview` -- a pycc-authored `TypeError`, nothing
- *    acquired. `PyMemoryView_Check` and not `PyObject_CheckBuffer`: D-244
- *    rule 7 defers to `docs/TYPE_SYSTEM.md` rule 4 (D-086), so `bytes`, an
- *    `array.array` and a NumPy array are all refused here even though each
- *    exports a buffer. Admitting them later is a widening, which is always
- *    available; starting wide and narrowing would not be.
- * 2. `PyObject_GetBuffer` fails -- CPython's own exception is propagated
- *    verbatim (in practice `BufferError: memoryview: underlying buffer is
- *    not C-contiguous`), because it says more about the operand than a
- *    translated message could, and nothing is acquired when it fails.
+ * 1. The object exports no buffer at all -- a pycc-authored `TypeError`,
+ *    nothing acquired. `PyObject_CheckBuffer` and not `PyMemoryView_Check`:
+ *    #1129 cashed in the widening D-244's Part-1-of-#1027 amendment
+ *    statement (a) pre-authorized, so `bytes`, a `bytearray`, an
+ *    `array.array` and a bare NumPy array now all pass *this* arm on the
+ *    strength of exporting a buffer, and are answered -- or accepted -- by
+ *    arms 2-4 on the properties of the buffer they export. This is what
+ *    lets a host hand a compiled export a bare `ndarray` without wrapping
+ *    it in `memoryview(...)` first, and it widens the `memoryview`
+ *    annotation by exactly the same set: the two spellings lower to one
+ *    pycc type and reach this helper identically.
+ * 2. `PyObject_GetBuffer` fails -- the exporter's own exception is
+ *    propagated verbatim, because it says more about the operand than a
+ *    translated message could, and nothing is acquired when it fails. The
+ *    *type* is the exporter's choice and not fixed: a strided `memoryview`
+ *    raises CPython's `BufferError: memoryview: underlying buffer is not
+ *    C-contiguous`, while a strided NumPy array raises numpy's own
+ *    `ValueError: ndarray is not C-contiguous` for the same condition
+ *    (D-244's #1129 amendment statement (g)).
  * 3. `ndim != 1` -- released first, then a pycc-authored `TypeError`.
  *    Part 1 admits one dimension only.
  * 4. The element format is not `"d"` -- released first, then a
  *    pycc-authored `TypeError` naming the format seen and the one required.
- *    This is the arm an exact but wrongly-typed `memoryview` takes, e.g.
- *    `memoryview(b"abc")`, whose format is `'B'`. `itemsize` is checked
+ *    This is the arm a buffer of the wrong element type takes, e.g. a
+ *    `bytes` or `memoryview(b"abc")`, whose format is `'B'`, or a float32
+ *    NumPy array, whose format is `'f'`. `itemsize` is checked
  *    alongside the format string rather than instead of it: the format is
  *    the exporter's own claim, and the size is the arithmetic the compiled
  *    code would do.
+ *
+ * Arms 3 and 4 say "a buffer", not "a memoryview". Arm 1's widening is
+ * what makes that accurate rather than cosmetic: the operand that reaches
+ * them is any conforming exporter, and a `bytes` or a bare NumPy array is
+ * not a `memoryview` by any reading (D-244's #1129 amendment statement
+ * (f)). Arm 2 needs no such wording -- it propagates the exporter's own
+ * exception and authors no text at all.
  *
  * `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` is the request. C-contiguity is what
  * makes a plain pointer walk correct at all, and it implies `PyBUF_STRIDES`
@@ -712,13 +730,13 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
     const char *declared;
     int ndim;
 
-    if (!PyMemoryView_Check(obj)) {
+    if (!PyObject_CheckBuffer(obj)) {
         type_name = PyType_GetName(Py_TYPE(obj));
         if (type_name == NULL) {
-            PyErr_SetString(PyExc_TypeError, "object cannot be interpreted as a memoryview");
+            PyErr_SetString(PyExc_TypeError, "object does not export a buffer");
         } else {
             PyErr_Format(PyExc_TypeError,
-                         "%s() argument %zd: '%U' object cannot be interpreted as a memoryview",
+                         "%s() argument %zd: '%U' object does not export a buffer",
                          fn_name, index + 1, type_name);
             Py_DECREF(type_name);
         }
@@ -731,8 +749,8 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
     if (ndim != 1) {
         PyBuffer_Release(out);
         PyErr_Format(PyExc_TypeError,
-                     "%s() argument %zd: a memoryview with ndim %d is not supported yet -- "
-                     "only a one-dimensional memoryview is",
+                     "%s() argument %zd: a buffer with ndim %d is not supported yet -- "
+                     "only a one-dimensional buffer is",
                      fn_name, index + 1, ndim);
         return -1;
     }
@@ -746,13 +764,13 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
      * release moved after it: `PyErr_Format` copies the characters it reads
      * as it formats, and it runs no interpreted code that could invalidate
      * the view in between, so the release below cannot leave the exception
-     * naming freed storage. The same reasoning already governs the
-     * non-`memoryview` arm's `%U` above.
+     * naming freed storage. The same reasoning already governs the `%U`
+     * of the arm above that #1129 widened to `PyObject_CheckBuffer`.
      */
     declared = (out->format == NULL) ? "" : out->format;
     if (strcmp(declared, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {
         PyErr_Format(PyExc_TypeError,
-                     "%s() argument %zd: a memoryview of format '%s' is not supported -- "
+                     "%s() argument %zd: a buffer of format '%s' is not supported -- "
                      "only format 'd' (a contiguous float64 buffer) is",
                      fn_name, index + 1, declared);
         PyBuffer_Release(out);

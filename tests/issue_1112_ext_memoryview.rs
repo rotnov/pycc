@@ -232,10 +232,11 @@ def total() -> int:
     let err = stderr_of(&ext);
     assert!(!err.contains("panicked"), "{err}");
     assert!(err.contains("error[C0001]"), "{err}");
-    assert!(
-        err.contains("`_make`'s return type `-> memoryview`"),
-        "{err}"
-    );
+    // Spelling-neutral since #1129: this site names the *type*, and the
+    // same message answers a `-> ndarray` return, so it says "a buffer"
+    // rather than either spelling. `C0003` above still quotes the whole
+    // signature position back, which is why it still reads `-> memoryview`.
+    assert!(err.contains("`_make`'s return type is a buffer"), "{err}");
 
     let native = pycc()
         .arg("build")
@@ -275,7 +276,7 @@ fn every_non_signature_memoryview_position_is_refused() {
 def f() -> int:
     return 1
 ",
-            "declaring `y: memoryview`",
+            "declaring `y` as a buffer",
         ),
         (
             "1112_decl_local",
@@ -283,7 +284,7 @@ def f() -> int:
     x: memoryview
     return 1
 ",
-            "declaring `x: memoryview`",
+            "declaring `x` as a buffer",
         ),
         (
             "1112_protocol_attr",
@@ -297,7 +298,7 @@ class P(Protocol):
 def f() -> int:
     return 1
 ",
-            "protocol attribute `P.x` has type `memoryview`",
+            "protocol attribute `P.x` has a buffer type",
         ),
         (
             "1112_class_attr",
@@ -436,7 +437,7 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
         let err = stderr_of(&build);
         assert!(err.contains("error[C0001]"), "{name}: {err}");
         assert!(
-            err.contains("using `v`, which is bound to a `memoryview`"),
+            err.contains("using `v`, which is bound to a buffer parameter"),
             "{name}: {err}"
         );
     }
@@ -574,7 +575,7 @@ fn a_protocol_method_s_memoryview_return_is_refused_in_both_modes() {
         let err = stderr_of(&build);
         assert!(err.contains("error[C0001]"), "{name}: {err}");
         assert!(
-            err.contains("protocol method `Source.make` returns `memoryview`"),
+            err.contains("protocol method `Source.make` returns a buffer"),
             "{name}: {err}"
         );
     }

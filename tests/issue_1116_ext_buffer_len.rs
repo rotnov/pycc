@@ -101,7 +101,7 @@ def total(b: memoryview) -> float:
     let err = stderr_of(&build);
     assert!(err.contains("error[C0001]"), "{err}");
     assert!(
-        err.contains("using `b`, which is bound to a `memoryview`"),
+        err.contains("using `b`, which is bound to a buffer parameter"),
         "{err}"
     );
     // The reworded gap names the sweep that does work, so a user who hits

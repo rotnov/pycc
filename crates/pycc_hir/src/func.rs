@@ -344,6 +344,7 @@ pub(crate) fn subscripted_base_description(
     base: &str,
     type_param: Option<&str>,
     class_name: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> String {
     if Some(base) == type_param {
         format!("type parameter `{base}`")
@@ -354,6 +355,20 @@ pub(crate) fn subscripted_base_description(
     } else {
         match base {
             "int" | "float" | "bool" | "str" => format!("builtin type `{base}`"),
+            // #1129: the buffer carrier's two spellings are neither builtin
+            // scalars nor aliases, so the catch-all noun below would call
+            // them something the program never wrote. The two spellings are
+            // guarded differently because the `Expr::Name` arm resolves them
+            // at different points: `memoryview` is a reserved keyword decided
+            // before `class_defs` and the alias table are consulted, exactly
+            // like the scalars above, so its noun is unconditional; `ndarray`
+            // is an ordinary identifier resolved only after both, so a
+            // program that binds it really does get the alias and must still
+            // read `type alias` here.
+            "memoryview" => format!("buffer type `{base}`"),
+            "ndarray" if !aliases.iter().any(|(alias_name, _)| alias_name == base) => {
+                format!("buffer type `{base}`")
+            }
             _ => format!("type alias `{base}`"),
         }
     }
@@ -714,29 +729,67 @@ pub(crate) fn annotation_to_ty(
                     }
                     return Ok(Ty::Instance(Box::new(other.to_string())));
                 }
-                aliases
+                if let Some(ty) = aliases
                     .iter()
                     .rev()
                     .find(|(alias_name, _)| alias_name == other)
                     .map(|(_, ty)| ty.clone())
-                    .ok_or_else(|| {
-                        // The message is built in `module` so #867's cascade
-                        // classifier can parse it back (D-219).
-                        //
-                        // A *bare* builtin container name (`list`, `dict`,
-                        // ...) is deliberately not special-cased here.
-                        // `annotation_to_ty` has no idea which annotation
-                        // position it is lowering, and the parameterized
-                        // form it would advise -- `list[int]` -- is rejected
-                        // in half the positions that reach this function. The
-                        // generic message is correct in all of them, so the
-                        // advice is opted into by the callers that can
-                        // honour it, through `with_bare_container_advice`.
-                        unsupported(
-                            crate::module::unknown_annotation_name_message(other),
-                            pycc_ast::expr_range(annotation),
-                        )
-                    })
+                {
+                    return Ok(ty);
+                }
+                // #1129: `ndarray` is a *second spelling* of the same pycc
+                // type, not a new one. Both mean "a one-dimensional,
+                // C-contiguous, format `'d'` buffer exporter", which is
+                // exactly what `pycc_ext_unpack_memoryview` enforces at the
+                // boundary, so the two spellings have no run-time observable
+                // difference and a distinct `Ty` variant would carry
+                // information no consumer could read. Diagnostics therefore
+                // render the canonical `memoryview` for either spelling,
+                // which is already what the alias table does for
+                // `type Arr = memoryview`.
+                //
+                // Recognized with **no import**, deliberately:
+                // `annotation_to_ty` receives `type_param`, `class_name`,
+                // `aliases` and `class_defs` and no import table at all, and
+                // `import numpy` is itself refused today (`I0403`), so
+                // requiring one would be new machinery gating a spelling on
+                // an import that cannot be written. `Any`, `Annotated`,
+                // `TypeAlias` and `Self` are all recognized on those terms.
+                //
+                // It is resolved *here* rather than beside `memoryview` in
+                // the keyword list above, and that placement is the rule
+                // rather than a detail: every name in that list is a Python
+                // builtin or a `typing` name, while `ndarray` is an ordinary
+                // identifier a program may bind itself. Reserving it ahead
+                // of `class_defs` and `aliases` would make a module-level
+                // `class ndarray` or `type ndarray = ...` mean something
+                // Python does not -- in Python a local definition shadows an
+                // imported name, not the other way round -- and measurably
+                // refused programs that compiled before the spelling
+                // existed. The user's own definition therefore wins, and the
+                // buffer carrier is what a name nothing else binds falls
+                // back to.
+                if other == "ndarray" {
+                    return Ok(Ty::MemoryView);
+                }
+                Err({
+                    // The message is built in `module` so #867's cascade
+                    // classifier can parse it back (D-219).
+                    //
+                    // A *bare* builtin container name (`list`, `dict`,
+                    // ...) is deliberately not special-cased here.
+                    // `annotation_to_ty` has no idea which annotation
+                    // position it is lowering, and the parameterized
+                    // form it would advise -- `list[int]` -- is rejected
+                    // in half the positions that reach this function. The
+                    // generic message is correct in all of them, so the
+                    // advice is opted into by the callers that can
+                    // honour it, through `with_bare_container_advice`.
+                    unsupported(
+                        crate::module::unknown_annotation_name_message(other),
+                        pycc_ast::expr_range(annotation),
+                    )
+                })
             }
         },
         // Issue #435 (Part D, __class_getitem__): `ClassName[type_arg]` as a
@@ -863,10 +916,22 @@ pub(crate) fn annotation_to_ty(
                     // that happens to share such a name must not win here
                     // either (`type int = C` + bare `x: int` is `Int`; `type
                     // Any = C` + `Any[str]` is `T0002`; both stay that way).
+                    //
+                    // #1129: `memoryview` is on that list for the same reason
+                    // -- it is a reserved keyword the `Expr::Name` arm answers
+                    // before either table, so `type memoryview = C` never
+                    // makes the name mean `C`, and `memoryview[...]` must not
+                    // be reported against `C` either. Its sibling spelling
+                    // `ndarray` is deliberately absent: that one is an
+                    // ordinary identifier resolved *after* both tables, so an
+                    // alias of that name genuinely does win here.
                     let name_resolves_before_aliases = Some(base) == type_param
                         || (base == "Self" && class_name.is_some())
                         || Some(base) == class_name
-                        || matches!(base, "int" | "float" | "bool" | "str" | "Any");
+                        || matches!(
+                            base,
+                            "int" | "float" | "bool" | "str" | "Any" | "memoryview"
+                        );
                     let alias_target = if name_resolves_before_aliases {
                         None
                     } else {
@@ -1029,7 +1094,7 @@ pub(crate) fn annotation_to_ty(
                         format!(
                             "{} is not subscriptable, so `{base}[...]` is not a valid type \
                              annotation",
-                            subscripted_base_description(base, type_param, class_name)
+                            subscripted_base_description(base, type_param, class_name, aliases)
                         ),
                         Span::new(range.start, range.end),
                     ))

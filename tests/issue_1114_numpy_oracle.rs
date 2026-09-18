@@ -9,15 +9,24 @@
 //! admitted slot as `memoryview(a.reshape(-1))` -- a zero-copy, 1-D,
 //! C-contiguous, format `'d'` view.
 //!
+//! #1129 widened the boundary's first refusal arm from `PyMemoryView_Check`
+//! to `PyObject_CheckBuffer`, so the same array now also reaches the slot
+//! **bare**, with no `memoryview(...)` around it. This file carries both
+//! halves of that: the bare array agrees with the view element for element
+//! in the oracle below, and the refusal arms it moved off are re-pinned
+//! where they land now.
+//!
 //! D-244 rule 7 closes the type boundary at the thunk export seam, so the
 //! interesting half is symmetric: the conforming view must agree with
 //! CPython element for element, and every *non*-conforming numpy argument
 //! must be refused by pycc's own authored text rather than read wrong.
 //!
-//! The subject takes the row count `n` as a parameter because `len(b)` is
-//! not yet a capability (#1116, a `C0001` gap). That is a consequence of
-//! the gap, not a requirement of the oracle: when #1116 lands, these
-//! functions keep compiling and this file needs no change.
+//! The subject takes the row count `n` as a parameter because `len(b)` was
+//! not a capability when this file was written (#1116, then a `C0001` gap).
+//! It has been one since #1116 landed, and the prediction this paragraph
+//! made held: these functions kept compiling and the file needed no change,
+//! so the parameter stays as the record of that rather than being rewritten
+//! now.
 //!
 //! The hosted arms below need numpy importable by the same interpreter
 //! that `pycc build --ext` links against. On CI that is supplied by the
@@ -161,6 +170,13 @@ fn the_numpy_oracle_type_checks() {
 /// The small `arange(27)` case is checked against literals as well, so a
 /// failure that moved *both* arms the same way is still caught.
 ///
+/// The bare-`ndarray` arm (#1129) is asserted against the *view* arm's own
+/// answers rather than printed: the interpreted arm cannot mirror it --
+/// interpreted `b[i]` over a bare array is ordinary numpy indexing and
+/// would agree for a reason that proves nothing about the boundary -- so
+/// what it states is the property this issue owns, that the two spellings
+/// of the same data reach the compiled loop identically.
+///
 /// Hosted, for the reason every `--ext` build-and-load test is: `--ext`
 /// requires a CPython 3.13+ with development headers, and CI's coverage
 /// interpreter is a different one.
@@ -187,7 +203,9 @@ fn a_compiled_numpy_buffer_loop_matches_cpython() {
          assert v.ndim == 1 and v.format == 'd', (v.ndim, v.format)\n\
          assert len(v) == n * 9, (len(v), n)\n\
          small = numpy.arange(27, dtype=numpy.float64).reshape(3, 9)\n\
-         sv = memoryview(small.reshape(-1))\n";
+         sv = memoryview(small.reshape(-1))\n\
+         bare = a.reshape(-1)\n\
+         assert type(bare).__name__ == 'ndarray', type(bare)\n";
 
     // `__file__` is the load-bearing guard: without it an import that
     // resolved to `buf_oracle.py` instead of the built artifact would
@@ -200,7 +218,9 @@ fn a_compiled_numpy_buffer_loop_matches_cpython() {
              import buf_oracle\n\
              assert not buf_oracle.__file__.endswith('.py'), buf_oracle.__file__\n\
              print(repr(buf_oracle.total9(v, n)), repr(buf_oracle.dot9(v, n)))\n\
-             print(repr(buf_oracle.total9(sv, 3)), repr(buf_oracle.dot9(sv, 3)))\n"
+             print(repr(buf_oracle.total9(sv, 3)), repr(buf_oracle.dot9(sv, 3)))\n\
+             assert buf_oracle.total9(bare, n) == buf_oracle.total9(v, n)\n\
+             assert buf_oracle.dot9(bare, n) == buf_oracle.dot9(v, n)\n"
         ),
     );
     assert!(compiled.status.success(), "{}", stderr_of(&compiled));
@@ -235,12 +255,21 @@ fn a_compiled_numpy_buffer_loop_matches_cpython() {
 /// The other half of D-244 rule 7: a numpy argument that is not the
 /// admitted carrier is refused at the thunk, in pycc's own words.
 ///
-/// Three of the four arms are pycc-authored `TypeError`s naming the
+/// Four of the six arms are pycc-authored `TypeError`s naming the
 /// function, the 1-based argument position, and what was wrong. The
-/// fourth is not pycc's to author: CPython itself refuses to build a
-/// `Py_buffer` over a strided view, so the `BufferError` it raises is
-/// propagated verbatim and only its type is asserted -- pinning wording
-/// this repository does not own would pin CPython's.
+/// remaining two are not pycc's to author: the exporter itself refuses to
+/// build a C-contiguous `Py_buffer` over a strided operand, and whatever
+/// it raises is propagated verbatim, so only the exception *type* is
+/// asserted -- pinning wording this repository does not own would pin the
+/// exporter's.
+///
+/// Since #1129 those two are not even one exception type. A strided
+/// `memoryview` gets CPython's `BufferError`; a strided bare `ndarray`
+/// gets numpy's own `ValueError`, because once the boundary admits any
+/// buffer exporter the refusal at that arm is the *exporter's* and its
+/// type is the exporter's choice (D-244's #1129 amendment statement (g)).
+/// Both are accepted here rather than one being pinned across numpy
+/// versions.
 ///
 /// The negative-index `IndexError` is deliberately *not* re-asserted
 /// here; `tests/issue_1113_ext_buffer_index.rs` owns it (D-108).
@@ -268,11 +297,15 @@ fn a_non_conforming_numpy_argument_is_refused_with_pycc_authored_text() {
          \x20   except BaseException as error:\n\
          \x20       return type(error).__name__, str(error)\n\
          \x20   raise AssertionError('the thunk accepted %r' % (type(arg),))\n\
-         # A bare ndarray is not a memoryview at all.\n\
+         # A bare two-dimensional ndarray. Before #1129 this was refused\n\
+         # by the first arm, for not being a `memoryview` at all; the\n\
+         # boundary now admits any buffer exporter, so the same array is\n\
+         # answered by the rank arm instead -- which is the proof that the\n\
+         # widening took effect, since only its *shape* is wrong now.\n\
          kind, text = refused(a)\n\
          assert kind == 'TypeError', (kind, text)\n\
          assert 'total9() argument 1' in text, text\n\
-         assert 'ndarray' in text, text\n\
+         assert 'ndim 2' in text, text\n\
          # A two-dimensional view of the same array.\n\
          kind, text = refused(memoryview(a))\n\
          assert kind == 'TypeError', (kind, text)\n\
@@ -286,6 +319,20 @@ fn a_non_conforming_numpy_argument_is_refused_with_pycc_authored_text() {
          # Not C-contiguous: CPython's own refusal, propagated verbatim.\n\
          kind, text = refused(memoryview(a.reshape(-1)[::2]))\n\
          assert kind == 'BufferError', (kind, text)\n\
+         # The same condition on a bare ndarray is numpy's refusal, and\n\
+         # numpy spells it `ValueError`. Both types are accepted: the arm\n\
+         # propagates whatever the exporter raised, and which exception\n\
+         # that is belongs to the exporter, not to this repository.\n\
+         kind, text = refused(a.reshape(-1)[::2])\n\
+         assert kind in ('BufferError', 'ValueError'), (kind, text)\n\
+         assert 'contiguous' in text, text\n\
+         # A list of the same floats exports no buffer at all, so it is\n\
+         # the one arm the widening did not move. (A numpy *scalar* would\n\
+         # not do: `numpy.float64` does export a buffer, of rank 0, and\n\
+         # lands on the rank arm.)\n\
+         kind, text = refused([1.0, 2.0, 3.0])\n\
+         assert kind == 'TypeError', (kind, text)\n\
+         assert 'does not export a buffer' in text, text\n\
          print('ok')\n",
     );
     assert!(run.status.success(), "{}", stderr_of(&run));

@@ -624,34 +624,63 @@ fn subscripted_base_description_follows_the_bare_name_arm_s_precedence() {
     // arm that lowering never reaches (the self-referential `class_defs`
     // entry catches the class's own name first) but D-014 still requires.
     assert_eq!(
-        subscripted_base_description("T", Some("T"), None),
+        subscripted_base_description("T", Some("T"), None, &[]),
         "type parameter `T`"
     );
     // The type parameter wins over every later arm, even for `Self`.
     assert_eq!(
-        subscripted_base_description("Self", Some("Self"), Some("C")),
+        subscripted_base_description("Self", Some("Self"), Some("C"), &[]),
         "type parameter `Self`"
     );
     assert_eq!(
-        subscripted_base_description("Self", None, Some("C")),
+        subscripted_base_description("Self", None, Some("C"), &[]),
         "`Self`"
     );
     assert_eq!(
-        subscripted_base_description("Self", None, None),
+        subscripted_base_description("Self", None, None, &[]),
         "type alias `Self`"
     );
     assert_eq!(
-        subscripted_base_description("C", None, Some("C")),
+        subscripted_base_description("C", None, Some("C"), &[]),
         "class `C`"
     );
     for scalar in ["int", "float", "bool", "str"] {
         assert_eq!(
-            subscripted_base_description(scalar, Some("T"), Some("C")),
+            subscripted_base_description(scalar, Some("T"), Some("C"), &[]),
             format!("builtin type `{scalar}`")
         );
     }
     assert_eq!(
-        subscripted_base_description("A", Some("T"), Some("C")),
+        subscripted_base_description("A", Some("T"), Some("C"), &[]),
         "type alias `A`"
+    );
+    // #1129: both spellings of the buffer carrier get their own noun, and
+    // each spelling's guard mirrors where the `Expr::Name` arm resolves it.
+    for spelling in ["memoryview", "ndarray"] {
+        assert_eq!(
+            subscripted_base_description(spelling, Some("T"), Some("C"), &[]),
+            format!("buffer type `{spelling}`")
+        );
+    }
+    // `memoryview` is decided before the alias table is read, so an alias of
+    // that name never wins and the noun must not claim it did.
+    assert_eq!(
+        subscripted_base_description(
+            "memoryview",
+            Some("T"),
+            Some("C"),
+            &[("memoryview".to_string(), Ty::Int)]
+        ),
+        "buffer type `memoryview`"
+    );
+    // `ndarray` is decided after it, so an alias of that name really does win.
+    assert_eq!(
+        subscripted_base_description(
+            "ndarray",
+            Some("T"),
+            Some("C"),
+            &[("ndarray".to_string(), Ty::Int)]
+        ),
+        "type alias `ndarray`"
     );
 }

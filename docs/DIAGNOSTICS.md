@@ -72,7 +72,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `I0402` | error | CPython-backed direct import root rejected by the effective v0.7 `allowlist` or `deny` policy (planned; not emitted by the current compiler) |
 | `I0403` | error | CPython import in native mode; `pycc build --ext` is required |
 | `I0404` | error | operation on a CPython object is not supported yet |
-| `I0405` | error | `memoryview` in a signature in native mode; `pycc build --ext` is required |
+| `I0405` | error | a buffer-typed signature in native mode, under either source spelling (`memoryview` or `ndarray`); `pycc build --ext` is required |
 | `W1001` | warning | unreachable code |
 | `W1002` | warning | boxed fallback in hot loop (`--memstats` hint) |
 

@@ -7016,6 +7016,56 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
 }
 
 #[test]
+fn the_ndarray_spelling_lowers_to_the_same_buffer_ty_as_memoryview() {
+    // #1129: `ndarray` is a second *spelling* of `Ty::MemoryView`, not a
+    // second type, so what this states is an equality and not merely that
+    // the annotation is accepted.
+    //
+    // Both annotation positions are lowered and asserted on, not just the
+    // parameter one. `annotation_to_ty` is one parser for every position,
+    // so a parameter-only assertion would prove the arm reachable without
+    // proving it reaches the position the downstream refusals key on: a
+    // return annotation is what `C0003` (a public export) and the private
+    // `C0001` walk both read, and `I0405` reads both.
+    //
+    // No import: the source mentions numpy nowhere, which is the whole
+    // point of the arm -- `import numpy` is itself refused (`I0403`), so a
+    // spelling gated on one could not be written at all. The return-position
+    // sources recurse rather than returning the parameter, because *reading*
+    // a buffer parameter is its own refusal (Part 2 of #1027) and would
+    // refuse the fixture for an unrelated reason.
+    fn signature(source: &str) -> (Vec<(String, Ty)>, Ty) {
+        let module = pycc_parser_test_helper::parse(source);
+        let lowered = lower_checked(&module).expect("the buffer annotation should lower");
+        let HirItem::Function {
+            params, return_ty, ..
+        } = &lowered.items[0]
+        else {
+            panic!("expected a function: {:?}", lowered.items[0]);
+        };
+        (params.clone(), return_ty.clone())
+    }
+
+    for source in [
+        "def f(a: ndarray, n: int) -> float:\n    return 0.0\n",
+        "def f(a: memoryview, n: int) -> float:\n    return 0.0\n",
+    ] {
+        let (params, return_ty) = signature(source);
+        assert_eq!(params[0].1, Ty::MemoryView, "{source}");
+        assert_eq!(return_ty, Ty::Float, "{source}");
+    }
+
+    for source in [
+        "def f(n: int) -> ndarray:\n    return f(n)\n",
+        "def f(n: int) -> memoryview:\n    return f(n)\n",
+    ] {
+        let (params, return_ty) = signature(source);
+        assert_eq!(return_ty, Ty::MemoryView, "{source}");
+        assert_eq!(params[0].1, Ty::Int, "{source}");
+    }
+}
+
+#[test]
 fn a_memoryview_ty_names_itself_with_its_python_spelling() {
     // Part 1 of #1027. `Ty::name` is the spelling every *type-system*
     // diagnostic renders a type with; `src/ext_build.rs`'s own `render_ty`

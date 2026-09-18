@@ -279,10 +279,13 @@ assert back == 2.5, back
 assert type(back) is float, type(back)
 assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
 
-# Shapes 25-28: Part 1 of #1027's `memoryview` carrier -- one refusal per
-# arm of `pycc_ext_unpack_memoryview`, in the order the helper applies
-# them. pycc-authored text throughout except shape 26, whose message comes
-# out of CPython's own `PyObject_GetBuffer` and is propagated verbatim.
+# Shapes 25-28, plus 25b and 25c: Part 1 of #1027's buffer carrier, walked
+# in the order `pycc_ext_unpack_memoryview` applies its arms. Shapes 25, 26,
+# 27 and 28 are one refusal per arm; #1129's widening of arm 1 adds two more
+# that are not one-per-arm -- 25b is a second operand answered by the format
+# arm, and 25c is an acceptance rather than a refusal, the positive half of
+# that widening. pycc-authored text throughout except shape 26, whose message
+# comes out of CPython's own `PyObject_GetBuffer` and is propagated verbatim.
 #
 # `bytearray(8)` is the conforming witness's backing store rather than a
 # `bytes`: rule 7 admits a read-only buffer just as it admits a writable
@@ -291,12 +294,30 @@ assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
 # needs.
 good_view = memoryview(bytearray(8)).cast('d')
 
-# 25: not a `memoryview` at all. Exact type, never the buffer protocol: a
-# `bytes` exports a buffer and is still refused, which is what makes rule
-# 7's boundary closed rather than duck-typed.
-refuse(m.take_view, (b'abcdefgh',), {}, TypeError,
-       "take_view() argument 1: 'bytes' object cannot be interpreted as a memoryview",
+# 25: exports no buffer at all. #1129 widened this arm from
+# `PyMemoryView_Check` to `PyObject_CheckBuffer`, so what it refuses is now
+# the objects that export nothing -- a `list`, an `int`, `None` -- and no
+# longer the buffer exporters that are merely not `memoryview`s. Those are
+# answered by the arms below on the properties of the buffer they export,
+# which is shape 25b.
+refuse(m.take_view, ([1.0, 2.0],), {}, TypeError,
+       "take_view() argument 1: 'list' object does not export a buffer",
        True, (good_view,), 7)
+
+# 25b: a `bytes` is a buffer exporter, so it passes the widened arm 1 and
+# is refused by the *format* arm instead -- the same answer shape 28 gets
+# for a `memoryview` over the same bytes. The pair is the statement that
+# arm 1 is now about the protocol and arm 4 about the element type.
+refuse(m.take_view, (b'abcdefgh',), {}, TypeError,
+       "take_view() argument 1: a buffer of format 'B' is not supported -- "
+       "only format 'd' (a contiguous float64 buffer) is",
+       True, (good_view,), 7)
+
+# 25c: and an `array.array('d')` -- a conforming buffer that is not a
+# `memoryview` -- is now *accepted*, which is the positive half of the same
+# widening and the one arm no refusal shape can state.
+import array
+assert m.take_view(array.array('d', [1.5, 2.5])) == 7
 
 # 26: a `memoryview` that is not C-contiguous. CPython-authored -- the
 # message is `PyObject_GetBuffer`'s own, propagated without rewriting.
@@ -310,13 +331,13 @@ refuse(m.take_view, (strided,), {}, (TypeError, BufferError),
 
 # 27: the right format and the wrong rank.
 refuse(m.take_view, (memoryview(bytearray(16)).cast('d', (2, 1)),), {}, TypeError,
-       'take_view() argument 1: a memoryview with ndim 2 is not supported yet -- '
-       'only a one-dimensional memoryview is',
+       'take_view() argument 1: a buffer with ndim 2 is not supported yet -- '
+       'only a one-dimensional buffer is',
        True, (good_view,), 7)
 
 # 28: the right rank and the wrong format.
 refuse(m.take_view, (memoryview(bytearray(8)),), {}, TypeError,
-       "take_view() argument 1: a memoryview of format 'B' is not supported -- "
+       "take_view() argument 1: a buffer of format 'B' is not supported -- "
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 
@@ -328,7 +349,7 @@ import ctypes
 wide = memoryview((ctypes.c_double * 2)())
 assert wide.format == '<d' and wide.itemsize == 8
 refuse(m.take_view, (wide,), {}, TypeError,
-       "take_view() argument 1: a memoryview of format '<d' is not supported -- "
+       "take_view() argument 1: a buffer of format '<d' is not supported -- "
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 
