@@ -734,8 +734,11 @@ count prerequisite 2 reports was measured rather than asserted, and again on
 itself. A second correction the same day withdrew the parameter-shape
 conclusion that first re-measurement reached: it characterized only the
 boundary-admissible subset, which is selected by the very property it was
-being read for, and the blocker is on the compiler rather than on the
-workload. Each correction is dated in place below; none is deleted.
+being read for. A third, the same day again, narrowed that second one: its
+replacement claim — that the remaining work is compiler-side rather than
+workload-side — overstated the scan in the opposite direction, because the
+scan's array-like spelling list counted `list[int]` as a carrier. Both
+blockers stand. Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
@@ -858,9 +861,29 @@ the sweep and the per-record shapes — and the third is independent of both:
 
    The operative consequence for this protocol is unchanged — prerequisite 2 is
    still unmet, because a subject must *compile* as well as be shaped right, and
-   these six sit behind the same import wall as everything else. What changes is
-   where the remaining work lives: on the compiler, in four tracked and closeable
-   gaps, not on the workload.
+   these six sit behind the same import wall as everything else.
+
+   **Second correction, the same day: "the remaining work is compiler-side, not
+   workload-side" overstates it in the other direction, and the same scan
+   refutes it.** The 10 rows were selected by an `ARRAYISH` spelling list that
+   included `list[int]` and `list[float]`, which are already-compiled scalar
+   sequences (D-105) and not buffer carriers at all. Re-counting the 6 public
+   rows by carrier kind and by loop content separately: **4** take a genuine
+   numpy-array parameter and **all 4 are loop-free** (4-11 calls over 16-78
+   lines — thin wrappers that delegate into numpy/scipy C code, so compiling one
+   would time nothing); **2** are loop-bearing but their array-like parameters
+   are `list[int]`, which the boundary's carrier gaps do not touch; **0** are
+   public, take a numpy-array parameter and contain a loop; and **0** take a
+   buffer-protocol parameter of any spelling. The loop-bearing row that returns
+   an `NDArray` returns one — it does not take one.
+
+   So neither the original claim nor the first correction is right. Both
+   blockers stand, and they are independent: the compiler does not admit the
+   way the workload spells an array parameter (#883, the #882 family, #889,
+   #1130, #1129), **and** closing every one of those gaps would still yield no
+   scorable subject, because no public function in the denominator both takes
+   an array and contains a loop. The first is tracked and closeable; the second
+   is a property of the workload that no compiler change reaches.
 
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
