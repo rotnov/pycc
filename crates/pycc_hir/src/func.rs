@@ -344,6 +344,7 @@ pub(crate) fn subscripted_base_description(
     base: &str,
     type_param: Option<&str>,
     class_name: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> String {
     if Some(base) == type_param {
         format!("type parameter `{base}`")
@@ -354,6 +355,18 @@ pub(crate) fn subscripted_base_description(
     } else {
         match base {
             "int" | "float" | "bool" | "str" => format!("builtin type `{base}`"),
+            // #1129: the buffer carrier's two spellings are neither builtin
+            // scalars nor aliases, so the catch-all noun below would call
+            // them something the program never wrote. `ndarray` reaches
+            // this helper only when nothing else binds the name -- a
+            // program that does bind it resolves through the alias table
+            // one link earlier and is still a `type alias` here, which is
+            // what the guard preserves.
+            "memoryview" | "ndarray"
+                if !aliases.iter().any(|(alias_name, _)| alias_name == base) =>
+            {
+                format!("buffer type `{base}`")
+            }
             _ => format!("type alias `{base}`"),
         }
     }
@@ -1067,7 +1080,7 @@ pub(crate) fn annotation_to_ty(
                         format!(
                             "{} is not subscriptable, so `{base}[...]` is not a valid type \
                              annotation",
-                            subscripted_base_description(base, type_param, class_name)
+                            subscripted_base_description(base, type_param, class_name, aliases)
                         ),
                         Span::new(range.start, range.end),
                     ))

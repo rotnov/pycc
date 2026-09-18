@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The three tests below that need no interpreter at all — every refusal
+//! The four tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the fourth, which builds an artifact and
+//! inside the coverage job. Only the fifth, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -135,6 +135,41 @@ fn a_program_that_binds_ndarray_itself_keeps_its_own_meaning() {
         stdout_of(&out),
         stderr_of(&out)
     );
+}
+
+/// The subscripted form stays refused, and says what the name is.
+///
+/// `ndarray[...]` belongs to #1130 and is deliberately not admitted here.
+/// What this change does own is the noun the refusal uses: before the bare
+/// name resolved at all, the subscript path's own recursion failed and the
+/// user saw the generic unknown-name `C0001`; now that it resolves, the
+/// path reaches `T0044`, whose catch-all called every unrecognized base a
+/// "type alias" -- a word for something the program never wrote. Both
+/// spellings of the carrier get their own noun instead, `memoryview`
+/// included, which had the same wrong word before this issue.
+#[test]
+fn a_subscripted_ndarray_is_refused_as_a_buffer_type_rather_than_an_alias() {
+    for spelling in ["ndarray", "memoryview"] {
+        let dir = fixture(
+            "1129_subscript",
+            &format!("def f(a: {spelling}[float]) -> int:\n    return 1\n"),
+        );
+        let out = pycc()
+            .arg("check")
+            .arg(dir.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        // `check` renders on stdout where `build` renders on stderr, so
+        // both are read rather than guessing which one this subcommand
+        // uses.
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[T0044]"), "{err}");
+        assert!(
+            err.contains(&format!("buffer type `{spelling}` is not subscriptable")),
+            "{err}"
+        );
+    }
 }
 
 /// The annotation compiles, with no interpreter, no numpy, and no import.
