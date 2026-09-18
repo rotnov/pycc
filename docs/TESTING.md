@@ -920,6 +920,31 @@ the sweep and the per-record shapes — and the third is independent of both:
    claim above is unchanged — it is a statement about module-level functions,
    which is what the export rule selects today.
 
+   **Fourth correction (2026-09-18): two of the four gaps above have moved,
+   and a third was never stated correctly.** (a) The subscripted-annotation
+   clause — "as is a subscripted one — `T0044`, the annotated class defining
+   no `__class_getitem__` (#1130)" — is false as of
+   [#1130](https://github.com/rotnov/pycc/issues/1130): a subscripted
+   annotation whose base resolves to a nameable type is now accepted with the
+   type argument erased, so that gap is closed. Nothing downstream changes,
+   because every one of the 19 occurrences also trips at least one of the
+   remaining gaps. (b) Clause 4 — "`ndarray` is not registered as a buffer
+   carrier at all" — was already stale when it was written: commit
+   `4d5a9677` ([#1129](https://github.com/rotnov/pycc/issues/1129)) registered
+   `ndarray` as a second spelling of the carrier, and the dated note at
+   prerequisite 1 disclaimed any bearing on prerequisite 2 rather than
+   correcting it. What remains is that `NDArray` — the capitalized
+   `numpy.typing` spelling all 18 subscripted occurrences use — is not
+   registered, tracked as a follow-up to #1130. (c) The clause "`from
+   numpy.typing import NDArray` is rejected (`C0001`, the #882 family)"
+   misattributes the refusal: numpy is not stdlib, so it comes from the
+   foreign-import path, not the `pycc_std` registry #882 widens. Correcting
+   that clause is not #1130's business and it is left as written here; the
+   same follow-up issue carries it. **The gap enumeration repeated in the
+   second correction above as "(#883, the #882 family, #889, #1130, #1129)"
+   is stale in the same two ways** and is read through this note rather than
+   restated there.
+
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
    **Arms** bullet binds the run to the five fields

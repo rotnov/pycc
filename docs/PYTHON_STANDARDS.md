@@ -125,6 +125,13 @@ For each newly observed upstream release:
    discharged. Rule 9 records that fixture's own D-102 Tier-1 observation and
    the flip it earned. PEP 487 remains recognition-only, so
    [#585](https://github.com/rotnov/pycc/issues/585) still stands.
+   Correction (2026-09-18): the #611 half of that sentence narrates history, not
+   current behavior. [#1130](https://github.com/rotnov/pycc/issues/1130) removed
+   the annotation-position gate -- PEP 649/749 evaluates annotations lazily, so
+   the `TypeError` #611 mirrored is unreachable from an annotation in a
+   pycc-compiled program. Value-position dispatch (#610), which is what
+   `pep_0560_class_getitem.py` exercises against the oracle, is unchanged, so
+   neither the fixture nor rule 9's flip is affected.
 9. PEP 560 (`__class_getitem__` dispatch) was flipped to `◐` on the same
    rule 5 basis against run
    [32494747082](https://github.com/rotnov/pycc/actions/runs/32494747082), the
