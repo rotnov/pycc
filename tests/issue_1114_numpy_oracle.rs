@@ -253,7 +253,7 @@ fn a_compiled_numpy_buffer_loop_matches_cpython() {
 /// The other half of D-244 rule 7: a numpy argument that is not the
 /// admitted carrier is refused at the thunk, in pycc's own words.
 ///
-/// Four of the five arms are pycc-authored `TypeError`s naming the
+/// Four of the six arms are pycc-authored `TypeError`s naming the
 /// function, the 1-based argument position, and what was wrong. The
 /// remaining two are not pycc's to author: the exporter itself refuses to
 /// build a C-contiguous `Py_buffer` over a strided operand, and whatever

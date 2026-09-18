@@ -279,10 +279,13 @@ assert back == 2.5, back
 assert type(back) is float, type(back)
 assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
 
-# Shapes 25-28: Part 1 of #1027's buffer carrier -- one refusal per arm of
-# `pycc_ext_unpack_memoryview`, in the order the helper applies them.
-# pycc-authored text throughout except shape 26, whose message comes out of
-# CPython's own `PyObject_GetBuffer` and is propagated verbatim.
+# Shapes 25-28, plus 25b and 25c: Part 1 of #1027's buffer carrier, walked
+# in the order `pycc_ext_unpack_memoryview` applies its arms. Shapes 25, 26,
+# 27 and 28 are one refusal per arm; #1129's widening of arm 1 adds two more
+# that are not one-per-arm -- 25b is a second operand answered by the format
+# arm, and 25c is an acceptance rather than a refusal, the positive half of
+# that widening. pycc-authored text throughout except shape 26, whose message
+# comes out of CPython's own `PyObject_GetBuffer` and is propagated verbatim.
 #
 # `bytearray(8)` is the conforming witness's backing store rather than a
 # `bytes`: rule 7 admits a read-only buffer just as it admits a writable

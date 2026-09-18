@@ -764,8 +764,8 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
      * release moved after it: `PyErr_Format` copies the characters it reads
      * as it formats, and it runs no interpreted code that could invalidate
      * the view in between, so the release below cannot leave the exception
-     * naming freed storage. The same reasoning already governs the
-     * non-`memoryview` arm's `%U` above.
+     * naming freed storage. The same reasoning already governs the `%U`
+     * of the arm above that #1129 widened to `PyObject_CheckBuffer`.
      */
     declared = (out->format == NULL) ? "" : out->format;
     if (strcmp(declared, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {

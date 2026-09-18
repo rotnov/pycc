@@ -23,11 +23,11 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The first four arms need no interpreter at all — every refusal they
-//! assert is resolved on the program before `plan_ext` probes the host
-//! toolchain — so they are not `#[ignore]`d and are the arms that run
-//! inside the coverage job. Only the arm that builds and loads an artifact
-//! is hosted.
+//! The two tests below that need no interpreter at all — every refusal and
+//! acceptance they assert is resolved on the program before `plan_ext`
+//! probes the host toolchain — are not `#[ignore]`d, and they are what runs
+//! inside the coverage job. Only the third, which builds an artifact and
+//! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
