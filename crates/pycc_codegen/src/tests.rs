@@ -16361,3 +16361,47 @@ fn issue_1054_j_a_fresh_temporary_argument_is_owned_solely_by_the_callee() {
         },
     );
 }
+
+/// (k) The `except*` mirror of (h). `emit_try_star` applies the same
+/// mid-function `locals.insert(binding_name, ...)` overwrite that
+/// `emit_try` does, so `except* ValueError as s` over a `str` parameter is
+/// the same type-confusion hazard through a second, independently written
+/// lowering path. The entry-block snapshot is what makes both safe, and this
+/// test pins the `TryStar` arm of it rather than inferring it from (h).
+#[test]
+fn issue_1054_k_an_except_star_binding_shadowing_a_str_parameter_is_not_released() {
+    compile_items_checking_ir(
+        "issue_1054_k_except_star_shadow",
+        vec![MirItem::Function {
+            name: "shadowed_star".to_string(),
+            params: vec![("s".to_string(), Ty::Str)],
+            return_ty: Ty::None,
+            body: vec![MirStmt::TryStar {
+                body: vec![MirStmt::Raise {
+                    exception: MirExceptionValue::Constructed {
+                        type_tag: 1,
+                        class_name: "ValueError".to_string(),
+                        message: MirExpr::StringLiteral("boom".to_string()),
+                    },
+                    frame_function: "shadowed_star".to_string(),
+                }],
+                handlers: vec![MirExceptHandler {
+                    exc_type_tag: Some(vec![1]),
+                    binding_name: Some("s".to_string()),
+                    binding_ty: Some(Ty::Instance(Box::new("ValueError".to_string()))),
+                    body: vec![MirStmt::NoOp],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+        }],
+        |ir| {
+            assert_eq!(str_epilogue_blocks(ir), 1, "{ir}");
+            assert_eq!(
+                str_epilogue_releases(ir),
+                1,
+                "only the parameter's own entry-block slot is in the snapshot: {ir}"
+            );
+        },
+    );
+}
