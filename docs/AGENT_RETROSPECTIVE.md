@@ -33,6 +33,38 @@ never a merge gate.
 
 ---
 
+## 2026-09-18 — A red `check-site.sh` masked the byte-budget breach it runs later
+
+**What happened.** PR #1126 (Part 1 of #884) added a sentence to
+`docs/ROADMAP.md`'s Language-surface evidence cell. Locally
+`sh scripts/check-site.sh` exited 1, and the failure was correctly
+attributed to an unrelated pre-existing cause: the status page's evidence
+pin is not on this worktree's first-parent history. The pull request was
+opened on that attribution. CI's `build` job then failed in 11 seconds on a
+completely different check the same script runs — `docs/ROADMAP.md` at
+174526 bytes against its 174080-byte per-resource llms.txt budget (#207).
+
+**Root cause.** `check-site.sh` runs under `set -e` and aborts at the first
+failing check, so every check after the status-pin one never ran locally. A
+failure that is genuinely not attributable to the diff still costs the
+diff every verdict that would have followed it. The aggregate
+`check_pages_performance_budget.rb --skip-lighthouse` gate that *was* run
+and passed measures a different limit, so its green result carried no
+information about the per-resource one.
+
+**What fixed it.** Condensing the added sentence to the claim, one primary
+issue link, and the remaining gap — the shape `AGENTS.md` already
+prescribes for these cells — brought the file to 173725 bytes.
+
+**Lesson.** A gate that aborts on the first failure reports one verdict,
+not a clean bill for the rest. When a known-failing early check is
+attributed away, do not treat the script's exit status as the diff's
+verdict: run the specific later check the diff could plausibly break, or
+measure its quantity directly. For a diff touching any document listed
+non-optional in `site/llms-txt-context-manifest.json`, that specific check
+is the per-resource byte budget, and `wc -c` against the documented limit
+settles it in one command.
+
 ## 2026-09-18 — `cargo llvm-cov` reported a coverage verdict against a stale, partial export
 
 **What happened.** Four consecutive attempts to produce a local diff-coverage
