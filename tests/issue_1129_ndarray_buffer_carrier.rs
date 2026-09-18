@@ -471,9 +471,9 @@ fn every_non_parameter_ndarray_position_is_refused() {
     assert!(err.contains("error[C0003]"), "{err}");
     assert!(err.contains("its return type `-> memoryview`"), "{err}");
     // The remediation enumerates what the boundary carries, so it has to
-    // name the second spelling too: a user who reached this message by
-    // writing `ndarray` and is shown a list without it reads the list as
-    // "not that type at all".
+    // name every other spelling too: a user who reached this message by
+    // writing `ndarray` or `NDArray` and is shown a list without it reads
+    // the list as "not that type at all".
     assert!(
         err.contains("(or its other spellings `ndarray` and `NDArray`)"),
         "{err}"
