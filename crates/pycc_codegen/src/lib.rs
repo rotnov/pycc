@@ -6263,6 +6263,29 @@ fn compile_to_object_with_observer(
                 .iter()
                 .map(|(global_name, binding)| (global_name.clone(), binding.clone()))
                 .collect();
+            // #1054: the release list for this function's `str` epilogue.
+            //
+            // **Ownership invariant this epilogue depends on (plan §7 R2):
+            // a `str` slot holds exactly one *owned* `PyStrObj` reference,
+            // or null.** Every producer upholds it -- a parameter slot
+            // receives an argument the caller already `pycc_rt_str_incref`d
+            // (`emit_user_call_args`' own `incref_if_str_duplicate`) or a
+            // freshly built object with refcount 1 (a literal, a
+            // concatenation, the D-244 `ext` shim's `pycc_ext_unpack_str`);
+            // a rebinding store releases the old value first
+            // (`decref_str_slot_before_store`); a `return` of a bare name
+            // increfs the duplicate it hands back. So exactly one
+            // `pycc_rt_str_decref` per slot on the way out balances the
+            // books, and the null a never-assigned local still holds is the
+            // runtime's documented no-op.
+            //
+            // Deliberately a *snapshot* taken here rather than a walk of
+            // `fn_locals` at exit: `fn_locals` is seeded above with this
+            // module's globals (which this function does not own) and is
+            // extended mid-function by `exception.rs`'s `except X as e`
+            // bindings (whose slots are not in the entry block and so need
+            // not dominate the epilogue).
+            let mut owned_str_slots: Vec<PointerValue> = Vec::new();
             for (i, (param_name, ty)) in params.iter().enumerate() {
                 // `.expect(...)`, not `.unwrap_or_else(|| panic!(...))`:
                 // `f`'s own `fn_type` (built above, in the first pass) was
@@ -6281,6 +6304,9 @@ fn compile_to_object_with_observer(
                 builder.build_store(slot.ptr, incoming).expect(
                     "build_store should not fail for a slot this function itself allocated",
                 );
+                if *ty == pycc_mir::Ty::Str {
+                    owned_str_slots.push(slot.ptr);
+                }
                 fn_locals.insert(param_name.clone(), slot);
             }
             let mut local_bindings = BTreeMap::new();
@@ -6291,12 +6317,67 @@ fn compile_to_object_with_observer(
                 local_bindings.remove(param_name);
             }
             for (local_name, ty) in local_bindings {
+                let is_str = ty == pycc_mir::Ty::Str;
                 let slot = storage_slot_at_entry(&context, &builder, ty, &local_name, true);
+                if is_str {
+                    owned_str_slots.push(slot.ptr);
+                }
                 // A function-local target shadows a same-named module global
                 // throughout the function (D-055), so this intentionally
                 // replaces any global slot seeded above.
                 fn_locals.insert(local_name, slot);
             }
+            // #1054: when this function owns at least one entry-block
+            // `str` slot, every way out of it is routed through a single
+            // synthetic outermost `finally` frame whose block releases
+            // those slots. Reusing #382's existing `FinallyTarget`
+            // machinery rather than inventing a landing pad means
+            // `MirStmt::Return` and `exception.rs`'s own `try`/`try*`
+            // return routing need no edit at all: they already store to
+            // the innermost frame's `ret_slot` and branch to its
+            // `finally_bb`, and a nested frame already propagates outward
+            // to this one. Only the two paths that bypass `finally_stack`
+            // entirely -- the implicit `return None` fall-through and the
+            // `exception_exit` carrier return, both below -- are
+            // redirected here.
+            //
+            // Gated on a non-empty snapshot so a `str`-free function emits
+            // byte-identical IR to before this change, which is also what
+            // keeps the "no outer `finally_stack` entry" arms of
+            // `MirStmt::Return` and of `emit_try`/`emit_try_star`'s
+            // `ret_bb` reachable (their tests build `str`-free functions).
+            // The module entry point (`main` / `__pycc_ext_exec`) is a
+            // separate emitter above and never gets this frame.
+            let mut finally_stack: Vec<FinallyTarget> = Vec::new();
+            let str_epilogue_bb = if owned_str_slots.is_empty() {
+                None
+            } else {
+                let is_returning = builder
+                    .build_alloca(context.i8_type(), "str_epilogue_is_returning")
+                    .expect("build_alloca should not fail for the str epilogue is_returning flag");
+                builder
+                    .build_store(is_returning, context.i8_type().const_zero())
+                    .expect("build_store should not fail for the str epilogue is_returning init");
+                let ret_slot = if *return_ty == pycc_mir::Ty::None {
+                    None
+                } else {
+                    Some(
+                        builder
+                            .build_alloca(
+                                ty_to_basic_type(&context, return_ty.clone()),
+                                "str_epilogue_ret_slot",
+                            )
+                            .expect("build_alloca should not fail for the str epilogue ret_slot"),
+                    )
+                };
+                let finally_bb = context.append_basic_block(f, "pycc_str_epilogue");
+                finally_stack.push(FinallyTarget {
+                    finally_bb,
+                    ret_slot,
+                    is_returning,
+                });
+                Some((finally_bb, ret_slot))
+            };
             let exception_exit = context.append_basic_block(f, "exception_exit");
             rt.exceptions.targets.borrow_mut().push(exception_exit);
             emit_body(
@@ -6308,7 +6389,7 @@ fn compile_to_object_with_observer(
                 &mut fn_locals,
                 body,
                 return_ty.clone(),
-                &mut Vec::new(),
+                &mut finally_stack,
             )?;
             rt.exceptions.targets.borrow_mut().pop();
             // A `None`-returning function falling through its last
@@ -6328,9 +6409,21 @@ fn compile_to_object_with_observer(
                         .get_terminator()
                         .is_none()
                     {
-                        builder.build_return(None).expect(
-                            "build_return should not fail: builder is always freshly positioned before this call",
-                        );
+                        // #1054: the implicit `return None` never passes
+                        // through `finally_stack`, so it is redirected to
+                        // the `str` epilogue explicitly. No `ret_slot`
+                        // store: a `None`-returning function's epilogue
+                        // has none, and the epilogue does not read
+                        // `is_returning` -- every path into it returns.
+                        if let Some((epilogue_bb, _)) = str_epilogue_bb {
+                            builder.build_unconditional_branch(epilogue_bb).expect(
+                                "build_unconditional_branch should not fail for str epilogue routing",
+                            );
+                        } else {
+                            builder.build_return(None).expect(
+                                "build_return should not fail: builder is always freshly positioned before this call",
+                            );
+                        }
                     }
                 }
                 _ if builder
@@ -6360,15 +6453,80 @@ fn compile_to_object_with_observer(
             // the caller's expression guard observes the still-active flag
             // before it can consume that carrier or evaluate another effect.
             builder.position_at_end(exception_exit);
-            if *return_ty == pycc_mir::Ty::None {
-                builder
-                    .build_return(None)
-                    .expect("build_return should not fail for an exceptional None exit");
-            } else {
-                let default = default_value_for_type(&context, return_ty.clone());
-                builder
-                    .build_return(Some(&default))
-                    .expect("build_return should not fail for an exceptional value exit");
+            // #1054: the exceptional exit is the other path that bypasses
+            // `finally_stack`. The slots are released here too -- an
+            // in-flight exception does not make the references this
+            // function owns somebody else's problem.
+            match (str_epilogue_bb, *return_ty == pycc_mir::Ty::None) {
+                (Some((epilogue_bb, _)), true) => {
+                    builder.build_unconditional_branch(epilogue_bb).expect(
+                        "build_unconditional_branch should not fail for an exceptional None exit",
+                    );
+                }
+                (Some((epilogue_bb, ret_slot)), false) => {
+                    let default = default_value_for_type(&context, return_ty.clone());
+                    let slot = ret_slot.expect(
+                        "a non-`None`-returning function's str epilogue always has a ret_slot",
+                    );
+                    builder
+                        .build_store(slot, default)
+                        .expect("build_store should not fail for the exceptional carrier");
+                    builder.build_unconditional_branch(epilogue_bb).expect(
+                        "build_unconditional_branch should not fail for an exceptional value exit",
+                    );
+                }
+                (None, true) => {
+                    builder
+                        .build_return(None)
+                        .expect("build_return should not fail for an exceptional None exit");
+                }
+                (None, false) => {
+                    let default = default_value_for_type(&context, return_ty.clone());
+                    builder
+                        .build_return(Some(&default))
+                        .expect("build_return should not fail for an exceptional value exit");
+                }
+            }
+
+            // #1054: emitted last, after every branch into it exists. One
+            // `pycc_rt_str_decref` per owned entry-block slot -- a null
+            // slot (a local on a path that never assigned it) is the
+            // runtime's documented no-op -- then the function's single
+            // real `ret`.
+            if let Some((epilogue_bb, ret_slot)) = str_epilogue_bb {
+                builder.position_at_end(epilogue_bb);
+                for slot_ptr in &owned_str_slots {
+                    let live = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            *slot_ptr,
+                            "str_epilogue_live",
+                        )
+                        .expect("build_load should not fail for a str slot this function allocated")
+                        .into_pointer_value();
+                    builder
+                        .build_call(rt.str_decref, &[live.into()], "str_epilogue_decref")
+                        .expect("build_call should not fail for pycc_rt_str_decref");
+                }
+                match ret_slot {
+                    Some(slot) => {
+                        let ret_val = builder
+                            .build_load(
+                                ty_to_basic_type(&context, return_ty.clone()),
+                                slot,
+                                "str_epilogue_ret_val",
+                            )
+                            .expect("build_load should not fail for the str epilogue ret_slot");
+                        builder
+                            .build_return(Some(&ret_val))
+                            .expect("build_return should not fail for the str epilogue");
+                    }
+                    None => {
+                        builder
+                            .build_return(None)
+                            .expect("build_return should not fail for a void str epilogue");
+                    }
+                }
             }
         }
     }

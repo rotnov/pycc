@@ -43,6 +43,7 @@
 //! script only produces the host's archives, and the diagnostic says so.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 mod exception;
 /// D-244 rule 2's `PyObject*` boundary, runtime half (#1025/#1028).
@@ -886,6 +887,34 @@ impl PyStrObj {
     }
 }
 
+/// Net count of live `PyStrObj` allocations: incremented by [`new_pystr`],
+/// the crate's single construction site, and decremented on the one path in
+/// [`pycc_rt_str_decref`] that actually frees an object. A steady-state
+/// value of zero across a sequence of calls is therefore exactly the
+/// "no `str` was leaked" property issue #1054 is about.
+///
+/// `Relaxed` is the correct ordering here: the counter orders nothing else,
+/// no reader infers the state of any other memory from it, and a probe reads
+/// it from the same thread that made the calls it is measuring.
+static STR_LIVE: AtomicI64 = AtomicI64::new(0);
+
+/// The current value of the live-`PyStrObj` counter.
+///
+/// Deliberately **not** `#[cfg(test)]`-gated. Its consumer is a hosted D-244
+/// `ext` module, which links the ordinary non-test `libpycc_rt.a`; a
+/// test-only symbol would simply not exist there, so the probe in
+/// `tests/issue_1054_ext_str_release.rs` could not resolve it. The cost of
+/// exporting it unconditionally is one relaxed atomic per string allocation
+/// and per string free, which no benchmark in this repository can resolve.
+///
+/// The value is only meaningful as a *difference* between two reads taken
+/// around a known sequence of calls: interned or otherwise long-lived
+/// objects legitimately keep it above zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_str_live_objects() -> i64 {
+    STR_LIVE.load(Ordering::Relaxed)
+}
+
 /// Allocates a fresh `PyStrObj` with refcount `1`, choosing the inline or
 /// heap `PyStrPayload` per D-059's 22-byte threshold. Shared by every
 /// `pycc_rt_str_*` entry point below that constructs a brand-new string (a
@@ -899,6 +928,7 @@ fn new_pystr(bytes: &[u8]) -> *mut PyStrObj {
     } else {
         PyStrPayload::Heap(bytes.to_vec().into_boxed_slice())
     };
+    STR_LIVE.fetch_add(1, Ordering::Relaxed);
     Box::into_raw(Box::new(PyStrObj {
         rc: Cell::new(1),
         payload,
@@ -1072,6 +1102,7 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
     }
     let new_rc = unsafe { &*s }.rc.get() - 1;
     if new_rc == 0 {
+        STR_LIVE.fetch_sub(1, Ordering::Relaxed);
         drop(unsafe { Box::from_raw(s) });
     } else {
         unsafe { &*s }.rc.set(new_rc);
@@ -4523,5 +4554,25 @@ mod tests {
             pycc_rt_int_set_incref(std::ptr::null_mut());
             pycc_rt_int_set_decref(std::ptr::null_mut());
         }
+    }
+
+    /// #1054, coverage-bearing companion to
+    /// `crates/pycc_rt/tests/str_live_objects.rs`. `STR_LIVE` is a single
+    /// process-wide atomic and dozens of tests in *this* binary construct
+    /// and free `PyStrObj` values concurrently, so no absolute reading of
+    /// the counter is assertable here -- the construct/free pairing is
+    /// proved in that integration test, which owns its own process. What
+    /// is true under concurrency, and is the property asserted here, is
+    /// that the net count never goes negative: a decrement only ever
+    /// retires an object some increment already counted, so an unbalanced
+    /// free anywhere in this binary's `str` tests would drive the reading
+    /// below zero.
+    #[test]
+    fn str_live_objects_never_reads_back_a_negative_count() {
+        let live = pycc_rt_str_live_objects();
+        assert!(
+            live >= 0,
+            "the live-str count must never go negative, read {live}"
+        );
     }
 }
