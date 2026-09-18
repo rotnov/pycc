@@ -731,7 +731,14 @@ This records why no run has been scored against it, so that a later session
 does not re-derive the same findings. It was corrected on 2026-09-17, when the
 count prerequisite 2 reports was measured rather than asserted, and again on
 2026-09-18, when a re-measurement against `f7f8748c` corrected that count
-itself and moved the operative blocker onto the subject's parameter shape.
+itself. A second correction the same day withdrew the parameter-shape
+conclusion that first re-measurement reached: it characterized only the
+boundary-admissible subset, which is selected by the very property it was
+being read for. A third, the same day again, narrowed that second one: its
+replacement claim — that the remaining work is compiler-side rather than
+workload-side — overstated the scan in the opposite direction, because the
+scan's array-like spelling list counted `list[int]` as a carrier. Both
+blockers stand. Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
@@ -814,15 +821,69 @@ the sweep and the per-record shapes — and the third is independent of both:
    it is independent of compilation: across all 23 admissible subjects the
    parameters are drawn only from `str` and `int` or absent entirely, with
    **zero `memoryview` and zero `tuple` parameters**, and the only three that
-   contain loops take **zero parameters**. No admissible subject can consume the
-   committed input — 2,000,000 `float` triangles — whatever the compiler learns
-   next. Timing one of the parameterless or `str`-taking functions would be the
-   post-hoc subject substitution the **Input** bullet exists to forbid, and an
-   exported `str` parameter leaks one object per call ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)'s 2026-09-13
-   amendment), so a long timed loop would be corrupted as well as meaningless.
-   The conclusion "no admissible subject" therefore stands, and prerequisite 1's
-   carrier being met makes the asymmetry sharper: pycc has the buffer-parameter
-   shape, and the workload has no function that uses it.
+   contain loops take **zero parameters**. No *admissible* subject can consume
+   the committed input — 2,000,000 `float` triangles — whatever the compiler
+   learns next. Timing one of the parameterless or `str`-taking functions would
+   be the post-hoc subject substitution the **Input** bullet exists to forbid,
+   and an exported `str` parameter leaks one object per call
+   ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)'s 2026-09-13 amendment), so a long timed loop would be
+   corrupted as well as meaningless.
+
+   **Corrected on 2026-09-18: that measurement characterizes the wrong subset,
+   and the conclusion drawn from it was wrong.** The 23 are selected *by*
+   boundary-admissibility, so a function whose parameter is annotated with any
+   array spelling the boundary does not admit is filtered out at the 101 → 23
+   step before parameter shapes are ever counted — the absence of a carrier
+   among the 23 is partly tautological. Re-scanning parameter annotations across
+   the full pre-registered denominator instead: **10 of the 133** take at least
+   one array-like parameter, **6** of those are public, undecorated, module-level
+   and fully annotated (so they pass rule 1's export test and sit inside the
+   101), and **3** contain loops. None spells its carrier `memoryview`; the
+   spellings are `NDArray[np.floating[Any]]` (11 occurrences across the
+   denominator), `npt.NDArray[...]` (5), `np.ndarray` (1), `NDArray[np.floating]`
+   (1) and `NDArray[np.bool_]` (1).
+
+   So the asymmetry is **not** that pycc has the buffer-parameter shape and the
+   workload has no function that uses it. The workload has such functions; the
+   boundary does not admit the way they spell it. Four separate gaps stand
+   between them, each verified against `5e96f065` with a synthetic reproducer
+   and each tracked: the aliased import form `import numpy as np` is rejected
+   while the bare `import numpy` is accepted (import aliasing, #883); `from
+   numpy.typing import NDArray` is rejected (`C0001`, the #882 family); an
+   attribute-form annotation `np.ndarray` is rejected (#889), as is a
+   subscripted one — `T0044`, the annotated class defining no
+   `__class_getitem__` (#1130); and `ndarray` is not registered as a buffer
+   carrier at all, which is the part #1027 delivered for `memoryview` only
+   (#1129). `def f(a:
+   memoryview, n: int) -> float` builds clean under `pycc build --ext` at the
+   same commit, which is what isolates the gap to the spelling rather than to
+   the carrier machinery.
+
+   The operative consequence for this protocol is unchanged — prerequisite 2 is
+   still unmet, because a subject must *compile* as well as be shaped right, and
+   these six sit behind the same import wall as everything else.
+
+   **Second correction, the same day: "the remaining work is compiler-side, not
+   workload-side" overstates it in the other direction, and the same scan
+   refutes it.** The 10 rows were selected by an `ARRAYISH` spelling list that
+   included `list[int]` and `list[float]`, which are already-compiled scalar
+   sequences (D-105) and not buffer carriers at all. Re-counting the 6 public
+   rows by carrier kind and by loop content separately: **4** take a genuine
+   numpy-array parameter and **all 4 are loop-free** (4-11 calls over 16-78
+   lines — thin wrappers that delegate into numpy/scipy C code, so compiling one
+   would time nothing); **2** are loop-bearing but their array-like parameters
+   are `list[int]`, which the boundary's carrier gaps do not touch; **0** are
+   public, take a numpy-array parameter and contain a loop; and **0** take a
+   buffer-protocol parameter of any spelling. The loop-bearing row that returns
+   an `NDArray` returns one — it does not take one.
+
+   So neither the original claim nor the first correction is right. Both
+   blockers stand, and they are independent: the compiler does not admit the
+   way the workload spells an array parameter (#883, the #882 family, #889,
+   #1130, #1129), **and** closing every one of those gaps would still yield no
+   scorable subject, because no public function in the denominator both takes
+   an array and contains a loop. The first is tracked and closeable; the second
+   is a property of the workload that no compiler change reaches.
 
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
