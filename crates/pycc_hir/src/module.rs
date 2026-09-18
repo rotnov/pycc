@@ -33,6 +33,7 @@
 //! own. HIR failures still stop the pipeline before the type
 //! checker (`src/frontend.rs`), so no partial module is ever type-checked.
 
+use crate::expr::keyword_bind::SignatureTable;
 use crate::import::{
     FuturePosition, ResolvedImports, future_prologue_len, is_future_import, is_noop_future_feature,
 };
@@ -95,6 +96,12 @@ struct ModuleState<'a> {
     // so `program::link` can report a cross-module name collision at the
     // later definition. Names may repeat (a variable rebound twice).
     definition_spans: Vec<(String, Span)>,
+    /// The module's keyword-bindable signature table (Part 1 of #884,
+    /// #1125). Collected from the whole module body *before* the item loop
+    /// so a keyword call written above its own `def` binds just as well as
+    /// one written below it, and deliberately lowering-internal: it never
+    /// reaches [`LoweredModule`] or `program::link`.
+    signatures: SignatureTable,
 }
 
 /// One module's lowering, before `program::link`/`program::finalize`
@@ -179,6 +186,7 @@ pub fn lower_module(
         imported_class_indices: Vec::new(),
         imported_alias_indices: Vec::new(),
         definition_spans: Vec::new(),
+        signatures: SignatureTable::collect(&module.body),
     };
     // Part 1 of #541 (extending D-173): give the builtin exception
     // hierarchy a real presence in the class table, seeded *before* any
@@ -351,6 +359,7 @@ pub fn lower_module(
         imported_class_indices,
         imported_alias_indices,
         definition_spans,
+        signatures: _,
     } = state;
     // The imported copies were pushed after the synthetic set, so
     // stripping them leaves the synthetic entries still at the front.
@@ -523,6 +532,7 @@ fn lower_top_level_item<'a>(
             &state.items,
             &state.class_asts,
             &state.imports,
+            &state.signatures,
         )?;
         // D-154 Part 1's own post-merge review finding: two module-level
         // classes sharing a name would each lower their own `__init__`
@@ -672,9 +682,13 @@ fn lower_top_level_item<'a>(
         ));
     }
     let item = match stmt {
-        Stmt::FunctionDef(def) => {
-            lower_function(def, &state.aliases, &class_name_defs, &state.imports)?
-        }
+        Stmt::FunctionDef(def) => lower_function(
+            def,
+            &state.aliases,
+            &class_name_defs,
+            &state.imports,
+            &state.signatures,
+        )?,
         other => HirItem::TopLevelStmt(stmt::lower_stmt(
             other,
             &state.aliases,
@@ -687,6 +701,7 @@ fn lower_top_level_item<'a>(
             None,
             &class_name_defs,
             &state.imports,
+            &state.signatures,
         )?),
     };
     let span = statement_span(stmt);

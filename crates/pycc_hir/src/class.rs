@@ -73,6 +73,7 @@ mod reserved_names;
 mod shadow;
 pub use shadow::declares_name_outside_class_attrs;
 
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
 use attrs::{
     ClassAttrCollisionInput, reject_class_attr_collisions,
@@ -887,6 +888,7 @@ pub(crate) fn lower_class(
     module_items: &[HirItem],
     base_class_asts: &[(String, &pycc_ast::StmtClassDef)],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
@@ -1193,6 +1195,7 @@ pub(crate) fn lower_class(
         mro: &mro,
         defined_classes,
         imports,
+        signatures,
     })?;
     // #911: the class-attribute/instance-slot collision check runs here,
     // after the walk, not at the `AnnAssign` site: `attrs` is populated only
@@ -1477,6 +1480,7 @@ pub(crate) fn lower_class(
 /// see `Ty::Infer`'s own doc comment). An unannotated `__init__` parameter
 /// referenced by a `self.<attr> = <param>` assignment would otherwise seed
 /// the slot with `Ty::Infer`, which must never reach `pycc_mir` unresolved.
+#[allow(clippy::too_many_arguments)]
 fn lower_method(
     def: &pycc_ast::StmtFunctionDef,
     class_name: &str,
@@ -1485,6 +1489,7 @@ fn lower_method(
     kind: &MethodKind,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -1731,6 +1736,7 @@ fn lower_method(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?
     };
     // #377/#436: compute the mangled name based on the method kind. A

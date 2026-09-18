@@ -49,6 +49,7 @@
 
 use super::lower_body;
 use crate::class::ClassAnnotationInfo;
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirExceptHandler, ImportBinding, Ty, unsupported};
 use pycc_ast::{ExceptHandler, Expr};
 use pycc_diag::Diagnostic;
@@ -108,6 +109,7 @@ pub(super) fn lower_except_handler(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirExceptHandler, Diagnostic> {
     let pycc_ast::ExceptHandler::ExceptHandler(handler) = handler;
     let exc_type = handler
@@ -161,6 +163,7 @@ pub(super) fn lower_except_handler(
         type_param,
         class_defs,
         imports,
+        signatures,
     )?;
     Ok(HirExceptHandler {
         exc_type,

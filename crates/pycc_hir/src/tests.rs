@@ -5,6 +5,7 @@
 //! private items it reaches resolve exactly as they did inline.
 
 use super::*;
+use crate::expr::keyword_bind::SignatureTable;
 use std::collections::HashSet;
 // `lower_comprehension_header`/`rename_name_in_expr` moved to `expr.rs`
 // (issue #361, D-149) but the two tests below call them directly,
@@ -2064,8 +2065,13 @@ fn a_param_spec_type_parameter_is_rejected() {
 
 #[test]
 fn a_keyword_call_argument_is_rejected_instead_of_being_erased() {
+    // Part 1 of #884 (#1125) made a keyword call to a module-level `def`
+    // bind by name, so this regression needs a callee the signature table
+    // cannot answer for. An undefined name is the simplest such callee, and
+    // the point of the test is unchanged: the keyword is rejected, never
+    // silently dropped on the way to `HirExpr::Call`.
     assert_capability_error_message(
-        "def f() -> None:\n    return\n\nf(extra=undefined)\n",
+        "f(extra=undefined)\n",
         "keyword call arguments are not supported yet",
     );
 }
@@ -3349,7 +3355,7 @@ fn lower_comprehension_header_rejects_an_empty_generators_slice() {
     // span-fallback expression at all (D-014's region coverage gate
     // would otherwise flag that fallback as an uncoverable dead
     // branch).
-    let err = lower_comprehension_header(&[], None, &[]).unwrap_err();
+    let err = lower_comprehension_header(&[], None, &[], &SignatureTable::default()).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
         err.message

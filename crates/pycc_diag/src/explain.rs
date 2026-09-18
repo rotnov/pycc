@@ -298,7 +298,11 @@ calling it). Since #898 (D-222) it also covers the project-import shapes \
 CPython itself rejects: importing a name the target module does not define, \
 a relative import with no parent package or one that climbs above the \
 top-level package, and a relative target that resolves to no module. (An \
-import shape pycc merely has not implemented yet stays `C0001`.) Different call sites across `pycc_types` construct T0021 with \
+import shape pycc merely has not implemented yet stays `C0001`.) Since #1125 (Part 1 of #884) it also covers the call shapes CPython rejects when a keyword \
+argument is bound to a parameter by name: an unexpected keyword name, a \
+positional-only parameter passed as a keyword, a parameter supplied both \
+positionally and by keyword, and a parameter left unsupplied. Different call \
+sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \
 that they are all instances of the same underlying category (a name or \
 value did not have the type or binding shape an expression needed), not \

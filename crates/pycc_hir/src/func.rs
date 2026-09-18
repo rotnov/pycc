@@ -15,6 +15,7 @@
 //! resolving unchanged.
 
 use crate::class::ClassAnnotationInfo;
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirItem, ImportBinding, Ty, stmt, unsupported};
 use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
@@ -24,6 +25,7 @@ pub(crate) fn lower_function(
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
@@ -83,6 +85,7 @@ pub(crate) fn lower_function(
         type_param.as_deref(),
         class_defs,
         imports,
+        signatures,
     )?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
@@ -140,12 +143,18 @@ pub(crate) fn lower_params(
     // this file produces (self-review finding, pre-merge).
     //
     // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
-    // `/` marker) are now lowered via the same `lower_arg_list` path as
-    // ordinary `args`, prepended before `args` in the parameter list. Since
-    // keyword call arguments are already globally unsupported (rejected in
-    // `expr.rs`/`stmt.rs`), every parameter is already effectively
-    // positional-only — accepting `posonlyargs` changes nothing about
-    // call-site checking.
+    // `/` marker) are lowered via the same `lower_arg_list` path as ordinary
+    // `args`, prepended before `args` in the parameter list — so index `i`
+    // of the returned vector is index `i` of `HirExpr::Call::args`.
+    //
+    // Part 1 of #884 (#1125) made that ordering load-bearing. Keyword call
+    // arguments are no longer globally unsupported: a call to a module-level
+    // `def` may now name a parameter, so the two parameter kinds are no
+    // longer interchangeable at the call site. `expr::keyword_bind`
+    // reproduces this exact concatenation order when it collects a
+    // signature, and excludes the leading `posonlyargs` entries from the set
+    // a keyword may name — naming one is a `T0021`, as in CPython. A
+    // parameter after the `/` marker stays bindable by name.
     if parameters.vararg.is_some() {
         return Err(unsupported(
             "`*args` is not supported yet",
