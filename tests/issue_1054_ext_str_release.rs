@@ -21,12 +21,27 @@
 //!
 //! `#[ignore]`d like every other hosted test in this directory: it needs an
 //! installed CPython 3.13+ with development headers, which is a property of
-//! the machine and not of the change. CI runs it on every Tier-1
-//! `native-build-test` leg through that job's
+//! the machine and not of the change. CI runs it on the non-Windows Tier-1
+//! `native-build-test` legs through that job's
 //! `cargo test --workspace -- --include-ignored`. It therefore earns no line
 //! coverage (`llvm-cov` runs without that flag); the changed lines are
 //! covered by the `issue_1054_*` tests in `crates/pycc_codegen/src/tests.rs`
 //! and by `pycc_rt`'s own unit test.
+//!
+//! **Not compiled on Windows**, by the file-level `cfg` below. MSVC exports
+//! from a DLL only what is declared `__declspec(dllexport)` or listed in a
+//! `.def` file, and a D-244 `ext` module declares exactly one export, its
+//! `PyMODINIT_FUNC PyInit_<name>`. `pycc_rt` is linked in as a static archive
+//! (`crate-type = ["staticlib", "rlib"]`), so `pycc_rt_str_live_objects` is
+//! *present* in the `.pyd` but not *reachable* through `ctypes`, and there is
+//! no separate shared `pycc_rt` to open instead -- a second copy would carry
+//! its own `STR_LIVE` and prove nothing. macOS and Linux export every global
+//! symbol of a shared library by default, which is why the probe works there.
+//! The property under test is codegen plus runtime refcounting and is not
+//! platform-specific: the ten `issue_1054_*` IR tests carry it on every
+//! platform, Windows included. Exporting the counter from the `ext` artifact
+//! so this probe covers all Tier-1 platforms is tracked separately.
+#![cfg(not(target_os = "windows"))]
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
