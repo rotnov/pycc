@@ -644,43 +644,31 @@ fn is_declaration_body(body: &[Stmt]) -> bool {
 /// One already-defined class, projected down to exactly what
 /// `annotation_to_ty` needs. Replaces the former `(String, bool)` pair
 /// (#380, PR-20), which carried the class name and its protocol flag and had
-/// nowhere to record #611's subscriptability answer.
+/// nowhere to record #693's `__class_getitem__` return type.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClassAnnotationInfo {
     pub(crate) name: String,
     pub(crate) is_protocol: bool,
-    /// PEP 560 (#611): whether `ClassName[type_arg]` is legal in a type
-    /// annotation. True when the class defines `__class_getitem__` somewhere
-    /// in its MRO -- in either the `@staticmethod` or the `@classmethod`
-    /// spelling -- or when it is a PEP 695 generic class (`class C[T]:`),
-    /// which CPython makes implicitly subscriptable through `Generic`
-    /// without any explicit hook of its own.
-    pub(crate) subscriptable: bool,
     /// Issue #693 (PEP 560, extending #611): the declared return type of
     /// whichever `__class_getitem__` hook `pycc_types`'
     /// `resolve_static_or_class_method_call` would itself dispatch to for a
     /// value-position `ClassName[type_arg]` call on this MRO -- found by
     /// `class_getitem_return_ty`'s own two-pass MRO walk (every MRO entry's
     /// `static_methods` first, then, only if none declared the hook, every
-    /// MRO entry's `class_methods`), which is deliberately the *same*
-    /// two-pass order and not the single combined pass `subscriptable`'s own
-    /// hook-existence search (`defines_class_getitem`) uses -- existence
-    /// doesn't care which table wins, so that search can check both tables
-    /// together at each MRO entry, but the winning declaration used to
-    /// resolve a *return type* must be the exact same one value position
-    /// would pick. `Some` only when an explicit hook exists somewhere in the
-    /// MRO -- never set for subscriptability granted purely by a PEP 695
+    /// MRO entry's `class_methods`). The two-pass order is deliberate: the
+    /// winning declaration used to resolve a *return type* must be the exact
+    /// same one value position would pick. `Some` only when an explicit hook
+    /// exists somewhere in the
+    /// MRO -- never set when a class is generic purely through a PEP 695
     /// type parameter with no hook of its own, since that case is
     /// deliberately still handled by `GenericClassInstantiate`, not by this
     /// field. `annotation_to_ty`'s `Subscript` arm routes
     /// `ClassName[type_arg]` through this return type instead of falling
     /// back to `Ty::Instance(ClassName)` when it is `Some`, and takes that
     /// same `Ty::Instance` fallback when it is `None` -- including the
-    /// structurally-unreachable-in-practice case where `subscriptable` is
-    /// true (the hook exists) but `class_getitem_return_ty`'s `items` lookup
-    /// still comes back empty, since `subscriptable` is deliberately keyed
-    /// on hook existence alone and never on this field's own resolution
-    /// outcome (issue #693 deep-review, Finding 2). Always `None` for the
+    /// structurally-unreachable-in-practice case where an explicit hook
+    /// exists but `class_getitem_return_ty`'s `items` lookup still comes
+    /// back empty (issue #693 deep-review, Finding 2). Always `None` for the
     /// self-referential entry `lower_class` pushes for the class it is
     /// currently lowering (see that call site's own comment) -- the hook's
     /// return type is not yet resolvable at that point, so a
@@ -709,21 +697,6 @@ pub(crate) fn class_annotation_infos(
             ClassAnnotationInfo {
                 name: name.clone(),
                 is_protocol: def.is_protocol,
-                // Subscriptability is gated purely on hook *existence*
-                // (`defines_class_getitem`), never on `class_getitem_return`'s
-                // own success at resolving a return type. This is
-                // deliberately decoupled: `class_getitem_return_ty`'s
-                // `items` lookup is documented as unreachable-in-practice
-                // when the hook exists, but that is an invariant of the
-                // current call graph, not something this type enforces. If
-                // that invariant were ever violated, coupling
-                // `subscriptable` to the resolution outcome would silently
-                // flip a previously-accepted class to a T0044 rejection
-                // instead of degrading to the pre-#693
-                // `Ty::Instance(ClassName)` fallback that
-                // `annotation_to_ty`'s `Subscript` arm already provides for
-                // a `None` `class_getitem_return`.
-                subscriptable: def.type_param.is_some() || defines_class_getitem(defs, &def.mro),
                 class_getitem_return,
             }
         })
@@ -816,42 +789,6 @@ fn class_getitem_return_ty(
     None
 }
 
-/// PEP 560 (#611): whether `def` declares `__class_getitem__` anywhere in
-/// its MRO. Checks `static_methods` and `class_methods` -- the same two
-/// tables, for the same reason, that `pycc_types`' own value-position
-/// `resolve_static_or_class_method_call` walks when it dispatches `C[x]`.
-/// The two crates must agree on which classes are subscriptable, so the
-/// lookups are deliberately kept parallel. `class_annotation_infos` calls
-/// this to compute `ClassAnnotationInfo::subscriptable` independently of
-/// whether `class_getitem_return_ty`'s own resolution of the hook's return
-/// type succeeds (issue #693 deep-review, Finding 2): a class can be
-/// subscriptable purely by declaring the hook, even in the
-/// structurally-unreachable-in-practice case where the return-type lookup
-/// comes back empty.
-///
-/// Iterates the class table and tests MRO membership, rather than iterating
-/// `mro` and looking each entry up in `defs` (the shape `class_getitem_return_ty`
-/// uses, since it also needs the mangled name for a *specific* MRO entry
-/// once found). The two shapes handle a `mro` entry absent from `defs` --
-/// deliberately exercised by `class::mro::tests::circular_inheritance_in_mro_is_rejected`
-/// via an incomplete `defined_classes` slice -- differently but equivalently
-/// safely: `class_getitem_return_ty` walks `mro` and defensively `continue`s
-/// past an entry it cannot look up, while this function walks `defs` and
-/// filters by `mro.contains`, so an entry missing from `defs` is simply
-/// never visited by the iteration at all. Neither shape panics or needs an
-/// `Option`/`unwrap` for the missing case; this one just never constructs
-/// the "look it up and get `None`" arm in the first place.
-fn defines_class_getitem(defs: &[(String, HirClassDef)], mro: &[String]) -> bool {
-    defs.iter().any(|(name, mro_def)| {
-        mro.contains(name)
-            && mro_def
-                .static_methods
-                .iter()
-                .chain(&mro_def.class_methods)
-                .any(|(method, _)| method == "__class_getitem__")
-    })
-}
-
 /// Lowers a module-level `class Foo: ...` statement (D-154). Returns the
 /// class's own declared shape (for `HirModule::class_defs`) alongside every
 /// method it defines, already lowered into ordinary mangled
@@ -892,7 +829,6 @@ pub(crate) fn lower_class(
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
-    // #611 (PEP 560) added the per-class subscriptability flag it carries;
     // #693 added `class_getitem_return`, resolved from `module_items` (every
     // `HirItem::Function` lowered by an earlier class or top-level `def` in
     // this module, in source order).
@@ -1088,42 +1024,29 @@ pub(crate) fn lower_class(
         // another protocol — no extra check needed here.
     }
     let mro = resolve_mro(&class_name, &bases, defined_classes, def.range.into())?;
-    // PEP 560 (#611): the class currently being lowered is not in
-    // `defined_classes` yet, so without this entry a self-referential
-    // `C[int]` annotation inside `C`'s own body would bypass the
-    // subscriptability gate that every *other* class name goes through. Its
-    // own `static_methods`/`class_methods` tables are still empty at this
-    // point, so an own hook is detected by pre-scanning the class body's
-    // `def`s; a hook inherited from a base is found by the same MRO walk
-    // over `defined_classes` that `class_annotation_infos` uses. A
-    // `classify_decorator` error is treated as "no hook" here -- the
-    // class-body loop below reports it properly a few lines later, and
-    // this pre-scan must not pre-empt that diagnostic.
-    let declares_own_class_getitem = def.body.iter().any(|stmt| match stmt {
-        Stmt::FunctionDef(method) if method.name.id.as_str() == "__class_getitem__" => matches!(
-            classify_decorator(
-                &method.decorator_list,
-                "__class_getitem__",
-                method.range.into()
-            ),
-            Ok(MethodKind::StaticMethod | MethodKind::ClassMethod)
-        ),
-        _ => false,
-    });
+    // PEP 560 (#611, narrowed by #1130): the class currently being lowered
+    // is not in `defined_classes` yet, so without this entry a
+    // self-referential `C[int]` annotation inside `C`'s own body would not
+    // find its own class at all. Since #1130 there is no subscriptability
+    // gate left for it to bypass -- a subscripted annotation whose base
+    // resolves to a class is accepted with the type argument erased -- so
+    // the entry's remaining purpose is the `class_name` carve-out in
+    // `annotation_to_ty`'s subscript arm: the direct `class_defs` lookup is
+    // skipped for the six names the `Expr::Name` arm answers before
+    // `class_defs` (`name_resolves_before_class_defs`) *except* when the base
+    // is the enclosing class's own name, and that exception resolves through
+    // this entry.
     class_name_defs.push(ClassAnnotationInfo {
         name: class_name.clone(),
         is_protocol,
-        subscriptable: type_param.is_some()
-            || declares_own_class_getitem
-            || defines_class_getitem(defined_classes, &mro),
         // #693: the hook's return type is not resolvable yet at this
-        // point -- an own hook (`declares_own_class_getitem`) has not been
-        // lowered into an `HirItem::Function` yet, and this self-referential
-        // entry exists specifically to keep a same-body annotation from
-        // hitting the "not subscriptable" rejection, not to type it
-        // precisely. Such an annotation (rare: `ClassName[x]` referring to
-        // the very class whose body it appears in) falls back to
-        // `Ty::Instance`, exactly as it did before this field existed.
+        // point -- an own hook has not been lowered into an
+        // `HirItem::Function` yet, and this self-referential entry exists
+        // specifically to make a same-body annotation name its own class,
+        // not to type it precisely. Such an annotation (rare:
+        // `ClassName[x]` referring to the very class whose body it appears
+        // in) falls back to `Ty::Instance`, exactly as it did before this
+        // field existed.
         class_getitem_return: None,
     });
     let enum_members: Vec<(String, EnumMemberValue)> = Vec::new();

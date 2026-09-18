@@ -323,6 +323,22 @@ fn bare_container_example(name: &str) -> Option<&'static str> {
     }
 }
 
+/// The six names [`annotation_to_ty`]'s `Expr::Name` arm answers *before* it
+/// consults `class_defs` or the alias table **and that the `Expr::Subscript`
+/// arm can reach**. Canonical statement of the precedence rule D-244
+/// statements (h) and (k) describe; every site that dispatches on it derives
+/// from here rather than restating the list. `ClassVar` is answered before
+/// both tables too but is deliberately absent: the subscript arm intercepts
+/// `ClassVar[...]` at the top of its own match, so it never reaches this
+/// helper. `ndarray` is deliberately absent too -- it is an ordinary
+/// identifier resolved *after* both tables (D-244 statement (h)).
+fn name_resolves_before_class_defs(base: &str) -> bool {
+    matches!(
+        base,
+        "int" | "float" | "bool" | "str" | "Any" | "memoryview"
+    )
+}
+
 /// The noun for [`annotation_to_ty`]'s non-class `T0044` (#931): what the
 /// base of a subscripted annotation resolved to, when it is neither a class
 /// nor an alias to one. The arms follow the **same precedence the
@@ -344,7 +360,6 @@ pub(crate) fn subscripted_base_description(
     base: &str,
     type_param: Option<&str>,
     class_name: Option<&str>,
-    aliases: &[(String, Ty)],
 ) -> String {
     if Some(base) == type_param {
         format!("type parameter `{base}`")
@@ -355,20 +370,6 @@ pub(crate) fn subscripted_base_description(
     } else {
         match base {
             "int" | "float" | "bool" | "str" => format!("builtin type `{base}`"),
-            // #1129: the buffer carrier's two spellings are neither builtin
-            // scalars nor aliases, so the catch-all noun below would call
-            // them something the program never wrote. The two spellings are
-            // guarded differently because the `Expr::Name` arm resolves them
-            // at different points: `memoryview` is a reserved keyword decided
-            // before `class_defs` and the alias table are consulted, exactly
-            // like the scalars above, so its noun is unconditional; `ndarray`
-            // is an ordinary identifier resolved only after both, so a
-            // program that binds it really does get the alias and must still
-            // read `type alias` here.
-            "memoryview" => format!("buffer type `{base}`"),
-            "ndarray" if !aliases.iter().any(|(alias_name, _)| alias_name == base) => {
-                format!("buffer type `{base}`")
-            }
             _ => format!("type alias `{base}`"),
         }
     }
@@ -793,19 +794,22 @@ pub(crate) fn annotation_to_ty(
             }
         },
         // Issue #435 (Part D, __class_getitem__): `ClassName[type_arg]` as a
-        // type annotation (PEP 560). A class that defines `__class_getitem__`
-        // allows subscript syntax in annotations. In pycc's static type
-        // system, this resolves to the hook's declared return type when it
-        // has one (#693), and otherwise to `Ty::Instance(ClassName)` — the
-        // class itself, ignoring the type argument (consistent with how
+        // type annotation (PEP 560). Since #1130 a subscript whose base
+        // resolves to a type pycc can name nominally is accepted whether or
+        // not the class defines `__class_getitem__`: in pycc's static type
+        // system it resolves to the hook's declared return type when the
+        // class has one (#693), and otherwise to `Ty::Instance(ClassName)` —
+        // the class itself, ignoring the type argument (consistent with how
         // generic classes are handled by PEP 695's `GenericClassInstantiate`
         // for actual instantiation, not annotation). A `type A = C` alias is
-        // transparent: `A[int]` behaves exactly as `C[int]`. The base must
-        // be a bare name; any other subscript shape is rejected, and (#931)
-        // a bare name that resolves to something other than a class or an
-        // alias to one -- a type parameter, a builtin scalar, `Self`, or a
-        // non-class alias -- is rejected with `T0044` rather than having
-        // its type argument silently discarded (see the `_ =>` arm).
+        // transparent: `A[int]` behaves exactly as `C[int]`, and so is a
+        // `type Arr = memoryview` alias to the buffer carrier. The base must
+        // be a bare name; any other subscript shape is rejected, and (#931,
+        // narrowed by #1130) a bare name that resolves to something that is
+        // *not* a nameable type -- a type parameter, a builtin scalar,
+        // `Self`, or an alias to a non-class, non-carrier `Ty` -- is
+        // rejected with `T0044` rather than having its type argument
+        // silently discarded (see the `_ =>` arm).
         //
         // PEP 593 (#383): `Annotated[X, ...]` is recognized as a bare name
         // (no `from typing import Annotated` required, matching the existing
@@ -871,23 +875,39 @@ pub(crate) fn annotation_to_ty(
                     };
                     annotation_to_ty(x, type_param, class_name, aliases, class_defs)
                 }
-                // PEP 560 (#611): reject a subscript on a known class that
-                // is not subscriptable. CPython raises `TypeError: type 'C'
-                // is not subscriptable` for the same program, and pycc's own
-                // value-position path (#610) already reports it as `T0044`
-                // through `t0044_unknown_member`, so this arm reuses that
-                // code rather than the surrounding `C0001`.
+                // PEP 560 (#611, reversed in annotation position by #1130):
+                // a subscript on a known class used to be rejected unless
+                // the class defined `__class_getitem__`. It no longer is.
+                // CPython 3.14 evaluates annotations lazily (PEP 649/749),
+                // so `class C: pass` + `def f(a: C[int])` raises no
+                // `TypeError` at definition time -- that error surfaces only
+                // through `typing.get_type_hints`, and pycc builds no
+                // runtime `__annotations__` object for any function, class
+                // or module, so no pycc-compiled program can reach it.
+                // Accepting the annotation therefore moves toward CPython
+                // 3.14's observable behavior, not away from it. **Value
+                // position is the opposite and is deliberately unchanged**:
+                // `x = C[int]` is evaluated eagerly and really does raise
+                // `TypeError: type 'C' is not subscriptable`, so
+                // `pycc_types`' value-position `C[x]` path (#610) computes
+                // its own subscriptability answer and keeps reporting
+                // `T0044`. The resulting asymmetry is CPython's own, not an
+                // invention of this change. The forfeiture #1130 accepts in
+                // exchange: `C[int]` where `C` is a genuinely non-generic
+                // user class is an ordinary typo that #611 caught and that
+                // pycc now accepts silently.
                 //
-                // #931 widens the same rule to every *other* resolvable base
-                // that is not a class: a PEP 695 type parameter (`T[int]`),
-                // a builtin scalar (`int[str]`), `Self` inside a class, and
-                // a `type` alias to a non-class type. Each of those used to
-                // fall through to the bare-name recursion below, which
-                // resolved the base and silently discarded the type
-                // argument. CPython reports all of them with the same
+                // #931 rejects every resolvable base that is *not* a
+                // nameable type: a PEP 695 type parameter (`T[int]`), a
+                // builtin scalar (`int[str]`), `Self` inside a class, and a
+                // `type` alias to a non-class, non-carrier type. Each of
+                // those used to fall through to the bare-name recursion
+                // below, which resolved the base and silently discarded the
+                // type argument. CPython reports all of them with the same
                 // `TypeError: ... is not subscriptable`, so they share the
-                // code with the known-class case and differ only in the
-                // noun (`subscripted_base_description`).
+                // `T0044` code and differ only in the noun
+                // (`subscripted_base_description`). #1130 carves the buffer
+                // carrier out of the alias half of that list -- see step 4.
                 //
                 // Two bases keep their pre-#931 diagnostic on purpose: an
                 // undefined name still gets the exact `C0001` that
@@ -928,10 +948,7 @@ pub(crate) fn annotation_to_ty(
                     let name_resolves_before_aliases = Some(base) == type_param
                         || (base == "Self" && class_name.is_some())
                         || Some(base) == class_name
-                        || matches!(
-                            base,
-                            "int" | "float" | "bool" | "str" | "Any" | "memoryview"
-                        );
+                        || name_resolves_before_class_defs(base);
                     let alias_target = if name_resolves_before_aliases {
                         None
                     } else {
@@ -952,7 +969,9 @@ pub(crate) fn annotation_to_ty(
                     // self-referential entry `lower_class` pushes, and
                     // `G[int]` inside `class G[T]`'s own body must stay
                     // accepted.
-                    let known_class = if Some(base) == type_param {
+                    let known_class = if Some(base) == type_param
+                        || (Some(base) != class_name && name_resolves_before_class_defs(base))
+                    {
                         None
                     } else {
                         class_defs.iter().find(|info| info.name == base)
@@ -971,17 +990,6 @@ pub(crate) fn annotation_to_ty(
                     // the base is an alias (`type A = C` / `x: A[int]`), so
                     // the text agrees with the caret.
                     if let Some(info) = known_class {
-                        if !info.subscriptable {
-                            return Err(Diagnostic::error(
-                                "T0044",
-                                format!(
-                                    "class `{}` does not define `__class_getitem__`, so \
-                                     `{base}[...]` is not a valid type annotation",
-                                    info.name
-                                ),
-                                Span::new(range.start, range.end),
-                            ));
-                        }
                         // Issue #693 (PEP 560): when the class's `__class_getitem__`
                         // hook has a resolvable declared return type, the
                         // annotation resolves to *that* type -- matching
@@ -989,7 +997,7 @@ pub(crate) fn annotation_to_ty(
                         // identical use of the hook's declared return type for
                         // value-position `C[x]` (#610) -- rather than to
                         // `Ty::Instance(ClassName)`. `class_getitem_return` is
-                        // `None` when subscriptability comes only from a PEP 695
+                        // `None` when the class is generic only through a PEP 695
                         // type parameter with no explicit hook (that case is
                         // handled by `GenericClassInstantiate`, not here), from
                         // the self-referential entry `lower_class` pushes for the
@@ -1074,27 +1082,56 @@ pub(crate) fn annotation_to_ty(
                             class_defs,
                         );
                     }
-                    // Step 4 (#931): resolve the bare base so an undefined
-                    // name keeps its cascade-shaped `C0001` (D-219) and `Any`
-                    // keeps `T0002`. A base that resolves here is, by
-                    // construction, not a class and not an alias to one: a
-                    // type parameter, `Self`, a builtin scalar, or an alias to
-                    // a scalar/container/Optional/type parameter. None of
-                    // those accepts a type argument, so the subscript is
-                    // rejected instead of silently discarding it.
-                    annotation_to_ty(
+                    // Step 4 (#931, narrowed by #1130): resolve the bare base
+                    // so an undefined name keeps its cascade-shaped `C0001`
+                    // (D-219) and `Any` keeps `T0002`. A base that resolves
+                    // here is either not a class at all -- a type parameter,
+                    // `Self`, a builtin scalar, or an alias to a
+                    // scalar/container/Optional/type parameter -- or it is one
+                    // of the six names the `Expr::Name` arm answers before
+                    // `class_defs` and a class of that name exists
+                    // (`class int[T]: pass` + `def f(a: int[str])` reaches
+                    // here with `int` in `class_defs`, because the gate on
+                    // the direct lookup above skips it: the reserved name,
+                    // not the shadow class, is what the bare form means).
+                    // None of those accepts a type argument, so the subscript
+                    // is rejected instead of silently discarding it -- except
+                    // for the buffer carrier, which is a nameable type.
+                    // #1130: the buffer carrier is a nameable type, so a
+                    // subscript on it is erased exactly as a class's is --
+                    // `memoryview[float]`, `ndarray[float]`, and
+                    // `type Arr = memoryview` + `Arr[float]` all lower to the
+                    // carrier. Keyed on the resolved `Ty` rather than on the
+                    // spelling, so a future carrier spelling (#1129 added the
+                    // second) is admitted by its registration alone.
+                    //
+                    // Keying on the resolved type is safe only because the
+                    // `Expr::Name` arm answers a PEP 695 type parameter
+                    // (level 1) and the enclosing class's own name (level 3)
+                    // *before* the `memoryview` keyword arm (level 4): a type
+                    // parameter named `memoryview`, or a class named
+                    // `memoryview` seen from inside its own body, resolves to
+                    // `Ty::Param`/`Ty::Instance` here and the accept cannot
+                    // swallow it. `Self[int]` likewise resolves to
+                    // `Ty::Instance` through this same recursion and keeps
+                    // #931's rejection, which is why the accept is keyed on
+                    // `Ty::MemoryView` only and not on "any nominal type".
+                    let resolved = annotation_to_ty(
                         &Expr::Name(base_name.clone()),
                         type_param,
                         class_name,
                         aliases,
                         class_defs,
                     )?;
+                    if resolved == Ty::MemoryView {
+                        return Ok(resolved);
+                    }
                     Err(Diagnostic::error(
                         "T0044",
                         format!(
                             "{} is not subscriptable, so `{base}[...]` is not a valid type \
                              annotation",
-                            subscripted_base_description(base, type_param, class_name, aliases)
+                            subscripted_base_description(base, type_param, class_name)
                         ),
                         Span::new(range.start, range.end),
                     ))

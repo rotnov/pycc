@@ -6931,19 +6931,24 @@ fn a_container_return_annotation_still_meets_every_element_and_arity_gate() {
 fn a_user_defined_class_named_list_still_wins_over_the_builtin_container() {
     // The container branch is checked *after* the known-class lookup, so a
     // user's own `class list` is not silently retyped as a builtin list.
-    // Without `__class_getitem__` the subscript is the PEP 560 error, exactly
-    // as it was before #918.
-    let diagnostic = container_annotation_err(
+    // Before #1130 that precedence was proved by a refusal (the PEP 560
+    // `T0044` a hook-less class used to get); it is now proved by the
+    // resolved type directly, which is the stronger statement of the same
+    // #918 point -- `Ty::Instance("list")`, the user's class, and not
+    // `Ty::List(Int)`.
+    let module = pycc_parser_test_helper::parse(
         "class list:\n    def __init__(self) -> None:\n        self.v = 0\n\ndef f(x: list[int]) -> None:\n    return\n",
     );
-    assert_eq!(diagnostic.code, "T0044");
-    assert!(
-        diagnostic
-            .message
-            .contains("class `list` does not define `__class_getitem__`"),
-        "{}",
-        diagnostic.message
-    );
+    let hir = lower_checked(&module).expect("a user-defined `class list` must win and lower");
+    let param_ty = hir
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Function { name, params, .. } if name == "f" => Some(params[0].1.clone()),
+            _ => None,
+        })
+        .expect("expected `f` to lower to an `HirItem::Function`");
+    assert_eq!(param_ty, Ty::Instance(Box::new("list".to_string())));
 }
 
 #[test]

@@ -19,9 +19,12 @@
 //! #1129 owns *carrier registration* — which pycc type the boundary admits
 //! and what the wrapper does with the object. How a user may *spell* a
 //! type is owned elsewhere: attribute-qualified `numpy.ndarray` by #889,
-//! subscripted `NDArray[...]` by #1130, import aliasing by #883/#963/#964.
-//! None of those is advanced here, and no numpy source file in the wild is
-//! made compilable by this change on its own.
+//! import aliasing by #883/#963/#964. Neither is advanced here, and no
+//! numpy source file in the wild is made compilable by this change on its
+//! own. The *subscripted* spelling was owned by #1130 and has since landed:
+//! three tests in this file assert the carrier's own subscripted form, and
+//! the rest of #1130's surface lives in
+//! `tests/issue_1130_subscripted_annotations.rs`.
 //!
 //! The nine tests below that need no interpreter at all — every refusal
 //! and acceptance they assert is resolved on the program before `plan_ext`
@@ -137,36 +140,52 @@ fn a_program_that_binds_ndarray_itself_keeps_its_own_meaning() {
     );
 }
 
-/// The subscripted form stays refused, and says what the name is.
+/// The subscripted form lowers to the same carrier the bare form does.
 ///
-/// `ndarray[...]` belongs to #1130 and is deliberately not admitted here.
-/// What this change does own is the noun the refusal uses: before the bare
-/// name resolved at all, the subscript path's own recursion failed and the
-/// user saw the generic unknown-name `C0001`; now that it resolves, the
-/// path reaches `T0044`, whose catch-all called every unrecognized base a
-/// "type alias" -- a word for something the program never wrote. Both
-/// spellings of the carrier get their own noun instead, `memoryview`
-/// included, which had the same wrong word before this issue.
+/// #1130 admits a subscripted annotation whose base resolves to a type pycc
+/// can name nominally, and the buffer carrier is one. This test used to
+/// assert a refusal with a per-spelling noun; it now asserts the acceptance,
+/// which is D-244 statement (b) -- the two spellings are one pycc type with
+/// no run-time observable difference -- restated for the subscripted form.
+/// The type argument is erased and never lowered, so `[float]` is not
+/// modelled and not checked.
+///
+/// The acceptance is proved by the *use*, not by the exit code alone: only
+/// the carrier supports `a[0]` yielding `float`, so a control arm returning
+/// that element as `int` must be the `T0022` mismatch. Without the control,
+/// an accept caused by resolving to something else entirely would pass.
 #[test]
-fn a_subscripted_ndarray_is_refused_as_a_buffer_type_rather_than_an_alias() {
+fn a_subscripted_carrier_spelling_lowers_to_the_carrier_itself() {
     for spelling in ["ndarray", "memoryview"] {
         let dir = fixture(
-            "1129_subscript",
-            &format!("def f(a: {spelling}[float]) -> int:\n    return 1\n"),
+            "1130_subscript_carrier",
+            &format!("def f(a: {spelling}[float]) -> float:\n    return a[0]\n"),
         );
         let out = pycc()
             .arg("check")
             .arg(dir.join("nd_probe.py"))
             .output()
             .expect("pycc should spawn");
-        assert!(!out.status.success(), "{}", stdout_of(&out));
         // `check` renders on stdout where `build` renders on stderr, so
         // both are read rather than guessing which one this subcommand
         // uses.
         let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(err.contains("error[T0044]"), "{err}");
+        assert!(out.status.success(), "{err}");
+
+        let control = fixture(
+            "1130_subscript_carrier_control",
+            &format!("def f(a: {spelling}[float]) -> int:\n    return a[0]\n"),
+        );
+        let out = pycc()
+            .arg("check")
+            .arg(control.join("nd_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert!(err.contains("error[T0022]"), "{err}");
         assert!(
-            err.contains(&format!("buffer type `{spelling}` is not subscriptable")),
+            err.contains("return type mismatch: expected `int`, found `float`"),
             "{err}"
         );
     }
@@ -222,68 +241,116 @@ fn a_container_of_the_carrier_is_refused_by_the_container_gate() {
 
 #[test]
 fn a_shadowed_spelling_is_named_by_whichever_binding_actually_wins() {
-    for (spelling, expected) in [
-        ("memoryview", "buffer type `memoryview`"),
-        ("ndarray", "type alias `ndarray`"),
-    ] {
-        let dir = fixture(
-            "1129_subscript_shadow",
-            &format!(
-                "type {spelling} = int
+    // `memoryview` is a reserved keyword the `Expr::Name` arm decides before
+    // it reads the alias table, so `type memoryview = int` does not win and
+    // the subscripted form reaches the carrier -- which #1130 now accepts,
+    // where it used to be the `buffer type` refusal. Proved by the element
+    // read: only the carrier yields `float` from `a[0]`.
+    let dir = fixture(
+        "1130_subscript_shadow_memoryview",
+        "type memoryview = int\n\ndef f(a: memoryview[float]) -> float:\n    return a[0]\n",
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(out.status.success(), "{err}");
 
-def f(a: {spelling}[float]) -> int:
-    return 1
-"
-            ),
-        );
-        let out = pycc()
-            .arg("check")
-            .arg(dir.join("nd_probe.py"))
-            .output()
-            .expect("pycc should spawn");
-        assert!(!out.status.success(), "{}", stdout_of(&out));
-        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(err.contains("error[T0044]"), "{err}");
-        assert!(
-            err.contains(&format!("{expected} is not subscriptable")),
-            "{err}"
-        );
-    }
+    // `ndarray` is an ordinary identifier resolved only after the alias
+    // table, so there the alias really does win, `ndarray` means `int`, and
+    // a subscript on a scalar alias keeps #931's refusal with the truthful
+    // noun. This arm is unchanged by #1130.
+    let dir = fixture(
+        "1129_subscript_shadow",
+        "type ndarray = int\n\ndef f(a: ndarray[float]) -> int:\n    return 1\n",
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!out.status.success(), "{}", stdout_of(&out));
+    let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(err.contains("error[T0044]"), "{err}");
+    assert!(
+        err.contains("type alias `ndarray` is not subscriptable"),
+        "{err}"
+    );
 }
 
 /// The same precedence holds when the shadowing alias targets a class.
 ///
-/// The subscript path resolves an alias to a class one step earlier than
-/// `subscripted_base_description` runs, through its own predicate, so a
-/// scalar-targeted alias cannot exercise this ladder at all. With
-/// `type memoryview = C` the reserved keyword still wins and the refusal
-/// must name the buffer type rather than `C`; with `type ndarray = C` the
-/// alias wins and naming `C` is the truthful answer.
+/// With `type memoryview = C` the reserved keyword still wins and the
+/// subscript is the buffer carrier, not `C`; with `type ndarray = C` the
+/// alias wins and the subscript is `C`. #1130 **strengthens** D-244
+/// statement (k) here rather than weakening it: before this change both arms
+/// were refusals, so the only witness (k) had was a pair of
+/// differently-worded rejections, and a pair of nouns is weak evidence about
+/// which binding the pipeline actually resolved. Both arms are now
+/// acceptances, so each is pinned by a *use* that only its own winner
+/// supports -- `a[0]` yielding `float` for the carrier, `a.m()` for the
+/// class -- and each arm additionally asserts that the other winner's use is
+/// refused. That is four assertions where there used to be two nouns.
 #[test]
 fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
-    for (spelling, expected) in [
-        (
-            "memoryview",
-            "buffer type `memoryview` is not subscriptable",
+    const CLASS: &str = "class C:\n    def __init__(self) -> None:\n        self.v = 1\n\n    def m(self) -> int:\n        return self.v\n\n";
+
+    // `memoryview`: the keyword wins, so the parameter is the carrier.
+    let dir = fixture(
+        "1130_subscript_class_alias_memoryview",
+        &format!(
+            "{CLASS}type memoryview = C\n\ndef f(a: memoryview[int]) -> float:\n    return a[0]\n"
         ),
-        ("ndarray", "class `C` does not define `__class_getitem__`"),
-    ] {
-        let dir = fixture(
-            "1129_subscript_class_alias",
-            &format!(
-                "class C:\n    pass\n\ntype {spelling} = C\n\ndef f(a: {spelling}[int]) -> int:\n    return 1\n"
-            ),
-        );
-        let out = pycc()
-            .arg("check")
-            .arg(dir.join("nd_probe.py"))
-            .output()
-            .expect("pycc should spawn");
-        assert!(!out.status.success(), "{}", stdout_of(&out));
-        let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(err.contains("error[T0044]"), "{err}");
-        assert!(err.contains(expected), "{err}");
-    }
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(out.status.success(), "{err}");
+    // ...and it is *not* `C`: a member read only `C` supports is refused.
+    let dir = fixture(
+        "1130_subscript_class_alias_memoryview_control",
+        &format!(
+            "{CLASS}type memoryview = C\n\ndef f(a: memoryview[int]) -> int:\n    return a.m()\n"
+        ),
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!out.status.success(), "{}", stdout_of(&out));
+
+    // `ndarray`: the alias wins, so the parameter is `C`.
+    let dir = fixture(
+        "1130_subscript_class_alias_ndarray",
+        &format!("{CLASS}type ndarray = C\n\ndef f(a: ndarray[int]) -> int:\n    return a.m()\n"),
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(out.status.success(), "{err}");
+    // ...and it is *not* the carrier: an element read the carrier supports
+    // is refused because `C` does not support indexing.
+    let dir = fixture(
+        "1130_subscript_class_alias_ndarray_control",
+        &format!("{CLASS}type ndarray = C\n\ndef f(a: ndarray[int]) -> float:\n    return a[0]\n"),
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(dir.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(!out.status.success(), "{}", stdout_of(&out));
+    let err = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(err.contains("error[T0033]"), "{err}");
 }
 
 /// The two protocol-member refusals name the thing, not either spelling.

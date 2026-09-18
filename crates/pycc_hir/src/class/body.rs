@@ -88,7 +88,9 @@ pub(super) struct ClassBodyInput<'a> {
     /// Module-level type aliases, for annotation resolution.
     pub(super) aliases: &'a [(String, Ty)],
     /// Class annotation info for every class visible here, including a
-    /// self-entry for the class being lowered (PEP 560, #611).
+    /// self-entry for the class being lowered (PEP 560, #611, narrowed by
+    /// #1130 -- see `lower_class`'s own comment at that push for what the
+    /// self-entry is still for now that the subscriptability gate is gone).
     pub(super) class_name_defs: &'a [ClassAnnotationInfo],
     /// The class's resolved C3 MRO, most-derived first.
     pub(super) mro: &'a [String],
