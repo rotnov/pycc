@@ -21,10 +21,12 @@
 //! CPython element for element, and every *non*-conforming numpy argument
 //! must be refused by pycc's own authored text rather than read wrong.
 //!
-//! The subject takes the row count `n` as a parameter because `len(b)` is
-//! not yet a capability (#1116, a `C0001` gap). That is a consequence of
-//! the gap, not a requirement of the oracle: when #1116 lands, these
-//! functions keep compiling and this file needs no change.
+//! The subject takes the row count `n` as a parameter because `len(b)` was
+//! not a capability when this file was written (#1116, then a `C0001` gap).
+//! It has been one since #1116 landed, and the prediction this paragraph
+//! made held: these functions kept compiling and the file needed no change,
+//! so the parameter stays as the record of that rather than being rewritten
+//! now.
 //!
 //! The hosted arms below need numpy importable by the same interpreter
 //! that `pycc build --ext` links against. On CI that is supplied by the

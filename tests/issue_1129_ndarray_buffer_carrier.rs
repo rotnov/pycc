@@ -23,10 +23,10 @@
 //! None of those is advanced here, and no numpy source file in the wild is
 //! made compilable by this change on its own.
 //!
-//! The two tests below that need no interpreter at all — every refusal and
-//! acceptance they assert is resolved on the program before `plan_ext`
+//! The three tests below that need no interpreter at all — every refusal
+//! and acceptance they assert is resolved on the program before `plan_ext`
 //! probes the host toolchain — are not `#[ignore]`d, and they are what runs
-//! inside the coverage job. Only the third, which builds an artifact and
+//! inside the coverage job. Only the fourth, which builds an artifact and
 //! loads it into a live interpreter, is hosted.
 
 use pycc_scratch::ScratchDir;
@@ -87,6 +87,55 @@ def total(b: ndarray) -> float:
         s = s + b[i]
     return s
 ";
+
+/// A program that binds `ndarray` itself keeps its own meaning for the
+/// name, because the spelling is resolved *after* `class_defs` and the
+/// alias table rather than beside `memoryview` in the keyword list.
+///
+/// This is the rule the placement exists for, not a corner case. Every
+/// other name that list reserves is a Python builtin or a `typing` name;
+/// `ndarray` is an ordinary identifier, and in Python a module-level
+/// definition shadows an imported name rather than losing to it. Reserving
+/// it first was measured to refuse both programs below, each of which
+/// compiles clean before the spelling exists and must keep doing so after.
+#[test]
+fn a_program_that_binds_ndarray_itself_keeps_its_own_meaning() {
+    // A class of that name: the parameter is an instance of it, so reading
+    // the parameter is an ordinary read and not the buffer capability gap.
+    let cls = fixture(
+        "1129_shadow_class",
+        "class ndarray:\n    pass\n\ndef g(a: ndarray) -> int:\n    b = a\n    return 1\n",
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(cls.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(
+        out.status.success(),
+        "a user-defined `class ndarray` must win over the buffer spelling: {}{}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+
+    // An alias of that name, which resolves one link later in the same
+    // chain: `a` is an `int`, so arithmetic on it type-checks.
+    let alias = fixture(
+        "1129_shadow_alias",
+        "type ndarray = int\n\ndef g(a: ndarray) -> int:\n    return a + 1\n",
+    );
+    let out = pycc()
+        .arg("check")
+        .arg(alias.join("nd_probe.py"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(
+        out.status.success(),
+        "a user-defined `type ndarray` alias must win over the buffer spelling: {}{}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+}
 
 /// The annotation compiles, with no interpreter, no numpy, and no import.
 ///
