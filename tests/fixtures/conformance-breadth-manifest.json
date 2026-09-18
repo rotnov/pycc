@@ -766,19 +766,24 @@
       "feature": "Positional-only params `/`",
       "matrix_line": 329,
       "fixtures": [
-        "pep_0570_pos_only.py"
+        "pep_0570_pos_only.py",
+        "pep_0570_pos_only_keyword_rejected.py"
       ],
       "proven": [
         {
           "category": "a positional-only parameter marker `/` in a function signature",
           "evidence": "pep_0570_pos_only.py"
+        },
+        {
+          "category": "rejection of a positional-only parameter passed by keyword",
+          "evidence": "pep_0570_pos_only_keyword_rejected.py"
         }
       ],
       "not_proven": [
         {
-          "category": "rejection of a positional-only parameter passed by keyword",
+          "category": "a positional-only parameter name reused as a `**kwargs` key",
           "kind": "core",
-          "reason": "The PEP's enforcement half needs a keyword call, which is itself rejected with C0001.",
+          "reason": "PEP 570's motivating case -- `def f(a, /, **kwargs)` letting `kwargs` carry its own `a` -- needs `**kwargs`, which is still rejected with C0001.",
           "issue": 248
         }
       ]

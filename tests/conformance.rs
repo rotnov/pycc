@@ -800,6 +800,37 @@ fn pep_0570_pos_only_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// PEP 570, enforcement half (Part 1 of #884, #1125): naming a
+// positional-only parameter in a keyword argument is a `T0021` static
+// rejection. No CPython oracle is involved, for the same reason as
+// `pep_0594_dead_battery_rejected_produces_c0001` above: CPython raises
+// `TypeError` at call time while pycc rejects the program before it runs,
+// so a byte-for-byte comparison would compare two different failure
+// shapes. Needs no `python3.14` oracle on PATH, so it runs by default
+// (no `#[ignore]`).
+#[test]
+fn pep_0570_pos_only_keyword_rejected_produces_t0021() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/pep_0570_pos_only_keyword_rejected.py");
+    let output = Command::new(pycc_bin())
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "`pycc check` should reject tests/fixtures/pep_0570_pos_only_keyword_rejected.py"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("T0021"),
+        "expected a T0021 diagnostic, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("positional-only parameter `a`"),
+        "expected the diagnostic to name the positional-only parameter, got: {stdout}"
+    );
+}
+
 // PEP 591 (#383): `Final[X]` — unwraps to `X`, non-reassignable.
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
