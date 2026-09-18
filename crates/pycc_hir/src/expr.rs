@@ -35,7 +35,10 @@
 //! literal that reproduces current behavior.
 
 mod container_call;
+pub(crate) mod keyword_bind;
 mod std_receiver;
+
+use keyword_bind::SignatureTable;
 
 use crate::int_boundary::check_boundary_literal;
 use crate::{
@@ -136,11 +139,19 @@ fn fold_int_literal_sign(
 /// `m.sqrt(x)`) at the call-shaped and bare-attribute stdlib arms below,
 /// and `stmt::is_type_checking_guard`, which lets `t.TYPE_CHECKING` fold
 /// when `t` aliases `typing`. Every other arm ignores it.
+///
+/// `signatures` is the enclosing module's keyword-bindable signature table
+/// (Part 1 of #884, #1125), collected from its top-level `def`s before any
+/// item is lowered and threaded exactly as `imports` is. It is read in
+/// exactly one place: the `Expr::Call` arm below, which uses it both to
+/// decide whether a keyword call is bindable at all and to bind one that is.
+/// Every other arm ignores it.
 pub(crate) fn lower_expr(
     expr: &Expr,
     in_function: bool,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirExpr, Diagnostic> {
     let lowered = match expr {
         Expr::NumberLiteral(lit) => match &lit.value {
@@ -201,7 +212,13 @@ pub(crate) fn lower_expr(
                 } else {
                     UnaryOpKind::UAdd
                 },
-                operand: Box::new(lower_expr(operand, in_function, class_name, imports)?),
+                operand: Box::new(lower_expr(
+                    operand,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
             },
             // #604 (Part 3 of #573): `not x` and `~x`. Neither operator has
             // a literal-folding arm the way `USub`/`UAdd` do above --
@@ -211,11 +228,23 @@ pub(crate) fn lower_expr(
             // and is typed/rewritten downstream.
             (UnaryOp::Not, operand) => HirExpr::UnaryOp {
                 op: UnaryOpKind::Not,
-                operand: Box::new(lower_expr(operand, in_function, class_name, imports)?),
+                operand: Box::new(lower_expr(
+                    operand,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
             },
             (UnaryOp::Invert, operand) => HirExpr::UnaryOp {
                 op: UnaryOpKind::Invert,
-                operand: Box::new(lower_expr(operand, in_function, class_name, imports)?),
+                operand: Box::new(lower_expr(
+                    operand,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
             },
         },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
@@ -223,7 +252,7 @@ pub(crate) fn lower_expr(
             list.elts
                 .iter()
                 .map(|e| {
-                    let lowered = lower_expr(e, in_function, class_name, imports)?;
+                    let lowered = lower_expr(e, in_function, class_name, imports, signatures)?;
                     check_boundary_literal(
                         &lowered,
                         pycc_ast::expr_range(e),
@@ -243,8 +272,9 @@ pub(crate) fn lower_expr(
                             pycc_ast::expr_range(&item.value),
                         ));
                     };
-                    let key = lower_expr(key, in_function, class_name, imports)?;
-                    let value = lower_expr(&item.value, in_function, class_name, imports)?;
+                    let key = lower_expr(key, in_function, class_name, imports, signatures)?;
+                    let value =
+                        lower_expr(&item.value, in_function, class_name, imports, signatures)?;
                     check_boundary_literal(
                         &value,
                         pycc_ast::expr_range(&item.value),
@@ -258,7 +288,7 @@ pub(crate) fn lower_expr(
             set.elts
                 .iter()
                 .map(|e| {
-                    let lowered = lower_expr(e, in_function, class_name, imports)?;
+                    let lowered = lower_expr(e, in_function, class_name, imports, signatures)?;
                     check_boundary_literal(
                         &lowered,
                         pycc_ast::expr_range(e),
@@ -272,7 +302,7 @@ pub(crate) fn lower_expr(
             tuple
                 .elts
                 .iter()
-                .map(|e| lower_expr(e, in_function, class_name, imports))
+                .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Subscript(sub) => match sub.slice.as_ref() {
@@ -284,12 +314,18 @@ pub(crate) fn lower_expr(
             // `Option::map`/`.transpose()` rather than assumed present.
             Expr::Slice(slice) => {
                 let lower_bound = |e: &Expr| -> Result<HirExpr, Diagnostic> {
-                    let lowered = lower_expr(e, in_function, class_name, imports)?;
+                    let lowered = lower_expr(e, in_function, class_name, imports, signatures)?;
                     check_boundary_literal(&lowered, pycc_ast::expr_range(e), "slice bound")?;
                     Ok(lowered)
                 };
                 HirExpr::Slice {
-                    base: Box::new(lower_expr(&sub.value, in_function, class_name, imports)?),
+                    base: Box::new(lower_expr(
+                        &sub.value,
+                        in_function,
+                        class_name,
+                        imports,
+                        signatures,
+                    )?),
                     start: slice
                         .lower
                         .as_deref()
@@ -311,8 +347,14 @@ pub(crate) fn lower_expr(
                 }
             }
             _ => {
-                let base = Box::new(lower_expr(&sub.value, in_function, class_name, imports)?);
-                let index = lower_expr(&sub.slice, in_function, class_name, imports)?;
+                let base = Box::new(lower_expr(
+                    &sub.value,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?);
+                let index = lower_expr(&sub.slice, in_function, class_name, imports, signatures)?;
                 // #618/D-207 (finding from PR #827 review): a tuple base has
                 // no D-141 runtime `int`-boundary position at all -- tuple
                 // indexing is resolved entirely at compile time in
@@ -340,7 +382,17 @@ pub(crate) fn lower_expr(
             }
         },
         Expr::Call(call) => {
-            if !call.arguments.keywords.is_empty() {
+            // Part 1 of #884 (#1125) narrows this rejection in place rather
+            // than moving it: the call-shape arms that follow (method calls,
+            // `super().m()`, container and stdlib intrinsics, generic class
+            // instantiation, subscript callees) never inspect `keywords`, so
+            // relocating the guard past them would silently erase keyword
+            // arguments on every one of those shapes. `is_bindable_call`
+            // answers `true` only for the one shape the tail of this arm can
+            // actually bind.
+            if !call.arguments.keywords.is_empty()
+                && !keyword_bind::is_bindable_call(signatures, call)
+            {
                 return Err(unsupported(
                     "keyword call arguments are not supported yet",
                     call.range,
@@ -368,7 +420,7 @@ pub(crate) fn lower_expr(
                         .arguments
                         .args
                         .iter()
-                        .map(|e| lower_expr(e, in_function, class_name, imports))
+                        .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                         .collect::<Result<Vec<_>, _>>()?;
                     return Ok(HirExpr::MethodCall {
                         base: Box::new(HirExpr::Super),
@@ -382,6 +434,7 @@ pub(crate) fn lower_expr(
                     in_function,
                     class_name,
                     imports,
+                    signatures,
                 ) {
                     return lowered;
                 }
@@ -430,7 +483,7 @@ pub(crate) fn lower_expr(
                         .arguments
                         .args
                         .iter()
-                        .map(|e| lower_expr(e, in_function, class_name, imports))
+                        .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                         .collect::<Result<Vec<_>, _>>()?;
                     return Ok(HirExpr::Call {
                         callee: format!("{}.{}", pycc_std::module_name(module), symbol.name),
@@ -454,10 +507,16 @@ pub(crate) fn lower_expr(
                     .arguments
                     .args
                     .iter()
-                    .map(|e| lower_expr(e, in_function, class_name, imports))
+                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(HirExpr::MethodCall {
-                    base: Box::new(lower_expr(&attr.value, in_function, class_name, imports)?),
+                    base: Box::new(lower_expr(
+                        &attr.value,
+                        in_function,
+                        class_name,
+                        imports,
+                        signatures,
+                    )?),
                     method: attr.attr.to_string(),
                     args,
                 });
@@ -483,7 +542,7 @@ pub(crate) fn lower_expr(
                     .arguments
                     .args
                     .iter()
-                    .map(|e| lower_expr(e, in_function, class_name, imports))
+                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(HirExpr::GenericClassInstantiate {
                     class: gen_class_name.id.as_str().to_string(),
@@ -523,8 +582,31 @@ pub(crate) fn lower_expr(
                 .arguments
                 .args
                 .iter()
-                .map(|e| lower_expr(e, in_function, class_name, imports))
+                .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                 .collect::<Result<Vec<_>, _>>()?;
+            let args = if call.arguments.keywords.is_empty() {
+                args
+            } else {
+                let mut supplied = Vec::with_capacity(call.arguments.keywords.len());
+                for keyword in &call.arguments.keywords {
+                    let name = keyword
+                        .arg
+                        .as_ref()
+                        .expect("`is_bindable_call` rejected `**kwargs` unpacking");
+                    supplied.push((
+                        name.as_str().to_string(),
+                        std::ops::Range::<u32>::from(keyword.range),
+                        lower_expr(&keyword.value, in_function, class_name, imports, signatures)?,
+                    ));
+                }
+                keyword_bind::bind_keyword_arguments(
+                    signatures,
+                    callee.id.as_str(),
+                    args,
+                    supplied,
+                    std::ops::Range::<u32>::from(call.range),
+                )?
+            };
             HirExpr::Call {
                 callee: callee.id.as_str().to_string(),
                 args,
@@ -546,8 +628,8 @@ pub(crate) fn lower_expr(
                     ));
                 }
             };
-            let left = lower_expr(&bin_op.left, in_function, class_name, imports)?;
-            let right = lower_expr(&bin_op.right, in_function, class_name, imports)?;
+            let left = lower_expr(&bin_op.left, in_function, class_name, imports, signatures)?;
+            let right = lower_expr(&bin_op.right, in_function, class_name, imports, signatures)?;
             // #618: `str` repeat count. Only the case where the *string*
             // side is itself a string literal is recognized here -- see
             // `crate::int_boundary`'s doc comment for why a `str`-typed
@@ -615,6 +697,7 @@ pub(crate) fn lower_expr(
                                 in_function,
                                 class_name,
                                 imports,
+                                signatures,
                             )?))
                         }
                     })
@@ -664,12 +747,19 @@ pub(crate) fn lower_expr(
             };
             HirExpr::Compare {
                 op,
-                left: Box::new(lower_expr(&cmp.left, in_function, class_name, imports)?),
+                left: Box::new(lower_expr(
+                    &cmp.left,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
                 right: Box::new(lower_expr(
                     &cmp.comparators[0],
                     in_function,
                     class_name,
                     imports,
+                    signatures,
                 )?),
             }
         }
@@ -734,7 +824,13 @@ pub(crate) fn lower_expr(
             // and defers to `pycc_types` to reject a non-instance base or an
             // attribute name the base's class never declares.
             HirExpr::AttrGet {
-                base: Box::new(lower_expr(&attr.value, in_function, class_name, imports)?),
+                base: Box::new(lower_expr(
+                    &attr.value,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
                 attr: attr.attr.to_string(),
             }
         }
@@ -770,7 +866,13 @@ pub(crate) fn lower_expr(
             };
             HirExpr::NamedExpr {
                 name: target.id.as_str().to_string(),
-                value: Box::new(lower_expr(&named.value, in_function, class_name, imports)?),
+                value: Box::new(lower_expr(
+                    &named.value,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
             }
         }
         other => {
@@ -1034,6 +1136,7 @@ pub(crate) fn lower_range_call(
     in_function: bool,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
     // Issue #618 (T0051) deliberately does NOT check a `range()` argument:
     // D-179 already removed `range` from D-141's runtime `int`-boundary
@@ -1045,7 +1148,7 @@ pub(crate) fn lower_range_call(
     // diagnostic. See D-207 for why this position was wrongly included in
     // #618's own filed inventory (copied from D-178's pre-D-179 fourteen).
     let lower_arg = |e: &Expr| -> Result<HirExpr, Diagnostic> {
-        lower_expr(e, in_function, class_name, imports)
+        lower_expr(e, in_function, class_name, imports, signatures)
     };
     match &*call.arguments.args {
         [stop] => Ok((
@@ -1073,6 +1176,7 @@ fn lower_comprehension_iter(
     iter_expr: &Expr,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<CompIter, Diagnostic> {
     if let Expr::Name(name) = iter_expr {
         return Ok(CompIter::Name(name.id.as_str().to_string()));
@@ -1119,7 +1223,7 @@ fn lower_comprehension_iter(
     // with zero regression risk, and getting the enclosing-scope split fully
     // right for it is deliberately deferred (see D-149 and its own "out of
     // scope" section).
-    let (start, stop, step) = lower_range_call(call, true, class_name, imports)?;
+    let (start, stop, step) = lower_range_call(call, true, class_name, imports, signatures)?;
     Ok(CompIter::Range { start, stop, step })
 }
 
@@ -1155,6 +1259,7 @@ pub(crate) fn lower_comprehension_header(
     generators: &[pycc_ast::Comprehension],
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
     // Named `generator`, not `gen` -- `gen` is a reserved keyword as of the
     // 2024 edition (this workspace's own edition, reserved for a future
@@ -1189,7 +1294,7 @@ pub(crate) fn lower_comprehension_header(
         // implement -- hardcoding `true` here preserves today's exact
         // `C0001`-in-both-scopes behavior byte-for-byte instead of emitting
         // the wrong classification.
-        [single] => Some(lower_expr(single, true, class_name, imports)?),
+        [single] => Some(lower_expr(single, true, class_name, imports, signatures)?),
         _ => {
             return Err(unsupported(
                 "a comprehension with more than one `if` filter is not supported yet",
@@ -1197,7 +1302,7 @@ pub(crate) fn lower_comprehension_header(
             ));
         }
     };
-    let iter = lower_comprehension_iter(&generator.iter, class_name, imports)?;
+    let iter = lower_comprehension_iter(&generator.iter, class_name, imports, signatures)?;
     let source_name = var.id.as_str().to_string();
     let synth_var =
         synthesize_comp_var_name(pycc_ast::expr_range(&generator.target).start, &source_name);
@@ -1209,15 +1314,16 @@ pub(crate) fn lower_list_comp_assign(
     comp: &pycc_ast::ExprListComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports)?;
+        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
     // Literal `true`: `elt` is lexically inside the comprehension's own
     // scope, same reasoning as `lower_comprehension_header`'s `cond` arm
     // above (D-149 correction 5) -- preserves today's `C0001` classification
     // for a comprehension-internal `yield`/`yield from` in both enclosing
     // scopes.
-    let elt_hir = lower_expr(&comp.elt, true, class_name, imports)?;
+    let elt_hir = lower_expr(&comp.elt, true, class_name, imports, signatures)?;
     check_boundary_literal(
         &elt_hir,
         pycc_ast::expr_range(&comp.elt),
@@ -1239,12 +1345,13 @@ pub(crate) fn lower_set_comp_assign(
     comp: &pycc_ast::ExprSetComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports)?;
+        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
     // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
     // above (D-149 correction 5).
-    let elt_hir = lower_expr(&comp.elt, true, class_name, imports)?;
+    let elt_hir = lower_expr(&comp.elt, true, class_name, imports, signatures)?;
     check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "setcomp element")?;
     let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
@@ -1262,6 +1369,7 @@ pub(crate) fn lower_dict_comp_assign(
     comp: &pycc_ast::ExprDictComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
     // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
@@ -1282,16 +1390,16 @@ pub(crate) fn lower_dict_comp_assign(
         ));
     };
     let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports)?;
+        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
     // Literal `true` for both `key` and `value`: same reasoning as
     // `lower_list_comp_assign`'s `elt` above (D-149 correction 5) -- `key`
     // and `value` are both lexically inside the comprehension's own scope.
     let key = rename_name_in_expr(
-        lower_expr(key_expr, true, class_name, imports)?,
+        lower_expr(key_expr, true, class_name, imports, signatures)?,
         &source_name,
         &synth_var,
     );
-    let value_hir = lower_expr(&comp.value, true, class_name, imports)?;
+    let value_hir = lower_expr(&comp.value, true, class_name, imports, signatures)?;
     check_boundary_literal(
         &value_hir,
         pycc_ast::expr_range(&comp.value),

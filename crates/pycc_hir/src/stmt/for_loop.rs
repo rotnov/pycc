@@ -5,6 +5,7 @@
 
 use super::{ExceptStarCtx, lower_body, lower_range_call};
 use crate::class::ClassAnnotationInfo;
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirStmt, ImportBinding, Ty, context_invalid, unsupported};
 use pycc_ast::{Expr, StmtFor};
 use pycc_diag::Diagnostic;
@@ -25,6 +26,7 @@ pub(super) fn lower_for(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     if for_stmt.is_async {
         // `async for` is only valid Python syntax inside an `async
@@ -80,6 +82,7 @@ pub(super) fn lower_for(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?,
         });
     }
@@ -100,6 +103,7 @@ pub(super) fn lower_for(
             type_param,
             class_defs,
             imports,
+            signatures,
         );
     }
     let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -123,6 +127,7 @@ pub(super) fn lower_for(
             type_param,
             class_defs,
             imports,
+            signatures,
         );
     }
     let Expr::Name(callee) = call.func.as_ref() else {
@@ -149,7 +154,12 @@ pub(super) fn lower_for(
             call.range,
         ));
     }
-    let (start, stop, step) = lower_range_call(call, in_function, class_name, imports)?;
+    // Lockstep with `type_checking::for_iterable_lowers` (Part 1 of #884,
+    // #1125): that function re-lowers this same `range(...)` call to decide
+    // whether a `TYPE_CHECKING`-guarded `for` would lower. Both must pass the
+    // same `signatures` table, or the two answers diverge for a `range()`
+    // argument that is itself a keyword call.
+    let (start, stop, step) = lower_range_call(call, in_function, class_name, imports, signatures)?;
     Ok(HirStmt::ForRange {
         var: var.id.to_string(),
         start,
@@ -169,6 +179,7 @@ pub(super) fn lower_for(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?,
     })
 }
@@ -190,6 +201,7 @@ fn lower_for_object(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     Ok(HirStmt::ForObject {
         var: var.to_string(),
@@ -198,6 +210,7 @@ fn lower_for_object(
             in_function,
             class_name,
             imports,
+            signatures,
         )?),
         body: lower_body(
             &for_stmt.body,
@@ -210,6 +223,7 @@ fn lower_for_object(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?,
     })
 }

@@ -93,6 +93,7 @@ mod for_loop;
 mod type_checking;
 
 use crate::class::ClassAnnotationInfo;
+use crate::expr::keyword_bind::SignatureTable;
 use crate::expr::{
     contains_named_expr, is_zero_arg_super_call, lower_dict_comp_assign, lower_expr,
     lower_list_comp_assign, lower_range_call, lower_set_comp_assign,
@@ -185,6 +186,7 @@ pub(crate) fn lower_stmt(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(
@@ -192,6 +194,7 @@ pub(crate) fn lower_stmt(
             in_function,
             class_name,
             imports,
+            signatures,
         )?),
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
@@ -215,18 +218,36 @@ pub(crate) fn lower_stmt(
                     // and falls through to that function's existing
                     // generic "expression kind not supported yet"
                     // catch-all.
-                    Expr::ListComp(comp) => {
-                        lower_list_comp_assign(name.id.as_str(), comp, class_name, imports)?
-                    }
-                    Expr::SetComp(comp) => {
-                        lower_set_comp_assign(name.id.as_str(), comp, class_name, imports)?
-                    }
-                    Expr::DictComp(comp) => {
-                        lower_dict_comp_assign(name.id.as_str(), comp, class_name, imports)?
-                    }
+                    Expr::ListComp(comp) => lower_list_comp_assign(
+                        name.id.as_str(),
+                        comp,
+                        class_name,
+                        imports,
+                        signatures,
+                    )?,
+                    Expr::SetComp(comp) => lower_set_comp_assign(
+                        name.id.as_str(),
+                        comp,
+                        class_name,
+                        imports,
+                        signatures,
+                    )?,
+                    Expr::DictComp(comp) => lower_dict_comp_assign(
+                        name.id.as_str(),
+                        comp,
+                        class_name,
+                        imports,
+                        signatures,
+                    )?,
                     _ => HirStmt::Assign {
                         target: name.id.as_str().to_string(),
-                        value: lower_expr(&assign.value, in_function, class_name, imports)?,
+                        value: lower_expr(
+                            &assign.value,
+                            in_function,
+                            class_name,
+                            imports,
+                            signatures,
+                        )?,
                     },
                 },
                 // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
@@ -255,8 +276,9 @@ pub(crate) fn lower_stmt(
                     // -- this compiler never gives a dict key an `int`-typed,
                     // boundary-sensitive representation, so a key literal has
                     // no runtime `int`-untagging boundary to protect.
-                    let key = lower_expr(&sub.slice, in_function, class_name, imports)?;
-                    let value = lower_expr(&assign.value, in_function, class_name, imports)?;
+                    let key = lower_expr(&sub.slice, in_function, class_name, imports, signatures)?;
+                    let value =
+                        lower_expr(&assign.value, in_function, class_name, imports, signatures)?;
                     // This lowering step is type-blind (see the comment
                     // above): `base_name` may turn out to be a `list[int]` at
                     // `pycc_types` time, not a `dict`, in which case T0033
@@ -309,9 +331,21 @@ pub(crate) fn lower_stmt(
                         ));
                     }
                     HirStmt::AttrSet {
-                        base: lower_expr(&attr.value, in_function, class_name, imports)?,
+                        base: lower_expr(
+                            &attr.value,
+                            in_function,
+                            class_name,
+                            imports,
+                            signatures,
+                        )?,
                         attr: attr.attr.to_string(),
-                        value: lower_expr(&assign.value, in_function, class_name, imports)?,
+                        value: lower_expr(
+                            &assign.value,
+                            in_function,
+                            class_name,
+                            imports,
+                            signatures,
+                        )?,
                     }
                 }
                 other => {
@@ -357,7 +391,7 @@ pub(crate) fn lower_stmt(
             let value = ann
                 .value
                 .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name, imports))
+                .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                 .transpose()?;
             // PEP 591 (#383): detect `Final[X]` at the AST level (before
             // `annotation_to_ty` unwrapped it to `X`) so the type checker
@@ -411,6 +445,7 @@ pub(crate) fn lower_stmt(
                 except_star,
                 class_name,
                 imports,
+                signatures,
             )?;
             HirStmt::If {
                 test: HirExpr::BoolLiteral(false),
@@ -426,11 +461,12 @@ pub(crate) fn lower_stmt(
                     type_param,
                     class_defs,
                     imports,
+                    signatures,
                 )?,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test, in_function, class_name, imports)?,
+            test: lower_expr(&if_stmt.test, in_function, class_name, imports, signatures)?,
             body: lower_body(
                 &if_stmt.body,
                 aliases,
@@ -442,6 +478,7 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
@@ -454,6 +491,7 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?,
         },
         Stmt::While(while_stmt) => {
@@ -464,7 +502,13 @@ pub(crate) fn lower_stmt(
                 ));
             }
             HirStmt::While {
-                test: lower_expr(&while_stmt.test, in_function, class_name, imports)?,
+                test: lower_expr(
+                    &while_stmt.test,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?,
                 body: lower_body(
                     &while_stmt.body,
                     aliases,
@@ -484,6 +528,7 @@ pub(crate) fn lower_stmt(
                     type_param,
                     class_defs,
                     imports,
+                    signatures,
                 )?,
             }
         }
@@ -496,6 +541,7 @@ pub(crate) fn lower_stmt(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?,
         Stmt::Return(ret) => {
             // #795 (PEP 654) and PEP 765 (#738, Part 1 of #543): both
@@ -517,7 +563,7 @@ pub(crate) fn lower_stmt(
             HirStmt::Return(
                 ret.value
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function, class_name, imports))
+                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                     .transpose()?,
             )
         }
@@ -572,6 +618,7 @@ pub(crate) fn lower_stmt(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?,
         Stmt::Try(try_stmt) => {
             let body = lower_body(
@@ -585,6 +632,7 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?;
             // #795 (PEP 654): an `except*` clause body is the only thing
             // that *sets* the context; a plain `except` clause propagates
@@ -623,6 +671,7 @@ pub(crate) fn lower_stmt(
                         type_param,
                         class_defs,
                         imports,
+                        signatures,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -637,6 +686,7 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?;
             // Entering a `finally` clause always sets `in_finally` to `true`
             // for its own body -- unconditionally, regardless of the
@@ -660,6 +710,7 @@ pub(crate) fn lower_stmt(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?;
             if try_stmt.is_star {
                 HirStmt::TryStar {
@@ -681,7 +732,7 @@ pub(crate) fn lower_stmt(
             let exc = raise_stmt
                 .exc
                 .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name, imports))
+                .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                 .transpose()?;
             // PEP 409: `raise X from None` suppresses the implicit
             // `__context__` chain. Its only observable effect in CPython is
@@ -696,7 +747,13 @@ pub(crate) fn lower_stmt(
             // reintroduced here when implicit `__context__` chaining lands.
             let cause = match raise_stmt.cause.as_deref() {
                 None | Some(Expr::NoneLiteral(_)) => None,
-                Some(cause) => Some(lower_expr(cause, in_function, class_name, imports)?),
+                Some(cause) => Some(lower_expr(
+                    cause,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                )?),
             };
             HirStmt::Raise { exc, cause }
         }
@@ -874,6 +931,7 @@ pub(crate) fn lower_body(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     // #435: `Stmt::Pass` is a no-op — filter it out rather than lowering it
     // to a statement. This allows method bodies like `def __init_subclass__:
@@ -894,6 +952,7 @@ pub(crate) fn lower_body(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )
         })
         .collect()
@@ -911,6 +970,7 @@ pub(crate) fn lower_elif_else_clauses(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
@@ -932,6 +992,7 @@ pub(crate) fn lower_elif_else_clauses(
                 except_star,
                 class_name,
                 imports,
+                signatures,
             )?;
             Ok(vec![HirStmt::If {
                 test: HirExpr::BoolLiteral(false),
@@ -947,11 +1008,12 @@ pub(crate) fn lower_elif_else_clauses(
                     type_param,
                     class_defs,
                     imports,
+                    signatures,
                 )?,
             }])
         }
         Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test, in_function, class_name, imports)?,
+            test: lower_expr(test, in_function, class_name, imports, signatures)?,
             body: lower_body(
                 &first.body,
                 aliases,
@@ -963,6 +1025,7 @@ pub(crate) fn lower_elif_else_clauses(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?,
             orelse: lower_elif_else_clauses(
                 rest,
@@ -975,6 +1038,7 @@ pub(crate) fn lower_elif_else_clauses(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )?,
         }]),
         None => {
@@ -993,6 +1057,7 @@ pub(crate) fn lower_elif_else_clauses(
                 type_param,
                 class_defs,
                 imports,
+                signatures,
             )
         }
     }
@@ -1014,15 +1079,22 @@ fn lower_match(
     type_param: Option<&str>,
     class_defs: &[ClassAnnotationInfo],
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
-    let subject = lower_expr(&match_stmt.subject, in_function, class_name, imports)?;
+    let subject = lower_expr(
+        &match_stmt.subject,
+        in_function,
+        class_name,
+        imports,
+        signatures,
+    )?;
     let mut cases = Vec::with_capacity(match_stmt.cases.len());
     for case in &match_stmt.cases {
-        let pattern = lower_pattern(&case.pattern, in_function, class_name, imports)?;
+        let pattern = lower_pattern(&case.pattern, in_function, class_name, imports, signatures)?;
         let guard = case
             .guard
             .as_deref()
-            .map(|g| lower_expr(g, in_function, class_name, imports))
+            .map(|g| lower_expr(g, in_function, class_name, imports, signatures))
             .transpose()?;
         let body = lower_body(
             &case.body,
@@ -1035,6 +1107,7 @@ fn lower_match(
             type_param,
             class_defs,
             imports,
+            signatures,
         )?;
         cases.push(HirMatchCase {
             pattern,
@@ -1054,10 +1127,11 @@ fn lower_pattern(
     in_function: bool,
     class_name: Option<&str>,
     imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirPattern, Diagnostic> {
     match pattern {
         Pattern::MatchValue(value) => {
-            let expr = lower_expr(&value.value, in_function, class_name, imports)?;
+            let expr = lower_expr(&value.value, in_function, class_name, imports, signatures)?;
             match &expr {
                 HirExpr::IntLiteral(_)
                 | HirExpr::FloatLiteral(_)
@@ -1086,7 +1160,13 @@ fn lower_pattern(
                     if let Pattern::MatchStar(star) = p {
                         rest = star.name.as_ref().map(|n| n.id.to_string());
                     } else {
-                        fixed.push(lower_pattern(p, in_function, class_name, imports)?);
+                        fixed.push(lower_pattern(
+                            p,
+                            in_function,
+                            class_name,
+                            imports,
+                            signatures,
+                        )?);
                     }
                 }
                 Ok(HirPattern::SequenceStar(fixed, rest))
@@ -1094,7 +1174,7 @@ fn lower_pattern(
                 let sub_patterns = seq
                     .patterns
                     .iter()
-                    .map(|p| lower_pattern(p, in_function, class_name, imports))
+                    .map(|p| lower_pattern(p, in_function, class_name, imports, signatures))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(HirPattern::Sequence(sub_patterns))
             }
@@ -1102,8 +1182,8 @@ fn lower_pattern(
         Pattern::MatchMapping(mapping) => {
             let mut pairs = Vec::with_capacity(mapping.keys.len());
             for (key, pat) in mapping.keys.iter().zip(mapping.patterns.iter()) {
-                let key_expr = lower_expr(key, in_function, class_name, imports)?;
-                let val_pat = lower_pattern(pat, in_function, class_name, imports)?;
+                let key_expr = lower_expr(key, in_function, class_name, imports, signatures)?;
+                let val_pat = lower_pattern(pat, in_function, class_name, imports, signatures)?;
                 pairs.push((key_expr, val_pat));
             }
             let rest = mapping.rest.as_ref().map(|n| n.id.to_string());
@@ -1121,14 +1201,14 @@ fn lower_pattern(
                 .arguments
                 .patterns
                 .iter()
-                .map(|p| lower_pattern(p, in_function, None, imports))
+                .map(|p| lower_pattern(p, in_function, None, imports, signatures))
                 .collect::<Result<Vec<_>, _>>()?;
             let keyword = class
                 .arguments
                 .keywords
                 .iter()
                 .map(|kw| {
-                    lower_pattern(&kw.pattern, in_function, None, imports)
+                    lower_pattern(&kw.pattern, in_function, None, imports, signatures)
                         .map(|p| (kw.attr.to_string(), p))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -1146,7 +1226,7 @@ fn lower_pattern(
             (None, None) => Ok(HirPattern::Wildcard),
             (None, Some(name)) => Ok(HirPattern::Capture(name.id.to_string())),
             (Some(inner), name) => {
-                let inner_pat = lower_pattern(inner, in_function, class_name, imports)?;
+                let inner_pat = lower_pattern(inner, in_function, class_name, imports, signatures)?;
                 let name = name.as_ref().map(|n| n.id.to_string()).unwrap_or_default();
                 Ok(HirPattern::As(Box::new(inner_pat), name))
             }
@@ -1155,7 +1235,7 @@ fn lower_pattern(
             let sub = or_pat
                 .patterns
                 .iter()
-                .map(|p| lower_pattern(p, in_function, class_name, imports))
+                .map(|p| lower_pattern(p, in_function, class_name, imports, signatures))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(HirPattern::Or(sub))
         }

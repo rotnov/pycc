@@ -2,6 +2,7 @@
 //! per AGENTS.md's file-decomposition rule (issue #890; tracking issue
 //! #552). Test names and bodies are unchanged.
 
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{BinOpKind, FStringPart, HirExpr, HirItem, HirStmt, UnaryOpKind};
 
 /// Lowers `source` and asserts that the value expression of its first
@@ -282,7 +283,7 @@ fn a_walrus_target_that_is_not_a_bare_name_is_rejected() {
             value: pycc_ast::Number::Int(pycc_ast::Int::from(1u8)),
         })),
     });
-    let err = super::lower_expr(&named, false, None, &[]).unwrap_err();
+    let err = super::lower_expr(&named, false, None, &[], &SignatureTable::default()).unwrap_err();
     assert_eq!(err.code, "C0001");
     assert!(
         err.message

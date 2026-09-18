@@ -20,6 +20,7 @@ use super::{
     PropertyDef, classify_decorator, collect_init_attrs, is_declaration_body, is_scalar_slot_type,
     lower_method,
 };
+use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirItem, ImportBinding, Ty, unsupported};
 use pycc_ast::{Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -97,6 +98,14 @@ pub(super) struct ClassBodyInput<'a> {
     /// #883, #962), forwarded to every method body so an aliased stdlib
     /// receiver (`m.sqrt(x)` after `import math as m`) lowers there too.
     pub(super) imports: &'a [ImportBinding],
+    /// The module's keyword-bindable signature table (Part 1 of #884,
+    /// #1125), forwarded to every method body alongside `imports` so a
+    /// keyword call to a module-level `def` binds inside a method exactly
+    /// as it does at module scope. The compiler cannot flag a missing
+    /// forward here -- an empty table would simply make every such call
+    /// fall back to the old capability rejection -- so this field is
+    /// covered by its own regression test.
+    pub(super) signatures: &'a SignatureTable,
 }
 
 /// The tables the class-body walk accumulates, handed back to
@@ -140,6 +149,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         mro,
         defined_classes,
         imports,
+        signatures,
     } = input;
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
@@ -488,6 +498,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             &kind,
             class_name_defs,
             imports,
+            signatures,
         )?;
         if method_name == "__init__" {
             init_seen = true;
