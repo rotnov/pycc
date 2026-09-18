@@ -33,6 +33,45 @@ never a merge gate.
 
 ---
 
+## 2026-09-18 — Four successive corrections to one published claim, each read off a set selected by the property being measured
+
+**What happened.** A single claim about the reference workload — whether a
+scorable subject for the D-244 rule 6 protocol exists — was published, then
+corrected four times in one day, each correction itself published to
+`docs/TESTING.md` and to the tracking issue before the next one refuted it.
+
+**Root cause.** Every round measured a population property off a set that had
+already been filtered by a property related to the one being read:
+
+1. The original "3 of 23 compile" figure was taken over subjects the 2026-09-17
+   triage had compiled in *extracted* form, not as the workload spells them.
+2. The first correction read a parameter-shape conclusion off the
+   boundary-admissible subset — selected by admissibility, which is exactly
+   what was being concluded about.
+3. The second read "the remaining work is compiler-side" off rows selected by
+   an array-like spelling list that included `list[int]`, which is not a buffer
+   carrier at all.
+4. The third read "no compiler change reaches this" off a scan that enumerated
+   module-level functions only — the same predicate the export rule uses — so
+   it was blind to methods by construction. Re-running it over the bodies of
+   public classes found a loop-bearing candidate immediately.
+
+Each round's measurement was correct; each round's *denominator* silently
+encoded the answer.
+
+**What fixed it.** Separating the selection predicate from the measured
+predicate and reporting both: counting by carrier kind and by loop content
+independently rather than through one combined filter, and re-running the same
+predicates over the enumeration the first one excluded.
+
+**Lesson.** Before publishing a population claim ("no X has property P"), write
+down the predicate that built the set and the predicate being measured, and
+check they are independent. When they are not — or when the set was produced by
+a helper whose own filter you did not read — the claim is about the filter, not
+the population. Re-running the same predicates over the enumeration the filter
+excluded costs one edit to a script that already exists; retracting a published
+conclusion costs a pull request and a tracker comment each time.
+
 ## 2026-09-18 — A red `check-site.sh` masked the byte-budget breach it runs later
 
 **What happened.** PR #1126 (Part 1 of #884) added a sentence to

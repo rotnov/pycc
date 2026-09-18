@@ -738,7 +738,14 @@ being read for. A third, the same day again, narrowed that second one: its
 replacement claim — that the remaining work is compiler-side rather than
 workload-side — overstated the scan in the opposite direction, because the
 scan's array-like spelling list counted `list[int]` as a carrier. Both
-blockers stand. Each correction is dated in place below; none is deleted.
+blockers stand. A fourth, again the same day, narrowed the third: the second
+blocker was called a property of the workload that no compiler change reaches,
+but every scan behind it enumerated module-level functions only — the same
+predicate the export rule uses — so it could not see methods. Re-run over the
+bodies of public classes, exactly one public method takes a numpy-array
+parameter and contains loops, and it is unreachable only because of where it
+is defined. That is a fifth boundary gap (#1131), not a workload property.
+Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
 and that the `ext` arm can actually export. Two readings of what one replicate
@@ -882,8 +889,27 @@ the sweep and the per-record shapes — and the third is independent of both:
    way the workload spells an array parameter (#883, the #882 family, #889,
    #1130, #1129), **and** closing every one of those gaps would still yield no
    scorable subject, because no public function in the denominator both takes
-   an array and contains a loop. The first is tracked and closeable; the second
-   is a property of the workload that no compiler change reaches.
+   an array and contains a loop. The first is tracked and closeable.
+
+   **Third correction, the same day again: the second blocker is not a
+   workload property either.** Calling it one rested on a scan that enumerated
+   module-level `def`s — the same predicate D-244 rule 1 uses to define the
+   export set — so it was blind to methods by construction, which is the same
+   defect as reading a population property off a set selected by that very
+   property. Re-running the identical predicates over the bodies of public
+   classes gives, numbers only per D-244 rule 6: **1485** methods in public
+   classes, **20** public and fully annotated, **8** of those loop-bearing,
+   **1** taking a numpy-array parameter, **1** taking a numpy-array parameter
+   *and* loop-bearing, **0** taking a buffer-protocol parameter. That single
+   row is 434 lines with 9 loops over 83 calls — by size and loop content the
+   most plausible scoring subject found anywhere in the workload, and it is
+   inadmissible purely because D-244 rule 1 exports module-level functions
+   only. That is a compiler-side gap like the other four, now tracked as
+   #1131, and closing it is not sufficient on its own: the row spells its
+   array parameter as a PEP 604 union, which #747 tracks as entirely
+   unimplemented. Prerequisite 2 stays unmet either way, and the denominator
+   claim above is unchanged — it is a statement about module-level functions,
+   which is what the export rule selects today.
 
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
