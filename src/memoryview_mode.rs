@@ -197,10 +197,11 @@ fn declares_member(
 /// Names the first part of a signature that mentions the buffer type, in
 /// its canonical spelling, or `None` when it mentions it nowhere.
 ///
-/// The rendered spelling is `memoryview` whichever of the two source
-/// spellings the user wrote (#1129 admits `ndarray` as the second), for
-/// the reason `Ty::MemoryView`'s own documentation gives: one type, one
-/// canonical name, exactly as for an alias of it.
+/// The rendered spelling is `memoryview` whichever of the three source
+/// spellings the user wrote (#1129 admits `ndarray` as the second, #1134
+/// `NDArray` as the third), for the reason `Ty::MemoryView`'s own
+/// documentation gives: one type, one canonical name, exactly as for an
+/// alias of it.
 ///
 /// Both positions are checked, and only `Ty::MemoryView` itself matches,
 /// with no recursion into a container's elements. A parameterized container
@@ -243,8 +244,9 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// #1027 nor #1129 adds an expression that *produces* a buffer, so there is
 /// nothing a function could return. The message is worded like those two
 /// siblings, and for the same reason: it names the type as "a buffer"
-/// rather than in either of its two spellings, so a user who wrote
-/// `ndarray` is not told about a `memoryview` they never mentioned. The
+/// rather than in any of its three spellings (#1134 added `NDArray`), so a
+/// user who wrote `ndarray` or `NDArray` is not told about a `memoryview`
+/// they never mentioned. The
 /// canonical-spelling rendering `offending_position` does is the *native*
 /// path's, whose `I0405` quotes a whole signature position back; this
 /// message quotes no annotation text at all.

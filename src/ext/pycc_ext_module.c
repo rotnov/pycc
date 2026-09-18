@@ -669,8 +669,9 @@ typedef struct {
 } PyccExtBufferView;
 
 /*
- * Unpacks one argument at a buffer parameter -- spelled `memoryview` or
- * `ndarray` in the source, one pycc type either way. Returns 0 with `*out`
+ * Unpacks one argument at a buffer parameter -- spelled `memoryview`,
+ * `ndarray` or `NDArray` in the source, one pycc type whichever was
+ * written. Returns 0 with `*out`
  * holding an acquired buffer the caller must release, or -1 with a CPython
  * exception set and nothing acquired.
  *
@@ -685,8 +686,9 @@ typedef struct {
  *    arms 2-4 on the properties of the buffer they export. This is what
  *    lets a host hand a compiled export a bare `ndarray` without wrapping
  *    it in `memoryview(...)` first, and it widens the `memoryview`
- *    annotation by exactly the same set: the two spellings lower to one
- *    pycc type and reach this helper identically.
+ *    annotation by exactly the same set: every source spelling of the
+ *    carrier -- `memoryview`, `ndarray` (#1129) and `NDArray` (#1134) --
+ *    lowers to one pycc type and reaches this helper identically.
  * 2. `PyObject_GetBuffer` fails -- the exporter's own exception is
  *    propagated verbatim, because it says more about the operand than a
  *    translated message could, and nothing is acquired when it fails. The

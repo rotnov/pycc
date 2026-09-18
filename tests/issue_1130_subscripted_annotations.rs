@@ -5,7 +5,7 @@
 //!
 //! > In **annotation** position, a subscript whose base resolves to a type
 //! > pycc can name nominally -- a class in `class_defs`, a `type` alias to
-//! > one, or the buffer carrier (`Ty::MemoryView`, either spelling, directly
+//! > one, or the buffer carrier (`Ty::MemoryView`, any spelling, directly
 //! > or through an alias) -- is accepted, with the type argument **erased
 //! > without being lowered**. Inside a class's own body the enclosing class's
 //! > own name is answered before the six reserved names, so its subscripted
@@ -27,9 +27,12 @@
 //!
 //! Scope: this issue admits the subscripted *form*. It does not make any of
 //! the #1039 census's 19 array-parameter occurrences compile -- every one of
-//! them also needs a name binding that does not exist yet (`NDArray` is not
-//! registered, attribute bases are #889, `import numpy as np` is #883, and
-//! `from numpy.typing import ...` is refused by the foreign-import path).
+//! them also needs a name binding that does not exist yet: attribute bases
+//! are #889, `import numpy as np` is #883, and `from numpy.typing import ...`
+//! is refused by the foreign-import path. (`NDArray` itself was unregistered
+//! when this file was written; #1134 has since registered it as a third
+//! source spelling of the buffer carrier, which is why the undefined-base
+//! regression guard below now names `Nonexistent` instead.)
 //!
 //! Every test below resolves its answer on the program before `plan_ext`
 //! probes the host toolchain, so none is `#[ignore]`d -- except the single
@@ -274,10 +277,11 @@ fn level_4_the_carrier_spellings_flip_the_other_way_in_the_same_ladder() {
         "C0001",
     );
     assert!(bare.contains("bound to a buffer parameter"), "{bare}");
-    // `ndarray`, the carrier's sibling spelling (#1129), is an ordinary
-    // identifier resolved *after* the class table, so the same shape flips
-    // reject -> accept resolving to the user's own class instead. `a.m()`
-    // type-checking is what proves which of the two won.
+    // `ndarray`, one of the carrier's sibling spellings (#1129, joined by
+    // #1134's `NDArray`), is an ordinary identifier resolved *after* the
+    // class table, so the same shape flips reject -> accept, resolving to
+    // the user's own class instead. `a.m()` type-checking is what proves
+    // the class won rather than the carrier.
     assert_accepts(
         "1130_level4_ndarray_shadow_use",
         "class ndarray:\n    def m(self) -> int:\n        return 1\n\n\ndef f(a: ndarray[float]) -> int:\n    return a.m()\n",
@@ -300,15 +304,19 @@ def total(b: ndarray[float]) -> float:
 
 #[test]
 fn every_way_of_naming_the_buffer_carrier_is_subscriptable() {
-    // Both registered spellings, and an alias to one. The accept is keyed on
-    // the resolved `Ty::MemoryView` rather than on the spelling, so a future
-    // third spelling is admitted by its registration alone -- and the alias
-    // form, which a name-keyed arm could not have admitted without being
-    // edited again, works for free. Each is proved by the element read:
+    // Every registered spelling, and an alias to one. The accept is keyed
+    // on the resolved `Ty::MemoryView` rather than on the spelling, so a
+    // further spelling is admitted by its registration alone -- and the
+    // alias form, which a name-keyed arm could not have admitted without
+    // being edited again, works for free. `NDArray` is the witness that the
+    // claim was true rather than merely plausible: #1134 registered it in
+    // `annotation_to_ty`'s `Expr::Name` arm alone and this arm admitted its
+    // subscripted form with no edit. Each is proved by the element read:
     // only the carrier yields `float` from `b[0]`.
     for (category, spelling, prelude) in [
         ("1130_carrier_memoryview", "memoryview", ""),
         ("1130_carrier_ndarray", "ndarray", ""),
+        ("1130_carrier_ndarray_capitalized", "NDArray", ""),
         ("1130_carrier_alias", "Arr", "type Arr = memoryview\n\n\n"),
     ] {
         assert_accepts(
@@ -502,13 +510,23 @@ fn the_931_reject_set_is_intact() {
     // An undefined base keeps the exact `C0001` `module::cascade_name`
     // parses back (D-219) -- this is the issue *title*'s example, which was
     // never `T0044` and is unchanged.
+    //
+    // The title example spelled that undefined base `NDArray`, which #1134
+    // has since registered as a third source spelling of the buffer carrier,
+    // so a bare `NDArray[int]` is now an *accept*. The property this arm
+    // pins is "an undefined base keeps its cascade-shaped `C0001`", not the
+    // spelling it was first written with, so it is restated on a name
+    // nothing binds. `tests/issue_1134_ndarray_capitalized_spelling.rs`'s
+    // `the_1130_undefined_base_reproducer_is_now_an_accept` carries this
+    // exact program as an acceptance, so the flip is asserted somewhere
+    // rather than merely removed here.
     let text = assert_rejects(
         "1130_reject_undefined",
-        "def f(a: NDArray[int]) -> float:\n    return 0.0\n",
+        "def f(a: Nonexistent[int]) -> float:\n    return 0.0\n",
         "C0001",
     );
     assert!(
-        text.contains("type annotation `NDArray` is not supported yet"),
+        text.contains("type annotation `Nonexistent` is not supported yet"),
         "{text}"
     );
 

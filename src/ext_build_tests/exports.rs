@@ -262,11 +262,14 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
     // not shown a scalar-only list that reads as "no tuple at all". #1129
     // put the buffer's second spelling into it for the same reason: a
     // reader who wrote `ndarray` and is shown a list naming only
-    // `memoryview` reads it as "not that type at all".
+    // `memoryview` reads it as "not that type at all". #1134 added the
+    // third spelling `NDArray` on the same reasoning -- it is the one 18 of
+    // the 19 array-parameter occurrences in the #1039 census use.
     assert!(
         message.contains(
             "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` (or its \
-             second spelling `ndarray`) or a `tuple` of `int`/`float`/`bool`, and a \
+             other spellings `ndarray` and `NDArray`) or a `tuple` of \
+             `int`/`float`/`bool`, and a \
              return type must be one of those except the buffer, or `None`"
         ),
         "{message}"

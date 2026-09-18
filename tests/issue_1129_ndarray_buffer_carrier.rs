@@ -145,7 +145,7 @@ fn a_program_that_binds_ndarray_itself_keeps_its_own_meaning() {
 /// #1130 admits a subscripted annotation whose base resolves to a type pycc
 /// can name nominally, and the buffer carrier is one. This test used to
 /// assert a refusal with a per-spelling noun; it now asserts the acceptance,
-/// which is D-244 statement (b) -- the two spellings are one pycc type with
+/// which is D-244 statement (b) -- the spellings are one pycc type with
 /// no run-time observable difference -- restated for the subscripted form.
 /// The type argument is erased and never lowered, so `[float]` is not
 /// modelled and not checked.
@@ -191,17 +191,6 @@ fn a_subscripted_carrier_spelling_lowers_to_the_carrier_itself() {
     }
 }
 
-/// A program that binds a spelling itself gets the noun its own binding
-/// earns -- which is not the same answer for the two spellings.
-///
-/// `memoryview` is a reserved keyword the `Expr::Name` arm decides before it
-/// reads `class_defs` or the alias table, so `type memoryview = int` does
-/// **not** win: the bare name still lowers to the buffer carrier, and the
-/// refusal must not claim an alias resolved. `ndarray` is an ordinary
-/// identifier resolved only after both, so there the alias really does win
-/// and `type alias` is the truthful word. This is measured through the CLI
-/// rather than through the helper, because the helper cannot observe which
-/// of the two the pipeline actually resolved.
 /// A container of the carrier lowers its element like any other, and is
 /// then refused by the container capability gate rather than by name
 /// resolution.
@@ -353,7 +342,7 @@ fn an_alias_to_a_class_wins_for_ndarray_and_loses_to_memoryview() {
     assert!(err.contains("error[T0033]"), "{err}");
 }
 
-/// The two protocol-member refusals name the thing, not either spelling.
+/// The two protocol-member refusals name the thing, not any one spelling.
 ///
 /// They are capability gaps of the same family as `ext_return_gap`: nothing
 /// produces a buffer, so no class could satisfy the member. Both fired on
@@ -390,9 +379,13 @@ fn a_protocol_member_spelled_ndarray_is_refused_without_naming_a_spelling() {
 }
 
 /// `pycc explain I0405` is the code's second normative surface, and a user
-/// who hit it on an `ndarray` signature must be told that spelling exists.
+/// who hit it on a signature spelled anything other than `memoryview` must
+/// be told that spelling exists. The explanation names every source
+/// spelling the carrier currently has, which is why this asserts the whole
+/// set rather than the one #1129 added: a fourth spelling registered
+/// without extending the explanation fails here.
 #[test]
-fn explain_i0405_names_both_source_spellings() {
+fn explain_i0405_names_every_source_spelling() {
     let out = pycc()
         .arg("explain")
         .arg("I0405")
@@ -402,6 +395,7 @@ fn explain_i0405_names_both_source_spellings() {
     let text = stdout_of(&out);
     assert!(text.contains("ndarray"), "{text}");
     assert!(text.contains("memoryview"), "{text}");
+    assert!(text.contains("NDArray"), "{text}");
 }
 
 /// The annotation compiles, with no interpreter, no numpy, and no import.
@@ -477,10 +471,13 @@ fn every_non_parameter_ndarray_position_is_refused() {
     assert!(err.contains("error[C0003]"), "{err}");
     assert!(err.contains("its return type `-> memoryview`"), "{err}");
     // The remediation enumerates what the boundary carries, so it has to
-    // name the second spelling too: a user who reached this message by
-    // writing `ndarray` and is shown a list without it reads the list as
-    // "not that type at all".
-    assert!(err.contains("(or its second spelling `ndarray`)"), "{err}");
+    // name every other spelling too: a user who reached this message by
+    // writing `ndarray` or `NDArray` and is shown a list without it reads
+    // the list as "not that type at all".
+    assert!(
+        err.contains("(or its other spellings `ndarray` and `NDArray`)"),
+        "{err}"
+    );
 
     // A *private* `-> ndarray` return under `--ext`: `C0001`, from the
     // separate walk that closes what `collect_exports` never visits. The
