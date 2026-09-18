@@ -111,17 +111,25 @@ fn an_ndarray_parameter_type_checks_without_any_import() {
 }
 
 /// Every position that is *not* an `--ext` parameter is refused for the new
-/// spelling exactly as it is for the old one, in the canonical spelling.
+/// spelling exactly as it is for the old one.
 ///
 /// This is the half of the change that is deliberately *not* a widening:
 /// `ndarray` lowers to `Ty::MemoryView`, so it inherits every existing
-/// refusal rather than opening a second, laxer path to them. Each message
-/// renders `memoryview`, because a `Ty` is the compiler's canonical name
-/// for a type — the same thing already happens for `type Arr = memoryview`,
-/// and #1129's D-244 amendment records it rather than leaving it to be
-/// discovered.
+/// refusal rather than opening a second, laxer path to them.
+///
+/// Two message styles, and which one a site uses is a deliberate split
+/// rather than an inconsistency. A message that names the *type* is
+/// spelling-neutral ("a buffer"), because a user who wrote `ndarray` must
+/// not be told about a `memoryview` they never mentioned; a message that
+/// quotes a whole *signature position* back (`I0405`, and `C0003`'s
+/// `-> memoryview`) renders the canonical spelling, because a `Ty` is the
+/// compiler's canonical name for a type -- the same thing already happens
+/// for `type Arr = memoryview`. #1129's D-244 amendment records the split
+/// rather than leaving it to be discovered. All four arms are asserted
+/// here so a later reword cannot quietly move a site from one style to the
+/// other.
 #[test]
-fn every_non_parameter_ndarray_position_is_refused_in_the_canonical_spelling() {
+fn every_non_parameter_ndarray_position_is_refused() {
     // A bare declaration: `C0001`, in both modes, because nothing produces
     // a buffer value to bind to the name. The message is the reworded,
     // spelling-neutral one — a user who wrote `ndarray` must not be told
@@ -157,6 +165,33 @@ fn every_non_parameter_ndarray_position_is_refused_in_the_canonical_spelling() {
     // writing `ndarray` and is shown a list without it reads the list as
     // "not that type at all".
     assert!(err.contains("(or its second spelling `ndarray`)"), "{err}");
+
+    // A *private* `-> ndarray` return under `--ext`: `C0001`, from the
+    // separate walk that closes what `collect_exports` never visits. The
+    // public arm above cannot reach this site at all -- `collect_exports`
+    // answers a public offender with `C0003` first -- which is exactly why
+    // this one is stated: the site was left spelling-pinned and citing
+    // only #1027 while its two documented siblings in `crates/pycc_types`
+    // were reworded, and no existing assertion would have caught it.
+    let dir = fixture(
+        "1129_private_return",
+        "def _f() -> ndarray:\n    return _f()\n",
+    );
+    let ext = build_ext(&dir);
+    assert!(!ext.status.success(), "{}", stdout_of(&ext));
+    let err = stderr_of(&ext);
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(err.contains("`_f`'s return type is a buffer"), "{err}");
+    assert!(err.contains("#1129"), "{err}");
+    // And the spelling the user did not write appears nowhere in the
+    // diagnostic. Scoped to the `error[C0001]` line rather than asserted
+    // over the whole stream: stderr also carries scratch paths and, on some
+    // hosts, toolchain warnings, none of which this arm owns.
+    let line = err
+        .lines()
+        .find(|line| line.contains("error[C0001]"))
+        .expect("the C0001 line");
+    assert!(!line.contains("memoryview"), "{line}");
 
     // An `ndarray` *signature* in a build without `--ext`: `I0405`, the
     // artifact-mode refusal, naming the parameter in the canonical

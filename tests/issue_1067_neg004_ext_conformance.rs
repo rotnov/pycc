@@ -306,7 +306,7 @@ refuse(m.take_view, ([1.0, 2.0],), {}, TypeError,
 # for a `memoryview` over the same bytes. The pair is the statement that
 # arm 1 is now about the protocol and arm 4 about the element type.
 refuse(m.take_view, (b'abcdefgh',), {}, TypeError,
-       "take_view() argument 1: a memoryview of format 'B' is not supported -- "
+       "take_view() argument 1: a buffer of format 'B' is not supported -- "
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 
@@ -328,13 +328,13 @@ refuse(m.take_view, (strided,), {}, (TypeError, BufferError),
 
 # 27: the right format and the wrong rank.
 refuse(m.take_view, (memoryview(bytearray(16)).cast('d', (2, 1)),), {}, TypeError,
-       'take_view() argument 1: a memoryview with ndim 2 is not supported yet -- '
-       'only a one-dimensional memoryview is',
+       'take_view() argument 1: a buffer with ndim 2 is not supported yet -- '
+       'only a one-dimensional buffer is',
        True, (good_view,), 7)
 
 # 28: the right rank and the wrong format.
 refuse(m.take_view, (memoryview(bytearray(8)),), {}, TypeError,
-       "take_view() argument 1: a memoryview of format 'B' is not supported -- "
+       "take_view() argument 1: a buffer of format 'B' is not supported -- "
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 
@@ -346,7 +346,7 @@ import ctypes
 wide = memoryview((ctypes.c_double * 2)())
 assert wide.format == '<d' and wide.itemsize == 8
 refuse(m.take_view, (wide,), {}, TypeError,
-       "take_view() argument 1: a memoryview of format '<d' is not supported -- "
+       "take_view() argument 1: a buffer of format '<d' is not supported -- "
        "only format 'd' (a contiguous float64 buffer) is",
        True, (good_view,), 7)
 

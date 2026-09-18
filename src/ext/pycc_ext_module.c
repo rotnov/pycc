@@ -706,6 +706,13 @@ typedef struct {
  *    the exporter's own claim, and the size is the arithmetic the compiled
  *    code would do.
  *
+ * Arms 3 and 4 say "a buffer", not "a memoryview". Arm 1's widening is
+ * what makes that accurate rather than cosmetic: the operand that reaches
+ * them is any conforming exporter, and a `bytes` or a bare NumPy array is
+ * not a `memoryview` by any reading (D-244's #1129 amendment statement
+ * (f)). Arm 2 needs no such wording -- it propagates the exporter's own
+ * exception and authors no text at all.
+ *
  * `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` is the request. C-contiguity is what
  * makes a plain pointer walk correct at all, and it implies `PyBUF_STRIDES`
  * and so `PyBUF_ND`, which is what makes `ndim` and `shape` populated for
@@ -742,8 +749,8 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
     if (ndim != 1) {
         PyBuffer_Release(out);
         PyErr_Format(PyExc_TypeError,
-                     "%s() argument %zd: a memoryview with ndim %d is not supported yet -- "
-                     "only a one-dimensional memoryview is",
+                     "%s() argument %zd: a buffer with ndim %d is not supported yet -- "
+                     "only a one-dimensional buffer is",
                      fn_name, index + 1, ndim);
         return -1;
     }
@@ -763,7 +770,7 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
     declared = (out->format == NULL) ? "" : out->format;
     if (strcmp(declared, "d") != 0 || out->itemsize != (Py_ssize_t)sizeof(double)) {
         PyErr_Format(PyExc_TypeError,
-                     "%s() argument %zd: a memoryview of format '%s' is not supported -- "
+                     "%s() argument %zd: a buffer of format '%s' is not supported -- "
                      "only format 'd' (a contiguous float64 buffer) is",
                      fn_name, index + 1, declared);
         PyBuffer_Release(out);

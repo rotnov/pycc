@@ -233,9 +233,15 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// *public* function's signature failing to cross the boundary, which a
 /// private one is not. This is the same versioned capability gap
 /// `crates/pycc_types`'s `reject_memoryview_declaration` and
-/// `reject_memoryview_read` report, for the same underlying reason: #1027
-/// adds no expression that *produces* a `memoryview`, so there is nothing a
-/// function could return.
+/// `reject_memoryview_read` report, for the same underlying reason: neither
+/// #1027 nor #1129 adds an expression that *produces* a buffer, so there is
+/// nothing a function could return. The message is worded like those two
+/// siblings, and for the same reason: it names the type as "a buffer"
+/// rather than in either of its two spellings, so a user who wrote
+/// `ndarray` is not told about a `memoryview` they never mentioned. The
+/// canonical-spelling rendering `offending_position` does is the *native*
+/// path's, whose `I0405` quotes a whole signature position back; this
+/// message quotes no annotation text at all.
 ///
 /// Only the return position is checked. A `memoryview` *parameter* on a
 /// private function carries no value into codegen either way: for the same
@@ -275,9 +281,9 @@ fn ext_return_gap(name: &str) -> Diagnostic {
         code: "C0001",
         severity: Severity::Error,
         message: format!(
-            "`{name}`'s return type `-> memoryview` is valid Python but not implemented yet; \
-             Part 1 of #1027 admits a `memoryview` only as a parameter of a `pycc build --ext` \
-             export, so no expression produces one to return"
+            "`{name}`'s return type is a buffer, which is valid Python but not implemented \
+             yet; Part 1 of #1027 and #1129 admit a buffer only as a parameter of a \
+             `pycc build --ext` export, so no expression produces one to return"
         ),
         span: None,
         label: None,
@@ -357,11 +363,11 @@ mod tests {
             "{messages:?}"
         );
         assert!(
-            messages[0].contains("`_make`'s return type `-> memoryview`"),
+            messages[0].contains("`_make`'s return type is a buffer"),
             "{messages:?}"
         );
         assert!(
-            messages[1].contains("`Buf.view`'s return type `-> memoryview`"),
+            messages[1].contains("`Buf.view`'s return type is a buffer"),
             "{messages:?}"
         );
     }
