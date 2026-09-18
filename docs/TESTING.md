@@ -844,12 +844,14 @@ the sweep and the per-record shapes — and the third is independent of both:
    workload has no function that uses it. The workload has such functions; the
    boundary does not admit the way they spell it. Four separate gaps stand
    between them, each verified against `5e96f065` with a synthetic reproducer
-   and each already tracked: the aliased import form `import numpy as np` is
-   rejected while the bare `import numpy` is accepted (import aliasing, #881);
-   `from numpy.typing import NDArray` is rejected (`C0001`, the #882 family);
-   an attribute-form annotation `np.ndarray` is rejected, as is a subscripted
-   one (#886/#889); and `ndarray` is not registered as a buffer carrier at all,
-   which is the part #1027 delivered for `memoryview` only. `def f(a:
+   and three of the four already tracked: the aliased import form `import numpy
+   as np` is rejected while the bare `import numpy` is accepted (import
+   aliasing, #883); `from numpy.typing import NDArray` is rejected (`C0001`,
+   the #882 family); an attribute-form annotation `np.ndarray` is rejected
+   (#889), as is a subscripted one — `T0044`, the annotated class defining no
+   `__class_getitem__`, which no open issue covers today; and `ndarray` is not
+   registered as a buffer carrier at all, which is the part #1027 delivered for
+   `memoryview` only. `def f(a:
    memoryview, n: int) -> float` builds clean under `pycc build --ext` at the
    same commit, which is what isolates the gap to the spelling rather than to
    the carrier machinery.
