@@ -202,6 +202,35 @@ fn a_read_that_precedes_a_module_level_assignment_is_t0021() {
     );
 }
 
+// -- a value-less annotation only declares a type ------------------
+
+#[test]
+fn a_value_less_annotation_does_not_withhold_the_seed() {
+    // `__name__: str` emits no store in CPython, so the module name survives;
+    // only an annotated *assignment* shadows the compiler-provided binding.
+    assert_eq!(
+        build_and_run("dn_ann_only", "__name__: str\nprint(__name__)\n"),
+        "__main__\n"
+    );
+}
+
+#[test]
+fn a_value_less_annotation_of_another_type_still_yields_the_str_seed() {
+    // The annotation declares nothing, so the seed's own `str` type is what
+    // every later use sees -- a mismatched one is a type error at the use
+    // site, never a silently mistyped global.
+    assert_eq!(
+        build_and_run("dn_ann_int", "__name__: int\nprint(__name__)\n"),
+        "__main__\n"
+    );
+    let (ok, rendered) = check("dn_ann_int_use", "__name__: int\nprint(__name__ + 1)\n");
+    assert!(!ok, "{rendered}");
+    assert!(
+        rendered.contains("operator Add is not defined for `str` and `int`"),
+        "{rendered}"
+    );
+}
+
 // -- expression-level bindings the top-level scan deliberately skips --
 //
 // `binds_dunder_name_at_top_level` scans statement targets, not every
@@ -295,6 +324,62 @@ fn check_program(category: &str, entry: &str, dependency: &str) -> (bool, String
         out.status.success(),
         format!("{}{}", stdout_of(&out), stderr_of(&out)),
     )
+}
+
+/// Builds a two-file program (`dep.py` plus the `m.py` entry) and returns the
+/// entry artifact's stdout, panicking with the compiler's own diagnostics when
+/// the build fails.
+fn build_and_run_program(category: &str, entry: &str, dependency: &str) -> String {
+    let dir = ScratchDir::new(category).expect("scratch");
+    std::fs::write(dir.join("dep.py"), dependency).expect("write the dependency");
+    let src = dir.join("m.py");
+    std::fs::write(&src, entry).expect("write the entry module");
+    let out = dir.join("m");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let run = Command::new(&out)
+        .output()
+        .expect("the artifact should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    stdout_of(&run)
+}
+
+// -- a dependency's own top-level binding withholds the entry seed --
+//
+// The program is one flat namespace (Part 1 of #881), so the seed and a
+// dependency's binding are the same global. Seeding anyway would silently
+// overwrite a `str`-valued dependency binding and would fail the whole
+// program with `T0023` for any other type; both compiled before #1156, so
+// both must keep compiling to the same values.
+
+#[test]
+fn a_dependencys_str_binding_withholds_the_entry_seed() {
+    assert_eq!(
+        build_and_run_program(
+            "dn_dep_str",
+            "from dep import helper\nprint(__name__)\nprint(helper())\n",
+            "__name__ = \"dep\"\n\ndef helper() -> str:\n    return __name__\n",
+        ),
+        "dep\ndep\n"
+    );
+}
+
+#[test]
+fn a_dependencys_non_str_binding_withholds_the_entry_seed() {
+    assert_eq!(
+        build_and_run_program(
+            "dn_dep_int",
+            "from dep import helper\nprint(__name__)\nprint(helper())\n",
+            "__name__ = 7\n\ndef helper() -> int:\n    return __name__\n",
+        ),
+        "7\n7\n"
+    );
 }
 
 #[test]

@@ -226,9 +226,13 @@ pub fn lower_module(
     // of a multi-file program, and the single-file `lower_all` path), which
     // withholds the seed. Deliberately *not* recorded in `definition_spans`:
     // that table drives `program::link`'s cross-module collision check, and
-    // registering a synthetic definition there would turn a program whose
-    // dependency binds its own top-level `__name__` -- legal today -- into a
-    // `C0001` reported against a statement no user wrote.
+    // registering a synthetic definition there would report a `C0001` against
+    // a statement no user wrote. A dependency's own top-level binding is not
+    // what that exclusion protects -- the driver's cross-module gate in
+    // `src/modules.rs` withholds the seed outright in that case, so the two
+    // never coexist. It covers the bindings this module's flat per-module scan
+    // deliberately does not see: a rebind nested in a top-level compound
+    // statement, and a `match` case capture.
     if let Some(item) = dunder_name::seed_item(module, module_name) {
         state.items.push(item);
     }

@@ -6,12 +6,17 @@
 //!
 //! > `__name__` is a compiler-provided module-level `str` binding, seeded as
 //! > the module's first top-level statement. It is provided only when the
-//! > module references the name and the module's own top level binds no name
-//! > `__name__`. A user binding of `__name__` at module top level wins
-//! > outright: nothing is seeded and every `__name__` in that module resolves
-//! > through the ordinary name path, exactly as before this change. A binding
-//! > inside a function body is an ordinary local and shadows the module
-//! > binding only within that function, matching CPython.
+//! > module references the name and *no module of the program* binds the name
+//! > `__name__` at its own top level -- neither the entry module nor any
+//! > dependency, because Part 1 of #881 links every module into one flat
+//! > namespace in which the seed and a user binding would be the same global.
+//! > A top-level user binding wins outright: nothing is seeded and every
+//! > `__name__` resolves through the ordinary name path, exactly as before
+//! > this change. A value-less annotation (`__name__: str`) is not such a
+//! > binding -- it only declares a type and emits no store, exactly as in
+//! > CPython -- so the seed survives it. A binding inside a function body is
+//! > an ordinary local and shadows the module binding only within that
+//! > function, matching CPython.
 //! >
 //! > Deviation from CPython, deliberate and documented: in CPython a read that
 //! > textually precedes a module-level `__name__ = ...` still sees the
@@ -33,7 +38,7 @@ use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
 /// The one name this module is about.
-pub(crate) const DUNDER_NAME: &str = "__name__";
+pub const DUNDER_NAME: &str = "__name__";
 
 /// Whether `module_name` should be seeded into `module`, and with what value.
 ///
@@ -94,6 +99,12 @@ fn references_dunder_name(module: &ModModule) -> bool {
 
 /// Gate 2: whether `module`'s own top level binds the name `__name__`.
 ///
+/// This is the *per-module* half of the shadowing gate. The cross-module half
+/// -- a dependency's own top-level binding, which is the same global in the
+/// flat namespace Part 1 of #881 links every module into -- is decided by the
+/// driver in `src/modules.rs`, which passes `module_name: None` and so never
+/// reaches this scan.
+///
 /// Shadowing is a property of a module's *top level* only: a `__name__ = "x"`
 /// inside a function body is an ordinary local that shadows the module binding
 /// only within that function (CPython's own rule), which is the main reason
@@ -144,7 +155,12 @@ fn binds_dunder_name_at_top_level(module: &ModModule) -> bool {
         Stmt::FunctionDef(function_def) => function_def.name.as_str() == DUNDER_NAME,
         Stmt::ClassDef(class_def) => class_def.name.as_str() == DUNDER_NAME,
         Stmt::TypeAlias(type_alias) => target_binds_dunder_name(&type_alias.name),
-        Stmt::AnnAssign(ann_assign) => target_binds_dunder_name(&ann_assign.target),
+        // A value-less `__name__: str` only *declares* a type; CPython emits no
+        // store for it and the interpreter-provided module name survives, so it
+        // must not withhold the seed the way an annotated *assignment* does.
+        Stmt::AnnAssign(ann_assign) => {
+            ann_assign.value.is_some() && target_binds_dunder_name(&ann_assign.target)
+        }
         Stmt::AugAssign(aug_assign) => target_binds_dunder_name(&aug_assign.target),
         Stmt::Assign(assign) => assign.targets.iter().any(target_binds_dunder_name),
         Stmt::For(for_stmt) => target_binds_dunder_name(&for_stmt.target),

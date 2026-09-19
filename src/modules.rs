@@ -186,7 +186,25 @@ impl Loader {
                 Resolution::Unanswered => {}
             }
         }
-        let module_name = is_entry
+        // W0 of #882 (#1156): a *dependency's* own top-level `__name__` binding
+        // withholds the entry module's seed, exactly as the entry module's own
+        // binding does inside `dunder_name::seed_item`. Part 1 of #881 links
+        // every module into one flat namespace, so the seed and a dependency's
+        // binding are the same global: without this gate a `str`-valued
+        // dependency binding is silently overwritten by the seed, and a
+        // binding of any other type fails the whole program with `T0023`.
+        // Withholding restores the pre-#1156 behavior for both -- the
+        // dependency's binding is the one global, as it was before this
+        // feature existed. Dependencies are lowered before the entry module,
+        // so every one of them is already in `self.modules` here.
+        let dependency_binds_dunder_name = self.modules.iter().any(|loaded| {
+            loaded
+                .module
+                .definition_spans
+                .iter()
+                .any(|(name, _)| name == pycc_hir::DUNDER_NAME)
+        });
+        let module_name = (is_entry && !dependency_binds_dunder_name)
             .then_some(self.entry_module_name.as_deref())
             .flatten();
         let module = pycc_hir::lower_module(&parsed, &resolved, module_name)
