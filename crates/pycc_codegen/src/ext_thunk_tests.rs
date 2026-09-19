@@ -334,3 +334,156 @@ fn a_native_build_emits_no_thunks_at_all() {
 
     assert_eq!(observed, vec![false]);
 }
+
+// --- #1143: the method mangling and the widened export predicate ---------
+
+#[test]
+fn mangling_is_the_identity_on_a_dot_free_name() {
+    // Every `ext` symbol emitted before #1143 was dot-free, and the mangling
+    // must not move one of them: an existing artifact's exported C symbols
+    // are its ABI.
+    for name in ["f", "compute", "a_b_c", "x0"] {
+        assert_eq!(crate::mangle_ext_name(name), name);
+    }
+}
+
+#[test]
+fn mangling_a_dotted_name_is_a_length_prefixed_c_identifier() {
+    assert_eq!(
+        crate::mangle_ext_name("Grid.scale.static"),
+        "0m4_Grid5_scale6_static"
+    );
+    assert_eq!(
+        crate::mangle_ext_name("Grid.make.classmethod"),
+        "0m4_Grid4_make11_classmethod"
+    );
+}
+
+#[test]
+fn mangling_is_injective_across_shapes_that_would_collide_if_flattened() {
+    // Dot-flattening (`Grid_scale_static`) is not injective: a class named
+    // `Grid_scale` with a method `static` flattens to the same symbol. The
+    // length prefixes are what make the segmentation recoverable, so the
+    // colliding pairs below must stay distinct.
+    //
+    // The identity arm cannot collide with the prefixed arm: a dot-free name
+    // maps to itself, and the only dot-free string that could equal some
+    // dotted name's image starts with `0m`, which no Python identifier can
+    // (an identifier cannot start with a digit) and which no compiler-
+    // generated name uses either -- those all start with `0gen_`.
+    let names = [
+        "Grid.scale.static",
+        "Grid_scale.static",
+        "Grid.scale_static",
+        "Grid_scale_static",
+        "Grid.make.classmethod",
+        "Grid.makeclassmethod",
+    ];
+    let mut mangled: Vec<String> = names.iter().map(|n| crate::mangle_ext_name(n)).collect();
+    mangled.sort();
+    let before = mangled.len();
+    mangled.dedup();
+    assert_eq!(mangled.len(), before, "mangling collided: {mangled:?}");
+}
+
+#[test]
+fn the_export_predicate_admits_exactly_the_two_method_kinds_that_need_no_receiver_object() {
+    // `.static` and `.classmethod` are admitted; the bare spelling (a regular
+    // method, a property getter or an abstract method, which this name cannot
+    // tell apart) and `.setter` are refused, as is any other third segment.
+    assert!(crate::is_ext_exportable_name("Grid.scale.static"));
+    assert!(crate::is_ext_exportable_name("Grid.make.classmethod"));
+    assert!(!crate::is_ext_exportable_name("Grid.scale"));
+    assert!(!crate::is_ext_exportable_name("Grid.width.setter"));
+    assert!(!crate::is_ext_exportable_name("Grid.scale.other"));
+    assert!(!crate::is_ext_exportable_name("Grid.scale.static.extra"));
+}
+
+#[test]
+fn the_export_predicate_applies_the_public_name_rule_to_both_segments() {
+    assert!(!crate::is_ext_exportable_name("_Grid.scale.static"));
+    assert!(!crate::is_ext_exportable_name("Grid._scale.static"));
+    assert!(!crate::is_ext_exportable_name("_f"));
+    assert!(crate::is_ext_exportable_name("f"));
+}
+
+#[test]
+fn the_export_predicate_refuses_an_empty_segment_and_a_specialization() {
+    // `is_public_name`'s underlying rule (`!starts_with('_')`) is `true` for
+    // the empty string, so each empty segment is refused explicitly rather
+    // than left to it.
+    assert!(!crate::is_ext_exportable_name(""));
+    assert!(!crate::is_ext_exportable_name(".static"));
+    assert!(!crate::is_ext_exportable_name("Grid..static"));
+    assert!(!crate::is_ext_exportable_name("0gen_identity_int"));
+    assert!(!crate::is_ext_exportable_name("0gen_f.scale.static"));
+}
+
+/// Every global the emitted module holds, in module order.
+fn globals_of(label: &str, mir: &MirModule) -> Vec<String> {
+    let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
+    let obj_path = dir.join(format!("{label}.o"));
+    let mut observed = Vec::new();
+    let mut observer = |module: &inkwell::module::Module<'_>, _pipeline: Option<&'static str>| {
+        for global in module.get_globals() {
+            observed.push(global.get_name().to_string_lossy().into_owned());
+        }
+    };
+    compile_to_object_with_observer(
+        mir,
+        &obj_path,
+        &CompileOptions {
+            ext: true,
+            ..CompileOptions::default()
+        },
+        Some(&mut observer),
+    )
+    .expect("ext codegen should succeed");
+    observed
+}
+
+#[test]
+fn a_methods_function_pointer_global_carries_the_mangled_spelling() {
+    // `fnptr_Grid.scale.static` is not a C identifier, so the global the
+    // generated wrapper declares `extern` must be the mangled spelling --
+    // and the two spellings are produced by one function, so this test is
+    // what keeps the emitted global and the generated `extern` equal.
+    let observed = globals_of(
+        "ext_method_fnptr_global",
+        &module(vec![
+            func("Grid.scale.static", &[("n", Ty::Int)], Ty::Int),
+            func("plain", &[("n", Ty::Int)], Ty::Int),
+        ]),
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|g| g == "fnptr_0m4_Grid5_scale6_static"),
+        "{observed:?}"
+    );
+    // A dot-free name is untouched: an existing artifact's symbols are ABI.
+    assert!(observed.iter().any(|g| g == "fnptr_plain"), "{observed:?}");
+    assert!(
+        !observed.iter().any(|g| g.contains("fnptr_Grid.scale")),
+        "{observed:?}"
+    );
+}
+
+#[test]
+fn a_method_that_needs_a_thunk_gets_the_mangled_thunk_symbol() {
+    let observed = thunks_of(
+        "ext_method_thunk_symbol",
+        &module(vec![func(
+            "Grid.pair.static",
+            &[("n", Ty::Int)],
+            tuple(vec![Ty::Int, Ty::Int]),
+        )]),
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .map(|t| t.symbol.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pycc_ext_thunk_0m4_Grid4_pair6_static"]
+    );
+}

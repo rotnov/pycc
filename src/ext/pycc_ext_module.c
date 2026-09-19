@@ -1484,6 +1484,21 @@ static int pycc_ext_exec_module(PyObject *module)
     if (pycc_ext_register_exception_classes(module) != 0) {
         return -1;
     }
+    /*
+     * One non-instantiable type object per class that exports a method,
+     * published under the bare class name. After the exception classes,
+     * because a user exception class is already registered under that same
+     * attribute and a second `PyModule_AddObjectRef` would clobber it --
+     * which is why a class carrying an exception tag never gets a type
+     * object at all. Before the module body, because nothing here depends
+     * on what the body produces: the wrappers reach the compiled code
+     * through the `fnptr_` globals the body stores, and the module is not
+     * importable until this function returns. Same -1-with-exception-set
+     * convention as everything else in this slot.
+     */
+    if (pycc_ext_register_method_types(module) != 0) {
+        return -1;
+    }
     if (pycc_ext_module_exec() != 0) {
         /*
          * The generic `ImportError` is a last resort, not the default. A

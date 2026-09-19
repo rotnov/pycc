@@ -52,6 +52,53 @@ fn module(items: Vec<HirItem>) -> HirModule {
     }
 }
 
+/// A minimal [`HirClassDef`] carrying only the two fields the `--ext` export
+/// set reads: the class name and `exception_type_tag`.
+///
+/// #1143 excludes a user exception class by that tag, deliberately rather
+/// than by `collect_user_exception_classes`' own selector: the tag is the one
+/// field that is set for exactly the classes the runtime treats as
+/// exceptions, so a selector drift elsewhere cannot silently widen the export
+/// set. Every other field is empty here because nothing in `collect_exports`
+/// consults it.
+fn class_def(name: &str, exception_type_tag: Option<u8>) -> pycc_hir::HirClassDef {
+    pycc_hir::HirClassDef {
+        name: name.to_string(),
+        bases: Vec::new(),
+        mro: vec![name.to_string()],
+        attrs: Vec::new(),
+        methods: Vec::new(),
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        type_param: None,
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        class_attrs: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+        exception_type_tag,
+    }
+}
+
+/// [`module`] plus the class table `collect_exports` reads for the
+/// exception-class exclusion.
+fn module_with_classes(
+    items: Vec<HirItem>,
+    class_defs: Vec<(String, pycc_hir::HirClassDef)>,
+) -> HirModule {
+    HirModule {
+        class_defs,
+        ..module(items)
+    }
+}
+
 fn probe(version: (u32, u32), include: &Path) -> ExtProbe {
     ExtProbe {
         version,

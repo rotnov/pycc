@@ -227,14 +227,30 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// `memoryview`, or `Ok(())` when none is.
 ///
 /// `src/ext_build.rs`'s `collect_exports` already refuses that return type
-/// on a *public* function, with `C0003` and the export-boundary wording.
-/// This closes the rest of the program: a private `def _make() ->
-/// memoryview`, a method, or a monomorphized specialization is skipped by
-/// that walk entirely, so nothing refused the signature and lowering the
-/// call's result reached `pycc_codegen`'s "a `memoryview`-typed call result
-/// is not supported yet" panic -- a compiler crash on valid Python, not a
-/// diagnostic. The `C0003` message's own advice ("rename it to `_name` to
-/// keep it out of the export set") pointed straight at that crash.
+/// on a *public* function, and on a public `@staticmethod` or
+/// `@classmethod` of a public non-exception class, with `C0003` and the
+/// export-boundary wording. This closes the rest of the program: a private
+/// `def _make() -> memoryview`, an instance method, a property, a method of
+/// a private or exception class, or a monomorphized specialization is
+/// skipped by that walk entirely, so nothing refused the signature and
+/// lowering the call's result reached `pycc_codegen`'s "a
+/// `memoryview`-typed call result is not supported yet" panic -- a compiler
+/// crash on valid Python, not a diagnostic. The `C0003` message's own
+/// advice ("rename it to `_name` to keep it out of the export set") pointed
+/// straight at that crash.
+///
+/// **A public `memoryview`-returning `@staticmethod` or `@classmethod` of a
+/// public class now reports `C0003` instead of the `C0001` this walk used
+/// to give it.** That is the export boundary's own diagnostic taking over a
+/// signature it now owns, not a new refusal: the program was already
+/// rejected, and only the code and the wording change. It also means such a
+/// method's `C0003` *suppresses* the `C0001`s this walk would have reported
+/// in the same run, because `plan_ext` aborts on `collect_exports`' gaps
+/// before reaching here. That arm is newly reachable rather than new: the
+/// same suppression has always applied to a public module-level function's
+/// `C0003`, and `C0003`'s own "every gap in a program is reported at once"
+/// is a statement about the export-boundary gap set, which is collected in
+/// full before the first is reported.
 ///
 /// `C0001` rather than `C0003`: `docs/DIAGNOSTICS.md` defines `C0003` as a
 /// *public* function's signature failing to cross the boundary, which a
@@ -261,7 +277,9 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// [`refuse_in_native_mode`] refuses both positions there, private
 /// functions included.
 ///
-/// Called after `collect_exports`, so a public offender has already been
+/// Called after `collect_exports`, so an offender that is *in the export
+/// set* -- a public module-level function, or a public `@staticmethod` or
+/// `@classmethod` of a public non-exception class -- has already been
 /// reported as the `C0003` its documented boundary owes it and never
 /// reaches this walk.
 pub(crate) fn refuse_in_ext_mode(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {

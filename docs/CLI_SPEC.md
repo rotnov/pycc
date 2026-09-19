@@ -219,7 +219,9 @@ directory once project mode exists.
                     as `C0003`; the
                     export set is the whole linked program -- the entry file
                     and its import closure (D-222) -- so a public function
-                    in an imported project module is exported too. Will
+                    in an imported project module is exported too, and it
+                    reaches a public `@staticmethod`/`@classmethod` of a
+                    public class, published as `mod.Class.method` (#1143). Will
                     conflict with `--lib`, `--interop-policy`, and `--pure`
                     once those flags exist.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)

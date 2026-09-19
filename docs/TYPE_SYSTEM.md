@@ -17,6 +17,18 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 - A module-level function whose name starts with `_` is a private helper under
   D-038. Missing parameter and return annotations create inference variables;
   explicit annotations remain fixed constraints.
+- **This scoping does not widen to methods**, deliberately, and
+  [#1143](https://github.com/rotnov/pycc/issues/1143) does not change it.
+  D-038's leading-underscore rule carries two separable jobs: a *visibility*
+  predicate (`pycc_hir::is_public_name`) and this *inference* convention.
+  #1143 widens only the first, applying the same unforked predicate to a class
+  name and a method name so that a public `@staticmethod`/`@classmethod` of a
+  public class joins the `ext` export set. The inference convention below stays
+  module-level: a method body is not a private-helper inference root, a
+  `_`-prefixed method creates no inference variables, and every method
+  parameter and return still needs a written annotation. Widening the
+  inference convention would be a separate change with its own solver work,
+  not a corollary of the export-set widening.
 - The v0.1 solver links those variables through call arguments, local names,
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting

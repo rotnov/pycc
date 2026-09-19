@@ -322,32 +322,152 @@ pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL: &str = "pycc_ext_obj_unpack_float_tuple";
 
+/// The C-legal spelling of a possibly-dotted pycc name.
+///
+/// A method reaches MIR under a dotted name (`Grid.scale.static`), and two
+/// of the places that name is used are *C identifiers*: the
+/// `extern void *fnptr_<name>;` declaration `pycc::ext_build`'s
+/// `wrapper_for` emits, and the `pycc_ext_wrap_<name>` /
+/// `pycc_ext_thunk_<name>` symbols. `extern void *fnptr_Grid.scale.static;`
+/// is not accepted by any C compiler, so the dotted spelling has to be
+/// encoded -- and `src/ext_build.rs`'s rebind-dedup comment records that a
+/// *duplicate* export name makes clang reject the generated `.inc`
+/// outright, so the encoding has to be injective as well as legal.
+///
+/// The encoding: a name with no `.` is returned unchanged; otherwise the
+/// result is `"0m"` followed by, for each `.`-separated segment in order,
+/// the segment's byte length in decimal, then `"_"`, then the segment. So
+/// `f` stays `f` and `Grid.scale.static` becomes `0m4_Grid5_scale6_static`.
+///
+/// **It is injective, and that is argued rather than fixture-tested.**
+/// Every dot-free name reaching this function is either a Python identifier
+/// or carries the compiler-generated `0gen_` prefix
+/// (`pycc_types::monomorphize`), and neither can begin with `0m` -- the
+/// premise is stated this way rather than as "Python identifiers cannot
+/// begin with a digit", because a dot-free name like `0gen_make__T_int` is
+/// a real identity-branch input that *does* begin with a digit. So the
+/// identity branch's outputs never collide with a `0m...` output. Within
+/// the `0m` branch the encoding is length-prefixed and therefore uniquely
+/// decodable, so two distinct dotted names cannot mangle alike. `.` -> `_`
+/// and `.` -> `__` both fail this argument, the second one silently: a
+/// module-level `def Grid__scale__static` would collide with
+/// `Grid.scale.static`.
+///
+/// Every use site prefixes the result (`fnptr_`, `fnname_`,
+/// `pycc_ext_thunk_`, `pycc_ext_wrap_`), so the leading digit never starts
+/// a C identifier. Because the dot-free case is the identity, every symbol
+/// the compiler emitted before methods became exportable is byte-identical.
+///
+/// This is the one canonical implementation: `pycc::ext_build` calls it
+/// rather than reimplementing it, exactly as it already calls
+/// [`ext_thunk_symbol`].
+#[must_use]
+pub fn mangle_ext_name(name: &str) -> String {
+    if !name.contains('.') {
+        return name.to_string();
+    }
+    let mut out = String::from("0m");
+    for segment in name.split('.') {
+        out.push_str(&segment.len().to_string());
+        out.push('_');
+        out.push_str(segment);
+    }
+    out
+}
+
 /// The external symbol `name`'s scalar-only `ext` export thunk is emitted
 /// under.
+///
+/// `name` is mangled through [`mangle_ext_name`] first, so a method's thunk
+/// is a legal C identifier the generated `extern` declaration can name. The
+/// mangling is the identity for a dot-free name, so every module-level
+/// function's thunk symbol is unchanged.
 #[must_use]
 pub fn ext_thunk_symbol(name: &str) -> String {
-    format!("{EXT_THUNK_PREFIX}{name}")
+    format!("{EXT_THUNK_PREFIX}{}", mangle_ext_name(name))
 }
 
 /// Whether `name` is a name D-244 rule 1 can export at all, disregarding
 /// its signature.
 ///
-/// The three tests are exactly `pycc::ext_build::collect_exports`' own, and
-/// this is their one canonical home so the two sides of the seam cannot
-/// drift: a wrapper generated for a name codegen declined to emit a thunk
-/// for links cleanly and crashes on the first call.
+/// The tests are exactly `pycc::ext_build::collect_exports`' own *lexical*
+/// verdict, and this is their one canonical home so the two sides of the
+/// seam cannot drift: a wrapper generated for a name codegen declined to
+/// emit a thunk for links cleanly and crashes on the first call.
+/// `src/ext_build_tests/exports.rs` carries a test pinning the two equal
+/// over a shared table of names, because the drift is otherwise silent --
+/// `wrapper_for` picks the thunk `extern` or the `fnptr_` `extern` from
+/// [`ext_thunk_required`], so a disagreement emits the wrong C declaration
+/// for a `tuple`-carrying method.
 ///
-/// The first test is D-038's public-name predicate, spelled out rather than
+/// The public-name test is D-038's predicate, spelled out rather than
 /// delegated to `pycc_hir::is_public_name` because this crate deliberately
 /// does not depend on `pycc_hir` -- it sees only `pycc_mir`'s re-export of
 /// `Ty`. The body there is `!name.starts_with('_')` and nothing else; if it
-/// ever grows a case, this copy must grow with it. The other two are not
-/// policy but representation: a method reaches MIR under its `Class.method`
-/// name, and a monomorphized generic specialization carries the `0gen_`
-/// prefix and has no `fnptr_` global to dispatch through.
+/// ever grows a case, this copy must grow with it.
+///
+/// **Dotted names are no longer refused wholesale.** A method reaches MIR
+/// under `<Class>.<method>` and the suffixed spellings
+/// `<Class>.<method>.static`, `<Class>.<method>.classmethod` and
+/// `<Class>.<property>.setter` (`pycc_hir::class`'s mangling). This admits
+/// exactly the `.static` and `.classmethod` spellings, with every segment
+/// public; the bare `<Class>.<method>` spelling covers the three
+/// `MethodKind`s `Regular`, `PropertyGetter` and `AbstractMethod` at once
+/// and is refused *as representation*, because the mangled name cannot tell
+/// them apart and admitting an abstract method would export a body that
+/// returns nothing. `<Class>.<property>.setter` is refused the same way.
+///
+/// **This verdict is purely lexical, and must stay so.** The function
+/// receives a bare `&str` and this crate cannot see `pycc_hir`, so a
+/// verdict that consulted `HirModule::class_defs` would have no
+/// mirror-comparable form here and the parity test would stop being
+/// well-formed. The driver layers its exception-class exclusion *on top of*
+/// this verdict rather than inside it, which makes this mirror a
+/// **superset** of the driver's admitted set: at worst a thunk is emitted
+/// for a name no wrapper calls, which is dead code -- never the link error
+/// the drift above would be.
+///
+/// A monomorphized generic specialization carries the `0gen_` prefix and
+/// has no `fnptr_` global to dispatch through, so it stays refused; that
+/// test is applied to the whole name *before* the split and takes
+/// precedence, as cheap defense in depth. It is not a live hazard: the real
+/// specialization shapes put the substitution suffix last
+/// (`0gen_<Class>.<method>__<P>_<C>`), so a `0gen_` name's last segment is
+/// never `static`.
 #[must_use]
 pub fn is_ext_exportable_name(name: &str) -> bool {
-    !name.starts_with('_') && !name.contains('.') && !name.starts_with("0gen_")
+    if name.starts_with("0gen_") {
+        return false;
+    }
+    let mut segments = name.split('.');
+    // `str::split` always yields at least one segment, so the fallback is
+    // unreachable rather than a second refusal path; an empty first segment
+    // is refused on the next line either way, which is what the driver's
+    // mirror does with its own empty-segment guard.
+    let first = segments.next().unwrap_or("");
+    if first.starts_with('_') || first.is_empty() {
+        return false;
+    }
+    let Some(second) = segments.next() else {
+        // A dot-free name: a module-level function, admitted by D-038's
+        // predicate alone.
+        return true;
+    };
+    if second.starts_with('_') || second.is_empty() {
+        return false;
+    }
+    match segments.next() {
+        // `<Class>.<method>` -- `Regular`, `PropertyGetter` or
+        // `AbstractMethod`, indistinguishable here and all refused.
+        None => false,
+        Some(kind) => {
+            // A fourth segment cannot arise: a class nested in a class or a
+            // function is refused by `pycc_hir` (`stmt.rs`, `class.rs`), so
+            // no `A.B.method` name exists. Refusing it is the fail-closed
+            // reading rather than a reachable branch.
+            segments.next().is_none() && (kind == "static" || kind == "classmethod")
+        }
+    }
 }
 
 /// The boundary slots a value of type `ty` occupies when it crosses the

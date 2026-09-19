@@ -55,6 +55,9 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
         "m",
         &[ExtExport {
             name: "answer".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: Vec::new(),
             return_ty: Ty::Int,
         }],
@@ -80,6 +83,9 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
         "m",
         &[ExtExport {
             name: "square".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -108,6 +114,9 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
         "m",
         &[ExtExport {
             name: "add".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int, Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -139,6 +148,9 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
         "m",
         &[ExtExport {
             name: "risky".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -161,6 +173,9 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
         "m",
         &[ExtExport {
             name: "scale".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Float],
             return_ty: Ty::Float,
         }],
@@ -189,6 +204,9 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
         "m",
         &[ExtExport {
             name: "negate".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Bool],
             return_ty: Ty::Bool,
         }],
@@ -216,6 +234,9 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
         "m",
         &[ExtExport {
             name: "sink".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::None,
         }],
@@ -237,6 +258,9 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
         "m",
         &[ExtExport {
             name: "mix".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int, Ty::Float, Ty::Bool],
             return_ty: Ty::Float,
         }],
@@ -272,6 +296,9 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
         "m",
         &[ExtExport {
             name: "risky".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::None,
         }],
@@ -299,6 +326,9 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
         "m",
         &[ExtExport {
             name: "shout".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -328,6 +358,9 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
         "m",
         &[ExtExport {
             name: "join".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Str, Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -596,6 +629,9 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
         "m",
         &[ExtExport {
             name: "total".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             return_ty: Ty::Int,
         }],
@@ -647,6 +683,9 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
         "m",
         &[ExtExport {
             name: "split".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
         }],
@@ -715,6 +754,9 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
         "m",
         &[ExtExport {
             name: "split".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
         }],
@@ -744,6 +786,9 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
         "m",
         &[ExtExport {
             name: "wrap".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int])),
         }],
@@ -765,6 +810,9 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
         "m",
         &[ExtExport {
             name: "dot".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![
                 Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
                 Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
@@ -811,6 +859,9 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
         "m",
         &[ExtExport {
             name: "tag".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Str, Ty::Tuple(Box::new(vec![Ty::Int]))],
             return_ty: Ty::Str,
         }],
@@ -841,6 +892,9 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
         "m",
         &[ExtExport {
             name: "origin".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: Vec::new(),
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Float])),
         }],
@@ -882,6 +936,9 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
         "m",
         &[ExtExport {
             name: "pair".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
         }],
@@ -906,6 +963,9 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
         "m",
         &[ExtExport {
             name: "square".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -924,6 +984,9 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
         "m",
         &[ExtExport {
             name: "record".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))],
             return_ty: Ty::None,
         }],
@@ -1201,6 +1264,9 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
         "m",
         &[ExtExport {
             name: name.to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::MemoryView; count],
             return_ty,
         }],
@@ -1315,6 +1381,9 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
         "m",
         &[ExtExport {
             name: "label".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -1351,6 +1420,9 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
         "m",
         &[ExtExport {
             name: "greet".to_string(),
+            class: None,
+            method: None,
+            receiver: false,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -1361,6 +1433,285 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
              return NULL;\n    }\n    return pycc_ext_pack_str(result);\n"
         ),
+        "{inc}"
+    );
+}
+
+// --- #1143: the per-class type object and its method table --------------
+
+/// An exported `@staticmethod`, receiver-free.
+fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
+    ExtExport {
+        name: format!("{class}.{method}.static"),
+        class: Some(class.to_string()),
+        method: Some(method.to_string()),
+        receiver: false,
+        params,
+        return_ty,
+    }
+}
+
+/// An exported `@classmethod`. `params` is the receiver-free tail: `cls`
+/// never crosses the boundary.
+fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
+    ExtExport {
+        name: format!("{class}.{method}.classmethod"),
+        class: Some(class.to_string()),
+        method: Some(method.to_string()),
+        receiver: true,
+        params,
+        return_ty,
+    }
+}
+
+#[test]
+fn a_program_with_no_exported_method_still_defines_the_registration_function() {
+    // Unconditional, so `src/ext/pycc_ext_module.c` can call it without a
+    // preprocessor guard: an artifact whose program exports no method still
+    // links.
+    let inc = inc_no_classes("m", &[]);
+    assert!(inc.contains(METHOD_TYPE_REGISTER_DECL), "{inc}");
+    assert!(
+        inc.contains("    (void)module;\n    return 0;\n}\n"),
+        "{inc}"
+    );
+    assert!(!inc.contains("PyType_FromSpec"), "{inc}");
+}
+
+#[test]
+fn an_exported_method_gets_a_method_table_a_slot_table_and_a_non_instantiable_spec() {
+    let inc = inc_no_classes(
+        "m",
+        &[
+            static_export("Grid", "scale", vec![Ty::Int], Ty::Int),
+            class_export("Grid", "make", vec![Ty::Int], Ty::Int),
+        ],
+    );
+    assert!(
+        inc.contains(
+            "static PyMethodDef pycc_ext_type_methods_Grid[] = {\n    \
+             {\"scale\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Grid5_scale6_static, \
+             METH_FASTCALL | METH_STATIC, NULL},\n    \
+             {\"make\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Grid4_make11_classmethod, \
+             METH_FASTCALL | METH_CLASS, NULL},\n    {NULL, NULL, 0, NULL},\n};\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "static PyType_Slot pycc_ext_type_slots_Grid[] = {\n    \
+             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    {0, NULL},\n};\n"
+        ),
+        "{inc}"
+    );
+    // `basicsize = 0` and `itemsize = 0`: the type carries no instance
+    // layout, and `Py_TPFLAGS_DISALLOW_INSTANTIATION` plus
+    // `Py_TPFLAGS_IMMUTABLETYPE` are what make `mod.Grid()` and
+    // `mod.Grid.scale = ...` both `TypeError` while instance methods are
+    // unimplemented.
+    assert!(
+        inc.contains(
+            "static PyType_Spec pycc_ext_type_spec_Grid = {\n    \
+             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    0,\n    0,\n    \
+             Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
+             Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_type_slots_Grid,\n};\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    type = PyType_FromSpec(&pycc_ext_type_spec_Grid);\n    \
+             if (type == NULL) {\n        return -1;\n    }\n    \
+             if (PyModule_AddObjectRef(module, \"Grid\", type) < 0) {\n        \
+             Py_DECREF(type);\n        return -1;\n    }\n    Py_DECREF(type);\n"
+        ),
+        "{inc}"
+    );
+}
+
+#[test]
+fn an_exported_method_is_never_a_flat_module_level_entry() {
+    // The host surface is `mod.Grid.scale(...)`. A flat
+    // `mod."Grid.scale"` attribute is not published, in this release or any
+    // later one: `pycc_ext_methods[]` carries module-level functions only.
+    let inc = inc_no_classes(
+        "m",
+        &[
+            ExtExport {
+                name: "plain".to_string(),
+                class: None,
+                method: None,
+                receiver: false,
+                params: vec![Ty::Int],
+                return_ty: Ty::Int,
+            },
+            static_export("Grid", "scale", vec![Ty::Int], Ty::Int),
+        ],
+    );
+    let table = inc
+        .split("static PyMethodDef pycc_ext_methods[]")
+        .nth(1)
+        .expect("the module-level table is emitted")
+        .split("};")
+        .next()
+        .expect("the table is terminated");
+    assert!(table.contains("\"plain\""), "{table}");
+    assert!(!table.contains("Grid"), "{table}");
+}
+
+#[test]
+fn a_non_ascii_class_name_is_spliced_verbatim_into_the_type_object_identifiers() {
+    // `mangle_ext_name` encodes the dot separator; it is not an ASCII fold,
+    // and it copies each segment's bytes verbatim. Routing a class name
+    // through it would therefore change nothing here, and nothing needs to:
+    // a Python identifier is `XID_Start XID_Continue*`, which carries no
+    // character that escapes a C identifier or a C string literal, and both
+    // clang and GCC accept UTF-8 identifiers. Verified end to end at
+    // `5b1fb3a1`: a module whose class is named `Grid\u{e9}` builds with
+    // `--ext`, imports, and answers `Grid\u{e9}.scale(21) == 42`.
+    let inc = inc_no_classes(
+        "m",
+        &[static_export("Grid\u{e9}", "scale", vec![Ty::Int], Ty::Int)],
+    );
+    assert!(
+        inc.contains("static PyMethodDef pycc_ext_type_methods_Grid\u{e9}[]"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("static PyType_Spec pycc_ext_type_spec_Grid\u{e9} = {"),
+        "{inc}"
+    );
+    // The host-visible name is the same bytes, in a string literal.
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".Grid\u{e9}\""),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_class_method_wrapper_prepends_the_null_receiver_and_a_static_one_does_not() {
+    let inc = inc_no_classes(
+        "m",
+        &[
+            static_export("Grid", "scale", vec![Ty::Int], Ty::Int),
+            class_export("Grid", "make", vec![Ty::Int], Ty::Int),
+        ],
+    );
+    // The `@staticmethod` thunk takes exactly the carried parameters.
+    assert!(
+        inc.contains("extern void *fnptr_0m4_Grid5_scale6_static;"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("extern void *fnptr_0m4_Grid4_make11_classmethod;"),
+        "{inc}"
+    );
+    // The `@classmethod` thunk's native signature still leads with the
+    // receiver slot, which every native `Grid.make(...)` call site fills
+    // with a null pointer; the wrapper passes `NULL` there and the compiled
+    // body never dereferences it.
+    let make = thunk_call_line(&inc, "fnptr_0m4_Grid4_make11_classmethod");
+    assert!(make.contains("void *,"), "{make}");
+    assert!(make.contains("NULL,"), "{make}");
+    // The `@staticmethod`'s own cast carries no receiver slot. Anchor on the
+    // cast line rather than on the wrapper's first statement: the body opens
+    // with `(void)self;`, so a negative assertion cut at the first `;` would
+    // hold whatever the cast below it said.
+    let scale = thunk_call_line(&inc, "fnptr_0m4_Grid5_scale6_static");
+    assert!(!scale.contains("void *,"), "{scale}");
+}
+
+/// The single line of generated C that casts `symbol` to its native
+/// signature and calls it -- the text that decides whether a wrapper
+/// prepends a receiver.
+fn thunk_call_line<'a>(inc: &'a str, symbol: &str) -> &'a str {
+    inc.lines()
+        .find(|line| line.contains(&format!(")){symbol})")))
+        .unwrap_or_else(|| panic!("no call through `{symbol}` in:\n{inc}"))
+}
+
+#[test]
+fn a_nullary_class_method_declares_the_receiver_as_its_whole_parameter_list() {
+    // `c_param_list` answers `"void"` for an empty carried list, because an
+    // empty C parameter list means "unspecified" rather than "no
+    // arguments". A `@classmethod` whose receiver-free tail is empty still
+    // takes the receiver slot natively, so the declaration must read
+    // `(void *)` -- never `(void *, void)`, which does not compile, and
+    // never `(void)`, which would disagree with the compiled arity.
+    let inc = inc_no_classes("m", &[class_export("Grid", "make", vec![], Ty::Int)]);
+    let decl = inc
+        .split("extern void *fnptr_0m4_Grid4_make11_classmethod;")
+        .nth(1)
+        .expect("the classmethod's function-pointer global is emitted");
+    assert!(!decl.contains("void *, void"), "{decl}");
+    let call = inc
+        .split("pycc_ext_wrap_0m4_Grid4_make11_classmethod(")
+        .nth(1)
+        .expect("the classmethod wrapper is emitted");
+    assert!(
+        call.contains("(void *))fnptr_0m4_Grid4_make11_classmethod"),
+        "{call}"
+    );
+    assert!(call.contains("(NULL)"), "{call}");
+}
+
+#[test]
+fn a_method_wrapper_renders_the_source_level_spelling_in_every_host_visible_message() {
+    // A message the host reads must never carry a spelling the user did not
+    // write: the arity error says `Grid.scale()`, not
+    // `Grid.scale.static()` and not `0m4_Grid5_scale6_static()`.
+    let inc = inc_no_classes(
+        "m",
+        &[static_export("Grid", "scale", vec![Ty::Int], Ty::Int)],
+    );
+    assert!(inc.contains("Grid.scale() takes exactly"), "{inc}");
+    assert!(!inc.contains("Grid.scale.static()"), "{inc}");
+    assert!(!inc.contains("0m4_Grid5_scale6_static()"), "{inc}");
+}
+
+#[test]
+fn two_classes_are_emitted_in_first_export_order() {
+    // The companion must be byte-identical across runs, so the class order
+    // is the export order and never a hash-map walk.
+    let inc = inc_no_classes(
+        "m",
+        &[
+            static_export("Zeta", "one", vec![], Ty::Int),
+            static_export("Alpha", "two", vec![], Ty::Int),
+            static_export("Zeta", "three", vec![], Ty::Int),
+        ],
+    );
+    let zeta = inc.find("pycc_ext_type_methods_Zeta").expect("Zeta");
+    let alpha = inc.find("pycc_ext_type_methods_Alpha").expect("Alpha");
+    assert!(zeta < alpha, "{inc}");
+    let table = inc
+        .split("static PyMethodDef pycc_ext_type_methods_Zeta[] = {")
+        .nth(1)
+        .expect("Zeta's table")
+        .split("};")
+        .next()
+        .expect("terminated");
+    assert!(table.contains("\"one\""), "{table}");
+    assert!(table.contains("\"three\""), "{table}");
+    assert!(!table.contains("\"two\""), "{table}");
+}
+
+#[test]
+fn a_tuple_carrying_exported_class_method_goes_through_its_thunk() {
+    // A `tuple` in the signature routes the call through
+    // `pycc_ext_thunk_<symbol>` (#1050) rather than the `fnptr_` global
+    // directly, and the mangled symbol travels into that spelling too.
+    let inc = inc_no_classes(
+        "m",
+        &[class_export(
+            "Grid",
+            "pair",
+            vec![Ty::Int],
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+        )],
+    );
+    assert!(
+        inc.contains("pycc_ext_thunk_0m4_Grid4_pair11_classmethod"),
         "{inc}"
     );
 }

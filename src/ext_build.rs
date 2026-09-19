@@ -29,10 +29,7 @@
 
 use crate::ext_output::ExtPlatform;
 use pycc_diag::Diagnostic;
-use pycc_hir::{
-    BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirItem, HirModule, Ty,
-    is_public_name,
-};
+use pycc_hir::{BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirItem, HirModule, Ty};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::ffi::OsStr;
@@ -395,16 +392,53 @@ pub(crate) fn ext_link_args(platform: ExtLinkPlatform, libs: &Path) -> Vec<OsStr
     }
 }
 
-/// One exported module-level function.
+/// One export: a public module-level function, or a public
+/// `@staticmethod`/`@classmethod` of a public class.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ExtExport {
-    /// The Python name, which is also the `PyMethodDef` name and the suffix
-    /// of the `fnptr_<name>` global codegen emits for its binding.
+    /// The compiled program's own name for the function -- a plain
+    /// identifier for a module-level `def`, and `pycc_hir::class`'s mangled
+    /// `<Class>.<method>.static` / `<Class>.<method>.classmethod` for a
+    /// method. Every C identifier built from it goes through
+    /// `pycc_codegen::mangle_ext_name` first; it is *not* the host-visible
+    /// name for a method.
     pub(crate) name: String,
-    /// The declared parameter types, in order. Their count is the arity the
+    /// The owning class, or `None` for a module-level function. A method's
+    /// host-visible name is `mod.<class>.<method>` -- a `PyMethodDef` entry
+    /// in that class's own table -- so two classes may carry the same
+    /// [`ExtExport::method`] without colliding.
+    pub(crate) class: Option<String>,
+    /// The bare method name, which is the `PyMethodDef` `ml_name` for a
+    /// method. `None` exactly when [`ExtExport::class`] is `None`, in which
+    /// case [`ExtExport::name`] is itself the `ml_name`.
+    pub(crate) method: Option<String>,
+    /// Whether the compiled function takes a leading receiver pointer the
+    /// wrapper must supply. True for a `@classmethod` and false for
+    /// everything else: `pycc_hir::class` injects `cls:
+    /// Ty::Instance(Class)` as a classmethod's first parameter, and
+    /// `MirExpr::NullInstance` records that every native `Class.method(...)`
+    /// call site passes a null pointer for it, because a method compiled for
+    /// one class resolves `cls.attr` at compile time and never dereferences
+    /// it. The wrapper does the same, and so discards the *type object*
+    /// CPython hands `METH_CLASS` in `self` -- writing that pointer into a
+    /// slot typed `Ty::Instance` would be type confusion even though nothing
+    /// dereferences it today.
+    pub(crate) receiver: bool,
+    /// The declared parameter types, in order, **excluding** a
+    /// [`ExtExport::receiver`]. Their count is the arity the
     /// `METH_FASTCALL` wrapper checks, and each one alone picks that
     /// argument's C local, its `pycc_ext_unpack_*` helper and its slot in
     /// the indirect call's cast.
+    ///
+    /// The receiver is dropped here and reinstated *textually* in
+    /// [`wrapper_for`], because every consumer of this field is
+    /// arity-shaped or carrier-shaped and neither can represent it:
+    /// `boundary_carrier` has no `Ty::Instance` arm, so leaving it in would
+    /// panic. It is reinstated rather than simply dropped because
+    /// `pycc_codegen`'s thunk builds its own parameter list from the MIR
+    /// function's parameters, which *do* include the receiver -- declaring
+    /// different arities on the two sides of one symbol is the silent ABI
+    /// mismatch the thunk exists to prevent.
     pub(crate) params: Vec<Ty>,
     /// The declared return type, which picks the cast's return type and the
     /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
@@ -418,12 +452,47 @@ pub(crate) struct ExtExport {
 /// exported too, and renaming it private is how a project keeps it off the
 /// artifact's CPython surface.
 ///
-/// "Public" is D-038's predicate, `pycc_hir::is_public_name`. Two further
-/// exclusions are not policy but representation: a method reaches
-/// `HirItem::Function` under its `Class.method` name, which is not a
-/// module-level function at all, and a monomorphized generic specialization
+/// D-244 rule 1's export set also reaches a public `@staticmethod` and
+/// `@classmethod` of a public, non-exception class. Such a method reaches
+/// `HirItem::Function` under `pycc_hir::class`'s mangled
+/// `<Class>.<method>.static` / `<Class>.<method>.classmethod` name, and its
+/// host-visible name is `mod.<Class>.<method>` -- a `PyMethodDef` entry in
+/// that class's own `PyType_FromSpec` type object, never a flat
+/// `mod.<Class>.<method>` module attribute. [`classify_export_name`] owns
+/// the lexical half of that verdict.
+///
+/// "Public" is D-038's predicate, `pycc_hir::is_public_name`, applied to
+/// the class name and the method name alike. Three exclusions are not
+/// policy but representation. A monomorphized generic specialization
 /// carries the `0gen_` prefix and has no `fnptr_` global to call through
-/// (codegen dispatches those directly).
+/// (codegen dispatches those directly). A bare `<Class>.<method>` spelling
+/// covers the `MethodKind`s `Regular`, `PropertyGetter` and
+/// `AbstractMethod` at once, and nothing at this point can tell them apart:
+/// admitting it would export an `@abstractmethod`'s body, which returns
+/// nothing while its `return_ty` says otherwise. `<Class>.<property>.setter`
+/// is refused the same way. **All three are refused before
+/// [`unsupported_boundary_ty`] is consulted, so none becomes a `C0003`** --
+/// routing an `@abstractmethod` through the gap collector would turn every
+/// public ABC into a build failure on a signature the boundary carries
+/// perfectly well.
+///
+/// A class whose HIR carries an `exception_type_tag` publishes no type
+/// object and exports no method. [`register_class_c`] already publishes
+/// such a class under its **bare class name** as a module attribute, so a
+/// second `PyModule_AddObjectRef` under that name would replace a working
+/// exception class with a non-instantiable type -- the host then gets
+/// `TypeError: catching classes that do not inherit from BaseException`.
+/// The exclusion is scoped on the HIR tag and deliberately *not* on
+/// [`collect_user_exception_classes`]' selector, which additionally drops
+/// group-derived classes: a `class MyGroup(ExceptionGroup)` is never
+/// registered, so scoping there would publish `mod.MyGroup` as a
+/// non-instantiable non-`BaseException` type standing in for a user
+/// exception class -- the same wrong-published-name defect from the other
+/// side. This filter is applied in the driver, layered *on top of*
+/// [`classify_export_name`]'s lexical verdict rather than inside it, which
+/// keeps that verdict mirror-comparable with
+/// `pycc_codegen::is_ext_exportable_name` (work item 8's parity test) and
+/// makes the mirror a harmless superset.
 ///
 /// The boundary carries `int`, `float`, `bool`, `str` and a `tuple` of
 /// those scalars in either direction, and `None` as a return type only
@@ -459,29 +528,88 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         else {
             continue;
         };
-        if !is_public_name(name) || name.contains('.') || name.starts_with("0gen_") {
+        let Some(spelling) = classify_export_name(name) else {
+            continue;
+        };
+        // The driver-only exception-class filter, layered on top of the
+        // lexical verdict rather than inside it -- see this function's doc.
+        if let ExportName::Method { class, .. } = &spelling
+            && module
+                .class_defs
+                .iter()
+                .any(|(held, def)| held == class && def.exception_type_tag.is_some())
+        {
             continue;
         }
-        if let Some(offender) = unsupported_boundary_ty(params, return_ty) {
+        // A `@classmethod`'s leading `cls` never crosses the boundary: the
+        // wrapper passes a C `NULL` for it. It is excluded here, before
+        // `unsupported_boundary_ty` runs, because `Ty::Instance` has no
+        // `boundary_carrier` arm -- leaving it in would make every exported
+        // classmethod a `C0003` instead of an export.
+        let receiver = matches!(&spelling, ExportName::Method { receiver: true, .. });
+        // `receiver` is decided lexically, from the `.classmethod` suffix
+        // alone, because `classify_export_name` cannot see HIR. The
+        // guarantee that such a function really has `cls` first lives in
+        // another crate -- `crates/pycc_hir/src/class.rs` refuses a
+        // `@classmethod` that does not take `cls` as its first parameter --
+        // so this site states that cross-crate invariant instead of
+        // slicing on the strength of it.
+        let carried_params = if receiver {
+            match params.split_first() {
+                Some((_, tail)) => tail,
+                None => panic!(
+                    "pycc: internal error: `{name}` is spelled as a `@classmethod` \
+                     but has no parameters -- pycc_hir::class refuses a `@classmethod` \
+                     without a leading `cls`, so this HIR should never have been built"
+                ),
+            }
+        } else {
+            &params[..]
+        };
+        if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty) {
             gaps.push(capability_gap(name, &offender));
             continue;
         }
+        let (class, method) = match &spelling {
+            ExportName::ModuleLevel => (None, None),
+            ExportName::Method { class, method, .. } => (Some(class.clone()), Some(method.clone())),
+        };
         let export = ExtExport {
             name: name.clone(),
-            params: params.iter().map(|(_, ty)| ty.clone()).collect(),
+            class,
+            method,
+            receiver,
+            params: carried_params.iter().map(|(_, ty)| ty.clone()).collect(),
             return_ty: return_ty.clone(),
         };
-        // A module may rebind a public name -- two `def`s, or a `def` over an
-        // imported name. Codegen emits exactly one `fnptr_<name>` global and
-        // binds it to the *last* definition, so the wrapper table must carry
-        // exactly one entry per name, with that definition's signature: a second
-        // entry generates a second `pycc_ext_wrap_<name>` and the C compiler
+        // A module may rebind a public name -- two `def`s, a `def` over an
+        // imported name, or two `@staticmethod def f` in one class body,
+        // which `pycc check` accepts. Codegen emits exactly one
+        // `fnptr_<name>` global and binds it to the *last* definition, so
+        // the wrapper table must carry exactly one entry per C function
+        // definition, with that definition's signature: a second entry
+        // generates a second `pycc_ext_wrap_<name>` and the C compiler
         // rejects the redefinition outright. Replacing in place rather than
         // appending keeps the table in definition order, which is what the
         // generated `.inc` fixtures assert. Cross-*module* collisions cannot
         // reach here -- `pycc_hir`'s import closure rejects a name defined by
         // two inputs with `C0001` first.
-        match exports.iter_mut().find(|held| held.name == export.name) {
+        //
+        // The key is `(class, method)` for a method and the plain name for a
+        // module-level function -- **not** the host-visible name alone. On a
+        // type object `Grid.scale` and `Other.scale` both publish `ml_name`
+        // `"scale"` and belong to different `PyMethodDef` tables, so a
+        // host-visible key would collapse two distinct exports into one;
+        // while keying on the compiled `name` alone would let one class
+        // publish `ml_name` `"f"` twice, once from `f.static` and once from
+        // `f.classmethod`, which Python's own class body cannot mean.
+        // Replacing keeps the last definition, which is what `Grid.f` binds
+        // to in Python and what the shared `fnptr_` slot holds.
+        let key = export_dedup_key(&export);
+        match exports
+            .iter_mut()
+            .find(|held| export_dedup_key(held) == key)
+        {
             Some(held) => *held = export,
             None => exports.push(export),
         }
@@ -495,6 +623,10 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
 
 mod carrier;
 pub(crate) use carrier::*;
+mod export_name;
+pub(crate) use export_name::*;
+mod method_types;
+pub(crate) use method_types::*;
 
 /// The exact C declaration of the generated tag-to-class lookup.
 ///
@@ -726,12 +858,25 @@ fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
 
 /// Renders the generated C companion to [`SHIM_C`]: the module name macros,
 /// the user-exception-class table ([`exception_classes_c`]), one
-/// `METH_FASTCALL` wrapper per export, and the `PyMethodDef` table.
+/// `METH_FASTCALL` wrapper per export, the module-level `PyMethodDef`
+/// table, and one non-instantiable type object per exporting class
+/// ([`method_types_c`]).
 ///
 /// `module_name` is already known to be a valid ASCII Python identifier
-/// (`ext_output::resolve` rejects everything else before this runs), and an
-/// export name is a Python identifier by construction, so neither can carry
-/// a character that would escape the C source it is pasted into.
+/// (`ext_output::resolve` rejects everything else before this runs). An
+/// export name is **no longer** a Python identifier by construction: a
+/// method's compiled name is `pycc_hir::class`'s dotted mangling, so every
+/// C identifier built from it goes through `pycc_codegen::mangle_ext_name`
+/// first. What survives of the old invariant is what it was for -- the
+/// pieces pasted into C source are a module name, a class name, a method
+/// name and a mangled derivation of the three, and none can carry a
+/// character that would escape it.
+///
+/// The export list is **partitioned** on [`ExtExport::class`]. A
+/// module-level function keeps its `pycc_ext_methods[]` row unchanged; a
+/// method goes into its own class's table instead, because a row in
+/// `pycc_ext_methods[]` would publish exactly the flat `mod."Class.method"`
+/// attribute the type object exists to avoid.
 pub(crate) fn generate_exports_inc(
     module_name: &str,
     exports: &[ExtExport],
@@ -748,14 +893,20 @@ pub(crate) fn generate_exports_inc(
         out.push_str(&wrapper_for(export));
     }
     out.push_str("static PyMethodDef pycc_ext_methods[] = {\n");
-    for export in exports {
+    for export in exports.iter().filter(|export| export.class.is_none()) {
+        // A module-level function's bare name, its mangled name and its
+        // wrapper suffix are all the same string -- the mangling is the
+        // identity for a dot-free name -- so this row keeps its single-`name`
+        // format. The divergence between `ml_name` and the wrapper symbol
+        // belongs to the per-class tables below.
         out.push_str(&format!(
             "    {{\"{name}\", (PyCFunction)(void (*)(void))pycc_ext_wrap_{name}, \
              METH_FASTCALL, NULL}},\n",
             name = export.name
         ));
     }
-    out.push_str("    {NULL, NULL, 0, NULL},\n};\n");
+    out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
+    out.push_str(&method_types_c(exports));
     out
 }
 
@@ -818,19 +969,63 @@ fn wrapper_for(export: &ExtExport) -> String {
     // `a{index}` to follow the flattened list would make
     // `def f(t: tuple[int, int])` report "takes exactly 2 arguments" for a
     // one-argument function.
+    // `ext_thunk_required` asks only whether a *declared* type is a tuple,
+    // and a receiver is never one, so the receiver-free tail gives the same
+    // verdict the codegen side reaches from the MIR function's full
+    // parameter list. The two therefore stay in agreement about whether a
+    // thunk exists at all.
     let use_thunk = pycc_codegen::ext_thunk_required(name, &export.params, &export.return_ty);
     let thunk = pycc_codegen::ext_thunk_symbol(name);
-    let params = c_param_list(&slots, &out_slots);
+    // A method's `name` is dotted, and these four sites paste it into C
+    // identifiers: the thunk `extern` (through `ext_thunk_symbol`, which
+    // mangles for itself), the `fnptr_` `extern`, the `fnptr_` cast at the
+    // call, and this wrapper's own definition -- plus the `PyMethodDef` row
+    // `generate_exports_inc` emits for it. The mangling is the identity for
+    // a dot-free name, so every module-level function's wrapper is
+    // byte-identical to what it was.
+    let symbol = pycc_codegen::mangle_ext_name(name);
+    // The `PyErr_Format` arity message is the one interpolation of `name`
+    // that is *not* a C identifier: the host reads it, so it renders the
+    // source-level spelling. Left alone it would say
+    // `Grid.scale.static() takes exactly 1 argument` next to CPython's own
+    // `Grid.scale() takes no keyword arguments` on the same object. The
+    // unpack helpers below take the same spelling for the same reason.
+    let source_name = source_level_name(name);
+    // A `@classmethod`'s compiled signature leads with `cls`, which never
+    // crosses the boundary (`ExtExport::receiver`). It is reinstated
+    // textually here -- a `void *` at the head of the declared parameter
+    // list and a `NULL` at the head of the call -- so this declaration and
+    // `pycc_codegen`'s thunk, which builds its own list from the MIR
+    // function's parameters, declare the same arity for the same symbol.
+    let params = {
+        let carried = c_param_list(&slots, &out_slots);
+        if !export.receiver {
+            carried
+        } else if carried == "void" {
+            // `c_param_list` answers `"void"` for an empty list, because an
+            // empty C parameter list means "unspecified". With a receiver
+            // the list is not empty.
+            "void *".to_string()
+        } else {
+            format!("void *, {carried}")
+        }
+    };
     let mut out = String::new();
     if use_thunk {
         out.push_str(&format!("extern {return_c} {thunk}({params});\n"));
     } else {
-        out.push_str(&format!("extern void *fnptr_{name};\n"));
+        out.push_str(&format!("extern void *fnptr_{symbol};\n"));
     }
     out.push_str(&format!(
-        "static PyObject *pycc_ext_wrap_{name}(PyObject *self, PyObject *const *args, \
+        "static PyObject *pycc_ext_wrap_{symbol}(PyObject *self, PyObject *const *args, \
          Py_ssize_t nargs)\n{{\n"
     ));
+    // A `METH_CLASS` wrapper is handed the *type object* in `self`, and it
+    // is discarded exactly as `MirExpr::NullInstance` discards `cls` at a
+    // native call site: the method was compiled for one class, so nothing
+    // in its body reads the receiver. Forwarding a CPython type pointer
+    // into a slot typed `Ty::Instance` would be type confusion even though
+    // nothing dereferences it.
     out.push_str("    (void)self;\n");
     out.push_str("    (void)args;\n");
     // A `-> None` export has no result to hold: codegen emits its return as
@@ -869,7 +1064,7 @@ fn wrapper_for(export: &ExtExport) -> String {
     }
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
-         \"{name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
+         \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
          return NULL;\n    }}\n",
         plural = if arity == 1 { "" } else { "s" },
     ));
@@ -893,13 +1088,13 @@ fn wrapper_for(export: &ExtExport) -> String {
             .collect();
         match slot {
             BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
-                "    if (pycc_ext_unpack_{helper}(args[{index}], \"{name}\", {index}, &a{index}) \
+                "    if (pycc_ext_unpack_{helper}(args[{index}], \"{source_name}\", {index}, &a{index}) \
                  != 0) {{\n{cleanup}        return NULL;\n    }}\n"
             )),
             BoundaryCarrier::Tuple(elements) => {
                 let elements_len = elements.len();
                 out.push_str(&format!(
-                    "    if (pycc_ext_unpack_tuple(args[{index}], \"{name}\", {index}, \
+                    "    if (pycc_ext_unpack_tuple(args[{index}], \"{source_name}\", {index}, \
                      {elements_len}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
                 ));
                 for (element, (_, helper)) in elements.iter().enumerate() {
@@ -908,7 +1103,7 @@ fn wrapper_for(export: &ExtExport) -> String {
                     // but this one, so the index is always in range.
                     out.push_str(&format!(
                         "    if (pycc_ext_unpack_{helper}_at(PyTuple_GetItem(args[{index}], \
-                         {element}), \"{name}\", {index}, {element}, &a{index}_{element}) != 0) \
+                         {element}), \"{source_name}\", {index}, {element}, &a{index}_{element}) != 0) \
                          {{\n{cleanup}        return NULL;\n    }}\n"
                     ));
                 }
@@ -923,7 +1118,7 @@ fn wrapper_for(export: &ExtExport) -> String {
             // is never carried across the boundary.
             BoundaryCarrier::Buffer => {
                 out.push_str(&format!(
-                    "    if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, \
+                    "    if (pycc_ext_unpack_memoryview(args[{index}], \"{source_name}\", {index}, \
                      &b{index}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
                 ));
                 out.push_str(&format!("    a{index}.ptr = b{index}.buf;\n"));
@@ -934,6 +1129,9 @@ fn wrapper_for(export: &ExtExport) -> String {
         }
     }
     let mut call_args: Vec<String> = Vec::new();
+    if export.receiver {
+        call_args.push("NULL".to_string());
+    }
     for (index, slot) in slots.iter().enumerate() {
         match slot {
             BoundaryCarrier::Scalar(..) => call_args.push(format!("a{index}")),
@@ -956,7 +1154,7 @@ fn wrapper_for(export: &ExtExport) -> String {
         out.push_str(&format!("    {assign}{thunk}({call_args});\n"));
     } else {
         out.push_str(&format!(
-            "    {assign}(({return_c} (*)({params}))fnptr_{name})({call_args});\n"
+            "    {assign}(({return_c} (*)({params}))fnptr_{symbol})({call_args});\n"
         ));
     }
     // A compiled function that raised returns a neutral carrier and leaves
@@ -991,7 +1189,7 @@ fn wrapper_for(export: &ExtExport) -> String {
     ));
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
-        Ty::Tuple(_) => out.push_str(&pack_tuple_return(name, &out_slots)),
+        Ty::Tuple(_) => out.push_str(&pack_tuple_return(source_name, &out_slots)),
         // `pack_int` is the one packer whose failure is a property of the
         // *value*, and the only one whose message therefore names the
         // function: D-141's bigint egress (#1040). `PyFloat_FromDouble` and
@@ -1000,7 +1198,7 @@ fn wrapper_for(export: &ExtExport) -> String {
         // the three take a name. Arity is uniform across them, so every
         // packer but `int` shares the generic arm below.
         Ty::Int => out.push_str(&format!(
-            "    return pycc_ext_pack_int(\"{name}\", result);\n}}\n\n"
+            "    return pycc_ext_pack_int(\"{source_name}\", result);\n}}\n\n"
         )),
         ty => {
             let (_, helper) = boundary_carrier(ty)

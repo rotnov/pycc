@@ -56,7 +56,7 @@ mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
     ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
-    ext_thunk_symbol, is_ext_exportable_name,
+    ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name,
 };
 use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
@@ -5996,9 +5996,37 @@ fn compile_to_object_with_observer(
                     }
                 } else {
                     let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-                    let fn_ptr_global =
-                        module.add_global(fn_ptr_type, None, &format!("fnptr_{name}"));
+                    // A method's `name` is dotted (`Grid.scale.static`), and
+                    // this global is the one codegen emits that the generated
+                    // C *declares* -- `extern void *fnptr_<name>;` in
+                    // `pycc::ext_build`'s `wrapper_for`. A dotted C identifier
+                    // is not accepted by any compiler, so the symbol carries
+                    // the mangled spelling. inkwell 0.9 exposes no alias API
+                    // and the workspace has no `llvm-sys` dependency, so this
+                    // is a rename and not a C-safe alias beside the dotted
+                    // one; nothing outside this workspace consumes the
+                    // spelling. `mangle_ext_name` is the identity for a
+                    // dot-free name, so every module-level function's global
+                    // is byte-identical to what it was.
+                    //
+                    // This path is not gated on `CompileOptions::ext`, so a
+                    // native build renames a method's global too, where no C
+                    // ever declares it. That is deliberate: one spelling per
+                    // symbol is cheaper to reason about than a mode-dependent
+                    // one, and nothing outside this workspace reads it.
+                    let fn_ptr_global = module.add_global(
+                        fn_ptr_type,
+                        None,
+                        &format!("fnptr_{}", mangle_ext_name(name)),
+                    );
                     fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
+                    // Deliberately *not* mangled, on both counts. The symbol
+                    // is internal-linkage and never declared from C, so it
+                    // needs no C-legal spelling; and its contents are the
+                    // string `pycc_rt_name_error` prints, so the array size
+                    // and initializer stay on the source dotted name --
+                    // mangling them would make a method's `NameError` read
+                    // `0m4_Grid5_scale6_static`.
                     let name_global = module.add_global(
                         context.i8_type().array_type(name.len() as u32 + 1),
                         None,
