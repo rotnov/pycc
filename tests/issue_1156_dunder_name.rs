@@ -1,36 +1,25 @@
 //! #1156 (W0 of #882): `__name__` reads as a module-level `str` constant.
 //!
-//! THE RULE, stated once here and owned by
-//! `crates/pycc_hir/src/dunder_name.rs` and `docs/STDLIB_PLAN.md`'s
-//! "Tier 0 — builtins" section:
-//!
-//! > `__name__` is a compiler-provided module-level `str` binding, seeded as
-//! > the module's first top-level statement. It is provided only when the
-//! > module references the name and the module's own top level binds no name
-//! > `__name__`. A user binding of `__name__` at module top level wins
-//! > outright: nothing is seeded and every `__name__` in that module resolves
-//! > through the ordinary name path, exactly as before this change. A binding
-//! > inside a function body is an ordinary local and shadows the module
-//! > binding only within that function, matching CPython.
-//! >
-//! > Deviation from CPython, deliberate and documented: in CPython a read that
-//! > textually precedes a module-level `__name__ = ...` still sees the
-//! > interpreter-provided module name. Here the seed is withheld for the whole
-//! > module, so such a read resolves to the user's binding — in practice a
-//! > `T0021` "name `__name__` is not defined" when the read precedes the
-//! > assignment. This is fail-closed (a diagnostic, never a silently wrong
-//! > value) and mirrors the all-or-nothing shape D-188 already established for
-//! > the builtin exception hierarchy.
+//! THE RULE is stated once, in the module documentation of
+//! `crates/pycc_hir/src/dunder_name.rs`, and quoted verbatim by
+//! `docs/STDLIB_PLAN.md`'s "Tier 0 — builtins" section. This file
+//! deliberately does not restate it: a third copy is a third thing to keep in
+//! step, and two successive review rounds found this header still describing
+//! behavior the rule no longer had. Read it there; the tests below are its
+//! executable form.
 //!
 //! The value is `"__main__"` for `pycc check` and for a native
 //! `pycc build`/`pycc run`, and the extension module's own name for a
 //! `pycc build --ext`.
 //!
-//! Known gap, deliberate: only the *entry* module is given a name. Part 1 of
+//! Known gap, deliberate: only the *entry* module is given a name, and a
+//! dependency that mentions `__name__` at all withholds even that. Part 1 of
 //! #881 links every module of a program into one flat namespace, so a
-//! per-module `__name__` global would collide and a dependency's function
-//! would read the entry module's value anyway. The three observable
-//! consequences are pinned by the multi-module tests at the end of this file.
+//! per-module `__name__` global would collide, and linking places every
+//! dependency's top-level statements ahead of the entry module's seed, so a
+//! dependency's read would observe the global before the seed stored
+//! anything. Every such program is therefore a `T0021` rather than a value,
+//! which the multi-module tests at the end of this file pin.
 //!
 //! Only the last test is `#[ignore]`d: it builds an artifact and asks an
 //! installed CPython to import it, which is a property of the machine rather
