@@ -115,6 +115,17 @@ pub struct LoweredModule {
     pub hir: HirModule,
     pub shadowed_builtin_exception_name: Option<String>,
     pub definition_spans: Vec<(String, Span)>,
+    /// Whether this module's own module scope binds `__name__` (W0 of #882,
+    /// #1156). The same predicate `dunder_name::seed_item` uses for this
+    /// module's own seed, published so the driver can apply it across modules:
+    /// Part 1 of #881 links every module into one flat namespace, so any
+    /// module's binding is the program's single `__name__` global and must
+    /// withhold the entry module's seed program-wide. Publishing the predicate
+    /// rather than re-deriving it keeps one answer to one question -- an
+    /// earlier revision inferred it from `definition_spans` instead, which
+    /// records neither import bindings nor anything nested inside a top-level
+    /// compound statement, and so answered "no" for both.
+    pub binds_dunder_name: bool,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -227,12 +238,10 @@ pub fn lower_module(
     // withholds the seed. Deliberately *not* recorded in `definition_spans`:
     // that table drives `program::link`'s cross-module collision check, and
     // registering a synthetic definition there would report a `C0001` against
-    // a statement no user wrote. A dependency's own top-level binding is not
-    // what that exclusion protects -- the driver's cross-module gate in
-    // `src/modules.rs` withholds the seed outright in that case, so the two
-    // never coexist. It covers the bindings this module's flat per-module scan
-    // deliberately does not see: a rebind nested in a top-level compound
-    // statement, and a `match` case capture.
+    // a statement no user wrote. Nothing else depends on that exclusion: a
+    // user binding in *any* module withholds the seed program-wide, through
+    // `LoweredModule::binds_dunder_name`, so a seed and a user binding of this
+    // name never coexist in a linked program.
     if let Some(item) = dunder_name::seed_item(module, module_name) {
         state.items.push(item);
     }
@@ -398,6 +407,7 @@ pub fn lower_module(
             seeded_builtin_exception_classes,
         },
         shadowed_builtin_exception_name,
+        binds_dunder_name: dunder_name::binds_dunder_name_at_module_scope(module),
         definition_spans,
     })
 }

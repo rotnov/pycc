@@ -12,7 +12,7 @@ fn references(source: &str) -> bool {
 }
 
 fn binds(source: &str) -> bool {
-    binds_dunder_name_at_top_level(&parse(source))
+    binds_dunder_name_at_module_scope(&parse(source))
 }
 
 fn seed(source: &str, module_name: Option<&str>) -> Option<HirItem> {
@@ -261,4 +261,75 @@ fn lowering_a_shadowing_module_seeds_nothing() {
     // first item carries the user's value, so no seed was prepended.
     assert_eq!(first_dunder_name_value(&hir), Some("custom"));
     assert_eq!(hir.items.len(), 2);
+}
+
+// -- module scope, not just the direct children of the module body --------
+//
+// Each of these was invisible to the earlier statement-target scan, so the
+// module was seeded and the user's own binding was then rejected with `T0023`.
+
+#[test]
+fn a_binding_nested_in_a_compound_statement_binds() {
+    assert!(binds("if flag:\n    __name__ = 7\n"));
+    assert!(binds("while flag:\n    __name__ = 7\n"));
+    assert!(binds("for i in xs:\n    __name__ = 7\n"));
+    assert!(binds("with ctx():\n    __name__ = 7\n"));
+    assert!(binds("try:\n    __name__ = 7\nexcept E:\n    pass\n"));
+}
+
+#[test]
+fn a_binding_nested_two_levels_deep_binds() {
+    assert!(binds("if a:\n    if b:\n        __name__ = 7\n"));
+}
+
+#[test]
+fn a_def_or_class_nested_in_a_compound_statement_binds() {
+    assert!(binds(
+        "if flag:\n    def __name__() -> int:\n        return 1\n"
+    ));
+    assert!(binds("if flag:\n    class __name__:\n        pass\n"));
+}
+
+#[test]
+fn a_walrus_binds_wherever_it_appears_in_module_scope() {
+    assert!(binds("print((__name__ := 7))\n"));
+    assert!(binds("if (__name__ := 7) > 3:\n    pass\n"));
+    assert!(binds("while (__name__ := 7) > 3:\n    break\n"));
+}
+
+#[test]
+fn a_match_capture_binds_in_every_capturing_pattern() {
+    assert!(binds("match x:\n    case __name__:\n        pass\n"));
+    assert!(binds("match x:\n    case [*__name__]:\n        pass\n"));
+    assert!(binds("match x:\n    case {**__name__}:\n        pass\n"));
+    assert!(binds("match x:\n    case 1 | __name__:\n        pass\n"));
+    assert!(binds("match x:\n    case [1, __name__]:\n        pass\n"));
+}
+
+#[test]
+fn an_except_as_name_binds() {
+    assert!(binds("try:\n    pass\nexcept E as __name__:\n    pass\n"));
+}
+
+#[test]
+fn an_import_binds_its_local_name() {
+    // The arm the driver's old `definition_spans` gate could not see at all:
+    // imports are deliberately absent from that table.
+    assert!(binds("import __name__\n"));
+    assert!(binds("import other as __name__\n"));
+    assert!(binds("from m import y as __name__\n"));
+}
+
+#[test]
+fn a_binding_inside_a_function_or_class_body_does_not_bind_module_scope() {
+    assert!(!binds(
+        "def f() -> int:\n    __name__ = 7\n    return __name__\n"
+    ));
+    assert!(!binds("class C:\n    __name__ = 7\n"));
+    assert!(!binds(
+        "def f() -> int:\n    if (__name__ := 7) > 3:\n        return 1\n    return 0\n"
+    ));
+    assert!(!binds(
+        "if flag:\n    def f() -> int:\n        __name__ = 7\n        return __name__\n"
+    ));
 }

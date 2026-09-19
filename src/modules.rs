@@ -197,13 +197,17 @@ impl Loader {
         // dependency's binding is the one global, as it was before this
         // feature existed. Dependencies are lowered before the entry module,
         // so every one of them is already in `self.modules` here.
-        let dependency_binds_dunder_name = self.modules.iter().any(|loaded| {
-            loaded
-                .module
-                .definition_spans
-                .iter()
-                .any(|(name, _)| name == pycc_hir::DUNDER_NAME)
-        });
+        //
+        // The predicate is `pycc_hir`'s own, published on `LoweredModule`, so
+        // both halves of the gate answer the same question the same way. An
+        // earlier revision asked `definition_spans` instead, which records
+        // neither a dependency's import bindings (`import __name__` binds an
+        // opaque `object` in an `--ext` program) nor anything nested inside a
+        // top-level compound statement, and so answered "no" for both.
+        let dependency_binds_dunder_name = self
+            .modules
+            .iter()
+            .any(|loaded| loaded.module.binds_dunder_name);
         let module_name = (is_entry && !dependency_binds_dunder_name)
             .then_some(self.entry_module_name.as_deref())
             .flatten();

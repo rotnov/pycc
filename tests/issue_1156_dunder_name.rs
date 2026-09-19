@@ -233,15 +233,15 @@ fn a_value_less_annotation_of_another_type_still_yields_the_str_seed() {
 
 // -- expression-level bindings the top-level scan deliberately skips --
 //
-// `binds_dunder_name_at_top_level` scans statement targets, not every
-// expression that can bind a name. These pin the two forms it does not scan,
-// so a future change to either is a visible test failure rather than a silent
-// race with the seed.
+// `binds_dunder_name_at_module_scope` scans all of module scope, not just the
+// direct children of the module body and not just statement-level targets.
+// These pin the forms an earlier revision missed -- a `match` capture, a
+// binding nested in a top-level compound statement, a walrus, an `except ...
+// as` name -- each of which was seeded and then rejected with `T0023` for
+// rebinding the seeded `str`.
 
 #[test]
-fn a_match_capture_over_a_str_subject_rebinds_the_seeded_global() {
-    // The seed is the module's first statement, so the capture overwrites an
-    // existing `str` global rather than introducing the name.
+fn a_match_capture_over_a_str_subject_wins_over_the_seed() {
     assert_eq!(
         build_and_run(
             "dn_match_str",
@@ -252,15 +252,33 @@ fn a_match_capture_over_a_str_subject_rebinds_the_seeded_global() {
 }
 
 #[test]
-fn a_match_capture_over_a_non_str_subject_is_t0023() {
-    let (ok, rendered) = check(
-        "dn_match_int",
-        "x: int = 7\nmatch x:\n    case __name__:\n        pass\nprint(__name__)\n",
+fn a_match_capture_over_a_non_str_subject_wins_over_the_seed() {
+    // The capture binds an `int` global. Nothing is seeded, so this is an
+    // ordinary `int` name and arithmetic on it type-checks -- where an earlier
+    // revision seeded a `str` first and rejected the capture with `T0023`.
+    assert_eq!(
+        build_and_run(
+            "dn_match_int",
+            "x: int = 7\nmatch x:\n    case __name__:\n        pass\nprint(__name__ + 1)\n",
+        ),
+        "8\n"
     );
-    assert!(!ok, "{rendered}");
-    assert!(
-        rendered.contains("error[T0023]") && rendered.contains("previously inferred as `str`"),
-        "{rendered}"
+}
+
+#[test]
+fn an_except_as_binding_wins_over_the_seed() {
+    assert_eq!(
+        build_and_run(
+            "dn_except_as",
+            concat!(
+                "try:\n",
+                "    raise ValueError(\"e\")\n",
+                "except ValueError as __name__:\n",
+                "    pass\n",
+                "print(1)\n",
+            ),
+        ),
+        "1\n"
     );
 }
 
@@ -321,6 +339,32 @@ fn a_walrus_binding_inside_a_function_body_does_not_withhold_the_seed() {
 }
 
 #[test]
+fn a_dependencys_nested_binding_withholds_the_entry_seed() {
+    // The driver asks `pycc_hir` for the same module-scope answer the entry
+    // module's own gate uses, so a dependency binding nested inside a compound
+    // statement withholds the entry seed exactly as a direct one does. The
+    // earlier `definition_spans` gate recorded only direct children and so
+    // seeded the entry anyway, which failed the program with `T0023`.
+    assert_eq!(
+        build_and_run_program(
+            "dn_dep_nested",
+            "from dep import helper\n\nprint(__name__)\nprint(helper())\n",
+            concat!(
+                "flag: bool = True\n",
+                "if flag:\n",
+                "    __name__ = \"dep\"\n",
+                "else:\n",
+                "    __name__ = \"other\"\n",
+                "\n",
+                "def helper() -> int:\n",
+                "    return 1\n",
+            ),
+        ),
+        "dep\n1\n"
+    );
+}
+
+#[test]
 fn a_dependencys_walrus_binding_withholds_the_entry_seed() {
     // The cross-module half of the gate, reached through the walrus door: a
     // dependency's own top-level `(__name__ := 7)` is the program's single
@@ -337,16 +381,61 @@ fn a_dependencys_walrus_binding_withholds_the_entry_seed() {
 }
 
 #[test]
-fn a_binding_nested_in_a_top_level_compound_statement_rebinds_the_seed() {
-    // The documented limit of the flat scan: the module is seeded *and* the
-    // user's statement still executes and still wins at runtime.
+fn a_binding_nested_in_a_top_level_compound_statement_withholds_the_seed() {
+    // Both arms bind, so the name is bound on every path and this is an
+    // ordinary `str` global with no seed behind it.
     assert_eq!(
         build_and_run(
             "dn_nested_if",
-            "flag: bool = True\nif flag:\n    __name__ = \"custom\"\nprint(__name__)\n",
+            concat!(
+                "flag: bool = True\n",
+                "if flag:\n",
+                "    __name__ = \"custom\"\n",
+                "else:\n",
+                "    __name__ = \"other\"\n",
+                "print(__name__)\n",
+            ),
         ),
         "custom\n"
     );
+}
+
+#[test]
+fn a_non_str_binding_nested_in_a_top_level_compound_statement_withholds_the_seed() {
+    // The arm that made the old "benign limit" framing wrong: with a seed in
+    // front of it this was `T0023`, because an `int` cannot rebind a `str`.
+    assert_eq!(
+        build_and_run(
+            "dn_nested_if_int",
+            concat!(
+                "flag: bool = True\n",
+                "__name__ = 0\n",
+                "if flag:\n",
+                "    __name__ = 7\n",
+                "print(__name__)\n",
+            ),
+        ),
+        "7\n"
+    );
+}
+
+#[test]
+fn a_conditionally_bound_dunder_name_behaves_like_any_other_name() {
+    // THE RULE's "resolves through the ordinary name path, exactly as before
+    // this change", made observable: the diagnostic is the same `T0041` a
+    // plain conditionally-bound name gets, not a seed-specific one.
+    let (ok, rendered) = check(
+        "dn_nested_if_unbound",
+        "flag: bool = True\nif flag:\n    __name__ = 7\nprint(__name__)\n",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("error[T0041]"), "{rendered}");
+    let (control_ok, control) = check(
+        "dn_nested_if_control",
+        "flag: bool = True\nif flag:\n    other = 7\nprint(other)\n",
+    );
+    assert!(!control_ok, "{control}");
+    assert!(control.contains("error[T0041]"), "{control}");
 }
 
 // -- a function-local binding shadows only inside that function -----

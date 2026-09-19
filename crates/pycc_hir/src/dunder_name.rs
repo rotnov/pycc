@@ -7,10 +7,13 @@
 //! > `__name__` is a compiler-provided module-level `str` binding, seeded as
 //! > the module's first top-level statement. It is provided only when the
 //! > module references the name and *no module of the program* binds the name
-//! > `__name__` at its own top level -- neither the entry module nor any
-//! > dependency, because Part 1 of #881 links every module into one flat
-//! > namespace in which the seed and a user binding would be the same global.
-//! > A top-level user binding wins outright: nothing is seeded and every
+//! > `__name__` anywhere in its own module scope -- neither the entry module
+//! > nor any dependency, because Part 1 of #881 links every module into one
+//! > flat namespace in which the seed and a user binding would be the same
+//! > global. Module scope includes a binding nested inside a top-level
+//! > compound statement, a `match` case capture, and a walrus, none of which
+//! > is a function-body local. A module-scope user binding wins outright:
+//! > nothing is seeded and every
 //! > `__name__` resolves through the ordinary name path, exactly as before
 //! > this change. A value-less annotation (`__name__: str`) is not such a
 //! > binding -- it only declares a type and emits no store, exactly as in
@@ -49,7 +52,7 @@ pub const DUNDER_NAME: &str = "__name__";
 /// fail-closed choice until per-module namespaces land.
 pub(crate) fn seed_item(module: &ModModule, module_name: Option<&str>) -> Option<HirItem> {
     let module_name = module_name?;
-    (references_dunder_name(module) && !binds_dunder_name_at_top_level(module)).then(|| {
+    (references_dunder_name(module) && !binds_dunder_name_at_module_scope(module)).then(|| {
         HirItem::TopLevelStmt(HirStmt::Assign {
             target: DUNDER_NAME.to_string(),
             value: HirExpr::StringLiteral(module_name.to_string()),
@@ -97,130 +100,182 @@ fn references_dunder_name(module: &ModModule) -> bool {
     scan.found
 }
 
-/// Gate 2: whether `module`'s own top level binds the name `__name__`.
+/// Gate 2: whether `module` binds the name `__name__` anywhere in *module
+/// scope*.
 ///
 /// This is the *per-module* half of the shadowing gate. The cross-module half
-/// -- a dependency's own top-level binding, which is the same global in the
-/// flat namespace Part 1 of #881 links every module into -- is decided by the
-/// driver in `src/modules.rs`, which passes `module_name: None` and so never
-/// reaches this scan.
+/// -- another module of the same program binding the name, which is the same
+/// global in the flat namespace Part 1 of #881 links every module into -- is
+/// decided by the driver in `src/modules.rs` from the very same predicate,
+/// published on `LoweredModule::binds_dunder_name`. One scan, one answer, both
+/// halves: exactly the shape `exception::shadowed_builtin_exception_name`
+/// already has for the builtin exception hierarchy.
 ///
-/// Shadowing is a property of a module's *top level* only: a `__name__ = "x"`
-/// inside a function body is an ordinary local that shadows the module binding
-/// only within that function (CPython's own rule), which is the main reason
-/// this design needs no scope machinery of its own. A reference, by contrast,
-/// counts at any depth — hence two separate scans rather than one fused pass,
-/// exactly as `exception::shadowed_builtin_exception_name` and
+/// Module scope, not "a direct child of `module.body`". Those are different
+/// sets, and an earlier revision of this scan conflated them: it classified
+/// bindings by the *statement* that introduces the name and looked only at
+/// direct children, then documented the gap as benign on the grounds that the
+/// seed is the module's first statement, so a later binding merely rebinds an
+/// existing `str` global. That reasoning holds for a `str` value and fails for
+/// every other type. `if flag:\n    __name__ = 7` at module level, a `match`
+/// capture over a non-`str` subject, and a walrus `(__name__ := 7)` -- all
+/// three bind a module global, all three were invisible here, and all three
+/// were therefore seeded and then rejected with
+///
+/// ```text
+/// error[T0023]: cannot assign `int` to `__name__`, previously inferred as `str`
+/// ```
+///
+/// which is the user's own top-level binding losing to the seed -- precisely
+/// what THE RULE says cannot happen. So the scan walks module scope in full:
+/// into every compound statement's body and header, into `match` patterns, and
+/// into `except ... as` handlers.
+///
+/// It stops at `FunctionDef`/`ClassDef`, whose *names* it still checks (a `def`
+/// nested in a top-level `if` binds a module global) but whose *bodies* it does
+/// not enter: a binding there is an ordinary local that shadows the module
+/// binding only within that scope, matching CPython, which is the main reason
+/// this design needs no scope machinery of its own. Skipping the whole node
+/// also skips its decorators, bases, and parameter defaults, which do evaluate
+/// in module scope; no binding form reaches them, because #774 admits a walrus
+/// only in an `if`/`while` condition or as a bare expression statement and
+/// rejects every other placement with `C0001`.
+///
+/// A reference, by contrast, counts at any depth -- hence two separate scans
+/// rather than one fused pass, exactly as
+/// `exception::shadowed_builtin_exception_name` and
 /// `exception::module_references_builtin_exception_name` are kept separate.
 ///
-/// Every top-level binding form whose *statement* introduces the name is
-/// covered, not just plain assignment: `Assign` (including tuple/list/starred
-/// unpacking targets), `AnnAssign`, `AugAssign`, `FunctionDef`, `ClassDef`,
-/// `TypeAlias`, `For` targets (`async` included — ruff carries that as a flag on
-/// the same node, not a separate variant), `With` `as`-targets, and
-/// `Import`/`ImportFrom` alias bindings (`import x as __name__`, `from m import
-/// y as __name__`). Over-reporting only costs the module its seed, which is the
-/// pre-#1156 behavior.
+/// Every binding form is covered: `Assign` (including tuple/list/starred
+/// unpacking targets), `AnnAssign` *with* a value, `AugAssign`, `FunctionDef`,
+/// `ClassDef`, `TypeAlias`, `For` targets (`async` included -- ruff carries that
+/// as a flag on the same node, not a separate variant), `With` `as`-targets,
+/// `Import`/`ImportFrom` alias bindings (`import __name__`, `import x as
+/// __name__`, `from m import y as __name__`), `except ... as __name__`,
+/// `match` captures (`case __name__:`, `case [*__name__]:`, `case {**__name__}:`),
+/// and the walrus. Over-reporting would only cost the module its seed, which is
+/// the pre-#1156 behavior; under-reporting is the defect above.
 ///
-/// Two further top-level forms bind a name through an *expression* rather than
-/// through the statement's own target, and neither is scanned. That is
-/// deliberate: in both, the type system — not this scan — already makes the
-/// outcome either a diagnostic or a well-typed rebind, so neither can race the
-/// seed into a silently wrong value.
-///
-/// * A `match` case capture (`match x:` / `case __name__:`). The seed is the
-///   module's first statement, so a capture rebinds an existing `str` global
-///   instead of introducing the name. A `str` subject compiles and the capture
-///   overwrites the seeded value; a subject of any other type is rejected with
-///   `T0023` ("cannot assign `int` to `__name__`, previously inferred as
-///   `str`"). Both are pinned by `tests/issue_1156_dunder_name.rs`.
-///
-/// A walrus (`(__name__ := 7)`) is the one *expression*-level binding form that
-/// is scanned, by [`binds_dunder_name_via_walrus`]. It has to be: #774 rejects a
-/// `str` walrus value with `T0050`, but explicitly permits `int`, `float`,
-/// `bool`, and `None`, so a top-level `(__name__ := 7)` is a fully supported
-/// binding of this name. Left unscanned it would be seeded *and* then rejected
-/// with `T0023` for rebinding a `str` global as an `int` -- the user's own
-/// top-level binding losing to the seed, which is exactly what THE RULE says
-/// cannot happen.
-///
-/// Documented limit, mirroring the flat scan
-/// `exception::shadowed_builtin_exception_name` performs: only *direct*
-/// children of `module.body` are inspected. A binding nested inside a top-level
-/// compound statement (`if flag:\n    __name__ = "x"`) does not trip this gate,
-/// so the module is seeded *and* the user's statement still executes and still
-/// wins at runtime — benign, because the seed is the module's first statement
-/// and a later assignment simply rebinds the same `str` global. The one visible
-/// consequence is that such a binding must be `str`-compatible, since it now
-/// rebinds a `str` rather than introducing the name. Recursing into every
-/// compound body while stopping at `FunctionDef`/`ClassDef` was rejected as
-/// more surface than the case earns.
-fn binds_dunder_name_at_top_level(module: &ModModule) -> bool {
-    module.body.iter().any(|stmt| match stmt {
-        Stmt::FunctionDef(function_def) => function_def.name.as_str() == DUNDER_NAME,
-        Stmt::ClassDef(class_def) => class_def.name.as_str() == DUNDER_NAME,
-        Stmt::TypeAlias(type_alias) => target_binds_dunder_name(&type_alias.name),
-        // A value-less `__name__: str` only *declares* a type; CPython emits no
-        // store for it and the interpreter-provided module name survives, so it
-        // must not withhold the seed the way an annotated *assignment* does.
-        Stmt::AnnAssign(ann_assign) => {
-            ann_assign.value.is_some() && target_binds_dunder_name(&ann_assign.target)
-        }
-        Stmt::AugAssign(aug_assign) => target_binds_dunder_name(&aug_assign.target),
-        Stmt::Assign(assign) => assign.targets.iter().any(target_binds_dunder_name),
-        Stmt::For(for_stmt) => target_binds_dunder_name(&for_stmt.target),
-        Stmt::With(with_stmt) => with_stmt
-            .items
-            .iter()
-            .filter_map(|item| item.optional_vars.as_deref())
-            .any(target_binds_dunder_name),
-        Stmt::Import(import) => import.names.iter().any(alias_binds_dunder_name),
-        Stmt::ImportFrom(import) => import.names.iter().any(alias_binds_dunder_name),
-        _ => false,
-    }) || binds_dunder_name_via_walrus(module)
-}
-
-/// Whether `module` binds `__name__` through a top-level walrus (`:=`).
-///
-/// Unlike the flat statement scan above, this one walks *into* compound
-/// statements, because a walrus most naturally appears in a compound
-/// statement's own header expression (`if (__name__ := 7) > 3:`) rather than as
-/// a bare top-level expression statement. It stops at `FunctionDef`/`ClassDef`
-/// bodies: a walrus there binds a function-scope local (PEP 572 -- a walrus
-/// binds in the enclosing *function or module* scope), which shadows the module
-/// binding only inside that function and so must not withhold the seed, exactly
-/// as a plain `__name__ = "x"` in a function body does not.
-fn binds_dunder_name_via_walrus(module: &ModModule) -> bool {
-    struct WalrusScan {
+/// A value-less `__name__: str` is deliberately *not* a binding: it only
+/// declares a type and emits no store, exactly as in CPython, so the seed
+/// survives it.
+pub(crate) fn binds_dunder_name_at_module_scope(module: &ModModule) -> bool {
+    struct BindingScan {
         found: bool,
     }
-    impl<'a> Visitor<'a> for WalrusScan {
+    impl BindingScan {
+        fn record(&mut self, bound: bool) {
+            if bound {
+                self.found = true;
+            }
+        }
+    }
+    impl<'a> Visitor<'a> for BindingScan {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             if self.found {
                 return;
             }
-            // A walrus inside either body binds a local, not this module's
-            // global, so neither body is descended into.
-            if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+            match stmt {
+                // Name checked, body deliberately not entered.
+                Stmt::FunctionDef(function_def) => {
+                    self.record(function_def.name.as_str() == DUNDER_NAME);
+                    return;
+                }
+                Stmt::ClassDef(class_def) => {
+                    self.record(class_def.name.as_str() == DUNDER_NAME);
+                    return;
+                }
+                Stmt::TypeAlias(type_alias) => {
+                    self.record(target_binds_dunder_name(&type_alias.name));
+                }
+                Stmt::AnnAssign(ann_assign) => {
+                    self.record(
+                        ann_assign.value.is_some() && target_binds_dunder_name(&ann_assign.target),
+                    );
+                }
+                Stmt::AugAssign(aug_assign) => {
+                    self.record(target_binds_dunder_name(&aug_assign.target));
+                }
+                Stmt::Assign(assign) => {
+                    self.record(assign.targets.iter().any(target_binds_dunder_name));
+                }
+                Stmt::For(for_stmt) => {
+                    self.record(target_binds_dunder_name(&for_stmt.target));
+                }
+                Stmt::With(with_stmt) => {
+                    self.record(
+                        with_stmt
+                            .items
+                            .iter()
+                            .filter_map(|item| item.optional_vars.as_deref())
+                            .any(target_binds_dunder_name),
+                    );
+                }
+                Stmt::Import(import) => {
+                    self.record(import.names.iter().any(alias_binds_dunder_name));
+                }
+                Stmt::ImportFrom(import) => {
+                    self.record(import.names.iter().any(alias_binds_dunder_name));
+                }
+                _ => {}
+            }
+            if self.found {
                 return;
             }
             visitor::walk_stmt(self, stmt);
+        }
+
+        fn visit_except_handler(&mut self, handler: &'a pycc_ast::ExceptHandler) {
+            if self.found {
+                return;
+            }
+            let pycc_ast::ExceptHandler::ExceptHandler(handler_inner) = handler;
+            self.record(
+                handler_inner
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.as_str() == DUNDER_NAME),
+            );
+            if self.found {
+                return;
+            }
+            visitor::walk_except_handler(self, handler);
+        }
+
+        fn visit_pattern(&mut self, pattern: &'a pycc_ast::Pattern) {
+            if self.found {
+                return;
+            }
+            // `walk_pattern` recurses through the nested patterns but never
+            // surfaces a capture *identifier*, which is an `Identifier` rather
+            // than an `Expr::Name` and so is invisible to `visit_expr`.
+            let captured = match pattern {
+                pycc_ast::Pattern::MatchAs(as_pattern) => as_pattern.name.as_ref(),
+                pycc_ast::Pattern::MatchStar(star_pattern) => star_pattern.name.as_ref(),
+                pycc_ast::Pattern::MatchMapping(mapping_pattern) => mapping_pattern.rest.as_ref(),
+                _ => None,
+            };
+            self.record(captured.is_some_and(|name| name.as_str() == DUNDER_NAME));
+            if self.found {
+                return;
+            }
+            visitor::walk_pattern(self, pattern);
         }
 
         fn visit_expr(&mut self, expr: &'a Expr) {
             if self.found {
                 return;
             }
-            if let Expr::Named(named) = expr
-                && target_binds_dunder_name(&named.target)
-            {
-                self.found = true;
-                return;
+            if let Expr::Named(named) = expr {
+                self.record(target_binds_dunder_name(&named.target));
+                if self.found {
+                    return;
+                }
             }
             visitor::walk_expr(self, expr);
         }
     }
-    let mut scan = WalrusScan { found: false };
+    let mut scan = BindingScan { found: false };
     scan.visit_body(&module.body);
     scan.found
 }
