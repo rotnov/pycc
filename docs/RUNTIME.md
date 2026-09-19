@@ -408,7 +408,16 @@ assigns to `self`** is answered by the instance, never by the type -- CPython
 consults the instance `__dict__` ahead of the class namespace for everything
 that is not a data descriptor -- so no class owns it and no callable is
 published under it, wherever in the MRO that slot was assigned and wherever
-the method it hides was declared. Second, every other name is answered by the
+the method it hides was declared. Rule one is a *static* test, deliberately
+broader than CPython's own per-instance one: a compiled instance has no
+`__dict__`, and `validate_mro_slot_layout` (#969) gives a slot declared
+anywhere on the MRO a fixed offset in every subclass whether or not the
+`__init__` assigning it is the one a given construction reaches. The two
+diverge exactly where an override's `__init__` skips its base's, and the
+artifact is lossy there rather than wrong: for a `Base` assigning
+`self.value` and a `Derived(Base)` whose `__init__` calls no `super()` and
+which declares `def value`, CPython answers the method and the artifact
+publishes nothing. Second, every other name is answered by the
 **first MRO entry that binds it in the class namespace**, whatever kind binds
 it, and that entry alone decides the outcome. If its binding is an export,
 the method is published; if it is anything else, the name is **absent** from
@@ -426,10 +435,11 @@ class attribute is an ordinary entry in the class object's namespace; and a
 any class of that MRO, including a *more* derived one, because rule one is
 position-independent. `pycc_hir` accepts each of those collisions rather than
 refusing it, so this walk is the only place they are seen. Rule one also
-suppresses a name a `@property` would win as a data descriptor; that is
-deliberate and conservative rather than exact -- a read-only property makes
-the assignment raise `AttributeError` during construction anyway, so
-publishing nothing there is at worst lossy, never wrong. A class whose every
+suppresses a name a `@property` would win as a data descriptor; that is the
+same conservatism, and it costs at most a getter+setter property whose class
+also assigns the name in `__init__`. A read-only property is not that case:
+`self.<name> = ...` against one is a `T0044` before the class compiles at
+all. A class whose every
 resolved name is shadowed away this way carries no type object at all rather
 than an empty one. An unshadowed name is inherited across all three method
 kinds alike: `mod.Derived(21).value()` reaches a `Base.value` declared only on

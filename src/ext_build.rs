@@ -1168,6 +1168,15 @@ pub(crate) fn collect_class_publications(
 /// read (`Derived.LIMIT`) and excludes `class_attrs` because its callers
 /// check them separately, while this walk answers an *instance* read and
 /// must treat a class attribute as the ordinary namespace entry it is.
+/// The two lists differ a second way, which is not an oversight: that
+/// predicate also carries `enum_members` and the
+/// `ProtocolMember::Method` half of `protocol_members`, neither of which
+/// can appear on the MRO this walk is given. An enum is a terminal leaf --
+/// `validate_bases` refuses to extend one with a `C0001` (#941) -- and a
+/// protocol is contagious, since `crates/pycc_hir/src/class.rs` propagates
+/// `is_protocol` to every inheritor and [`instance_shape_admissible`]
+/// excludes every `is_protocol` class, so neither kind is ever an ancestor
+/// of a publishable class.
 /// Nothing rejects the shape that makes the difference visible:
 /// `crates/pycc_hir/src/class/attrs.rs`'s `reject_class_attr_collisions`
 /// checks a class's *own* newly declared `class_attrs` against its own MRO
@@ -1208,7 +1217,7 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
 ///
 /// **Position in the walk is irrelevant, which is the whole point.** An
 /// instance slot is not a namespace binding that competes with the class
-/// namespace at its own MRO index: CPython consults the instance
+/// namespace at its own MRO index. CPython consults the instance
 /// `__dict__` *before* the type's namespace for everything that is not a
 /// data descriptor, so a slot contributed by the *least* derived base
 /// still wins over a method defined on the most derived class. Modelling a
@@ -1219,13 +1228,31 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
 /// `class Derived(Base): def value(self): ...`, where CPython answers the
 /// integer and raises `TypeError: 'int' object is not callable`.
 ///
-/// The one class-namespace kind that *does* beat an instance slot is a
-/// `@property`, a data descriptor. Suppressing that name too is
-/// deliberate and conservative rather than exact: a read-only property
-/// makes `self.<name> = ...` raise `AttributeError` during construction,
-/// so an artifact publishing nothing there is at worst lossy for the
-/// getter+setter case, never wrong. Publishing on a guess is what this
-/// whole walk exists to avoid.
+/// **What this predicate actually tests is broader than that, on purpose.**
+/// CPython's precedence is per instance and per construction: a name is in
+/// the instance `__dict__` only once an `__init__` that assigns it has
+/// run. This predicate asks a static question instead -- does any class
+/// linearized in `mro` declare the slot at all -- because a compiled
+/// instance has no `__dict__`. `crates/pycc_hir/src/class/mro.rs`'s
+/// `validate_mro_slot_layout` (#969) makes every ancestor layout a
+/// name-wise prefix of the derived one, so a slot declared anywhere on the
+/// MRO occupies a fixed offset in every subclass whether or not the
+/// `__init__` that assigns it is the one a given construction reaches.
+/// The two conditions differ exactly where an override's `__init__` skips
+/// its base's: for `class Base: def __init__(self): self.value = 5` with a
+/// `class Derived(Base)` whose `__init__` calls no `super()` and which
+/// declares `def value`, CPython answers `Derived().value()` with `99`
+/// while the artifact publishes nothing. That is the direction this walk
+/// is willing to be wrong in -- lossy, never a callable Python would not
+/// give -- and publishing on a guess is what it exists to avoid.
+///
+/// The same conservatism covers the one class-namespace kind that beats an
+/// instance slot, a `@property`: it is a data descriptor, so it would win
+/// the name, and suppressing it anyway costs at most a getter+setter
+/// property whose class also assigns the name in `__init__`. A read-only
+/// property is not that case -- `crates/pycc_types/src/class.rs`'s
+/// `check_attr_set` rejects `self.<name> = ...` against it with a `T0044`
+/// before such a class compiles at all -- so nothing is lost there.
 fn mro_binds_slot(module: &HirModule, mro: &[String], name: &str) -> bool {
     mro.iter().any(|ancestor| {
         module.class_defs.iter().any(|(held, def)| {
