@@ -148,11 +148,14 @@ fn a_for_loop_target_binds() {
     assert!(binds("for __name__ in [\"a\"]:\n    pass\n"));
 }
 
+/// A genuine `Stmt::For { is_async: true, .. }`, which is the node the gate's
+/// doc comment claims to cover -- ruff carries `async` as a flag on the same
+/// variant, so a plain `for` would not exercise the claim at all. A bare
+/// top-level `async for` parses fine here; it is rejected later, at lowering,
+/// by the D-148 context-validity check, and this gate runs before that.
 #[test]
 fn an_async_for_loop_target_binds() {
-    assert!(binds(
-        "async def f() -> None:\n    pass\n\nfor __name__ in [\"a\"]:\n    pass\n"
-    ));
+    assert!(binds("async for __name__ in [\"a\"]:\n    pass\n"));
 }
 
 #[test]

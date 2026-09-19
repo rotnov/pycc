@@ -282,20 +282,26 @@ fn try_build(
     // usually a dependency rather than the entry path.
     // W0 of #882 (#1156): an `--ext` build compiles the entry module under
     // the extension module's own name, so `__name__` inside the artifact
-    // reads what CPython would report for it. The resolve is done twice --
-    // here and again inside `plan_ext` below -- deliberately: it is a pure,
-    // cheap path computation, and the frontend needs the name *before*
-    // `plan_ext` runs. Its error is dropped to `None` here so `plan_ext`
-    // keeps reporting that error at exactly the point it always has; moving
-    // the report earlier would reorder diagnostics existing tests pin.
-    let ext_module_name = ext.and_then(|_| {
-        ext_output::resolve(
-            out,
-            &ext_build::ExtLinkPlatform::resolve(target).suffix_platform(),
-        )
-        .ok()
-        .map(|resolved| resolved.module_name)
-    });
+    // reads what CPython would report for it. That makes the output
+    // contract an input to the *frontend*, so it is resolved here rather
+    // than only inside `plan_ext` below. The resolve runs twice --
+    // deliberately: it is pure and cheap (`src/ext_output.rs` touches no
+    // filesystem), and keeping `plan_ext` self-contained keeps its own
+    // ordered failure sequence, and the tests that pin it, unchanged.
+    //
+    // The failure is *reported* here rather than carried forward: an
+    // earlier shape dropped it to a `None` module name, which withheld the
+    // `__name__` seed, so a program that reads `__name__` then failed with
+    // an unrelated `T0021` -- propagated before `plan_ext` ever ran, which
+    // hid the real `-o` diagnostic entirely. Reporting here does move the
+    // output-path message ahead of any type error in the same invocation;
+    // no test pins that pairing, and the output path is a property of the
+    // command line rather than of the program, so it is the more useful of
+    // the two to report first.
+    let ext_module_name = match ext {
+        Some(_) => Some(resolve_ext_output(out, target)?.module_name),
+        None => None,
+    };
     let typed_hir = match ext {
         Some(_) => resolve_frontend(path, ext_module_name.as_deref()),
         None => resolve_frontend_native(path),
@@ -389,6 +395,25 @@ struct ExtPlan {
     artifact: std::path::PathBuf,
     compile_args: Vec<std::ffi::OsString>,
     link_args: Vec<std::ffi::OsString>,
+}
+
+/// Resolves `OUT` against the `--ext` output contract, reporting a rejected
+/// path exactly as `plan_ext` does (`src/ext_output.rs` owns the messages).
+///
+/// Exists because `try_build` needs the resolved module name *before* the
+/// frontend runs -- it is the entry module's `__name__` (#1156) -- while
+/// `plan_ext` needs the resolved artifact path after it. `ext_output::resolve`
+/// is pure, so calling it from both places costs nothing and keeps
+/// `plan_ext`'s own failure ordering intact.
+fn resolve_ext_output(out: &Path, target: Option<&str>) -> Result<ext_output::ExtOutput, ExitCode> {
+    ext_output::resolve(
+        out,
+        &ext_build::ExtLinkPlatform::resolve(target).suffix_platform(),
+    )
+    .map_err(|e| {
+        eprintln!("error: {}", e.message());
+        ExitCode::from(2)
+    })
 }
 
 /// Resolves the `--ext` output, export set and host toolchain, and writes
@@ -1277,6 +1302,33 @@ mod ext_build_wiring_tests {
             &dir.join("no-such-dir").join("main.o"),
         )
         .expect_err("an unwritable scratch is an environment failure");
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    /// A rejected `-o` is reported as the output-contract failure it is,
+    /// even when the source reads `__name__` (#1156).
+    ///
+    /// The regression this pins: while the resolve's error was dropped to a
+    /// `None` module name, `dunder_name::seed_item` withheld the seed, the
+    /// type checker then rejected the program with `T0021` (exit 1), and
+    /// that unrelated diagnostic reached the user instead of the `-o` one.
+    /// Exit 2 is `resolve_ext_output`'s own code, so it distinguishes the
+    /// two outcomes without matching on rendered message text.
+    #[test]
+    fn a_rejected_ext_output_path_is_reported_even_when_the_source_reads_dunder_name() {
+        let dir = ScratchDir::new("ext_out_reject").expect("scratch");
+        let src = write_source(&dir, "def f() -> str:\n    return __name__\n");
+        let code = try_build(
+            &src,
+            // `/` has no file-name component, so no module name can be
+            // derived from it (`ext_output::ExtOutputError::NoFileName`).
+            Path::new("/"),
+            None,
+            false,
+            &dir.join("main.o"),
+            Some(&header_less_toolchain(&dir)),
+        )
+        .expect_err("`/` names no module");
         assert_eq!(code, ExitCode::from(2));
     }
 
