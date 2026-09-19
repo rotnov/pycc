@@ -304,6 +304,11 @@ fn a_match_capture_binds_in_every_capturing_pattern() {
     assert!(binds("match x:\n    case {**__name__}:\n        pass\n"));
     assert!(binds("match x:\n    case 1 | __name__:\n        pass\n"));
     assert!(binds("match x:\n    case [1, __name__]:\n        pass\n"));
+    // A later case's pattern is still visited after the name is found, which
+    // is the scan's own short-circuit rather than the walk's.
+    assert!(binds(
+        "match x:\n    case __name__:\n        pass\n    case 1:\n        pass\n"
+    ));
 }
 
 #[test]
