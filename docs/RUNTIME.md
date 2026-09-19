@@ -403,7 +403,8 @@ the strength of what it inherits.
 and of its bases, resolved along the class's MRO most-derived-first. The walk
 resolves the **namespace**, not the export set: a method name is answered by
 the **first MRO entry that binds it at all** -- as a regular method, a
-`@property`, an `@abstractmethod`, a `@staticmethod`, a `@classmethod` or an
+`@property`, an `@abstractmethod`, a `@staticmethod`, a `@classmethod`, a
+**class attribute** (a `ClassVar` or bare class-level assignment) or an
 **instance-attribute slot** its `__init__` assigns -- and that entry alone
 decides the outcome. If its binding is an export, the
 method is published; if it is anything else, the name is **absent** from the
@@ -412,10 +413,13 @@ same name. So a `Derived` that binds `value` as a `@property` publishes no
 callable `value` at all, exactly as Python's own attribute lookup gives the
 derived property rather than `Base.value`; a derived ordinary method shadows a
 base `@property` in the same way, a derived `@staticmethod` shadows a base
-instance method, published under its own receiver kind, and a derived
+instance method, published under its own receiver kind, a derived
 `self.value = ...` shadows a base `value()` -- an instance slot binds on the
-instance, which Python consults before the type, and `pycc_hir` accepts that
-collision rather than refusing it. A class whose every resolved name is
+instance, which Python consults before the type -- and a base's `value: int =
+2` shadows a *further* base's `value()` under multiple inheritance, because a
+class attribute is an ordinary entry in the class object's namespace.
+`pycc_hir` accepts both of those last two collisions rather than refusing
+them, so this walk is the only place they are seen. A class whose every resolved name is
 shadowed away this way carries no type object at all rather than an empty
 one. An unshadowed name is
 inherited across all three method kinds alike: `mod.Derived(21).value()`

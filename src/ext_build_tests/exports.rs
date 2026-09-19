@@ -1486,6 +1486,40 @@ fn a_derived_instance_attribute_shadows_its_base_method_and_publishes_nothing() 
 }
 
 #[test]
+fn a_sibling_base_s_class_attribute_shadows_a_further_base_s_method() {
+    // A class attribute is an ordinary entry in the class object's
+    // namespace, so an MRO entry binding `value` as a `ClassVar` answers
+    // the name and the walk must stop there rather than reach `Base`'s
+    // method behind it. `pycc_hir` accepts this shape: its class-attribute
+    // collision check runs over a class's *own* newly declared attributes,
+    // so `Derived`, which declares none, combines two independent bases
+    // without complaint. Verified end to end: before the fix, the same
+    // source built with `--ext` published a callable `mod.Derived(3).f()`
+    // answering `3` where CPython raises `TypeError: 'int' object is not
+    // callable`, because `d.f` is the sibling base's `2`.
+    let mut hir = inheriting_module();
+    let mut shadowing = class_def("Shadowing", None);
+    shadowing.class_attrs = vec![(
+        "value".to_string(),
+        Ty::Int,
+        pycc_hir::ClassAttrValue::Int(2),
+    )];
+    hir.class_defs.push(("Shadowing".to_string(), shadowing));
+    hir.class_defs[1].1.mro = vec![
+        "Derived".to_string(),
+        "Shadowing".to_string(),
+        "Base".to_string(),
+    ];
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
 fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
     // The collapse case the per-name matrix above never reaches: every one
     // of `Derived`'s resolved names is shadowed by a non-exporting binding,
