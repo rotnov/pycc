@@ -1147,7 +1147,13 @@ pub(crate) fn collect_class_publications(
 /// `properties` by [`pycc_hir::PropertyDef::name`] (one entry covers a
 /// getter and its optional setter: that file refuses a `@<name>.setter`
 /// without a preceding `@property` getter, so a setter never binds a name
-/// on its own), `static_methods`, and `class_methods`.
+/// on its own), `static_methods`, `class_methods`, and `attrs` -- the
+/// instance-attribute slots `__init__`'s `self.<name> = ...` assignments
+/// declare. That last kind is bound on the instance rather than on the
+/// type, but Python resolves `obj.<name>` against the instance first, so a
+/// class that assigns a slot named like an inherited method shadows that
+/// method exactly as an override would; `pycc_hir` does not reject the
+/// collision, so this walk is where it has to be seen.
 ///
 /// Slices are walked in table order and never through a hash map: the
 /// generated `.inc` must be byte-identical across runs.
@@ -1169,6 +1175,7 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
                 .iter()
                 .map(|(name, _)| name.as_str()),
         )
+        .chain(class_def.attrs.iter().map(|(name, _)| name.as_str()))
 }
 
 /// The MRO entry that answers `method` for a class linearized as `mro`:

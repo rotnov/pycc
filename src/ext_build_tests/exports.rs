@@ -1463,6 +1463,55 @@ fn a_derived_property_getter_shadows_its_base_method_and_publishes_nothing() {
 }
 
 #[test]
+fn a_derived_instance_attribute_shadows_its_base_method_and_publishes_nothing() {
+    // `__init__`'s `self.value = ...` binds `value` on the instance, and
+    // Python resolves `obj.value` against the instance before the type, so
+    // the derived slot wins over `Base.value` exactly as an override would.
+    // `pycc_hir` accepts the collision -- verified end to end: the same
+    // source built with `--ext` published a callable `Derived.value`
+    // answering Base's 21 where CPython reads the slot's own value -- so
+    // this walk is the only place it can be seen.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
+fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
+    // The collapse case the per-name matrix above never reaches: every one
+    // of `Derived`'s resolved names is shadowed by a non-exporting binding,
+    // so it contributes no publication row rather than an empty one. Pinned
+    // because the generated `.inc` gives an empty row a type object the host
+    // could construct and then find nothing on. Verified end to end: the
+    // same source built with `--ext` produces a module whose only attribute
+    // is `Base`.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .methods
+        .retain(|(name, _)| name != "twice");
+    hir.items
+        .retain(|item| !matches!(item, HirItem::Function { name, .. } if name == "Derived.twice"));
+    hir.class_defs[1]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Base", vec!["Base.value"])]
+    );
+}
+
+#[test]
 fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
     // The mirror direction, which must not regress: `Base` binds `value` as
     // a `@property` and publishes nothing for it, while `Derived`'s ordinary
