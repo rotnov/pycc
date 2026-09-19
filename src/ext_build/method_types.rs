@@ -255,13 +255,18 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     out.push_str(&format!("    inst = pycc_rt_instance_new({slot_count});\n"));
     let mut call_args = vec!["inst".to_string()];
     for (index, slot) in slots.iter().enumerate() {
-        match slot {
-            super::BoundaryCarrier::Scalar(..) => call_args.push(format!("a{index}")),
-            super::BoundaryCarrier::Tuple(elements) => {
-                call_args.extend((0..elements.len()).map(|element| format!("a{index}_{element}")))
-            }
-            super::BoundaryCarrier::Buffer => call_args.push(format!("&a{index}")),
-        }
+        // Deliberately two arms where `wrapper_for` has three.
+        // `ctor_descriptor` refuses a `tuple` parameter outright -- no
+        // `pycc_ext_thunk_` exists for a constructor, so there would be no
+        // callable C entry point for the flattened elements -- which leaves
+        // a scalar as the only other carrier a constructor slot can hold. A
+        // third arm for `BoundaryCarrier::Tuple` would be a line no test
+        // could ever execute, which the 100%-changed-lines invariant does
+        // not admit (D-242 rule 1).
+        call_args.push(match slot {
+            super::BoundaryCarrier::Buffer => format!("&a{index}"),
+            _ => format!("a{index}"),
+        });
     }
     out.push_str(&format!(
         "    ((void (*)({params}))fnptr_{symbol})({call_args});\n",

@@ -933,6 +933,23 @@ fn a_property_getter_is_excluded_by_the_class_table_not_by_its_name() {
 }
 
 #[test]
+fn the_constructor_is_found_past_an_unrelated_item_of_the_same_kind() {
+    // `resolved_init` scans `HirModule::items` for the mangled name the MRO
+    // walk produced. Every module of any size has functions before it that
+    // are `HirItem::Function` too, so the name guard -- not the variant --
+    // is what selects the constructor. With the constructor first in the
+    // list, a guard that always matched would pass unnoticed.
+    let mut hir = constructible_module("Grid");
+    hir.items
+        .insert(0, func("decoy", &[("n", Ty::Int)], Ty::Int));
+    let (name, params, return_ty) =
+        resolved_init(&hir, "Grid").expect("the constructor is still resolved");
+    assert_eq!(name, "Grid.__init__");
+    assert_eq!(params.len(), 3, "{params:?}");
+    assert_eq!(*return_ty, Ty::None);
+}
+
+#[test]
 fn an_implicit_object_init_ranks_below_a_real_one_in_the_same_mro() {
     // D-232/#966: a base whose `__init__` is the D-225 implicit zero-argument
     // constructor must never win over a real one further along the MRO, or a
