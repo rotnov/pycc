@@ -374,18 +374,129 @@ past module-level functions: a public `@staticmethod` and a public
 user exception class. Such a method is published as a `PyMethodDef` entry in
 its own class's `PyType_FromSpec` type object -- the host calls it as
 `mod.Class.method(...)`, and **no flat `mod."Class.method"` module attribute
-is ever published**. That type is non-instantiable
-(`Py_TPFLAGS_DISALLOW_INSTANTIATION`) and immutable
-(`Py_TPFLAGS_IMMUTABLETYPE`) while instance methods remain unimplemented, so
-admitting them later is purely additive. A `@classmethod` receives the type
-object in `self` and discards it, passing the same null receiver every native
-`Class.method(...)` call site already passes. An instance method, a
-`@property` getter or setter, an `@abstractmethod`, and any method of a
-private class or of a user exception class are **not** exported and are not
-`C0003`: they are excluded as representation, not as a capability gap. A
-public `@staticmethod` or `@classmethod` of a public class whose signature
-the boundary cannot carry *is* a `C0003`, where it was previously skipped in
-silence.
+is ever published**. That type is immutable
+(`Py_TPFLAGS_IMMUTABLETYPE`) and never an acceptable base type (no
+`Py_TPFLAGS_BASETYPE`); whether it can be *instantiated* is #1145's
+constructibility question below. A `@classmethod` receives the type object in `self`
+and discards it, passing the same null receiver every native
+`Class.method(...)` call site already passes. A `@property` getter or setter,
+and any method of a private class or of a user exception class, are **not**
+exported and are not `C0003`: they are excluded as representation, not as a
+capability gap. A public `@staticmethod` or `@classmethod` of a public class
+whose signature the boundary cannot carry *is* a `C0003`, where it was
+previously skipped in silence.
+
+[#1145](https://github.com/rotnov/pycc/issues/1145) adds public **instance
+methods** to that export set, and makes publication **MRO-resolved**
+(namespace-resolved since
+[#1146](https://github.com/rotnov/pycc/issues/1146), below). Three
+separate predicates decide what the host sees, and they are deliberately not
+the same predicate.
+
+*Which classes are published.* A class gets a type object exactly when its
+MRO-resolved export set is non-empty -- when it or one of its bases exports at
+least one member -- and its own name is public and carries no exception type
+tag. A class that declares no exportable member of its own is published on
+the strength of what it inherits.
+
+*Which methods each type object carries.* Every exported member of the class
+and of its bases, resolved along the class's MRO most-derived-first. The walk
+resolves the **namespace**, not the export set, and states Python's own
+attribute lookup as a mechanism rather than as a list of member kinds. Two
+rules, in this order. First, a name that **any `__init__` along the MRO
+assigns to `self`** is answered by the instance, never by the type -- CPython
+consults the instance `__dict__` ahead of the class namespace for everything
+that is not a data descriptor -- so no class owns it and no callable is
+published under it, wherever in the MRO that slot was assigned and wherever
+the method it hides was declared. Rule one is a *static* test, deliberately
+broader than CPython's own per-instance one: a compiled instance has no
+`__dict__`, and a slot declared anywhere on the MRO has a fixed offset in
+every subclass -- in a single-inheritance chain by construction, since
+`pycc_hir`'s `flat_attr_layout` assigns slots most-base-first, and under
+multiple inheritance because `validate_mro_slot_layout` (#969) rejects
+every shape where that would not hold, a single base onto an
+already-validated ancestor inheriting the property transitively -- whether
+or not the `__init__` assigning it is the one a given construction
+reaches. The two
+diverge exactly where an override's `__init__` skips its base's, and the
+artifact is lossy there rather than wrong: for a `Base` assigning
+`self.value` and a `Derived(Base)` whose `__init__` calls no `super()` and
+which declares `def value`, CPython answers the method and the artifact
+publishes nothing. Second, every other name is answered by the
+**first MRO entry that binds it in the class namespace**, whatever kind binds
+it, and that entry alone decides the outcome. If its binding is an export,
+the method is published; if it is anything else, the name is **absent** from
+the published class, and the walk never falls through to a base that exports
+the same name.
+
+So a `Derived` that binds `value` as a `@property` publishes no callable
+`value` at all, exactly as Python's own attribute lookup gives the derived
+property rather than `Base.value`; a derived ordinary method shadows a base
+`@property` in the same way; a derived `@staticmethod` shadows a base instance
+method, published under its own receiver kind; a base's `value: int = 2`
+shadows a *further* base's `value()` under multiple inheritance, because a
+class attribute is an ordinary entry in the class object's namespace; and a
+`self.value = ...` in any `__init__` on the MRO hides a `value()` declared on
+any class of that MRO, including a *more* derived one, because rule one is
+position-independent. A `Protocol` base's declaration-style `def f(self) ->
+int: ...` is one of those bindings too -- it is a real function object in the
+protocol's namespace, which CPython resolves like any other -- so for a
+`class Q(P, A)` where `P` declares `f` and `A` exports a `@staticmethod f`,
+`P`'s binding wins and `mod.Q` carries no `f` at all. An annotation-only
+protocol attribute is not a binding and shadows nothing. `pycc_hir` accepts each of those collisions rather than
+refusing it, so this walk is the only place they are seen. Rule one also
+suppresses a name a `@property` would win as a data descriptor; that is the
+same conservatism, and it costs at most a getter+setter property whose class
+also assigns the name in `__init__`. A read-only property is not that case:
+`self.<name> = ...` against one is a `T0044` before the class compiles at
+all. A class whose every
+resolved name is shadowed away this way carries no type object at all rather
+than an empty one. An unshadowed name is inherited across all three method
+kinds alike: `mod.Derived(21).value()` reaches a `Base.value` declared only on
+the base, and `mod.Derived.tag()` reaches a base's `@staticmethod`. An
+inherited method's compiled body addresses its own class's attribute slots,
+which is safe because `pycc_hir`'s `validate_mro_slot_layout` (#969) rejects,
+at HIR lowering with `C0001`, every multiple-inheritance shape whose ancestor
+layout is not a name-wise prefix of the derived one -- see that function's own
+documentation for why that is the condition.
+
+*Which classes are constructible.* A published class is **constructible**
+exactly when it is not abstract, not a `Protocol` and not an enum; it is not a
+user or builtin exception class; its MRO-resolved `__init__` returns `None`;
+and every parameter of that `__init__` after `self` is carriable by the table
+below and is not a `tuple`. A constructible class's type object drops
+`Py_TPFLAGS_DISALLOW_INSTANTIATION`, gains a `tp_init`, and the host writes
+`mod.Class(...).method(...)`; a class that is not constructible keeps the
+non-instantiable shape above, so `mod.Class()` raises `TypeError`. A class
+published only for what it inherits is constructible on these same terms, so
+`mod.Derived(21)` works while `mod.Base(...)` may refuse.
+
+An instance method is exported when its **declaring** class is not abstract,
+not a `Protocol`, not an enum and not an exception class, *and* some
+**public, non-exception** class whose MRO contains it is constructible. Those
+two conditions on the witness are the ones stated above for publication: only a
+class the artifact publishes gets a type object the host can name, so only such
+a witness makes the receiver the compiled body needs obtainable. A privately
+named subclass is published under no name and is therefore no witness at all,
+however constructible it is, and neither is a class whose own MRO resolves the
+method's name to some other binding: the witness clause is *per method*, and a
+class that shadows the name answers it with its own binding rather than with
+the inherited body, so it makes no receiver for that method obtainable. The
+declaring class itself need not be constructible. **Every instance method excluded by that predicate is
+excluded as representation, never as a `C0003`.** An `@abstractmethod` is
+excluded by the declaring-class half, which a constructible subclass does not
+relax: an abstract stub's body returns nothing while its annotation says
+otherwise. An instance method that survives the predicate *is* held to the
+boundary like any other export, so an uncarriable signature there is a
+`C0003`.
+
+Two further consequences are deliberate. `tp_init` is not a `METH_FASTCALL`
+entry point, so it enforces D-244 rule 7's keyword boundary itself --
+`mod.Class(3, 4, extra=1)` raises `TypeError` because the generated `tp_init`
+refuses a non-empty `kwds`, not because CPython refused it first. And the
+instance a constructor allocates is never freed: D-107's arena model, narrowed
+by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
+bounds at process exit becomes linear in the host's call count.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
@@ -402,7 +513,7 @@ restating it.
 | `tuple[...]` of `int`/`bool`/`float` | carried; accepts a `tuple` or a `tuple` subclass of exactly the declared arity, each element admitted by its own `int`/`float`/`bool` row above -- `str` is carried at a top-level position but not as an element. Every other object -- `list`, `str`, an iterator, a different arity -- raises `TypeError` | carried, always as an exact `tuple` |
 | `tuple[...]` carrying anything else, any other container, `T \| None` | **not carried**: `C0003` | **not carried**: `C0003` |
 | `object` | **not carried**: `C0003` | **not carried**: `C0003` |
-| `memoryview` (also spellable `ndarray` or `NDArray`) | carried; accepts **any object exporting a conforming buffer** — a `memoryview`, a bare NumPy array, an `array.array('d')`, a third-party exporter — since [#1129](https://github.com/rotnov/pycc/issues/1129) widened the first refusal arm from `PyMemoryView_Check` to `PyObject_CheckBuffer`. That widening applies to the `memoryview` annotation as much as to the `ndarray` spelling and to the `NDArray` spelling [#1134](https://github.com/rotnov/pycc/issues/1134) added: all three lower to one type and reach one helper. Both `ndarray` and `NDArray` are resolved after a program's own classes and type aliases, so a module-level `class ndarray` or `type NDArray = ...` keeps its own meaning (D-244's #1129 review-round-3 amendment, statement (h)). The buffer must additionally be C-contiguous, one-dimensional, and of element format `'d'` (float64); the last two raise a `TypeError` naming what it saw, and a non-contiguous operand's refusal is the **exporter's own**, propagated verbatim — a strided `memoryview` raises CPython's `BufferError` and a strided NumPy array numpy's own `ValueError`, so the propagated *type* is not fixed (D-244's #1129 amendment, statement (g)). An object that exports no buffer at all — a `list`, an `int`, `None` — is what the first arm refuses now, with a pycc-authored `TypeError` naming the function, the 1-based argument index and the offending type. A NumPy array therefore reaches the admitted slot **bare**, with no `memoryview(a.reshape(-1))` wrapper, provided it is C-contiguous, one-dimensional and `float64`; that acceptance and the refusals it did not move onto (a two-dimensional array, an element format other than `'d'`, a strided array, and a non-exporter) are pinned end to end in `tests/issue_1114_numpy_oracle.rs` (Part 3 of #1027, [#1114](https://github.com/rotnov/pycc/issues/1114)) and, on the standard library alone, in `tests/issue_1129_ndarray_buffer_carrier.rs`. The wrapper owns the `Py_buffer` for the whole call and releases it on every exit, including the success path; compiled code receives a `{ ptr, len }` pair and never the buffer or the owning object. In a build without `--ext` the buffer type in a *signature* -- a parameter or the return type -- is refused as `I0405`, in the canonical `memoryview` spelling whichever way it was written. Only a signature admits the type at all: a buffer *declaration* (`x: memoryview`, `x: ndarray` or `x: NDArray`) is a `C0001` capability gap in both modes, because nothing in #1027 produces a value to bind to the name. Exactly two *reads* of a name bound to a `memoryview` are implemented. `v[i]` (Part 2 of #1027, [#1113](https://github.com/rotnov/pycc/issues/1113)) loads one float64 element through `pycc_rt_buffer_f64_get`. That helper owns the bounds check -- it compares the index against the `len` the wrapper copied out of `Py_buffer.shape[0]` and raises `IndexError` for anything outside `0..len`, negative indices included, since a negative index is refused rather than wrapped (D-108) -- so compiled code never reads outside the view, and the index itself must be an `int` (`T0021` otherwise). `len(v)` ([#1116](https://github.com/rotnov/pycc/issues/1116)) returns that same copied `len` through `pycc_rt_buffer_len`, as an `int` counted in elements and never in bytes, so it equals CPython's own `len(view)`; it performs no check and cannot raise, and together with `v[i]` it makes `for i in range(len(v)):` -- one call sweeping the whole input -- expressible. Every *other* read is still that same `C0001` gap wherever it appears -- an alias, a `for` over the name itself, a call of the name, an element store `v[i] = x`, an attribute, or handing it to another function -- and that holds inside the body of an `--ext` export whose parameter the signature admits: the parameter position exists so the wrapper can unpack the view for the compiled boundary, not so compiled code can operate on it as a value. A `Protocol` method's signature splits the two positions: a `memoryview` parameter is still `I0405` in a native build (a class genuinely can satisfy it under `--ext`, where an exported function receives the view and passes it inward), while a `-> memoryview` member is refused at its declaration as `C0001` in *both* modes, because no class could implement it in either | **not carried**: `C0003` — the wrapper has released the buffer by the time it would have to hand one back. That refusal is the export walk's, so it names a *public* function; the same return type on a function that walk never visits — a private one, a method, a specialization — is refused under `--ext` as the `C0001` capability gap a declaration gets, since #1027 produces no `memoryview` value to return |
+| `memoryview` (also spellable `ndarray` or `NDArray`) | carried; accepts **any object exporting a conforming buffer** — a `memoryview`, a bare NumPy array, an `array.array('d')`, a third-party exporter — since [#1129](https://github.com/rotnov/pycc/issues/1129) widened the first refusal arm from `PyMemoryView_Check` to `PyObject_CheckBuffer`. That widening applies to the `memoryview` annotation as much as to the `ndarray` spelling and to the `NDArray` spelling [#1134](https://github.com/rotnov/pycc/issues/1134) added: all three lower to one type and reach one helper. Both `ndarray` and `NDArray` are resolved after a program's own classes and type aliases, so a module-level `class ndarray` or `type NDArray = ...` keeps its own meaning (D-244's #1129 review-round-3 amendment, statement (h)). The buffer must additionally be C-contiguous, one-dimensional, and of element format `'d'` (float64); the last two raise a `TypeError` naming what it saw, and a non-contiguous operand's refusal is the **exporter's own**, propagated verbatim — a strided `memoryview` raises CPython's `BufferError` and a strided NumPy array numpy's own `ValueError`, so the propagated *type* is not fixed (D-244's #1129 amendment, statement (g)). An object that exports no buffer at all — a `list`, an `int`, `None` — is what the first arm refuses now, with a pycc-authored `TypeError` naming the function, the 1-based argument index and the offending type. A NumPy array therefore reaches the admitted slot **bare**, with no `memoryview(a.reshape(-1))` wrapper, provided it is C-contiguous, one-dimensional and `float64`; that acceptance and the refusals it did not move onto (a two-dimensional array, an element format other than `'d'`, a strided array, and a non-exporter) are pinned end to end in `tests/issue_1114_numpy_oracle.rs` (Part 3 of #1027, [#1114](https://github.com/rotnov/pycc/issues/1114)) and, on the standard library alone, in `tests/issue_1129_ndarray_buffer_carrier.rs`. The wrapper owns the `Py_buffer` for the whole call and releases it on every exit, including the success path; compiled code receives a `{ ptr, len }` pair and never the buffer or the owning object. In a build without `--ext` the buffer type in a *signature* -- a parameter or the return type -- is refused as `I0405`, in the canonical `memoryview` spelling whichever way it was written. Only a signature admits the type at all: a buffer *declaration* (`x: memoryview`, `x: ndarray` or `x: NDArray`) is a `C0001` capability gap in both modes, because nothing in #1027 produces a value to bind to the name. Exactly two *reads* of a name bound to a `memoryview` are implemented. `v[i]` (Part 2 of #1027, [#1113](https://github.com/rotnov/pycc/issues/1113)) loads one float64 element through `pycc_rt_buffer_f64_get`. That helper owns the bounds check -- it compares the index against the `len` the wrapper copied out of `Py_buffer.shape[0]` and raises `IndexError` for anything outside `0..len`, negative indices included, since a negative index is refused rather than wrapped (D-108) -- so compiled code never reads outside the view, and the index itself must be an `int` (`T0021` otherwise). `len(v)` ([#1116](https://github.com/rotnov/pycc/issues/1116)) returns that same copied `len` through `pycc_rt_buffer_len`, as an `int` counted in elements and never in bytes, so it equals CPython's own `len(view)`; it performs no check and cannot raise, and together with `v[i]` it makes `for i in range(len(v)):` -- one call sweeping the whole input -- expressible. Every *other* read is still that same `C0001` gap wherever it appears -- an alias, a `for` over the name itself, a call of the name, an element store `v[i] = x`, an attribute, or handing it to another function -- and that holds inside the body of an `--ext` export whose parameter the signature admits: the parameter position exists so the wrapper can unpack the view for the compiled boundary, not so compiled code can operate on it as a value. A `Protocol` method's signature splits the two positions: a `memoryview` parameter is still `I0405` in a native build (a class genuinely can satisfy it under `--ext`, where an exported function receives the view and passes it inward), while a `-> memoryview` member is refused at its declaration as `C0001` in *both* modes, because no class could implement it in either | **not carried**: `C0003` — the wrapper has released the buffer by the time it would have to hand one back. That refusal is the export walk's, so it names a *public* function; the same return type on a function that walk never visits — a private one, a method excluded from the export walk, a specialization — is refused under `--ext` as the `C0001` capability gap a declaration gets; a *reachable* public instance method reaches the boundary check like any other export, so a `-> memoryview` there is that same `C0003`, since #1027 produces no `memoryview` value to return |
 
 `float` and `bool` refusing an `int` is not a local choice: it is
 `docs/TYPE_SYSTEM.md` rule 4 (D-086), no implicit numeric narrowing *or*

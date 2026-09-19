@@ -87,6 +87,38 @@ fn class_def(name: &str, exception_type_tag: Option<u8>) -> pycc_hir::HirClassDe
     }
 }
 
+/// [`class_def`] made **constructible** under #1145: two `int` attribute
+/// slots and an MRO-resolved `__init__` the caller supplies as an
+/// [`HirItem::Function`] named `<name>.__init__`.
+///
+/// The `__init__` entry has to sit in `methods` rather than anywhere else:
+/// `pycc_hir::class` mangles a constructor exactly like any other regular
+/// method, and `resolved_init` walks `mro` against `class_defs` looking for
+/// that one binding. `attrs` is what `flat_attr_layout` counts, so the two
+/// entries here are the slot count the generated `tp_init` passes to
+/// `pycc_rt_instance_new`.
+fn constructible_class_def(name: &str) -> pycc_hir::HirClassDef {
+    pycc_hir::HirClassDef {
+        attrs: vec![("w".to_string(), Ty::Int), ("h".to_string(), Ty::Int)],
+        methods: vec![("__init__".to_string(), format!("{name}.__init__"))],
+        ..class_def(name, None)
+    }
+}
+
+/// The [`HirItem::Function`] a [`constructible_class_def`] resolves to, with
+/// the leading `self` every compiled method carries.
+fn init_func(class: &str, params: &[(&str, Ty)], return_ty: Ty) -> HirItem {
+    let mut all = vec![("self", Ty::Instance(Box::new(class.to_string())))];
+    all.extend(params.iter().map(|(n, ty)| (*n, ty.clone())));
+    func(
+        &format!("{class}.__init__"),
+        &all.iter()
+            .map(|(n, ty)| (*n, ty.clone()))
+            .collect::<Vec<_>>(),
+        return_ty,
+    )
+}
+
 /// [`module`] plus the class table `collect_exports` reads for the
 /// exception-class exclusion.
 fn module_with_classes(

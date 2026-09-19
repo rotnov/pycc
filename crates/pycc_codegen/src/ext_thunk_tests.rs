@@ -281,13 +281,24 @@ fn no_thunk_is_emitted_for_a_name_the_export_set_excludes() {
     // Each of these carries a tuple and would otherwise qualify. A thunk
     // for one of them is not merely dead weight: `0gen_` names have no
     // `fnptr_` global at all, so emitting one would panic, and a `_private`
-    // or `Class.method` thunk would advertise a symbol `collect_exports`
+    // or private-method thunk would advertise a symbol `collect_exports`
     // never generates a wrapper for.
+    //
+    // #1145 moved the bare `Shape.area` spelling *into* the export set --
+    // it is an instance method now, not an unrecognized third segment -- so
+    // the corpus carries a property setter in its place. That is still a
+    // name no `PyMethodDef` row can ever name, and it keeps this test about
+    // the name predicate rather than about a kind the predicate admits.
     let observed = thunks_of(
         "ext_thunk_excluded_names",
         &module(vec![
             func("_private", &[("t", tuple(vec![Ty::Int]))], Ty::Int),
-            func("Shape.area", &[("t", tuple(vec![Ty::Int]))], Ty::Int),
+            func("Shape._area", &[("t", tuple(vec![Ty::Int]))], Ty::Int),
+            func(
+                "Shape.width.setter",
+                &[("t", tuple(vec![Ty::Int]))],
+                Ty::Int,
+            ),
             func("0gen_pair", &[("t", tuple(vec![Ty::Int]))], Ty::Int),
         ]),
     );
@@ -387,13 +398,19 @@ fn mangling_is_injective_across_shapes_that_would_collide_if_flattened() {
 }
 
 #[test]
-fn the_export_predicate_admits_exactly_the_two_method_kinds_that_need_no_receiver_object() {
-    // `.static` and `.classmethod` are admitted; the bare spelling (a regular
-    // method, a property getter or an abstract method, which this name cannot
-    // tell apart) and `.setter` are refused, as is any other third segment.
+fn the_export_predicate_admits_every_method_kind_a_mangled_name_can_carry_a_receiver_for() {
+    // `.static`, `.classmethod` and the bare spelling are admitted; `.setter`
+    // is refused, as is any other third segment. The bare spelling is a
+    // regular method, a property getter or an abstract method, which this
+    // name cannot tell apart -- #1145 admits all three here and lets the
+    // driver, which can see `HirModule::class_defs`, remove the last two.
+    // This predicate is deliberately a *superset* of the driver's admitted
+    // set: at worst a thunk is emitted for a name no wrapper calls, while
+    // the opposite error makes `ext_thunk_required` answer `false` for a
+    // `tuple`-carrying instance method and emit the wrong call form.
     assert!(crate::is_ext_exportable_name("Grid.scale.static"));
     assert!(crate::is_ext_exportable_name("Grid.make.classmethod"));
-    assert!(!crate::is_ext_exportable_name("Grid.scale"));
+    assert!(crate::is_ext_exportable_name("Grid.scale"));
     assert!(!crate::is_ext_exportable_name("Grid.width.setter"));
     assert!(!crate::is_ext_exportable_name("Grid.scale.other"));
     assert!(!crate::is_ext_exportable_name("Grid.scale.static.extra"));

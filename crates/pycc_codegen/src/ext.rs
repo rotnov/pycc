@@ -410,12 +410,21 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 /// under `<Class>.<method>` and the suffixed spellings
 /// `<Class>.<method>.static`, `<Class>.<method>.classmethod` and
 /// `<Class>.<property>.setter` (`pycc_hir::class`'s mangling). This admits
-/// exactly the `.static` and `.classmethod` spellings, with every segment
-/// public; the bare `<Class>.<method>` spelling covers the three
-/// `MethodKind`s `Regular`, `PropertyGetter` and `AbstractMethod` at once
-/// and is refused *as representation*, because the mangled name cannot tell
-/// them apart and admitting an abstract method would export a body that
-/// returns nothing. `<Class>.<property>.setter` is refused the same way.
+/// the `.static` and `.classmethod` spellings and -- since #1145 -- the
+/// bare `<Class>.<method>` one, with every segment public.
+/// `<Class>.<property>.setter` stays refused: a `@property` is attribute
+/// syntax on the host side, never a method table entry.
+///
+/// The bare spelling covers the three `MethodKind`s `Regular`,
+/// `PropertyGetter` and `AbstractMethod` at once, and nothing here can tell
+/// them apart. Admitting it is deliberate rather than an approximation:
+/// widening this mirror is what makes it a **superset** of the driver's
+/// admitted set again, and a superset is the safe direction. The driver
+/// narrows the bare spelling back down with filters that read
+/// `HirModule::class_defs`; leaving this side refusing it would instead
+/// make `ext_thunk_required` answer `false` for a `tuple`-carrying instance
+/// method, so the wrapper would emit the `fnptr_` cast form -- measured to
+/// fault (SIGBUS) on aarch64-apple-darwin for an out-pointer signature.
 ///
 /// **This verdict is purely lexical, and must stay so.** The function
 /// receives a bare `&str` and this crate cannot see `pycc_hir`, so a
@@ -458,8 +467,9 @@ pub fn is_ext_exportable_name(name: &str) -> bool {
     }
     match segments.next() {
         // `<Class>.<method>` -- `Regular`, `PropertyGetter` or
-        // `AbstractMethod`, indistinguishable here and all refused.
-        None => false,
+        // `AbstractMethod`, indistinguishable here and all admitted as the
+        // superset the driver narrows (#1145).
+        None => true,
         Some(kind) => {
             // A fourth segment cannot arise: a class nested in a class or a
             // function is refused by `pycc_hir` (`stmt.rs`, `class.rs`), so

@@ -14,8 +14,11 @@
 //! `crates/pycc_codegen/src/ext_thunk_tests.rs` covers the emitted symbols.
 //! This file covers the one thing neither can: that the type object the
 //! generated `PyType_FromSpec` call builds really publishes
-//! `mod.Class.method`, really refuses instantiation, and really passes the
-//! null receiver a `@classmethod`'s compiled body expects.
+//! `mod.Class.method` and really passes the null receiver a
+//! `@classmethod`'s compiled body expects. Instantiation of that type
+//! object was refused in PR 1 and is not any more -- see
+//! `the_published_type_is_immutable_and_now_constructible` below and
+//! `tests/issue_1145_ext_instance_methods.rs`.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
@@ -105,22 +108,26 @@ assert not hasattr(grid, 'make'), dir(grid)
 
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn the_published_type_refuses_instantiation_and_mutation() {
-    // `Py_TPFLAGS_DISALLOW_INSTANTIATION` and `Py_TPFLAGS_IMMUTABLETYPE`:
-    // instance methods are unimplemented in PR 1, so an instance would have
-    // no behaviour, and a mutable type would let a host add one.
+fn the_published_type_is_immutable_and_now_constructible() {
+    // `Py_TPFLAGS_IMMUTABLETYPE` is unchanged since PR 1: a mutable type
+    // would let a host add a method the compiler never saw.
+    //
+    // `Py_TPFLAGS_DISALLOW_INSTANTIATION` is *not* unchanged. PR 1 set it
+    // because instance methods were unimplemented, so an instance would have
+    // had no behaviour. #1145 implements them, and `Grid` -- which declares
+    // no `__init__` at all -- is constructible through the D-225 implicit
+    // zero-argument constructor, so the flag is gone and `grid.Grid()`
+    // succeeds. `tests/issue_1145_ext_instance_methods.rs` owns the
+    // still-refused direction: a class the constructibility predicate
+    // rejects keeps the flag.
     let dir = ScratchDir::new("ext_1143_flags").expect("scratch");
     build_ext(&dir, "grid", GRID);
     run_python(
         &dir,
         "\
 import grid
-try:
-    grid.Grid()
-except TypeError:
-    pass
-else:
-    raise AssertionError('instantiation should be refused')
+instance = grid.Grid()
+assert type(instance) is grid.Grid, type(instance)
 try:
     grid.Grid.other = 1
 except TypeError:
