@@ -221,7 +221,12 @@ directory once project mode exists.
                     and its import closure (D-222) -- so a public function
                     in an imported project module is exported too, and it
                     reaches a public `@staticmethod`/`@classmethod` of a
-                    public class, published as `mod.Class.method` (#1143). Will
+                    public class, published as `mod.Class.method` (#1143),
+                    and a public instance method of a public *constructible*
+                    class, called on an instance the host builds with
+                    `mod.Class(...)` (#1145); `docs/RUNTIME.md`'s `ext`
+                    boundary section states which classes are
+                    constructible. Will
                     conflict with `--lib`, `--interop-policy`, and `--pure`
                     once those flags exist.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)

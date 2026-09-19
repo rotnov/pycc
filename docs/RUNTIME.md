@@ -374,18 +374,45 @@ past module-level functions: a public `@staticmethod` and a public
 user exception class. Such a method is published as a `PyMethodDef` entry in
 its own class's `PyType_FromSpec` type object -- the host calls it as
 `mod.Class.method(...)`, and **no flat `mod."Class.method"` module attribute
-is ever published**. That type is non-instantiable
-(`Py_TPFLAGS_DISALLOW_INSTANTIATION`) and immutable
-(`Py_TPFLAGS_IMMUTABLETYPE`) while instance methods remain unimplemented, so
-admitting them later is purely additive. A `@classmethod` receives the type
-object in `self` and discards it, passing the same null receiver every native
-`Class.method(...)` call site already passes. An instance method, a
-`@property` getter or setter, an `@abstractmethod`, and any method of a
-private class or of a user exception class are **not** exported and are not
-`C0003`: they are excluded as representation, not as a capability gap. A
-public `@staticmethod` or `@classmethod` of a public class whose signature
-the boundary cannot carry *is* a `C0003`, where it was previously skipped in
-silence.
+is ever published**. That type is immutable
+(`Py_TPFLAGS_IMMUTABLETYPE`) and never an acceptable base type (no
+`Py_TPFLAGS_BASETYPE`); whether it can be *instantiated* is #1145's
+constructibility question below. A `@classmethod` receives the type object in `self`
+and discards it, passing the same null receiver every native
+`Class.method(...)` call site already passes. A `@property` getter or setter,
+and any method of a private class or of a user exception class, are **not**
+exported and are not `C0003`: they are excluded as representation, not as a
+capability gap. A public `@staticmethod` or `@classmethod` of a public class
+whose signature the boundary cannot carry *is* a `C0003`, where it was
+previously skipped in silence.
+
+[#1145](https://github.com/rotnov/pycc/issues/1145) adds public **instance
+methods** to that export set, but only for a class the host can construct. A
+published class is **constructible** exactly when it is not abstract, not a
+`Protocol` and not an enum; it is not a user or builtin exception class; its
+MRO-resolved `__init__` returns `None`; and every parameter of that `__init__`
+after `self` is carriable by the table below and is not a `tuple`. A
+constructible class's type object drops
+`Py_TPFLAGS_DISALLOW_INSTANTIATION`, gains a `tp_init`, and the host writes
+`mod.Class(...).method(...)`; a class that is not constructible keeps the
+non-instantiable shape above, so `mod.Class()` raises `TypeError`. **Every
+instance method excluded because the class is not constructible is excluded
+as representation, never as a `C0003`** -- an `@abstractmethod` falls under
+that one clause rather than a rule of its own, since an abstract class is
+never constructible. An instance method of a constructible class *is* held to
+the boundary like any other export, so an uncarriable signature there is a
+`C0003`.
+
+Two consequences are deliberate. Publication stays narrower than
+constructibility: a class appears as `mod.Class` only when it exports at
+least one method, so a class with a carriable `__init__` and no public method
+is still not constructible from the host. And `tp_init` is not a
+`METH_FASTCALL` entry point, so it enforces D-244 rule 7's keyword boundary
+itself -- `mod.Class(3, 4, extra=1)` raises `TypeError` because the generated
+`tp_init` refuses a non-empty `kwds`, not because CPython refused it first.
+The instance a constructor allocates is never freed: D-107's arena model,
+narrowed by D-154, gives `pycc_rt` no ownership model, so the leak a `native`
+program bounds at process exit becomes linear in the host's call count.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,

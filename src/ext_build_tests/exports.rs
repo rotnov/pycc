@@ -27,7 +27,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "first".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -35,7 +35,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "second".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -43,7 +43,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "third".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -51,7 +51,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "scaled".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Float],
                 return_ty: Ty::Float,
             },
@@ -59,7 +59,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "negated".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Bool],
                 return_ty: Ty::Bool,
             },
@@ -67,7 +67,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "sink".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::None,
             },
@@ -102,7 +102,7 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
             name: "kept".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: Vec::new(),
             return_ty: Ty::Int,
         }]
@@ -128,7 +128,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "one".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -138,7 +138,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "two".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -146,7 +146,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "three".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -225,7 +225,7 @@ fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
             name: "flag".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
             return_ty: Ty::Bool,
         }]
@@ -246,7 +246,7 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
             name: "echo".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }]
@@ -272,7 +272,7 @@ fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
             name: "swap".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
         }]
@@ -486,7 +486,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 name: "Grid.scale.static".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("scale".to_string()),
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -494,7 +494,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 name: "Grid.make.classmethod".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("make".to_string()),
-                receiver: true,
+                receiver: ExtReceiver::NullCls,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -657,13 +657,15 @@ fn two_static_methods_of_one_class_with_the_same_name_export_once() {
 }
 
 #[test]
-#[should_panic(expected = "is spelled as a `@classmethod` but has no parameters")]
+#[should_panic(expected = "is spelled as a method with a receiver but has no parameters")]
 fn a_class_method_without_a_receiver_parameter_is_an_internal_error() {
     // `classify_export_name` reads the `.classmethod` suffix and nothing
     // else, so the guarantee that such a function leads with `cls` belongs
     // to `pycc_hir::class`, a crate away. Hand-built HIR can violate it;
     // real HIR cannot. Pin the failure mode as a named internal error rather
-    // than as an index-out-of-bounds slice panic.
+    // than as an index-out-of-bounds slice panic. #1145 widened the same
+    // guard to the instance-method receiver, so the message names "a method
+    // with a receiver" rather than a `@classmethod` alone.
     let hir = module_with_classes(
         vec![func("Grid.make.classmethod", &[], Ty::Int)],
         vec![("Grid".to_string(), class_def("Grid", None))],
@@ -698,7 +700,7 @@ fn a_static_and_a_class_method_of_one_class_with_the_same_name_export_once() {
             .iter()
             .map(|e| (e.name.as_str(), e.receiver, e.params.len()))
             .collect::<Vec<_>>(),
-        vec![("Grid.scale.classmethod", true, 2)]
+        vec![("Grid.scale.classmethod", ExtReceiver::NullCls, 2)]
     );
 }
 
@@ -711,8 +713,9 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
     // across a crate boundary is only safe while something proves the two
     // copies equal, which is this test. The codegen mirror is allowed to be
     // a *superset* on the class-table question alone -- it cannot see
-    // `exception_type_tag` -- so the corpus here carries no class-table
-    // dependence.
+    // `exception_type_tag`, `HirClassDef::properties` or #1145's
+    // constructibility predicate -- so the corpus here carries no
+    // class-table dependence.
     for name in [
         "f",
         "_f",
@@ -722,6 +725,14 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
         "_Grid.scale.static",
         "Grid._scale.static",
         "Grid.scale",
+        // #1145: the bare spelling is now admitted on both sides. It is
+        // `MethodKind::Regular`, `PropertyGetter` or `AbstractMethod` and
+        // nothing lexical tells them apart, so the two non-`Regular` kinds
+        // are removed by `collect_exports`' driver filters instead -- which
+        // is exactly why the mirror is allowed to stay a superset.
+        "Grid.__init__",
+        "_Grid.area",
+        "Grid._area",
         "Grid.width.setter",
         "Grid.scale.other",
         "Grid.scale.static.extra",
@@ -736,4 +747,287 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
             "predicates disagree on {name:?}"
         );
     }
+}
+
+// --- #1145: instance methods, and the constructibility predicate ---------
+
+/// The module every constructibility test below varies one field of: a
+/// public class with a public instance method and a carriable `__init__`.
+fn constructible_module(class: &str) -> HirModule {
+    module_with_classes(
+        vec![
+            init_func(class, &[("w", Ty::Int), ("h", Ty::Int)], Ty::None),
+            func(
+                &format!("{class}.area"),
+                &[("self", Ty::Instance(Box::new(class.to_string())))],
+                Ty::Int,
+            ),
+        ],
+        vec![(class.to_string(), constructible_class_def(class))],
+    )
+}
+
+#[test]
+fn an_instance_method_of_a_constructible_class_is_exported_with_a_real_receiver() {
+    let exports = collect_exports(&constructible_module("Grid")).expect("a carriable signature");
+    assert_eq!(
+        exports
+            .iter()
+            .map(|e| (
+                e.name.as_str(),
+                e.class.as_deref(),
+                e.method.as_deref(),
+                e.receiver,
+                e.params.len()
+            ))
+            .collect::<Vec<_>>(),
+        // `__init__` is not public under `is_public_name`, so it is never an
+        // export in its own right; only `area` is, and its `self` is split
+        // off exactly as a `@classmethod`'s `cls` is.
+        vec![(
+            "Grid.area",
+            Some("Grid"),
+            Some("area"),
+            ExtReceiver::SelfInstance,
+            0
+        )]
+    );
+}
+
+#[test]
+fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail_only() {
+    let hir = constructible_module("Grid");
+    let exports = collect_exports(&hir).expect("a carriable signature");
+    assert_eq!(
+        collect_constructors(&hir, &exports),
+        vec![ExtCtor {
+            class: "Grid".to_string(),
+            name: "Grid.__init__".to_string(),
+            // `self` is gone; the two `int`s remain, and the slot count is
+            // `flat_attr_layout`'s, not the parameter count -- they agree
+            // here only because the fixture declares two attributes.
+            params: vec![Ty::Int, Ty::Int],
+            slot_count: 2,
+        }]
+    );
+}
+
+/// Each row removes exactly one constructibility condition from
+/// [`constructible_module`] and asserts both consequences at once: the class
+/// contributes no constructor descriptor, and its instance method is not an
+/// export. The second half is the one that matters -- an exclusion that
+/// dropped the constructor but still published the method would emit a
+/// wrapper that dereferences a receiver no host can ever build.
+#[test]
+fn every_constructibility_condition_removes_the_class_and_its_instance_methods() {
+    let mut rows: Vec<(&str, HirModule)> = Vec::new();
+
+    let mut abstract_class = constructible_module("Grid");
+    abstract_class.class_defs[0].1.is_abstract = true;
+    rows.push(("is_abstract", abstract_class));
+
+    let mut protocol = constructible_module("Grid");
+    protocol.class_defs[0].1.is_protocol = true;
+    rows.push(("is_protocol", protocol));
+
+    let mut enum_class = constructible_module("Grid");
+    enum_class.class_defs[0].1.is_enum = true;
+    rows.push(("is_enum", enum_class));
+
+    let mut tagged = constructible_module("Grid");
+    tagged.class_defs[0].1.exception_type_tag = Some(FIRST_USER_EXCEPTION_TYPE_TAG);
+    rows.push(("exception_type_tag", tagged));
+
+    // A seeded builtin exception class carries no tag of its own, so this
+    // row is the one `exception_type_tag` alone does not cover.
+    let mut builtin_exception = constructible_module("ValueError");
+    builtin_exception.class_defs[0].1.exception_type_tag = None;
+    rows.push(("is_builtin_exception_class", builtin_exception));
+
+    // An `__init__` that does not return `None` is not a constructor pycc
+    // can call for its effect; nothing consumes the value at this boundary.
+    let mut returning_init = constructible_module("Grid");
+    returning_init.items[0] = init_func("Grid", &[("w", Ty::Int), ("h", Ty::Int)], Ty::Int);
+    rows.push(("__init__ return type", returning_init));
+
+    // `Ty::Instance` has no `boundary_carrier` arm at all, which is exactly
+    // the case a hand-rolled parameter predicate would miss.
+    let mut instance_param = constructible_module("Grid");
+    instance_param.items[0] = init_func(
+        "Grid",
+        &[("other", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::None,
+    );
+    rows.push(("uncarriable __init__ parameter", instance_param));
+
+    // A `tuple` parameter is carriable everywhere else and refused here
+    // alone: the constructor is called through its `fnptr_` slot with no
+    // thunk, so no flattening exists for an aggregate (C8).
+    let mut tuple_param = constructible_module("Grid");
+    tuple_param.items[0] = init_func(
+        "Grid",
+        &[("wh", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    rows.push(("tuple __init__ parameter", tuple_param));
+
+    // No `__init__` resolves at all: `methods` is empty, so `resolved_init`
+    // finds nothing in the MRO.
+    let mut no_init = constructible_module("Grid");
+    no_init.class_defs[0].1.methods.clear();
+    rows.push(("no resolved __init__", no_init));
+
+    for (label, hir) in rows {
+        let exports = collect_exports(&hir).expect("{label}: not a capability gap");
+        assert!(
+            exports.is_empty(),
+            "{label}: an excluded class still exported {exports:?}"
+        );
+        assert!(
+            collect_constructors(&hir, &exports).is_empty(),
+            "{label}: an excluded class still yielded a constructor"
+        );
+    }
+}
+
+#[test]
+fn a_class_whose_class_def_is_missing_entirely_is_not_constructible() {
+    // The class table is what every constructibility condition is read
+    // from, so a name with no entry has to fail closed rather than fall
+    // through to "nothing refused it".
+    let hir = module(vec![
+        init_func("Grid", &[("w", Ty::Int)], Ty::None),
+        func(
+            "Grid.area",
+            &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+            Ty::Int,
+        ),
+    ]);
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert!(exports.is_empty(), "{exports:?}");
+    assert!(collect_constructors(&hir, &exports).is_empty());
+}
+
+#[test]
+fn a_property_getter_is_excluded_by_the_class_table_not_by_its_name() {
+    // The getter's mangled name is the bare `<Class>.<method>` spelling, so
+    // nothing lexical separates it from an ordinary method: only
+    // `HirClassDef::properties` does. Deleting that driver filter publishes
+    // `v` as a callable member.
+    let mut hir = constructible_module("Grid");
+    hir.items.push(func(
+        "Grid.v",
+        &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::Int,
+    ));
+    hir.class_defs[0].1.properties = vec![pycc_hir::PropertyDef {
+        name: "v".to_string(),
+        getter: "Grid.v".to_string(),
+        setter: None,
+    }];
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Grid.area"]
+    );
+}
+
+#[test]
+fn an_implicit_object_init_ranks_below_a_real_one_in_the_same_mro() {
+    // D-232/#966: a base whose `__init__` is the D-225 implicit zero-argument
+    // constructor must never win over a real one further along the MRO, or a
+    // subclass with a two-argument constructor would be published as taking
+    // none. The two-pass ranking is what makes the first pass skip it.
+    let mut hir = constructible_module("Grid");
+    let mut base = constructible_class_def("Base");
+    base.implicit_object_init = true;
+    hir.class_defs[0].1.mro = vec!["Base".to_string(), "Grid".to_string()];
+    hir.class_defs.push(("Base".to_string(), base));
+    hir.items.push(init_func("Base", &[], Ty::None));
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    let ctors = collect_constructors(&hir, &exports);
+    assert_eq!(
+        ctors.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        vec!["Grid.__init__"],
+        "the implicit `object.__init__` outranked the real one: {ctors:?}"
+    );
+}
+
+#[test]
+fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
+    // The second pass of the same ranking: with no real `__init__` anywhere
+    // in the MRO, the implicit one is the constructor, and a class with it
+    // is constructible with zero carried arguments.
+    let mut hir = constructible_module("Grid");
+    hir.class_defs[0].1.implicit_object_init = true;
+    hir.items[0] = init_func("Grid", &[], Ty::None);
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert_eq!(
+        collect_constructors(&hir, &exports),
+        vec![ExtCtor {
+            class: "Grid".to_string(),
+            name: "Grid.__init__".to_string(),
+            params: Vec::new(),
+            slot_count: 2,
+        }]
+    );
+}
+
+#[test]
+fn an_instance_method_of_a_constructible_class_with_an_uncarriable_signature_is_a_gap() {
+    // The ordering claim D-244 rule 1 rests on: representation exclusions
+    // run *before* `unsupported_boundary_ty`, so only a method that survived
+    // them can be a capability gap -- and once it has, it is held to the
+    // boundary exactly like a module-level function.
+    let mut hir = constructible_module("Grid");
+    hir.items[1] = func(
+        "Grid.area",
+        &[
+            ("self", Ty::Instance(Box::new("Grid".to_string()))),
+            ("xs", Ty::List(Box::new(Ty::Int))),
+        ],
+        Ty::Int,
+    );
+    let gap = collect_exports(&hir).expect_err("an uncarriable parameter is a C0003");
+    assert_eq!(gap.len(), 1, "{gap:?}");
+    assert_eq!(gap[0].code, "C0003", "{gap:?}");
+    assert!(gap[0].message.contains("Grid.area"), "{gap:?}");
+}
+
+#[test]
+fn an_instance_method_of_a_non_constructible_class_is_never_a_gap() {
+    // The other arm of the same ordering: the identical uncarriable
+    // signature on a class pycc cannot construct is excluded as
+    // representation and reported as nothing at all. This is what bounds
+    // the new-failure set to constructible classes.
+    let mut hir = constructible_module("Grid");
+    hir.class_defs[0].1.is_abstract = true;
+    hir.items[1] = func(
+        "Grid.area",
+        &[
+            ("self", Ty::Instance(Box::new("Grid".to_string()))),
+            ("xs", Ty::List(Box::new(Ty::Int))),
+        ],
+        Ty::Int,
+    );
+    assert!(
+        collect_exports(&hir)
+            .expect("excluded as representation, not reported as a gap")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_constructor_descriptor_is_emitted_once_per_class_however_many_methods_it_exports() {
+    // `collect_constructors` walks the export list, which carries one entry
+    // per exported method; the `.inc` must declare one `tp_init` per class.
+    let mut hir = constructible_module("Grid");
+    hir.items.push(func(
+        "Grid.perimeter",
+        &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::Int,
+    ));
+    let exports = collect_exports(&hir).expect("carriable");
+    assert_eq!(exports.len(), 2);
+    assert_eq!(collect_constructors(&hir, &exports).len(), 1);
 }

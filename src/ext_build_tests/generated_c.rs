@@ -13,7 +13,7 @@ use super::*;
 /// asserts both generated class functions are still emitted with empty
 /// bodies so an artifact with no such class still links.
 fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
-    generate_exports_inc(module_name, exports, &[])
+    generate_exports_inc(module_name, exports, &[], &[])
 }
 
 /// The generated companion for a program lowered from real source, so the
@@ -26,7 +26,7 @@ fn inc_from_source(source: &str) -> String {
     std::fs::write(&src, source).expect("write source");
     let module = crate::frontend::resolve_frontend(&src)
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
-    generate_exports_inc("m", &[], &collect_user_exception_classes(&module))
+    generate_exports_inc("m", &[], &collect_user_exception_classes(&module), &[])
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
             name: "answer".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: Vec::new(),
             return_ty: Ty::Int,
         }],
@@ -85,7 +85,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
             name: "square".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -116,7 +116,7 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
             name: "add".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -150,7 +150,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
             name: "risky".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -175,7 +175,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
             name: "scale".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Float],
             return_ty: Ty::Float,
         }],
@@ -206,7 +206,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
             name: "negate".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
             return_ty: Ty::Bool,
         }],
@@ -236,7 +236,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
             name: "sink".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::None,
         }],
@@ -260,7 +260,7 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
             name: "mix".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Float, Ty::Bool],
             return_ty: Ty::Float,
         }],
@@ -298,7 +298,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
             name: "risky".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::None,
         }],
@@ -328,7 +328,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
             name: "shout".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -360,7 +360,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
             name: "join".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -631,7 +631,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
             name: "total".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             return_ty: Ty::Int,
         }],
@@ -685,7 +685,7 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
             name: "split".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
         }],
@@ -756,7 +756,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
             name: "split".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
         }],
@@ -788,7 +788,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
             name: "wrap".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int])),
         }],
@@ -812,7 +812,7 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
             name: "dot".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![
                 Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
                 Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
@@ -861,7 +861,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
             name: "tag".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Tuple(Box::new(vec![Ty::Int]))],
             return_ty: Ty::Str,
         }],
@@ -894,7 +894,7 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
             name: "origin".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: Vec::new(),
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Float])),
         }],
@@ -938,7 +938,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             name: "pair".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
         }],
@@ -965,7 +965,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             name: "square".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -986,7 +986,7 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
             name: "record".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))],
             return_ty: Ty::None,
         }],
@@ -1266,7 +1266,7 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
             name: name.to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::MemoryView; count],
             return_ty,
         }],
@@ -1383,7 +1383,7 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
             name: "label".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
             return_ty: Ty::Int,
         }],
@@ -1422,7 +1422,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
             name: "greet".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }],
@@ -1445,7 +1445,7 @@ fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> E
         name: format!("{class}.{method}.static"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
-        receiver: false,
+        receiver: ExtReceiver::None,
         params,
         return_ty,
     }
@@ -1458,7 +1458,7 @@ fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> Ex
         name: format!("{class}.{method}.classmethod"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
-        receiver: true,
+        receiver: ExtReceiver::NullCls,
         params,
         return_ty,
     }
@@ -1541,7 +1541,7 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
                 name: "plain".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -1713,5 +1713,307 @@ fn a_tuple_carrying_exported_class_method_goes_through_its_thunk() {
     assert!(
         inc.contains("pycc_ext_thunk_0m4_Grid4_pair11_classmethod"),
         "{inc}"
+    );
+}
+
+// --- #1145: the constructible type object and its `tp_init` --------------
+
+/// An exported instance method. `params` is the receiver-free tail, exactly
+/// as `collect_exports` hands it over.
+fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> ExtExport {
+    ExtExport {
+        name: format!("{class}.{method}"),
+        class: Some(class.to_string()),
+        method: Some(method.to_string()),
+        receiver: ExtReceiver::SelfInstance,
+        params,
+        return_ty,
+    }
+}
+
+fn grid_ctor(params: Vec<Ty>, slot_count: usize) -> ExtCtor {
+    ExtCtor {
+        class: "Grid".to_string(),
+        name: "Grid.__init__".to_string(),
+        params,
+        slot_count,
+    }
+}
+
+#[test]
+fn an_exported_instance_method_is_a_plain_fastcall_row_that_unwraps_its_receiver() {
+    let inc = inc_no_classes("m", &[instance_export("Grid", "area", vec![], Ty::Int)]);
+    // Neither `METH_STATIC` nor `METH_CLASS`: a plain `METH_FASTCALL` row is
+    // what makes CPython deliver the instance in `self` -- and, through its
+    // method-descriptor machinery, type-check that instance before the
+    // wrapper is entered.
+    assert!(
+        inc.contains(
+            "    {\"area\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Grid4_area, \
+             METH_FASTCALL, NULL},\n"
+        ),
+        "{inc}"
+    );
+    // The NULL guard is reachable, not defensive: `mod.Grid.__new__(mod.Grid)`
+    // runs `PyType_GenericNew` and never `tp_init`.
+    assert!(
+        inc.contains(
+            "    void *self_inst = ((PyccExtInstance *)self)->inst;\n    \
+             if (self_inst == NULL) {\n        PyErr_SetString(PyExc_TypeError, \
+             \"Grid.area() called on an uninitialized instance\");\n        \
+             return NULL;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // The receiver reaches the compiled call as the real pointer, where a
+    // `@classmethod`'s `cls` reaches it as `NULL`.
+    assert!(inc.contains("fnptr_0m4_Grid4_area)(self_inst)"), "{inc}");
+    // No flat module attribute: the module's own table stays receiver-free.
+    assert!(!inc.contains("{\"Grid.area\""), "{inc}");
+}
+
+#[test]
+fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
+    let inc = generate_exports_inc(
+        "m",
+        &[instance_export("Grid", "area", vec![], Ty::Int)],
+        &[],
+        &[grid_ctor(vec![Ty::Int, Ty::Int], 2)],
+    );
+    assert!(
+        inc.contains(
+            "extern void *fnptr_0m4_Grid8___init__;\n\
+             static int pycc_ext_tp_init_Grid(PyObject *self, PyObject *args, PyObject *kwds)\n\
+             {\n    void *inst;\n    long long a0;\n    long long a1;\n"
+        ),
+        "{inc}"
+    );
+    // D-244 rule 7's keyword boundary, written out by hand because a
+    // `tp_init` is not a `METH_FASTCALL` entry point and CPython refuses
+    // nothing on its behalf. Without this, a correct positional count plus a
+    // keyword would silently ignore the keyword.
+    assert!(
+        inc.contains(
+            "    if (kwds != NULL && PyDict_Size(kwds) != 0) {\n        \
+             PyErr_SetString(PyExc_TypeError, \
+             \"Grid.__init__() takes no keyword arguments\");\n        return -1;\n    }\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    if (PyTuple_Size(args) != 2) {\n        PyErr_Format(PyExc_TypeError, \
+             \"Grid.__init__() takes exactly 2 arguments (%zd given)\", \
+             PyTuple_Size(args));\n        return -1;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // The same `pycc_ext_unpack_*` helper an ordinary export uses for a
+    // declared `int`, bridged through `PyTuple_GetItem` because `tp_init`
+    // receives a tuple rather than a `METH_FASTCALL` vector. A
+    // `PyArg_ParseTuple` shortcut here would give `mod.Grid(True, 4)` and
+    // `mod.Grid(3, 4).area()` two different admissibility matrices for one
+    // declared type.
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_int(PyTuple_GetItem(args, 0), \"Grid.__init__\", 0, &a0) \
+             != 0) {\n        return -1;\n    }\n    \
+             if (pycc_ext_unpack_int(PyTuple_GetItem(args, 1), \"Grid.__init__\", 1, &a1) \
+             != 0) {\n        return -1;\n    }\n"
+        ),
+        "{inc}"
+    );
+    // The slot count is `flat_attr_layout`'s, not the argument count, and
+    // the compiled constructor is called through its `fnptr_` slot with the
+    // instance first -- the same shape `MirExpr::Instantiate` emits.
+    assert!(
+        inc.contains(
+            "    inst = pycc_rt_instance_new(2);\n    \
+             ((void (*)(void *, long long, long long))fnptr_0m4_Grid8___init__)\
+             (inst, a0, a1);\n"
+        ),
+        "{inc}"
+    );
+    // A constructor that raised must not publish its carrier: the pending
+    // flag is read before the store, exactly as `wrapper_for` reads it
+    // before packing a result.
+    assert!(
+        inc.contains(
+            "    if (pycc_rt_ext_pending_type() >= 0) {\n        \
+             pycc_ext_raise_pending();\n        return -1;\n    }\n    \
+             ((PyccExtInstance *)self)->inst = inst;\n    return 0;\n}\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "static PyType_Slot pycc_ext_type_slots_Grid[] = {\n    \
+             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    \
+             {Py_tp_new, PyType_GenericNew},\n    \
+             {Py_tp_init, pycc_ext_tp_init_Grid},\n    \
+             {Py_tp_dealloc, pycc_ext_instance_dealloc},\n    {0, NULL},\n};\n"
+        ),
+        "{inc}"
+    );
+    // `basicsize` grows to the carrier and `DISALLOW_INSTANTIATION` is gone,
+    // while `IMMUTABLETYPE` stays and `BASETYPE` is still absent: a host may
+    // build an instance but may neither rebind the type's attributes nor
+    // subclass it.
+    assert!(
+        inc.contains(
+            "static PyType_Spec pycc_ext_type_spec_Grid = {\n    \
+             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    sizeof(PyccExtInstance),\n    0,\n    \
+             Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE,\n    \
+             pycc_ext_type_slots_Grid,\n};\n"
+        ),
+        "{inc}"
+    );
+    assert!(!inc.contains("Py_TPFLAGS_BASETYPE"), "{inc}");
+}
+
+#[test]
+fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
+    // `c_param_list` answers `"void"` for an empty carried list, which would
+    // declare `void (*)(void, void *)` if it were pasted after the receiver.
+    // The receiver-only spelling is `void *` alone.
+    let inc = generate_exports_inc(
+        "m",
+        &[instance_export("Grid", "area", vec![], Ty::Int)],
+        &[],
+        &[grid_ctor(Vec::new(), 0)],
+    );
+    assert!(
+        inc.contains(
+            "    if (PyTuple_Size(args) != 0) {\n        PyErr_Format(PyExc_TypeError, \
+             \"Grid.__init__() takes exactly 0 arguments (%zd given)\", \
+             PyTuple_Size(args));\n        return -1;\n    }\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    inst = pycc_rt_instance_new(0);\n    \
+             ((void (*)(void *))fnptr_0m4_Grid8___init__)(inst);\n"
+        ),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_one_argument_constructor_says_argument_in_the_singular() {
+    let inc = generate_exports_inc(
+        "m",
+        &[instance_export("Grid", "area", vec![], Ty::Int)],
+        &[],
+        &[grid_ctor(vec![Ty::Int], 1)],
+    );
+    assert!(
+        inc.contains("takes exactly 1 argument (%zd given)"),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire() {
+    // `memoryview` is admitted at a parameter position, so it is admitted at
+    // a constructor's too -- and a `tp_init` owes the same release discipline
+    // a wrapper does, on the raising arm as well as the falling-through one.
+    let inc = generate_exports_inc(
+        "m",
+        &[instance_export("Grid", "area", vec![], Ty::Int)],
+        &[],
+        &[grid_ctor(vec![Ty::MemoryView], 1)],
+    );
+    assert!(
+        inc.contains("    Py_buffer b0;\n    PyccExtBufferView a0;\n"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    if (pycc_ext_unpack_memoryview(PyTuple_GetItem(args, 0), \"Grid.__init__\", \
+             0, &b0) != 0) {\n        return -1;\n    }\n    a0.ptr = b0.buf;\n    \
+             a0.len = (long long)b0.shape[0];\n"
+        ),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(
+            "    if (pycc_rt_ext_pending_type() >= 0) {\n        PyBuffer_Release(&b0);\n        \
+             pycc_ext_raise_pending();\n        return -1;\n    }\n    PyBuffer_Release(&b0);\n"
+        ),
+        "{inc}"
+    );
+}
+
+#[test]
+fn a_published_class_with_no_constructor_descriptor_keeps_part_ones_bytes() {
+    // The scope line: publication is decided by the export list and
+    // constructibility by `ctors`, so a class absent from `ctors` must emit
+    // exactly what #1143 emitted -- no `tp_init`, no extra slots,
+    // `basicsize` zero and `DISALLOW_INSTANTIATION` intact.
+    let exports = [instance_export("Grid", "area", vec![], Ty::Int)];
+    let without = generate_exports_inc("m", &exports, &[], &[]);
+    assert!(!without.contains("pycc_ext_tp_init_Grid"), "{without}");
+    assert!(
+        without.contains(
+            "static PyType_Slot pycc_ext_type_slots_Grid[] = {\n    \
+             {Py_tp_methods, pycc_ext_type_methods_Grid},\n    {0, NULL},\n};\n"
+        ),
+        "{without}"
+    );
+    assert!(
+        without.contains(
+            "static PyType_Spec pycc_ext_type_spec_Grid = {\n    \
+             PYCC_EXT_MODULE_NAME_STR \".Grid\",\n    0,\n    0,\n    \
+             Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | \
+             Py_TPFLAGS_IMMUTABLETYPE,\n    pycc_ext_type_slots_Grid,\n};\n"
+        ),
+        "{without}"
+    );
+}
+
+#[test]
+fn a_constructor_descriptor_for_an_unpublished_class_emits_nothing() {
+    // `class_order` is built from the exports alone, so a constructor
+    // descriptor whose class publishes no method must not conjure a type
+    // object -- the two sets are deliberately not the same set.
+    let inc = generate_exports_inc("m", &[], &[], &[grid_ctor(vec![Ty::Int], 1)]);
+    assert!(!inc.contains("pycc_ext_tp_init_Grid"), "{inc}");
+    assert!(!inc.contains("PyType_FromSpec"), "{inc}");
+}
+
+#[test]
+fn the_shim_defines_the_carrier_and_the_shared_dealloc_above_the_generated_include() {
+    // The generated `.inc` names `PyccExtInstance` and
+    // `pycc_ext_instance_dealloc` without declaring either, so both must be
+    // defined earlier in the translation unit. C has no forward reference
+    // for a struct size or a function address used as an initializer.
+    let shim = shim_c();
+    let carrier = shim
+        .find("typedef struct {\n    PyObject_HEAD\n    void *inst;\n} PyccExtInstance;\n")
+        .expect("the carrier typedef");
+    let dealloc = shim
+        .find("static void pycc_ext_instance_dealloc(PyObject *self)\n")
+        .expect("the shared dealloc");
+    let include = shim
+        .find("#include \"pycc_ext_exports.inc\"")
+        .expect("the generated include");
+    assert!(
+        carrier < include && dealloc < include,
+        "{carrier} {dealloc} {include}"
+    );
+    // The heap-type reference every instance holds is discharged here.
+    // Dropping the `Py_DECREF(tp)` leaks the type object in silence.
+    assert!(
+        shim.contains(
+            "    PyTypeObject *tp = Py_TYPE(self);\n    \
+             freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);\n    \
+             tp_free(self);\n    Py_DECREF(tp);\n"
+        ),
+        "{shim}"
+    );
+    assert!(
+        shim.contains("extern void *pycc_rt_instance_new(long long slot_count);"),
+        "{shim}"
     );
 }

@@ -29,7 +29,10 @@
 
 use crate::ext_output::ExtPlatform;
 use pycc_diag::Diagnostic;
-use pycc_hir::{BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirItem, HirModule, Ty};
+use pycc_hir::{
+    BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule, Ty,
+    flat_attr_layout, is_builtin_exception_class,
+};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::ffi::OsStr;
@@ -412,10 +415,11 @@ pub(crate) struct ExtExport {
     /// method. `None` exactly when [`ExtExport::class`] is `None`, in which
     /// case [`ExtExport::name`] is itself the `ml_name`.
     pub(crate) method: Option<String>,
-    /// Whether the compiled function takes a leading receiver pointer the
-    /// wrapper must supply. True for a `@classmethod` and false for
-    /// everything else: `pycc_hir::class` injects `cls:
-    /// Ty::Instance(Class)` as a classmethod's first parameter, and
+    /// Which leading receiver pointer the compiled function takes, and what
+    /// the wrapper must supply for it.
+    ///
+    /// [`ExtReceiver::NullCls`] for a `@classmethod`: `pycc_hir::class`
+    /// injects `cls: Ty::Instance(Class)` as its first parameter, and
     /// `MirExpr::NullInstance` records that every native `Class.method(...)`
     /// call site passes a null pointer for it, because a method compiled for
     /// one class resolves `cls.attr` at compile time and never dereferences
@@ -423,7 +427,15 @@ pub(crate) struct ExtExport {
     /// CPython hands `METH_CLASS` in `self` -- writing that pointer into a
     /// slot typed `Ty::Instance` would be type confusion even though nothing
     /// dereferences it today.
-    pub(crate) receiver: bool,
+    ///
+    /// [`ExtReceiver::SelfInstance`] for an instance method (#1145), whose
+    /// leading `self` *is* dereferenced: the wrapper unwraps the host
+    /// carrier object's inner `PyInstanceObj` and passes that. Both spell
+    /// the same `void *` in the declaration; only the call argument differs.
+    ///
+    /// [`ExtReceiver::None`] for a module-level `def` and a
+    /// `@staticmethod`, which declare no receiver at all.
+    pub(crate) receiver: ExtReceiver,
     /// The declared parameter types, in order, **excluding** a
     /// [`ExtExport::receiver`]. Their count is the arity the
     /// `METH_FASTCALL` wrapper checks, and each one alone picks that
@@ -452,27 +464,48 @@ pub(crate) struct ExtExport {
 /// exported too, and renaming it private is how a project keeps it off the
 /// artifact's CPython surface.
 ///
-/// D-244 rule 1's export set also reaches a public `@staticmethod` and
-/// `@classmethod` of a public, non-exception class. Such a method reaches
-/// `HirItem::Function` under `pycc_hir::class`'s mangled
-/// `<Class>.<method>.static` / `<Class>.<method>.classmethod` name, and its
+/// D-244 rule 1's export set also reaches a public `@staticmethod`,
+/// `@classmethod` and -- since #1145 -- instance method of a public,
+/// non-exception class. Such a method reaches `HirItem::Function` under
+/// `pycc_hir::class`'s mangled `<Class>.<method>.static` /
+/// `<Class>.<method>.classmethod` / bare `<Class>.<method>` name, and its
 /// host-visible name is `mod.<Class>.<method>` -- a `PyMethodDef` entry in
 /// that class's own `PyType_FromSpec` type object, never a flat
 /// `mod.<Class>.<method>` module attribute. [`classify_export_name`] owns
 /// the lexical half of that verdict.
 ///
+/// An instance method is published only on a **constructible** class --
+/// [`class_constructible`] is the canonical statement of that predicate --
+/// because a method the host has no way to obtain a receiver for would be
+/// an unreachable entry. That ordering is also what bounds the new
+/// `C0003` set: a class `pycc` cannot construct contributes no new gaps at
+/// all, so an `@abstractmethod`'s stub body and a `@property` getter are
+/// **excluded as representation, before [`unsupported_boundary_ty`] is
+/// consulted**, exactly as the suffixed spellings that preceded them were.
+///
 /// "Public" is D-038's predicate, `pycc_hir::is_public_name`, applied to
-/// the class name and the method name alike. Three exclusions are not
-/// policy but representation. A monomorphized generic specialization
-/// carries the `0gen_` prefix and has no `fnptr_` global to call through
-/// (codegen dispatches those directly). A bare `<Class>.<method>` spelling
-/// covers the `MethodKind`s `Regular`, `PropertyGetter` and
-/// `AbstractMethod` at once, and nothing at this point can tell them apart:
-/// admitting it would export an `@abstractmethod`'s body, which returns
-/// nothing while its `return_ty` says otherwise. `<Class>.<property>.setter`
-/// is refused the same way. **All three are refused before
-/// [`unsupported_boundary_ty`] is consulted, so none becomes a `C0003`** --
-/// routing an `@abstractmethod` through the gap collector would turn every
+/// the class name and the method name alike. The exclusions that are not
+/// policy but representation:
+///
+/// * a monomorphized generic specialization carries the `0gen_` prefix and
+///   has no `fnptr_` global to call through (codegen dispatches those
+///   directly);
+/// * `<Class>.<property>.setter` -- a `@property` is attribute syntax on
+///   the host side, not a method;
+/// * a `@property` **getter**, which shares the bare `<Class>.<method>`
+///   spelling with an ordinary instance method and is told apart here by
+///   `HirClassDef::properties`, whose `getter` field holds exactly that
+///   mangled name;
+/// * every instance method of a class that is not constructible, which is
+///   what removes an `@abstractmethod`'s stub body: such a method survives
+///   lowering only on an `is_abstract` class (a class carrying its own
+///   `@abstractmethod` without an `ABC` base is rejected with `C0001` by
+///   `crates/pycc_hir/src/class.rs`'s unoverridden-abstract check), and an
+///   `is_abstract` class is never constructible. The exclusion story is
+///   therefore *"excluded because the class is not constructible"*, never
+///   *"excluded because the method is abstract"*.
+///
+/// Routing any of them through the gap collector instead would turn a
 /// public ABC into a build failure on a signature the boundary carries
 /// perfectly well.
 ///
@@ -541,30 +574,61 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         {
             continue;
         }
-        // A `@classmethod`'s leading `cls` never crosses the boundary: the
-        // wrapper passes a C `NULL` for it. It is excluded here, before
-        // `unsupported_boundary_ty` runs, because `Ty::Instance` has no
-        // `boundary_carrier` arm -- leaving it in would make every exported
-        // classmethod a `C0003` instead of an export.
-        let receiver = matches!(&spelling, ExportName::Method { receiver: true, .. });
-        // `receiver` is decided lexically, from the `.classmethod` suffix
-        // alone, because `classify_export_name` cannot see HIR. The
-        // guarantee that such a function really has `cls` first lives in
-        // another crate -- `crates/pycc_hir/src/class.rs` refuses a
-        // `@classmethod` that does not take `cls` as its first parameter --
-        // so this site states that cross-crate invariant instead of
-        // slicing on the strength of it.
-        let carried_params = if receiver {
+        // #1145's two driver filters, in the same position and form as the
+        // exception-class one above and, like it, *before*
+        // `unsupported_boundary_ty` -- so neither exclusion can become a
+        // `C0003`. Both apply only to the bare spelling: a `@staticmethod`
+        // and a `@classmethod` are published on a non-constructible class
+        // exactly as Part 1 published them.
+        if let ExportName::Method {
+            class,
+            receiver: ExtReceiver::SelfInstance,
+            ..
+        } = &spelling
+        {
+            // A `@property` getter shares the bare spelling with an
+            // ordinary instance method. `HirClassDef::properties` holds the
+            // getter's own mangled name, so this is an identity test rather
+            // than a name pattern.
+            if module.class_defs.iter().any(|(held, def)| {
+                held == class && def.properties.iter().any(|prop| prop.getter == *name)
+            }) {
+                continue;
+            }
+            if !class_constructible(module, class) {
+                continue;
+            }
+        }
+        // A `@classmethod`'s leading `cls` never crosses the boundary (the
+        // wrapper passes a C `NULL` for it) and an instance method's
+        // leading `self` crosses it as an opaque pointer the wrapper
+        // unwraps, not as a carried argument. Both are split off here,
+        // before `unsupported_boundary_ty` runs, because `Ty::Instance` has
+        // no `boundary_carrier` arm -- leaving either in would make every
+        // such export a `C0003` instead of an export.
+        let receiver = match &spelling {
+            ExportName::ModuleLevel => ExtReceiver::None,
+            ExportName::Method { receiver, .. } => *receiver,
+        };
+        // `receiver` is decided lexically, from the mangled suffix alone,
+        // because `classify_export_name` cannot see HIR. The guarantee that
+        // such a function really leads with `cls`/`self` lives in another
+        // crate -- `crates/pycc_hir/src/class.rs` refuses a `@classmethod`
+        // that does not take `cls` first and requires a regular method's
+        // first parameter to be named `self` -- so this site states that
+        // cross-crate invariant instead of slicing on the strength of it.
+        let carried_params = if receiver == ExtReceiver::None {
+            &params[..]
+        } else {
             match params.split_first() {
                 Some((_, tail)) => tail,
                 None => panic!(
-                    "pycc: internal error: `{name}` is spelled as a `@classmethod` \
-                     but has no parameters -- pycc_hir::class refuses a `@classmethod` \
-                     without a leading `cls`, so this HIR should never have been built"
+                    "pycc: internal error: `{name}` is spelled as a method with a \
+                     receiver but has no parameters -- pycc_hir::class refuses a \
+                     `@classmethod` without a leading `cls` and a regular method \
+                     without a leading `self`, so this HIR should never have been built"
                 ),
             }
-        } else {
-            &params[..]
         };
         if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty) {
             gaps.push(capability_gap(name, &offender));
@@ -619,6 +683,210 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
     } else {
         Err(gaps)
     }
+}
+
+/// What [`resolved_init`] hands back: the constructor's mangled name, its
+/// declared parameter list -- receiver still at index 0 -- and its return
+/// type. A named alias only because `clippy::type_complexity` refuses the
+/// tuple spelled inline; every caller destructures it immediately.
+pub(crate) type ResolvedInit<'a> = (&'a str, &'a [(String, Ty)], &'a Ty);
+
+/// The `__init__` a host-side `mod.<Class>(...)` call would run, resolved
+/// through `class`'s MRO exactly as instantiation resolves it.
+///
+/// Two passes, and the second is mandatory (#966, D-232): a D-225 implicit
+/// zero-argument constructor lands in its *own* class's method table, where
+/// it would otherwise out-rank a real `__init__` declared by a later base.
+/// The first pass therefore skips every `implicit_object_init` class and the
+/// second accepts one, mirroring `pycc_types::class`' `super().__init__()`
+/// ranking and `pycc_mir`'s instantiation lowering. A class whose only
+/// constructor *is* the implicit one -- `class C: pass`, the common case --
+/// is found by the second pass alone.
+///
+/// Returns the constructor's *destructured* mangled name, parameter list
+/// and return type rather than the `HirItem` itself. Every caller needs all
+/// three, and handing back the enum would make each one re-match a variant
+/// whose other arms this function has already excluded -- an `else` arm no
+/// test could ever execute, which
+/// `scripts/check_diff_coverage.py`'s 100%-changed-lines invariant does not
+/// admit (D-242 rule 1).
+pub(crate) fn resolved_init<'a>(module: &'a HirModule, class: &str) -> Option<ResolvedInit<'a>> {
+    let (_, class_def) = module.class_defs.iter().find(|(held, _)| held == class)?;
+    let resolve = |skip_implicit: bool| {
+        class_def.mro.iter().find_map(|mro_class| {
+            let (_, mro_def) = module
+                .class_defs
+                .iter()
+                .find(|(held, _)| held == mro_class)?;
+            if skip_implicit && mro_def.implicit_object_init {
+                return None;
+            }
+            mro_def
+                .methods
+                .iter()
+                .find(|(method, _)| method == "__init__")
+                .map(|(_, mangled)| mangled.as_str())
+        })
+    };
+    let mangled = resolve(true).or_else(|| resolve(false))?;
+    module.items.iter().find_map(|item| match item {
+        HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } if name == mangled => Some((name.as_str(), params.as_slice(), return_ty)),
+        _ => None,
+    })
+}
+
+/// Whether a published class can be constructed from the host -- the
+/// canonical statement of D-244's #1145 amendment clause (b), and the
+/// predicate every instance-method exclusion cites.
+///
+/// *Publication* is narrower still and is decided elsewhere: `method_types_c`
+/// builds its class list from the export set, so a class with no exported
+/// member gets no type object at all and is not constructible however this
+/// answers. What this function adds is which *published* class gets a
+/// `Py_tp_init`.
+///
+/// The four conditions, each a HIR fact rather than a name pattern:
+///
+/// 1. the class is not abstract, not a `Protocol` and not an `Enum` --
+///    `is_abstract` is what removes an `@abstractmethod`'s stub body, whose
+///    lowered `HirItem::Function` returns nothing while its `return_ty` says
+///    otherwise, and it removes it *totally*: a class carrying its own
+///    `@abstractmethod` without an `ABC` base never reaches codegen at all
+///    (`crates/pycc_hir/src/class.rs`'s unoverridden-abstract check rejects
+///    it with `C0001`), so every surviving abstract stub belongs to an
+///    `is_abstract` class;
+/// 2. it carries no `exception_type_tag` and is not a seeded synthetic
+///    builtin exception class -- [`register_class_c`] already publishes a
+///    user exception class under its bare name, and the flat builtins carry
+///    no tag of their own;
+/// 3. its MRO-resolved `__init__` ([`resolved_init`]) exists and returns
+///    `None` -- an unannotated `__init__` infers `Ty::Infer` and is refused
+///    here rather than emitting a constructor whose C return type is
+///    unspellable;
+/// 4. the receiver-free tail of that `__init__`'s parameters is carriable by
+///    [`unsupported_boundary_ty`] and contains no `tuple`.
+///
+/// Condition 4 **reuses `unsupported_boundary_ty`** rather than re-deriving
+/// the predicate, so a constructor's admissibility is literally the same
+/// statement as every other export's instead of a second one that drifts
+/// (`AGENTS.md`'s canonical-statement rule). It also answers correctly, for
+/// free, on the case a hand-written predicate would most likely miss: `def
+/// __init__(self, other: Grid)` carries a `Ty::Instance`, which has no
+/// [`boundary_carrier`] arm, so the class is non-constructible rather than
+/// emitting a C declaration no C type can spell. The extra `tuple` refusal
+/// is not a second admissibility rule either: `is_ext_exportable_name`
+/// answers `false` for `<Class>.__init__` (its second segment starts with
+/// `_`), so `ext_thunk_required` emits no `pycc_ext_thunk_` for a
+/// constructor and a `tuple` parameter would have no callable C entry point
+/// at all.
+pub(crate) fn class_constructible(module: &HirModule, class: &str) -> bool {
+    ctor_descriptor(module, class).is_some()
+}
+
+/// [`class_constructible`]'s answer with the generated `Py_tp_init`'s inputs
+/// attached: one function, so the predicate and the descriptor can never
+/// disagree about which classes are constructible.
+fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
+    let (_, class_def) = module.class_defs.iter().find(|(held, _)| held == class)?;
+    if class_def.is_abstract || class_def.is_protocol || class_def.is_enum {
+        return None;
+    }
+    if class_def.exception_type_tag.is_some() || is_builtin_exception_class(class) {
+        return None;
+    }
+    let (name, params, return_ty) = resolved_init(module, class)?;
+    if *return_ty != Ty::None {
+        return None;
+    }
+    // The constructor descriptor does not come through `collect_exports`,
+    // so the receiver is still at index 0 here and has to be split off
+    // exactly as the classmethod path splits `cls`: `Ty::Instance` has no
+    // carrier arm, so leaving it in would refuse every constructor.
+    let (_, carried) = params.split_first()?;
+    if unsupported_boundary_ty(carried, &Ty::None).is_some()
+        || carried.iter().any(|(_, ty)| matches!(ty, Ty::Tuple(_)))
+    {
+        return None;
+    }
+    Some(ExtCtor {
+        class: class.to_string(),
+        name: name.to_string(),
+        params: carried.iter().map(|(_, ty)| ty.clone()).collect(),
+        slot_count: instance_slot_count(module, class_def),
+    })
+}
+
+/// The number of `pycc_rt_instance_new` slots an instance of `class_def`
+/// occupies.
+///
+/// `pycc_hir::flat_attr_layout` is the single definition of what counts as
+/// a slot -- merged `@dataclass` fields, an exception class's empty
+/// attribute list -- and `pycc_mir` delegates to it too, so the count the
+/// generated `tp_init` allocates is by construction the one
+/// `MirExpr::Instantiate` passes for the same class. An MRO entry that is
+/// not a class defined in this program (a synthetic builtin exception base)
+/// contributes no slots and is skipped, which is what `resolve_mro_defs`
+/// does on the `pycc_hir` side.
+fn instance_slot_count(module: &HirModule, class_def: &HirClassDef) -> usize {
+    let mro_defs: Vec<&HirClassDef> = class_def
+        .mro
+        .iter()
+        .filter_map(|mro_class| {
+            module
+                .class_defs
+                .iter()
+                .find(|(held, _)| held == mro_class)
+                .map(|(_, def)| def)
+        })
+        .collect();
+    flat_attr_layout(&mro_defs).len()
+}
+
+/// One constructible class's generated `Py_tp_init` descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ExtCtor {
+    /// The class's own (unqualified) Python name, which is also the
+    /// host-visible type name and the suffix of every C identifier the
+    /// generated shim builds for it.
+    pub(crate) class: String,
+    /// The compiled program's name for the constructor,
+    /// `pycc_hir::class`'s mangled `<Owner>.__init__`. `<Owner>` is the
+    /// MRO-resolved owner and not necessarily [`ExtCtor::class`].
+    pub(crate) name: String,
+    /// The constructor's declared parameter types **excluding** the leading
+    /// `self`, which the generated shim supplies itself from
+    /// `pycc_rt_instance_new`. Their count is the arity `tp_init` checks
+    /// `PyTuple_Size(args)` against.
+    pub(crate) params: Vec<Ty>,
+    /// The slot count `pycc_rt_instance_new` is called with.
+    pub(crate) slot_count: usize,
+}
+
+/// The constructible classes among the export set's classes, in first-export
+/// order.
+///
+/// Ordered off `exports` and never off a hash map, for the same reason
+/// [`method_types_c`] builds its class list that way: the generated `.inc`
+/// must be byte-identical across runs.
+pub(crate) fn collect_constructors(module: &HirModule, exports: &[ExtExport]) -> Vec<ExtCtor> {
+    let mut ctors: Vec<ExtCtor> = Vec::new();
+    for export in exports {
+        let Some(class) = &export.class else {
+            continue;
+        };
+        if ctors.iter().any(|held| held.class == *class) {
+            continue;
+        }
+        if let Some(ctor) = ctor_descriptor(module, class) {
+            ctors.push(ctor);
+        }
+    }
+    ctors
 }
 
 mod carrier;
@@ -860,7 +1128,7 @@ fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
 /// the user-exception-class table ([`exception_classes_c`]), one
 /// `METH_FASTCALL` wrapper per export, the module-level `PyMethodDef`
 /// table, and one non-instantiable type object per exporting class
-/// ([`method_types_c`]).
+/// (`method_types_c`).
 ///
 /// `module_name` is already known to be a valid ASCII Python identifier
 /// (`ext_output::resolve` rejects everything else before this runs). An
@@ -881,6 +1149,7 @@ pub(crate) fn generate_exports_inc(
     module_name: &str,
     exports: &[ExtExport],
     classes: &[UserExceptionClass],
+    ctors: &[ExtCtor],
 ) -> String {
     let mut out = String::new();
     out.push_str("/* Generated by pycc --ext. Do not edit: see src/ext_build.rs. */\n");
@@ -906,7 +1175,7 @@ pub(crate) fn generate_exports_inc(
         ));
     }
     out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
-    out.push_str(&method_types_c(exports));
+    out.push_str(&method_types_c(exports, ctors));
     out
 }
 
@@ -991,15 +1260,16 @@ fn wrapper_for(export: &ExtExport) -> String {
     // `Grid.scale() takes no keyword arguments` on the same object. The
     // unpack helpers below take the same spelling for the same reason.
     let source_name = source_level_name(name);
-    // A `@classmethod`'s compiled signature leads with `cls`, which never
-    // crosses the boundary (`ExtExport::receiver`). It is reinstated
-    // textually here -- a `void *` at the head of the declared parameter
-    // list and a `NULL` at the head of the call -- so this declaration and
-    // `pycc_codegen`'s thunk, which builds its own list from the MIR
-    // function's parameters, declare the same arity for the same symbol.
+    // A `@classmethod`'s compiled signature leads with `cls` and an
+    // instance method's with `self` (`ExtExport::receiver`); neither is a
+    // carried argument. The leading `void *` is reinstated textually here,
+    // so this declaration and `pycc_codegen`'s thunk -- which builds its own
+    // list from the MIR function's parameters -- declare the same arity for
+    // the same symbol. Only the *call* argument differs between the two:
+    // `NULL` for `cls`, the unwrapped instance pointer for `self`.
     let params = {
         let carried = c_param_list(&slots, &out_slots);
-        if !export.receiver {
+        if export.receiver == ExtReceiver::None {
             carried
         } else if carried == "void" {
             // `c_param_list` answers `"void"` for an empty list, because an
@@ -1020,13 +1290,33 @@ fn wrapper_for(export: &ExtExport) -> String {
         "static PyObject *pycc_ext_wrap_{symbol}(PyObject *self, PyObject *const *args, \
          Py_ssize_t nargs)\n{{\n"
     ));
-    // A `METH_CLASS` wrapper is handed the *type object* in `self`, and it
-    // is discarded exactly as `MirExpr::NullInstance` discards `cls` at a
-    // native call site: the method was compiled for one class, so nothing
-    // in its body reads the receiver. Forwarding a CPython type pointer
-    // into a slot typed `Ty::Instance` would be type confusion even though
-    // nothing dereferences it.
-    out.push_str("    (void)self;\n");
+    // A `METH_STATIC` wrapper is handed `NULL` in `self` and a `METH_CLASS`
+    // one the *type object*; both discard it, exactly as
+    // `MirExpr::NullInstance` discards `cls` at a native call site -- the
+    // method was compiled for one class, so nothing in its body reads the
+    // receiver, and forwarding a CPython type pointer into a slot typed
+    // `Ty::Instance` would be type confusion even though nothing
+    // dereferences it.
+    //
+    // A plain `METH_FASTCALL` instance-method wrapper (#1145) is handed the
+    // carrier object itself and *does* read it. The NULL guard is not
+    // defence in depth: `mod.Grid.__new__(mod.Grid)` runs
+    // `PyType_GenericNew`, which zeroes the carrier and never runs
+    // `tp_init`, so `inst` really is NULL at the wrapper's entry and the
+    // guard is what makes that a `TypeError` instead of a segfault.
+    // CPython's own method-descriptor machinery has already refused a
+    // `self` of the wrong type before this point, so no type check is
+    // needed here.
+    if export.receiver == ExtReceiver::SelfInstance {
+        out.push_str(&format!(
+            "    void *self_inst = ((PyccExtInstance *)self)->inst;\n    \
+             if (self_inst == NULL) {{\n        PyErr_SetString(PyExc_TypeError, \
+             \"{source_name}() called on an uninitialized instance\");\n        \
+             return NULL;\n    }}\n"
+        ));
+    } else {
+        out.push_str("    (void)self;\n");
+    }
     out.push_str("    (void)args;\n");
     // A `-> None` export has no result to hold: codegen emits its return as
     // LLVM `void`, so a result local would be a C type error, not a waste.
@@ -1042,95 +1332,24 @@ fn wrapper_for(export: &ExtExport) -> String {
     if !out_slots.is_empty() {
         out.push_str("    PyObject *packed;\n");
     }
-    for (index, slot) in slots.iter().enumerate() {
-        match slot {
-            BoundaryCarrier::Scalar(c_type, _) => {
-                out.push_str(&format!("    {c_type} a{index};\n"));
-            }
-            BoundaryCarrier::Tuple(elements) => {
-                for (element, (c_type, _)) in elements.iter().enumerate() {
-                    out.push_str(&format!("    {c_type} a{index}_{element};\n"));
-                }
-            }
-            // Two locals, both wrapper-owned for the whole call: the
-            // `Py_buffer` the shim acquires (and this wrapper releases on
-            // every exit past that point), and the `{ptr, len}` pair that is
-            // all the compiled body ever sees of it.
-            BoundaryCarrier::Buffer => {
-                out.push_str(&format!("    Py_buffer b{index};\n"));
-                out.push_str(&format!("    {BUFFER_VIEW_C_TYPE} a{index};\n"));
-            }
-        }
-    }
+    out.push_str(&arg_slot_locals(&slots));
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
          \"{source_name}() takes exactly {arity} argument{plural} (%zd given)\", nargs);\n        \
          return NULL;\n    }}\n",
         plural = if arity == 1 { "" } else { "s" },
     ));
-    for (index, slot) in slots.iter().enumerate() {
-        // Each `str` argument already unpacked holds a fresh reference that
-        // only the compiled function's own parameter slot ever consumes, and
-        // this branch bails before the call -- so release them here, or a
-        // `TypeError` on argument 2 would leak argument 1's `PyStrObj` on
-        // every raising call. Emitted inline rather than behind a shared
-        // `goto` label: the cleanup differs per argument index, and the
-        // wrapper has no other exit that owes anything. A `tuple` argument
-        // owes nothing: its elements are copied out by value.
-        let cleanup: String = slots[..index]
-            .iter()
-            .enumerate()
-            .filter_map(|(earlier, carrier)| Some((earlier, carrier.cleanup()?)))
-            .map(|(earlier, owed)| match owed {
-                SlotCleanup::StrDecref => format!("        pycc_rt_str_decref(a{earlier});\n"),
-                SlotCleanup::BufferRelease => format!("        PyBuffer_Release(&b{earlier});\n"),
-            })
-            .collect();
-        match slot {
-            BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
-                "    if (pycc_ext_unpack_{helper}(args[{index}], \"{source_name}\", {index}, &a{index}) \
-                 != 0) {{\n{cleanup}        return NULL;\n    }}\n"
-            )),
-            BoundaryCarrier::Tuple(elements) => {
-                let elements_len = elements.len();
-                out.push_str(&format!(
-                    "    if (pycc_ext_unpack_tuple(args[{index}], \"{source_name}\", {index}, \
-                     {elements_len}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
-                ));
-                for (element, (_, helper)) in elements.iter().enumerate() {
-                    // `PyTuple_GetItem` cannot fail at this call: the check
-                    // just emitted refused every non-tuple and every length
-                    // but this one, so the index is always in range.
-                    out.push_str(&format!(
-                        "    if (pycc_ext_unpack_{helper}_at(PyTuple_GetItem(args[{index}], \
-                         {element}), \"{source_name}\", {index}, {element}, &a{index}_{element}) != 0) \
-                         {{\n{cleanup}        return NULL;\n    }}\n"
-                    ));
-                }
-            }
-            // The shim refuses everything that is not an exact,
-            // C-contiguous, one-dimensional `float` `memoryview` and leaves
-            // nothing acquired when it does, so this arm owes no cleanup of
-            // its own -- only the earlier slots'. On success the wrapper
-            // takes the two words it is allowed to keep: the data pointer,
-            // and a *copy* of `shape[0]`. `b{index}.shape` itself is
-            // exporter-owned storage that dies at `PyBuffer_Release`, so it
-            // is never carried across the boundary.
-            BoundaryCarrier::Buffer => {
-                out.push_str(&format!(
-                    "    if (pycc_ext_unpack_memoryview(args[{index}], \"{source_name}\", {index}, \
-                     &b{index}) != 0) {{\n{cleanup}        return NULL;\n    }}\n"
-                ));
-                out.push_str(&format!("    a{index}.ptr = b{index}.buf;\n"));
-                out.push_str(&format!(
-                    "    a{index}.len = (long long)b{index}.shape[0];\n"
-                ));
-            }
-        }
-    }
+    out.push_str(&unpack_args(
+        &slots,
+        source_name,
+        &|index| format!("args[{index}]"),
+        "        return NULL;\n",
+    ));
     let mut call_args: Vec<String> = Vec::new();
-    if export.receiver {
-        call_args.push("NULL".to_string());
+    match export.receiver {
+        ExtReceiver::None => {}
+        ExtReceiver::NullCls => call_args.push("NULL".to_string()),
+        ExtReceiver::SelfInstance => call_args.push("self_inst".to_string()),
     }
     for (index, slot) in slots.iter().enumerate() {
         match slot {
@@ -1207,6 +1426,126 @@ fn wrapper_for(export: &ExtExport) -> String {
             out.push_str(&format!(
                 "    return pycc_ext_pack_{helper}(result);\n}}\n\n"
             ));
+        }
+    }
+    out
+}
+
+/// The C local declarations one generated function needs for its argument
+/// slots: `a{index}` per scalar, one `a{index}_{element}` per `tuple`
+/// element, and a `Py_buffer b{index}` beside the view pair for a
+/// `memoryview`.
+///
+/// Shared by [`wrapper_for`] and the generated `Py_tp_init`
+/// (`method_types_c`) so a constructor and an ordinary export declare the
+/// same locals for the same declared type.
+fn arg_slot_locals(slots: &[BoundaryCarrier]) -> String {
+    let mut out = String::new();
+    for (index, slot) in slots.iter().enumerate() {
+        match slot {
+            BoundaryCarrier::Scalar(c_type, _) => {
+                out.push_str(&format!("    {c_type} a{index};\n"));
+            }
+            BoundaryCarrier::Tuple(elements) => {
+                for (element, (c_type, _)) in elements.iter().enumerate() {
+                    out.push_str(&format!("    {c_type} a{index}_{element};\n"));
+                }
+            }
+            // Two locals, both owned by the generated function for the
+            // whole call: the `Py_buffer` the shim acquires (and the
+            // function releases on every exit past that point), and the
+            // `{ptr, len}` pair that is all the compiled body ever sees of
+            // it.
+            BoundaryCarrier::Buffer => {
+                out.push_str(&format!("    Py_buffer b{index};\n"));
+                out.push_str(&format!("    {BUFFER_VIEW_C_TYPE} a{index};\n"));
+            }
+        }
+    }
+    out
+}
+
+/// The per-argument ingress: one `pycc_ext_unpack_*` call per slot, each
+/// bailing with `fail` after releasing whatever the earlier slots hold.
+///
+/// `arg_expr` renders the `PyObject *` for argument `index`, because the two
+/// callers receive their arguments differently: a `METH_FASTCALL` wrapper
+/// gets a `PyObject *const *` vector and indexes it, while the generated
+/// `Py_tp_init` gets a real tuple and has to bridge through
+/// `PyTuple_GetItem`. Everything else -- which helper, which local, what the
+/// bail path owes -- is shared, which is the point: the unpack helper is a
+/// function of the declared type alone, so `mod.Grid(True, 4)` and
+/// `mod.Grid(3, 4).scale(True)` must admit exactly the same object set for
+/// the same declared `int`. `docs/RUNTIME.md` claims one admissibility
+/// matrix, not two.
+///
+/// Emitted inline rather than behind a shared `goto` label: the cleanup
+/// differs per argument index, and neither caller has another exit that owes
+/// anything at this point. A `tuple` argument owes nothing -- its elements
+/// are copied out by value.
+fn unpack_args(
+    slots: &[BoundaryCarrier],
+    source_name: &str,
+    arg_expr: &dyn Fn(usize) -> String,
+    fail: &str,
+) -> String {
+    let mut out = String::new();
+    for (index, slot) in slots.iter().enumerate() {
+        // Each `str` argument already unpacked holds a fresh reference that
+        // only the compiled function's own parameter slot ever consumes, and
+        // this branch bails before the call -- so release them here, or a
+        // `TypeError` on argument 2 would leak argument 1's `PyStrObj` on
+        // every raising call.
+        let cleanup: String = slots[..index]
+            .iter()
+            .enumerate()
+            .filter_map(|(earlier, carrier)| Some((earlier, carrier.cleanup()?)))
+            .map(|(earlier, owed)| match owed {
+                SlotCleanup::StrDecref => format!("        pycc_rt_str_decref(a{earlier});\n"),
+                SlotCleanup::BufferRelease => format!("        PyBuffer_Release(&b{earlier});\n"),
+            })
+            .collect();
+        let arg = arg_expr(index);
+        match slot {
+            BoundaryCarrier::Scalar(_, helper) => out.push_str(&format!(
+                "    if (pycc_ext_unpack_{helper}({arg}, \"{source_name}\", {index}, &a{index}) \
+                 != 0) {{\n{cleanup}{fail}    }}\n"
+            )),
+            BoundaryCarrier::Tuple(elements) => {
+                let elements_len = elements.len();
+                out.push_str(&format!(
+                    "    if (pycc_ext_unpack_tuple({arg}, \"{source_name}\", {index}, \
+                     {elements_len}) != 0) {{\n{cleanup}{fail}    }}\n"
+                ));
+                for (element, (_, helper)) in elements.iter().enumerate() {
+                    // `PyTuple_GetItem` cannot fail at this call: the check
+                    // just emitted refused every non-tuple and every length
+                    // but this one, so the index is always in range.
+                    out.push_str(&format!(
+                        "    if (pycc_ext_unpack_{helper}_at(PyTuple_GetItem({arg}, \
+                         {element}), \"{source_name}\", {index}, {element}, &a{index}_{element}) != 0) \
+                         {{\n{cleanup}{fail}    }}\n"
+                    ));
+                }
+            }
+            // The shim refuses everything that is not an exact,
+            // C-contiguous, one-dimensional `float` buffer and leaves
+            // nothing acquired when it does, so this arm owes no cleanup of
+            // its own -- only the earlier slots'. On success the caller
+            // takes the two words it is allowed to keep: the data pointer,
+            // and a *copy* of `shape[0]`. `b{index}.shape` itself is
+            // exporter-owned storage that dies at `PyBuffer_Release`, so it
+            // is never carried across the boundary.
+            BoundaryCarrier::Buffer => {
+                out.push_str(&format!(
+                    "    if (pycc_ext_unpack_memoryview({arg}, \"{source_name}\", {index}, \
+                     &b{index}) != 0) {{\n{cleanup}{fail}    }}\n"
+                ));
+                out.push_str(&format!("    a{index}.ptr = b{index}.buf;\n"));
+                out.push_str(&format!(
+                    "    a{index}.len = (long long)b{index}.shape[0];\n"
+                ));
+            }
         }
     }
     out

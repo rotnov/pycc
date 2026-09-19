@@ -59,6 +59,21 @@ extern void pycc_rt_bigint_release(long long word);
 extern void *pycc_rt_str_from_literal(const unsigned char *ptr, long long len);
 extern void pycc_rt_str_decref(void *s);
 extern const unsigned char *pycc_rt_ext_str_bytes(void *s, size_t *len);
+/* The instance boundary (#1145). `pycc_rt_instance_new` allocates a
+ * `PyInstanceObj` with `slot_count` attribute slots and returns it as the
+ * opaque `void *` a compiled `Ty::Instance` parameter is. It is the same
+ * call `MirExpr::Instantiate` emits for a native `Grid(3, 4)`, so a host-
+ * constructed instance and a natively constructed one have identical
+ * layout.
+ *
+ * There is deliberately no matching free. Compiled code never releases an
+ * instance either (D-107's arena model, narrowed by D-154), so a
+ * `pycc_rt_instance_free` called from `tp_dealloc` would be the only
+ * deallocation in the program and could release storage a compiled
+ * function still aliases -- attribute reads hand out interior pointers.
+ * The inner object therefore outlives its carrier; see
+ * `pycc_ext_instance_dealloc`. */
+extern void *pycc_rt_instance_new(long long slot_count);
 
 /* `pycc_rt::ext_bridge`'s classification codes. */
 #define PYCC_EXT_INT_SMALLINT 0
@@ -1454,6 +1469,49 @@ int pycc_ext_obj_unpack_float_tuple(PyObject *o, long long arity, double *out)
         out[index] = value;
     }
     return 0;
+}
+
+/*
+ * The host-side carrier for a compiled instance (#1145): one CPython object
+ * per `mod.Class(...)`, holding nothing but the opaque `PyInstanceObj *`
+ * that every compiled method of that class takes as its receiver.
+ *
+ * Every constructible class's generated `PyType_Spec` sets
+ * `basicsize = sizeof(PyccExtInstance)` and uses `PyType_GenericNew`, which
+ * zeroes the allocation -- so `inst` is NULL until `tp_init` stores one, and
+ * `mod.Class.__new__(mod.Class)` (which never runs `tp_init`) yields a
+ * carrier whose NULL every generated wrapper checks before dereferencing.
+ *
+ * `PyObject_HEAD` is available under `Py_LIMITED_API` and is what makes this
+ * a well-formed object layout without naming any field of `PyObject`.
+ */
+typedef struct {
+    PyObject_HEAD
+    void *inst;
+} PyccExtInstance;
+
+/*
+ * The shared `Py_tp_dealloc` for every constructible class -- one function
+ * rather than one per class, because none of it is class-dependent.
+ *
+ * The documented heap-type pattern: a `PyType_FromSpec` type is a heap type,
+ * every instance of it holds a reference to it, and `tp_dealloc` is what
+ * discharges that reference. Omitting the `Py_DECREF(tp)` leaks the type
+ * object invisibly -- nothing observable fails, the module just never
+ * releases its own types. `Py_tp_free` is fetched through `PyType_GetSlot`
+ * because the limited API exposes no other way to reach the type's
+ * deallocator, and it is called *before* the type reference is released so
+ * `tp` is still live while the object is freed.
+ *
+ * The inner `PyInstanceObj` is deliberately not freed; the `extern` above
+ * carries the reason.
+ */
+static void pycc_ext_instance_dealloc(PyObject *self)
+{
+    PyTypeObject *tp = Py_TYPE(self);
+    freefunc tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);
+    tp_free(self);
+    Py_DECREF(tp);
 }
 
 /* Generated companion: module name macros, per-export wrappers, method table. */

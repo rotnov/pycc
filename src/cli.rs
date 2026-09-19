@@ -46,10 +46,13 @@ pub enum Command {
         #[arg(long)]
         release: bool,
         /// Build a hosted CPython extension module (D-244) instead of a
-        /// native executable: every public module-level function, and every
-        /// public `@staticmethod` and `@classmethod` of a public class,
+        /// native executable: every public module-level function, every
+        /// public `@staticmethod` and `@classmethod` of a public class, and
+        /// every public instance method of a public *constructible* class,
         /// becomes a callable of one stable-ABI artifact that a CPython
-        /// interpreter imports -- a method as `mod.Class.method`. `-o` names
+        /// interpreter imports -- a method as `mod.Class.method`, an
+        /// instance method on an instance the host builds with
+        /// `mod.Class(...)`. `-o` names
         /// that artifact; `docs/CLI_SPEC.md:23-63` is
         /// the canonical statement of how its suffix and module name are
         /// derived. `docs/RUNTIME.md`'s `ext` boundary section is the
