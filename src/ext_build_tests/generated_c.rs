@@ -1560,6 +1560,35 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
 }
 
 #[test]
+fn a_non_ascii_class_name_is_spliced_verbatim_into_the_type_object_identifiers() {
+    // `mangle_ext_name` encodes the dot separator; it is not an ASCII fold,
+    // and it copies each segment's bytes verbatim. Routing a class name
+    // through it would therefore change nothing here, and nothing needs to:
+    // a Python identifier is `XID_Start XID_Continue*`, which carries no
+    // character that escapes a C identifier or a C string literal, and both
+    // clang and GCC accept UTF-8 identifiers. Verified end to end at
+    // `5b1fb3a1`: a module whose class is named `Grid\u{e9}` builds with
+    // `--ext`, imports, and answers `Grid\u{e9}.scale(21) == 42`.
+    let inc = inc_no_classes(
+        "m",
+        &[static_export("Grid\u{e9}", "scale", vec![Ty::Int], Ty::Int)],
+    );
+    assert!(
+        inc.contains("static PyMethodDef pycc_ext_type_methods_Grid\u{e9}[]"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("static PyType_Spec pycc_ext_type_spec_Grid\u{e9} = {"),
+        "{inc}"
+    );
+    // The host-visible name is the same bytes, in a string literal.
+    assert!(
+        inc.contains("PYCC_EXT_MODULE_NAME_STR \".Grid\u{e9}\""),
+        "{inc}"
+    );
+}
+
+#[test]
 fn a_class_method_wrapper_prepends_the_null_receiver_and_a_static_one_does_not() {
     let inc = inc_no_classes(
         "m",

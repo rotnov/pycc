@@ -6008,6 +6008,12 @@ fn compile_to_object_with_observer(
                     // spelling. `mangle_ext_name` is the identity for a
                     // dot-free name, so every module-level function's global
                     // is byte-identical to what it was.
+                    //
+                    // This path is not gated on `CompileOptions::ext`, so a
+                    // native build renames a method's global too, where no C
+                    // ever declares it. That is deliberate: one spelling per
+                    // symbol is cheaper to reason about than a mode-dependent
+                    // one, and nothing outside this workspace reads it.
                     let fn_ptr_global = module.add_global(
                         fn_ptr_type,
                         None,
