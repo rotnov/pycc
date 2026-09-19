@@ -1205,6 +1205,72 @@ fn an_unconstructible_base_still_exports_its_instance_method_for_a_constructible
     );
 }
 
+/// [`inheriting_module`] with `Base` made unconstructible by a `tuple`
+/// `__init__` and its only constructible subclass renamed to a **private**
+/// spelling, so that subclass is never published.
+///
+/// `Derived.twice` goes with the rename: an inheriting class that exports
+/// nothing of its own is the one shape that reaches publication without
+/// having already passed `collect_exports`' own name filter, which is
+/// exactly the shape whose witness has to be filtered here.
+fn privately_derived_module() -> HirModule {
+    let mut hir = inheriting_module();
+    hir.items[0] = init_func(
+        "Base",
+        &[("p", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    hir.items[2] = init_func("_Priv", &[("w", Ty::Int), ("h", Ty::Int)], Ty::None);
+    hir.items.truncate(3);
+    hir.class_defs[1] = (
+        "_Priv".to_string(),
+        pycc_hir::HirClassDef {
+            mro: vec!["_Priv".to_string(), "Base".to_string()],
+            ..constructible_class_def("_Priv")
+        },
+    );
+    hir
+}
+
+#[test]
+fn a_privately_named_constructible_subclass_witnesses_nothing_for_its_base() {
+    // The witness search has to hold the *publishability* condition
+    // `collect_class_publications` applies, not constructibility alone.
+    // `_Priv` is constructible but is published under no name, so the host
+    // can never build an instance that reaches `Base.value`'s compiled body
+    // -- exporting it would emit a `PyMethodDef` row with no obtainable
+    // receiver. Drop `class_publishable` from the witness and `Base` starts
+    // publishing `Base.value` again.
+    let hir = privately_derived_module();
+    assert!(
+        collect_exports(&hir)
+            .expect("a carriable program")
+            .is_empty(),
+        "an unpublished subclass makes its base's instance method unreachable"
+    );
+    assert!(publications_of(&hir).is_empty());
+}
+
+#[test]
+fn an_unreachable_instance_method_with_an_uncarriable_signature_is_not_a_c0003() {
+    // The same shape with a signature the boundary cannot carry. The
+    // exclusion is representational and lands *before*
+    // `unsupported_boundary_ty` is consulted, so a method nothing can ever
+    // call must not fail the whole `--ext` build. Before the fix this exact
+    // program exited 1 with `error[C0003]: ... parameter `xs: list`".
+    let mut hir = privately_derived_module();
+    hir.items[1] = func(
+        "Base.value",
+        &[("self", inst("Base")), ("xs", Ty::List(Box::new(Ty::Int)))],
+        Ty::Int,
+    );
+    assert!(
+        collect_exports(&hir)
+            .expect("an unreachable method is excluded as representation, never a C0003")
+            .is_empty()
+    );
+}
+
 #[test]
 fn a_published_abstract_class_is_refused_a_constructor_by_its_shape_alone() {
     // Publication is deliberately wider than constructibility: an abstract

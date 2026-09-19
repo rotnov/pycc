@@ -223,8 +223,9 @@ directory once project mode exists.
                     reaches a public `@staticmethod`/`@classmethod` of a
                     public class, published as `mod.Class.method` (#1143),
                     and a public instance method of a public class that
-                    some *constructible* class's method resolution order
-                    reaches, called on an instance the host builds with
+                    some *published, constructible* class's method
+                    resolution order reaches, called on an instance the
+                    host builds with
                     `mod.Class(...)` (#1145) -- each class's method table is
                     MRO-resolved, so an inherited method is reachable on the
                     derived class and a derived override shadows it;

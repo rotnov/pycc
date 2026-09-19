@@ -806,27 +806,71 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
         && !is_builtin_exception_class(class)
 }
 
-/// Whether an instance method *declared by* `class` can ever reach the host
-/// -- the predicate [`collect_exports`] applies to the bare method spelling,
-/// and the canonical statement of D-244 rule 1's #1145 receiver-reachability
-/// clause.
+/// Whether the artifact publishes a type object for `class` at all, as far
+/// as the class's *name and kind* decide it -- the two conditions
+/// [`collect_class_publications`] applies, factored out so
+/// [`instance_methods_reachable`] can require them of its witness instead
+/// of restating them (`AGENTS.md`'s canonical-statement rule).
 ///
-/// Strictly wider than [`class_constructible`], and deliberately so. A
-/// method is lowered once against its own class's slot layout and is then
+/// Publication's third condition -- that the class's MRO-resolved method
+/// set is non-empty -- is deliberately *not* here, and a witness does not
+/// need it: a class that satisfies this predicate and is
+/// [`class_constructible`] carries, in its own MRO, the very method whose
+/// export it is asked to justify, so its resolved set is non-empty by
+/// construction. Stating it here would also be circular, since the
+/// resolved set is built out of the export set this predicate helps
+/// decide.
+/// Where each conjunct bites: the name half is what a *witness* needs --
+/// a privately named subclass is constructible and unpublished -- and the
+/// tag half is what the *publication* site needs, since `class_constructible`
+/// already refuses an exception-tagged class through
+/// [`instance_shape_admissible`]. Deleting either one turns a test red, but
+/// not the same test: the name half is pinned by
+/// `a_privately_named_constructible_subclass_witnesses_nothing_for_its_base`
+/// and the tag half by `a_private_or_exception_inheriting_class_is_not_published`.
+///
+/// [`instance_shape_admissible`]'s third exclusion, `is_builtin_exception_class`,
+/// is deliberately absent: the 26 synthetic classes `pycc_hir` seeds carry no
+/// public method of their own, so [`collect_class_publications`]'s non-empty
+/// resolved-method-set condition already removes every one of them before this
+/// predicate's answer could matter.
+fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
+    is_public_name(class) && class_def.exception_type_tag.is_none()
+}
+
+/// Whether `class`'s own shape admits instance exports **and** the host can
+/// actually obtain a receiver for them -- the predicate [`collect_exports`]
+/// applies to the bare method spelling, and the canonical statement of
+/// D-244 rule 1's #1145 receiver-reachability clause.
+///
+/// The answer is: [`instance_shape_admissible`] holds of `class` itself,
+/// *and* some class the artifact **publishes** ([`class_publishable`])
+/// whose MRO contains `class` is [`class_constructible`].
+///
+/// Wider than [`class_constructible`] alone, and deliberately so. A method
+/// is lowered once against its own class's slot layout and is then
 /// inherited by every subclass, so `Derived(21).value()` reaches
 /// `Base.value`'s compiled body even when `Base` itself can never be built
 /// from the host -- an unannotated or `tuple`-carrying `__init__` makes
-/// `Base` unconstructible without making its methods unreachable. The
-/// answer is therefore "*some* class whose MRO contains `class` is
-/// constructible", and `mro[0]` is the class itself, so a constructible
-/// class answers for its own methods.
+/// `Base` unconstructible without making its methods unreachable. `mro[0]`
+/// is the class itself, so a publishable constructible class answers for
+/// its own methods.
 ///
-/// [`class_constructible`]'s conditions 3 and 4 are the ones a constructible
-/// subclass rescues. Conditions 1 and 2 -- [`instance_shape_admissible`] --
-/// are not: an `@abstractmethod`'s stub body returns nothing while its
-/// `return_ty` says otherwise, so exporting it from an `is_abstract` base
-/// would emit a wrapper over a body that never returns, and an exception
-/// class publishes no type object at all.
+/// **Both halves of the witness are load-bearing.** Constructibility alone
+/// is not enough, because the host names a constructor only through a
+/// published type object: a privately named subclass is never published by
+/// [`collect_class_publications`], so `mod._Priv(...)` does not exist and
+/// no instance reaching `class`'s methods can ever be built. Accepting
+/// such a witness would emit a `PyMethodDef` row with no obtainable
+/// receiver, or -- with an uncarriable signature -- fail the whole `--ext`
+/// build with a `C0003` for a method nothing could ever call.
+///
+/// [`class_constructible`]'s conditions 3 and 4 are the ones a publishable
+/// constructible subclass rescues. Conditions 1 and 2 --
+/// [`instance_shape_admissible`] -- are not: an `@abstractmethod`'s stub
+/// body returns nothing while its `return_ty` says otherwise, so exporting
+/// it from an `is_abstract` base would emit a wrapper over a body that
+/// never returns, and an exception class publishes no type object at all.
 fn instance_methods_reachable(module: &HirModule, class: &str) -> bool {
     let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
         return false;
@@ -835,7 +879,9 @@ fn instance_methods_reachable(module: &HirModule, class: &str) -> bool {
         return false;
     }
     module.class_defs.iter().any(|(held, def)| {
-        def.mro.iter().any(|entry| entry == class) && class_constructible(module, held)
+        def.mro.iter().any(|entry| entry == class)
+            && class_publishable(def, held)
+            && class_constructible(module, held)
     })
 }
 
@@ -1031,7 +1077,7 @@ pub(crate) fn collect_class_publications(
         let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
             continue;
         };
-        if !is_public_name(class) || class_def.exception_type_tag.is_some() {
+        if !class_publishable(class_def, class) {
             continue;
         }
         let mut methods: Vec<ExtExport> = Vec::new();

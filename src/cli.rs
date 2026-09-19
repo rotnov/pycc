@@ -49,7 +49,8 @@ pub enum Command {
         /// native executable: every public module-level function, every
         /// public `@staticmethod` and `@classmethod` of a public class, and
         /// every public instance method of a public class that some
-        /// *constructible* class's method resolution order reaches, becomes
+        /// *published, constructible* class's method resolution order
+        /// reaches, becomes
         /// a callable of one stable-ABI artifact that a CPython interpreter
         /// imports -- a method as `mod.Class.method`, an instance method on
         /// an instance the host builds with `mod.Class(...)`. Each class's

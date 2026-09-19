@@ -422,10 +422,14 @@ published only for what it inherits is constructible on these same terms, so
 `mod.Derived(21)` works while `mod.Base(...)` may refuse.
 
 An instance method is exported when its **declaring** class is not abstract,
-not a `Protocol`, not an enum and not an exception class, *and* some class in
-the program whose MRO contains it is constructible -- the receiver its
-compiled body needs is then obtainable, whether or not the declaring class can
-be built directly. **Every instance method excluded by that predicate is
+not a `Protocol`, not an enum and not an exception class, *and* some
+**public, non-exception** class whose MRO contains it is constructible. Those
+two conditions on the witness are the ones stated above for publication: only a
+class the artifact publishes gets a type object the host can name, so only such
+a witness makes the receiver the compiled body needs obtainable. A privately
+named subclass is published under no name and is therefore no witness at all,
+however constructible it is. The declaring class itself need not be
+constructible. **Every instance method excluded by that predicate is
 excluded as representation, never as a `C0003`.** An `@abstractmethod` is
 excluded by the declaring-class half, which a constructible subclass does not
 relax: an abstract stub's body returns nothing while its annotation says

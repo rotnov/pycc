@@ -138,7 +138,8 @@ export set at all. Because D-244 rule 1 \
 exports *every* public module-level function -- and, since #1143, every \
 public `@staticmethod` and `@classmethod` of a public non-exception class, \
 and since #1145 every public instance method of such a class when some \
-class whose method resolution order contains it is *constructible*, \
+*published* class whose method resolution order contains it is \
+*constructible*, \
 published as `mod.Class.method` -- (a stable ABI cannot \
 have a per-function opt-out without also having a way to spell it), one \
 unexportable public signature \
