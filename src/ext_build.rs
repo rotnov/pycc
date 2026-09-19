@@ -547,7 +547,25 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         // `boundary_carrier` arm -- leaving it in would make every exported
         // classmethod a `C0003` instead of an export.
         let receiver = matches!(&spelling, ExportName::Method { receiver: true, .. });
-        let carried_params = if receiver { &params[1..] } else { &params[..] };
+        // `receiver` is decided lexically, from the `.classmethod` suffix
+        // alone, because `classify_export_name` cannot see HIR. The
+        // guarantee that such a function really has `cls` first lives in
+        // another crate -- `crates/pycc_hir/src/class.rs` refuses a
+        // `@classmethod` that does not take `cls` as its first parameter --
+        // so this site states that cross-crate invariant instead of
+        // slicing on the strength of it.
+        let carried_params = if receiver {
+            match params.split_first() {
+                Some((_, tail)) => tail,
+                None => panic!(
+                    "pycc: internal error: `{name}` is spelled as a `@classmethod` \
+                     but has no parameters -- pycc_hir::class refuses a `@classmethod` \
+                     without a leading `cls`, so this HIR should never have been built"
+                ),
+            }
+        } else {
+            &params[..]
+        };
         if let Some(offender) = unsupported_boundary_ty(carried_params, return_ty) {
             gaps.push(capability_gap(name, &offender));
             continue;

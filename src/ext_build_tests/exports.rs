@@ -629,10 +629,8 @@ fn the_underscore_remedy_a_method_gap_prints_actually_removes_it_from_the_export
 fn two_static_methods_of_one_class_with_the_same_name_export_once() {
     // Python rebinds rather than redeclares inside a class body too, and the
     // dedup key is `(class, method)`: a bare name key would collapse two
-    // different classes' `scale`, and a mangled-name key would let one class
-    // publish `scale` twice -- once from `.static` and once from
-    // `.classmethod` -- which the C compiler would reject as a duplicate
-    // `ml_name` only at build time.
+    // different classes' `scale`. A mangled-name key is the opposite defect
+    // and is pinned by the test below.
     let hir = module_with_classes(
         vec![
             func("Grid.scale.static", &[("n", Ty::Int)], Ty::Int),
@@ -655,6 +653,52 @@ fn two_static_methods_of_one_class_with_the_same_name_export_once() {
             .map(|e| (e.name.as_str(), e.params.len()))
             .collect::<Vec<_>>(),
         vec![("Grid.scale.static", 2), ("Other.scale.static", 1)]
+    );
+}
+
+#[test]
+#[should_panic(expected = "is spelled as a `@classmethod` but has no parameters")]
+fn a_class_method_without_a_receiver_parameter_is_an_internal_error() {
+    // `classify_export_name` reads the `.classmethod` suffix and nothing
+    // else, so the guarantee that such a function leads with `cls` belongs
+    // to `pycc_hir::class`, a crate away. Hand-built HIR can violate it;
+    // real HIR cannot. Pin the failure mode as a named internal error rather
+    // than as an index-out-of-bounds slice panic.
+    let hir = module_with_classes(
+        vec![func("Grid.make.classmethod", &[], Ty::Int)],
+        vec![("Grid".to_string(), class_def("Grid", None))],
+    );
+    let _ = collect_exports(&hir);
+}
+
+#[test]
+fn a_static_and_a_class_method_of_one_class_with_the_same_name_export_once() {
+    // The dedup key is `(class, method)` and not the mangled name, so the
+    // two kind suffixes of one `(class, method)` pair collapse to the last
+    // binding exactly as Python's own class body does. A mangled-name key
+    // would admit both, and nothing downstream would reject them: the two
+    // wrappers carry distinct C symbols, so the C compiler stays silent and
+    // the duplicate surfaces only as two `PyMethodDef` entries with the same
+    // `ml_name` in one type's method table -- a runtime shadowing, not a
+    // build failure.
+    let hir = module_with_classes(
+        vec![
+            func("Grid.scale.static", &[("n", Ty::Int)], Ty::Int),
+            func(
+                "Grid.scale.classmethod",
+                &[("cls", Ty::Int), ("a", Ty::Int), ("b", Ty::Int)],
+                Ty::Int,
+            ),
+        ],
+        vec![("Grid".to_string(), class_def("Grid", None))],
+    );
+    let exports = collect_exports(&hir).expect("a rebind is not a capability gap");
+    assert_eq!(
+        exports
+            .iter()
+            .map(|e| (e.name.as_str(), e.receiver, e.params.len()))
+            .collect::<Vec<_>>(),
+        vec![("Grid.scale.classmethod", true, 2)]
     );
 }
 

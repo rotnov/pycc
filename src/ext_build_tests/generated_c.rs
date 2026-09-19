@@ -1581,18 +1581,24 @@ fn a_class_method_wrapper_prepends_the_null_receiver_and_a_static_one_does_not()
     // receiver slot, which every native `Grid.make(...)` call site fills
     // with a null pointer; the wrapper passes `NULL` there and the compiled
     // body never dereferences it.
-    let make = inc
-        .split("pycc_ext_wrap_0m4_Grid4_make11_classmethod(")
-        .nth(1)
-        .expect("the classmethod wrapper is emitted");
+    let make = thunk_call_line(&inc, "fnptr_0m4_Grid4_make11_classmethod");
     assert!(make.contains("void *,"), "{make}");
     assert!(make.contains("NULL,"), "{make}");
-    let scale = inc
-        .split("pycc_ext_wrap_0m4_Grid5_scale6_static(")
-        .nth(1)
-        .expect("the staticmethod wrapper is emitted");
-    let scale_decl = scale.split(';').next().expect("a declaration");
-    assert!(!scale_decl.contains("void *,"), "{scale_decl}");
+    // The `@staticmethod`'s own cast carries no receiver slot. Anchor on the
+    // cast line rather than on the wrapper's first statement: the body opens
+    // with `(void)self;`, so a negative assertion cut at the first `;` would
+    // hold whatever the cast below it said.
+    let scale = thunk_call_line(&inc, "fnptr_0m4_Grid5_scale6_static");
+    assert!(!scale.contains("void *,"), "{scale}");
+}
+
+/// The single line of generated C that casts `symbol` to its native
+/// signature and calls it -- the text that decides whether a wrapper
+/// prepends a receiver.
+fn thunk_call_line<'a>(inc: &'a str, symbol: &str) -> &'a str {
+    inc.lines()
+        .find(|line| line.contains(&format!(")){symbol})")))
+        .unwrap_or_else(|| panic!("no call through `{symbol}` in:\n{inc}"))
 }
 
 #[test]
