@@ -265,12 +265,75 @@ fn a_match_capture_over_a_non_str_subject_is_t0023() {
 }
 
 #[test]
-fn a_walrus_binding_of_dunder_name_is_t0050() {
-    // #774: `str` is not a supported walrus value, so this form cannot bind a
-    // module name at all today.
+fn a_str_valued_walrus_binding_of_dunder_name_is_t0050() {
+    // #774: `str` is not a supported walrus value, so this *particular* walrus
+    // shape cannot bind a module name at all today.
     let (ok, rendered) = check("dn_walrus", "print((__name__ := \"custom\"))\n");
     assert!(!ok, "{rendered}");
     assert!(rendered.contains("error[T0050]"), "{rendered}");
+}
+
+#[test]
+fn a_scalar_walrus_binding_wins_over_the_seed_as_a_bare_expression_statement() {
+    // #774 permits `int`/`float`/`bool`/`None` as walrus values, so this is a
+    // fully supported top-level binding of the name and THE RULE's "a top-level
+    // user binding wins outright" must hold for it: nothing is seeded, and the
+    // `int` rebind is not rejected with `T0023`.
+    assert_eq!(
+        build_and_run("dn_walrus_int", "print((__name__ := 7))\n"),
+        "7\n"
+    );
+}
+
+#[test]
+fn a_scalar_walrus_binding_in_a_top_level_if_condition_wins_over_the_seed() {
+    // The walrus scan walks *into* a top-level compound statement's own header,
+    // which is where PEP 572's own motivating shape puts it.
+    assert_eq!(
+        build_and_run(
+            "dn_walrus_if",
+            "if (__name__ := 7) > 3:\n    pass\nprint(__name__)\n",
+        ),
+        "7\n"
+    );
+}
+
+#[test]
+fn a_walrus_binding_inside_a_function_body_does_not_withhold_the_seed() {
+    // A walrus binds in the enclosing *function or module* scope (PEP 572), so
+    // one inside a function body is a local and must leave the module seed
+    // intact -- exactly as a plain `__name__ = "x"` in a function body does.
+    assert_eq!(
+        build_and_run(
+            "dn_walrus_local",
+            concat!(
+                "def f() -> int:\n",
+                "    if (__name__ := 7) > 3:\n",
+                "        return 1\n",
+                "    return 0\n",
+                "\n",
+                "print(f())\n",
+                "print(__name__)\n",
+            ),
+        ),
+        "1\n__main__\n"
+    );
+}
+
+#[test]
+fn a_dependencys_walrus_binding_withholds_the_entry_seed() {
+    // The cross-module half of the gate, reached through the walrus door: a
+    // dependency's own top-level `(__name__ := 7)` is the program's single
+    // `__name__` global in #881's flat namespace, so the entry module is not
+    // seeded and both modules read the dependency's value.
+    assert_eq!(
+        build_and_run_program(
+            "dn_dep_walrus",
+            "from dep import helper\n\nprint(__name__)\nprint(helper())\n",
+            "print((__name__ := 7))\n\ndef helper() -> int:\n    return 1\n",
+        ),
+        "7\n7\n1\n"
+    );
 }
 
 #[test]

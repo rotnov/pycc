@@ -134,10 +134,15 @@ fn references_dunder_name(module: &ModModule) -> bool {
 ///   overwrites the seeded value; a subject of any other type is rejected with
 ///   `T0023` ("cannot assign `int` to `__name__`, previously inferred as
 ///   `str`"). Both are pinned by `tests/issue_1156_dunder_name.rs`.
-/// * A walrus (`(__name__ := "custom")`). A walrus value of type `str` is not
-///   supported at all — `T0050`, #774 — so this form cannot bind a module name
-///   today. Should #774 lift that restriction, the `match` reasoning above
-///   applies to it unchanged.
+///
+/// A walrus (`(__name__ := 7)`) is the one *expression*-level binding form that
+/// is scanned, by [`binds_dunder_name_via_walrus`]. It has to be: #774 rejects a
+/// `str` walrus value with `T0050`, but explicitly permits `int`, `float`,
+/// `bool`, and `None`, so a top-level `(__name__ := 7)` is a fully supported
+/// binding of this name. Left unscanned it would be seeded *and* then rejected
+/// with `T0023` for rebinding a `str` global as an `int` -- the user's own
+/// top-level binding losing to the seed, which is exactly what THE RULE says
+/// cannot happen.
 ///
 /// Documented limit, mirroring the flat scan
 /// `exception::shadowed_builtin_exception_name` performs: only *direct*
@@ -172,7 +177,52 @@ fn binds_dunder_name_at_top_level(module: &ModModule) -> bool {
         Stmt::Import(import) => import.names.iter().any(alias_binds_dunder_name),
         Stmt::ImportFrom(import) => import.names.iter().any(alias_binds_dunder_name),
         _ => false,
-    })
+    }) || binds_dunder_name_via_walrus(module)
+}
+
+/// Whether `module` binds `__name__` through a top-level walrus (`:=`).
+///
+/// Unlike the flat statement scan above, this one walks *into* compound
+/// statements, because a walrus most naturally appears in a compound
+/// statement's own header expression (`if (__name__ := 7) > 3:`) rather than as
+/// a bare top-level expression statement. It stops at `FunctionDef`/`ClassDef`
+/// bodies: a walrus there binds a function-scope local (PEP 572 -- a walrus
+/// binds in the enclosing *function or module* scope), which shadows the module
+/// binding only inside that function and so must not withhold the seed, exactly
+/// as a plain `__name__ = "x"` in a function body does not.
+fn binds_dunder_name_via_walrus(module: &ModModule) -> bool {
+    struct WalrusScan {
+        found: bool,
+    }
+    impl<'a> Visitor<'a> for WalrusScan {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            // A walrus inside either body binds a local, not this module's
+            // global, so neither body is descended into.
+            if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+                return;
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if self.found {
+                return;
+            }
+            if let Expr::Named(named) = expr
+                && target_binds_dunder_name(&named.target)
+            {
+                self.found = true;
+                return;
+            }
+            visitor::walk_expr(self, expr);
+        }
+    }
+    let mut scan = WalrusScan { found: false };
+    scan.visit_body(&module.body);
+    scan.found
 }
 
 /// Whether `expr`, used as an assignment or loop target, binds `__name__`.
