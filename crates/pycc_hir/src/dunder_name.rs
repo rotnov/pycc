@@ -102,14 +102,31 @@ fn references_dunder_name(module: &ModModule) -> bool {
 /// exactly as `exception::shadowed_builtin_exception_name` and
 /// `exception::module_references_builtin_exception_name` are kept separate.
 ///
-/// Every top-level binding form is covered, not just plain assignment:
-/// `Assign` (including tuple/list/starred unpacking targets), `AnnAssign`,
-/// `AugAssign`, `FunctionDef`, `ClassDef`, `TypeAlias`, `For` targets (`async`
-/// included — ruff carries that as a flag on the same node, not a separate
-/// variant), `With` `as`-targets, and `Import`/`ImportFrom` alias bindings
-/// (`import x as __name__`, `from m import y as __name__`). Over-reporting only
-/// costs the module its seed, which is the pre-#1156 behavior; under-reporting
-/// would let the seed race a user's own binding of the same global.
+/// Every top-level binding form whose *statement* introduces the name is
+/// covered, not just plain assignment: `Assign` (including tuple/list/starred
+/// unpacking targets), `AnnAssign`, `AugAssign`, `FunctionDef`, `ClassDef`,
+/// `TypeAlias`, `For` targets (`async` included — ruff carries that as a flag on
+/// the same node, not a separate variant), `With` `as`-targets, and
+/// `Import`/`ImportFrom` alias bindings (`import x as __name__`, `from m import
+/// y as __name__`). Over-reporting only costs the module its seed, which is the
+/// pre-#1156 behavior.
+///
+/// Two further top-level forms bind a name through an *expression* rather than
+/// through the statement's own target, and neither is scanned. That is
+/// deliberate: in both, the type system — not this scan — already makes the
+/// outcome either a diagnostic or a well-typed rebind, so neither can race the
+/// seed into a silently wrong value.
+///
+/// * A `match` case capture (`match x:` / `case __name__:`). The seed is the
+///   module's first statement, so a capture rebinds an existing `str` global
+///   instead of introducing the name. A `str` subject compiles and the capture
+///   overwrites the seeded value; a subject of any other type is rejected with
+///   `T0023` ("cannot assign `int` to `__name__`, previously inferred as
+///   `str`"). Both are pinned by `tests/issue_1156_dunder_name.rs`.
+/// * A walrus (`(__name__ := "custom")`). A walrus value of type `str` is not
+///   supported at all — `T0050`, #774 — so this form cannot bind a module name
+///   today. Should #774 lift that restriction, the `match` reasoning above
+///   applies to it unchanged.
 ///
 /// Documented limit, mirroring the flat scan
 /// `exception::shadowed_builtin_exception_name` performs: only *direct*

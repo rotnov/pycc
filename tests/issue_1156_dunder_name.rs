@@ -202,6 +202,61 @@ fn a_read_that_precedes_a_module_level_assignment_is_t0021() {
     );
 }
 
+// -- expression-level bindings the top-level scan deliberately skips --
+//
+// `binds_dunder_name_at_top_level` scans statement targets, not every
+// expression that can bind a name. These pin the two forms it does not scan,
+// so a future change to either is a visible test failure rather than a silent
+// race with the seed.
+
+#[test]
+fn a_match_capture_over_a_str_subject_rebinds_the_seeded_global() {
+    // The seed is the module's first statement, so the capture overwrites an
+    // existing `str` global rather than introducing the name.
+    assert_eq!(
+        build_and_run(
+            "dn_match_str",
+            "x: str = \"a\"\nmatch x:\n    case __name__:\n        pass\nprint(__name__)\n",
+        ),
+        "a\n"
+    );
+}
+
+#[test]
+fn a_match_capture_over_a_non_str_subject_is_t0023() {
+    let (ok, rendered) = check(
+        "dn_match_int",
+        "x: int = 7\nmatch x:\n    case __name__:\n        pass\nprint(__name__)\n",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(
+        rendered.contains("error[T0023]") && rendered.contains("previously inferred as `str`"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_walrus_binding_of_dunder_name_is_t0050() {
+    // #774: `str` is not a supported walrus value, so this form cannot bind a
+    // module name at all today.
+    let (ok, rendered) = check("dn_walrus", "print((__name__ := \"custom\"))\n");
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("error[T0050]"), "{rendered}");
+}
+
+#[test]
+fn a_binding_nested_in_a_top_level_compound_statement_rebinds_the_seed() {
+    // The documented limit of the flat scan: the module is seeded *and* the
+    // user's statement still executes and still wins at runtime.
+    assert_eq!(
+        build_and_run(
+            "dn_nested_if",
+            "flag: bool = True\nif flag:\n    __name__ = \"custom\"\nprint(__name__)\n",
+        ),
+        "custom\n"
+    );
+}
+
 // -- a function-local binding shadows only inside that function -----
 
 #[test]

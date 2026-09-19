@@ -60,7 +60,7 @@ target-specific runtime closure to the deployment artifact under `auto` or
 
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_all` (the single-file entry, now exactly
-`finalize(lower_module(m, &ResolvedImports::default())?.hir)`; `lower_checked`
+`finalize(lower_module(m, &ResolvedImports::default(), None)?.hir)`; `lower_checked`
 is its first-diagnostic view) preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
