@@ -39,7 +39,7 @@ use crate::import::{
 };
 use crate::{
     HirClassDef, HirItem, HirModule, ImportBinding, Ty, builtin_exception_class_defs, class,
-    exception, import_local_name, killed_names, lower_function, lower_import_stmt,
+    dunder_name, exception, import_local_name, killed_names, lower_function, lower_import_stmt,
     lower_legacy_type_alias_ann_assign, lower_type_alias_stmt, program, stmt, unsupported,
 };
 use pycc_ast::{Expr, ModModule, Stmt};
@@ -129,7 +129,10 @@ pub struct LoweredModule {
 /// followed by `program::finalize` -- the same phases in the same order as
 /// before #898, so the result is byte-identical.
 pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
-    let lowered = lower_module(module, &ResolvedImports::default())?;
+    // No module name: this entry is the in-crate/test single-file path, and
+    // the driver -- the only caller that knows whether the file is an entry
+    // module and under which name -- goes through `lower_module` directly.
+    let lowered = lower_module(module, &ResolvedImports::default(), None)?;
     program::finalize(lowered.hir)
 }
 
@@ -176,6 +179,7 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 pub fn lower_module(
     module: &ModModule,
     resolved: &ResolvedImports<'_>,
+    module_name: Option<&str>,
 ) -> Result<LoweredModule, Vec<Diagnostic>> {
     let mut state = ModuleState {
         aliases: Vec::new(),
@@ -212,6 +216,21 @@ pub fn lower_module(
             && shadowed_builtin_exception_name.is_none();
     if seeded_builtin_exception_classes {
         state.class_defs.extend(builtin_exception_class_defs());
+    }
+    // W0 of #882 (#1156): the compiler-provided `__name__` binding, pushed
+    // into the still-empty item list so it is the module's *first* top-level
+    // statement -- an ordinary `str` global every downstream pass already
+    // knows how to compile, so no new HIR/MIR/type/codegen node exists for
+    // it. `dunder_name` owns THE RULE and both seeding gates; `module_name`
+    // is `None` for every module the driver did not name (a non-entry module
+    // of a multi-file program, and the single-file `lower_all` path), which
+    // withholds the seed. Deliberately *not* recorded in `definition_spans`:
+    // that table drives `program::link`'s cross-module collision check, and
+    // registering a synthetic definition there would turn a program whose
+    // dependency binds its own top-level `__name__` -- legal today -- into a
+    // `C0001` reported against a statement no user wrote.
+    if let Some(item) = dunder_name::seed_item(module, module_name) {
+        state.items.push(item);
     }
     // Seeded at the *front* so every lookup below (base resolution,
     // annotation projection, the name-collision checks) sees them, then

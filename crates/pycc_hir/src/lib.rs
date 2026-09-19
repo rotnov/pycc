@@ -2,6 +2,7 @@ use pycc_diag::{Diagnostic, Span};
 
 mod class;
 mod container;
+mod dunder_name;
 mod exception;
 mod expr;
 mod func;

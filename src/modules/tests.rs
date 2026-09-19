@@ -24,7 +24,7 @@ fn write(root: &Path, relative: &str, contents: &str) -> PathBuf {
 
 /// The display paths of a successfully loaded program, in load order.
 fn loaded_paths(entry: &Path) -> Vec<String> {
-    load(entry)
+    load(entry, None)
         .unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)))
         .modules
         .into_iter()
@@ -55,7 +55,10 @@ fn describe(failure: &FrontendFailure) -> String {
 
 /// The one diagnostic a failing load reports, with the file it belongs to.
 fn first_diagnostic(entry: &Path) -> (String, String, String) {
-    match load(entry).map(|_| ()).expect_err("this fixture must fail") {
+    match load(entry, None)
+        .map(|_| ())
+        .expect_err("this fixture must fail")
+    {
         FrontendFailure::Compile { files } => {
             let file = &files[0];
             let diagnostic = &file.diagnostics[0];
@@ -72,7 +75,10 @@ fn first_diagnostic(entry: &Path) -> (String, String, String) {
 }
 
 fn input_failure(entry: &Path) -> (String, String) {
-    match load(entry).map(|_| ()).expect_err("this fixture must fail") {
+    match load(entry, None)
+        .map(|_| ())
+        .expect_err("this fixture must fail")
+    {
         FrontendFailure::Input { path, message } => (path, message),
         FrontendFailure::Compile { files } => {
             panic!(
@@ -199,7 +205,7 @@ fn a_module_file_wins_over_a_package_of_the_same_name() {
     );
     let entry = write(&scratch, "main.py", USES_HELPER);
     let program =
-        load(&entry).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+        load(&entry, None).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
     assert!(
         program.modules[0].display_path.ends_with("helper.py"),
         "unexpected dependency: {}",
@@ -450,7 +456,7 @@ fn one_file_reached_by_two_spellings_is_one_module() {
          def main() -> None:\n    print(helper(1) + other(1))\n",
     );
     let program =
-        load(&entry).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+        load(&entry, None).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
     let modules: Vec<&str> = program
         .modules
         .iter()
@@ -528,7 +534,7 @@ fn an_unreadable_dependency_is_an_input_failure() {
     let helper = write(&scratch, "helper.py", HELPER);
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o000)).expect("chmod");
     let entry = write(&scratch, "main.py", USES_HELPER);
-    let result = load(&entry);
+    let result = load(&entry, None);
     // Running as root defeats the permission bit entirely; the load then
     // simply succeeds and there is nothing to assert.
     if let Err(FrontendFailure::Input { path, message }) = result {
@@ -552,7 +558,7 @@ fn an_unreadable_pycc_toml_is_an_input_failure() {
     std::fs::set_permissions(&toml, std::fs::Permissions::from_mode(0o000)).expect("chmod");
     write(&scratch, "helper.py", HELPER);
     let entry = write(&scratch, "main.py", USES_HELPER);
-    let result = load(&entry);
+    let result = load(&entry, None);
     if let Err(FrontendFailure::Input { path, message }) = result {
         assert!(path.ends_with("pycc.toml"), "unexpected path: {path}");
         assert!(!message.is_empty());
@@ -700,6 +706,7 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         entry_dir: PathBuf::new(),
         entry_display_dir: PathBuf::new(),
         root: None,
+        entry_module_name: None,
     };
     let request = ProjectImportRequest {
         level: 1,

@@ -14,7 +14,7 @@ const DEP: &str = "dep.py";
 /// Lowers `source` as a standalone module (no project imports), the way
 /// the driver lowers a dependency before its importer.
 fn lower_dependency(source: &str) -> HirModule {
-    lower_module(&parse(source), &ResolvedImports::default())
+    lower_module(&parse(source), &ResolvedImports::default(), None)
         .expect("a dependency fixture must lower")
         .hir
 }
@@ -47,7 +47,7 @@ impl Fixture {
                 }),
             );
         }
-        lower_module(&parsed, &resolved)
+        lower_module(&parsed, &resolved, None)
     }
 
     fn lower_ok(&self, source: &str) -> LoweredModule {
@@ -70,7 +70,7 @@ fn lower_with_answer(source: &str, answer: &ResolvedImport<'_>) -> Vec<Diagnosti
     for request in project_import_requests(&parsed) {
         resolved.insert(request.span, answer.clone());
     }
-    lower_module(&parsed, &resolved).expect_err("fixture must fail to lower")
+    lower_module(&parsed, &resolved, None).expect_err("fixture must fail to lower")
 }
 
 const DEFINITIONS: &str = "class Point:\n    def __init__(self, x: int) -> None:\n        \
@@ -290,7 +290,7 @@ fn a_re_export_is_followed_one_hop_to_the_module_that_defines_the_name() {
             }),
         );
     }
-    let package = lower_module(&parsed, &package_resolved)
+    let package = lower_module(&parsed, &package_resolved, None)
         .expect("the package fixture must lower")
         .hir;
 
@@ -310,7 +310,7 @@ fn a_re_export_is_followed_one_hop_to_the_module_that_defines_the_name() {
             }),
         );
     }
-    let lowered = lower_module(&importer, &resolved).expect("the re-export chain must lower");
+    let lowered = lower_module(&importer, &resolved, None).expect("the re-export chain must lower");
     // The class and alias were copied from `base.py`, the module that
     // actually defines them, and every binding still points there.
     assert_eq!(
@@ -455,7 +455,7 @@ fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
                 }),
             );
         }
-        lower_module(&parsed, &resolved)
+        lower_module(&parsed, &resolved, None)
             .expect("the re-exporting fixture must lower")
             .hir
     };
@@ -478,7 +478,7 @@ fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
             }),
         );
     }
-    let lowered = lower_module(&parsed, &resolved).expect("the importer must lower");
+    let lowered = lower_module(&parsed, &resolved, None).expect("the importer must lower");
     assert_eq!(
         binding_kinds(&lowered),
         vec![
@@ -535,7 +535,7 @@ fn foreign_dependency(source: &str, import_stmt: &str) -> HirModule {
         Span::new(start as u32, (start + import_stmt.len()) as u32),
         ResolvedImport::Foreign,
     );
-    lower_module(&parsed, &resolved)
+    lower_module(&parsed, &resolved, None)
         .expect("a dependency fixture must lower")
         .hir
 }

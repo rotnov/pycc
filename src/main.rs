@@ -280,8 +280,24 @@ fn try_build(
     // `I0403` has to be rendered against whichever file of the program
     // actually wrote the `import`, which for a multi-file program is
     // usually a dependency rather than the entry path.
+    // W0 of #882 (#1156): an `--ext` build compiles the entry module under
+    // the extension module's own name, so `__name__` inside the artifact
+    // reads what CPython would report for it. The resolve is done twice --
+    // here and again inside `plan_ext` below -- deliberately: it is a pure,
+    // cheap path computation, and the frontend needs the name *before*
+    // `plan_ext` runs. Its error is dropped to `None` here so `plan_ext`
+    // keeps reporting that error at exactly the point it always has; moving
+    // the report earlier would reorder diagnostics existing tests pin.
+    let ext_module_name = ext.and_then(|_| {
+        ext_output::resolve(
+            out,
+            &ext_build::ExtLinkPlatform::resolve(target).suffix_platform(),
+        )
+        .ok()
+        .map(|resolved| resolved.module_name)
+    });
     let typed_hir = match ext {
-        Some(_) => resolve_frontend(path),
+        Some(_) => resolve_frontend(path, ext_module_name.as_deref()),
         None => resolve_frontend_native(path),
     }
     .map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
@@ -1045,7 +1061,10 @@ mod try_build_release_isolation_tests {
         // Independently compiled reference: the same source's MIR, built
         // through the exact same frontend pipeline try_build itself uses,
         // compiled directly with release=false.
-        let typed_hir = resolve_frontend(&src)
+        // The same `__name__` value `resolve_frontend_native` gives the
+        // native path `try_build` just took, so the two objects stay
+        // byte-identical (#1156).
+        let typed_hir = resolve_frontend(&src, Some(frontend::NATIVE_MODULE_NAME))
             .ok()
             .expect("fixture source should type-check");
         let mir = pycc_mir::build(&typed_hir);
@@ -1120,7 +1139,8 @@ mod ext_build_wiring_tests {
     }
 
     fn typed(src: &Path) -> pycc_hir::HirModule {
-        resolve_frontend(src).unwrap_or_else(|_| panic!("the fixture must type-check"))
+        resolve_frontend(src, Some(frontend::NATIVE_MODULE_NAME))
+            .unwrap_or_else(|_| panic!("the fixture must type-check"))
     }
 
     #[test]

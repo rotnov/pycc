@@ -1,0 +1,371 @@
+//! #1156 (W0 of #882): `__name__` reads as a module-level `str` constant.
+//!
+//! THE RULE, stated once here and owned by
+//! `crates/pycc_hir/src/dunder_name.rs` and `docs/STDLIB_PLAN.md`'s
+//! "Tier 0 — builtins" section:
+//!
+//! > `__name__` is a compiler-provided module-level `str` binding, seeded as
+//! > the module's first top-level statement. It is provided only when the
+//! > module references the name and the module's own top level binds no name
+//! > `__name__`. A user binding of `__name__` at module top level wins
+//! > outright: nothing is seeded and every `__name__` in that module resolves
+//! > through the ordinary name path, exactly as before this change. A binding
+//! > inside a function body is an ordinary local and shadows the module
+//! > binding only within that function, matching CPython.
+//! >
+//! > Deviation from CPython, deliberate and documented: in CPython a read that
+//! > textually precedes a module-level `__name__ = ...` still sees the
+//! > interpreter-provided module name. Here the seed is withheld for the whole
+//! > module, so such a read resolves to the user's binding — in practice a
+//! > `T0021` "name `__name__` is not defined" when the read precedes the
+//! > assignment. This is fail-closed (a diagnostic, never a silently wrong
+//! > value) and mirrors the all-or-nothing shape D-188 already established for
+//! > the builtin exception hierarchy.
+//!
+//! The value is `"__main__"` for `pycc check` and for a native
+//! `pycc build`/`pycc run`, and the extension module's own name for a
+//! `pycc build --ext`.
+//!
+//! Known gap, deliberate: only the *entry* module is given a name. Part 1 of
+//! #881 links every module of a program into one flat namespace, so a
+//! per-module `__name__` global would collide and a dependency's function
+//! would read the entry module's value anyway. The three observable
+//! consequences are pinned by the multi-module tests at the end of this file.
+//!
+//! Only the last test is `#[ignore]`d: it builds an artifact and asks an
+//! installed CPython to import it, which is a property of the machine rather
+//! than of the change under test (the convention
+//! `tests/issue_1143_ext_methods.rs` states).
+
+use pycc_scratch::ScratchDir;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn pycc() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn stdout_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+}
+
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n")
+}
+
+/// Builds `source` as a native executable and returns its stdout. Panics with
+/// the compiler's own diagnostics when the build fails, so a regression shows
+/// the diagnostic rather than an opaque missing-file error.
+fn build_and_run(category: &str, source: &str) -> String {
+    let dir = ScratchDir::new(category).expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, source).expect("write the fixture source");
+    let out = dir.join("m");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let run = Command::new(&out)
+        .output()
+        .expect("the artifact should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    stdout_of(&run)
+}
+
+/// `pycc check` on `source`, returning success plus both streams: `check`
+/// renders diagnostics on stdout where `build` renders them on stderr, so
+/// both are read rather than guessing which one a subcommand uses.
+fn check(category: &str, source: &str) -> (bool, String) {
+    let dir = ScratchDir::new(category).expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, source).expect("write the fixture source");
+    let out = pycc()
+        .arg("check")
+        .arg(&src)
+        .output()
+        .expect("pycc should spawn");
+    (
+        out.status.success(),
+        format!("{}{}", stdout_of(&out), stderr_of(&out)),
+    )
+}
+
+// -- the provided binding -------------------------------------------
+
+#[test]
+fn a_module_level_read_prints_dunder_main() {
+    assert_eq!(
+        build_and_run("dn_module", "print(__name__)\n"),
+        "__main__\n"
+    );
+}
+
+#[test]
+fn a_read_inside_a_function_body_sees_the_same_value() {
+    assert_eq!(
+        build_and_run(
+            "dn_function",
+            "\
+def report() -> None:
+    print(__name__)
+
+report()
+print(__name__)
+",
+        ),
+        "__main__\n__main__\n"
+    );
+}
+
+#[test]
+fn the_dunder_main_guard_takes_its_true_branch() {
+    assert_eq!(
+        build_and_run(
+            "dn_guard",
+            "\
+if __name__ == \"__main__\":
+    print(\"entry\")
+else:
+    print(\"imported\")
+",
+        ),
+        "entry\n"
+    );
+}
+
+#[test]
+fn the_binding_is_a_str_and_supports_str_operations() {
+    assert_eq!(
+        build_and_run(
+            "dn_str",
+            "\
+greeting: str = \"hello \" + __name__
+print(greeting)
+print(__name__ != \"other\")
+"
+        ),
+        "hello __main__\nTrue\n"
+    );
+}
+
+#[test]
+fn pycc_check_accepts_a_read_with_no_diagnostic() {
+    let (ok, rendered) = check("dn_check", "print(__name__)\n");
+    assert!(ok, "{rendered}");
+    assert_eq!(rendered, "");
+}
+
+// -- a user binding at module top level wins outright ---------------
+
+#[test]
+fn a_module_level_assignment_wins_over_the_seed() {
+    assert_eq!(
+        build_and_run("dn_user_assign", "__name__ = \"custom\"\nprint(__name__)\n",),
+        "custom\n"
+    );
+}
+
+#[test]
+fn a_module_level_annotated_assignment_wins_over_the_seed() {
+    assert_eq!(
+        build_and_run(
+            "dn_user_ann_assign",
+            "__name__: str = \"custom\"\nprint(__name__)\n",
+        ),
+        "custom\n"
+    );
+}
+
+#[test]
+fn a_user_binding_of_a_non_str_type_is_accepted_because_nothing_is_seeded() {
+    // The seed is withheld for the *whole* module, so the user's binding
+    // introduces the name with its own type rather than rebinding a `str`.
+    assert_eq!(
+        build_and_run("dn_user_int", "__name__ = 7\nprint(__name__ + 1)\n"),
+        "8\n"
+    );
+}
+
+#[test]
+fn a_read_that_precedes_a_module_level_assignment_is_t0021() {
+    // The documented deviation from CPython: CPython's interpreter-provided
+    // module name would still be visible here.
+    let (ok, rendered) = check("dn_precedes", "print(__name__)\n__name__ = \"custom\"\n");
+    assert!(!ok, "{rendered}");
+    assert!(
+        rendered.contains("error[T0021]") && rendered.contains("name `__name__` is not defined"),
+        "{rendered}"
+    );
+}
+
+// -- a function-local binding shadows only inside that function -----
+
+#[test]
+fn a_function_local_binding_shadows_only_within_that_function() {
+    assert_eq!(
+        build_and_run(
+            "dn_local",
+            "\
+def local() -> None:
+    __name__ = \"local\"
+    print(__name__)
+
+local()
+print(__name__)
+",
+        ),
+        "local\n__main__\n"
+    );
+}
+
+// -- the multi-module gap -------------------------------------------
+
+/// Writes a two-file program into a fresh scratch directory and runs
+/// `pycc check` on its entry module, returning success plus both streams.
+fn check_program(category: &str, entry: &str, dependency: &str) -> (bool, String) {
+    let dir = ScratchDir::new(category).expect("scratch");
+    std::fs::write(dir.join("dep.py"), dependency).expect("write the dependency");
+    let src = dir.join("m.py");
+    std::fs::write(&src, entry).expect("write the entry module");
+    let out = pycc()
+        .arg("check")
+        .arg(&src)
+        .output()
+        .expect("pycc should spawn");
+    (
+        out.status.success(),
+        format!("{}{}", stdout_of(&out), stderr_of(&out)),
+    )
+}
+
+#[test]
+fn a_dependency_function_reads_the_entry_modules_value() {
+    // The flat-namespace consequence: the entry module's seed is the
+    // program's only `__name__` global, so a dependency's own function reads
+    // it. Correct per-module values wait on #881's per-module namespaces.
+    let dir = ScratchDir::new("dn_multi_run").expect("scratch");
+    std::fs::write(
+        dir.join("dep.py"),
+        "\
+def report() -> None:
+    print(__name__)
+",
+    )
+    .expect("write the dependency");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "\
+from dep import report
+
+report()
+print(__name__)
+",
+    )
+    .expect("write the entry module");
+    let out = dir.join("m");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let run = Command::new(&out)
+        .output()
+        .expect("the artifact should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "__main__\n__main__\n");
+}
+
+#[test]
+fn a_dependency_read_is_t0021_when_the_entry_module_never_references_the_name() {
+    // No reference in the entry module means Gate 1 withholds the seed, so
+    // the program has no `__name__` global at all.
+    let (ok, rendered) = check_program(
+        "dn_multi_unseeded",
+        "from dep import report\n\nreport()\n",
+        "\
+def report() -> None:
+    print(__name__)
+",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(
+        rendered.contains("error[T0021]") && rendered.contains("dep.py"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_dependencys_own_top_level_read_is_t0021() {
+    // Linking concatenates dependencies before the entry module, so the
+    // entry's seed has not run yet when a dependency's module-level code
+    // does — the type checker reports the read against the dependency.
+    let (ok, rendered) = check_program(
+        "dn_multi_top_level",
+        "from dep import report\n\nreport()\nprint(__name__)\n",
+        "\
+print(__name__)
+
+
+def report() -> None:
+    pass
+",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(
+        rendered.contains("error[T0021]") && rendered.contains("dep.py"),
+        "{rendered}"
+    );
+}
+
+// -- `--ext` uses the extension module's own name -------------------
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_extension_module_reads_its_own_module_name() {
+    let dir = ScratchDir::new("dn_ext").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "\
+def modname() -> str:
+    return __name__
+",
+    )
+    .expect("write the fixture source");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("dunder_probe"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let cwd: &Path = &dir;
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "\
+import dunder_probe
+assert dunder_probe.modname() == \"dunder_probe\", dunder_probe.modname()
+assert dunder_probe.modname() == dunder_probe.__name__, dunder_probe.modname()
+",
+        )
+        .current_dir(cwd)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+}

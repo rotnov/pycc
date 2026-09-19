@@ -82,7 +82,17 @@ enum Resolution {
 }
 
 /// Loads the whole program reachable from `entry`.
-pub(crate) fn load(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
+///
+/// `entry_module_name` is the `__name__` value the *entry* module is compiled
+/// with (W0 of #882, #1156); every module loaded recursively from it is a
+/// dependency and receives `None`. Part 1 of #881 links the whole program into
+/// one flat namespace, so seeding a `__name__` global per module would collide
+/// -- withholding it from dependencies is the fail-closed choice until
+/// per-module namespaces land.
+pub(crate) fn load(
+    entry: &Path,
+    entry_module_name: Option<&str>,
+) -> Result<LoadedProgram, FrontendFailure> {
     let display = entry.to_string_lossy().into_owned();
     let canonical = canonicalize(entry, &display)?;
     let mut entry_dir = canonical.clone();
@@ -96,8 +106,9 @@ pub(crate) fn load(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
         entry_dir,
         entry_display_dir,
         root: None,
+        entry_module_name: entry_module_name.map(str::to_string),
     };
-    loader.load_module(&canonical, display)?;
+    loader.load_module(&canonical, display, true)?;
     Ok(LoadedProgram {
         modules: loader.modules,
     })
@@ -114,12 +125,23 @@ struct Loader {
     entry_dir: PathBuf,
     entry_display_dir: PathBuf,
     root: Option<RootInfo>,
+    /// The `__name__` value the entry module is compiled with, or `None` when
+    /// the caller supplied none (#1156). Only the entry module ever sees it.
+    entry_module_name: Option<String>,
 }
 
 impl Loader {
     /// Parses, resolves and lowers one module, loading every dependency it
     /// imports first. Returns its index in `modules`.
-    fn load_module(&mut self, canonical: &Path, display: String) -> Result<usize, FrontendFailure> {
+    ///
+    /// `is_entry` selects the module that receives the program's `__name__`
+    /// value (#1156); `resolve` always loads dependencies with `false`.
+    fn load_module(
+        &mut self,
+        canonical: &Path,
+        display: String,
+        is_entry: bool,
+    ) -> Result<usize, FrontendFailure> {
         if let Some(index) = self.memo.get(canonical) {
             return Ok(*index);
         }
@@ -164,7 +186,10 @@ impl Loader {
                 Resolution::Unanswered => {}
             }
         }
-        let module = pycc_hir::lower_module(&parsed, &resolved)
+        let module_name = is_entry
+            .then_some(self.entry_module_name.as_deref())
+            .flatten();
+        let module = pycc_hir::lower_module(&parsed, &resolved, module_name)
             .map_err(|diagnostics| FrontendFailure::compile(&display, &source, diagnostics))?;
         drop(resolved);
 
@@ -230,9 +255,9 @@ impl Loader {
             {
                 continue;
             }
-            self.load_module(&init_canonical, init_display)?;
+            self.load_module(&init_canonical, init_display, false)?;
         }
-        let index = self.load_module(&canonical, target.display)?;
+        let index = self.load_module(&canonical, target.display, false)?;
         Ok(Resolution::Loaded {
             index,
             submodules: target.submodules,

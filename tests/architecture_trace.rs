@@ -102,7 +102,7 @@ fn derive() -> Derived {
     let source = String::from_utf8(canonical_lf(source.as_bytes())).expect("fixture is UTF-8");
     let parsed = pycc_parser::parse_all(&source).expect("the fixture parses");
     let resolved = pycc_hir::ResolvedImports::default();
-    let lowered = pycc_hir::lower_module(&parsed, &resolved).expect("the fixture lowers");
+    let lowered = pycc_hir::lower_module(&parsed, &resolved, None).expect("the fixture lowers");
     let linked = pycc_hir::link(vec![pycc_hir::LinkInput {
         display_path: FIXTURE.to_string(),
         module: lowered,

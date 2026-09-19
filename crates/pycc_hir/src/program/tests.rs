@@ -14,7 +14,7 @@ use crate::{HirItem, ResolvedImports, lower_all, lower_module};
 fn input(display_path: &str, source: &str) -> LinkInput {
     LinkInput {
         display_path: display_path.to_string(),
-        module: lower_module(&parse(source), &ResolvedImports::default())
+        module: lower_module(&parse(source), &ResolvedImports::default(), None)
             .expect("a fixture module must lower"),
     }
 }
@@ -325,7 +325,7 @@ fn foreign_input(display_path: &str, source: &str, import_stmt: &str) -> LinkInp
     );
     LinkInput {
         display_path: display_path.to_string(),
-        module: lower_module(&parse(source), &resolved).expect("a fixture module must lower"),
+        module: lower_module(&parse(source), &resolved, None).expect("a fixture module must lower"),
     }
 }
 
@@ -441,8 +441,8 @@ fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
         Span::new(start as u32, (start + "import json".len()) as u32),
         crate::ResolvedImport::Foreign,
     );
-    let diagnostics =
-        lower_module(&parse(source), &resolved).expect_err("the shadowing module must be refused");
+    let diagnostics = lower_module(&parse(source), &resolved, None)
+        .expect_err("the shadowing module must be refused");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
     assert!(
