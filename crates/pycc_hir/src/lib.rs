@@ -52,9 +52,11 @@ pub use typecheck::{
 /// (`func.rs`, `class.rs`, and twice in `class/protocol.rs`). It is `pub`
 /// because the rule now has a consumer outside HIR lowering as well: D-244
 /// rule 1 exports *every public module-level function* of an `--ext` build,
-/// and the driver derives that export set from the same predicate the
-/// frontend's own `T0001` annotation requirement uses -- so "public" can only
-/// ever mean one thing across the compiler.
+/// and a public `@staticmethod` or `@classmethod` of a public class, and
+/// the driver derives that export set from the same predicate the
+/// frontend's own `T0001` annotation requirement uses -- applied
+/// unchanged to the class name and the method name alike, never forked --
+/// so "public" can only ever mean one thing across the compiler.
 ///
 /// The name is the whole input on purpose. This is a *visibility* predicate
 /// over a source-level identifier, unrelated to `pycc_types`'

@@ -125,7 +125,7 @@ from math import isnan
     DiagnosticExplanation {
         code: "C0003",
         severity: Severity::Error,
-        summary: "--ext cannot carry this public function's signature across the CPython boundary",
+        summary: "--ext cannot carry this public function's or method's signature across the CPython boundary",
         explanation: "\
 C0003 is an `ext`-mode capability gap (D-244), and it is distinct from C0001 \
 in what is missing: the construct itself is fully supported -- pycc compiles \
@@ -133,13 +133,20 @@ the function without complaint for a `native` executable -- but the \
 `PyObject*` boundary that a hosted extension module needs for that \
 signature does not exist yet. `docs/RUNTIME.md`'s `ext` boundary section \
 is the canonical admissibility matrix: which types cross, in which \
-direction, and what each admitted one narrows. Because D-244 rule 1 \
-exports *every* public module-level function (a stable ABI cannot have a \
+direction, what each admitted one narrows, and which members are in the \
+export set at all. Because D-244 rule 1 \
+exports *every* public module-level function -- and, since #1143, every \
+public `@staticmethod` and `@classmethod` of a public non-exception class, \
+published as `mod.Class.method` -- (a stable ABI cannot have a \
 per-function opt-out without also having a way to spell it), one \
 unexportable public signature \
 fails the whole `--ext` build rather than silently shipping an artifact \
-missing a name its source clearly defines. Every gap in a program is \
-reported at once. The two fixes are to make the function private under \
+missing a name its source clearly defines. A member that is not in the \
+export set at all -- an instance method, a `@property`, an \
+`@abstractmethod`, anything on a private or user exception class -- is \
+never a C0003: it is excluded as representation, not reported as a gap. \
+Every gap in a program is \
+reported at once. The two fixes are to make the member private under \
 D-038's rule -- rename it with a leading underscore, which removes it from \
 the export set -- or to build without `--ext`.",
         // The example has to name a signature the boundary still refuses

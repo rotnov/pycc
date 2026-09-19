@@ -368,6 +368,25 @@ carry as a `METH_FASTCALL` wrapper, runs the module body in a PEP 489
 `Py_mod_exec` slot, refuses to initialize on a free-threaded interpreter, and
 rejects any other public signature at compile time as `C0003`.
 
+[#1143](https://github.com/rotnov/pycc/issues/1143) extends that export set
+past module-level functions: a public `@staticmethod` and a public
+`@classmethod` of a public class are exported too, when the class is not a
+user exception class. Such a method is published as a `PyMethodDef` entry in
+its own class's `PyType_FromSpec` type object -- the host calls it as
+`mod.Class.method(...)`, and **no flat `mod."Class.method"` module attribute
+is ever published**. That type is non-instantiable
+(`Py_TPFLAGS_DISALLOW_INSTANTIATION`) and immutable
+(`Py_TPFLAGS_IMMUTABLETYPE`) while instance methods remain unimplemented, so
+admitting them later is purely additive. A `@classmethod` receives the type
+object in `self` and discards it, passing the same null receiver every native
+`Class.method(...)` call site already passes. An instance method, a
+`@property` getter or setter, an `@abstractmethod`, and any method of a
+private class or of a user exception class are **not** exported and are not
+`C0003`: they are excluded as representation, not as a capability gap. A
+public `@staticmethod` or `@classmethod` of a public class whose signature
+the boundary cannot carry *is* a `C0003`, where it was previously skipped in
+silence.
+
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
 `docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than

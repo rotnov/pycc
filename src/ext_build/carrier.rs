@@ -260,26 +260,49 @@ pub(crate) fn render_ty(ty: &Ty) -> &'static str {
     }
 }
 
-/// Builds the `C0003` diagnostic for one unexportable public function.
+/// Builds the `C0003` diagnostic for one unexportable public function or
+/// method.
 ///
 /// Span-less: `HirItem::Function` carries no source range (the whole point
 /// of `pycc_hir`'s lowered form), and `pycc_diag::render_human` renders a
 /// span-less diagnostic as exactly `error[C0003]: <message>`, which is what
 /// `report_build_failure` needs.
+///
+/// `name` is the **compiled** name, so for a method it arrives mangled
+/// (`Grid.scale.static`). Both the subject and the remedy are rendered from
+/// the source-level spelling instead: the subject reads `Grid.scale`, a
+/// spelling the user actually wrote, and the remedy reads `Grid._scale` --
+/// renaming the *method* private is what keeps it out of the export set.
+/// `_Grid.scale` and `_Grid.scale.static` are both unusable, and the second
+/// is what a naive `_{name}` renders.
 pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
+    let source_name = crate::ext_build::source_level_name(name);
+    // `Grid.scale` -> ("Grid.", "scale"); `f` -> ("", "f"). The remedy
+    // renames the last component, which is the method for a method and the
+    // function itself for a module-level `def`.
+    let (owner, member) = match source_name.rsplit_once('.') {
+        Some((class, method)) => (format!("{class}."), method),
+        None => (String::new(), source_name),
+    };
+    let noun = if owner.is_empty() {
+        "function"
+    } else {
+        "method"
+    };
     Diagnostic {
         code: EXT_CAPABILITY_CODE,
         severity: Severity::Error,
         message: format!(
-            "--ext cannot export the public function `{name}`: its {offender} is not a type \
+            "--ext cannot export the public {noun} `{source_name}`: its {offender} is not a type \
              this pycc version's CPython boundary can carry -- a parameter must be `int`, \
              `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
              `NDArray`) or a \
              `tuple` of `int`/`float`/`bool`, and a \
              return type must be one of those except the buffer, or `None` \
              (D-244 rule \
-             1 exports every public module-level function, so there is no way to opt one \
-             out) -- rename it to `_{name}` to keep it out of the export set, or build \
+             1 exports every public module-level function, and a public `@staticmethod` or \
+             `@classmethod` of a public class, so there is no way to opt one \
+             out) -- rename it to `{owner}_{member}` to keep it out of the export set, or build \
              without --ext"
         ),
         span: None,

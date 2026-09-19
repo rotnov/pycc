@@ -412,9 +412,13 @@ fn plan_ext(
         )))
     })?;
     // The rest of the program, which `collect_exports` never visits: a
-    // private function, a method, or a specialization whose return type is
-    // `memoryview` would otherwise reach codegen's own panic for a
-    // `memoryview`-typed call result (Part 1 of #1027).
+    // private function, a specialization, or a method the export set does
+    // not admit -- an instance method, a property, or any method of a
+    // private or exception class -- whose return type is `memoryview` would
+    // otherwise reach codegen's own panic for a `memoryview`-typed call
+    // result (Part 1 of #1027). A public `@staticmethod` or `@classmethod`
+    // of a public non-exception class *is* visited by `collect_exports`
+    // now, and is refused above as a `C0003` rather than here.
     memoryview_mode::refuse_in_ext_mode(typed_hir).map_err(|gaps| {
         ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
             &source_path.display().to_string(),

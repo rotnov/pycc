@@ -976,6 +976,41 @@ the sweep and the per-record shapes — and the third is independent of both:
    consequence is unchanged: prerequisite 2 stays unmet, for both of the
    independent blockers the third correction states.
 
+   **Sixth correction (2026-09-19, [#1143](https://github.com/rotnov/pycc/issues/1143)):
+   the export rule no longer selects module-level functions only, so two of
+   the third correction's clauses are superseded.** PR 1 of #1143 widens
+   D-244 rule 1 to export a public `@staticmethod` and a public
+   `@classmethod` of a public non-exception class, published as
+   `mod.Class.method` on a `PyType_FromSpec` type object. (a) The clause "it
+   is inadmissible purely because D-244 rule 1 exports module-level functions
+   only" is superseded: the row's method kind was measured, numbers only per
+   D-244 rule 6, and it is a **`@staticmethod`**, so the widened rule 1 now
+   admits it into the export set. (b) The closing clause "the denominator
+   claim above is unchanged — it is a statement about module-level functions,
+   which is what the export rule selects today" is superseded in its stated
+   *reason*, not in its effect: the export rule no longer selects module-level
+   functions only, but the denominator is fixed by **pre-registration** rather
+   than by tracking the export rule. `scripts/bench_hosted_ext_precommit.json`
+   pins it at **133** with a digest over that exact set, the enumeration
+   predicate in `scripts/enumerate_annotated_functions.py` is unchanged by
+   this pull request, and re-deriving it on this host reproduces both the
+   count and the digest. Changing it would itself be a pre-registration
+   change, with the "chosen after a result is seen" hazard the protocol's
+   preamble names. The denominator therefore stays **133**.
+
+   **What this does not change: the sufficiency clause still holds, and
+   prerequisite 2 stays unmet.** The third correction's own clause — "closing
+   it is not sufficient on its own: the row spells its array parameter as a
+   PEP 604 union, which [#747](https://github.com/rotnov/pycc/issues/747)
+   tracks as entirely unimplemented" — is unaffected and was re-verified
+   against the row's current signature: three of its four parameters name
+   user-defined classes and the fourth is the PEP 604 union, so the row is in
+   the export set and is a `C0003`, not a scorable compile. **This correction
+   does not narrow [#1039](https://github.com/rotnov/pycc/issues/1039)'s
+   prerequisite 2**, which stays unmet for exactly the reasons the third
+   through fifth corrections state. A **seventh correction follows with PR 2
+   of #1143**; no PR 2 figure appears here.
+
 3. **The pre-registered machine pin no longer matches this host**, which
    would refuse a scored run on its own even with a subject in hand. The
    **Arms** bullet binds the run to the five fields
