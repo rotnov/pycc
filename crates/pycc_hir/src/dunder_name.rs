@@ -6,13 +6,19 @@
 //!
 //! > `__name__` is a compiler-provided module-level `str` binding, seeded as
 //! > the module's first top-level statement. It is provided only when the
-//! > module references the name and *no module of the program* binds the name
-//! > `__name__` anywhere in its own module scope -- neither the entry module
-//! > nor any dependency, because Part 1 of #881 links every module into one
-//! > flat namespace in which the seed and a user binding would be the same
-//! > global. Module scope includes a binding nested inside a top-level
-//! > compound statement, a `match` case capture, and a walrus, none of which
-//! > is a function-body local. A module-scope user binding wins outright:
+//! > module references the name and *no dependency of the program mentions the
+//! > name at all* and the entry module itself does not bind the name
+//! > `__name__` anywhere in its own module scope, because Part 1 of #881 links
+//! > every module into one flat namespace in which the seed and a user binding
+//! > would be the same global. Module scope includes a binding nested inside a
+//! > top-level compound statement, a `match` case capture, and a walrus, none
+//! > of which is a function-body local. A dependency is held to the stricter
+//! > test -- any mention, a read as much as a binding, anywhere in the file --
+//! > because linking places every dependency's top-level statements *ahead* of
+//! > the entry module's seed, so a dependency's read runs before the seed
+//! > stores anything. That includes a read reached indirectly, through a
+//! > dependency's top-level call to one of its own functions, which no
+//! > binding-only test can see. A user binding wins outright:
 //! > nothing is seeded and every
 //! > `__name__` resolves through the ordinary name path, exactly as before
 //! > this change. A value-less annotation (`__name__: str`) is not such a
@@ -98,6 +104,26 @@ fn references_dunder_name(module: &ModModule) -> bool {
     let mut scan = ReferenceScan { found: false };
     scan.visit_body(&module.body);
     scan.found
+}
+
+/// Whether `module` mentions `__name__` at all -- a read as much as a binding,
+/// at any depth, including inside a function or class body.
+///
+/// This is the *dependency* half of the cross-module gate, published on
+/// [`crate::LoweredModule`] and applied by the driver (`src/modules.rs`). It is
+/// deliberately stricter than [`binds_dunder_name_at_module_scope`], which
+/// decides the entry module's own seed: `program::link` concatenates every
+/// dependency's top-level statements *ahead* of the entry module's items, and
+/// the seed is the first of those, so every dependency statement runs before
+/// the seed stores anything. A dependency that merely reads the name therefore
+/// reads an uninitialized global, and the read need not be textually top-level
+/// -- a top-level call to one of the dependency's own functions reaches a
+/// function-body read just the same, which is invisible to any scan that
+/// classifies by binding form. Withholding the seed for the whole program
+/// restores the pre-#1156 behavior there: the name is undefined and the read is
+/// a `T0021`, a diagnostic rather than an artifact that traps at run time.
+pub(crate) fn mentions_dunder_name(module: &ModModule) -> bool {
+    references_dunder_name(module) || binds_dunder_name_at_module_scope(module)
 }
 
 /// Gate 2: whether `module` binds the name `__name__` anywhere in *module

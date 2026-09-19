@@ -115,17 +115,25 @@ pub struct LoweredModule {
     pub hir: HirModule,
     pub shadowed_builtin_exception_name: Option<String>,
     pub definition_spans: Vec<(String, Span)>,
-    /// Whether this module's own module scope binds `__name__` (W0 of #882,
-    /// #1156). The same predicate `dunder_name::seed_item` uses for this
-    /// module's own seed, published so the driver can apply it across modules:
-    /// Part 1 of #881 links every module into one flat namespace, so any
-    /// module's binding is the program's single `__name__` global and must
-    /// withhold the entry module's seed program-wide. Publishing the predicate
-    /// rather than re-deriving it keeps one answer to one question -- an
-    /// earlier revision inferred it from `definition_spans` instead, which
+    /// Whether this module mentions `__name__` at all -- a read as much as a
+    /// binding, at any depth (W0 of #882, #1156). Published so the driver
+    /// (`src/modules.rs`) can apply it to every *dependency*: Part 1 of #881
+    /// links the program into one flat namespace and places every dependency's
+    /// top-level statements ahead of the entry module's seed, so a dependency
+    /// that touches the name at all either collides with the seed or reads the
+    /// global before the seed stores anything. Withholding the seed
+    /// program-wide is the fail-closed answer to both.
+    ///
+    /// Deliberately stricter than the entry module's own gate inside
+    /// `dunder_name::seed_item`, which is a binding test: a dependency's read
+    /// is the case a binding test cannot see, and it need not be textually
+    /// top-level, because a top-level call to one of the dependency's own
+    /// functions reaches a function-body read the same way. Publishing the
+    /// predicate rather than re-deriving it keeps one answer to one question --
+    /// an earlier revision inferred it from `definition_spans` instead, which
     /// records neither import bindings nor anything nested inside a top-level
     /// compound statement, and so answered "no" for both.
-    pub binds_dunder_name: bool,
+    pub mentions_dunder_name: bool,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -240,7 +248,7 @@ pub fn lower_module(
     // registering a synthetic definition there would report a `C0001` against
     // a statement no user wrote. Nothing else depends on that exclusion: a
     // user binding in *any* module withholds the seed program-wide, through
-    // `LoweredModule::binds_dunder_name`, so a seed and a user binding of this
+    // `LoweredModule::mentions_dunder_name`, so a seed and a user binding of this
     // name never coexist in a linked program.
     if let Some(item) = dunder_name::seed_item(module, module_name) {
         state.items.push(item);
@@ -407,7 +415,7 @@ pub fn lower_module(
             seeded_builtin_exception_classes,
         },
         shadowed_builtin_exception_name,
-        binds_dunder_name: dunder_name::binds_dunder_name_at_module_scope(module),
+        mentions_dunder_name: dunder_name::mentions_dunder_name(module),
         definition_spans,
     })
 }

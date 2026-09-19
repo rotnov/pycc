@@ -72,3 +72,22 @@ status: accepted
   programs that are rejected today into programs that compile, so #881's
   per-module namespaces can supersede this entry without invalidating any
   program that compiles under it.
+- Amendment (2026-09-20): the dependency half of the gate is widened from
+  "binds the name" to "mentions the name at all", and this entry's own
+  statement that "a dependency's function-body read observes the entry
+  module's value" is withdrawn with it. That statement held only while nothing
+  in the dependency ran before the seed, and linking places every dependency's
+  top-level statements ahead of it: a dependency whose module scope neither
+  binds nor reads `__name__`, but whose top-level call reaches one of its own
+  functions that does, read the global before the seed had stored anything.
+  `pycc check` accepted such a program and the built artifact aborted at
+  codegen's uninitialized-global trap — a wrong outcome rather than a
+  diagnostic, which is the one thing this entry's design is meant to exclude.
+  Any mention in any dependency now withholds the seed program-wide, so that
+  read is a `T0021` instead. The `T0021` this entry already predicted for a
+  dependency's own top-level read is unchanged; what changes is that the same
+  diagnostic now also covers the indirect and function-body cases, and that a
+  dependency's `if __name__ == "__main__":` is rejected rather than silently
+  taking the entry module's name. This narrows the set of programs that
+  compile, so #881's per-module namespaces still supersede this entry without
+  invalidating any program that compiles under it.

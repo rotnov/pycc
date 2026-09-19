@@ -15,6 +15,10 @@ fn binds(source: &str) -> bool {
     binds_dunder_name_at_module_scope(&parse(source))
 }
 
+fn mentions(source: &str) -> bool {
+    mentions_dunder_name(&parse(source))
+}
+
 fn seed(source: &str, module_name: Option<&str>) -> Option<HirItem> {
     seed_item(&parse(source), module_name)
 }
@@ -337,4 +341,25 @@ fn a_binding_inside_a_function_or_class_body_does_not_bind_module_scope() {
     assert!(!binds(
         "if flag:\n    def f() -> int:\n        __name__ = 7\n        return __name__\n"
     ));
+}
+
+#[test]
+fn mentions_is_the_union_of_both_per_module_gates() {
+    // The dependency test the driver applies. A read alone counts, which is
+    // exactly what `binds` does not see, and a binding that is not a read
+    // counts too, which is what `references` does not see.
+    assert!(mentions("print(__name__)\n"));
+    assert!(mentions("import __name__\n"));
+    assert!(mentions("if flag:\n    __name__ = 7\n"));
+    assert!(!mentions("x = 7\nprint(x)\n"));
+}
+
+#[test]
+fn mentions_counts_a_read_reached_only_through_a_function_body() {
+    // The shape a module-scope binding test cannot see: the dependency's own
+    // module scope neither binds nor reads the name, yet its top-level call
+    // reaches the read before the entry module's seed runs.
+    let source = "def show() -> str:\n    return __name__\n\nprint(show())\n";
+    assert!(!binds(source));
+    assert!(mentions(source));
 }

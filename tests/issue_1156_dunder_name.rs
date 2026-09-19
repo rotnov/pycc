@@ -535,44 +535,81 @@ fn a_dependencys_non_str_binding_withholds_the_entry_seed() {
 }
 
 #[test]
-fn a_dependency_function_reads_the_entry_modules_value() {
-    // The flat-namespace consequence: the entry module's seed is the
-    // program's only `__name__` global, so a dependency's own function reads
-    // it. Correct per-module values wait on #881's per-module namespaces.
-    let dir = ScratchDir::new("dn_multi_run").expect("scratch");
-    std::fs::write(
-        dir.join("dep.py"),
+fn a_dependency_function_body_read_withholds_the_entry_seed() {
+    // A dependency that only *reads* the name still withholds the seed. An
+    // earlier revision let the read observe the entry module's value, which
+    // held only while nothing in the dependency ran before the seed -- and
+    // `program::link` puts every dependency statement ahead of it. Withholding
+    // makes the name undefined, so the read is a `T0021` rather than a value
+    // whose validity depends on where the call happens to appear.
+    let (ok, rendered) = check_program(
+        "dn_dep_body_read",
+        "from dep import report\n\nreport()\nprint(__name__)\n",
         "\
 def report() -> None:
     print(__name__)
 ",
-    )
-    .expect("write the dependency");
-    let src = dir.join("m.py");
-    std::fs::write(
-        &src,
-        "\
-from dep import report
+    );
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+}
 
-report()
-print(__name__)
+#[test]
+fn a_dependencys_top_level_call_into_its_own_function_withholds_the_entry_seed() {
+    // The shape a binding-only dependency test cannot see: nothing in the
+    // dependency's *module scope* binds or reads the name, yet its top-level
+    // call reaches a function-body read -- which runs before the entry seed
+    // stores anything. Before this gate `pycc check` accepted the program and
+    // the built artifact aborted at codegen's uninitialized-global trap, the
+    // one outcome D-246 rules out. It is a diagnostic now.
+    let (ok, rendered) = check_program(
+        "dn_dep_indirect",
+        "from dep import show\n\nprint(__name__)\n",
+        "\
+def show() -> str:
+    return __name__
+
+print(show())
 ",
-    )
-    .expect("write the entry module");
-    let out = dir.join("m");
-    let build = pycc()
-        .arg("build")
-        .arg(&src)
-        .arg("-o")
-        .arg(&out)
-        .output()
-        .expect("pycc should spawn");
-    assert!(build.status.success(), "{}", stderr_of(&build));
-    let run = Command::new(&out)
-        .output()
-        .expect("the artifact should spawn");
-    assert!(run.status.success(), "{}", stderr_of(&run));
-    assert_eq!(stdout_of(&run), "__main__\n__main__\n");
+    );
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+}
+
+#[test]
+fn a_dependency_main_guard_withholds_the_entry_seed() {
+    // `if __name__ == "__main__":` in a dependency is the common shape this
+    // gate protects: the flat namespace would give the dependency the entry
+    // module's own name, so the guard would be true in an imported module and
+    // its body would run -- silently unlike CPython. Withholding the seed
+    // turns that into a diagnostic instead.
+    let (ok, rendered) = check_program(
+        "dn_dep_guard",
+        "from dep import f\n\nprint(__name__)\nprint(f())\n",
+        "\
+def f() -> int:
+    return 1
+
+if __name__ == \"__main__\":
+    print(\"dependency main\")
+",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+}
+
+#[test]
+fn a_dependency_that_never_mentions_the_name_leaves_the_entry_seed_intact() {
+    // The control for the three tests above: the gate keys on the dependency
+    // mentioning the name, not on the program having a dependency at all.
+    assert_eq!(
+        build_and_run_program(
+            "dn_dep_silent",
+            "from dep import f\n\nprint(__name__)\nprint(f())\n",
+            "def f() -> int:\n    return 1\n",
+        ),
+        "__main__\n1\n"
+    );
 }
 
 #[test]

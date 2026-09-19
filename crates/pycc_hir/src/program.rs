@@ -156,7 +156,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             // The driver (`src/modules.rs`) consumes this before `link` runs:
             // it decides whether the entry module is seeded at all, so by the
             // time modules reach linking the answer has already been applied.
-            binds_dunder_name: _,
+            mentions_dunder_name: _,
         } = input.module;
         let mut own: HashSet<&str> = HashSet::new();
         for (name, span) in &definition_spans {
