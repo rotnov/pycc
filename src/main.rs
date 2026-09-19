@@ -438,8 +438,15 @@ fn plan_ext(
     // `scripts/check_diff_coverage.py` then reports as an uncovered
     // changed line (D-242 rule 1).
     let classes = ext_build::collect_user_exception_classes(typed_hir);
-    let ctors = ext_build::collect_constructors(typed_hir, &exports);
-    let inc_body = ext_build::generate_exports_inc(&output.module_name, &exports, &classes, &ctors);
+    let publications = ext_build::collect_class_publications(typed_hir, &exports);
+    let ctors = ext_build::collect_constructors(typed_hir, &publications);
+    let inc_body = ext_build::generate_exports_inc(
+        &output.module_name,
+        &exports,
+        &classes,
+        &publications,
+        &ctors,
+    );
     write_ext_source(&shim, ext_build::SHIM_C)?;
     write_ext_source(&inc, &inc_body)?;
     Ok(ExtPlan {

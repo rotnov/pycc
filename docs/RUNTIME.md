@@ -387,32 +387,59 @@ whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
 [#1145](https://github.com/rotnov/pycc/issues/1145) adds public **instance
-methods** to that export set, but only for a class the host can construct. A
-published class is **constructible** exactly when it is not abstract, not a
-`Protocol` and not an enum; it is not a user or builtin exception class; its
-MRO-resolved `__init__` returns `None`; and every parameter of that `__init__`
-after `self` is carriable by the table below and is not a `tuple`. A
-constructible class's type object drops
+methods** to that export set, and makes publication **MRO-resolved**. Three
+separate predicates decide what the host sees, and they are deliberately not
+the same predicate.
+
+*Which classes are published.* A class gets a type object exactly when its
+MRO-resolved export set is non-empty -- when it or one of its bases exports at
+least one member -- and its own name is public and carries no exception type
+tag. A class that declares no exportable member of its own is published on
+the strength of what it inherits.
+
+*Which methods each type object carries.* Every exported member of the class
+and of its bases, resolved along the class's MRO most-derived-first, with the
+**first hit on a method name winning**, so a derived override shadows its
+base's definition exactly as Python's own attribute lookup does. This holds
+for all three method kinds alike: `mod.Derived(21).value()` reaches a
+`Base.value` declared only on the base, and `mod.Derived.tag()` reaches a
+base's `@staticmethod`. An inherited method's compiled body addresses its own
+class's attribute slots, which is safe because `pycc_hir`'s
+`validate_mro_slot_layout` (#969) rejects, at HIR lowering with `C0001`, every
+multiple-inheritance shape whose ancestor layout is not a name-wise prefix of
+the derived one -- see that function's own documentation for why that is the
+condition.
+
+*Which classes are constructible.* A published class is **constructible**
+exactly when it is not abstract, not a `Protocol` and not an enum; it is not a
+user or builtin exception class; its MRO-resolved `__init__` returns `None`;
+and every parameter of that `__init__` after `self` is carriable by the table
+below and is not a `tuple`. A constructible class's type object drops
 `Py_TPFLAGS_DISALLOW_INSTANTIATION`, gains a `tp_init`, and the host writes
 `mod.Class(...).method(...)`; a class that is not constructible keeps the
-non-instantiable shape above, so `mod.Class()` raises `TypeError`. **Every
-instance method excluded because the class is not constructible is excluded
-as representation, never as a `C0003`** -- an `@abstractmethod` falls under
-that one clause rather than a rule of its own, since an abstract class is
-never constructible. An instance method of a constructible class *is* held to
-the boundary like any other export, so an uncarriable signature there is a
+non-instantiable shape above, so `mod.Class()` raises `TypeError`. A class
+published only for what it inherits is constructible on these same terms, so
+`mod.Derived(21)` works while `mod.Base(...)` may refuse.
+
+An instance method is exported when its **declaring** class is not abstract,
+not a `Protocol`, not an enum and not an exception class, *and* some class in
+the program whose MRO contains it is constructible -- the receiver its
+compiled body needs is then obtainable, whether or not the declaring class can
+be built directly. **Every instance method excluded by that predicate is
+excluded as representation, never as a `C0003`.** An `@abstractmethod` is
+excluded by the declaring-class half, which a constructible subclass does not
+relax: an abstract stub's body returns nothing while its annotation says
+otherwise. An instance method that survives the predicate *is* held to the
+boundary like any other export, so an uncarriable signature there is a
 `C0003`.
 
-Two consequences are deliberate. Publication stays narrower than
-constructibility: a class appears as `mod.Class` only when it exports at
-least one method, so a class with a carriable `__init__` and no public method
-is still not constructible from the host. And `tp_init` is not a
-`METH_FASTCALL` entry point, so it enforces D-244 rule 7's keyword boundary
-itself -- `mod.Class(3, 4, extra=1)` raises `TypeError` because the generated
-`tp_init` refuses a non-empty `kwds`, not because CPython refused it first.
-The instance a constructor allocates is never freed: D-107's arena model,
-narrowed by D-154, gives `pycc_rt` no ownership model, so the leak a `native`
-program bounds at process exit becomes linear in the host's call count.
+Two further consequences are deliberate. `tp_init` is not a `METH_FASTCALL`
+entry point, so it enforces D-244 rule 7's keyword boundary itself --
+`mod.Class(3, 4, extra=1)` raises `TypeError` because the generated `tp_init`
+refuses a non-empty `kwds`, not because CPython refused it first. And the
+instance a constructor allocates is never freed: D-107's arena model, narrowed
+by D-154, gives `pycc_rt` no ownership model, so the leak a `native` program
+bounds at process exit becomes linear in the host's call count.
 
 The table below is the canonical statement of what the `ext` boundary carries
 today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,

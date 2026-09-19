@@ -137,19 +137,20 @@ direction, what each admitted one narrows, and which members are in the \
 export set at all. Because D-244 rule 1 \
 exports *every* public module-level function -- and, since #1143, every \
 public `@staticmethod` and `@classmethod` of a public non-exception class, \
-and since #1145 every public instance method of such a class when the class \
-is *constructible*, published as `mod.Class.method` -- (a stable ABI cannot \
+and since #1145 every public instance method of such a class when some \
+class whose method resolution order contains it is *constructible*, \
+published as `mod.Class.method` -- (a stable ABI cannot \
 have a per-function opt-out without also having a way to spell it), one \
 unexportable public signature \
 fails the whole `--ext` build rather than silently shipping an artifact \
 missing a name its source clearly defines. A member that is not in the \
 export set at all -- a `@property` getter or setter, any member of a \
 private or user exception class, and every instance method excluded \
-because the class is not constructible -- is \
+because no host-obtainable instance can ever receive it -- is \
 never a C0003: it is excluded as representation, not reported as a gap. \
 An `@abstractmethod` is covered by that same clause rather than by a rule \
-of its own: its class is abstract, and an abstract class is never \
-constructible. \
+of its own: an abstract class is never constructible, and a constructible \
+subclass does not make its abstract base's stub receivable. \
 Every gap in a program is \
 reported at once. The two fixes are to make the member private under \
 D-038's rule -- rename it with a leading underscore, which removes it from \

@@ -13,7 +13,33 @@ use super::*;
 /// asserts both generated class functions are still emitted with empty
 /// bodies so an artifact with no such class still links.
 fn inc_no_classes(module_name: &str, exports: &[ExtExport]) -> String {
-    generate_exports_inc(module_name, exports, &[], &[])
+    generate_exports_inc(module_name, exports, &[], &flat_publications(exports), &[])
+}
+
+/// The publication list of a program whose classes inherit nothing: one
+/// entry per exporting class, in first-export order, carrying exactly that
+/// class's own exports.
+///
+/// The inheritance-resolving walk is [`collect_class_publications`]', and it
+/// needs a `HirModule` to see an MRO at all. Every case here hands
+/// [`generate_exports_inc`] a hand-built export list instead, so this helper
+/// states the base-less shape those cases mean, and the resolver's own
+/// behaviour is pinned separately in `exports.rs` against real lowered HIR.
+fn flat_publications(exports: &[ExtExport]) -> Vec<ExtPublishedClass> {
+    let mut published: Vec<ExtPublishedClass> = Vec::new();
+    for export in exports {
+        let Some(class) = &export.class else {
+            continue;
+        };
+        match published.iter_mut().find(|held| held.class == *class) {
+            Some(held) => held.methods.push(export.clone()),
+            None => published.push(ExtPublishedClass {
+                class: class.clone(),
+                methods: vec![export.clone()],
+            }),
+        }
+    }
+    published
 }
 
 /// The generated companion for a program lowered from real source, so the
@@ -26,7 +52,7 @@ fn inc_from_source(source: &str) -> String {
     std::fs::write(&src, source).expect("write source");
     let module = crate::frontend::resolve_frontend(&src)
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
-    generate_exports_inc("m", &[], &collect_user_exception_classes(&module), &[])
+    generate_exports_inc("m", &[], &collect_user_exception_classes(&module), &[], &[])
 }
 
 #[test]
@@ -1778,6 +1804,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
         "m",
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
+        &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::Int, Ty::Int], 2)],
     );
     assert!(
@@ -1880,6 +1907,7 @@ fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
         "m",
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
+        &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(Vec::new(), 0)],
     );
     assert!(
@@ -1905,6 +1933,7 @@ fn a_one_argument_constructor_says_argument_in_the_singular() {
         "m",
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
+        &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::Int], 1)],
     );
     assert!(
@@ -1922,6 +1951,7 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
         "m",
         &[instance_export("Grid", "area", vec![], Ty::Int)],
         &[],
+        &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
         &[grid_ctor(vec![Ty::MemoryView], 1)],
     );
     assert!(
@@ -1947,12 +1977,12 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
 
 #[test]
 fn a_published_class_with_no_constructor_descriptor_keeps_part_ones_bytes() {
-    // The scope line: publication is decided by the export list and
+    // The scope line: publication is decided by `publications` and
     // constructibility by `ctors`, so a class absent from `ctors` must emit
     // exactly what #1143 emitted -- no `tp_init`, no extra slots,
     // `basicsize` zero and `DISALLOW_INSTANTIATION` intact.
     let exports = [instance_export("Grid", "area", vec![], Ty::Int)];
-    let without = generate_exports_inc("m", &exports, &[], &[]);
+    let without = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
     assert!(!without.contains("pycc_ext_tp_init_Grid"), "{without}");
     assert!(
         without.contains(
@@ -1974,10 +2004,10 @@ fn a_published_class_with_no_constructor_descriptor_keeps_part_ones_bytes() {
 
 #[test]
 fn a_constructor_descriptor_for_an_unpublished_class_emits_nothing() {
-    // `class_order` is built from the exports alone, so a constructor
-    // descriptor whose class publishes no method must not conjure a type
-    // object -- the two sets are deliberately not the same set.
-    let inc = generate_exports_inc("m", &[], &[], &[grid_ctor(vec![Ty::Int], 1)]);
+    // The class list is `publications` alone, so a constructor descriptor
+    // whose class publishes no method must not conjure a type object -- the
+    // two sets are deliberately not the same set.
+    let inc = generate_exports_inc("m", &[], &[], &[], &[grid_ctor(vec![Ty::Int], 1)]);
     assert!(!inc.contains("pycc_ext_tp_init_Grid"), "{inc}");
     assert!(!inc.contains("PyType_FromSpec"), "{inc}");
 }
@@ -2016,4 +2046,65 @@ fn the_shim_defines_the_carrier_and_the_shared_dealloc_above_the_generated_inclu
         shim.contains("extern void *pycc_rt_instance_new(long long slot_count);"),
         "{shim}"
     );
+}
+
+#[test]
+fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
+    // The rendered half of #1145's inheritance fix, end to end from a
+    // `HirModule`: `Derived`'s table names `Base.value`'s wrapper -- the one
+    // `generate_exports_inc` emitted once, from the export list -- and
+    // `Derived` gets its own type object and `tp_init` although it declares
+    // no exportable member of its own.
+    let mut derived = constructible_class_def("Derived");
+    derived.mro = vec!["Derived".to_string(), "Base".to_string()];
+    let hir = module_with_classes(
+        vec![
+            init_func("Base", &[("w", Ty::Int)], Ty::None),
+            func(
+                "Base.value",
+                &[("self", Ty::Instance(Box::new("Base".to_string())))],
+                Ty::Int,
+            ),
+            init_func("Derived", &[("w", Ty::Int)], Ty::None),
+        ],
+        vec![
+            ("Base".to_string(), constructible_class_def("Base")),
+            ("Derived".to_string(), derived),
+        ],
+    );
+    let exports = collect_exports(&hir).expect("a carriable program");
+    let publications = collect_class_publications(&hir, &exports);
+    let ctors = collect_constructors(&hir, &publications);
+    let inc = generate_exports_inc("m", &exports, &[], &publications, &ctors);
+    // One wrapper, two rows: the inherited row points at the base's own
+    // compiled symbol, so nothing is generated twice.
+    assert_eq!(
+        inc.matches("static PyObject *pycc_ext_wrap_0m4_Base5_value")
+            .count(),
+        1,
+        "{inc}"
+    );
+    let row = "    {\"value\", (PyCFunction)(void (*)(void))pycc_ext_wrap_0m4_Base5_value, \
+               METH_FASTCALL, NULL},\n";
+    assert!(
+        inc.contains(&format!(
+            "static PyMethodDef pycc_ext_type_methods_Derived[] = {{\n{row}"
+        )),
+        "{inc}"
+    );
+    assert!(
+        inc.contains(&format!(
+            "static PyMethodDef pycc_ext_type_methods_Base[] = {{\n{row}"
+        )),
+        "{inc}"
+    );
+    assert!(inc.contains("pycc_ext_tp_init_Derived"), "{inc}");
+    // Both classes reach the module, in publication order.
+    let base_at = inc
+        .find("PyModule_AddObjectRef(module, \"Base\"")
+        .expect("Base registered");
+    let derived_at = inc
+        .find("PyModule_AddObjectRef(module, \"Derived\"")
+        .expect("Derived registered");
+    assert!(base_at < derived_at, "{inc}");
 }

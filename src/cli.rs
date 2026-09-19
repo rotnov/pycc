@@ -48,11 +48,13 @@ pub enum Command {
         /// Build a hosted CPython extension module (D-244) instead of a
         /// native executable: every public module-level function, every
         /// public `@staticmethod` and `@classmethod` of a public class, and
-        /// every public instance method of a public *constructible* class,
-        /// becomes a callable of one stable-ABI artifact that a CPython
-        /// interpreter imports -- a method as `mod.Class.method`, an
-        /// instance method on an instance the host builds with
-        /// `mod.Class(...)`. `-o` names
+        /// every public instance method of a public class that some
+        /// *constructible* class's method resolution order reaches, becomes
+        /// a callable of one stable-ABI artifact that a CPython interpreter
+        /// imports -- a method as `mod.Class.method`, an instance method on
+        /// an instance the host builds with `mod.Class(...)`. Each class's
+        /// method table is MRO-resolved, so an inherited method is reachable
+        /// on the derived class and a derived override shadows it. `-o` names
         /// that artifact; `docs/CLI_SPEC.md:23-63` is
         /// the canonical statement of how its suffix and module name are
         /// derived. `docs/RUNTIME.md`'s `ext` boundary section is the

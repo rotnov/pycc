@@ -153,7 +153,7 @@ fn every_admitted_argument_type_refuses_before_the_call_and_after_the_arity_chec
         let hir = module(vec![func(name, &params, Ty::Int)]);
         let exports = collect_exports(&hir).expect("every row is a carriable signature");
         let carrier = boundary_carrier(&ty).expect("every row is an admitted argument type");
-        let inc = generate_exports_inc("m", &exports, &[], &[]);
+        let inc = generate_exports_inc("m", &exports, &[], &[], &[]);
         for index in 0..params.len() {
             for arm in refusal_arms(&carrier, name, index) {
                 assert_arm_refuses(&inc, &arm);

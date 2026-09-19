@@ -9,7 +9,7 @@
 
 use super::export_name::ExtReceiver;
 use super::{
-    ExtCtor, ExtExport, arg_slot_locals, boundary_carrier, buffer_releases, c_param_list,
+    ExtCtor, ExtPublishedClass, arg_slot_locals, boundary_carrier, buffer_releases, c_param_list,
     source_level_name, unpack_args,
 };
 
@@ -35,12 +35,17 @@ pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
 /// subinterpreters and of free-threaded hosts, so nothing here needs
 /// `PyType_GetModule`.
 ///
-/// **Publication is narrower than constructibility.** `class_order` is built
-/// from the *export* list, so a class with a perfectly carriable `__init__`
-/// but no public method gets no type object at all and cannot be
-/// constructed: a class appears only when it has something to publish. That
-/// is the scope line D-244 rule 1's #1145 amendment states, not an
-/// accident of this loop.
+/// **The class list and each table's rows are resolved upstream.**
+/// `publications` is [`collect_class_publications`]' output: one entry per
+/// class that resolves at least one exported member through its MRO, each
+/// carrying that MRO-resolved method set with a derived override already
+/// shadowing its base's definition. A class that resolves nothing -- one
+/// with a perfectly carriable `__init__` but no public method anywhere in
+/// its MRO -- gets no type object at all and so cannot be constructed. This
+/// function renders that decision and never re-derives it, so the MRO walk
+/// exists once (`AGENTS.md`'s canonical-statement rule).
+///
+/// [`collect_class_publications`]: super::collect_class_publications
 ///
 /// A class in `ctors` is **constructible**: its spec carries
 /// `basicsize = sizeof(PyccExtInstance)`, the slots `Py_tp_new`
@@ -68,27 +73,15 @@ pub(crate) const METHOD_TYPE_REGISTER_DECL: &str =
 /// discipline [`exception_classes_c`] follows.
 ///
 /// [`exception_classes_c`]: super::exception_classes_c
-pub(crate) fn method_types_c(exports: &[ExtExport], ctors: &[ExtCtor]) -> String {
-    // Classes in first-export order, deduplicated: the emitted `.inc` must
-    // be byte-identical across runs, so this never walks a hash map.
-    let mut class_order: Vec<&str> = Vec::new();
-    for export in exports {
-        if let Some(class) = &export.class
-            && !class_order.contains(&class.as_str())
-        {
-            class_order.push(class.as_str());
-        }
-    }
+pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCtor]) -> String {
     let mut out = String::new();
-    for class in &class_order {
+    for published in publications {
+        let class = &published.class;
         let ctor = ctors.iter().find(|ctor| ctor.class == *class);
         out.push_str(&format!(
             "static PyMethodDef pycc_ext_type_methods_{class}[] = {{\n"
         ));
-        for export in exports
-            .iter()
-            .filter(|export| export.class.as_deref() == Some(*class))
-        {
+        for export in &published.methods {
             let method = export
                 .method
                 .as_deref()
@@ -156,12 +149,12 @@ pub(crate) fn method_types_c(exports: &[ExtExport], ctors: &[ExtCtor]) -> String
         ));
     }
     out.push_str(&format!("{METHOD_TYPE_REGISTER_DECL}\n{{\n"));
-    if class_order.is_empty() {
+    if publications.is_empty() {
         out.push_str("    (void)module;\n    return 0;\n}\n");
         return out;
     }
     out.push_str("    PyObject *type;\n");
-    for class in &class_order {
+    for class in publications.iter().map(|published| &published.class) {
         // `PyModule_AddObjectRef` takes its own reference, so the local one
         // is released on both arms. Releasing it on the failing arm too is
         // what keeps a failed registration from leaking the type.

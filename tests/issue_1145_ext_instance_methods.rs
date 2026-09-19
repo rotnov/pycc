@@ -220,12 +220,14 @@ else:
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn an_abstract_base_is_excluded_while_its_concrete_subclass_is_not() {
     // The abstract exclusion is carried entirely by `is_abstract` inside the
-    // constructibility predicate, so an `@abstractmethod`'s stub body -- which
-    // returns nothing while its `return_ty` says otherwise -- is never
-    // reachable from the host. `Shape` has no exportable member at all, so it
-    // gets no type object; `Sq`, which overrides the method, is a full
-    // constructible export. The `C0003` wording for the general case is
-    // "excluded because the class is not constructible".
+    // declaring-class half of the export predicate, so an `@abstractmethod`'s
+    // stub body -- which returns nothing while its `return_ty` says otherwise
+    // -- is never reachable from the host, and a constructible subclass does
+    // not relax that half. `Shape` therefore exports nothing and gets no type
+    // object even though `Sq` is constructible; `Sq`, which overrides the
+    // method, is a full constructible export. The `C0003` wording for the
+    // general case is "excluded because no host-obtainable instance can ever
+    // receive it".
     let dir = ScratchDir::new("ext_1145_abstract").expect("scratch");
     build_ext(
         &dir,
@@ -469,6 +471,101 @@ try:
     raise failing.Failure('boom')
 except failing.Failure as exc:
     assert isinstance(exc, Exception)
+",
+    );
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_inherited_method_is_reachable_on_the_derived_class() {
+    // The defect the #1145 review found: publication was by *declaring*
+    // class, so `mod.Derived(21).twice()` answered while
+    // `mod.Derived(21).value()` raised `AttributeError`. Publication is
+    // MRO-resolved now, so a base's instance method, a base's
+    // `@staticmethod` and a derived override all reach the host -- and the
+    // override is the definition that answers.
+    let dir = ScratchDir::new("ext_1145_inherited").expect("scratch");
+    build_ext(
+        &dir,
+        "inh",
+        "\
+class Base:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def value(self) -> int:
+        return self.n
+
+    def label(self) -> int:
+        return 1
+
+    @staticmethod
+    def tag() -> int:
+        return 7
+
+
+class Derived(Base):
+    def twice(self) -> int:
+        return self.n * 2
+
+    def label(self) -> int:
+        return 2
+",
+    );
+    run_python(
+        &dir,
+        "\
+import inh
+d = inh.Derived(21)
+assert d.twice() == 42, d.twice()
+assert d.value() == 21, d.value()
+assert d.label() == 2, d.label()
+assert inh.Base(21).label() == 1, inh.Base(21).label()
+assert inh.Derived.tag() == 7, inh.Derived.tag()
+assert inh.Base(3).value() == 3, inh.Base(3).value()
+assert not hasattr(inh, 'Base.value'), dir(inh)
+assert not hasattr(inh, 'Derived.value'), dir(inh)
+",
+    );
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_class_whose_exportable_members_are_all_inherited_is_still_constructible() {
+    // A derived class that declares no exportable member of its own got no
+    // type object at all before the fix, and so could not be constructed
+    // either. Its base here is deliberately *unconstructible* -- a `tuple`
+    // parameter on `__init__` -- which proves publication and
+    // constructibility are separate predicates rather than one.
+    let dir = ScratchDir::new("ext_1145_inherit_only").expect("scratch");
+    build_ext(
+        &dir,
+        "inhonly",
+        "\
+class Base:
+    def __init__(self, n: int, p: tuple[int, int]) -> None:
+        self.n = n
+
+    def value(self) -> int:
+        return self.n
+
+
+class Derived(Base):
+    def __init__(self, n: int) -> None:
+        self.n = n
+",
+    );
+    run_python(
+        &dir,
+        "\
+import inhonly
+assert inhonly.Derived(9).value() == 9, inhonly.Derived(9).value()
+try:
+    inhonly.Base(1, (1, 2))
+except TypeError:
+    pass
+else:
+    raise AssertionError('an unconstructible base must refuse instantiation')
 ",
     );
 }

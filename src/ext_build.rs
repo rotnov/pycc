@@ -31,7 +31,7 @@ use crate::ext_output::ExtPlatform;
 use pycc_diag::Diagnostic;
 use pycc_hir::{
     BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule, Ty,
-    flat_attr_layout, is_builtin_exception_class,
+    flat_attr_layout, is_builtin_exception_class, is_public_name,
 };
 use std::collections::HashMap;
 #[cfg(test)]
@@ -474,14 +474,15 @@ pub(crate) struct ExtExport {
 /// `mod.<Class>.<method>` module attribute. [`classify_export_name`] owns
 /// the lexical half of that verdict.
 ///
-/// An instance method is published only on a **constructible** class --
-/// [`class_constructible`] is the canonical statement of that predicate --
-/// because a method the host has no way to obtain a receiver for would be
-/// an unreachable entry. That ordering is also what bounds the new
-/// `C0003` set: a class `pycc` cannot construct contributes no new gaps at
-/// all, so an `@abstractmethod`'s stub body and a `@property` getter are
-/// **excluded as representation, before [`unsupported_boundary_ty`] is
-/// consulted**, exactly as the suffixed spellings that preceded them were.
+/// An instance method is exported only from a class some host-obtainable
+/// instance can be a receiver for -- [`instance_methods_reachable`] is the
+/// canonical statement of that predicate -- because a method no instance
+/// can ever reach would be an unreachable entry. That ordering is also what
+/// bounds the new `C0003` set: a class no constructible class inherits
+/// contributes no new gaps at all, so an `@abstractmethod`'s stub body and
+/// a `@property` getter are **excluded as representation, before
+/// [`unsupported_boundary_ty`] is consulted**, exactly as the suffixed
+/// spellings that preceded them were.
 ///
 /// "Public" is D-038's predicate, `pycc_hir::is_public_name`, applied to
 /// the class name and the method name alike. The exclusions that are not
@@ -496,14 +497,16 @@ pub(crate) struct ExtExport {
 ///   spelling with an ordinary instance method and is told apart here by
 ///   `HirClassDef::properties`, whose `getter` field holds exactly that
 ///   mangled name;
-/// * every instance method of a class that is not constructible, which is
-///   what removes an `@abstractmethod`'s stub body: such a method survives
-///   lowering only on an `is_abstract` class (a class carrying its own
-///   `@abstractmethod` without an `ABC` base is rejected with `C0001` by
-///   `crates/pycc_hir/src/class.rs`'s unoverridden-abstract check), and an
-///   `is_abstract` class is never constructible. The exclusion story is
-///   therefore *"excluded because the class is not constructible"*, never
-///   *"excluded because the method is abstract"*.
+/// * every instance method of a class [`instance_methods_reachable`]
+///   refuses, which is what removes an `@abstractmethod`'s stub body: such
+///   a method survives lowering only on an `is_abstract` class (a class
+///   carrying its own `@abstractmethod` without an `ABC` base is rejected
+///   with `C0001` by `crates/pycc_hir/src/class.rs`'s unoverridden-abstract
+///   check), and that predicate refuses an `is_abstract` class outright --
+///   unlike an unconstructible `__init__` shape, which a constructible
+///   subclass does rescue. The exclusion story is therefore *"excluded
+///   because no host instance can ever receive it"*, never *"excluded
+///   because the method is abstract"*.
 ///
 /// Routing any of them through the gap collector instead would turn a
 /// public ABC into a build failure on a signature the boundary carries
@@ -595,7 +598,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             }) {
                 continue;
             }
-            if !class_constructible(module, class) {
+            if !instance_methods_reachable(module, class) {
                 continue;
             }
         }
@@ -744,9 +747,11 @@ pub(crate) fn resolved_init<'a>(module: &'a HirModule, class: &str) -> Option<Re
 /// canonical statement of D-244's #1145 amendment clause (b), and the
 /// predicate every instance-method exclusion cites.
 ///
-/// *Publication* is narrower still and is decided elsewhere: `method_types_c`
-/// builds its class list from the export set, so a class with no exported
-/// member gets no type object at all and is not constructible however this
+/// *Publication* is decided elsewhere, by [`collect_class_publications`]: a
+/// class gets a type object exactly when its MRO-resolved method set is
+/// non-empty, which since #1145's inheritance fix includes a class that
+/// declares no exportable member of its own. A class with an empty resolved
+/// set gets no type object at all and is not constructible however this
 /// answers. What this function adds is which *published* class gets a
 /// `Py_tp_init`.
 ///
@@ -788,15 +793,58 @@ pub(crate) fn class_constructible(module: &HirModule, class: &str) -> bool {
     ctor_descriptor(module, class).is_some()
 }
 
+/// [`class_constructible`]'s conditions 1 and 2 -- the ones about the
+/// class's own *shape* rather than about its `__init__` -- factored out so
+/// [`instance_methods_reachable`] can hold them while relaxing conditions 3
+/// and 4, instead of restating them (`AGENTS.md`'s canonical-statement
+/// rule).
+fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
+    !class_def.is_abstract
+        && !class_def.is_protocol
+        && !class_def.is_enum
+        && class_def.exception_type_tag.is_none()
+        && !is_builtin_exception_class(class)
+}
+
+/// Whether an instance method *declared by* `class` can ever reach the host
+/// -- the predicate [`collect_exports`] applies to the bare method spelling,
+/// and the canonical statement of D-244 rule 1's #1145 receiver-reachability
+/// clause.
+///
+/// Strictly wider than [`class_constructible`], and deliberately so. A
+/// method is lowered once against its own class's slot layout and is then
+/// inherited by every subclass, so `Derived(21).value()` reaches
+/// `Base.value`'s compiled body even when `Base` itself can never be built
+/// from the host -- an unannotated or `tuple`-carrying `__init__` makes
+/// `Base` unconstructible without making its methods unreachable. The
+/// answer is therefore "*some* class whose MRO contains `class` is
+/// constructible", and `mro[0]` is the class itself, so a constructible
+/// class answers for its own methods.
+///
+/// [`class_constructible`]'s conditions 3 and 4 are the ones a constructible
+/// subclass rescues. Conditions 1 and 2 -- [`instance_shape_admissible`] --
+/// are not: an `@abstractmethod`'s stub body returns nothing while its
+/// `return_ty` says otherwise, so exporting it from an `is_abstract` base
+/// would emit a wrapper over a body that never returns, and an exception
+/// class publishes no type object at all.
+fn instance_methods_reachable(module: &HirModule, class: &str) -> bool {
+    let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
+        return false;
+    };
+    if !instance_shape_admissible(class_def, class) {
+        return false;
+    }
+    module.class_defs.iter().any(|(held, def)| {
+        def.mro.iter().any(|entry| entry == class) && class_constructible(module, held)
+    })
+}
+
 /// [`class_constructible`]'s answer with the generated `Py_tp_init`'s inputs
 /// attached: one function, so the predicate and the descriptor can never
 /// disagree about which classes are constructible.
 fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
     let (_, class_def) = module.class_defs.iter().find(|(held, _)| held == class)?;
-    if class_def.is_abstract || class_def.is_protocol || class_def.is_enum {
-        return None;
-    }
-    if class_def.exception_type_tag.is_some() || is_builtin_exception_class(class) {
+    if !instance_shape_admissible(class_def, class) {
         return None;
     }
     let (name, params, return_ty) = resolved_init(module, class)?;
@@ -828,20 +876,42 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
 /// a slot -- merged `@dataclass` fields, an exception class's empty
 /// attribute list -- and `pycc_mir` delegates to it too, so the count the
 /// generated `tp_init` allocates is by construction the one
-/// `MirExpr::Instantiate` passes for the same class. An MRO entry that is
-/// not a class defined in this program (a synthetic builtin exception base)
-/// contributes no slots and is skipped, which is what `resolve_mro_defs`
-/// does on the `pycc_hir` side.
+/// `MirExpr::Instantiate` passes for the same class.
+///
+/// That parity is what forbids skipping an MRO entry this program does not
+/// define. The counterpart on the MIR side is `pycc_mir::class`'s
+/// `mro_attrs`/`mro_class_def`, which does not skip such an entry either --
+/// it panics with an internal error, pinned by
+/// `mro_attrs_with_a_ghost_class_in_the_mro_panics_with_an_internal_error`
+/// (`crates/pycc_mir/src/tests/class_mro.rs`). Skipping here while
+/// `mro_attrs` panics there would mean under-allocating an instance whose
+/// inherited compiled methods then index past its own storage, so this path
+/// fails the same way instead. It is unreachable on any program `pycc check`
+/// accepts: `validate_bases` rejects a base this module does not define, and
+/// the one MRO entry that can be absent from `HirModule::class_defs` -- a
+/// synthetic builtin exception base dropped as `pycc_hir::link` concatenates
+/// -- only ever appears in the MRO of an exception class, which
+/// [`instance_shape_admissible`] already refused above.
 fn instance_slot_count(module: &HirModule, class_def: &HirClassDef) -> usize {
     let mro_defs: Vec<&HirClassDef> = class_def
         .mro
         .iter()
-        .filter_map(|mro_class| {
-            module
+        .map(|mro_class| {
+            match module
                 .class_defs
                 .iter()
                 .find(|(held, _)| held == mro_class)
                 .map(|(_, def)| def)
+            {
+                Some(def) => def,
+                None => panic!(
+                    "pycc: internal error: class `{}` lists `{mro_class}` in its \
+                     method resolution order but this program defines no such \
+                     class -- pycc_hir::class refuses a base the module does not \
+                     define, so this HIR should never have been built",
+                    class_def.name
+                ),
+            }
         })
         .collect();
     flat_attr_layout(&mro_defs).len()
@@ -867,26 +937,122 @@ pub(crate) struct ExtCtor {
     pub(crate) slot_count: usize,
 }
 
-/// The constructible classes among the export set's classes, in first-export
-/// order.
+/// The constructible classes among the published ones, in publication order.
 ///
-/// Ordered off `exports` and never off a hash map, for the same reason
-/// [`method_types_c`] builds its class list that way: the generated `.inc`
-/// must be byte-identical across runs.
-pub(crate) fn collect_constructors(module: &HirModule, exports: &[ExtExport]) -> Vec<ExtCtor> {
-    let mut ctors: Vec<ExtCtor> = Vec::new();
+/// Driven by [`collect_class_publications`] rather than by the export set
+/// directly, so a class that declares no exportable member of its own but
+/// inherits one -- published since #1145's inheritance fix -- gets its
+/// `Py_tp_init` too. Ordered off that list and never off a hash map,
+/// because the generated `.inc` must be byte-identical across runs.
+pub(crate) fn collect_constructors(
+    module: &HirModule,
+    publications: &[ExtPublishedClass],
+) -> Vec<ExtCtor> {
+    publications
+        .iter()
+        .filter_map(|published| ctor_descriptor(module, &published.class))
+        .collect()
+}
+
+/// One published class: the host-visible type object's name and the exact
+/// `PyMethodDef` rows it carries.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ExtPublishedClass {
+    /// The class's own (unqualified) Python name.
+    pub(crate) class: String,
+    /// The methods published on this class's type object, MRO-resolved:
+    /// every exported member of the class and of its bases, first MRO hit
+    /// winning, in the order [`collect_class_publications`] resolves them.
+    /// Each entry is an [`ExtExport`] the export set already holds, so every
+    /// row names a `pycc_ext_wrap_` that [`generate_exports_inc`] really
+    /// emits.
+    pub(crate) methods: Vec<ExtExport>,
+}
+
+/// The published classes and, for each, its MRO-resolved method set.
+///
+/// **MRO-resolved, not own-declared.** A method is lowered once against its
+/// own class's slot layout and inherited unchanged, so `mod.Derived(21)`
+/// must answer `value()` as well as `twice()`. Resolving the set here is
+/// what publishes it: the walk is `class_def.mro`, most derived first --
+/// the same order [`resolved_init`] walks for `__init__` -- and the first
+/// hit on a given method name wins, so a derived override shadows its base's
+/// definition exactly as Python's own attribute lookup does. That direction
+/// is the opposite of [`collect_exports`]' `(class, method)` dedup, which
+/// keeps the *last* binding because a rebound name is what `Grid.f` means in
+/// one class body.
+///
+/// **Why an inherited method may be published at all.** A base method's
+/// compiled body addresses its own class's slot indices, and
+/// `crates/pycc_hir/src/class/mro.rs`'s `validate_mro_slot_layout` (#969)
+/// rejects with
+/// `C0001`, during HIR lowering, every multiple-inheritance shape whose
+/// ancestor layout is not a name-wise prefix of the derived one -- see that
+/// function's own doc for why. So a base method invoked with a derived
+/// instance addresses the same attributes, and this path inherits that
+/// invariant rather than restating it.
+///
+/// The class list is the export set's classes in first-export order, then
+/// every remaining class that resolves something, in `HirModule::class_defs`
+/// order: a class with no export of its own has no first-export position,
+/// and appending is the only deterministic slot for it. Deterministic is the
+/// requirement -- the generated `.inc` must be byte-identical across runs,
+/// so neither list is ever built from a hash map.
+///
+/// A class is publishable when [`is_public_name`] accepts its name and it is
+/// not an exception class: [`register_class_c`] already publishes a user
+/// exception class under its bare name, and a second `PyModule_AddObjectRef`
+/// under that name would replace it. Both are already true of every class in
+/// the export set -- [`classify_export_name`] and [`collect_exports`]'
+/// exception filter see to that -- so the test bites only on an inheriting
+/// class that exports nothing itself. Abstractness is deliberately *not*
+/// tested: Part 1 published a `@staticmethod` on an abstract class, and an
+/// abstract class exports no instance method to begin with
+/// ([`instance_methods_reachable`]).
+pub(crate) fn collect_class_publications(
+    module: &HirModule,
+    exports: &[ExtExport],
+) -> Vec<ExtPublishedClass> {
+    let mut order: Vec<&str> = Vec::new();
     for export in exports {
-        let Some(class) = &export.class else {
-            continue;
-        };
-        if ctors.iter().any(|held| held.class == *class) {
-            continue;
-        }
-        if let Some(ctor) = ctor_descriptor(module, class) {
-            ctors.push(ctor);
+        if let Some(class) = &export.class
+            && !order.contains(&class.as_str())
+        {
+            order.push(class.as_str());
         }
     }
-    ctors
+    for (class, _) in &module.class_defs {
+        if !order.contains(&class.as_str()) {
+            order.push(class.as_str());
+        }
+    }
+    let mut published: Vec<ExtPublishedClass> = Vec::new();
+    for class in order {
+        let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
+            continue;
+        };
+        if !is_public_name(class) || class_def.exception_type_tag.is_some() {
+            continue;
+        }
+        let mut methods: Vec<ExtExport> = Vec::new();
+        for ancestor in &class_def.mro {
+            for export in exports
+                .iter()
+                .filter(|export| export.class.as_deref() == Some(ancestor.as_str()))
+            {
+                if !methods.iter().any(|held| held.method == export.method) {
+                    methods.push(export.clone());
+                }
+            }
+        }
+        if !methods.is_empty() {
+            published.push(ExtPublishedClass {
+                class: class.to_string(),
+                methods,
+            });
+        }
+    }
+    published
 }
 
 mod carrier;
@@ -1127,8 +1293,7 @@ fn exception_classes_c(classes: &[UserExceptionClass]) -> String {
 /// Renders the generated C companion to [`SHIM_C`]: the module name macros,
 /// the user-exception-class table ([`exception_classes_c`]), one
 /// `METH_FASTCALL` wrapper per export, the module-level `PyMethodDef`
-/// table, and one non-instantiable type object per exporting class
-/// (`method_types_c`).
+/// table, and one type object per published class (`method_types_c`).
 ///
 /// `module_name` is already known to be a valid ASCII Python identifier
 /// (`ext_output::resolve` rejects everything else before this runs). An
@@ -1149,6 +1314,7 @@ pub(crate) fn generate_exports_inc(
     module_name: &str,
     exports: &[ExtExport],
     classes: &[UserExceptionClass],
+    publications: &[ExtPublishedClass],
     ctors: &[ExtCtor],
 ) -> String {
     let mut out = String::new();
@@ -1175,7 +1341,7 @@ pub(crate) fn generate_exports_inc(
         ));
     }
     out.push_str("    {NULL, NULL, 0, NULL},\n};\n\n");
-    out.push_str(&method_types_c(exports, ctors));
+    out.push_str(&method_types_c(publications, ctors));
     out
 }
 
