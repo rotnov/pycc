@@ -1233,10 +1233,13 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
 /// the instance `__dict__` only once an `__init__` that assigns it has
 /// run. This predicate asks a static question instead -- does any class
 /// linearized in `mro` declare the slot at all -- because a compiled
-/// instance has no `__dict__`. `crates/pycc_hir/src/class/mro.rs`'s
-/// `validate_mro_slot_layout` (#969) makes every ancestor layout a
-/// name-wise prefix of the derived one, so a slot declared anywhere on the
-/// MRO occupies a fixed offset in every subclass whether or not the
+/// instance has no `__dict__`. Every ancestor layout is a name-wise
+/// prefix of the derived one: in a single-inheritance chain by
+/// construction, since `crates/pycc_hir/src/class/mro.rs`'s
+/// `flat_attr_layout` assigns slots most-base-first, and under multiple
+/// inheritance because `validate_mro_slot_layout` (#969) rejects every
+/// shape where that would not hold. A slot declared anywhere on the MRO
+/// therefore occupies a fixed offset in every subclass whether or not the
 /// `__init__` that assigns it is the one a given construction reaches.
 /// The two conditions differ exactly where an override's `__init__` skips
 /// its base's: for `class Base: def __init__(self): self.value = 5` with a

@@ -410,9 +410,12 @@ that is not a data descriptor -- so no class owns it and no callable is
 published under it, wherever in the MRO that slot was assigned and wherever
 the method it hides was declared. Rule one is a *static* test, deliberately
 broader than CPython's own per-instance one: a compiled instance has no
-`__dict__`, and `validate_mro_slot_layout` (#969) gives a slot declared
-anywhere on the MRO a fixed offset in every subclass whether or not the
-`__init__` assigning it is the one a given construction reaches. The two
+`__dict__`, and a slot declared anywhere on the MRO has a fixed offset in
+every subclass -- in a single-inheritance chain by construction, since
+`flat_attr_layout` assigns slots most-base-first, and under multiple
+inheritance because `validate_mro_slot_layout` (#969) rejects every shape
+where that would not hold -- whether or not the `__init__` assigning it is
+the one a given construction reaches. The two
 diverge exactly where an override's `__init__` skips its base's, and the
 artifact is lossy there rather than wrong: for a `Base` assigning
 `self.value` and a `Derived(Base)` whose `__init__` calls no `super()` and
