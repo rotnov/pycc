@@ -27,7 +27,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "first".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -35,7 +35,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "second".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -43,7 +43,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "third".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -51,7 +51,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "scaled".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Float],
                 return_ty: Ty::Float,
             },
@@ -59,7 +59,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "negated".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Bool],
                 return_ty: Ty::Bool,
             },
@@ -67,7 +67,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 name: "sink".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::None,
             },
@@ -102,7 +102,7 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
             name: "kept".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: Vec::new(),
             return_ty: Ty::Int,
         }]
@@ -128,7 +128,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "one".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -138,7 +138,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "two".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -146,7 +146,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 name: "three".to_string(),
                 class: None,
                 method: None,
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: Vec::new(),
                 return_ty: Ty::Int,
             },
@@ -225,7 +225,7 @@ fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
             name: "flag".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
             return_ty: Ty::Bool,
         }]
@@ -246,7 +246,7 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
             name: "echo".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             return_ty: Ty::Str,
         }]
@@ -272,7 +272,7 @@ fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
             name: "swap".to_string(),
             class: None,
             method: None,
-            receiver: false,
+            receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
         }]
@@ -486,7 +486,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 name: "Grid.scale.static".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("scale".to_string()),
-                receiver: false,
+                receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -494,7 +494,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 name: "Grid.make.classmethod".to_string(),
                 class: Some("Grid".to_string()),
                 method: Some("make".to_string()),
-                receiver: true,
+                receiver: ExtReceiver::NullCls,
                 params: vec![Ty::Int],
                 return_ty: Ty::Int,
             },
@@ -657,13 +657,15 @@ fn two_static_methods_of_one_class_with_the_same_name_export_once() {
 }
 
 #[test]
-#[should_panic(expected = "is spelled as a `@classmethod` but has no parameters")]
+#[should_panic(expected = "is spelled as a method with a receiver but has no parameters")]
 fn a_class_method_without_a_receiver_parameter_is_an_internal_error() {
     // `classify_export_name` reads the `.classmethod` suffix and nothing
     // else, so the guarantee that such a function leads with `cls` belongs
     // to `pycc_hir::class`, a crate away. Hand-built HIR can violate it;
     // real HIR cannot. Pin the failure mode as a named internal error rather
-    // than as an index-out-of-bounds slice panic.
+    // than as an index-out-of-bounds slice panic. #1145 widened the same
+    // guard to the instance-method receiver, so the message names "a method
+    // with a receiver" rather than a `@classmethod` alone.
     let hir = module_with_classes(
         vec![func("Grid.make.classmethod", &[], Ty::Int)],
         vec![("Grid".to_string(), class_def("Grid", None))],
@@ -698,7 +700,7 @@ fn a_static_and_a_class_method_of_one_class_with_the_same_name_export_once() {
             .iter()
             .map(|e| (e.name.as_str(), e.receiver, e.params.len()))
             .collect::<Vec<_>>(),
-        vec![("Grid.scale.classmethod", true, 2)]
+        vec![("Grid.scale.classmethod", ExtReceiver::NullCls, 2)]
     );
 }
 
@@ -711,8 +713,9 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
     // across a crate boundary is only safe while something proves the two
     // copies equal, which is this test. The codegen mirror is allowed to be
     // a *superset* on the class-table question alone -- it cannot see
-    // `exception_type_tag` -- so the corpus here carries no class-table
-    // dependence.
+    // `exception_type_tag`, `HirClassDef::properties` or #1145's
+    // constructibility predicate -- so the corpus here carries no
+    // class-table dependence.
     for name in [
         "f",
         "_f",
@@ -722,6 +725,14 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
         "_Grid.scale.static",
         "Grid._scale.static",
         "Grid.scale",
+        // #1145: the bare spelling is now admitted on both sides. It is
+        // `MethodKind::Regular`, `PropertyGetter` or `AbstractMethod` and
+        // nothing lexical tells them apart, so the two non-`Regular` kinds
+        // are removed by `collect_exports`' driver filters instead -- which
+        // is exactly why the mirror is allowed to stay a superset.
+        "Grid.__init__",
+        "_Grid.area",
+        "Grid._area",
         "Grid.width.setter",
         "Grid.scale.other",
         "Grid.scale.static.extra",
@@ -736,4 +747,1019 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
             "predicates disagree on {name:?}"
         );
     }
+}
+
+// --- #1145: instance methods, and the constructibility predicate ---------
+
+/// The module every constructibility test below varies one field of: a
+/// public class with a public instance method and a carriable `__init__`.
+fn constructible_module(class: &str) -> HirModule {
+    let mut hir = module_with_classes(
+        vec![
+            init_func(class, &[("w", Ty::Int), ("h", Ty::Int)], Ty::None),
+            func(
+                &format!("{class}.area"),
+                &[("self", Ty::Instance(Box::new(class.to_string())))],
+                Ty::Int,
+            ),
+        ],
+        vec![(class.to_string(), constructible_class_def(class))],
+    );
+    declare_member(&mut hir, class, Member::Method("area"));
+    hir
+}
+
+/// Which of [`pycc_hir::HirClassDef`]'s member tables a fixture's binding
+/// belongs in. `collect_class_publications` resolves a name against those
+/// tables, so a fixture that pushes a `<Class>.<method>` item without the
+/// matching table entry describes a class `pycc_hir::class` could never
+/// have lowered -- and would exercise the namespace walk against a class
+/// that binds nothing.
+enum Member<'a> {
+    Method(&'a str),
+    Property(&'a str),
+    Static(&'a str),
+}
+
+/// Record `member` in `class`'s own table, so the class table says what the
+/// fixture's [`HirItem`]s already say.
+fn declare_member(hir: &mut HirModule, class: &str, member: Member<'_>) {
+    let (_, def) = hir
+        .class_defs
+        .iter_mut()
+        .find(|(held, _)| held == class)
+        .expect("the fixture defines the class it declares a member on");
+    match member {
+        Member::Method(name) => def
+            .methods
+            .push((name.to_string(), format!("{class}.{name}"))),
+        Member::Property(name) => def.properties.push(pycc_hir::PropertyDef {
+            name: name.to_string(),
+            getter: format!("{class}.{name}"),
+            setter: None,
+        }),
+        Member::Static(name) => def
+            .static_methods
+            .push((name.to_string(), format!("{class}.{name}.static"))),
+    }
+}
+
+/// Drop both `class.method`'s compiled item and its method-table entry --
+/// the inverse of [`declare_member`] for a regular method, used by the
+/// fixtures that remove a class's only own export.
+fn undeclare_method(hir: &mut HirModule, class: &str, method: &str) {
+    let mangled = format!("{class}.{method}");
+    hir.items
+        .retain(|item| !matches!(item, HirItem::Function { name, .. } if *name == mangled));
+    let (_, def) = hir
+        .class_defs
+        .iter_mut()
+        .find(|(held, _)| held == class)
+        .expect("the fixture defines the class it undeclares a method on");
+    def.methods.retain(|(name, _)| name != method);
+}
+
+#[test]
+fn an_instance_method_of_a_constructible_class_is_exported_with_a_real_receiver() {
+    let exports = collect_exports(&constructible_module("Grid")).expect("a carriable signature");
+    assert_eq!(
+        exports
+            .iter()
+            .map(|e| (
+                e.name.as_str(),
+                e.class.as_deref(),
+                e.method.as_deref(),
+                e.receiver,
+                e.params.len()
+            ))
+            .collect::<Vec<_>>(),
+        // `__init__` is not public under `is_public_name`, so it is never an
+        // export in its own right; only `area` is, and its `self` is split
+        // off exactly as a `@classmethod`'s `cls` is.
+        vec![(
+            "Grid.area",
+            Some("Grid"),
+            Some("area"),
+            ExtReceiver::SelfInstance,
+            0
+        )]
+    );
+}
+
+#[test]
+fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail_only() {
+    let hir = constructible_module("Grid");
+    let exports = collect_exports(&hir).expect("a carriable signature");
+    assert_eq!(
+        collect_constructors(&hir, &collect_class_publications(&hir, &exports)),
+        vec![ExtCtor {
+            class: "Grid".to_string(),
+            name: "Grid.__init__".to_string(),
+            // `self` is gone; the two `int`s remain, and the slot count is
+            // `flat_attr_layout`'s, not the parameter count -- they agree
+            // here only because the fixture declares two attributes.
+            params: vec![Ty::Int, Ty::Int],
+            slot_count: 2,
+        }]
+    );
+}
+
+/// Each row removes exactly one constructibility condition from
+/// [`constructible_module`] and asserts both consequences at once: the class
+/// contributes no constructor descriptor, and its instance method is not an
+/// export. The second half is the one that matters -- an exclusion that
+/// dropped the constructor but still published the method would emit a
+/// wrapper that dereferences a receiver no host can ever build.
+#[test]
+fn every_constructibility_condition_removes_the_class_and_its_instance_methods() {
+    let mut rows: Vec<(&str, HirModule)> = Vec::new();
+
+    let mut abstract_class = constructible_module("Grid");
+    abstract_class.class_defs[0].1.is_abstract = true;
+    rows.push(("is_abstract", abstract_class));
+
+    let mut protocol = constructible_module("Grid");
+    protocol.class_defs[0].1.is_protocol = true;
+    rows.push(("is_protocol", protocol));
+
+    let mut enum_class = constructible_module("Grid");
+    enum_class.class_defs[0].1.is_enum = true;
+    rows.push(("is_enum", enum_class));
+
+    let mut tagged = constructible_module("Grid");
+    tagged.class_defs[0].1.exception_type_tag = Some(FIRST_USER_EXCEPTION_TYPE_TAG);
+    rows.push(("exception_type_tag", tagged));
+
+    // A seeded builtin exception class carries no tag of its own, so this
+    // row is the one `exception_type_tag` alone does not cover.
+    let mut builtin_exception = constructible_module("ValueError");
+    builtin_exception.class_defs[0].1.exception_type_tag = None;
+    rows.push(("is_builtin_exception_class", builtin_exception));
+
+    // An `__init__` that does not return `None` is not a constructor pycc
+    // can call for its effect; nothing consumes the value at this boundary.
+    let mut returning_init = constructible_module("Grid");
+    returning_init.items[0] = init_func("Grid", &[("w", Ty::Int), ("h", Ty::Int)], Ty::Int);
+    rows.push(("__init__ return type", returning_init));
+
+    // `Ty::Instance` has no `boundary_carrier` arm at all, which is exactly
+    // the case a hand-rolled parameter predicate would miss.
+    let mut instance_param = constructible_module("Grid");
+    instance_param.items[0] = init_func(
+        "Grid",
+        &[("other", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::None,
+    );
+    rows.push(("uncarriable __init__ parameter", instance_param));
+
+    // A `tuple` parameter is carriable everywhere else and refused here
+    // alone: the constructor is called through its `fnptr_` slot with no
+    // thunk, so no flattening exists for an aggregate (C8).
+    let mut tuple_param = constructible_module("Grid");
+    tuple_param.items[0] = init_func(
+        "Grid",
+        &[("wh", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    rows.push(("tuple __init__ parameter", tuple_param));
+
+    // No `__init__` resolves at all: `methods` is empty, so `resolved_init`
+    // finds nothing in the MRO.
+    let mut no_init = constructible_module("Grid");
+    no_init.class_defs[0].1.methods.clear();
+    rows.push(("no resolved __init__", no_init));
+
+    for (label, hir) in rows {
+        let exports = collect_exports(&hir).expect("{label}: not a capability gap");
+        assert!(
+            exports.is_empty(),
+            "{label}: an excluded class still exported {exports:?}"
+        );
+        assert!(
+            collect_constructors(&hir, &collect_class_publications(&hir, &exports)).is_empty(),
+            "{label}: an excluded class still yielded a constructor"
+        );
+    }
+}
+
+#[test]
+fn a_class_whose_class_def_is_missing_entirely_is_not_constructible() {
+    // The class table is what every constructibility condition is read
+    // from, so a name with no entry has to fail closed rather than fall
+    // through to "nothing refused it".
+    let hir = module(vec![
+        init_func("Grid", &[("w", Ty::Int)], Ty::None),
+        func(
+            "Grid.area",
+            &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+            Ty::Int,
+        ),
+    ]);
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert!(exports.is_empty(), "{exports:?}");
+    assert!(collect_constructors(&hir, &collect_class_publications(&hir, &exports)).is_empty());
+}
+
+#[test]
+fn a_property_getter_is_excluded_by_the_class_table_not_by_its_name() {
+    // The getter's mangled name is the bare `<Class>.<method>` spelling, so
+    // nothing lexical separates it from an ordinary method: only
+    // `HirClassDef::properties` does. Deleting that driver filter publishes
+    // `v` as a callable member.
+    let mut hir = constructible_module("Grid");
+    hir.items.push(func(
+        "Grid.v",
+        &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::Int,
+    ));
+    hir.class_defs[0].1.properties = vec![pycc_hir::PropertyDef {
+        name: "v".to_string(),
+        getter: "Grid.v".to_string(),
+        setter: None,
+    }];
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Grid.area"]
+    );
+}
+
+#[test]
+fn the_constructor_is_found_past_an_unrelated_item_of_the_same_kind() {
+    // `resolved_init` scans `HirModule::items` for the mangled name the MRO
+    // walk produced. Every module of any size has functions before it that
+    // are `HirItem::Function` too, so the name guard -- not the variant --
+    // is what selects the constructor. With the constructor first in the
+    // list, a guard that always matched would pass unnoticed.
+    let mut hir = constructible_module("Grid");
+    hir.items
+        .insert(0, func("decoy", &[("n", Ty::Int)], Ty::Int));
+    let (name, params, return_ty) =
+        resolved_init(&hir, "Grid").expect("the constructor is still resolved");
+    assert_eq!(name, "Grid.__init__");
+    assert_eq!(params.len(), 3, "{params:?}");
+    assert_eq!(*return_ty, Ty::None);
+}
+
+#[test]
+fn an_implicit_object_init_ranks_below_a_real_one_in_the_same_mro() {
+    // D-232/#966: a base whose `__init__` is the D-225 implicit zero-argument
+    // constructor must never win over a real one further along the MRO, or a
+    // subclass with a two-argument constructor would be published as taking
+    // none. The two-pass ranking is what makes the first pass skip it.
+    let mut hir = constructible_module("Grid");
+    let mut base = constructible_class_def("Base");
+    base.implicit_object_init = true;
+    hir.class_defs[0].1.mro = vec!["Base".to_string(), "Grid".to_string()];
+    hir.class_defs.push(("Base".to_string(), base));
+    hir.items.push(init_func("Base", &[], Ty::None));
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    let ctors = collect_constructors(&hir, &collect_class_publications(&hir, &exports));
+    assert_eq!(
+        ctors.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        vec!["Grid.__init__"],
+        "the implicit `object.__init__` outranked the real one: {ctors:?}"
+    );
+}
+
+#[test]
+fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
+    // The second pass of the same ranking: with no real `__init__` anywhere
+    // in the MRO, the implicit one is the constructor, and a class with it
+    // is constructible with zero carried arguments.
+    let mut hir = constructible_module("Grid");
+    hir.class_defs[0].1.implicit_object_init = true;
+    hir.items[0] = init_func("Grid", &[], Ty::None);
+    let exports = collect_exports(&hir).expect("not a capability gap");
+    assert_eq!(
+        collect_constructors(&hir, &collect_class_publications(&hir, &exports)),
+        vec![ExtCtor {
+            class: "Grid".to_string(),
+            name: "Grid.__init__".to_string(),
+            params: Vec::new(),
+            slot_count: 2,
+        }]
+    );
+}
+
+#[test]
+fn an_instance_method_of_a_constructible_class_with_an_uncarriable_signature_is_a_gap() {
+    // The ordering claim D-244 rule 1 rests on: representation exclusions
+    // run *before* `unsupported_boundary_ty`, so only a method that survived
+    // them can be a capability gap -- and once it has, it is held to the
+    // boundary exactly like a module-level function.
+    let mut hir = constructible_module("Grid");
+    hir.items[1] = func(
+        "Grid.area",
+        &[
+            ("self", Ty::Instance(Box::new("Grid".to_string()))),
+            ("xs", Ty::List(Box::new(Ty::Int))),
+        ],
+        Ty::Int,
+    );
+    let gap = collect_exports(&hir).expect_err("an uncarriable parameter is a C0003");
+    assert_eq!(gap.len(), 1, "{gap:?}");
+    assert_eq!(gap[0].code, "C0003", "{gap:?}");
+    assert!(gap[0].message.contains("Grid.area"), "{gap:?}");
+}
+
+#[test]
+fn an_instance_method_of_a_non_constructible_class_is_never_a_gap() {
+    // The other arm of the same ordering: the identical uncarriable
+    // signature on a class pycc cannot construct is excluded as
+    // representation and reported as nothing at all. This is what bounds
+    // the new-failure set to constructible classes.
+    let mut hir = constructible_module("Grid");
+    hir.class_defs[0].1.is_abstract = true;
+    hir.items[1] = func(
+        "Grid.area",
+        &[
+            ("self", Ty::Instance(Box::new("Grid".to_string()))),
+            ("xs", Ty::List(Box::new(Ty::Int))),
+        ],
+        Ty::Int,
+    );
+    assert!(
+        collect_exports(&hir)
+            .expect("excluded as representation, not reported as a gap")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_constructor_descriptor_is_emitted_once_per_class_however_many_methods_it_exports() {
+    // `collect_constructors` walks the export list, which carries one entry
+    // per exported method; the `.inc` must declare one `tp_init` per class.
+    let mut hir = constructible_module("Grid");
+    hir.items.push(func(
+        "Grid.perimeter",
+        &[("self", Ty::Instance(Box::new("Grid".to_string())))],
+        Ty::Int,
+    ));
+    declare_member(&mut hir, "Grid", Member::Method("perimeter"));
+    let exports = collect_exports(&hir).expect("carriable");
+    assert_eq!(exports.len(), 2);
+    assert_eq!(
+        collect_constructors(&hir, &collect_class_publications(&hir, &exports)).len(),
+        1
+    );
+}
+
+// --- #1145 finding 1: MRO-resolved publication ---------------------------
+
+/// `Ty::Instance` for a receiver parameter, spelled once.
+fn inst(class: &str) -> Ty {
+    Ty::Instance(Box::new(class.to_string()))
+}
+
+/// `Base`, with one instance method, plus `Derived(Base)` with one of its
+/// own -- both constructible, wired the way `pycc_hir::class` wires an
+/// inheriting program: `Derived`'s `mro` is `[Derived, Base]` and `Base`'s
+/// is `[Base]`, most derived first.
+fn inheriting_module() -> HirModule {
+    let mut hir = constructible_module("Base");
+    hir.items[1] = func("Base.value", &[("self", inst("Base"))], Ty::Int);
+    hir.class_defs[0]
+        .1
+        .methods
+        .retain(|(name, _)| name != "area");
+    declare_member(&mut hir, "Base", Member::Method("value"));
+    let mut derived = constructible_class_def("Derived");
+    derived.mro = vec!["Derived".to_string(), "Base".to_string()];
+    hir.class_defs.push(("Derived".to_string(), derived));
+    hir.items.push(init_func(
+        "Derived",
+        &[("w", Ty::Int), ("h", Ty::Int)],
+        Ty::None,
+    ));
+    hir.items
+        .push(func("Derived.twice", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("twice"));
+    hir
+}
+
+/// Each published class paired with the *compiled* names of the methods its
+/// type object carries -- the compiled name rather than the host-visible one
+/// because that is what says which definition won an override.
+fn publication_rows(publications: &[ExtPublishedClass]) -> Vec<(&str, Vec<&str>)> {
+    publications
+        .iter()
+        .map(|published| {
+            (
+                published.class.as_str(),
+                published
+                    .methods
+                    .iter()
+                    .map(|export| export.name.as_str())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn publications_of(hir: &HirModule) -> Vec<ExtPublishedClass> {
+    let exports = collect_exports(hir).expect("a carriable program");
+    collect_class_publications(hir, &exports)
+}
+
+#[test]
+fn an_inherited_instance_method_is_published_on_the_derived_class() {
+    // The defect this fixes: `mod.Derived(21).twice()` worked while
+    // `mod.Derived(21).value()` raised `AttributeError`, because the table
+    // was built by declaring class. `Derived`'s own method comes first
+    // because the walk is most-derived-first.
+    assert_eq!(
+        publication_rows(&publications_of(&inheriting_module())),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Base.value"]),
+        ]
+    );
+}
+
+#[test]
+fn a_derived_override_shadows_its_base_at_the_first_mro_hit() {
+    // First-MRO-hit-wins, which is the *opposite* direction from
+    // `collect_exports`' own `(class, method)` dedup: that one keeps the
+    // last binding, because a rebound name is what the class body means.
+    // Here the derived definition is the one Python's attribute lookup
+    // finds, so `Base.value` must not appear in `Derived`'s table at all.
+    let mut hir = inheriting_module();
+    hir.items
+        .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Derived.value"]),
+        ]
+    );
+}
+
+#[test]
+fn a_static_method_of_a_base_is_published_on_the_derived_class_too() {
+    // One filter serves all three receiver kinds, so MRO-resolved
+    // publication closes Part 1's identical gap for
+    // `mod.Derived.static_from_base()`. Additive at the host surface: an
+    // attribute appears, none disappears.
+    let mut hir = inheriting_module();
+    hir.items.push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut hir, "Base", Member::Static("tag"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value", "Base.tag.static"]),
+            (
+                "Derived",
+                vec!["Derived.twice", "Base.value", "Base.tag.static"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_class_whose_only_exportable_members_are_inherited_is_published_and_constructible() {
+    // The class list can no longer be read off the export set: `Derived`
+    // declares no exportable member of its own, so the old loop gave it no
+    // type object at all -- and therefore no `tp_init` either, by absence.
+    let mut hir = inheriting_module();
+    undeclare_method(&mut hir, "Derived", "twice");
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Base.value"])
+        ]
+    );
+    let ctors = collect_constructors(&hir, &publications_of(&hir));
+    assert_eq!(
+        ctors.iter().map(|c| c.class.as_str()).collect::<Vec<_>>(),
+        vec!["Base", "Derived"]
+    );
+}
+
+#[test]
+fn an_unconstructible_base_still_exports_its_instance_method_for_a_constructible_subclass() {
+    // Publication and constructibility are separate predicates. A `tuple`
+    // parameter makes `Base` unconstructible (condition 4), but a `Derived`
+    // instance still reaches `Base.value`'s compiled body, so the method is
+    // exported and published -- while only `Derived` gets a `tp_init`.
+    let mut hir = inheriting_module();
+    hir.items[0] = init_func(
+        "Base",
+        &[("p", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Base.value"]),
+        ]
+    );
+    let ctors = collect_constructors(&hir, &publications_of(&hir));
+    assert_eq!(
+        ctors.iter().map(|c| c.class.as_str()).collect::<Vec<_>>(),
+        vec!["Derived"]
+    );
+}
+
+/// [`inheriting_module`] with `Base` made unconstructible by a `tuple`
+/// `__init__` and its only constructible subclass renamed to a **private**
+/// spelling, so that subclass is never published.
+///
+/// `Derived.twice` goes with the rename: an inheriting class that exports
+/// nothing of its own is the one shape that reaches publication without
+/// having already passed `collect_exports`' own name filter, which is
+/// exactly the shape whose witness has to be filtered here.
+fn privately_derived_module() -> HirModule {
+    let mut hir = inheriting_module();
+    hir.items[0] = init_func(
+        "Base",
+        &[("p", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    hir.items[2] = init_func("_Priv", &[("w", Ty::Int), ("h", Ty::Int)], Ty::None);
+    hir.items.truncate(3);
+    hir.class_defs[1] = (
+        "_Priv".to_string(),
+        pycc_hir::HirClassDef {
+            mro: vec!["_Priv".to_string(), "Base".to_string()],
+            ..constructible_class_def("_Priv")
+        },
+    );
+    hir
+}
+
+#[test]
+fn a_privately_named_constructible_subclass_witnesses_nothing_for_its_base() {
+    // The witness search has to hold the *publishability* condition
+    // `collect_class_publications` applies, not constructibility alone.
+    // `_Priv` is constructible but is published under no name, so the host
+    // can never build an instance that reaches `Base.value`'s compiled body
+    // -- exporting it would emit a `PyMethodDef` row with no obtainable
+    // receiver. Drop `class_publishable` from the witness and `Base` starts
+    // publishing `Base.value` again.
+    let hir = privately_derived_module();
+    assert!(
+        collect_exports(&hir)
+            .expect("a carriable program")
+            .is_empty(),
+        "an unpublished subclass makes its base's instance method unreachable"
+    );
+    assert!(publications_of(&hir).is_empty());
+}
+
+#[test]
+fn an_unreachable_instance_method_with_an_uncarriable_signature_is_not_a_c0003() {
+    // The same shape with a signature the boundary cannot carry. The
+    // exclusion is representational and lands *before*
+    // `unsupported_boundary_ty` is consulted, so a method nothing can ever
+    // call must not fail the whole `--ext` build. Before the fix this exact
+    // program exited 1 with `error[C0003]: ... parameter `xs: list`".
+    let mut hir = privately_derived_module();
+    hir.items[1] = func(
+        "Base.value",
+        &[("self", inst("Base")), ("xs", Ty::List(Box::new(Ty::Int)))],
+        Ty::Int,
+    );
+    assert!(
+        collect_exports(&hir)
+            .expect("an unreachable method is excluded as representation, never a C0003")
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_published_abstract_class_is_refused_a_constructor_by_its_shape_alone() {
+    // Publication is deliberately wider than constructibility: an abstract
+    // class that exports a `@staticmethod` is published (Part 1's shape), so
+    // it reaches `collect_constructors` even though nothing may ever
+    // instantiate it. The refusal is `instance_shape_admissible`, not the
+    // `__init__` conditions -- this fixture gives the class a perfectly
+    // carriable `__init__` so only the shape half can answer.
+    let mut hir = module_with_classes(
+        vec![
+            init_func("Grid", &[("w", Ty::Int)], Ty::None),
+            func("Grid.scale.static", &[("n", Ty::Int)], Ty::Int),
+        ],
+        vec![("Grid".to_string(), constructible_class_def("Grid"))],
+    );
+    declare_member(&mut hir, "Grid", Member::Static("scale"));
+    hir.class_defs[0].1.is_abstract = true;
+    let publications = publications_of(&hir);
+    assert_eq!(
+        publications
+            .iter()
+            .map(|p| p.class.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Grid"],
+        "the staticmethod still publishes the type object"
+    );
+    assert!(
+        collect_constructors(&hir, &publications).is_empty(),
+        "an abstract class is never constructible, however carriable its `__init__` is"
+    );
+}
+
+#[test]
+fn an_abstract_base_exports_no_instance_method_however_constructible_its_subclass_is() {
+    // The half of the old constructibility filter a constructible subclass
+    // must *not* rescue: an `@abstractmethod`'s stub body returns nothing
+    // while its `return_ty` says otherwise, so a wrapper over it would
+    // return indeterminate storage. Only `Derived`'s own method is exported.
+    let mut hir = inheriting_module();
+    hir.class_defs[0].1.is_abstract = true;
+    let exports = collect_exports(&hir).expect("excluded as representation, never a gap");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Derived.twice"]
+    );
+}
+
+#[test]
+fn a_private_or_exception_inheriting_class_is_not_published() {
+    // Both filters bite only here: every class in the export set already
+    // passed them, so an inheriting class that exports nothing of its own
+    // is the one shape that can reach publication without them.
+    let mut private = inheriting_module();
+    undeclare_method(&mut private, "Derived", "twice");
+    private.class_defs[1].0 = "_Derived".to_string();
+    private.class_defs[1].1.name = "_Derived".to_string();
+    private.class_defs[1].1.mro = vec!["_Derived".to_string(), "Base".to_string()];
+    assert_eq!(
+        publication_rows(&publications_of(&private)),
+        vec![("Base", vec!["Base.value"])]
+    );
+
+    let mut raising = inheriting_module();
+    undeclare_method(&mut raising, "Derived", "twice");
+    raising.class_defs[1].1.exception_type_tag = Some(FIRST_USER_EXCEPTION_TYPE_TAG);
+    assert_eq!(
+        publication_rows(&publications_of(&raising)),
+        vec![("Base", vec!["Base.value"])]
+    );
+}
+
+#[test]
+fn a_class_absent_from_the_class_table_publishes_nothing() {
+    // Neither predicate can answer without the class definition -- there is
+    // no MRO to resolve and no tag to read -- so such a spelling exports no
+    // instance method and publishes no type object. Unreachable from a
+    // program `pycc check` accepts: `pycc_hir::class` records a definition
+    // for every class it lowers a method of.
+    let hir = module(vec![
+        func("Grid.tag.static", &[], Ty::Int),
+        func("Grid.area", &[("self", inst("Grid"))], Ty::Int),
+    ]);
+    let exports = collect_exports(&hir).expect("a carriable program");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Grid.tag.static"]
+    );
+    assert!(collect_class_publications(&hir, &exports).is_empty());
+}
+
+#[test]
+#[should_panic(expected = "lists `Ghost` in its method resolution order")]
+fn a_ghost_class_in_the_mro_fails_fast_instead_of_under_allocating_an_instance() {
+    // #1145 finding 2: the MIR counterpart (`pycc_mir::class`' `mro_attrs`)
+    // panics on the same input, so skipping the entry here would allocate an
+    // instance too small for the slots an inherited compiled method indexes.
+    let mut hir = constructible_module("Grid");
+    hir.class_defs[0].1.mro = vec!["Grid".to_string(), "Ghost".to_string()];
+    let _ = class_constructible(&hir, "Grid");
+}
+
+// --- #1146: the walk resolves the namespace, not the export set ----------
+
+/// [`inheriting_module`] with `Derived` shadowing `Base.value` with a
+/// `@property` of the same name: the getter is an ordinary compiled
+/// `Derived.value` item plus the `properties` entry that tells it apart.
+fn property_shadowing_module() -> HirModule {
+    let mut hir = inheriting_module();
+    hir.items
+        .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Property("value"));
+    hir
+}
+
+#[test]
+fn a_derived_property_getter_shadows_its_base_method_and_publishes_nothing() {
+    // The #1146 defect, at the unit seam. `collect_exports` has already
+    // removed the getter from the export set, so a walk that stops at the
+    // first *exportable* hit fell through to `Base.value` and published a
+    // `method_descriptor` returning Base's answer where Python's own
+    // attribute lookup gives the derived property. Resolving the namespace
+    // first stops at `Derived`, which owns the name.
+    assert_eq!(
+        publication_rows(&publications_of(&property_shadowing_module())),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
+fn a_derived_instance_attribute_shadows_its_base_method_and_publishes_nothing() {
+    // `__init__`'s `self.value = ...` binds `value` on the instance, and
+    // Python resolves `obj.value` against the instance before the type, so
+    // the derived slot wins over `Base.value` exactly as an override would.
+    // `pycc_hir` accepts the collision -- verified end to end: the same
+    // source built with `--ext` published a callable `Derived.value`
+    // answering Base's 21 where CPython reads the slot's own value -- so
+    // this walk is the only place it can be seen.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
+fn a_sibling_base_s_class_attribute_shadows_a_further_base_s_method() {
+    // A class attribute is an ordinary entry in the class object's
+    // namespace, so an MRO entry binding `value` as a `ClassVar` answers
+    // the name and the walk must stop there rather than reach `Base`'s
+    // method behind it. `pycc_hir` accepts this shape: its class-attribute
+    // collision check runs over a class's *own* newly declared attributes,
+    // so `Derived`, which declares none, combines two independent bases
+    // without complaint. Verified end to end: before the fix, the same
+    // source built with `--ext` published a callable `mod.Derived(3).f()`
+    // answering `3` where CPython raises `TypeError: 'int' object is not
+    // callable`, because `d.f` is the sibling base's `2`.
+    let mut hir = inheriting_module();
+    let mut shadowing = class_def("Shadowing", None);
+    shadowing.class_attrs = vec![(
+        "value".to_string(),
+        Ty::Int,
+        pycc_hir::ClassAttrValue::Int(2),
+    )];
+    hir.class_defs.push(("Shadowing".to_string(), shadowing));
+    hir.class_defs[1].1.mro = vec![
+        "Derived".to_string(),
+        "Shadowing".to_string(),
+        "Base".to_string(),
+    ];
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
+fn a_class_binding_one_name_both_ways_publishes_the_slot_s_neighbours_only() {
+    // The same class assigns `self.value` in `__init__` *and* declares
+    // `def value`. `pycc_hir` retains both bindings, and a walk that
+    // modelled the slot as one more namespace kind would find `Base` owning
+    // the name either way and publish the method. Python does not: the
+    // instance `__dict__` answers `obj.value` ahead of a non-data
+    // descriptor, so the compiled method is unreachable. Verified end to
+    // end: before the fix, that source built with `--ext` answered
+    // `mod.C(1).value()` with `5` where CPython raises `TypeError: 'int'
+    // object is not callable`. `Derived.twice` is the positive direction --
+    // an unrelated name on a class whose MRO carries the slot still
+    // publishes.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Derived", vec!["Derived.twice"])]
+    );
+}
+
+#[test]
+fn a_base_s_instance_slot_shadows_a_derived_class_s_method() {
+    // The shape a position-sensitive walk cannot answer: the slot is
+    // declared by the *least* derived class and the method by the most
+    // derived one, so the first MRO entry binding `twice` is `Derived`
+    // itself. CPython still reads the instance slot, because its precedence
+    // over a non-data descriptor does not depend on where in the MRO the
+    // slot was assigned. Verified end to end: before the fix, a `Base`
+    // assigning `self.value` with a `Derived(Base)` declaring `def value`
+    // built with `--ext` and answered `mod.Derived(7).value()` with `5`
+    // where CPython raises `TypeError`. `Base.value` is the positive
+    // direction: unshadowed, it is still published on both classes.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .attrs
+        .push(("twice".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Base.value"])
+        ]
+    );
+}
+
+#[test]
+fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
+    // The collapse case the per-name matrix above never reaches: every one
+    // of `Derived`'s resolved names is shadowed by a non-exporting binding,
+    // so it contributes no publication row rather than an empty one. Pinned
+    // because the generated `.inc` gives an empty row a type object the host
+    // could construct and then find nothing on. Verified end to end: the
+    // same source built with `--ext` produces a module whose only attribute
+    // is `Base`.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .methods
+        .retain(|(name, _)| name != "twice");
+    hir.items
+        .retain(|item| !matches!(item, HirItem::Function { name, .. } if name == "Derived.twice"));
+    hir.class_defs[1]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Base", vec!["Base.value"])]
+    );
+}
+
+#[test]
+fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
+    // The mirror direction, which must not regress: `Base` binds `value` as
+    // a `@property` and publishes nothing for it, while `Derived`'s ordinary
+    // method owns the name on `Derived` and is published there. A
+    // non-regression guard rather than a discriminator: the base contributes
+    // no export under the name, so nothing exists for a first-exportable-hit
+    // walk to fall through to and this shape answered the same before #1146.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .methods
+        .retain(|(name, _)| name != "value");
+    declare_member(&mut hir, "Base", Member::Property("value"));
+    hir.items
+        .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Derived", vec!["Derived.twice", "Derived.value"])]
+    );
+}
+
+#[test]
+fn a_derived_abstract_method_shadows_its_base_s_concrete_one() {
+    // An `@abstractmethod` binds its name in `methods` exactly as an
+    // ordinary method does, and exports nothing of its own
+    // (`instance_shape_admissible` refuses an abstract class). `Derived`
+    // therefore publishes no `value` at all -- publishing `Base.value` there
+    // would answer a name whose derived binding is a stub.
+    let mut hir = inheriting_module();
+    hir.class_defs[1].1.is_abstract = true;
+    hir.class_defs[1]
+        .1
+        .abstract_methods
+        .push("value".to_string());
+    declare_member(&mut hir, "Derived", Member::Method("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Base", vec!["Base.value"])]
+    );
+}
+
+#[test]
+fn a_derived_static_or_class_method_shadows_its_base_instance_method() {
+    // A shadowing binding of a *different* receiver kind is still the
+    // binding Python resolves, and it is published under its own kind: the
+    // derived `@staticmethod` wins on `Derived` while `Base` keeps its
+    // instance method. The first two arms are non-regression guards -- both
+    // bindings are exports, so a first-exportable-hit walk reached the same
+    // rows -- and the third discriminates: the shadowing binding of a
+    // different kind is not itself an export.
+    let mut statics = inheriting_module();
+    statics
+        .items
+        .push(func("Derived.value.static", &[], Ty::Int));
+    declare_member(&mut statics, "Derived", Member::Static("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&statics)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Derived.value.static"]),
+        ]
+    );
+
+    // The same for a `@classmethod`, whose table is its own as well.
+    let mut classmethods = inheriting_module();
+    classmethods.items.push(func(
+        "Derived.value.classmethod",
+        &[("cls", inst("Derived"))],
+        Ty::Int,
+    ));
+    classmethods.class_defs[1]
+        .1
+        .class_methods
+        .push(("value".to_string(), "Derived.value.classmethod".to_string()));
+    assert_eq!(
+        publication_rows(&publications_of(&classmethods)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            (
+                "Derived",
+                vec!["Derived.twice", "Derived.value.classmethod"]
+            ),
+        ]
+    );
+
+    // The kind pair the export set alone cannot answer: `Base` exports `tag`
+    // as a `@staticmethod` and `Derived` rebinds the name as a `@property`,
+    // which exports nothing. Stopping at the first exportable hit publishes
+    // `mod.Derived.tag()` as a callable the Python program does not have.
+    let mut over_static = inheriting_module();
+    over_static
+        .items
+        .push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut over_static, "Base", Member::Static("tag"));
+    over_static
+        .items
+        .push(func("Derived.tag", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut over_static, "Derived", Member::Property("tag"));
+    assert_eq!(
+        publication_rows(&publications_of(&over_static)),
+        vec![
+            ("Base", vec!["Base.value", "Base.tag.static"]),
+            ("Derived", vec!["Derived.twice", "Base.value"]),
+        ]
+    );
+}
+
+#[test]
+fn a_derived_instance_method_shadows_its_base_static_method() {
+    // And the reverse direction: an ordinary method shadowing an inherited
+    // `@staticmethod`. `Base.tag.static` stays published on `Base` itself.
+    // Another non-regression guard: both bindings are exports, so this shape
+    // answered the same under the first-exportable-hit walk.
+    let mut hir = inheriting_module();
+    hir.items.push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut hir, "Base", Member::Static("tag"));
+    hir.items
+        .push(func("Derived.tag", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("tag"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value", "Base.tag.static"]),
+            // `value` is not shadowed, so `Derived` still inherits it.
+            (
+                "Derived",
+                vec!["Derived.twice", "Derived.tag", "Base.value"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_base_method_every_witness_shadows_is_not_exported_and_never_a_c0003() {
+    // The export side of the same rule. `Base` is unconstructible (a `tuple`
+    // `__init__`), so its only witness is `Derived` -- which shadows `value`
+    // with a `@property`. No host instance can ever reach `Base.value`'s
+    // compiled body, so it is excluded as representation: a dead
+    // `PyMethodDef` row on `Base`'s own type object with the carriable
+    // signature, and a whole failed `--ext` build with an uncarriable one.
+    let mut hir = property_shadowing_module();
+    hir.items[0] = init_func(
+        "Base",
+        &[("p", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    let exports = collect_exports(&hir).expect("a carriable program");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Derived.twice"]
+    );
+
+    hir.items[1] = func(
+        "Base.value",
+        &[("self", inst("Base")), ("xs", Ty::List(Box::new(Ty::Int)))],
+        Ty::Int,
+    );
+    assert_eq!(
+        collect_exports(&hir)
+            .expect("a shadowed method is excluded as representation, never a C0003")
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Derived.twice"]
+    );
 }

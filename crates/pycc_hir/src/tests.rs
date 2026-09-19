@@ -35,6 +35,11 @@ mod reserved_dunder_class_attrs;
 // module rather than more of the one above.
 mod enum_non_member_names;
 
+// The `C0001` that makes `--ext`'s abstract-method exclusion total
+// (#1145) -- a derivation nothing pinned before, and its discriminating
+// counterpart. Its own module for the reason the four above give.
+mod abstract_without_abc_base;
+
 fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
     let module = pycc_parser_test_helper::parse(source);
     let diagnostic = lower_checked(&module).unwrap_err();

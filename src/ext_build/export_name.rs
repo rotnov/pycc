@@ -18,20 +18,46 @@ pub(crate) fn export_dedup_key(export: &ExtExport) -> (Option<&str>, &str) {
     }
 }
 
+/// Which receiver, if any, a compiled method's signature leads with, and
+/// what the generated wrapper must pass for it.
+///
+/// Three-state rather than the `bool` #1143 used, because "the declaration
+/// leads with a `void *`" and "the call passes a real pointer" are two
+/// different questions and #1145 added a member that answers them
+/// differently. [`ExtReceiver::None`] declares no receiver at all;
+/// [`ExtReceiver::NullCls`] declares one and passes `NULL`;
+/// [`ExtReceiver::SelfInstance`] declares one and passes the carrier
+/// object's inner `PyInstanceObj`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExtReceiver {
+    /// A module-level `def` or a `@staticmethod`: the compiled signature is
+    /// exactly the declared parameter list.
+    None,
+    /// A `@classmethod`, whose compiled signature leads with an injected
+    /// `cls: Ty::Instance(Class)` that never crosses the boundary --
+    /// `MirExpr::NullInstance` records that every native call site passes a
+    /// null pointer for it, and the wrapper does the same.
+    NullCls,
+    /// An instance method, whose compiled signature leads with `self:
+    /// Ty::Instance(Class)` and which *does* dereference it. The wrapper
+    /// unwraps the host carrier object and passes the real pointer.
+    SelfInstance,
+}
+
 /// What a compiled function's name says about its place in the export set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExportName {
     /// A public module-level `def`. [`ExtExport::name`] is also its
     /// `PyMethodDef` `ml_name`.
     ModuleLevel,
-    /// A public `@staticmethod` or `@classmethod` of a public class, whose
-    /// `ml_name` is `method` inside `class`'s own table.
+    /// A public `@staticmethod`, `@classmethod` or instance method of a
+    /// public class, whose `ml_name` is `method` inside `class`'s own
+    /// table.
     Method {
         class: String,
         method: String,
-        /// True for a `@classmethod`, whose compiled signature leads with
-        /// an injected `cls: Ty::Instance(Class)`.
-        receiver: bool,
+        /// Which receiver the compiled signature leads with.
+        receiver: ExtReceiver,
     },
 }
 
@@ -53,10 +79,24 @@ pub(crate) enum ExportName {
 /// bare `&str` and cannot see `HirModule::class_defs`, so a verdict that
 /// consulted the class table would have no mirror-comparable form and the
 /// parity test would stop being well-formed. `class_defs` may still be read
-/// for *diagnostics*, and [`collect_exports`] layers its exception-class
+/// for *diagnostics*, and [`collect_exports`] layers every HIR-dependent
 /// exclusion on top of this verdict -- which makes the mirror a superset of
 /// the driver's admitted set, and a superset is harmless here: at worst a
 /// thunk is emitted for a name no wrapper calls.
+///
+/// **Refused as representation, here, lexically:** a monomorphized generic
+/// specialization (`0gen_`), a private class or method name, an empty
+/// segment, a fourth segment, and `<Class>.<property>.setter` -- a
+/// `@property` is attribute syntax on the host side, not a method table
+/// entry. #1145 moved the *rest* of the old refusal list into the driver.
+/// The bare `<Class>.<method>` spelling covers `MethodKind::Regular`,
+/// `PropertyGetter` and `AbstractMethod` at once, and telling them apart
+/// needs `HirModule::class_defs`, which this verdict may not see. So it is
+/// admitted here and narrowed there: a property getter by
+/// `HirClassDef::properties`, and an abstract stub by its class failing
+/// [`collect_exports`]' constructibility predicate -- an
+/// `@abstractmethod` that survives lowering always belongs to an
+/// `is_abstract` class, which is never constructible.
 ///
 /// The `0gen_` refusal is applied to the whole name before the split and
 /// takes precedence. That is defense in depth rather than a live hazard:
@@ -85,9 +125,16 @@ pub(crate) fn classify_export_name(name: &str) -> Option<ExportName> {
     }
     match segments.next() {
         // `<Class>.<method>`: `MethodKind::Regular`, `PropertyGetter` or
-        // `AbstractMethod`, which this spelling cannot tell apart. Refused
-        // as representation -- see [`collect_exports`]' doc.
-        None => None,
+        // `AbstractMethod`. This spelling cannot tell them apart, and since
+        // #1145 it does not have to: it is admitted lexically as an
+        // instance method and the two non-`Regular` kinds are removed by
+        // [`collect_exports`]' driver filters, which can see the class
+        // table this verdict may not.
+        None => Some(ExportName::Method {
+            class: class_or_fn.to_string(),
+            method: method.to_string(),
+            receiver: ExtReceiver::SelfInstance,
+        }),
         Some(kind) => {
             // A fourth segment cannot arise: `pycc_hir` refuses a class
             // nested in a class or in a function, so no `A.B.method` name
@@ -100,12 +147,12 @@ pub(crate) fn classify_export_name(name: &str) -> Option<ExportName> {
                 "static" => Some(ExportName::Method {
                     class: class_or_fn.to_string(),
                     method: method.to_string(),
-                    receiver: false,
+                    receiver: ExtReceiver::None,
                 }),
                 "classmethod" => Some(ExportName::Method {
                     class: class_or_fn.to_string(),
                     method: method.to_string(),
-                    receiver: true,
+                    receiver: ExtReceiver::NullCls,
                 }),
                 // `<Class>.<property>.setter`: refused as representation,
                 // for the same reason the bare spelling is. A `@property`
