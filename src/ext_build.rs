@@ -863,6 +863,9 @@ fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
 /// `@abstractmethod`, or a member of any other kind -- publishes its own
 /// binding and never the one compiled here, so this method is as
 /// unreachable through that witness as it is through an unpublished one.
+/// A witness whose MRO assigns `method` to `self` in any `__init__`
+/// disqualifies it for the same reason: the instance answers the name and
+/// the compiled body is unreachable through that witness too.
 /// Exporting it anyway would emit a `PyMethodDef` row nothing can call and,
 /// with an uncarriable signature, fail the whole `--ext` build with a
 /// `C0003` for a method no host could ever reach.
@@ -1036,9 +1039,12 @@ pub(crate) struct ExtPublishedClass {
 /// the same order [`resolved_init`] walks for `__init__`.
 ///
 /// **The walk resolves the namespace, not the export set.** This is the
-/// canonical statement of that rule: a name is answered by the *first* MRO
-/// entry that binds it at all -- [`class_member_names`] is what "binds"
-/// means -- and that entry alone decides the outcome. If its binding is an
+/// canonical statement of that rule: a name any `__init__` along the MRO
+/// assigns to `self` is answered by the instance and belongs to no class
+/// at all ([`mro_binds_slot`]); every other name is answered by the
+/// *first* MRO entry that binds it in the class namespace --
+/// [`class_member_names`] is what "binds" means -- and that entry alone
+/// decides the outcome. If its binding is an
 /// export, the method is published; if it is anything the export set does
 /// not hold (a `@property` getter, an `@abstractmethod`'s stub, a private
 /// or uncarriable member), the name is simply absent from the published
@@ -1135,8 +1141,8 @@ pub(crate) fn collect_class_publications(
     published
 }
 
-/// Every member name `class_def`'s own body binds, in a deterministic
-/// order, whatever kind of member binds it.
+/// Every name `class_def`'s own body binds **in the class namespace**, in
+/// a deterministic order, whatever kind of member binds it.
 ///
 /// This is the canonical statement of "does this class define this name"
 /// for [`collect_class_publications`]' namespace walk. The kinds are read
@@ -1147,17 +1153,22 @@ pub(crate) fn collect_class_publications(
 /// `properties` by [`pycc_hir::PropertyDef::name`] (one entry covers a
 /// getter and its optional setter: that file refuses a `@<name>.setter`
 /// without a preceding `@property` getter, so a setter never binds a name
-/// on its own), `static_methods`, `class_methods`, `class_attrs` -- a
+/// on its own), `static_methods`, `class_methods`, and `class_attrs` -- a
 /// `ClassVar` or bare class-level assignment, whose constant is an
-/// ordinary entry in the class object's namespace -- and `attrs`, the
-/// instance-attribute slots `__init__`'s `self.<name> = ...` assignments
-/// declare. That last kind is bound on the instance rather than on the
-/// type, but Python resolves `obj.<name>` against the instance first, so a
-/// class that assigns a slot named like an inherited method shadows that
-/// method exactly as an override would.
+/// ordinary entry in the class object's namespace.
 ///
-/// Neither of the last two kinds is rejected at lowering in the shape that
-/// matters here, so this walk is where it has to be seen.
+/// **`attrs` is deliberately not one of them.** An instance-attribute slot
+/// is bound on the instance, not on the type, so it is not a namespace
+/// entry and has no position in the MRO walk at all; [`mro_binds_slot`]
+/// is where it is seen instead.
+///
+/// `class_attrs` is here for a reason the sibling predicate
+/// `crates/pycc_hir/src/class/shadow.rs`'s `declares_name_outside_class_attrs`
+/// documents from the other side: that one answers a *class-name-qualified*
+/// read (`Derived.LIMIT`) and excludes `class_attrs` because its callers
+/// check them separately, while this walk answers an *instance* read and
+/// must treat a class attribute as the ordinary namespace entry it is.
+/// Nothing rejects the shape that makes the difference visible:
 /// `crates/pycc_hir/src/class/attrs.rs`'s `reject_class_attr_collisions`
 /// checks a class's *own* newly declared `class_attrs` against its own MRO
 /// and never runs for a class that declares none, so two independent bases
@@ -1190,26 +1201,69 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
                 .iter()
                 .map(|(name, _, _)| name.as_str()),
         )
-        .chain(class_def.attrs.iter().map(|(name, _)| name.as_str()))
+}
+
+/// Whether any class linearized in `mro` assigns `name` to `self` in its
+/// `__init__` -- that is, declares it as an instance-attribute slot.
+///
+/// **Position in the walk is irrelevant, which is the whole point.** An
+/// instance slot is not a namespace binding that competes with the class
+/// namespace at its own MRO index: CPython consults the instance
+/// `__dict__` *before* the type's namespace for everything that is not a
+/// data descriptor, so a slot contributed by the *least* derived base
+/// still wins over a method defined on the most derived class. Modelling a
+/// slot as one more kind inside [`class_member_names`] would answer only
+/// the cases where the slot's own class happens to precede the method's
+/// (#1146), and would silently publish a callable for
+/// `class Base: def __init__(self, n): self.value = n` combined with
+/// `class Derived(Base): def value(self): ...`, where CPython answers the
+/// integer and raises `TypeError: 'int' object is not callable`.
+///
+/// The one class-namespace kind that *does* beat an instance slot is a
+/// `@property`, a data descriptor. Suppressing that name too is
+/// deliberate and conservative rather than exact: a read-only property
+/// makes `self.<name> = ...` raise `AttributeError` during construction,
+/// so an artifact publishing nothing there is at worst lossy for the
+/// getter+setter case, never wrong. Publishing on a guess is what this
+/// whole walk exists to avoid.
+fn mro_binds_slot(module: &HirModule, mro: &[String], name: &str) -> bool {
+    mro.iter().any(|ancestor| {
+        module.class_defs.iter().any(|(held, def)| {
+            held == ancestor && def.attrs.iter().any(|(held_name, _)| held_name == name)
+        })
+    })
 }
 
 /// The MRO entry that answers `method` for a class linearized as `mro`:
-/// the first entry, most derived first, that binds the name at all
-/// ([`class_member_names`]), or `None` when no entry binds it.
+/// the first entry, most derived first, that binds the name in the class
+/// namespace ([`class_member_names`]), or `None` when nothing publishable
+/// answers it.
 ///
-/// Python's own attribute lookup, and deliberately kind-blind: the winning
-/// entry decides the outcome whether it binds a regular method, a
-/// `@property`, an `@abstractmethod`'s stub, a `@staticmethod` or a
-/// `@classmethod`. Callers ask whether the entry they hold is the winner,
-/// never whether an entry further down the walk could also answer.
+/// Python's own attribute lookup, stated as a mechanism rather than as a
+/// list of kinds. Two rules, in this order:
 ///
-/// `None` is unreachable for a `method` some export names: `pycc_hir`'s
-/// class lowering records a table entry for every method it mangles, so an
-/// export's own class always binds its name. A fixture that pushes a
-/// `<Class>.<method>` item without the matching table entry describes a
-/// class that lowering could not have produced, and is treated as binding
-/// nothing.
+/// 1. A name any `__init__` along the MRO assigns to `self` is answered by
+///    the instance, never by the type, so no class owns it and the result
+///    is `None` ([`mro_binds_slot`]).
+/// 2. Otherwise the first MRO entry binding the name in the class
+///    namespace owns it, kind-blind: that entry decides the outcome
+///    whether it binds a regular method, a `@property`, an
+///    `@abstractmethod`'s stub, a `@staticmethod`, a `@classmethod` or a
+///    class attribute.
+///
+/// Callers ask whether the entry they hold is the winner, never whether an
+/// entry further down the walk could also answer.
+///
+/// `None` from rule 2 alone is unreachable for a `method` some export
+/// names: `pycc_hir`'s class lowering records a table entry for every
+/// method it mangles, so an export's own class always binds its name. A
+/// fixture that pushes a `<Class>.<method>` item without the matching
+/// table entry describes a class that lowering could not have produced,
+/// and is treated as binding nothing.
 fn namespace_owner<'a>(module: &HirModule, mro: &'a [String], method: &str) -> Option<&'a str> {
+    if mro_binds_slot(module, mro, method) {
+        return None;
+    }
     mro.iter().map(String::as_str).find(|ancestor| {
         module.class_defs.iter().any(|(held, def)| {
             held == ancestor && class_member_names(def).any(|name| name == method)

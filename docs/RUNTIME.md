@@ -401,35 +401,44 @@ the strength of what it inherits.
 
 *Which methods each type object carries.* Every exported member of the class
 and of its bases, resolved along the class's MRO most-derived-first. The walk
-resolves the **namespace**, not the export set: a method name is answered by
-the **first MRO entry that binds it at all** -- as a regular method, a
-`@property`, an `@abstractmethod`, a `@staticmethod`, a `@classmethod`, a
-**class attribute** (a `ClassVar` or bare class-level assignment) or an
-**instance-attribute slot** its `__init__` assigns -- and that entry alone
-decides the outcome. If its binding is an export, the
-method is published; if it is anything else, the name is **absent** from the
-published class, and the walk never falls through to a base that exports the
-same name. So a `Derived` that binds `value` as a `@property` publishes no
-callable `value` at all, exactly as Python's own attribute lookup gives the
-derived property rather than `Base.value`; a derived ordinary method shadows a
-base `@property` in the same way, a derived `@staticmethod` shadows a base
-instance method, published under its own receiver kind, a derived
-`self.value = ...` shadows a base `value()` -- an instance slot binds on the
-instance, which Python consults before the type -- and a base's `value: int =
-2` shadows a *further* base's `value()` under multiple inheritance, because a
-class attribute is an ordinary entry in the class object's namespace.
-`pycc_hir` accepts both of those last two collisions rather than refusing
-them, so this walk is the only place they are seen. A class whose every resolved name is
-shadowed away this way carries no type object at all rather than an empty
-one. An unshadowed name is
-inherited across all three method kinds alike: `mod.Derived(21).value()`
-reaches a `Base.value` declared only on the base, and `mod.Derived.tag()`
-reaches a base's `@staticmethod`. An inherited method's compiled body
-addresses its own class's attribute slots, which is safe because `pycc_hir`'s
-`validate_mro_slot_layout` (#969) rejects, at HIR lowering with `C0001`, every
-multiple-inheritance shape whose ancestor layout is not a name-wise prefix of
-the derived one -- see that function's own documentation for why that is the
-condition.
+resolves the **namespace**, not the export set, and states Python's own
+attribute lookup as a mechanism rather than as a list of member kinds. Two
+rules, in this order. First, a name that **any `__init__` along the MRO
+assigns to `self`** is answered by the instance, never by the type -- CPython
+consults the instance `__dict__` ahead of the class namespace for everything
+that is not a data descriptor -- so no class owns it and no callable is
+published under it, wherever in the MRO that slot was assigned and wherever
+the method it hides was declared. Second, every other name is answered by the
+**first MRO entry that binds it in the class namespace**, whatever kind binds
+it, and that entry alone decides the outcome. If its binding is an export,
+the method is published; if it is anything else, the name is **absent** from
+the published class, and the walk never falls through to a base that exports
+the same name.
+
+So a `Derived` that binds `value` as a `@property` publishes no callable
+`value` at all, exactly as Python's own attribute lookup gives the derived
+property rather than `Base.value`; a derived ordinary method shadows a base
+`@property` in the same way; a derived `@staticmethod` shadows a base instance
+method, published under its own receiver kind; a base's `value: int = 2`
+shadows a *further* base's `value()` under multiple inheritance, because a
+class attribute is an ordinary entry in the class object's namespace; and a
+`self.value = ...` in any `__init__` on the MRO hides a `value()` declared on
+any class of that MRO, including a *more* derived one, because rule one is
+position-independent. `pycc_hir` accepts each of those collisions rather than
+refusing it, so this walk is the only place they are seen. Rule one also
+suppresses a name a `@property` would win as a data descriptor; that is
+deliberate and conservative rather than exact -- a read-only property makes
+the assignment raise `AttributeError` during construction anyway, so
+publishing nothing there is at worst lossy, never wrong. A class whose every
+resolved name is shadowed away this way carries no type object at all rather
+than an empty one. An unshadowed name is inherited across all three method
+kinds alike: `mod.Derived(21).value()` reaches a `Base.value` declared only on
+the base, and `mod.Derived.tag()` reaches a base's `@staticmethod`. An
+inherited method's compiled body addresses its own class's attribute slots,
+which is safe because `pycc_hir`'s `validate_mro_slot_layout` (#969) rejects,
+at HIR lowering with `C0001`, every multiple-inheritance shape whose ancestor
+layout is not a name-wise prefix of the derived one -- see that function's own
+documentation for why that is the condition.
 
 *Which classes are constructible.* A published class is **constructible**
 exactly when it is not abstract, not a `Protocol` and not an enum; it is not a

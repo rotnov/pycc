@@ -1520,6 +1520,56 @@ fn a_sibling_base_s_class_attribute_shadows_a_further_base_s_method() {
 }
 
 #[test]
+fn a_class_binding_one_name_both_ways_publishes_the_slot_s_neighbours_only() {
+    // The same class assigns `self.value` in `__init__` *and* declares
+    // `def value`. `pycc_hir` retains both bindings, and a walk that
+    // modelled the slot as one more namespace kind would find `Base` owning
+    // the name either way and publish the method. Python does not: the
+    // instance `__dict__` answers `obj.value` ahead of a non-data
+    // descriptor, so the compiled method is unreachable. Verified end to
+    // end: before the fix, that source built with `--ext` answered
+    // `mod.C(1).value()` with `5` where CPython raises `TypeError: 'int'
+    // object is not callable`. `Derived.twice` is the positive direction --
+    // an unrelated name on a class whose MRO carries the slot still
+    // publishes.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .attrs
+        .push(("value".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Derived", vec!["Derived.twice"])]
+    );
+}
+
+#[test]
+fn a_base_s_instance_slot_shadows_a_derived_class_s_method() {
+    // The shape a position-sensitive walk cannot answer: the slot is
+    // declared by the *least* derived class and the method by the most
+    // derived one, so the first MRO entry binding `twice` is `Derived`
+    // itself. CPython still reads the instance slot, because its precedence
+    // over a non-data descriptor does not depend on where in the MRO the
+    // slot was assigned. Verified end to end: before the fix, a `Base`
+    // assigning `self.value` with a `Derived(Base)` declaring `def value`
+    // built with `--ext` and answered `mod.Derived(7).value()` with `5`
+    // where CPython raises `TypeError`. `Base.value` is the positive
+    // direction: unshadowed, it is still published on both classes.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .attrs
+        .push(("twice".to_string(), Ty::Int));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Base.value"])
+        ]
+    );
+}
+
+#[test]
 fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
     // The collapse case the per-name matrix above never reaches: every one
     // of `Derived`'s resolved names is shadowed by a non-exporting binding,
