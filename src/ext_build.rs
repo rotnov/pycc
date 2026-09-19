@@ -1238,7 +1238,9 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
 /// construction, since `crates/pycc_hir/src/class/mro.rs`'s
 /// `flat_attr_layout` assigns slots most-base-first, and under multiple
 /// inheritance because `validate_mro_slot_layout` (#969) rejects every
-/// shape where that would not hold. A slot declared anywhere on the MRO
+/// shape where that would not hold, a single base onto an
+/// already-validated ancestor inheriting the property transitively. A
+/// slot declared anywhere on the MRO
 /// therefore occupies a fixed offset in every subclass whether or not the
 /// `__init__` that assigns it is the one a given construction reaches.
 /// The two conditions differ exactly where an override's `__init__` skips
