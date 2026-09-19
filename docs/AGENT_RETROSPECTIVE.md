@@ -33,6 +33,77 @@ never a merge gate.
 
 ---
 
+## 2026-09-19 — Three clean reviewer rounds missed a language-semantics divergence an external bot caught in one
+
+**What happened.** The #1145 `--ext` instance-method work ran the pinned local
+reviewer to a clean round 3 (round 1 found a blocker, round 2 found a blocker,
+round 3 found neither). The pull request was opened and every required check
+went green. The repository's optional external reviewer then filed a P2 that
+all three rounds had missed: the publication walk stopped at the first
+*exportable* MRO hit, so a derived class shadowing a base method with a
+non-exportable member of the same name published the base's method. The host
+saw `mod.Derived(21).value()` return `21` where Python's own attribute lookup
+gives the derived property's `121` — a silent divergence from the language the
+compiler implements, not a crash or a contract violation. Fixing it took a
+fifth and sixth round, one of which found the same defect in a member kind the
+fix's first version still omitted.
+
+**Root cause.** The reviewer's checklist is organized around the *artifact*:
+completeness, test/impl drift, dead code, doc drift, error paths, API
+contracts. Every item asks whether the change is internally consistent. None
+asks whether the change agrees with the semantics of the language being
+compiled. A walk that is complete, tested, documented and internally
+consistent can still answer a name the way Python does not, and three rounds
+of that checklist will call it clean. The external reviewer had no such frame
+and simply asked what Python would do.
+
+**What fixed it.** Naming the question in the round's own brief. Round 4's
+brief asked, in addition to the checklist, whether `class_member_names`
+enumerated *every* member kind the HIR class table can bind — and the round
+found the remaining one (`attrs`, the instance slots `__init__` assigns),
+confirmed the same way: a real `--ext` build imported into CPython, compared
+against CPython on the same source.
+
+**Lesson.** When a change decides what a name means — attribute lookup, method
+resolution, shadowing, scoping — the reviewer brief must ask the language
+question explicitly, because the standing checklist does not. Phrase it as a
+comparison against the reference implementation ("does this resolve the name
+the way CPython resolves it, for every kind of binding"), not as a review of
+the code, and enumerate the kinds rather than asking whether the set is
+complete. A related defect found by an external reviewer is also a signal to
+re-run the local loop with that question added, not just to fix the one case
+reported.
+
+## 2026-09-19 — Re-derived a documented `cargo llvm-cov` failure mode instead of reading the journal
+
+**What happened.** A local coverage run wrote an lcov with 18 `SF:` records
+instead of ~100 and the gate scored the diff against it. Three further full
+instrumented runs followed — adding `--no-fail-fast`, splitting into
+`--no-report` plus `report`, then deleting the whole coverage target directory
+and rebuilding from scratch — each taking many minutes and each producing the
+same 18 records. The entry directly below this one, written the previous day,
+names the cause (`cargo llvm-cov` refuses to export when the test run exits
+non-zero), names the remedy (`--ignore-run-fail`), and even names the symptom
+by number.
+
+**Root cause.** The journal was never opened. Debugging began from the symptom
+and stayed there, and each attempt was plausible enough on its own to justify
+the next one.
+
+**What fixed it.** Comparing the local invocation against the one in
+`.github/workflows/ci.yml` line by line, which showed the local run was passing
+`-- --include-ignored` that CI does not: with the environment-gated tests
+ignored the run exits 0, and the export is complete. That is a second route to
+the same cause the journal already recorded.
+
+**Lesson.** Before the second attempt at a failing gate — not the fourth —
+search `docs/AGENT_RETROSPECTIVE.md` for the tool's name. The file exists
+precisely for failure modes whose cause is not visible in the symptom, and a
+grep costs seconds against the tens of minutes a repeated instrumented build
+costs. When the journal offers nothing, diff the local invocation against the
+workflow's own before varying flags: a local gate that differs from CI is a
+different gate, and the difference is usually the answer.
+
 ## 2026-09-18 — Four successive corrections to one published claim, each read off a set selected by the property being measured
 
 **What happened.** A single claim about the reference workload — whether a
