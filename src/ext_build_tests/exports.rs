@@ -1570,6 +1570,57 @@ fn a_base_s_instance_slot_shadows_a_derived_class_s_method() {
 }
 
 #[test]
+fn a_protocol_base_s_declared_method_shadows_a_further_base_s_export() {
+    // A `Protocol`'s declaration-style `def f(self) -> int: ...` is a real
+    // function object in the protocol's namespace, so CPython answers it and
+    // not a later base's binding of the same name. Verified end to end:
+    // `class Q(P, A)` with `P` declaring `f` and `A` exporting a
+    // `@staticmethod f` built with `--ext` and answered `mod.Q.f()` with `7`,
+    // where CPython raises `TypeError: P.f() missing 1 required positional
+    // argument: 'self'`. The protocol binding is not itself exportable, so
+    // the name is now published by no one, while `Base.value` -- the name no
+    // protocol member binds -- is inherited unchanged.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .protocol_members
+        .push(pycc_hir::ProtocolMember::Method {
+            name: "value".to_string(),
+            param_tys: Vec::new(),
+            return_ty: Ty::Int,
+        });
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"])
+        ]
+    );
+}
+
+#[test]
+fn a_protocol_base_s_annotation_only_attribute_shadows_nothing() {
+    // The other half of `protocol_members`: `x: int` in a class body
+    // declares a type and binds no namespace entry, in a `Protocol` exactly
+    // as anywhere else, so it must not suppress a name a real base exports.
+    let mut hir = inheriting_module();
+    hir.class_defs[1]
+        .1
+        .protocol_members
+        .push(pycc_hir::ProtocolMember::Attribute {
+            name: "value".to_string(),
+            ty: Ty::Int,
+        });
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Base.value"])
+        ]
+    );
+}
+
+#[test]
 fn a_class_whose_whole_resolved_set_is_shadowed_away_is_not_published_at_all() {
     // The collapse case the per-name matrix above never reaches: every one
     // of `Derived`'s resolved names is shadowed by a non-exporting binding,

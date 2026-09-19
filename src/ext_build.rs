@@ -30,8 +30,8 @@
 use crate::ext_output::ExtPlatform;
 use pycc_diag::Diagnostic;
 use pycc_hir::{
-    BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule, Ty,
-    flat_attr_layout, is_builtin_exception_class, is_public_name,
+    BUILTIN_EXCEPTION_CLASSES, FIRST_USER_EXCEPTION_TYPE_TAG, HirClassDef, HirItem, HirModule,
+    ProtocolMember, Ty, flat_attr_layout, is_builtin_exception_class, is_public_name,
 };
 use std::collections::HashMap;
 #[cfg(test)]
@@ -1169,14 +1169,23 @@ pub(crate) fn collect_class_publications(
 /// check them separately, while this walk answers an *instance* read and
 /// must treat a class attribute as the ordinary namespace entry it is.
 /// The two lists differ a second way, which is not an oversight: that
-/// predicate also carries `enum_members` and the
-/// `ProtocolMember::Method` half of `protocol_members`, neither of which
-/// can appear on the MRO this walk is given. An enum is a terminal leaf --
-/// `validate_bases` refuses to extend one with a `C0001` (#941) -- and a
-/// protocol is contagious, since `crates/pycc_hir/src/class.rs` propagates
-/// `is_protocol` to every inheritor and [`instance_shape_admissible`]
-/// excludes every `is_protocol` class, so neither kind is ever an ancestor
-/// of a publishable class.
+/// predicate also carries `enum_members`, which cannot appear on the MRO
+/// this walk is given, because an enum is a terminal leaf --
+/// `validate_bases` refuses to extend one with a `C0001` (#941).
+///
+/// The `ProtocolMember::Method` half of `protocol_members` *is* carried
+/// here, for the reason that predicate states: a `Protocol` class's
+/// declaration-style `def f(self) -> int: ...` is a real function object in
+/// its namespace, and CPython resolves it like any other. A protocol base
+/// does reach this walk -- `crates/pycc_hir/src/class.rs` propagates
+/// `is_protocol` to an inheritor and gives it the base's
+/// `protocol_members`, but such a class is still published, so for
+/// `class Q(P, A)` with `P` declaring `f` and `A` exporting a
+/// `@staticmethod f`, `P`'s binding is the one CPython answers and `A`'s
+/// export must not be published under that name. The binding is not itself
+/// exportable, so the name is published by no one -- lossy in the
+/// direction this walk is always willing to be wrong in, where resolving
+/// the export set instead published a callable Python does not give.
 /// Nothing rejects the shape that makes the difference visible:
 /// `crates/pycc_hir/src/class/attrs.rs`'s `reject_class_attr_collisions`
 /// checks a class's *own* newly declared `class_attrs` against its own MRO
@@ -1210,6 +1219,16 @@ fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
                 .iter()
                 .map(|(name, _, _)| name.as_str()),
         )
+        .chain(class_def.protocol_members.iter().filter_map(|member| {
+            match member {
+                ProtocolMember::Method { name, .. } => Some(name.as_str()),
+                // An annotation-only protocol attribute declares a type,
+                // not a binding: `x: int` in a class body leaves the class
+                // namespace without an `x`, exactly as it does anywhere
+                // else, so it shadows nothing.
+                ProtocolMember::Attribute { .. } => None,
+            }
+        }))
 }
 
 /// Whether any class linearized in `mro` assigns `name` to `self` in its
