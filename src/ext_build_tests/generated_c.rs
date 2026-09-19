@@ -2057,6 +2057,12 @@ fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
     // no exportable member of its own.
     let mut derived = constructible_class_def("Derived");
     derived.mro = vec!["Derived".to_string(), "Base".to_string()];
+    // `Base` binds `value` in its own method table, exactly as
+    // `pycc_hir::class` lowers it: `collect_class_publications` resolves the
+    // name against that table before it consults the export set.
+    let mut base = constructible_class_def("Base");
+    base.methods
+        .push(("value".to_string(), "Base.value".to_string()));
     let hir = module_with_classes(
         vec![
             init_func("Base", &[("w", Ty::Int)], Ty::None),
@@ -2067,10 +2073,7 @@ fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
             ),
             init_func("Derived", &[("w", Ty::Int)], Ty::None),
         ],
-        vec![
-            ("Base".to_string(), constructible_class_def("Base")),
-            ("Derived".to_string(), derived),
-        ],
+        vec![("Base".to_string(), base), ("Derived".to_string(), derived)],
     );
     let exports = collect_exports(&hir).expect("a carriable program");
     let publications = collect_class_publications(&hir, &exports);

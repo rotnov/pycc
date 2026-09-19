@@ -569,3 +569,49 @@ else:
 ",
     );
 }
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_derived_property_shadowing_a_base_method_publishes_no_callable() {
+    // #1146, against the running interpreter. The publication walk resolves
+    // the *namespace* before it consults the export set, so `Derived`, which
+    // binds `value` as a `@property`, answers the name itself -- it must not
+    // fall through to `Base.value`'s compiled body. Before the fix this exact
+    // program published `value` as a `method_descriptor` and
+    // `mod.Derived(21).value()` returned 21, where Python's own attribute
+    // lookup gives the derived property's 121.
+    let dir = ScratchDir::new("ext_1146_property_shadow").expect("scratch");
+    build_ext(
+        &dir,
+        "shadow",
+        "\
+class Base:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def value(self) -> int:
+        return self.n
+
+    def twice(self) -> int:
+        return self.n * 2
+
+
+class Derived(Base):
+    @property
+    def value(self) -> int:
+        return self.n + 100
+",
+    );
+    run_python(
+        &dir,
+        "\
+import shadow
+d = shadow.Derived(21)
+assert 'value' not in shadow.Derived.__dict__, dir(shadow.Derived)
+assert not callable(getattr(shadow.Derived, 'value', None)), shadow.Derived.value
+# The inherited, unshadowed method is unaffected, and `Base` keeps its own.
+assert d.twice() == 42, d.twice()
+assert shadow.Base(21).value() == 21, shadow.Base(21).value()
+",
+    );
+}

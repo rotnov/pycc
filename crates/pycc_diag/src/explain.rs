@@ -139,7 +139,8 @@ exports *every* public module-level function -- and, since #1143, every \
 public `@staticmethod` and `@classmethod` of a public non-exception class, \
 and since #1145 every public instance method of such a class when some \
 *published* class whose method resolution order contains it is \
-*constructible*, \
+*constructible* and resolves that method name to the declaring class \
+rather than to a binding of its own, \
 published as `mod.Class.method` -- (a stable ABI cannot \
 have a per-function opt-out without also having a way to spell it), one \
 unexportable public signature \
@@ -147,7 +148,8 @@ fails the whole `--ext` build rather than silently shipping an artifact \
 missing a name its source clearly defines. A member that is not in the \
 export set at all -- a `@property` getter or setter, any member of a \
 private or user exception class, and every instance method excluded \
-because no host-obtainable instance can ever receive it -- is \
+because no host-obtainable instance can ever receive it, which includes \
+one every such class shadows with a binding of its own -- is \
 never a C0003: it is excluded as representation, not reported as a gap. \
 An `@abstractmethod` is covered by that same clause rather than by a rule \
 of its own: an abstract class is never constructible, and a constructible \

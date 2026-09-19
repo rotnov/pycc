@@ -54,8 +54,11 @@ pub enum Command {
         /// a callable of one stable-ABI artifact that a CPython interpreter
         /// imports -- a method as `mod.Class.method`, an instance method on
         /// an instance the host builds with `mod.Class(...)`. Each class's
-        /// method table is MRO-resolved, so an inherited method is reachable
-        /// on the derived class and a derived override shadows it. `-o` names
+        /// method table is resolved through the class's namespace, so an
+        /// inherited method is reachable on the derived class while any
+        /// binding the derived class makes for that name -- another method,
+        /// a `@property`, an `@abstractmethod` -- shadows it, publishing the
+        /// derived binding or nothing. `-o` names
         /// that artifact; `docs/CLI_SPEC.md:23-63` is
         /// the canonical statement of how its suffix and module name are
         /// derived. `docs/RUNTIME.md`'s `ext` boundary section is the

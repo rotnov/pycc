@@ -754,7 +754,7 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
 /// The module every constructibility test below varies one field of: a
 /// public class with a public instance method and a carriable `__init__`.
 fn constructible_module(class: &str) -> HirModule {
-    module_with_classes(
+    let mut hir = module_with_classes(
         vec![
             init_func(class, &[("w", Ty::Int), ("h", Ty::Int)], Ty::None),
             func(
@@ -764,7 +764,59 @@ fn constructible_module(class: &str) -> HirModule {
             ),
         ],
         vec![(class.to_string(), constructible_class_def(class))],
-    )
+    );
+    declare_member(&mut hir, class, Member::Method("area"));
+    hir
+}
+
+/// Which of [`pycc_hir::HirClassDef`]'s member tables a fixture's binding
+/// belongs in. `collect_class_publications` resolves a name against those
+/// tables, so a fixture that pushes a `<Class>.<method>` item without the
+/// matching table entry describes a class `pycc_hir::class` could never
+/// have lowered -- and would exercise the namespace walk against a class
+/// that binds nothing.
+enum Member<'a> {
+    Method(&'a str),
+    Property(&'a str),
+    Static(&'a str),
+}
+
+/// Record `member` in `class`'s own table, so the class table says what the
+/// fixture's [`HirItem`]s already say.
+fn declare_member(hir: &mut HirModule, class: &str, member: Member<'_>) {
+    let (_, def) = hir
+        .class_defs
+        .iter_mut()
+        .find(|(held, _)| held == class)
+        .expect("the fixture defines the class it declares a member on");
+    match member {
+        Member::Method(name) => def
+            .methods
+            .push((name.to_string(), format!("{class}.{name}"))),
+        Member::Property(name) => def.properties.push(pycc_hir::PropertyDef {
+            name: name.to_string(),
+            getter: format!("{class}.{name}"),
+            setter: None,
+        }),
+        Member::Static(name) => def
+            .static_methods
+            .push((name.to_string(), format!("{class}.{name}.static"))),
+    }
+}
+
+/// Drop both `class.method`'s compiled item and its method-table entry --
+/// the inverse of [`declare_member`] for a regular method, used by the
+/// fixtures that remove a class's only own export.
+fn undeclare_method(hir: &mut HirModule, class: &str, method: &str) {
+    let mangled = format!("{class}.{method}");
+    hir.items
+        .retain(|item| !matches!(item, HirItem::Function { name, .. } if *name == mangled));
+    let (_, def) = hir
+        .class_defs
+        .iter_mut()
+        .find(|(held, _)| held == class)
+        .expect("the fixture defines the class it undeclares a method on");
+    def.methods.retain(|(name, _)| name != method);
 }
 
 #[test]
@@ -1044,6 +1096,7 @@ fn a_constructor_descriptor_is_emitted_once_per_class_however_many_methods_it_ex
         &[("self", Ty::Instance(Box::new("Grid".to_string())))],
         Ty::Int,
     ));
+    declare_member(&mut hir, "Grid", Member::Method("perimeter"));
     let exports = collect_exports(&hir).expect("carriable");
     assert_eq!(exports.len(), 2);
     assert_eq!(
@@ -1066,6 +1119,11 @@ fn inst(class: &str) -> Ty {
 fn inheriting_module() -> HirModule {
     let mut hir = constructible_module("Base");
     hir.items[1] = func("Base.value", &[("self", inst("Base"))], Ty::Int);
+    hir.class_defs[0]
+        .1
+        .methods
+        .retain(|(name, _)| name != "area");
+    declare_member(&mut hir, "Base", Member::Method("value"));
     let mut derived = constructible_class_def("Derived");
     derived.mro = vec!["Derived".to_string(), "Base".to_string()];
     hir.class_defs.push(("Derived".to_string(), derived));
@@ -1076,6 +1134,7 @@ fn inheriting_module() -> HirModule {
     ));
     hir.items
         .push(func("Derived.twice", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("twice"));
     hir
 }
 
@@ -1128,6 +1187,7 @@ fn a_derived_override_shadows_its_base_at_the_first_mro_hit() {
     let mut hir = inheriting_module();
     hir.items
         .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("value"));
     assert_eq!(
         publication_rows(&publications_of(&hir)),
         vec![
@@ -1145,6 +1205,7 @@ fn a_static_method_of_a_base_is_published_on_the_derived_class_too() {
     // attribute appears, none disappears.
     let mut hir = inheriting_module();
     hir.items.push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut hir, "Base", Member::Static("tag"));
     assert_eq!(
         publication_rows(&publications_of(&hir)),
         vec![
@@ -1163,8 +1224,7 @@ fn a_class_whose_only_exportable_members_are_inherited_is_published_and_construc
     // declares no exportable member of its own, so the old loop gave it no
     // type object at all -- and therefore no `tp_init` either, by absence.
     let mut hir = inheriting_module();
-    hir.items
-        .retain(|item| !matches!(item, HirItem::Function { name, .. } if name == "Derived.twice"));
+    undeclare_method(&mut hir, "Derived", "twice");
     assert_eq!(
         publication_rows(&publications_of(&hir)),
         vec![
@@ -1286,6 +1346,7 @@ fn a_published_abstract_class_is_refused_a_constructor_by_its_shape_alone() {
         ],
         vec![("Grid".to_string(), constructible_class_def("Grid"))],
     );
+    declare_member(&mut hir, "Grid", Member::Static("scale"));
     hir.class_defs[0].1.is_abstract = true;
     let publications = publications_of(&hir);
     assert_eq!(
@@ -1323,9 +1384,7 @@ fn a_private_or_exception_inheriting_class_is_not_published() {
     // passed them, so an inheriting class that exports nothing of its own
     // is the one shape that can reach publication without them.
     let mut private = inheriting_module();
-    private
-        .items
-        .retain(|item| !matches!(item, HirItem::Function { name, .. } if name == "Derived.twice"));
+    undeclare_method(&mut private, "Derived", "twice");
     private.class_defs[1].0 = "_Derived".to_string();
     private.class_defs[1].1.name = "_Derived".to_string();
     private.class_defs[1].1.mro = vec!["_Derived".to_string(), "Base".to_string()];
@@ -1335,9 +1394,7 @@ fn a_private_or_exception_inheriting_class_is_not_published() {
     );
 
     let mut raising = inheriting_module();
-    raising
-        .items
-        .retain(|item| !matches!(item, HirItem::Function { name, .. } if name == "Derived.twice"));
+    undeclare_method(&mut raising, "Derived", "twice");
     raising.class_defs[1].1.exception_type_tag = Some(FIRST_USER_EXCEPTION_TYPE_TAG);
     assert_eq!(
         publication_rows(&publications_of(&raising)),
@@ -1373,4 +1430,203 @@ fn a_ghost_class_in_the_mro_fails_fast_instead_of_under_allocating_an_instance()
     let mut hir = constructible_module("Grid");
     hir.class_defs[0].1.mro = vec!["Grid".to_string(), "Ghost".to_string()];
     let _ = class_constructible(&hir, "Grid");
+}
+
+// --- #1146: the walk resolves the namespace, not the export set ----------
+
+/// [`inheriting_module`] with `Derived` shadowing `Base.value` with a
+/// `@property` of the same name: the getter is an ordinary compiled
+/// `Derived.value` item plus the `properties` entry that tells it apart.
+fn property_shadowing_module() -> HirModule {
+    let mut hir = inheriting_module();
+    hir.items
+        .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Property("value"));
+    hir
+}
+
+#[test]
+fn a_derived_property_getter_shadows_its_base_method_and_publishes_nothing() {
+    // The #1146 defect, at the unit seam. `collect_exports` has already
+    // removed the getter from the export set, so a walk that stops at the
+    // first *exportable* hit fell through to `Base.value` and published a
+    // `method_descriptor` returning Base's answer where Python's own
+    // attribute lookup gives the derived property. Resolving the namespace
+    // first stops at `Derived`, which owns the name.
+    assert_eq!(
+        publication_rows(&publications_of(&property_shadowing_module())),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice"]),
+        ]
+    );
+}
+
+#[test]
+fn a_derived_method_shadowing_a_base_property_is_published_unchanged() {
+    // The mirror direction, which must not regress: `Base` binds `value` as
+    // a `@property` and publishes nothing for it, while `Derived`'s ordinary
+    // method owns the name on `Derived` and is published there. A
+    // non-regression guard rather than a discriminator: the base contributes
+    // no export under the name, so nothing exists for a first-exportable-hit
+    // walk to fall through to and this shape answered the same before #1146.
+    let mut hir = inheriting_module();
+    hir.class_defs[0]
+        .1
+        .methods
+        .retain(|(name, _)| name != "value");
+    declare_member(&mut hir, "Base", Member::Property("value"));
+    hir.items
+        .push(func("Derived.value", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Derived", vec!["Derived.twice", "Derived.value"])]
+    );
+}
+
+#[test]
+fn a_derived_abstract_method_shadows_its_base_s_concrete_one() {
+    // An `@abstractmethod` binds its name in `methods` exactly as an
+    // ordinary method does, and exports nothing of its own
+    // (`instance_shape_admissible` refuses an abstract class). `Derived`
+    // therefore publishes no `value` at all -- publishing `Base.value` there
+    // would answer a name whose derived binding is a stub.
+    let mut hir = inheriting_module();
+    hir.class_defs[1].1.is_abstract = true;
+    hir.class_defs[1]
+        .1
+        .abstract_methods
+        .push("value".to_string());
+    declare_member(&mut hir, "Derived", Member::Method("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![("Base", vec!["Base.value"])]
+    );
+}
+
+#[test]
+fn a_derived_static_or_class_method_shadows_its_base_instance_method() {
+    // A shadowing binding of a *different* receiver kind is still the
+    // binding Python resolves, and it is published under its own kind: the
+    // derived `@staticmethod` wins on `Derived` while `Base` keeps its
+    // instance method. The first two arms are non-regression guards -- both
+    // bindings are exports, so a first-exportable-hit walk reached the same
+    // rows -- and the third discriminates: the shadowing binding of a
+    // different kind is not itself an export.
+    let mut statics = inheriting_module();
+    statics
+        .items
+        .push(func("Derived.value.static", &[], Ty::Int));
+    declare_member(&mut statics, "Derived", Member::Static("value"));
+    assert_eq!(
+        publication_rows(&publications_of(&statics)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            ("Derived", vec!["Derived.twice", "Derived.value.static"]),
+        ]
+    );
+
+    // The same for a `@classmethod`, whose table is its own as well.
+    let mut classmethods = inheriting_module();
+    classmethods.items.push(func(
+        "Derived.value.classmethod",
+        &[("cls", inst("Derived"))],
+        Ty::Int,
+    ));
+    classmethods.class_defs[1]
+        .1
+        .class_methods
+        .push(("value".to_string(), "Derived.value.classmethod".to_string()));
+    assert_eq!(
+        publication_rows(&publications_of(&classmethods)),
+        vec![
+            ("Base", vec!["Base.value"]),
+            (
+                "Derived",
+                vec!["Derived.twice", "Derived.value.classmethod"]
+            ),
+        ]
+    );
+
+    // The kind pair the export set alone cannot answer: `Base` exports `tag`
+    // as a `@staticmethod` and `Derived` rebinds the name as a `@property`,
+    // which exports nothing. Stopping at the first exportable hit publishes
+    // `mod.Derived.tag()` as a callable the Python program does not have.
+    let mut over_static = inheriting_module();
+    over_static
+        .items
+        .push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut over_static, "Base", Member::Static("tag"));
+    over_static
+        .items
+        .push(func("Derived.tag", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut over_static, "Derived", Member::Property("tag"));
+    assert_eq!(
+        publication_rows(&publications_of(&over_static)),
+        vec![
+            ("Base", vec!["Base.value", "Base.tag.static"]),
+            ("Derived", vec!["Derived.twice", "Base.value"]),
+        ]
+    );
+}
+
+#[test]
+fn a_derived_instance_method_shadows_its_base_static_method() {
+    // And the reverse direction: an ordinary method shadowing an inherited
+    // `@staticmethod`. `Base.tag.static` stays published on `Base` itself.
+    // Another non-regression guard: both bindings are exports, so this shape
+    // answered the same under the first-exportable-hit walk.
+    let mut hir = inheriting_module();
+    hir.items.push(func("Base.tag.static", &[], Ty::Int));
+    declare_member(&mut hir, "Base", Member::Static("tag"));
+    hir.items
+        .push(func("Derived.tag", &[("self", inst("Derived"))], Ty::Int));
+    declare_member(&mut hir, "Derived", Member::Method("tag"));
+    assert_eq!(
+        publication_rows(&publications_of(&hir)),
+        vec![
+            ("Base", vec!["Base.value", "Base.tag.static"]),
+            // `value` is not shadowed, so `Derived` still inherits it.
+            (
+                "Derived",
+                vec!["Derived.twice", "Derived.tag", "Base.value"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_base_method_every_witness_shadows_is_not_exported_and_never_a_c0003() {
+    // The export side of the same rule. `Base` is unconstructible (a `tuple`
+    // `__init__`), so its only witness is `Derived` -- which shadows `value`
+    // with a `@property`. No host instance can ever reach `Base.value`'s
+    // compiled body, so it is excluded as representation: a dead
+    // `PyMethodDef` row on `Base`'s own type object with the carriable
+    // signature, and a whole failed `--ext` build with an uncarriable one.
+    let mut hir = property_shadowing_module();
+    hir.items[0] = init_func(
+        "Base",
+        &[("p", Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])))],
+        Ty::None,
+    );
+    let exports = collect_exports(&hir).expect("a carriable program");
+    assert_eq!(
+        exports.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        vec!["Derived.twice"]
+    );
+
+    hir.items[1] = func(
+        "Base.value",
+        &[("self", inst("Base")), ("xs", Ty::List(Box::new(Ty::Int)))],
+        Ty::Int,
+    );
+    assert_eq!(
+        collect_exports(&hir)
+            .expect("a shadowed method is excluded as representation, never a C0003")
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Derived.twice"]
+    );
 }

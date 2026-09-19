@@ -227,8 +227,11 @@ directory once project mode exists.
                     resolution order reaches, called on an instance the
                     host builds with
                     `mod.Class(...)` (#1145) -- each class's method table is
-                    MRO-resolved, so an inherited method is reachable on the
-                    derived class and a derived override shadows it;
+                    resolved through the class's namespace, so an
+                    inherited method is reachable on the derived class while
+                    any binding the derived class makes for that name --
+                    another method, a `@property`, an `@abstractmethod` --
+                    shadows it, publishing the derived binding or nothing;
                     `docs/RUNTIME.md`'s `ext` boundary section states which
                     classes are published and which are constructible. Will
                     conflict with `--lib`, `--interop-policy`, and `--pure`

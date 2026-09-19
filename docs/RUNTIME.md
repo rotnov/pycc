@@ -387,7 +387,9 @@ whose signature the boundary cannot carry *is* a `C0003`, where it was
 previously skipped in silence.
 
 [#1145](https://github.com/rotnov/pycc/issues/1145) adds public **instance
-methods** to that export set, and makes publication **MRO-resolved**. Three
+methods** to that export set, and makes publication **MRO-resolved**
+(namespace-resolved since
+[#1146](https://github.com/rotnov/pycc/issues/1146), below). Three
 separate predicates decide what the host sees, and they are deliberately not
 the same predicate.
 
@@ -398,13 +400,22 @@ tag. A class that declares no exportable member of its own is published on
 the strength of what it inherits.
 
 *Which methods each type object carries.* Every exported member of the class
-and of its bases, resolved along the class's MRO most-derived-first, with the
-**first hit on a method name winning**, so a derived override shadows its
-base's definition exactly as Python's own attribute lookup does. This holds
-for all three method kinds alike: `mod.Derived(21).value()` reaches a
-`Base.value` declared only on the base, and `mod.Derived.tag()` reaches a
-base's `@staticmethod`. An inherited method's compiled body addresses its own
-class's attribute slots, which is safe because `pycc_hir`'s
+and of its bases, resolved along the class's MRO most-derived-first. The walk
+resolves the **namespace**, not the export set: a method name is answered by
+the **first MRO entry that binds it at all** -- as a regular method, a
+`@property`, an `@abstractmethod`, a `@staticmethod` or a `@classmethod` --
+and that entry alone decides the outcome. If its binding is an export, the
+method is published; if it is anything else, the name is **absent** from the
+published class, and the walk never falls through to a base that exports the
+same name. So a `Derived` that binds `value` as a `@property` publishes no
+callable `value` at all, exactly as Python's own attribute lookup gives the
+derived property rather than `Base.value`; a derived ordinary method shadows a
+base `@property` in the same way, and a derived `@staticmethod` shadows a base
+instance method, published under its own receiver kind. An unshadowed name is
+inherited across all three method kinds alike: `mod.Derived(21).value()`
+reaches a `Base.value` declared only on the base, and `mod.Derived.tag()`
+reaches a base's `@staticmethod`. An inherited method's compiled body
+addresses its own class's attribute slots, which is safe because `pycc_hir`'s
 `validate_mro_slot_layout` (#969) rejects, at HIR lowering with `C0001`, every
 multiple-inheritance shape whose ancestor layout is not a name-wise prefix of
 the derived one -- see that function's own documentation for why that is the

@@ -475,7 +475,7 @@ pub(crate) struct ExtExport {
 /// the lexical half of that verdict.
 ///
 /// An instance method is exported only from a class some host-obtainable
-/// instance can be a receiver for -- [`instance_methods_reachable`] is the
+/// instance can be a receiver for -- [`instance_method_reachable`] is the
 /// canonical statement of that predicate -- because a method no instance
 /// can ever reach would be an unreachable entry. That ordering is also what
 /// bounds the new `C0003` set: a class no constructible class inherits
@@ -497,7 +497,7 @@ pub(crate) struct ExtExport {
 ///   spelling with an ordinary instance method and is told apart here by
 ///   `HirClassDef::properties`, whose `getter` field holds exactly that
 ///   mangled name;
-/// * every instance method of a class [`instance_methods_reachable`]
+/// * every instance method of a class [`instance_method_reachable`]
 ///   refuses, which is what removes an `@abstractmethod`'s stub body: such
 ///   a method survives lowering only on an `is_abstract` class (a class
 ///   carrying its own `@abstractmethod` without an `ABC` base is rejected
@@ -585,8 +585,8 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         // exactly as Part 1 published them.
         if let ExportName::Method {
             class,
+            method,
             receiver: ExtReceiver::SelfInstance,
-            ..
         } = &spelling
         {
             // A `@property` getter shares the bare spelling with an
@@ -598,7 +598,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             }) {
                 continue;
             }
-            if !instance_methods_reachable(module, class) {
+            if !instance_method_reachable(module, class, method) {
                 continue;
             }
         }
@@ -795,7 +795,7 @@ pub(crate) fn class_constructible(module: &HirModule, class: &str) -> bool {
 
 /// [`class_constructible`]'s conditions 1 and 2 -- the ones about the
 /// class's own *shape* rather than about its `__init__` -- factored out so
-/// [`instance_methods_reachable`] can hold them while relaxing conditions 3
+/// [`instance_method_reachable`] can hold them while relaxing conditions 3
 /// and 4, instead of restating them (`AGENTS.md`'s canonical-statement
 /// rule).
 fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
@@ -809,7 +809,7 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
 /// Whether the artifact publishes a type object for `class` at all, as far
 /// as the class's *name and kind* decide it -- the two conditions
 /// [`collect_class_publications`] applies, factored out so
-/// [`instance_methods_reachable`] can require them of its witness instead
+/// [`instance_method_reachable`] can require them of its witness instead
 /// of restating them (`AGENTS.md`'s canonical-statement rule).
 ///
 /// Publication's third condition -- that the class's MRO-resolved method
@@ -856,6 +856,17 @@ fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
 /// is the class itself, so a publishable constructible class answers for
 /// its own methods.
 ///
+/// **The witness must also resolve `method` to `class`.** The predicate is
+/// per method, not per class, because [`collect_class_publications`] answers
+/// a name from the first MRO entry that binds it (see [`namespace_owner`]):
+/// a witness whose own body shadows `method` -- with a `@property`, an
+/// `@abstractmethod`, or a member of any other kind -- publishes its own
+/// binding and never the one compiled here, so this method is as
+/// unreachable through that witness as it is through an unpublished one.
+/// Exporting it anyway would emit a `PyMethodDef` row nothing can call and,
+/// with an uncarriable signature, fail the whole `--ext` build with a
+/// `C0003` for a method no host could ever reach.
+///
 /// **Both halves of the witness are load-bearing.** Constructibility alone
 /// is not enough, because the host names a constructor only through a
 /// published type object: a privately named subclass is never published by
@@ -871,7 +882,7 @@ fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
 /// body returns nothing while its `return_ty` says otherwise, so exporting
 /// it from an `is_abstract` base would emit a wrapper over a body that
 /// never returns, and an exception class publishes no type object at all.
-fn instance_methods_reachable(module: &HirModule, class: &str) -> bool {
+fn instance_method_reachable(module: &HirModule, class: &str, method: &str) -> bool {
     let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
         return false;
     };
@@ -882,6 +893,7 @@ fn instance_methods_reachable(module: &HirModule, class: &str) -> bool {
         def.mro.iter().any(|entry| entry == class)
             && class_publishable(def, held)
             && class_constructible(module, held)
+            && namespace_owner(module, &def.mro, method) == Some(class)
     })
 }
 
@@ -1021,12 +1033,27 @@ pub(crate) struct ExtPublishedClass {
 /// own class's slot layout and inherited unchanged, so `mod.Derived(21)`
 /// must answer `value()` as well as `twice()`. Resolving the set here is
 /// what publishes it: the walk is `class_def.mro`, most derived first --
-/// the same order [`resolved_init`] walks for `__init__` -- and the first
-/// hit on a given method name wins, so a derived override shadows its base's
-/// definition exactly as Python's own attribute lookup does. That direction
-/// is the opposite of [`collect_exports`]' `(class, method)` dedup, which
-/// keeps the *last* binding because a rebound name is what `Grid.f` means in
-/// one class body.
+/// the same order [`resolved_init`] walks for `__init__`.
+///
+/// **The walk resolves the namespace, not the export set.** This is the
+/// canonical statement of that rule: a name is answered by the *first* MRO
+/// entry that binds it at all -- [`class_member_names`] is what "binds"
+/// means -- and that entry alone decides the outcome. If its binding is an
+/// export, the method is published; if it is anything the export set does
+/// not hold (a `@property` getter, an `@abstractmethod`'s stub, a private
+/// or uncarriable member), the name is simply absent from the published
+/// class, and the walk never falls through to a base that happens to
+/// export the same name. Stopping at the first *exportable* hit instead
+/// would publish `Base.value`'s compiled body on a `Derived` whose own
+/// `@property value` shadows it -- an artifact that silently disagrees
+/// with Python's own attribute lookup (#1146). The rule is kind-blind in
+/// both directions, so a derived ordinary method still shadows a base
+/// `@property`, and a derived `@staticmethod` still shadows a base
+/// instance method, each published under its own receiver kind.
+///
+/// That direction is the opposite of [`collect_exports`]' `(class, method)`
+/// dedup, which keeps the *last* binding because a rebound name is what
+/// `Grid.f` means in one class body.
 ///
 /// **Why an inherited method may be published at all.** A base method's
 /// compiled body addresses its own class's slot indices, and
@@ -1054,7 +1081,7 @@ pub(crate) struct ExtPublishedClass {
 /// class that exports nothing itself. Abstractness is deliberately *not*
 /// tested: Part 1 published a `@staticmethod` on an abstract class, and an
 /// abstract class exports no instance method to begin with
-/// ([`instance_methods_reachable`]).
+/// ([`instance_method_reachable`]).
 pub(crate) fn collect_class_publications(
     module: &HirModule,
     exports: &[ExtExport],
@@ -1082,11 +1109,18 @@ pub(crate) fn collect_class_publications(
         }
         let mut methods: Vec<ExtExport> = Vec::new();
         for ancestor in &class_def.mro {
-            for export in exports
-                .iter()
-                .filter(|export| export.class.as_deref() == Some(ancestor.as_str()))
-            {
-                if !methods.iter().any(|held| held.method == export.method) {
+            // [`ExtExport::method`] is `Some` exactly when
+            // [`ExtExport::class`] is, so the `?` rejects only the
+            // module-level functions this filter drops anyway.
+            for (export, method) in exports.iter().filter_map(|export| {
+                let method = export.method.as_deref()?;
+                (export.class.as_deref() == Some(ancestor.as_str())).then_some((export, method))
+            }) {
+                // No dedup pass is needed beside this test: exactly one MRO
+                // entry owns a given name, and `collect_exports`' own
+                // `(class, method)` dedup leaves that entry at most one
+                // export under it.
+                if namespace_owner(module, &class_def.mro, method) == Some(ancestor.as_str()) {
                     methods.push(export.clone());
                 }
             }
@@ -1099,6 +1133,66 @@ pub(crate) fn collect_class_publications(
         }
     }
     published
+}
+
+/// Every member name `class_def`'s own body binds, in a deterministic
+/// order, whatever kind of member binds it.
+///
+/// This is the canonical statement of "does this class define this name"
+/// for [`collect_class_publications`]' namespace walk. The kinds are read
+/// off the HIR class table rather than recognized by a name pattern:
+/// `methods` (an ordinary method, a `@dataclass`-generated one, and an
+/// `@abstractmethod`, which `crates/pycc_hir/src/class/body.rs` enters
+/// there *and* into `abstract_methods` -- so the latter adds nothing here),
+/// `properties` by [`pycc_hir::PropertyDef::name`] (one entry covers a
+/// getter and its optional setter: that file refuses a `@<name>.setter`
+/// without a preceding `@property` getter, so a setter never binds a name
+/// on its own), `static_methods`, and `class_methods`.
+///
+/// Slices are walked in table order and never through a hash map: the
+/// generated `.inc` must be byte-identical across runs.
+fn class_member_names(class_def: &HirClassDef) -> impl Iterator<Item = &str> {
+    class_def
+        .methods
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain(class_def.properties.iter().map(|prop| prop.name.as_str()))
+        .chain(
+            class_def
+                .static_methods
+                .iter()
+                .map(|(name, _)| name.as_str()),
+        )
+        .chain(
+            class_def
+                .class_methods
+                .iter()
+                .map(|(name, _)| name.as_str()),
+        )
+}
+
+/// The MRO entry that answers `method` for a class linearized as `mro`:
+/// the first entry, most derived first, that binds the name at all
+/// ([`class_member_names`]), or `None` when no entry binds it.
+///
+/// Python's own attribute lookup, and deliberately kind-blind: the winning
+/// entry decides the outcome whether it binds a regular method, a
+/// `@property`, an `@abstractmethod`'s stub, a `@staticmethod` or a
+/// `@classmethod`. Callers ask whether the entry they hold is the winner,
+/// never whether an entry further down the walk could also answer.
+///
+/// `None` is unreachable for a `method` some export names: `pycc_hir`'s
+/// class lowering records a table entry for every method it mangles, so an
+/// export's own class always binds its name. A fixture that pushes a
+/// `<Class>.<method>` item without the matching table entry describes a
+/// class that lowering could not have produced, and is treated as binding
+/// nothing.
+fn namespace_owner<'a>(module: &HirModule, mro: &'a [String], method: &str) -> Option<&'a str> {
+    mro.iter().map(String::as_str).find(|ancestor| {
+        module.class_defs.iter().any(|(held, def)| {
+            held == ancestor && class_member_names(def).any(|name| name == method)
+        })
+    })
 }
 
 mod carrier;
