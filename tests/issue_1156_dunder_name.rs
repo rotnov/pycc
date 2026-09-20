@@ -129,6 +129,19 @@ fn an_aliased_type_checking_guarded_binding_leaves_the_seed_intact() {
 }
 
 #[test]
+fn an_elif_type_checking_guarded_binding_leaves_the_seed_intact() {
+    // `lower_elif_else_clauses` folds the guard in the `elif` position too
+    // (#790), so the dead assignment cannot collide with the seed.
+    assert_eq!(
+        build_and_run(
+            "name_type_checking_elif",
+            "from typing import TYPE_CHECKING\n\nif False:\n    pass\nelif TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n",
+        ),
+        "__main__\n",
+    );
+}
+
+#[test]
 fn the_else_arm_of_a_type_checking_guard_still_binds() {
     // Only the guarded body is dead. The `else` is live whenever the guard is
     // skipped -- at run time, always -- so it shadows the seed like any other

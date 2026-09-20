@@ -26,9 +26,9 @@
 //! > CPython -- so the seed survives it. A binding inside a function body is
 //! > an ordinary local and shadows the module binding only within that
 //! > function, matching CPython. Neither test counts a module-scope
-//! > `if TYPE_CHECKING:` body, in either the entry module or a dependency:
-//! > #790 constant-folds that body away, so it binds nothing and reads
-//! > nothing at run time.
+//! > `if TYPE_CHECKING:` or `elif TYPE_CHECKING:` body, in either the entry
+//! > module or a dependency: #790 constant-folds that body away, so it binds
+//! > nothing and reads nothing at run time.
 //! >
 //! > Deviation from CPython, deliberate and documented: in CPython a read that
 //! > textually precedes a module-level `__name__ = ...` still sees the
@@ -101,10 +101,9 @@ fn references_dunder_name(module: &ModModule, imports: &[ImportBinding]) -> bool
             if self.found {
                 return;
             }
-            if let Some(orelse) = folded_type_checking_orelse(stmt, self.imports) {
-                for clause in orelse {
-                    visitor::walk_elif_else_clause(self, clause);
-                }
+            if let Stmt::If(if_stmt) = stmt {
+                let imports = self.imports;
+                walk_live_if(self, if_stmt, imports);
                 return;
             }
             visitor::walk_stmt(self, stmt);
@@ -233,10 +232,9 @@ pub(crate) fn binds_dunder_name_at_module_scope(
             if self.found {
                 return;
             }
-            if let Some(orelse) = folded_type_checking_orelse(stmt, self.imports) {
-                for clause in orelse {
-                    visitor::walk_elif_else_clause(self, clause);
-                }
+            if let Stmt::If(if_stmt) = stmt {
+                let imports = self.imports;
+                walk_live_if(self, if_stmt, imports);
                 return;
             }
             match stmt {
@@ -388,32 +386,45 @@ fn scan_imports(module: &ModModule, driver_imports: &[ImportBinding]) -> Vec<Imp
     imports
 }
 
-/// The `orelse` of a module-scope `if TYPE_CHECKING:` whose body `lower_stmt`
-/// constant-folds away (#790), and `None` for every other statement.
+/// Walk exactly the parts of an `if`/`elif`/`else` chain that lowering keeps.
 ///
-/// Both scans consult it, and neither may count what the fold discards. A
-/// `TYPE_CHECKING`-guarded body never executes: it binds nothing and reads
+/// Both scans route every [`Stmt::If`] through this instead of
+/// [`visitor::walk_stmt`], and neither may count what the `TYPE_CHECKING`
+/// fold discards. A guarded body never executes: it binds nothing and reads
 /// nothing, so a `__name__ = 7` there is not a user binding that could collide
 /// with the seed, and a `print(__name__)` there is not a read that could
-/// observe an uninitialized global. Counting either one withholds the seed from
-/// a program that would have compiled -- exactly the false `T0021` this helper
-/// removes. The `orelse` (an `elif`/`else` chain) *is* live whenever the guard
-/// is skipped, so it is walked normally, matching `lower_stmt`.
+/// observe an uninitialized global. Counting either one withholds the seed
+/// from a program that would have compiled -- exactly the false `T0021` this
+/// helper removes.
+///
+/// #790 folds the guard in *both* positions, so this does too: `lower_stmt`
+/// folds a leading `if TYPE_CHECKING:` and `lower_elif_else_clauses` folds an
+/// `elif TYPE_CHECKING:` anywhere down the chain, each replacing that arm's
+/// test with `HirExpr::BoolLiteral(false)` and its body with nothing while
+/// lowering the rest of the chain normally. A folded arm therefore
+/// contributes neither its test nor its body here, and every other arm --
+/// including the `else`, live whenever the guards above it are skipped -- is
+/// walked in full.
 ///
 /// `imports` reaches `is_type_checking_guard` unchanged, so the recognized
 /// spellings are exactly the ones lowering folds. The bare `TYPE_CHECKING` and
 /// the qualified `typing.TYPE_CHECKING` resolve with no import binding at all;
 /// an aliased `import typing as t` then `t.TYPE_CHECKING` needs the binding,
 /// which [`scan_imports`] supplies.
-fn folded_type_checking_orelse<'a>(
-    stmt: &'a Stmt,
+fn walk_live_if<'a, V: Visitor<'a>>(
+    visitor: &mut V,
+    if_stmt: &'a pycc_ast::StmtIf,
     imports: &[ImportBinding],
-) -> Option<&'a [pycc_ast::ElifElseClause]> {
-    match stmt {
-        Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test, imports) => {
-            Some(&if_stmt.elif_else_clauses)
+) {
+    if !is_type_checking_guard(&if_stmt.test, imports) {
+        visitor.visit_expr(&if_stmt.test);
+        visitor.visit_body(&if_stmt.body);
+    }
+    for clause in &if_stmt.elif_else_clauses {
+        match &clause.test {
+            Some(test) if is_type_checking_guard(test, imports) => {}
+            _ => visitor::walk_elif_else_clause(visitor, clause),
         }
-        _ => None,
     }
 }
 

@@ -436,3 +436,36 @@ fn a_non_stdlib_alias_does_not_fold() {
     let source = "import nowhere as t\n\nif t.TYPE_CHECKING:\n    __name__ = 7\n";
     assert!(binds(source));
 }
+
+#[test]
+fn an_elif_type_checking_guard_folds_like_a_leading_one() {
+    // #790 folds the guard in the `elif` position too
+    // (`lower_elif_else_clauses`), so neither gate may count that arm.
+    let source = "from typing import TYPE_CHECKING\n\nif flag:\n    pass\nelif TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n";
+    assert!(!binds(source));
+    assert!(references(source));
+    assert!(seed(source, Some("m")).is_some());
+}
+
+#[test]
+fn a_read_inside_a_folded_elif_is_not_a_mention() {
+    let source = "from typing import TYPE_CHECKING\n\nif flag:\n    pass\nelif TYPE_CHECKING:\n    print(__name__)\n";
+    assert!(!references(source));
+    assert!(!mentions(source));
+}
+
+#[test]
+fn the_arms_around_a_folded_elif_stay_live() {
+    // Only the guarded arm is dead: the leading `if` above it and the `else`
+    // below it both lower normally, so a binding in either still shadows.
+    let above = "from typing import TYPE_CHECKING\n\nif flag:\n    __name__ = 7\nelif TYPE_CHECKING:\n    pass\n";
+    assert!(binds(above));
+    let below = "from typing import TYPE_CHECKING\n\nif flag:\n    pass\nelif TYPE_CHECKING:\n    pass\nelse:\n    __name__ = 7\n";
+    assert!(binds(below));
+}
+
+#[test]
+fn a_live_if_test_is_still_scanned() {
+    // The leading test of a non-guard `if` is lowered, so a read there counts.
+    assert!(references("if print(__name__):\n    pass\n"));
+}
