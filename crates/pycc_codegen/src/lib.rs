@@ -7592,6 +7592,27 @@ fn emit_stmt<'ctx>(
         // on (`docs/RUNTIME.md`'s object-model "still aborts" line), not
         // something the store introduces.
         MirStmt::BufferSet { base, index, value } => {
+            // CPython's assignment order, which is *not* left to right: for
+            // `b[i] = v` the interpreter evaluates the right-hand side
+            // first, then the subscription target, then the index. A
+            // `d[i()] = v()` probe on CPython prints `v`'s effect before
+            // `i`'s, so emitting the index first would let a raising or
+            // side-effecting index expression suppress a value expression
+            // CPython would already have run. The three `emit_expr` calls
+            // below are therefore in value, base, index order.
+            //
+            // The neighbouring `MirStmt::DictSet` arm has the same ordering
+            // defect -- it emits its key before its value. That is
+            // pre-existing and out of scope here, and is worth its own issue
+            // rather than a silent fix in this pull request, so it is left
+            // exactly as it stands.
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            // `pycc_types` admits only a `Ty::Float` value here, so this is
+            // the identity arm of `to_float`; it is used rather than an
+            // inline `Scalar::Float` destructure so the store carries no
+            // panic the load does not.
+            let element = to_float(context, builder, rt, value_scalar);
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let Scalar::MemoryView(base_ptr) = base_scalar else {
                 panic!(
@@ -7603,13 +7624,6 @@ fn emit_stmt<'ctx>(
                 emit_expr(context, builder, module, rt, user_functions, locals, index);
             let encoded_index = to_numeric_encoded_int(context, builder, index_scalar);
             let raw_index = build_untag_checked(builder, rt, encoded_index, "buffer_untag_index");
-            let value_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, value);
-            // `pycc_types` admits only a `Ty::Float` value here, so this is
-            // the identity arm of `to_float`; it is used rather than an
-            // inline `Scalar::Float` destructure so the store carries no
-            // panic the load does not.
-            let element = to_float(context, builder, rt, value_scalar);
             builder
                 .build_call(
                     rt.buffer_f64_set,

@@ -15969,6 +15969,53 @@ fn a_buffer_element_store_emits_one_pending_exception_guard() {
     );
 }
 
+/// CPython evaluates `b[i] = v`'s **right-hand side first**, then the
+/// subscription target, then the index -- a `d[i()] = v()` probe on the
+/// reference interpreter prints `v`'s effect before `i`'s. The emitted IR
+/// must observe the same order, or a raising or side-effecting index
+/// expression would suppress a value expression CPython would already have
+/// run.
+///
+/// The witness is a store whose value is itself a buffer load: with the
+/// value emitted first, the index's own `pycc_rt_int_untag_checked` falls
+/// *between* the load and the store. Emitting the index first would put
+/// both untags ahead of the load and leave that span empty.
+#[test]
+fn a_buffer_element_store_emits_its_value_before_its_index() {
+    compile_ext_items_checking_ir(
+        "buffer_store_value_before_index",
+        buffer_fn_items(
+            vec![MirStmt::BufferSet {
+                base: MirExpr::Name {
+                    name: "b".to_string(),
+                    ty: Ty::MemoryView,
+                },
+                index: MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                },
+                value: buffer_get_b_i(),
+            }],
+            Ty::None,
+        ),
+        |ir| {
+            // Anchored on the `call` sites, not on the bare symbol: the
+            // module prints its `declare` lines ahead of every definition.
+            let load_at = ir
+                .find("call double @pycc_rt_buffer_f64_get")
+                .unwrap_or_else(|| panic!("the value's own load is missing: {ir}"));
+            let store_at = ir
+                .find("call void @pycc_rt_buffer_f64_set")
+                .unwrap_or_else(|| panic!("the store is missing: {ir}"));
+            assert!(load_at < store_at, "{ir}");
+            assert!(
+                ir[load_at..store_at].contains("call i64 @pycc_rt_int_untag_checked"),
+                "the index was decoded before the value was evaluated: {ir}"
+            );
+        },
+    );
+}
+
 #[test]
 #[should_panic(expected = "a buffer element load's base did not evaluate to a memoryview")]
 fn a_buffer_element_load_whose_base_is_not_a_memoryview_is_an_internal_error() {

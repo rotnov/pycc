@@ -1511,7 +1511,16 @@ unsafe fn buffer_f64_get(view: &PyccExtBufferView, index: i64) -> f64 {
         );
         return 0.0;
     }
-    unsafe { *(view.ptr as *const f64).offset(index as isize) }
+    // The `--ext` wrapper admits an exporter on four properties --
+    // writable-or-not, one-dimensional, C-contiguous, format `"d"` -- and
+    // none of them implies that the exporter's storage is 8-byte aligned.
+    // `memoryview(bytearray(17))[1:].cast("d")` satisfies every one of them
+    // on CPython and reports a data address that is `1 mod 8`, so a plain
+    // `*const f64` dereference here would be undefined behavior on a buffer
+    // the boundary is required to accept. `read_unaligned` costs nothing on
+    // an aligned address and keeps the unaligned exporter working rather
+    // than turning it into a refusal.
+    unsafe { core::ptr::read_unaligned((view.ptr as *const f64).add(index as usize)) }
 }
 
 /// Reads the element at `index` of a `pycc build --ext` export's `memoryview`
@@ -1561,7 +1570,12 @@ unsafe fn buffer_f64_set(view: &PyccExtBufferView, index: i64, value: f64) {
         );
         return;
     }
-    unsafe { *(view.ptr as *mut f64).offset(index as isize) = value };
+    // Unaligned for the same reason the load is, and stated again rather
+    // than shared so neither side can be relaxed alone: the four properties
+    // the wrapper checks do not imply 8-byte alignment, and
+    // `memoryview(bytearray(17))[1:].cast("d")` is a CPython buffer that
+    // passes all four at a data address `1 mod 8`.
+    unsafe { core::ptr::write_unaligned((view.ptr as *mut f64).add(index as usize), value) };
 }
 
 /// Writes `value` to the element at `index` of a `pycc build --ext`
@@ -4037,6 +4051,42 @@ mod tests {
             buffer_f64_set(&view, 2, 3.5);
         }
         assert_eq!(storage, [1.5, 2.5, 3.5]);
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    /// The four properties the `--ext` wrapper checks -- writable, one
+    /// dimension, C-contiguous, format `"d"` -- say nothing about the
+    /// alignment of the exporter's storage.
+    /// `memoryview(bytearray(17))[1:].cast("d")` passes all four on CPython
+    /// and reports a data address that is `1 mod 8`, so both accessors have
+    /// to use the unaligned primitives; a plain `f64` dereference there is
+    /// undefined behavior. An unaligned exporter must keep working, so this
+    /// asserts a round trip rather than a refusal.
+    #[test]
+    fn buffer_f64_round_trips_through_a_misaligned_view() {
+        pycc_rt_exception_clear();
+        #[repr(align(8))]
+        struct AlignedBytes([u8; 24]);
+        let mut storage = AlignedBytes([0u8; 24]);
+        // One byte past an 8-byte-aligned base, so every element address is
+        // `1 mod 8` -- the same residue the `bytearray(17)[1:]` witness has.
+        let base = unsafe { storage.0.as_mut_ptr().add(1) };
+        assert_eq!(base as usize % core::mem::align_of::<f64>(), 1);
+        let view = PyccExtBufferView {
+            ptr: base as *mut core::ffi::c_void,
+            len: 2,
+        };
+        unsafe {
+            buffer_f64_set(&view, 0, 1.5);
+            buffer_f64_set(&view, 1, -2.25);
+            assert_eq!(buffer_f64_get(&view, 0), 1.5);
+            assert_eq!(buffer_f64_get(&view, 1), -2.25);
+        }
+        // The writes landed at the misaligned offsets themselves, not at a
+        // rounded-down aligned address: byte 0 is untouched.
+        assert_eq!(storage.0[0], 0);
+        assert_eq!(storage.0[1..9], 1.5f64.to_ne_bytes());
+        assert_eq!(storage.0[9..17], (-2.25f64).to_ne_bytes());
         assert_eq!(pycc_rt_exception_active(), 0);
     }
 

@@ -373,6 +373,51 @@ def tail(b: memoryview) -> None:
     assert_eq!(stdout_of(&run), "ok\n");
 }
 
+/// CPython's assignment order, observed from a hosted run: for `b[i] = v`
+/// the right-hand side is evaluated **first**, then the subscription
+/// target, then the index. A `d[i()] = v()` probe on the reference
+/// interpreter prints `v`'s effect before `i`'s, and the compiled store
+/// must agree -- otherwise a raising or side-effecting index expression
+/// suppresses a value expression CPython would already have run.
+///
+/// Both positions are calls whose effect is a `print`, so the order is read
+/// straight off the run's stdout. Nothing else writes to it: the driver
+/// prints nothing of its own, so CPython's own buffering cannot interleave
+/// with the compiled writes.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_store_evaluates_its_value_before_its_index() {
+    let dir = fixture(
+        "1142_hosted_order",
+        "\
+def value() -> int:
+    print(\"value\")
+    return 1
+
+
+def position() -> int:
+    print(\"index\")
+    return 0
+
+
+def order(b: memoryview) -> None:
+    b[position()] = float(value())
+",
+    );
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import array, store_probe\n\
+         data = array.array('d', [0.0])\n\
+         store_probe.order(memoryview(data))\n\
+         assert list(data) == [1.0], list(data)\n",
+    );
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "value\nindex\n");
+}
+
 /// A bigint index is refused at the `ext` boundary by D-141's own
 /// `OverflowError`, before the store's untag ever runs -- the index
 /// position is an ordinary `int` parameter, so it inherits that rule
