@@ -228,7 +228,7 @@ pub(crate) fn infer_expr_in(
                     if env.in_function_body {
                         crate::foreign::reject_object_read(name, &ty)?;
                     }
-                    reject_memoryview_read(name, &ty)?;
+                    reject_memoryview_read(name, &ty, env.owned_buffers.contains(name))?;
                     Ok(ty)
                 }
                 Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -727,6 +727,29 @@ pub(crate) fn infer_expr_in(
                 // stdlib-qualified symbol lookup, the class-instantiation lookup,
                 // and the generic-function lookup, so a user `def
                 // ValueError(...)` always takes priority over this classification.
+                // Part 2a of #1142 (#1165): the buffer producer. Placed
+                // here, and not early like `len`'s own interception, so
+                // D-244's #1129 statement (h) falls out of the ordering
+                // rather than needing a second precedence rule: the class
+                // table, the generic table and the user-function table have
+                // all been consulted above, so a program's own `class
+                // ndarray` or `def NDArray` keeps its meaning and never
+                // reaches this line.
+                //
+                // A refusal rather than a type: `ndarray(n)` is admitted
+                // only as an assignment's whole right-hand side, which
+                // `crate::buffer_producer_assignment` handles before the
+                // value ever reaches this walk. Every other position --
+                // including the bare `HirStmt::ExprStmt` whose arm discards
+                // the inferred type, and which would otherwise leak one
+                // allocation per call -- arrives here.
+                if crate::buffer::is_producer_spelling(callee) {
+                    return Err(if env.in_function_body {
+                        crate::buffer::producer_position_unsupported(callee)
+                    } else {
+                        crate::buffer::producer_at_module_scope(callee)
+                    });
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }
@@ -1015,9 +1038,14 @@ pub(crate) fn infer_expr_in(
             //
             // Only a bare `HirExpr::Name` base is intercepted, which is the
             // whole of the admitted surface -- a `memoryview` cannot be
-            // aliased, stored, returned or produced, so no other expression
-            // can have the type. `b[i][j]` therefore falls through to the
-            // `Ty::Float` catch-all below and is refused with `T0033`.
+            // aliased, stored or returned, so no other expression can have
+            // the type. Part 2a of #1142 (#1165) added the one producing
+            // expression and does not widen this: `ndarray(n)` is admitted
+            // only as an assignment's whole right-hand side, so
+            // `ndarray(4)[0]` is refused by the `Call` arm's own named
+            // position diagnostic before this seam ever sees it. `b[i][j]`
+            // therefore still falls through to the `Ty::Float` catch-all
+            // below and is refused with `T0033`.
             if let HirExpr::Name(buffer_name) = base.as_ref()
                 && matches!(
                     env.binding_state(buffer_name),
@@ -1682,10 +1710,16 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// function" -- and this is where it is enforced.
 ///
 /// Refusing the *read* is what makes that list closed rather than a list.
-/// `memoryview` has no literal and no producing expression, so the only way
-/// a value of the type can reach any of those positions is through a read of
-/// its own parameter name; refusing the read therefore refuses every one of
-/// them at once. Without it `pycc_codegen` reaches a local load it has no
+/// `memoryview` has no literal, and until Part 2a of #1142 (#1165) it had no
+/// producing expression either, so the only way a value of the type could
+/// reach any of those positions was through a read of its own parameter
+/// name; refusing the read therefore refuses every one of them at once.
+/// #1165 adds a producing expression (`crate::buffer`), and closes the
+/// positions it opens on its own terms rather than through this function: a
+/// producer is admitted in exactly one syntactic position -- an assignment's
+/// whole right-hand side -- so the value still cannot reach a container, a
+/// call argument or a return without passing through a read of the name it
+/// was bound to, which arrives here. Without it `pycc_codegen` reaches a local load it has no
 /// lowering for and panics (`reading a `memoryview`-typed local is not
 /// supported yet`) -- an ICE where the contract calls for a diagnostic.
 ///
@@ -1711,8 +1745,24 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// iteration is still refused, but as `T0033` -- "`memoryview` cannot be
 /// iterated" -- which is false about Python and mislabels a capability gap
 /// as a type error.
-pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
+///
+/// Part 2a of #1142 (#1165) gives the buffer type a second source, so this
+/// refusal stops meaning "this type" and starts meaning "this *binding*".
+/// `owned` is the caller's answer to "did this artifact allocate the storage
+/// `name` is bound to?", read from the walker's own `owned_buffers` set; the
+/// two walkers each answer it from their own environment because the
+/// constraint solver runs first and would otherwise report the parameter
+/// message for every owned read before the check phase ever looked.
+///
+/// The parameter arm's text is unchanged verbatim -- eight assertions pin
+/// its prefix -- and the owned arm is [`crate::buffer::owned_buffer_use_unsupported`],
+/// which names the owned case and the reason it is still refused (there is
+/// nowhere for the value to go until egress lands in Part 2b).
+pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty, owned: bool) -> Result<(), Diagnostic> {
     if matches!(ty, Ty::MemoryView) {
+        if owned {
+            return Err(crate::buffer::owned_buffer_use_unsupported(name));
+        }
         return Err(Diagnostic::error(
             "C0001",
             format!(

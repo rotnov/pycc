@@ -204,6 +204,28 @@ pub struct Environment {
     /// to tell those apart, and this flag is what tells it which environment
     /// it is looking at.
     pub(crate) in_function_body: bool,
+    /// Part 2a of #1142 (#1165): the names whose `Ty::MemoryView` binding is
+    /// storage **this artifact allocated** (`a = ndarray(n)`), as opposed to
+    /// a buffer parameter the `pycc build --ext` wrapper borrowed from the
+    /// host for one call.
+    ///
+    /// A per-name fact rather than a second `Ty` variant, for the reason
+    /// `BindingState` itself is one: the distinction is about where a *name*
+    /// got its value, not about the type. A `Ty::OwnedBuffer` would ripple
+    /// through every exhaustive `match` on `Ty` in the workspace, through
+    /// `boundary_carrier`, `render_ty`, `annotation_to_ty`, `ty_to_basic_type`
+    /// and the wrapper tables, and would make the annotation spelling
+    /// ambiguous -- all to express something none of those sites asks.
+    ///
+    /// Flat and flow-insensitive on purpose: `crate::buffer`'s
+    /// `buffer_parameter_rebinding` refuses the one shape that would make a
+    /// name change provenance mid-function, so a set is enough and no
+    /// per-program-point map is needed. Merged as a union at every
+    /// control-flow join, matching `bindings`' own `Maybe` widening: a name
+    /// owned on either path is owned for the epilogue's purposes, and the
+    /// runtime free is a documented no-op on the null a never-taken path
+    /// leaves in the slot.
+    pub(crate) owned_buffers: HashSet<String>,
 }
 
 impl Environment {
@@ -401,6 +423,13 @@ impl Environment {
             child.declared.remove(*name);
             child.finals.remove(*name);
             child.narrowed.remove(*name);
+            // Part 2a of #1142 (#1165): a function-local name shadows any
+            // module-level one, so it starts with no provenance of its own.
+            // Module scope cannot actually own a buffer (`crate::buffer`'s
+            // `producer_at_module_scope` refuses production there), so this
+            // is hygiene that keeps the set's meaning local rather than a
+            // hole being closed.
+            child.owned_buffers.remove(*name);
         }
         // Issue #22: a function body may call any module-level function
         // regardless of source order -- Python's late binding evaluates a

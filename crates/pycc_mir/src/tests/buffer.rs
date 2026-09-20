@@ -234,3 +234,159 @@ fn a_subscript_store_into_a_dict_still_lowers_to_a_dict_set() {
     };
     assert_eq!(dict, "d");
 }
+
+// ---------------------------------------------------------------------------
+// Part 2a of #1142 (#1165): `MirExpr::BufferAlloc`, the second source of a
+// `Ty::MemoryView` value and the first that is not a parameter.
+// ---------------------------------------------------------------------------
+
+/// `def f(): a = <callee>(4); <tail>`, with no buffer parameter, which is
+/// the shape #1165 admits.
+fn module_with_allocation(callee: &str, tail: Vec<HirStmt>) -> HirModule {
+    let mut body = vec![HirStmt::Assign {
+        target: "a".to_string(),
+        value: HirExpr::Call {
+            callee: callee.to_string(),
+            args: vec![HirExpr::IntLiteral(4)],
+        },
+    }];
+    body.extend(tail);
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body,
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    }
+}
+
+/// Both spellings lower to the dedicated node, whose `ty()` is
+/// unconditionally `Ty::MemoryView` -- deliberately *not* a `MirExpr::Call`,
+/// which would carry the buffer type into `pycc_codegen::call_result`'s
+/// `Ty::MemoryView` panic.
+#[test]
+fn a_producer_call_lowers_to_a_buffer_alloc_typed_memoryview() {
+    for callee in ["ndarray", "NDArray"] {
+        let mir = build(&module_with_allocation(callee, vec![]));
+        let [MirStmt::Assign { value, .. }] = function_body(&mir) else {
+            panic!("expected a single assignment");
+        };
+        assert_eq!(value.ty(), Ty::MemoryView, "{callee}");
+        let MirExpr::BufferAlloc { len } = value else {
+            panic!("expected a `BufferAlloc`, got {value:?}");
+        };
+        assert_eq!(len.ty(), Ty::Int, "{callee}");
+    }
+}
+
+/// The store into artifact-owned storage reaches `MirStmt::BufferSet`
+/// through the same `HirStmt::DictSet` dispatch a parameter-bound buffer
+/// uses: `bind_variable` records the assignment's `value.ty()`, so
+/// `BufferAlloc`'s `Ty::MemoryView` selects that arm with no edit to it.
+#[test]
+fn a_store_into_allocated_storage_reaches_the_buffer_set_arm() {
+    let mir = build(&module_with_allocation(
+        "ndarray",
+        vec![HirStmt::DictSet {
+            dict: "a".to_string(),
+            key: HirExpr::IntLiteral(0),
+            value: HirExpr::FloatLiteral(1.5),
+        }],
+    ));
+    let [_, MirStmt::BufferSet { base, .. }] = function_body(&mir) else {
+        panic!("expected an allocation and a buffer store");
+    };
+    assert_eq!(base.ty(), Ty::MemoryView);
+}
+
+/// PEP 572 (#774): `collect_named_expr_bindings` has to recurse into the
+/// length argument, or a later statement lowers against an unbound name and
+/// panics.
+///
+/// Driven through the `ExprStmt` seam for the same reason the `BufferLen`
+/// test above is: that arm is the one `stmt.rs` runs the walk from
+/// (`HirStmt::Assign` never has, for any node), and `pycc_hir`'s own
+/// `contains_named_expr` restriction admits a walrus in exactly the three
+/// placements that seam covers. The node under test is the same either way.
+#[test]
+fn a_walrus_in_the_length_argument_binds_for_the_next_statement() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "ndarray".to_string(),
+                    args: vec![HirExpr::NamedExpr {
+                        name: "n".to_string(),
+                        value: Box::new(HirExpr::IntLiteral(4)),
+                    }],
+                }),
+                HirStmt::ExprStmt(HirExpr::Name("n".to_string())),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let [MirStmt::ExprStmt(value), MirStmt::ExprStmt(second)] = function_body(&mir) else {
+        panic!("expected two expression statements");
+    };
+    assert!(matches!(value, MirExpr::BufferAlloc { .. }), "{value:?}");
+    assert!(
+        matches!(second, MirExpr::Name { name, ty: Ty::Int } if name == "n"),
+        "{second:?}"
+    );
+}
+
+/// D-244 #1129 statement (h) at the lowering seam, which has its own shadow
+/// guard rather than inheriting the checker's: a program's own `def
+/// ndarray` keeps its meaning, and the call stays a `MirExpr::Call`.
+#[test]
+fn a_program_that_defines_the_spelling_itself_still_lowers_to_a_call() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "ndarray".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![HirStmt::Assign {
+                    target: "a".to_string(),
+                    value: HirExpr::Call {
+                        callee: "ndarray".to_string(),
+                        args: vec![HirExpr::IntLiteral(4)],
+                    },
+                }],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let MirItem::Function { body, .. } = &mir.items[1] else {
+        panic!("expected the second item to be a function");
+    };
+    let [MirStmt::Assign { value, .. }] = &body[..] else {
+        panic!("expected a single assignment");
+    };
+    assert!(
+        matches!(value, MirExpr::Call { callee, .. } if callee == "ndarray"),
+        "{value:?}"
+    );
+}

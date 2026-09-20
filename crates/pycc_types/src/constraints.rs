@@ -186,6 +186,38 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// each per-function environment there; the stdlib receiver shadow
     /// check in `collect_expr_constraints` reads it.
     pub(crate) std_module_aliases: Vec<(String, pycc_std::StdModule)>,
+    /// Part 2a of #1142 (#1165): the solver's mirror of
+    /// `Environment::owned_buffers` -- names bound to buffer storage this
+    /// artifact allocated rather than to a host-borrowed parameter.
+    ///
+    /// A mirror is required rather than convenient. The solver runs before
+    /// the check phase, so the `Name` arm's `reject_memoryview_read` above
+    /// is the *first* seam any owned read reaches; without this set every
+    /// one of them would report the parameter message and the provenance
+    /// distinction would be unobservable no matter what the check phase
+    /// went on to record.
+    pub(crate) owned_buffers: HashSet<String>,
+    /// Part 2a of #1142 (#1165): `true` while a *function body* is being
+    /// collected, `false` for the module's own top-level statements.
+    ///
+    /// The solver's counterpart of `Environment::in_function_body`, and
+    /// needed for the same one reason: the buffer producer is refused at
+    /// module scope with its own diagnostic, and `local_names` cannot stand
+    /// in for the distinction (a function with no locals also has an empty
+    /// slice).
+    pub(crate) in_function_body: bool,
+    /// Part 2a of #1142 (#1165): the buffer-producer spellings this module
+    /// binds itself, which therefore keep the program's own meaning
+    /// (D-244 #1129 statement (h)).
+    ///
+    /// The check phase needs no equivalent -- `env.lookup_class` and
+    /// `env.lookup_generic` already run ahead of its interception -- but
+    /// `ConstraintEnvironment` carries no class table at all, and
+    /// `signatures` covers only `def`s. Seeded once per module in
+    /// `constraints::signatures` from the HIR's own class table, per
+    /// *spelling*: a module defining `class ndarray` must still be able to
+    /// call `NDArray(n)`.
+    pub(crate) shadowed_producers: HashSet<String>,
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -203,6 +235,9 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             opaque_bindings: HashSet::new(),
             foreign_objects: HashSet::new(),
             std_module_aliases: Vec::new(),
+            owned_buffers: HashSet::new(),
+            in_function_body: false,
+            shadowed_producers: HashSet::new(),
         }
     }
 
@@ -455,6 +490,33 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
     }
 }
 
+/// Part 2a of #1142 (#1165): the solver's answer to "is this expression a
+/// buffer producer *here*?", returning the length argument when it is.
+///
+/// The solver's own statement (h): a `def` of the spelling is in
+/// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
+/// no class table), and a module-level value binding of it is in `bindings`.
+/// Any of the three means the program's own meaning wins.
+fn resolved_producer_call<'a>(
+    signatures: &HashMap<String, SignatureTerms>,
+    env: &ConstraintEnvironment<'_, '_>,
+    expr: &'a HirExpr,
+) -> Option<&'a HirExpr> {
+    let HirExpr::Call { callee, args } = expr else {
+        return None;
+    };
+    if !crate::buffer::is_producer_spelling(callee)
+        || signatures.contains_key(callee)
+        || env.shadowed_producers.contains(callee.as_str())
+        || env.bindings.contains_key(callee.as_str())
+        || args.len() != 1
+        || !env.in_function_body
+    {
+        return None;
+    }
+    Some(&args[0])
+}
+
 pub(crate) fn collect_expr_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -531,7 +593,11 @@ pub(crate) fn collect_expr_constraints(
                     // stays: a call's callee is a bare string, not a `Name`
                     // expression, so it never reaches this seam.
                     if let Some(ty) = resolved_term(term.clone(), parents, concrete) {
-                        crate::expr::reject_memoryview_read(name, &ty)?;
+                        crate::expr::reject_memoryview_read(
+                            name,
+                            &ty,
+                            env.owned_buffers.contains(name),
+                        )?;
                     }
                     Ok(Some(term))
                 }
@@ -714,7 +780,11 @@ pub(crate) fn collect_expr_constraints(
                 // is (`C0001`), not D-110's "no value in the current subset
                 // is callable" (`T0021`).
                 if let Some(ty) = resolved_term(term, parents, concrete) {
-                    crate::expr::reject_memoryview_read(callee, &ty)?;
+                    crate::expr::reject_memoryview_read(
+                        callee,
+                        &ty,
+                        env.owned_buffers.contains(callee),
+                    )?;
                 }
                 return Err(non_callable_binding(callee));
             }
@@ -752,6 +822,28 @@ pub(crate) fn collect_expr_constraints(
                 && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
             {
                 return Ok(Some(Ok(Ty::Int)));
+            }
+            // Part 2a of #1142 (#1165), the solver half of `crate::expr`'s
+            // own producer refusal: `ndarray(n)`/`NDArray(n)` is admitted
+            // only as an assignment's whole right-hand side, which
+            // `collect_block_constraints` handles before the value reaches
+            // this walk. Placed before the argument recursion for the same
+            // ordering reason the `len` interception above is: the recursion
+            // reaches the `Name` seam, which would report a read refusal for
+            // an argument of the very expression being refused.
+            //
+            // The callee-bound gate further above already returned for a
+            // name the module binds to a *value*, so only the two spelling
+            // shadows remain to check here.
+            if crate::buffer::is_producer_spelling(callee)
+                && !signatures.contains_key(callee)
+                && !env.shadowed_producers.contains(callee.as_str())
+            {
+                return Err(if env.in_function_body {
+                    crate::buffer::producer_position_unsupported(callee)
+                } else {
+                    crate::buffer::producer_at_module_scope(callee)
+                });
             }
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
@@ -1177,6 +1269,12 @@ pub(crate) fn collect_expr_constraints(
             // unsatisfiable constraint inside it is a real error and must
             // surface -- but its *term* is discarded exactly as the list
             // path discards it: the index type gate is the check phase's.
+            //
+            // Still only a bare `Name` base after Part 2a of #1142 (#1165),
+            // for the reason `crate::expr`'s own arm records: the producer
+            // is admitted only as an assignment's whole right-hand side, so
+            // `ndarray(4)[0]` is refused by this walker's `Call` arm before
+            // the base recursion below can reach it.
             if let HirExpr::Name(buffer_name) = base.as_ref()
                 && let Some(term) = env.bindings.get(buffer_name).cloned()
                 && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
@@ -1619,6 +1717,25 @@ pub(crate) fn collect_block_constraints(
                 // to be — it is either replaced by a real term below, or
                 // reinstated as opaque by the `else` arm.
                 env.opaque_bindings.remove(target.as_str());
+                // Part 2a of #1142 (#1165): the solver's one admitting seam
+                // for the buffer producer, mirroring `crate::check_stmt`'s.
+                // The length argument is still collected so its own
+                // constraints (and its own diagnostics) are not skipped.
+                if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        len_arg,
+                    )?;
+                    env.bindings
+                        .entry(target.clone())
+                        .or_insert(Ok(Ty::MemoryView));
+                    env.owned_buffers.insert(target.clone());
+                    continue;
+                }
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1682,6 +1799,26 @@ pub(crate) fn collect_block_constraints(
                 // removal above; `HirExpr::Name`'s lookup already prefers
                 // `bindings` over `opaque_bindings` either way.
                 env.opaque_bindings.remove(target.as_str());
+                // Part 2a of #1142 (#1165): see the plain `Assign` arm. No
+                // `AnnotationDefaultConstraint` is pushed for a producer --
+                // the term is already the concrete `Ty::MemoryView`, never
+                // an `Err(var)`, so `apply_annotation_defaults` would skip
+                // it anyway.
+                if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        len_arg,
+                    )?;
+                    env.bindings
+                        .entry(target.clone())
+                        .or_insert(Ok(Ty::MemoryView));
+                    env.owned_buffers.insert(target.clone());
+                    continue;
+                }
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,

@@ -26,8 +26,8 @@
 //! a message about something else.
 
 use pycc_diag::{Diagnostic, Severity};
-use pycc_hir::{HirItem, HirModule, ProtocolMember, Ty};
-use std::collections::HashMap;
+use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, ProtocolMember, Ty};
+use std::collections::{HashMap, HashSet};
 
 /// The `I04xx` code this gate emits. The family is the CPython interop
 /// boundary (`docs/DIAGNOSTICS.md`): `I0403` is its nearest neighbour --
@@ -317,6 +317,175 @@ fn ext_return_gap(name: &str) -> Diagnostic {
     }
 }
 
+/// One [`NATIVE_MEMORYVIEW_CODE`] per function body that binds
+/// artifact-owned buffer storage, paired with that function's index in
+/// `hir.items`, or `Ok(())` when the program allocates none (Part 2a of
+/// #1142, issue #1165).
+///
+/// The third native-mode buffer gate, and the first that reads *bodies*
+/// rather than signatures. It exists because #1165 gave `Ty::MemoryView` a
+/// second source that the two signature walks above structurally cannot
+/// see: `a = ndarray(n)` names the type nowhere.
+///
+/// Its ground is deliberately *not* [`gap`]'s. A `memoryview` parameter is
+/// impossible natively -- there is no interpreter to acquire a `Py_buffer`
+/// from. Artifact-owned storage is not: `pycc_rt_buffer_f64_alloc` is a
+/// plain heap allocation and `pycc_rt` links into a native executable
+/// unchanged, so a native `a = ndarray(4)` would *run*. It is refused
+/// because the buffer type exists to carry data across the `pycc build
+/// --ext` boundary, and admitting a second, interpreter-free meaning for it
+/// in native mode would commit the project to that meaning before anything
+/// needs it. Reusing [`gap`]'s wording here would state a reason that is
+/// false of this case, so [`producer_gap`] states the real one.
+///
+/// Only the *admitted* producer shape is searched, and that is sufficient
+/// rather than approximate: `crates/pycc_types/src/buffer.rs` admits a
+/// producer call in exactly one position -- the whole right-hand side of an
+/// assignment, bare or annotated -- and refuses it with `C0001` in every
+/// other position, in every artifact mode. A producer this walk does not
+/// find is therefore already refused by the checker behind it.
+///
+/// D-244's #1129 statement (h) is honoured with the same three-part shadow
+/// set the checker uses (`lookup_class`, `lookup_function`, `env.bindings`),
+/// read from the HIR: a program's own `class ndarray`, `def ndarray`, or
+/// module-level `ndarray = ...` keeps its own meaning and is not reported.
+/// Over-refusal is the failure mode that matters here -- it rejects a legal
+/// program -- so the set is widened to the whole module rather than scoped
+/// per function.
+///
+/// `pycc check` selects no artifact mode and so does not run this gate, the
+/// same deliberate divergence [`refuse_in_native_mode`] already has: the
+/// refusal's whole subject is *which artifact* is being built.
+pub(crate) fn refuse_buffer_producers_in_native_mode(
+    hir: &HirModule,
+) -> Result<(), Vec<(usize, Diagnostic)>> {
+    let shadowed = shadowed_producer_spellings(hir);
+    let gaps: Vec<(usize, Diagnostic)> = hir
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let HirItem::Function { name, body, .. } = item else {
+                return None;
+            };
+            let callee = producer_bound_in(body, &shadowed)?;
+            Some((index, producer_gap(name, callee)))
+        })
+        .collect();
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    Err(gaps)
+}
+
+/// The producer spellings the program itself rebinds, which
+/// [`refuse_buffer_producers_in_native_mode`] must leave alone.
+fn shadowed_producer_spellings(hir: &HirModule) -> HashSet<&str> {
+    let mut shadowed: HashSet<&str> = HashSet::new();
+    for (name, _) in &hir.class_defs {
+        if pycc_types::is_buffer_producer_spelling(name) {
+            shadowed.insert(name.as_str());
+        }
+    }
+    for item in &hir.items {
+        let name = match item {
+            HirItem::Function { name, .. } => name,
+            HirItem::TopLevelStmt(HirStmt::Assign { target, .. })
+            | HirItem::TopLevelStmt(HirStmt::AnnAssign { target, .. }) => target,
+            HirItem::TopLevelStmt(_) => continue,
+        };
+        if pycc_types::is_buffer_producer_spelling(name) {
+            shadowed.insert(name.as_str());
+        }
+    }
+    shadowed
+}
+
+/// The spelling of the first producer call `body` binds to a name at any
+/// nesting depth, or `None` when it binds none.
+///
+/// Exhaustive with no `_` arm for the same reason
+/// `crates/pycc_hir/src/buffer_store.rs`'s walk is: a future block-carrying
+/// `HirStmt` variant must be a compile error here rather than a hole this
+/// gate silently stops covering.
+fn producer_bound_in<'a>(body: &'a [HirStmt], shadowed: &HashSet<&str>) -> Option<&'a str> {
+    body.iter().find_map(|stmt| match stmt {
+        HirStmt::Assign { value, .. } => producer_callee(Some(value), shadowed),
+        HirStmt::AnnAssign { value, .. } => producer_callee(value.as_ref(), shadowed),
+        HirStmt::If { body, orelse, .. } => {
+            producer_bound_in(body, shadowed).or_else(|| producer_bound_in(orelse, shadowed))
+        }
+        HirStmt::While { body, .. }
+        | HirStmt::ForRange { body, .. }
+        | HirStmt::ForList { body, .. }
+        | HirStmt::ForObject { body, .. } => producer_bound_in(body, shadowed),
+        HirStmt::Match { cases, .. } => cases
+            .iter()
+            .find_map(|case| producer_bound_in(&case.body, shadowed)),
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => producer_bound_in(body, shadowed)
+            .or_else(|| {
+                handlers
+                    .iter()
+                    .find_map(|handler| producer_bound_in(&handler.body, shadowed))
+            })
+            .or_else(|| producer_bound_in(orelse, shadowed))
+            .or_else(|| producer_bound_in(finalbody, shadowed)),
+        // Every remaining statement either carries no nested block or binds
+        // no name from a call expression, so no *admitted* producer can hide
+        // in one; a producer anywhere inside them is the checker's `C0001`.
+        HirStmt::ExprStmt(_)
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::Return(_)
+        | HirStmt::DictSet { .. }
+        | HirStmt::AttrSet { .. }
+        | HirStmt::Raise { .. } => None,
+    })
+}
+
+/// The producer spelling `value` calls, honouring `shadowed` and the
+/// one-argument arity the checker admits.
+fn producer_callee<'a>(value: Option<&'a HirExpr>, shadowed: &HashSet<&str>) -> Option<&'a str> {
+    let HirExpr::Call { callee, args } = value? else {
+        return None;
+    };
+    if args.len() != 1
+        || shadowed.contains(callee.as_str())
+        || !pycc_types::is_buffer_producer_spelling(callee)
+    {
+        return None;
+    }
+    Some(callee.as_str())
+}
+
+fn producer_gap(name: &str, callee: &str) -> Diagnostic {
+    Diagnostic {
+        code: NATIVE_MEMORYVIEW_CODE,
+        severity: Severity::Error,
+        message: format!(
+            "`{name}` allocates buffer storage with `{callee}(n)`, which requires \
+             `pycc build --ext`: a buffer exists to carry data across the CPython \
+             extension-module boundary, and a native executable has no host to carry \
+             it to"
+        ),
+        span: None,
+        label: None,
+        help: None,
+    }
+}
+
 fn gap(name: &str, position: &str) -> Diagnostic {
     Diagnostic {
         code: NATIVE_MEMORYVIEW_CODE,
@@ -434,5 +603,283 @@ mod tests {
         // against the program's per-file item bounds to name the owning file.
         let positions: Vec<usize> = gaps.iter().map(|(index, _)| *index).collect();
         assert_eq!(positions, vec![0, 2], "{messages:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Part 2a of #1142 (#1165): the body-level artifact-owned buffer gate.
+    // ---------------------------------------------------------------------
+
+    /// A minimal non-generic, non-protocol class, for the statement-(h)
+    /// shadow test below.
+    fn plain_class_def(name: &str) -> pycc_hir::HirClassDef {
+        pycc_hir::HirClassDef {
+            class_attrs: Vec::new(),
+            exception_type_tag: None,
+            name: name.to_string(),
+            bases: Vec::new(),
+            mro: vec![name.to_string()],
+            attrs: Vec::new(),
+            methods: Vec::new(),
+            type_param: None,
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
+            is_enum: false,
+            implicit_object_init: true,
+            enum_members: Vec::new(),
+            is_dataclass: false,
+            dataclass_fields: Vec::new(),
+            is_protocol: false,
+            runtime_checkable: false,
+            protocol_members: Vec::new(),
+            abstract_methods: Vec::new(),
+            is_abstract: false,
+        }
+    }
+
+    /// `a = <callee>(4)`.
+    fn alloc(callee: &str) -> HirStmt {
+        HirStmt::Assign {
+            target: "a".to_string(),
+            value: HirExpr::Call {
+                callee: callee.to_string(),
+                args: vec![HirExpr::IntLiteral(4)],
+            },
+        }
+    }
+
+    /// `def <name>(): <body>`.
+    fn body_func(name: &str, body: Vec<HirStmt>) -> HirItem {
+        HirItem::Function {
+            name: name.to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body,
+        }
+    }
+
+    /// Both spellings, both binding forms, and a message whose ground is the
+    /// missing *host* rather than the missing interpreter: the allocation
+    /// itself would work natively, which is exactly why the refusal needs
+    /// its own wording instead of [`gap`]'s.
+    #[test]
+    fn allocating_a_buffer_natively_is_refused_in_its_own_words() {
+        for stmt in [
+            alloc("ndarray"),
+            alloc("NDArray"),
+            HirStmt::AnnAssign {
+                target: "a".to_string(),
+                annotation: Ty::MemoryView,
+                value: Some(HirExpr::Call {
+                    callee: "ndarray".to_string(),
+                    args: vec![HirExpr::IntLiteral(4)],
+                }),
+                is_final: false,
+            },
+        ] {
+            let module = hir(vec![body_func("f", vec![stmt])]);
+            let gaps = refuse_buffer_producers_in_native_mode(&module).unwrap_err();
+            assert_eq!(gaps.len(), 1);
+            assert_eq!(gaps[0].0, 0);
+            assert_eq!(gaps[0].1.code, NATIVE_MEMORYVIEW_CODE);
+            assert!(gaps[0].1.message.contains("`f`"), "{:?}", gaps[0].1);
+            assert!(gaps[0].1.message.contains("pycc build --ext"));
+            assert!(gaps[0].1.message.contains("extension-module boundary"));
+            assert!(gaps[0].1.span.is_none());
+        }
+    }
+
+    /// A program that allocates nowhere is untouched, and so is a top-level
+    /// statement (module scope is `pycc_types`' own refusal, in every mode).
+    #[test]
+    fn a_program_that_allocates_no_buffer_is_admitted_natively() {
+        assert!(refuse_buffer_producers_in_native_mode(&hir(vec![])).is_ok());
+        assert!(
+            refuse_buffer_producers_in_native_mode(&hir(vec![
+                body_func("f", vec![HirStmt::Return(None)]),
+                HirItem::TopLevelStmt(alloc("ndarray")),
+            ]))
+            .is_ok()
+        );
+    }
+
+    /// Every nesting shape the walk recurses through reaches the producer,
+    /// and every shape it deliberately does not recurse through is left to
+    /// the checker's own `C0001`.
+    #[test]
+    fn the_walk_reaches_a_producer_at_every_nesting_depth() {
+        let nested: Vec<Vec<HirStmt>> = vec![
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![alloc("ndarray")],
+                orelse: vec![],
+            }],
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![],
+                orelse: vec![alloc("ndarray")],
+            }],
+            vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![alloc("ndarray")],
+            }],
+            vec![HirStmt::Try {
+                body: vec![alloc("ndarray")],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::Try {
+                body: vec![],
+                handlers: vec![],
+                orelse: vec![alloc("ndarray")],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::Try {
+                body: vec![],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![alloc("ndarray")],
+            }],
+            vec![HirStmt::Try {
+                body: vec![],
+                handlers: vec![pycc_hir::HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![alloc("ndarray")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::Match {
+                subject: HirExpr::IntLiteral(0),
+                cases: vec![pycc_hir::HirMatchCase {
+                    pattern: pycc_hir::HirPattern::Wildcard,
+                    guard: None,
+                    body: vec![alloc("ndarray")],
+                }],
+            }],
+            vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![alloc("ndarray")],
+            }],
+            // A value-less annotated declaration binds no producer, and a
+            // nested block that holds none leaves the walk at `None`.
+            vec![
+                HirStmt::AnnAssign {
+                    target: "a".to_string(),
+                    annotation: Ty::Int,
+                    value: None,
+                    is_final: false,
+                },
+                alloc("ndarray"),
+            ],
+        ];
+        for body in nested {
+            let module = hir(vec![body_func("f", body.clone())]);
+            assert!(
+                refuse_buffer_producers_in_native_mode(&module).is_err(),
+                "{body:?}"
+            );
+        }
+        // Not an assignment's right-hand side, so not this gate's subject.
+        let module = hir(vec![body_func(
+            "f",
+            vec![
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "ndarray".to_string(),
+                    args: vec![HirExpr::IntLiteral(4)],
+                }),
+                HirStmt::Return(None),
+            ],
+        )]);
+        assert!(refuse_buffer_producers_in_native_mode(&module).is_ok());
+    }
+
+    /// The arity the checker admits is the arity this gate claims: a
+    /// two-argument call is `pycc_types`' `C0001`, not an `I0405`.
+    #[test]
+    fn a_producer_with_the_wrong_arity_is_not_this_gates_subject() {
+        let module = hir(vec![body_func(
+            "f",
+            vec![HirStmt::Assign {
+                target: "a".to_string(),
+                value: HirExpr::Call {
+                    callee: "ndarray".to_string(),
+                    args: vec![HirExpr::IntLiteral(4), HirExpr::IntLiteral(5)],
+                },
+            }],
+        )]);
+        assert!(refuse_buffer_producers_in_native_mode(&module).is_ok());
+    }
+
+    /// D-244 #1129 statement (h): the program's own binding wins, through
+    /// each of the three tables the checker consults. Over-refusal is the
+    /// failure that matters here -- it rejects a legal native program.
+    #[test]
+    fn a_program_that_shadows_the_spelling_is_not_refused() {
+        let own_function = hir(vec![
+            HirItem::Function {
+                name: "ndarray".to_string(),
+                params: vec![("n".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(None)],
+            },
+            body_func("f", vec![alloc("ndarray")]),
+        ]);
+        assert!(refuse_buffer_producers_in_native_mode(&own_function).is_ok());
+
+        let own_binding = hir(vec![
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "ndarray".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }),
+            body_func("f", vec![alloc("ndarray")]),
+        ]);
+        assert!(refuse_buffer_producers_in_native_mode(&own_binding).is_ok());
+
+        let own_annotated_binding = hir(vec![
+            HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "ndarray".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+                is_final: false,
+            }),
+            body_func("f", vec![alloc("ndarray")]),
+        ]);
+        assert!(refuse_buffer_producers_in_native_mode(&own_annotated_binding).is_ok());
+
+        let mut own_class = hir(vec![body_func("f", vec![alloc("NDArray")])]);
+        own_class
+            .class_defs
+            .push(("NDArray".to_string(), plain_class_def("NDArray")));
+        assert!(refuse_buffer_producers_in_native_mode(&own_class).is_ok());
+
+        // An unrelated top-level statement contributes no shadow and stops
+        // no refusal.
+        let unrelated = hir(vec![
+            HirItem::TopLevelStmt(HirStmt::Return(None)),
+            body_func("f", vec![alloc("ndarray")]),
+        ]);
+        assert!(refuse_buffer_producers_in_native_mode(&unrelated).is_err());
+    }
+
+    /// Every function that allocates is named, not only the first: one build
+    /// reports the whole list, exactly as the signature walk does.
+    #[test]
+    fn every_allocating_function_is_reported() {
+        let module = hir(vec![
+            body_func("f", vec![alloc("ndarray")]),
+            body_func("g", vec![HirStmt::Return(None)]),
+            body_func("h", vec![alloc("NDArray")]),
+        ]);
+        let gaps = refuse_buffer_producers_in_native_mode(&module).unwrap_err();
+        assert_eq!(
+            gaps.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
     }
 }

@@ -676,10 +676,13 @@ fn to_numeric_encoded_int<'ctx>(
         }
         // Defensive for the same reason as every arm above, extended to a
         // `memoryview` (Part 2 of #1027): `numeric_result_type` maps no
-        // `Ty::MemoryView` to a numeric type, and `reject_memoryview_read`
-        // refuses the bare name an arithmetic operand would have to be.
-        // Its own arm rather than folding into `Object`'s, so the message
-        // names the type it actually got.
+        // `Ty::MemoryView` to a numeric type, and the bare name an
+        // arithmetic operand would have to be is refused whichever
+        // provenance it has -- `reject_memoryview_read` for a wrapper-
+        // borrowed parameter, and since Part 2a of #1142 (#1165)
+        // `pycc_types::buffer::owned_buffer_use_unsupported` for
+        // artifact-owned storage. Its own arm rather than folding into
+        // `Object`'s, so the message names the type it actually got.
         Scalar::MemoryView(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got memoryview")
         }
@@ -876,8 +879,10 @@ fn scalar_to_slot_word<'ctx>(
         // no separate, permanently-unexecutable region.
         // Part 2 of #1027: a `memoryview` joins the same or-pattern for
         // the identical reason -- `slot_ty_from_init_rhs` admits only
-        // `int`/`bool`/`float`/`str` slots, and a `memoryview` cannot be
-        // stored anywhere at all, so no such attribute is ever built.
+        // `int`/`bool`/`float`/`str` slots. Part 2a of #1142 (#1165) gave
+        // the type its one storable position, a *local* slot bound by
+        // `a = ndarray(n)`; an instance attribute is not that position and
+        // stays refused, so no such attribute is ever built.
         | Scalar::MemoryView(_)
         | Scalar::Object(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
@@ -1466,7 +1471,7 @@ fn range_operand_to_normalized_int<'ctx>(
         // Part 2 of #1027: a `memoryview` joins this same or-pattern for
         // the identical reason -- `range()` operands are type-checked as
         // plain numeric types before codegen, and a `Ty::MemoryView` never
-        // is.
+        // is, under either provenance (Part 2a of #1142, #1165).
         | Scalar::MemoryView(_)
         | Scalar::Object(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
@@ -1600,7 +1605,9 @@ fn to_float<'ctx>(
         }
         // Defensive for the same reason as every arm above, extended to a
         // `memoryview` (Part 2 of #1027). A buffer *element* is a `float`
-        // and reaches this function freely; the buffer itself never does.
+        // and reaches this function freely; the buffer itself never does,
+        // whether it is a wrapper-borrowed parameter or the artifact-owned
+        // storage Part 2a of #1142 (#1165) added.
         Scalar::MemoryView(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got memoryview")
         }
@@ -1784,9 +1791,11 @@ fn to_str<'ctx>(
         }
         // Defensive, unlike the `List`/`Dict` arms above and like
         // `Object`'s: `print(b)` and `f"{b}"` are both bare reads of a
-        // `memoryview`-bound name, which `reject_memoryview_read` refuses
-        // with `C0001` before codegen runs (Part 2 of #1027 admits `b[i]`
-        // and nothing else).
+        // `memoryview`-bound name, refused with `C0001` before codegen runs
+        // by `reject_memoryview_read` for a wrapper-borrowed parameter and
+        // by `owned_buffer_use_unsupported` for the artifact-owned storage
+        // Part 2a of #1142 (#1165) added. Part 2 of #1027 admits `b[i]`,
+        // #1116 `len(b)` and Part 1 of #1142 `b[i] = v`; nothing else.
         Scalar::MemoryView(_) => {
             panic!(
                 "pycc_codegen: internal error: string conversion of a memoryview value is not \
@@ -3931,6 +3940,33 @@ fn emit_expr_unchecked<'ctx>(
             // `len` arm tags `pycc_rt_int_list_len`'s own raw count.
             Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len))
         }
+        // #1165: `ndarray(n)` / `NDArray(n)`. One call and no arithmetic,
+        // exactly as the two arms above -- `pycc_rt` owns the zero-fill, the
+        // negative-length refusal and the allocator pairing.
+        //
+        // The length is decoded exactly as a buffer index is: `Ty::Int` (or
+        // `bool`, per D-086) arrives D-141 encoded, and `build_untag_checked`
+        // rejects a bigint or malformed word before the runtime sees it. The
+        // D-173 raise a negative length leaves pending is declared by
+        // `expression_can_set_exception`, which emits the guard that reads
+        // it; the null view the refusal returns is safe for the epilogue,
+        // whose free is a documented no-op on null.
+        MirExpr::BufferAlloc { len } => {
+            let len_scalar = emit_expr(context, builder, module, rt, user_functions, locals, len);
+            let encoded_len = to_numeric_encoded_int(context, builder, len_scalar);
+            let raw_len = build_untag_checked(builder, rt, encoded_len, "buffer_untag_alloc_len");
+            let view = builder
+                .build_call(rt.buffer_f64_alloc, &[raw_len.into()], "buffer_alloc")
+                .expect("build_call should not fail for a declared runtime function")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_buffer_f64_alloc returns a non-void pointer")
+                .into_pointer_value();
+            // The identical `Scalar::MemoryView` a `memoryview` parameter
+            // carries (see the parameter's own binding site), which is what
+            // lets `BufferGet`, `BufferLen` and `MirStmt::BufferSet` operate
+            // on an owned buffer with no arm of their own.
+            Scalar::MemoryView(view)
+        }
         // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
         // o` at module scope, and the same at any other fixed arity -- the
         // PEP 585 variadic `tuple[float, ...]` stays refused and never
@@ -4293,9 +4329,12 @@ fn build_call_to_with_leading_args<'ctx>(
                 }
                 // Defensive for the same reason (Part 2 of #1027): passing
                 // `b` to another function is a bare read of the name, which
-                // `reject_memoryview_read` refuses with `C0001`. A
-                // `memoryview` parameter exists only on an `--ext` export,
-                // which CPython calls, never compiled code.
+                // `reject_memoryview_read` refuses with `C0001` for a
+                // wrapper-borrowed parameter and
+                // `owned_buffer_use_unsupported` for the artifact-owned
+                // storage of Part 2a of #1142 (#1165). A `memoryview`
+                // parameter exists only on an `--ext` export, which CPython
+                // calls, never compiled code.
                 Scalar::MemoryView(_) => {
                     panic!(
                         "pycc_codegen: internal error: a memoryview argument is not supported \
@@ -4569,9 +4608,12 @@ fn truthy<'ctx>(
                 .expect("build_int_z_extend should not fail widening i1 to i8")
         }
         // Defensive, not a capability gap (Part 2 of #1027): `if b:` is a
-        // bare read of a `memoryview`-bound name, which
-        // `reject_memoryview_read` refuses with `C0001`. CPython would
-        // answer `len(b) != 0`, and `len(b)` is itself still refused.
+        // bare read of a `memoryview`-bound name, refused with `C0001` by
+        // `reject_memoryview_read` for a wrapper-borrowed parameter and by
+        // `owned_buffer_use_unsupported` for the artifact-owned storage of
+        // Part 2a of #1142 (#1165). CPython would answer `len(b) != 0`;
+        // `len(b)` is implemented (#1116) but the bare read is not, so this
+        // arm stays unreachable.
         Scalar::MemoryView(_) => {
             panic!("pycc_codegen: truthiness of a memoryview value is not supported yet")
         }
@@ -4633,7 +4675,15 @@ fn storage_slot_at_entry<'ctx>(
     let ptr = builder
         .build_alloca(ty_to_basic_type(context, ty.clone()), name)
         .expect("build_alloca should not fail for a supported local type");
-    if ty == pycc_mir::Ty::Str {
+    if ty == pycc_mir::Ty::Str || ty == pycc_mir::Ty::MemoryView {
+        // Part 2a of #1142 (#1165) joins `Ty::Str` on this arm rather than
+        // adding one of its own: both are owning pointer slots released on
+        // the way out, and both runtime releases are documented no-ops on
+        // null. Without the null-init a `MemoryView` slot holds garbage, and
+        // the epilogue's free and the first free-before-overwrite store
+        // would each read uninitialized alloca memory. Gating those on the
+        // `initialized` flag below is *not* an alternative: that flag guards
+        // reads, and the very first store happens before any read.
         builder
             .build_store(
                 ptr,
@@ -4805,17 +4855,21 @@ fn emit_assign<'ctx>(
                  not supported yet -- pycc_types::check_assignment should have refused this"
             )
         }
-        // NOT a pass-through either, and for a stricter reason than
-        // `Object`'s (Part 2 of #1027): the buffer is borrowed only for the
-        // duration of the `--ext` call, so a binding that outlived the
-        // expression would outlive the storage itself. `c = b` is a bare
-        // read of the name, refused with `C0001` before codegen runs.
-        Scalar::MemoryView(_) => {
-            panic!(
-                "pycc_codegen: internal error: assigning a memoryview value to a binding is not \
-                 supported yet -- pycc_types should have refused this before codegen"
-            )
-        }
+        // A pass-through since Part 2a of #1142 (#1165), where it was the
+        // `Object`-style panic above: storing one `PyccExtBufferView *` into
+        // a slot `ty_to_basic_type` already allocated as a pointer.
+        //
+        // The value is always artifact-owned storage, never the host's. The
+        // two shapes that would put a *borrowed* view here are both refused
+        // before codegen: `c = b` is a bare read of a buffer parameter
+        // (`reject_memoryview_read`'s `C0001`), and `b = ndarray(n)` on a
+        // parameter name is `buffer_parameter_rebinding`'s. What makes the
+        // store safe rather than a leak is the pair around it --
+        // `free_buffer_slot_before_store` releases whatever the slot already
+        // held (D-074), and the frame's owned-slot epilogue releases this one
+        // on every return path -- so unlike `List`/`Dict`/`Set` above, this
+        // arm is deliberately *not* on the D-107 leak-only precedent.
+        Scalar::MemoryView(v) => v.into(),
     };
     builder
         .build_store(slot.ptr, basic_value)
@@ -4927,6 +4981,44 @@ fn decref_str_slot_before_store<'ctx>(
     builder
         .build_call(rt.str_decref, &[old.into()], "str_decref_old")
         .expect("build_call should not fail for a well-formed decref");
+}
+
+/// Mirror of [`decref_str_slot_before_store`] for an artifact-owned buffer
+/// slot (Part 2a of #1142, #1165): loads the target's predeclared slot and
+/// frees its current storage before the new view pointer overwrites it.
+///
+/// D-074's rule, applied to the second owning slot type this crate has.
+/// Without it `a = ndarray(3); a = ndarray(4)` leaks the first allocation
+/// and `for i in range(n): a = ndarray(3)` leaks `n - 1` of them -- an
+/// unbounded leak inside someone else's process, which is why the D-107
+/// leak precedent for `list`/`dict`/`set` is deliberately *not* followed
+/// here. Buffer slots are null-initialized by `storage_slot_at_entry`, and
+/// `pycc_rt_buffer_f64_free` is a documented no-op on null, so the same path
+/// is correct for the first assignment and for every later one.
+fn free_buffer_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    target: &str,
+) {
+    let slot = &locals[target];
+    if slot.ty != pycc_mir::Ty::MemoryView {
+        panic!(
+            "pycc_codegen: internal error: buffer assignment target `{target}` has a non-buffer storage slot"
+        );
+    }
+    let old = builder
+        .build_load(
+            context.ptr_type(inkwell::AddressSpace::default()),
+            slot.ptr,
+            "old_buffer",
+        )
+        .expect("build_load should not fail for this function's own alloca")
+        .into_pointer_value();
+    builder
+        .build_call(rt.buffer_f64_free, &[old.into()], "buffer_free_old")
+        .expect("build_call should not fail for a well-formed buffer free");
 }
 
 /// Mirror of [`decref_str_slot_before_store`] for an instance attribute slot
@@ -5206,6 +5298,15 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                     // skipped, surfacing here as a missing-slot panic
                     // rather than at the type-checking boundary.
                     | pycc_mir::Ty::Optional(_)
+                    // Part 2a of #1142 (#1165): `a = ndarray(n)` binds
+                    // artifact-owned buffer storage, and the slot this
+                    // function predeclares is what the free-before-overwrite
+                    // store path and the function's exit epilogue both
+                    // operate on. Missing from this list, the binding is
+                    // silently skipped and `emit_assign` panics on the
+                    // absent slot -- the exact symptom the `Ty::Optional`
+                    // comment above records.
+                    | pycc_mir::Ty::MemoryView
             ) {
                 bindings.entry(target.clone()).or_insert(ty);
             }
@@ -5298,10 +5399,13 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // a temporary stub: no future codegen task ever needs `d[k] = v` to
         // introduce a new binding, since it structurally cannot.
         MirStmt::DictSet { .. } => {}
-        // `b[i] = v` (Part 1 of #1142) writes through a buffer parameter's
-        // storage -- same reasoning as `DictSet` immediately above, and
-        // stronger still: a `memoryview` has no producing expression at
-        // all, so its base is always an existing parameter binding.
+        // `b[i] = v` (Part 1 of #1142) writes through a buffer's storage --
+        // same reasoning as `DictSet` immediately above: the statement
+        // reassigns a binding's contents, never a name. Its base is always
+        // an existing binding, under either provenance -- a wrapper-borrowed
+        // parameter, or the artifact-owned storage Part 2a of #1142 (#1165)
+        // added, whose own `MirStmt::Assign` gives it a slot through the arm
+        // above before any store can name it.
         MirStmt::BufferSet { .. } => {}
         // `base.attr = value` (D-154, Part 1 of #375) reassigns an
         // existing instance's attribute slot, not a name -- same reasoning
@@ -6319,6 +6423,19 @@ fn compile_to_object_with_observer(
             // bindings (whose slots are not in the entry block and so need
             // not dominate the epilogue).
             let mut owned_str_slots: Vec<PointerValue> = Vec::new();
+            // Part 2a of #1142 (#1165): the same list for artifact-owned
+            // buffer storage, kept separate from `owned_str_slots` because
+            // the two release through different runtime helpers.
+            //
+            // **Only locals are ever pushed here, never parameters.** A
+            // buffer parameter holds a `PyccExtBufferView *` the *host*
+            // owns and the wrapper borrowed for one call; freeing it would
+            // be an invalid free. `pycc_types`' `buffer_parameter_rebinding`
+            // refuses the one shape (`b = ndarray(3)` on a parameter `b`)
+            // that could make a parameter slot look like it needed
+            // releasing, so this asymmetry with the `str` list above is a
+            // checked invariant rather than an assumption.
+            let mut owned_buffer_slots: Vec<PointerValue> = Vec::new();
             for (i, (param_name, ty)) in params.iter().enumerate() {
                 // `.expect(...)`, not `.unwrap_or_else(|| panic!(...))`:
                 // `f`'s own `fn_type` (built above, in the first pass) was
@@ -6351,9 +6468,16 @@ fn compile_to_object_with_observer(
             }
             for (local_name, ty) in local_bindings {
                 let is_str = ty == pycc_mir::Ty::Str;
+                // Part 2a of #1142 (#1165): a buffer *local* is artifact-owned
+                // storage and joins the release list; the parameter loop above
+                // deliberately has no counterpart.
+                let is_buffer = ty == pycc_mir::Ty::MemoryView;
                 let slot = storage_slot_at_entry(&context, &builder, ty, &local_name, true);
                 if is_str {
                     owned_str_slots.push(slot.ptr);
+                }
+                if is_buffer {
+                    owned_buffer_slots.push(slot.ptr);
                 }
                 // A function-local target shadows a same-named module global
                 // throughout the function (D-055), so this intentionally
@@ -6382,7 +6506,13 @@ fn compile_to_object_with_observer(
             // The module entry point (`main` / `__pycc_ext_exec`) is a
             // separate emitter above and never gets this frame.
             let mut finally_stack: Vec<FinallyTarget> = Vec::new();
-            let str_epilogue_bb = if owned_str_slots.is_empty() {
+            // Part 2a of #1142 (#1165): the gate widens to "this function
+            // owns *any* releasable entry-block slot". Left keyed on
+            // `owned_str_slots` alone, a buffer-owning but `str`-free
+            // function would get no epilogue block at all and leak one
+            // allocation per call into a long-lived host process -- silently,
+            // since nothing else in this emitter would notice.
+            let str_epilogue_bb = if owned_str_slots.is_empty() && owned_buffer_slots.is_empty() {
                 None
             } else {
                 let is_returning = builder
@@ -6540,6 +6670,28 @@ fn compile_to_object_with_observer(
                     builder
                         .build_call(rt.str_decref, &[live.into()], "str_epilogue_decref")
                         .expect("build_call should not fail for pycc_rt_str_decref");
+                }
+                // Part 2a of #1142 (#1165): one `pycc_rt_buffer_f64_free`
+                // per artifact-owned buffer slot, on exactly the `str`
+                // model above -- the null a never-assigned local still
+                // holds is the runtime's documented no-op, which is what
+                // covers a buffer allocated in only one arm of an `if`.
+                // Freeing here is sound because `pycc_types` refuses every
+                // position that would let the value escape this function.
+                for slot_ptr in &owned_buffer_slots {
+                    let live = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            *slot_ptr,
+                            "buffer_epilogue_live",
+                        )
+                        .expect(
+                            "build_load should not fail for a buffer slot this function allocated",
+                        )
+                        .into_pointer_value();
+                    builder
+                        .build_call(rt.buffer_f64_free, &[live.into()], "buffer_epilogue_free")
+                        .expect("build_call should not fail for pycc_rt_buffer_f64_free");
                 }
                 match ret_slot {
                     Some(slot) => {
@@ -6893,6 +7045,14 @@ fn emit_stmt<'ctx>(
             let scalar = retain_if_int_duplicate(context, builder, rt, value, scalar);
             if ty == pycc_mir::Ty::Str {
                 decref_str_slot_before_store(context, builder, rt, locals, target);
+            }
+            // Part 2a of #1142 (#1165): D-074's free-before-overwrite, for
+            // the second owning slot type. Keyed on `ty` exactly like the
+            // `str` arm above; unlike `int`, a buffer slot's declared type
+            // and the value's type can never disagree, because the producer
+            // is the only expression of the type a local can be bound to.
+            if ty == pycc_mir::Ty::MemoryView {
+                free_buffer_slot_before_store(context, builder, rt, locals, target);
             }
             // #146 Part 1: the matching `int` release is *not* here. It
             // lives inside `emit_assign`, gated on the target slot's own
@@ -7491,7 +7651,14 @@ fn emit_stmt<'ctx>(
                         // Defensive (Part 2 of #1027): a `-> memoryview`
                         // return annotation is refused outright, and
                         // `return b` is a bare read of the name refused
-                        // with `C0001`. Nothing else has the type.
+                        // with `C0001` -- by `reject_memoryview_read` for a
+                        // wrapper-borrowed parameter, and by
+                        // `owned_buffer_use_unsupported` for the artifact-
+                        // owned storage Part 2a of #1142 (#1165) added.
+                        // Keeping egress refused for *both* provenances is
+                        // what makes Part 2a's free-at-function-exit sound;
+                        // lifting it for the owned one is Part 2b (#1164).
+                        // Nothing else has the type.
                         Scalar::MemoryView(_) => panic!(
                             "pycc_codegen: internal error: returning a memoryview value is not \
                              supported yet -- pycc_types should have refused this before codegen"

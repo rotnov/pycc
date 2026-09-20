@@ -594,7 +594,12 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // exporter's `shape[0]`), so the release this classification emits
         // is an unconditional runtime no-op, exactly as for the scalar
         // `len` `Call` grouped above.
-        | MirExpr::BufferLen { .. } => false,
+        | MirExpr::BufferLen { .. }
+        // #1165: `BufferAlloc` joins `BufferGet`'s group rather than
+        // `BufferLen`'s answer-with-a-reason -- its own `.ty()` is always
+        // `Ty::MemoryView`, never `Ty::Int`, so like `BufferGet` it can
+        // never reach this function at all.
+        | MirExpr::BufferAlloc { .. } => false,
     }
 }
 

@@ -101,6 +101,25 @@ pub(super) struct RtFns<'ctx> {
     /// Unlike `buffer_f64_get` above it cannot fail, so the emitted call
     /// carries no D-173 exception check.
     pub(super) buffer_len: FunctionValue<'ctx>,
+    /// #1165's artifact-owned buffer allocation
+    /// (`pycc_rt_buffer_f64_alloc`): takes an already-untagged raw `i64`
+    /// element count and returns a **fresh** `PyccExtBufferView` pointer --
+    /// exactly the same opaque pointer type the three helpers above already
+    /// take, so a produced buffer and a `memoryview` parameter are one shape
+    /// to every consumer.
+    ///
+    /// Unlike `buffer_len` it can fail: a negative count leaves the D-173
+    /// pending `ValueError` set and returns null, which is why
+    /// `expression_can_set_exception` answers `true` for `MirExpr::BufferAlloc`.
+    pub(super) buffer_f64_alloc: FunctionValue<'ctx>,
+    /// #1165's release for storage `buffer_f64_alloc` produced
+    /// (`pycc_rt_buffer_f64_free`): takes the view pointer and returns
+    /// nothing.
+    ///
+    /// A documented no-op on null, which is what makes the generated
+    /// epilogue safe over a buffer slot a path never assigned -- the slot is
+    /// null-initialized at entry, exactly as an owned `str` slot is.
+    pub(super) buffer_f64_free: FunctionValue<'ctx>,
     pub(super) int_list_len: FunctionValue<'ctx>,
     /// PR-12 Task 9's own new `pycc_rt_int_list_slice` declaration
     /// (`base[start:stop:step]`, D-118) -- takes the `list` pointer plus
@@ -390,6 +409,16 @@ pub(super) fn declare_rt_functions<'ctx>(
         buffer_len: declare(
             "pycc_rt_buffer_len",
             i64_type.fn_type(&[ptr_type.into()], false),
+        ),
+        buffer_f64_alloc: declare(
+            "pycc_rt_buffer_f64_alloc",
+            ptr_type.fn_type(&[i64_type.into()], false),
+        ),
+        // Returns nothing, exactly like `buffer_f64_set` above, so its call
+        // site must not go through `try_as_basic_value()`.
+        buffer_f64_free: declare(
+            "pycc_rt_buffer_f64_free",
+            void_type.fn_type(&[ptr_type.into()], false),
         ),
         int_list_len: declare(
             "pycc_rt_int_list_len",

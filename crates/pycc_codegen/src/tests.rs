@@ -15718,46 +15718,6 @@ fn truthiness_of_a_memoryview_value_panics_honestly() {
     );
 }
 
-#[test]
-#[should_panic(expected = "assigning a memoryview value to a binding is not supported yet")]
-fn assigning_a_memoryview_to_a_binding_is_an_internal_error() {
-    // `v = b` is a bare read of `b`, refused with `C0001`. The buffer is
-    // borrowed for the duration of one wrapper call, so a binding that
-    // outlived the expression would dangle -- which is why #1027 admits no
-    // such assignment rather than implementing one.
-    let context = Context::create();
-    let (module, rt) = list_scalar_panic_fixture(&context);
-    let builder = context.create_builder();
-    // `emit_assign` reads `slot.ty` before it matches on the value, so the
-    // slot must exist, and a positioned block is needed because the
-    // `Ty::Int` release path it checks first would build IR.
-    let function = module.add_function(
-        "assign_memoryview",
-        context.void_type().fn_type(&[], false),
-        None,
-    );
-    builder.position_at_end(context.append_basic_block(function, "entry"));
-    let ptr = builder
-        .build_alloca(context.ptr_type(inkwell::AddressSpace::default()), "b")
-        .expect("build_alloca should not fail for a fresh block");
-    let locals = HashMap::from([(
-        "b".to_string(),
-        StorageSlot {
-            ptr,
-            ty: Ty::MemoryView,
-            initialized: None,
-        },
-    )]);
-    emit_assign(
-        &context,
-        &builder,
-        &rt,
-        &locals,
-        "b",
-        null_memoryview_scalar(&context),
-    );
-}
-
 /// An `--ext` module holding one function whose first parameter is a
 /// `memoryview`, which is the only shape that binding can have.
 fn buffer_fn_items(body: Vec<MirStmt>, return_ty: Ty) -> Vec<MirItem> {
@@ -16510,4 +16470,134 @@ fn issue_1054_k_an_except_star_binding_shadowing_a_str_parameter_is_not_released
             );
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// Part 2a of #1142 (#1165): `MirExpr::BufferAlloc` and the owned-slot frame.
+//
+// The second source of a `Ty::MemoryView` value, and the first that the
+// artifact itself owns. What has to hold is a lifecycle rather than a single
+// emission: the slot is null-initialized at entry, the allocation stores into
+// it, a reassignment frees the old view first, and the epilogue frees
+// whatever the slot holds on every return path -- including a path on which
+// the allocation never ran, where the slot still holds the entry null and
+// `pycc_rt_buffer_f64_free`'s documented null no-op is what makes it safe.
+// ---------------------------------------------------------------------------
+
+/// `a = ndarray(4)` as a `MirStmt`, the one producer shape #1165 emits.
+fn buffer_alloc_a() -> MirStmt {
+    MirStmt::Assign {
+        target: "a".to_string(),
+        value: MirExpr::BufferAlloc {
+            len: Box::new(MirExpr::IntLiteral(4)),
+        },
+    }
+}
+
+/// An `--ext` module holding one parameterless function with `body`.
+fn owned_buffer_fn_items(body: Vec<MirStmt>) -> Vec<MirItem> {
+    vec![MirItem::Function {
+        name: "allocate".to_string(),
+        params: vec![],
+        return_ty: Ty::None,
+        body,
+    }]
+}
+
+#[test]
+fn a_buffer_allocation_untags_its_length_and_calls_the_runtime_allocator() {
+    // The length reaches the runtime as a raw `i64`, decoded through the
+    // same shared checked untag every other D-141 operand uses: the
+    // allocator takes an element count, not a tagged `int`, and handing it
+    // the tagged form would allocate twice the requested length.
+    compile_ext_items_checking_ir(
+        "buffer_allocation",
+        owned_buffer_fn_items(vec![buffer_alloc_a()]),
+        |ir| {
+            assert!(ir.contains("call i64 @pycc_rt_int_untag_checked"), "{ir}");
+            assert!(ir.contains("call ptr @pycc_rt_buffer_f64_alloc"), "{ir}");
+        },
+    );
+}
+
+#[test]
+fn an_allocating_function_frees_its_buffer_slot_in_the_epilogue() {
+    // The whole reason the producer is admitted in exactly one position: the
+    // value cannot escape the frame, so the frame can free it
+    // unconditionally on the way out. Without the epilogue this is one
+    // leaked allocation per call in a long-lived host process, which is the
+    // D-107 list/dict/set precedent this issue explicitly does not follow.
+    compile_ext_items_checking_ir(
+        "buffer_epilogue_free",
+        owned_buffer_fn_items(vec![buffer_alloc_a(), MirStmt::Return(None)]),
+        |ir| {
+            assert!(ir.contains("call void @pycc_rt_buffer_f64_free"), "{ir}");
+        },
+    );
+}
+
+#[test]
+fn a_reallocating_function_frees_the_old_view_before_it_stores_the_new_one() {
+    // D-074's free-before-overwrite, mirrored from `decref_str_slot_before_store`:
+    // a second `a = ndarray(4)` overwrites the slot, so the view the slot
+    // already holds has to be released first -- the epilogue only ever sees
+    // the last one. Two frees is the signature of the fix: one before the
+    // second store, one in the epilogue.
+    compile_ext_items_checking_ir(
+        "buffer_realloc_free",
+        owned_buffer_fn_items(vec![buffer_alloc_a(), buffer_alloc_a()]),
+        |ir| {
+            assert!(
+                ir.matches("call void @pycc_rt_buffer_f64_free").count() >= 2,
+                "{ir}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_buffer_parameter_is_never_pushed_into_the_owned_slot_frame() {
+    // The load-bearing negative. A `memoryview` *parameter* is storage the
+    // host lent for exactly one call, so freeing it in the epilogue would
+    // hand the host's allocator a pointer it still owns. The `str` precedent
+    // this frame is modelled on *does* push parameter slots, so the omission
+    // is deliberate rather than incidental and is pinned here.
+    compile_ext_items_checking_ir(
+        "buffer_param_not_owned",
+        buffer_fn_items(vec![MirStmt::Return(Some(buffer_get_b_i()))], Ty::Float),
+        |ir| {
+            assert!(!ir.contains("call void @pycc_rt_buffer_f64_free"), "{ir}");
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "has a non-buffer storage slot")]
+fn freeing_a_non_buffer_slot_before_a_store_is_an_internal_error() {
+    // `free_buffer_slot_before_store` is reached only from the
+    // `Ty::MemoryView` arm of `MirStmt::Assign`, so a slot of any other type
+    // is a lowering defect. Pinned directly, on the same convention as the
+    // defensive `Scalar::MemoryView` tests above: an honest panic in the
+    // function that owns the invariant beats a silent free of an `i64` slot.
+    let context = Context::create();
+    let (module, rt) = list_scalar_panic_fixture(&context);
+    let builder = context.create_builder();
+    let function = module.add_function(
+        "free_wrong_slot",
+        context.void_type().fn_type(&[], false),
+        None,
+    );
+    builder.position_at_end(context.append_basic_block(function, "entry"));
+    let ptr = builder
+        .build_alloca(context.i64_type(), "a")
+        .expect("build_alloca should not fail for a fresh block");
+    let locals = HashMap::from([(
+        "a".to_string(),
+        StorageSlot {
+            ptr,
+            ty: Ty::Int,
+            initialized: None,
+        },
+    )]);
+    free_buffer_slot_before_store(&context, &builder, &rt, &locals, "a");
 }

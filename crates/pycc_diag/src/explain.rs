@@ -1365,7 +1365,13 @@ never visits (a private one, a method, a specialization) is the `C0001` \
 capability gap a declaration gets. A signature is the only position the type is \
 admitted at in either mode: a `memoryview` *declaration* (`x: memoryview`, \
 at module scope or in a function body) is a `C0001` capability gap in both, \
-because nothing produces a value to bind to such a name yet.",
+because the annotation alone produces no value to bind to the name. Since \
+Part 2a of #1142 (#1165) a function *body* reaches this same code without any \
+buffer in its signature: `a = ndarray(n)` allocates artifact-owned buffer \
+storage, which a native artifact would actually run -- the allocation is a \
+plain heap allocation that links natively -- so its refusal states the \
+boundary rather than the missing interpreter, and `pycc build --ext` is \
+again the fix.",
         example: "\
 def total(xs: memoryview) -> float:  # error[I0405]: requires `pycc build --ext`
     return 0.0
@@ -1375,6 +1381,10 @@ def mean(xs: ndarray) -> float:      # error[I0405]: another spelling, same code
 
 def sum(xs: NDArray) -> float:       # error[I0405]: the third spelling, same code
     return 0.0
+
+def zeros(n: int) -> float:
+    a = ndarray(n)                   # error[I0405]: allocating buffer storage natively
+    return a[0]
 ",
     },
     DiagnosticExplanation {

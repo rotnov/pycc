@@ -30,6 +30,15 @@ pub(crate) fn join_if_branches_solver(
     orelse_env: &ConstraintEnvironment,
     pre_existing: &HashSet<String>,
 ) {
+    // Part 2a of #1142 (#1165): buffer provenance joins as a union, exactly
+    // as `crate::join_if_branches` does it for the check phase. `env` is
+    // both branches' ancestor, so this never loses a name either branch
+    // owned, and never invents one neither did. Placed here rather than at
+    // the eleven call sites so a future join site cannot silently skip it.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
+    env.owned_buffers
+        .extend(orelse_env.owned_buffers.iter().cloned());
     // Merge bindings: first-binding-wins (body first, then orelse).
     // `entry().or_insert()` preserves the existing binding for pre-existing
     // names and takes the body's term for new names introduced by the body.
@@ -136,6 +145,11 @@ pub(crate) fn join_loop_body_solver(
     body_env: &ConstraintEnvironment,
     pre_existing: &HashSet<String>,
 ) {
+    // Part 2a of #1142 (#1165): see `join_if_branches_solver` -- provenance
+    // is a union here for the same reason, and the `Try` arms route their
+    // handler and `else` environments through this helper too.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
     for (name, term) in &body_env.bindings {
         if !pre_existing.contains(name) {
             env.bindings.entry(name.clone()).or_insert(term.clone());

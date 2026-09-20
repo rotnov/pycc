@@ -319,6 +319,12 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     // `ProtocolMember::Method` in `hir.class_defs`, never an
     // `HirItem::Function`, so it resolves through the class bounds instead.
     let protocol_gaps = crate::memoryview_mode::refuse_protocol_methods_in_native_mode(&hir);
+    // Keyed by *item* index like the signature walk, and reported in the same
+    // pre-check pass for a different reason (#1165): the checker has no
+    // artifact-mode awareness and *admits* `a = ndarray(n)`, so there is no
+    // post-check verdict to consult -- running afterwards would mean never
+    // running at all.
+    let producer_gaps = crate::memoryview_mode::refuse_buffer_producers_in_native_mode(&hir);
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
     if let Err(gaps) = import_gaps {
         keyed.extend(
@@ -326,7 +332,8 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
         );
     }
-    let refused_a_memoryview_signature = memoryview_gaps.is_err() || protocol_gaps.is_err();
+    let refused_a_buffer =
+        memoryview_gaps.is_err() || protocol_gaps.is_err() || producer_gaps.is_err();
     if let Err(gaps) = memoryview_gaps {
         keyed.extend(
             gaps.into_iter()
@@ -339,7 +346,13 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(index, diagnostic)| (sources.owner_of_class(index), diagnostic)),
         );
     }
-    if refused_a_memoryview_signature {
+    if let Err(gaps) = producer_gaps {
+        keyed.extend(
+            gaps.into_iter()
+                .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
+        );
+    }
+    if refused_a_buffer {
         return Err(sources.group(keyed));
     }
     let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
