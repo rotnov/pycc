@@ -25,7 +25,10 @@
 //! > binding -- it only declares a type and emits no store, exactly as in
 //! > CPython -- so the seed survives it. A binding inside a function body is
 //! > an ordinary local and shadows the module binding only within that
-//! > function, matching CPython.
+//! > function, matching CPython. Neither test counts a module-scope
+//! > `if TYPE_CHECKING:` body, in either the entry module or a dependency:
+//! > #790 constant-folds that body away, so it binds nothing and reads
+//! > nothing at run time.
 //! >
 //! > Deviation from CPython, deliberate and documented: in CPython a read that
 //! > textually precedes a module-level `__name__ = ...` still sees the
@@ -43,6 +46,8 @@
 //! untouched by this feature.
 
 use super::{HirExpr, HirItem, HirStmt};
+use crate::hir_module::ImportBinding;
+use crate::stmt::is_type_checking_guard;
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
@@ -56,14 +61,19 @@ pub const DUNDER_NAME: &str = "__name__";
 /// #881 links every module into one flat namespace, so a per-module
 /// `__name__` global would collide, and withholding the seed there is the
 /// fail-closed choice until per-module namespaces land.
-pub(crate) fn seed_item(module: &ModModule, module_name: Option<&str>) -> Option<HirItem> {
+pub(crate) fn seed_item(
+    module: &ModModule,
+    module_name: Option<&str>,
+    imports: &[ImportBinding],
+) -> Option<HirItem> {
     let module_name = module_name?;
-    (references_dunder_name(module) && !binds_dunder_name_at_module_scope(module)).then(|| {
-        HirItem::TopLevelStmt(HirStmt::Assign {
-            target: DUNDER_NAME.to_string(),
-            value: HirExpr::StringLiteral(module_name.to_string()),
+    (references_dunder_name(module, imports) && !binds_dunder_name_at_module_scope(module, imports))
+        .then(|| {
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: DUNDER_NAME.to_string(),
+                value: HirExpr::StringLiteral(module_name.to_string()),
+            })
         })
-    })
 }
 
 /// Gate 1: whether `module` references the name `__name__` anywhere, at any
@@ -81,11 +91,25 @@ pub(crate) fn seed_item(module: &ModModule, module_name: Option<&str>) -> Option
 /// reachable by construction and keeps new upstream AST nodes covered
 /// automatically. A reference inside a function or class body counts, because
 /// the seeded module global is exactly what such a read resolves to.
-fn references_dunder_name(module: &ModModule) -> bool {
-    struct ReferenceScan {
+fn references_dunder_name(module: &ModModule, imports: &[ImportBinding]) -> bool {
+    struct ReferenceScan<'i> {
         found: bool,
+        imports: &'i [ImportBinding],
     }
-    impl<'a> Visitor<'a> for ReferenceScan {
+    impl<'a> Visitor<'a> for ReferenceScan<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            if let Some(orelse) = folded_type_checking_orelse(stmt, self.imports) {
+                for clause in orelse {
+                    visitor::walk_elif_else_clause(self, clause);
+                }
+                return;
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+
         fn visit_expr(&mut self, expr: &'a Expr) {
             // Once the name is seen the answer cannot change, so stop
             // descending rather than walking the rest of the module.
@@ -101,7 +125,10 @@ fn references_dunder_name(module: &ModModule) -> bool {
             visitor::walk_expr(self, expr);
         }
     }
-    let mut scan = ReferenceScan { found: false };
+    let mut scan = ReferenceScan {
+        found: false,
+        imports,
+    };
     scan.visit_body(&module.body);
     scan.found
 }
@@ -122,8 +149,8 @@ fn references_dunder_name(module: &ModModule) -> bool {
 /// classifies by binding form. Withholding the seed for the whole program
 /// restores the pre-#1156 behavior there: the name is undefined and the read is
 /// a `T0021`, a diagnostic rather than an artifact that traps at run time.
-pub(crate) fn mentions_dunder_name(module: &ModModule) -> bool {
-    references_dunder_name(module) || binds_dunder_name_at_module_scope(module)
+pub(crate) fn mentions_dunder_name(module: &ModModule, imports: &[ImportBinding]) -> bool {
+    references_dunder_name(module, imports) || binds_dunder_name_at_module_scope(module, imports)
 }
 
 /// Gate 2: whether `module` binds the name `__name__` anywhere in *module
@@ -185,20 +212,30 @@ pub(crate) fn mentions_dunder_name(module: &ModModule) -> bool {
 /// A value-less `__name__: str` is deliberately *not* a binding: it only
 /// declares a type and emits no store, exactly as in CPython, so the seed
 /// survives it.
-pub(crate) fn binds_dunder_name_at_module_scope(module: &ModModule) -> bool {
-    struct BindingScan {
+pub(crate) fn binds_dunder_name_at_module_scope(
+    module: &ModModule,
+    imports: &[ImportBinding],
+) -> bool {
+    struct BindingScan<'i> {
         found: bool,
+        imports: &'i [ImportBinding],
     }
-    impl BindingScan {
+    impl BindingScan<'_> {
         fn record(&mut self, bound: bool) {
             if bound {
                 self.found = true;
             }
         }
     }
-    impl<'a> Visitor<'a> for BindingScan {
+    impl<'a> Visitor<'a> for BindingScan<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             if self.found {
+                return;
+            }
+            if let Some(orelse) = folded_type_checking_orelse(stmt, self.imports) {
+                for clause in orelse {
+                    visitor::walk_elif_else_clause(self, clause);
+                }
                 return;
             }
             match stmt {
@@ -301,9 +338,43 @@ pub(crate) fn binds_dunder_name_at_module_scope(module: &ModModule) -> bool {
             visitor::walk_expr(self, expr);
         }
     }
-    let mut scan = BindingScan { found: false };
+    let mut scan = BindingScan {
+        found: false,
+        imports,
+    };
     scan.visit_body(&module.body);
     scan.found
+}
+
+/// The `orelse` of a module-scope `if TYPE_CHECKING:` whose body `lower_stmt`
+/// constant-folds away (#790), and `None` for every other statement.
+///
+/// Both scans consult it, and neither may count what the fold discards. A
+/// `TYPE_CHECKING`-guarded body never executes: it binds nothing and reads
+/// nothing, so a `__name__ = 7` there is not a user binding that could collide
+/// with the seed, and a `print(__name__)` there is not a read that could
+/// observe an uninitialized global. Counting either one withholds the seed from
+/// a program that would have compiled -- exactly the false `T0021` this helper
+/// removes. The `orelse` (an `elif`/`else` chain) *is* live whenever the guard
+/// is skipped, so it is walked normally, matching `lower_stmt`.
+///
+/// `imports` reaches `is_type_checking_guard` unchanged, so the recognized
+/// spellings are exactly the ones lowering folds. The bare `TYPE_CHECKING` and
+/// the qualified `typing.TYPE_CHECKING` resolve with no import binding at all;
+/// an aliased `import typing as t` then `t.TYPE_CHECKING` needs the binding, so
+/// passing a short import slice only under-recognizes, which withholds the seed
+/// -- the pre-#1156 behavior, and the safe direction, exactly as
+/// `class::enum_call::module_bindings` already documents for the same fold.
+fn folded_type_checking_orelse<'a>(
+    stmt: &'a Stmt,
+    imports: &[ImportBinding],
+) -> Option<&'a [pycc_ast::ElifElseClause]> {
+    match stmt {
+        Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test, imports) => {
+            Some(&if_stmt.elif_else_clauses)
+        }
+        _ => None,
+    }
 }
 
 /// Whether `expr`, used as an assignment or loop target, binds `__name__`.

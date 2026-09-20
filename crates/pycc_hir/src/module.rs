@@ -250,9 +250,17 @@ pub fn lower_module(
     // user binding in *any* module withholds the seed program-wide, through
     // `LoweredModule::mentions_dunder_name`, so a seed and a user binding of this
     // name never coexist in a linked program.
-    if let Some(item) = dunder_name::seed_item(module, module_name) {
+    // Both scans run here, against the driver's own import answers --
+    // `state.imports` before the loop below appends this module's own
+    // `import` statements, which is exactly the slice
+    // `class::enum_call::module_bindings` already folds `TYPE_CHECKING`
+    // guards against. One slice for both halves of THE RULE keeps the entry
+    // gate and the dependency gate from disagreeing about which guarded
+    // bodies are dead.
+    if let Some(item) = dunder_name::seed_item(module, module_name, &state.imports) {
         state.items.push(item);
     }
+    let mentions_dunder_name = dunder_name::mentions_dunder_name(module, &state.imports);
     // Seeded at the *front* so every lookup below (base resolution,
     // annotation projection, the name-collision checks) sees them, then
     // rotated to the back once lowering finishes so `class_defs` still
@@ -415,7 +423,7 @@ pub fn lower_module(
             seeded_builtin_exception_classes,
         },
         shadowed_builtin_exception_name,
-        mentions_dunder_name: dunder_name::mentions_dunder_name(module),
+        mentions_dunder_name,
         definition_spans,
     })
 }

@@ -282,7 +282,13 @@ fn try_build(
     // usually a dependency rather than the entry path.
     // W0 of #882 (#1156): an `--ext` build compiles the entry module under
     // the extension module's own name, so `__name__` inside the artifact
-    // reads what CPython would report for it. That makes the output
+    // reads the name the artifact is importable as. That is a compile-time
+    // constant derived from `-o`, where CPython takes the module object's
+    // `__name__` from the import spec: the two agree for a top-level import
+    // and diverge for a package submodule (`pkg/mod.abi3.so` imported as
+    // `pkg.mod`). #1161 closes that by seeding from the live module object
+    // in the `Py_mod_exec` slot; `docs/STDLIB_PLAN.md` carries the contract.
+    // That makes the output
     // contract an input to the *frontend*, so it is resolved here rather
     // than only inside `plan_ext` below. The resolve runs twice --
     // deliberately: it is pure and cheap (`src/ext_output.rs` touches no

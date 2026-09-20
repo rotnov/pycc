@@ -7,20 +7,27 @@ use crate::module::lower_module;
 use crate::pycc_parser_test_helper::parse;
 use crate::{HirModule, ResolvedImports};
 
+/// Every unit test here runs the scans with no import bindings, which is what
+/// `lower_module` passes for a module the driver resolved no project import
+/// for. The bare `TYPE_CHECKING` and the qualified `typing.TYPE_CHECKING`
+/// guards both fold against an empty slice; only an aliased `t.TYPE_CHECKING`
+/// would need a binding, and that case is covered by `lower`'s own path.
+const NO_IMPORTS: &[ImportBinding] = &[];
+
 fn references(source: &str) -> bool {
-    references_dunder_name(&parse(source))
+    references_dunder_name(&parse(source), NO_IMPORTS)
 }
 
 fn binds(source: &str) -> bool {
-    binds_dunder_name_at_module_scope(&parse(source))
+    binds_dunder_name_at_module_scope(&parse(source), NO_IMPORTS)
 }
 
 fn mentions(source: &str) -> bool {
-    mentions_dunder_name(&parse(source))
+    mentions_dunder_name(&parse(source), NO_IMPORTS)
 }
 
 fn seed(source: &str, module_name: Option<&str>) -> Option<HirItem> {
-    seed_item(&parse(source), module_name)
+    seed_item(&parse(source), module_name, NO_IMPORTS)
 }
 
 fn lower(source: &str, module_name: Option<&str>) -> HirModule {
@@ -362,4 +369,44 @@ fn mentions_counts_a_read_reached_only_through_a_function_body() {
     let source = "def show() -> str:\n    return __name__\n\nprint(show())\n";
     assert!(!binds(source));
     assert!(mentions(source));
+}
+
+#[test]
+fn a_type_checking_guarded_binding_is_not_a_module_scope_binding() {
+    // `lower_stmt` constant-folds the guarded body away (#790), so the
+    // assignment emits no store and cannot collide with the seed.
+    let source = "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n";
+    assert!(!binds(source));
+    assert!(references(source));
+    assert!(seed(source, Some("m")).is_some());
+}
+
+#[test]
+fn a_qualified_type_checking_guard_folds_the_same_way() {
+    let source = "import typing\n\nif typing.TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n";
+    assert!(!binds(source));
+}
+
+#[test]
+fn a_type_checking_guarded_read_is_not_a_mention() {
+    // The dependency gate must not count it either: a folded read observes
+    // nothing, so it cannot see an uninitialized global.
+    let source = "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    print(__name__)\n";
+    assert!(!references(source));
+    assert!(!mentions(source));
+}
+
+#[test]
+fn the_else_arm_of_a_folded_guard_is_still_live() {
+    // Only the guarded body is dead; the `else` runs whenever the guard is
+    // skipped, which at run time is always.
+    let source = "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    pass\nelse:\n    __name__ = 7\n";
+    assert!(binds(source));
+    let read = "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    pass\nelif print(__name__):\n    pass\n";
+    assert!(references(read));
+}
+
+#[test]
+fn a_non_type_checking_guard_binds_normally() {
+    assert!(binds("if flag:\n    __name__ = 7\n"));
 }

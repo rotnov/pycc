@@ -12,6 +12,10 @@
 //! `pycc build`/`pycc run`, and the extension module's own name for a
 //! `pycc build --ext`.
 //!
+//! Neither gate counts a module-scope `if TYPE_CHECKING:` body, in the entry
+//! module or in a dependency: #790 constant-folds it away, so it binds and
+//! reads nothing at run time.
+//!
 //! Known gap, deliberate: only the *entry* module is given a name, and a
 //! dependency that mentions `__name__` at all withholds even that. Part 1 of
 //! #881 links every module of a program into one flat namespace, so a
@@ -81,6 +85,49 @@ fn check(category: &str, source: &str) -> (bool, String) {
         out.status.success(),
         format!("{}{}", stdout_of(&out), stderr_of(&out)),
     )
+}
+
+// -- `TYPE_CHECKING`-guarded bodies ----------------------------------
+
+#[test]
+fn a_type_checking_guarded_binding_leaves_the_seed_intact() {
+    // #790 constant-folds the guarded body away, so the assignment emits no
+    // store. Counting it as a user binding withheld the seed and turned the
+    // live read below into a `T0021` for a program CPython runs fine.
+    assert_eq!(
+        build_and_run(
+            "name_type_checking_binding",
+            "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n",
+        ),
+        "__main__\n",
+    );
+}
+
+#[test]
+fn a_qualified_type_checking_guarded_binding_leaves_the_seed_intact() {
+    assert_eq!(
+        build_and_run(
+            "name_type_checking_qualified",
+            "import typing\n\nif typing.TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n",
+        ),
+        "__main__\n",
+    );
+}
+
+#[test]
+fn the_else_arm_of_a_type_checking_guard_still_binds() {
+    // Only the guarded body is dead. The `else` is live whenever the guard is
+    // skipped -- at run time, always -- so it shadows the seed like any other
+    // module-scope binding. The diagnostic is `T0041` rather than `T0021`
+    // because the binding sits on one arm of a conditional: with the seed
+    // withheld, definite-assignment analysis reaches the read on a path that
+    // never bound the name.
+    let (ok, rendered) = check(
+        "name_type_checking_else",
+        "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    pass\nelse:\n    __name__ = 7\n\nprint(__name__)\n",
+    );
+    assert!(!ok, "{rendered}");
+    assert!(rendered.contains("T0041"), "{rendered}");
 }
 
 // -- the provided binding -------------------------------------------
