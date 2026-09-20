@@ -18,9 +18,25 @@
 //! * and the leak arm, which reads `pycc_rt_buffer_live_views` -- the
 //!   allocator pair's own balance counter -- out of the built extension
 //!   module with `ctypes` and asserts it is back at zero after every call.
+//!   The library is opened by `alloc_probe.__file__`, the sibling
+//!   `issue_1054_ext_str_release.rs` probe's convention, so the handle
+//!   refers to the same mapping the import created. That arm is the one
+//!   thing here that is **not** compiled on Windows, for the reason that
+//!   file states in full: MSVC exports from a `.pyd` only the single
+//!   `PyInit_<name>` a D-244 `ext` module declares, so a counter linked in
+//!   from the `pycc_rt` static archive is present but unreachable through
+//!   `ctypes`. Every other arm, diagnostics included, runs on Windows.
 //!   That symbol is reachable because `pycc_rt` links into the module as a
 //!   staticlib; asserting on it is what distinguishes "the epilogue ran"
-//!   from "the process had enough memory not to notice".
+//!   from "the process had enough memory not to notice". Its last arm is
+//!   the only place a *live* allocation leaves through the exception exit.
+//!
+//! Every non-`#[ignore]`d test here asserts a front-end diagnostic, and
+//! deliberately so: a successful `--ext` build needs CPython development
+//! headers at or above the `Py_LIMITED_API` floor, which CI's coverage job
+//! does not have when it runs. See
+//! `a_program_that_defines_the_spelling_keeps_its_own_meaning` for the one
+//! property that had to be restated as a refusal to keep it in that pass.
 //!
 //! None of these contributes line coverage: CI's coverage job runs
 //! `llvm-cov` without `--include-ignored` and `scripts/check_diff_coverage.py`
@@ -106,6 +122,12 @@ def rebuild(n: int) -> float:
     a = ndarray(n)
     a = ndarray(n + 1)
     return float(len(a))
+
+
+def alloc_then_raise(n: int) -> float:
+    a = ndarray(n)
+    b = ndarray(-1)
+    return a[0] + b[0]
 ";
 
 /// The `NDArray` spelling reaches the same producer, so the second
@@ -224,8 +246,23 @@ def go(n: int) -> float:
 }
 
 /// A program that binds the spelling itself keeps its own meaning, which is
-/// D-244's #1129 statement (h) applied to the call position. The subject
-/// would be the position refusal if the producer won.
+/// D-244's #1129 statement (h) applied to the call position.
+///
+/// Written as a *refusal* rather than a successful build on purpose. A
+/// successful `--ext` build links against CPython development headers, and
+/// CI's coverage job probes the interpreter only in `src/main.rs`'s ext
+/// emission -- after type checking -- so a success-shaped subject is the one
+/// arm in this file that cannot run on a runner whose interpreter predates
+/// the `Py_LIMITED_API` floor. Every other non-`#[ignore]`d test here
+/// asserts a front-end diagnostic and passes there unchanged, so the
+/// shadowing seam is proven the same way.
+///
+/// `a[0]` is what discriminates the two interpretations. If the producer
+/// wrongly hijacked the name, `a` would be `Ty::MemoryView` and `a[0]` a
+/// legal element read; because the program's own `def` wins, `a` is a
+/// `float` and subscripting it is a typed refusal. The same subject without
+/// the user's `def ndarray` builds cleanly, which is the counterfactual this
+/// diagnostic stands in for.
 #[test]
 fn a_program_that_defines_the_spelling_keeps_its_own_meaning() {
     let dir = fixture(
@@ -237,11 +274,14 @@ def ndarray(n: int) -> float:
 
 def go(n: int) -> float:
     a = ndarray(n)
-    return a
+    return a[0]
 ",
     );
     let build = build_ext(&dir);
-    assert!(build.status.success(), "{}", stderr_of(&build));
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[T0033]"), "{err}");
+    assert!(err.contains("`float` does not support indexing"), "{err}");
 }
 
 /// The native gate is a property of the artifact mode, so it needs the
@@ -332,10 +372,26 @@ fn a_negative_length_raises_value_error_at_the_boundary() {
 /// zero after a call that raised, since the failed allocation returned
 /// null and the epilogue must skip it rather than free it.
 ///
+/// The last arm is the one the exception-exit routing actually exists for:
+/// `alloc_then_raise` allocates successfully, *then* raises on a second
+/// allocation, so the frame leaves through its exception exit with one
+/// **live** view rather than a null one. The `build_and_sum(-1)` arm above
+/// cannot prove that -- its allocator returned null before `fetch_add`, so
+/// an epilogue that freed nothing at all would still show a zero balance.
+///
 /// Asserting a *balance* rather than watching memory is the point: a frame
 /// that never freed would show identical behavior on every other
 /// observation in this file.
+///
+/// Not compiled on Windows, matching `issue_1054_ext_str_release.rs`'s
+/// file-level gate and for exactly its reason: the counter is linked into
+/// the `.pyd` from a static archive but is absent from its export table,
+/// and opening a second shared `pycc_rt` would carry its own `BUFFER_LIVE`
+/// and prove nothing. The property is codegen plus runtime bookkeeping and
+/// is not platform-specific -- the `pycc_codegen` epilogue tests carry it
+/// on every platform, Windows included.
 #[test]
+#[cfg(not(target_os = "windows"))]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn no_allocation_outlives_the_call_that_made_it() {
     let dir = fixture("1165_hosted_live_views", SUBJECT);
@@ -345,7 +401,7 @@ fn no_allocation_outlives_the_call_that_made_it() {
     let run = run_hosted(
         &dir,
         "import ctypes, alloc_probe\n\
-         live = ctypes.CDLL('./alloc_probe.abi3.so').pycc_rt_buffer_live_views\n\
+         live = ctypes.CDLL(alloc_probe.__file__).pycc_rt_buffer_live_views\n\
          live.restype = ctypes.c_longlong\n\
          live.argtypes = []\n\
          assert live() == 0, live()\n\
@@ -360,6 +416,14 @@ fn no_allocation_outlives_the_call_that_made_it() {
          \x20       alloc_probe.build_and_sum(-1)\n\
          \x20   except ValueError:\n\
          \x20       pass\n\
+         assert live() == 0, live()\n\
+         for _ in range(64):\n\
+         \x20   try:\n\
+         \x20       alloc_probe.alloc_then_raise(16)\n\
+         \x20   except ValueError:\n\
+         \x20       pass\n\
+         \x20   else:\n\
+         \x20       raise AssertionError('alloc_then_raise returned normally')\n\
          assert live() == 0, live()\n\
          print('ok')\n",
     );

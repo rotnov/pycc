@@ -6512,7 +6512,9 @@ fn compile_to_object_with_observer(
             // function would get no epilogue block at all and leak one
             // allocation per call into a long-lived host process -- silently,
             // since nothing else in this emitter would notice.
-            let str_epilogue_bb = if owned_str_slots.is_empty() && owned_buffer_slots.is_empty() {
+            let owned_slot_epilogue_bb = if owned_str_slots.is_empty()
+                && owned_buffer_slots.is_empty()
+            {
                 None
             } else {
                 let is_returning = builder
@@ -6574,11 +6576,11 @@ fn compile_to_object_with_observer(
                     {
                         // #1054: the implicit `return None` never passes
                         // through `finally_stack`, so it is redirected to
-                        // the `str` epilogue explicitly. No `ret_slot`
+                        // the owned-slot epilogue explicitly. No `ret_slot`
                         // store: a `None`-returning function's epilogue
                         // has none, and the epilogue does not read
                         // `is_returning` -- every path into it returns.
-                        if let Some((epilogue_bb, _)) = str_epilogue_bb {
+                        if let Some((epilogue_bb, _)) = owned_slot_epilogue_bb {
                             builder.build_unconditional_branch(epilogue_bb).expect(
                                 "build_unconditional_branch should not fail for str epilogue routing",
                             );
@@ -6620,7 +6622,7 @@ fn compile_to_object_with_observer(
             // `finally_stack`. The slots are released here too -- an
             // in-flight exception does not make the references this
             // function owns somebody else's problem.
-            match (str_epilogue_bb, *return_ty == pycc_mir::Ty::None) {
+            match (owned_slot_epilogue_bb, *return_ty == pycc_mir::Ty::None) {
                 (Some((epilogue_bb, _)), true) => {
                     builder.build_unconditional_branch(epilogue_bb).expect(
                         "build_unconditional_branch should not fail for an exceptional None exit",
@@ -6652,11 +6654,14 @@ fn compile_to_object_with_observer(
             }
 
             // #1054: emitted last, after every branch into it exists. One
-            // `pycc_rt_str_decref` per owned entry-block slot -- a null
-            // slot (a local on a path that never assigned it) is the
-            // runtime's documented no-op -- then the function's single
-            // real `ret`.
-            if let Some((epilogue_bb, ret_slot)) = str_epilogue_bb {
+            // `pycc_rt_str_decref` per owned `str` entry-block slot -- a
+            // null slot (a local on a path that never assigned it) is the
+            // runtime's documented no-op -- then, since Part 2a of #1142
+            // (#1165), one `pycc_rt_buffer_f64_free` per owned buffer slot
+            // on the same model, and finally the function's single real
+            // `ret`. The IR value names below keep their `str_` prefix so a
+            // `str`-owning function still emits byte-identical IR.
+            if let Some((epilogue_bb, ret_slot)) = owned_slot_epilogue_bb {
                 builder.position_at_end(epilogue_bb);
                 for slot_ptr in &owned_str_slots {
                     let live = builder

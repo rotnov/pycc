@@ -517,6 +517,37 @@ fn resolved_producer_call<'a>(
     Some(&args[0])
 }
 
+/// Part 2a of #1142 (#1165): the solver's mirror of `crate::check_assignment`'s
+/// buffer-parameter guard, applied at the producer's admitting seam.
+///
+/// Without it the solver admits `b = ndarray(4)` on a `memoryview`
+/// *parameter* `b` and marks `b` artifact-owned, so a later read of `b` in
+/// the same pass reaches `reject_memoryview_read` with `owned = true` and
+/// raises the *owned* refusal. `crate::module`'s `merge_solver_first` makes
+/// that wrong wording the one the compiler emits, overruling the check
+/// phase, which flags the same statement with the correct *parameter*
+/// wording. See `buffer::buffer_parameter_rebinding` for the two independent
+/// grounds the refusal rests on.
+///
+/// Keying on `Some(Ok(Ty::MemoryView))` rather than on "a term that may
+/// unify to `MemoryView`" is exact here, not an approximation: an `Err(var)`
+/// term is only ever resolved to a concrete type by
+/// `apply_annotation_defaults`, whose `is_private_solver_scalar` guard
+/// admits `Int | Float | Bool | Str | None` only, so no inferred term can
+/// become `MemoryView`. A `memoryview` parameter's term is therefore always
+/// the concrete `Ok(Ty::MemoryView)` this guard matches.
+fn reject_buffer_parameter_rebinding(
+    env: &ConstraintEnvironment<'_, '_>,
+    target: &str,
+) -> Result<(), Diagnostic> {
+    if matches!(env.bindings.get(target), Some(Ok(Ty::MemoryView)))
+        && !env.owned_buffers.contains(target)
+    {
+        return Err(crate::buffer::buffer_parameter_rebinding(target));
+    }
+    Ok(())
+}
+
 pub(crate) fn collect_expr_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -1722,6 +1753,10 @@ pub(crate) fn collect_block_constraints(
                 // The length argument is still collected so its own
                 // constraints (and its own diagnostics) are not skipped.
                 if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                    // Guard first, matching `check_assignment`'s order: a
+                    // parameter rebinding is refused before the length
+                    // argument's own constraints are collected.
+                    reject_buffer_parameter_rebinding(env, target)?;
                     collect_expr_constraints(
                         signatures,
                         parents,
@@ -1805,6 +1840,8 @@ pub(crate) fn collect_block_constraints(
                 // an `Err(var)`, so `apply_annotation_defaults` would skip
                 // it anyway.
                 if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                    // See the plain `Assign` arm: guard before collecting.
+                    reject_buffer_parameter_rebinding(env, target)?;
                     collect_expr_constraints(
                         signatures,
                         parents,

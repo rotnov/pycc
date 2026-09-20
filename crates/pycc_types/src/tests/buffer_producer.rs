@@ -610,3 +610,64 @@ fn the_solver_propagates_a_refusal_from_the_length_argument() {
         }
     }
 }
+
+/// The solver's own parameter-rebinding guard, in both assignment
+/// spellings. Without it the solver admits the rebinding, marks `b`
+/// artifact-owned, and the later read of `b` raises the *owned* refusal --
+/// which `module::merge_solver_first` then prefers over the check phase's
+/// correct *parameter* refusal, making #1165's acceptance criterion 2 false
+/// for this reachable shape.
+///
+/// `_h` takes a concrete `memoryview` parameter but leaves its return type
+/// inferred, which is what routes it through the constraint solver rather
+/// than the concrete fast path (see `unannotated_helper_module`).
+#[test]
+fn the_solver_refuses_rebinding_a_buffer_parameter() {
+    for assignment in [
+        HirStmt::Assign {
+            target: "b".to_string(),
+            value: call("ndarray", vec![HirExpr::IntLiteral(4)]),
+        },
+        HirStmt::AnnAssign {
+            target: "b".to_string(),
+            annotation: Ty::MemoryView,
+            value: Some(call("ndarray", vec![HirExpr::IntLiteral(4)])),
+            is_final: false,
+        },
+    ] {
+        let hir = HirModule {
+            seeded_builtin_exception_classes: false,
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("b".to_string(), Ty::MemoryView)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        assignment.clone(),
+                        HirStmt::Return(Some(HirExpr::Name("b".to_string()))),
+                    ],
+                },
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("v".to_string(), Ty::MemoryView)],
+                    return_ty: Ty::MemoryView,
+                    body: vec![HirStmt::Return(Some(call(
+                        "_h",
+                        vec![HirExpr::Name("v".to_string())],
+                    )))],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "C0001", "{assignment:?}");
+        assert!(
+            err.message
+                .contains("a buffer parameter of a `pycc build --ext` export"),
+            "{}",
+            err.message
+        );
+    }
+}
