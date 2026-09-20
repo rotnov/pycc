@@ -349,6 +349,8 @@ fn ext_return_gap(name: &str) -> Diagnostic {
 /// set the checker uses (`lookup_class`, `lookup_function`, `env.bindings`),
 /// read from the HIR: a program's own `class ndarray`, `def ndarray`, or
 /// module-level `ndarray = ...` keeps its own meaning and is not reported.
+/// A value-less module-level `ndarray: int` is not such a binding; see
+/// [`shadowed_producer_spellings`].
 /// Over-refusal is the failure mode that matters here -- it rejects a legal
 /// program -- so the set is widened to the whole module rather than scoped
 /// per function.
@@ -380,6 +382,17 @@ pub(crate) fn refuse_buffer_producers_in_native_mode(
 
 /// The producer spellings the program itself rebinds, which
 /// [`refuse_buffer_producers_in_native_mode`] must leave alone.
+///
+/// A module-level `AnnAssign` counts only when it carries an initializer.
+/// `HirStmt::AnnAssign`'s `value` is an `Option`, and a value-less `ndarray:
+/// int` binds nothing at run time -- the check phase records it in `declared`
+/// rather than in `Environment::bindings`, so its statement-(h) test does not
+/// see it either and `buffer::producer_assignment_ty` still recognizes the
+/// producer. Treating the bare annotation as a shadow here while the checker
+/// does not was a one-sided disagreement in the only direction that matters:
+/// this gate skipped its refusal, and an artifact-owned buffer allocation
+/// reached a **native** executable, past the `--ext`-only boundary
+/// [`producer_gap`] exists to state.
 fn shadowed_producer_spellings(hir: &HirModule) -> HashSet<&str> {
     let mut shadowed: HashSet<&str> = HashSet::new();
     for (name, _) in &hir.class_defs {
@@ -391,7 +404,11 @@ fn shadowed_producer_spellings(hir: &HirModule) -> HashSet<&str> {
         let name = match item {
             HirItem::Function { name, .. } => name,
             HirItem::TopLevelStmt(HirStmt::Assign { target, .. })
-            | HirItem::TopLevelStmt(HirStmt::AnnAssign { target, .. }) => target,
+            | HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target,
+                value: Some(_),
+                ..
+            }) => target,
             HirItem::TopLevelStmt(_) => continue,
         };
         if pycc_types::is_buffer_producer_spelling(name) {

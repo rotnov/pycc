@@ -495,8 +495,20 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 ///
 /// The solver's own statement (h): a `def` of the spelling is in
 /// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
-/// no class table), and a module-level value binding of it is in `bindings`.
-/// Any of the three means the program's own meaning wins.
+/// no class table), a module-level value binding of it is in `bindings`, and
+/// a *function-local* binding of it is in `local_names`. Any of the four
+/// means the program's own meaning wins.
+///
+/// `local_names` cannot be folded into the `bindings` check and is not
+/// redundant with it: `constraints::signatures` deliberately *removes* every
+/// local name from the per-function `bindings` map it seeds, and a local is
+/// re-entered there only once the walk reaches its binding statement. A body
+/// that binds the spelling after using it therefore has an empty `bindings`
+/// answer at the use site, while CPython makes the name local for the whole
+/// body and raises `UnboundLocalError`. The check-phase mirror is
+/// `crate::buffer::producer_assignment_ty`; declining here hands the value to
+/// the ordinary `Call` walk, whose own `is_local` gate (further down this
+/// file, ahead of the producer refusal) reports `unbound_local`.
 fn resolved_producer_call<'a>(
     signatures: &HashMap<String, SignatureTerms>,
     env: &ConstraintEnvironment<'_, '_>,
@@ -509,6 +521,7 @@ fn resolved_producer_call<'a>(
         || signatures.contains_key(callee)
         || env.shadowed_producers.contains(callee.as_str())
         || env.bindings.contains_key(callee.as_str())
+        || is_local(env.local_names, callee)
         || args.len() != 1
         || !env.in_function_body
     {

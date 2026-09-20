@@ -284,6 +284,138 @@ def go(n: int) -> float:
     assert!(err.contains("`float` does not support indexing"), "{err}");
 }
 
+/// #1166 review finding F2: statement (h) covers a binding the *function*
+/// makes, not only one the module makes.
+///
+/// `local_names` is a whole-body pre-pass, so CPython makes `ndarray` local
+/// throughout `go` and the earlier call raises `UnboundLocalError`. Before
+/// the fix the producer's statement-(h) guard consulted only the class,
+/// generic, function and module-binding tables -- none of which holds a local
+/// that the walk has not reached yet -- so the call was recognized as a
+/// producer and the frame allocated. Both walkers now decline, and the
+/// solver's own `is_local` gate reports the `UnboundLocalError` analogue.
+#[test]
+fn a_function_local_rebinding_of_the_spelling_wins_over_the_producer() {
+    let dir = fixture(
+        "1165_local_shadow",
+        "\
+def go() -> float:
+    a = ndarray(4)
+    ndarray = 1
+    return float(ndarray)
+",
+    );
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[T0021]"), "{err}");
+    assert!(
+        err.contains("local name `ndarray` is not bound before this use"),
+        "{err}"
+    );
+}
+
+/// #1166 review finding F3: a `bool` length is an `int` length.
+///
+/// `docs/TYPE_SYSTEM.md`'s representation table makes `bool` a subtype of
+/// `int` (rule 4/D-086), the same rule that already admits a `bool` buffer
+/// *index*, and `MirExpr::BufferAlloc`'s codegen already decodes one -- the
+/// length goes through `to_numeric_encoded_int`, whose `Scalar::Bool` arm
+/// zero-extends and re-tags before the shared checked untag. The `T0033` this
+/// used to raise refused a one-element request the whole pipeline supports.
+///
+/// Written as the *owned-use* refusal for
+/// `a_program_that_defines_the_spelling_keeps_its_own_meaning`'s reason: a
+/// successful `--ext` build needs CPython development headers. `b = a` is
+/// what discriminates the two interpretations -- that message is reachable
+/// only if `a` is bound to artifact-owned buffer storage, so reaching it
+/// proves `ndarray(True)` was admitted as the producer.
+#[test]
+fn a_bool_length_is_admitted_as_a_one_element_request() {
+    let dir = fixture(
+        "1165_bool_length",
+        "\
+def go() -> float:
+    a = ndarray(True)
+    b = a
+    return float(len(b))
+",
+    );
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(
+        err.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{err}"
+    );
+    assert!(!err.contains("error[T0033]"), "{err}");
+}
+
+/// #1166 review finding F4: a value-less module-level annotation is not a
+/// binding, so it must not disarm the native gate.
+///
+/// `HirStmt::AnnAssign`'s `value` is an `Option`, and `ndarray: int` alone
+/// binds nothing at run time -- the check phase records it in `declared`, not
+/// in `Environment::bindings`, so `buffer::producer_assignment_ty` still
+/// recognizes the producer. The native gate's shadow set nevertheless counted
+/// the bare annotation, skipped its refusal, and let an artifact-owned buffer
+/// allocation reach a **native** executable past the documented `--ext`-only
+/// boundary. This is the counterpart of
+/// `allocating_buffer_storage_natively_is_refused_in_its_own_words`, whose
+/// subject carries no such annotation.
+#[test]
+fn a_value_less_module_annotation_does_not_disarm_the_native_gate() {
+    let dir = fixture(
+        "1165_native_bare_annotation",
+        "\
+ndarray: int
+
+
+def go(n: int) -> float:
+    a = ndarray(n)
+    return a[0]
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("a native executable has no host to carry it to"),
+        "{err}"
+    );
+}
+
+/// The load-bearing negative for the test above: an annotation that *does*
+/// carry an initializer is a real binding, so it still keeps the program's
+/// own meaning and the native gate stays silent about it. `T0021` rather than
+/// `I0405` is the whole assertion -- calling an `int` is the program's own
+/// error, which is exactly statement (h) working.
+#[test]
+fn an_initialized_module_annotation_still_keeps_the_programs_own_meaning() {
+    let dir = fixture(
+        "1165_native_initialized_annotation",
+        "\
+ndarray: int = 3
+
+
+def go(n: int) -> float:
+    a = ndarray(n)
+    return a[0]
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0405]"), "{err}");
+    assert!(err.contains("error[T0021]"), "{err}");
+    assert!(
+        err.contains("name `ndarray` is bound to a non-callable value"),
+        "{err}"
+    );
+}
+
 /// The native gate is a property of the artifact mode, so it needs the
 /// driver. Its message states the `--ext` boundary rather than the missing
 /// interpreter, because the allocation itself would link and run natively.
@@ -358,6 +490,59 @@ fn a_negative_length_raises_value_error_at_the_boundary() {
          \x20   assert 'negative' in str(error), str(error)\n\
          else:\n\
          \x20   raise AssertionError('a negative length returned normally')\n\
+         print('ok')\n",
+    );
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// #1166 review finding F5, corroborated on a real artifact: an allocation
+/// reached with an exception *already* pending must not happen at all.
+///
+/// `xs.pop()` on an empty list raises, and `MirExpr::ListPop` is in
+/// `expression_can_set_exception`'s `false` group, so nothing guarded the
+/// pending state between that raise and the allocator call. The allocation
+/// succeeded and `emit_expr`'s own post-call guard then branched to the
+/// handler before `MirStmt::Assign` could store the pointer into the frame's
+/// owned slot, leaving the slot at its entry null: one leaked view per call,
+/// which the balance counter reports and no other observation in this file
+/// would notice.
+///
+/// `#[ignore]`d, and the codegen-side proof is
+/// `pycc_codegen`'s own `a_buffer_allocation_checks_the_pending_state_before_it_allocates`,
+/// which runs in CI's coverage job; this arm is corroboration on the built
+/// module, not the primary gate. Windows is excluded for the reason the arm
+/// below states.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_allocation_reached_with_a_pending_exception_never_happens() {
+    let dir = fixture(
+        "1165_hosted_stale_pending",
+        "\
+def stale_pending(n: int) -> float:
+    xs: list[int] = []
+    try:
+        a = ndarray(n)
+        b = ndarray(xs.pop())
+        return a[0] + b[0]
+    except IndexError:
+        return -1.0
+",
+    );
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import ctypes, alloc_probe\n\
+         live = ctypes.CDLL(alloc_probe.__file__).pycc_rt_buffer_live_views\n\
+         live.restype = ctypes.c_longlong\n\
+         live.argtypes = []\n\
+         assert live() == 0, live()\n\
+         for _ in range(64):\n\
+         \x20   assert alloc_probe.stale_pending(8) == -1.0\n\
+         assert live() == 0, live()\n\
          print('ok')\n",
     );
     assert!(run.status.success(), "{}", stderr_of(&run));

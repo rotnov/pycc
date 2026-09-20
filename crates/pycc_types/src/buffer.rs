@@ -131,6 +131,10 @@ pub(crate) fn producer_at_module_scope(callee: &str) -> Diagnostic {
 }
 
 /// `Err(T0033)` when a buffer producer's length argument is not an `int`.
+///
+/// A `bool` is *not* such a case: it is an `int` by the representation table
+/// (`docs/TYPE_SYSTEM.md`, rule 4/D-086), so `ndarray(True)` requests one
+/// element. See [`producer_assignment_ty`]'s own length check.
 pub(crate) fn producer_length_not_an_int(callee: &str, len_ty: &Ty) -> Diagnostic {
     Diagnostic::error(
         "T0033",
@@ -227,10 +231,25 @@ pub(crate) fn producer_assignment_ty(
     }
     // D-244 #1129 statement (h): the program's own binding wins, in call
     // position exactly as in annotation position.
+    //
+    // `local_names` is the fourth arm rather than a redundant one. It is a
+    // whole-body pre-pass (`crate::function_local_names` = the parameters
+    // plus every assignment, `for`, comprehension, `match` capture and
+    // `except ... as` target `collect_local_names` reaches at any depth), so
+    // it answers CPython's own scoping question: a function that binds the
+    // spelling *anywhere* in its body makes it local *throughout*, and a use
+    // before that binding is an `UnboundLocalError` rather than a producer.
+    // Without this arm `a = ndarray(4)` followed by a later `ndarray = 1` in
+    // the same body allocated, because `env.bindings` never holds a local
+    // that has not been bound yet at this point in the walk. The solver's
+    // mirror is `crate::constraints::resolved_producer_call`; both then let
+    // the ordinary `Call` walk report the program's own error, which for a
+    // syntactic local is the solver's `unbound_local` (`T0021`).
     if env.lookup_class(callee).is_some()
         || env.lookup_generic(callee).is_some()
         || env.lookup_function(callee).is_some()
         || env.bindings.contains_key(callee.as_str())
+        || crate::is_local(local_names, callee)
     {
         return None;
     }
@@ -246,7 +265,20 @@ pub(crate) fn producer_assignment_ty(
         Ok(ty) => ty,
         Err(diagnostic) => return Some(Err(diagnostic)),
     };
-    if !matches!(len_ty, Ty::Int) {
+    // `bool` is admitted alongside `int`, exactly as it is for a buffer
+    // *index* (`docs/TYPE_SYSTEM.md`'s `memoryview` row, rule 4/D-086):
+    // `crate::is_assignable`'s own `from == Ty::Bool && to == Ty::Int` clause
+    // encodes that representation-table subtyping, and codegen already
+    // decodes the value -- `MirExpr::BufferAlloc`'s arm routes the length
+    // through `to_numeric_encoded_int`, whose `Scalar::Bool` arm zero-extends
+    // the `i8` to `i64` and re-tags it before the shared checked untag, so
+    // `ndarray(True)` reaches the allocator as the element count `1`.
+    //
+    // Written as an explicit match rather than `is_assignable(len_ty,
+    // Ty::Int)` because that helper also admits a `Ty::Param`, which is not a
+    // length; the `float(...)` arm in `crate::expr` spells its own
+    // `Int | Float | Bool` admission out for the same reason.
+    if !matches!(len_ty, Ty::Int | Ty::Bool) {
         return Some(Err(producer_length_not_an_int(callee, &len_ty)));
     }
     Some(Ok(Ty::MemoryView))

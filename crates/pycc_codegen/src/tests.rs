@@ -16556,6 +16556,41 @@ fn a_reallocating_function_frees_the_old_view_before_it_stores_the_new_one() {
 }
 
 #[test]
+fn a_buffer_allocation_checks_the_pending_state_before_it_allocates() {
+    // #1166 review finding F5. `emit_expr` guards *after*
+    // `emit_expr_unchecked` returns, so an exception already pending when
+    // this node is reached -- set by an operation
+    // `expression_can_set_exception` classifies `false` and therefore leaves
+    // unguarded, such as the `ListPop` in `a = ndarray(xs.pop())` -- let the
+    // allocation succeed and only then branched to the handler, before
+    // `MirStmt::Assign` stored the pointer into the frame's owned slot. The
+    // slot kept its entry null, so nothing freed the view: one leaked buffer
+    // per call.
+    //
+    // Asserted as an ordering *between* the length untag and the allocator
+    // call rather than as the mere presence of a guard: the post-call guard
+    // `expression_can_set_exception` already emitted makes a presence-only
+    // assertion pass with or without the fix.
+    compile_ext_items_checking_ir(
+        "buffer_alloc_pending_pre_guard",
+        owned_buffer_fn_items(vec![buffer_alloc_a()]),
+        |ir| {
+            let untag = ir
+                .find("buffer_untag_alloc_len")
+                .unwrap_or_else(|| panic!("the length untag should be emitted: {ir}"));
+            let alloc = ir[untag..]
+                .find("@pycc_rt_buffer_f64_alloc")
+                .map(|offset| untag + offset)
+                .unwrap_or_else(|| panic!("the allocator call should follow the untag: {ir}"));
+            assert!(
+                ir[untag..alloc].contains("@pycc_rt_exception_active"),
+                "{ir}"
+            );
+        },
+    );
+}
+
+#[test]
 fn a_buffer_parameter_is_never_pushed_into_the_owned_slot_frame() {
     // The load-bearing negative. A `memoryview` *parameter* is storage the
     // host lent for exactly one call, so freeing it in the epilogue would

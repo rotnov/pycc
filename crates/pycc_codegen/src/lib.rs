@@ -3950,11 +3950,35 @@ fn emit_expr_unchecked<'ctx>(
         // D-173 raise a negative length leaves pending is declared by
         // `expression_can_set_exception`, which emits the guard that reads
         // it; the null view the refusal returns is safe for the epilogue,
-        // whose free is a documented no-op on null.
+        // whose free is a documented no-op on null. A second guard is emitted
+        // *before* the allocator call, for an exception that was already
+        // pending when this arm was reached -- see it in place below.
         MirExpr::BufferAlloc { len } => {
             let len_scalar = emit_expr(context, builder, module, rt, user_functions, locals, len);
             let encoded_len = to_numeric_encoded_int(context, builder, len_scalar);
             let raw_len = build_untag_checked(builder, rt, encoded_len, "buffer_untag_alloc_len");
+            // #1166 review finding F5: check the pending state *before*
+            // allocating, not only after.
+            //
+            // `emit_expr`'s own guard runs after `emit_expr_unchecked`
+            // returns, so an exception already pending when this arm is
+            // reached -- set by an operation `expression_can_set_exception`
+            // classifies `false` and therefore leaves unguarded, such as the
+            // `MirExpr::ListPop` in `a = ndarray(xs.pop())` -- allowed the
+            // allocation to succeed and *then* branched to the handler,
+            // before `MirStmt::Assign` could store the pointer into the
+            // frame's owned slot. The slot kept its entry null, so neither
+            // the unwind nor the epilogue freed the view: one leaked buffer
+            // per call, which `pycc_rt_buffer_live_views` counts.
+            //
+            // Guarding here instead short-circuits to the same exception
+            // target without allocating, which is what makes the arm's
+            // "a refused allocation leaves nothing for the unwind path to
+            // release" claim hold for a *stale* pending exception as well as
+            // for the allocator's own negative-length raise. It also covers
+            // `build_untag_checked` above, whose own refusal sets the pending
+            // state and returns a sentinel word.
+            guard_statement_effects(context, builder, rt);
             let view = builder
                 .build_call(rt.buffer_f64_alloc, &[raw_len.into()], "buffer_alloc")
                 .expect("build_call should not fail for a declared runtime function")
