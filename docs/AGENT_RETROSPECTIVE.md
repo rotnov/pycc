@@ -33,6 +33,60 @@ never a merge gate.
 
 ---
 
+## 2026-09-20 — A green local test suite hid two CI failures at once: the coverage job has no CPython, and the hosted probe assumed a POSIX module suffix
+
+**What happened.** PR #1166 (#1165, Part 2a of #1142) was pushed with every
+local gate green, including `cargo test --workspace -- --include-ignored`
+with only the known environmental failures. CI came back red on
+`build-test-coverage`, and a second failure on
+`native-build-test (windows-latest)` was still pending at the moment the
+first one was diagnosed. Both were in the diff's own new tests, and neither
+could fail on this machine.
+
+**Root cause.** Two independent environment assumptions, both invisible
+locally:
+
+1. `a_program_that_defines_the_spelling_keeps_its_own_meaning` asserted a
+   *successful* `pycc build --ext`, which links against CPython development
+   headers. The coverage job's "Set up CPython 3.14.7 conformance oracle"
+   step runs *after* the coverage gate, so the runner is still on the
+   image's default interpreter at that point and the build refuses on the
+   `Py_LIMITED_API` floor. This machine has the headers, so the test passed
+   here.
+2. The `ctypes` leak probe opened the built module by a hard-coded
+   `./alloc_probe.abi3.so`. Windows builds a `.pyd`.
+
+**What fixed it.** The first test was rewritten to prove the same shadowing
+property through a *front-end refusal* rather than a successful build —
+the five sibling tests that assert diagnostics all passed on the same
+runner, which establishes that type checking precedes the interpreter
+probe, so a refusal-shaped assertion needs no headers at all. The probe now
+opens the module through its own `__file__` and carries the
+`#[cfg(not(target_os = "windows"))]` gate that
+`tests/issue_1054_ext_str_release.rs` already applies to its identical
+counter probe, gated on the one arm rather than the whole file so the
+diagnostic arms keep running on Windows.
+
+**Lesson.** Two distinct rules, both cheap to apply before pushing:
+
+- A test that asserts a *successful* `--ext` build cannot run in the
+  coverage job. Either mark it `#[ignore]` and accept that it contributes
+  no line coverage, or restate its property as a front-end refusal, which
+  runs everywhere. Deciding this when the test is written costs nothing;
+  discovering it from a red runner costs a full CI cycle.
+- When a new test loads a built artifact by filename, copy the
+  platform gate from the nearest existing test that does the same thing
+  rather than writing the path fresh. The precedent already encodes which
+  platforms the technique works on.
+
+And one about diagnosis rather than authorship: when CI reports a failure,
+enumerate *every* failing job before concluding what the cause is. The
+first red check was treated as the cause while a second job was still
+pending; had the fix round not re-read the run's full failed-test list, it
+would have shipped a fix that left CI red.
+
+---
+
 ## 2026-09-20 — Two `cargo llvm-cov` cycles wasted: the merge-base gates were run before committing, and the tree was edited after the profile was taken
 
 **What happened.** While implementing Part 1 of #1142, the full local gate
