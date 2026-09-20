@@ -649,11 +649,12 @@ def go(n: int) -> int:
     assert!(!err.contains("I0405"), "{err}");
 }
 
-/// The one path with no check verdict to filter against: a `memoryview` in a
-/// *signature* refuses the program before the type check runs, exactly so the
-/// signature gets the `I0405` it is documented to get. The producer gap is
-/// reported unfiltered beside it -- the program is already refused under the
-/// same code for a reason that does apply.
+/// A `memoryview` in a *signature* refuses the program before the type check
+/// is reported, exactly so the signature gets the `I0405` it is documented to
+/// get. The producer gap is still filtered against a verdict obtained purely
+/// for that purpose -- `src/frontend.rs`'s `resolve_frontend_native` owns why,
+/// on the `refused_a_buffer` arm. This program checks clean, so it exercises
+/// that filter's `Ok` arm and both `I0405`s survive.
 #[test]
 fn a_buffer_signature_and_an_allocation_are_both_named() {
     let dir = fixture(
@@ -677,6 +678,81 @@ def go(v: memoryview) -> int:
         "{err}"
     );
     assert_eq!(err.matches("error[I0405]").count(), 2, "{err}");
+}
+
+/// The keep path of the same filter, on the arm where the check actually
+/// fails: `broken` is what keys the verdict's error, `alloc`'s allocation is
+/// admitted, and the signature gap in `sig` is what routes the program down
+/// the `refused_a_buffer` early return in the first place. The filter is per
+/// function, so `alloc`'s `I0405` must survive `broken`'s failure -- and the
+/// verdict's own `T0022` must stay discarded, because this path exists to
+/// deliver `sig`'s signature `I0405` instead of a type error.
+#[test]
+fn a_signature_gap_does_not_suppress_an_admitted_allocation_elsewhere() {
+    let dir = fixture(
+        "1165_native_signature_and_admitted_producer",
+        "\
+def sig(v: memoryview) -> int:
+    return 0
+
+
+def broken(n: int) -> str:
+    return 1
+
+
+def alloc(n: int) -> int:
+    a = ndarray(4)
+    return n
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(
+        err.contains("`sig`'s parameter `v: memoryview` requires `pycc build --ext`"),
+        "{err}"
+    );
+    assert!(
+        err.contains("`alloc` allocates buffer storage with `ndarray(n)`"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("T0022"),
+        "the verdict obtained for filtering must not be reported: {err}"
+    );
+}
+
+/// The drop path on the same arm, and the defect it closed (#1165 review
+/// round 4): a signature gap used to take an early return that reported every
+/// producer gap without ever consulting the type check, so `bad` was told to
+/// rebuild with `--ext` -- while `--ext` refuses this very program with a
+/// `T0033` naming the `str` element count. The
+/// signature's own `I0405` is correct and stays; `bad`'s is a misdirected
+/// remedy and must not be reported.
+#[test]
+fn a_signature_gap_does_not_report_a_producer_the_checker_refuses() {
+    let dir = fixture(
+        "1165_native_signature_and_refused_producer",
+        "\
+def sig(v: memoryview) -> int:
+    return 0
+
+
+def bad() -> None:
+    a = ndarray(\"x\")
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(
+        err.contains("`sig`'s parameter `v: memoryview` requires `pycc build --ext`"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("`bad` allocates buffer storage"),
+        "the producer gap `--ext` does not fix must not be reported: {err}"
+    );
 }
 
 /// The whole of Part 2a in one hosted run: the artifact allocates its own

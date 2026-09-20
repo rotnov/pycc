@@ -312,6 +312,17 @@ pub(crate) fn resolve_frontend(
 /// `crate::memoryview_mode::producer_gaps_the_check_admits`: a producer
 /// whose length the checker refuses is not an allocation, and reporting
 /// `I0405` for it prescribed a remedy `--ext` does not satisfy either.
+/// That filter is unconditional -- it applies on every path this function
+/// can report a producer gap from, including the `memoryview` early return
+/// above, which obtains a verdict *purely* to filter with and discards the
+/// verdict's own diagnostics.
+///
+/// The inventory, because a missed site is exactly how this defect reached
+/// review twice: `resolve_frontend_native` has three producer-gap report
+/// sites -- the `refused_a_buffer` early return (filtered), the type-check
+/// `Err` arm (filtered), and the `Ok(resolved)` tail (provably needs no
+/// filter, because reaching it means the check returned `Ok` and so keys no
+/// error to any function).
 ///
 /// `pycc check` selects no artifact mode and so runs neither gate:
 /// [`check_frontend`] reports the `C0001` read refusal there, which is
@@ -356,14 +367,42 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     }
     let producer_gaps = producer_gaps.err().unwrap_or_default();
     if refused_a_buffer {
-        // No check verdict exists on this path and none can be obtained:
-        // the early return above is exactly what keeps a body that reads its
-        // own `memoryview` parameter from failing the type check before the
-        // signature gets the `I0405` it is documented to get. The producer
-        // gaps are reported unfiltered, as they were before the filter
-        // existed -- the program is already refused under this same code for
-        // a reason that does apply, so naming the allocation beside it adds
-        // information rather than a misdirected remedy.
+        // A check verdict *is* obtained here, and its own diagnostics are
+        // thrown away rather than reported. Both halves are deliberate.
+        //
+        // Discarding them is the #1115 guarantee: `reject_memoryview_read`
+        // refuses almost every use of a `memoryview`-typed name with
+        // `C0001`, so a body that reads its own parameter fails the check,
+        // and reporting that verdict here would replace the signature-level
+        // `I0405` this early return exists to deliver.
+        // `issue_1112_ext_memoryview.rs`'s
+        // `a_memoryview_parameter_is_refused_with_i0405_even_when_the_body_reads_it`
+        // pins that, and is the regression guard for this call.
+        //
+        // Obtaining it is the producer gate's own semantic validation, which
+        // `producer_gaps_the_check_admits` owns and which is no less required
+        // on this path than on the `Err` arm below: a producer whose length the
+        // checker refuses (`a = ndarray("x")`) is not an allocation, and
+        // `I0405` would prescribe `--ext` for a program `--ext` refuses with
+        // `T0033`. The signature gap beside it does not make that remedy any
+        // less misdirected.
+        //
+        // The filter is function-scoped, so a function that both reads its
+        // own `memoryview` parameter and allocates loses its (correct)
+        // producer gap here. That over-suppression is accepted: the program
+        // stays refused, the surviving `I0405` still prescribes `--ext`, and
+        // `--ext` genuinely fixes it, so no user is misdirected -- they see
+        // one fewer redundant line. The alternative, excluding `C0001` from
+        // the filtering verdict by diagnostic code, was rejected: it would
+        // encode "C0001 is the set of refusals `--ext` removes" in a fourth
+        // place no canonical enumeration owns, which is the treadmill
+        // https://github.com/rotnov/pycc/issues/1168 was filed to stop.
+        let producer_gaps = match pycc_types::check_and_resolve_all_keyed(&hir) {
+            Ok(_) => producer_gaps,
+            Err(check_keyed) => {
+                crate::memoryview_mode::producer_gaps_the_check_admits(producer_gaps, &check_keyed)
+            }
+        };
         keyed.extend(
             producer_gaps
                 .into_iter()
