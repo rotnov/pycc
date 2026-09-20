@@ -414,6 +414,33 @@ fn lookup_bound_name(
     local_names: &[&str],
     name: &str,
 ) -> Result<Ty, Diagnostic> {
+    lookup_bound_name_inner(env, local_names, name, false)
+}
+
+/// [`lookup_bound_name`] with the `memoryview` read refusal suppressed, for
+/// the **one** position that admits a buffer-bound name: the target of an
+/// element store, `b[i] = v` (Part 1 of #1142).
+///
+/// A separate entry point and not a relaxation of the refusal itself. Every
+/// other difference from [`lookup_bound_name`] would be a language-wide
+/// regression -- `reject_object_read`, the possibly-unbound arm, the
+/// unbound-local arm and the "name is not defined" `T0021` all apply to
+/// `d[k] = v` for every base -- so the two share one body and differ by
+/// exactly the one line this flag guards.
+fn lookup_bound_name_for_store(
+    env: &Environment,
+    local_names: &[&str],
+    name: &str,
+) -> Result<Ty, Diagnostic> {
+    lookup_bound_name_inner(env, local_names, name, true)
+}
+
+fn lookup_bound_name_inner(
+    env: &Environment,
+    local_names: &[&str],
+    name: &str,
+    admit_buffer: bool,
+) -> Result<Ty, Diagnostic> {
     // Issue #118 Part 1: three-way distinction -- definitely bound -> ok, maybe
     // bound -> T0041, unbound -> T0021 (local) or "not defined" (global).
     match env.binding_state(name) {
@@ -429,7 +456,9 @@ fn lookup_bound_name(
             // `Name` arm's own guard, and without this call the iteration is
             // refused as a `T0033` type error instead of the `C0001`
             // capability gap the type actually is.
-            reject_memoryview_read(name, ty)?;
+            if !admit_buffer {
+                reject_memoryview_read(name, ty)?;
+            }
             Ok(ty.clone())
         }
         Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
@@ -2411,7 +2440,15 @@ fn check_dict_set(
     key: &HirExpr,
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
-    let dict_ty = lookup_bound_name(env, local_names, dict)?;
+    // The buffer element store is admitted *before* the `Ty::Dict`
+    // destructure below, because that destructure's `else` is the `T0033`
+    // refusal -- and before it, through `lookup_bound_name_for_store`,
+    // because `lookup_bound_name`'s own `reject_memoryview_read` would
+    // otherwise report `C0001` one line earlier still.
+    let dict_ty = lookup_bound_name_for_store(env, local_names, dict)?;
+    if dict_ty == Ty::MemoryView {
+        return check_buffer_set(env, local_names, key, value);
+    }
     let Ty::Dict(kv) = &dict_ty else {
         return Err(Diagnostic::error(
             "T0033",
@@ -2446,6 +2483,56 @@ fn check_dict_set(
             ),
             Span::new(0, 0),
         ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", val_ty.name(), value_ty.name())));
+    }
+    Ok(())
+}
+
+/// `b[i] = v` on a name bound to a `memoryview` (Part 1 of #1142): the
+/// store counterpart of the `Subscript` load `expr.rs` intercepts, and the
+/// second operation on such a name this compiler admits after `b[i]` and
+/// `len(b)`.
+///
+/// The index rule is the load's rule verbatim -- `T0021` and `is_assignable`
+/// against `Ty::Int`, so `bool` is accepted under D-086 -- because a load
+/// and a store that disagreed about `b[True]` would be a defect on its own.
+/// The value rule is `check_dict_set`'s own: `T0021` and `is_assignable`
+/// against the element type, which for the one admitted buffer format
+/// (`'d'`) is `Ty::Float`. `is_assignable` is not a widening here -- D-086
+/// admits no implicit `int` -> `float` -- so `b[0] = 1` is refused and the
+/// generated code has exactly one scalar shape to store.
+///
+/// This admits the store's *target name* and nothing else: every other read
+/// of a buffer-bound name stays `reject_memoryview_read`'s `C0001`, which is
+/// what keeps D-244's wholly-wrapper-owned lifetime true by construction.
+fn check_buffer_set(
+    env: &Environment,
+    local_names: &[&str],
+    key: &HirExpr,
+    value: &HirExpr,
+) -> Result<(), Diagnostic> {
+    let index_ty = infer_expr_in(env, local_names, key)?;
+    if !is_assignable(index_ty.clone(), Ty::Int) {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "`memoryview` index must be `int`, found `{}`",
+                index_ty.name()
+            ),
+            Span::new(0, 0),
+        )
+        .with_help("use an `int` value"));
+    }
+    let value_ty = infer_expr_in(env, local_names, value)?;
+    if !is_assignable(value_ty.clone(), Ty::Float) {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "cannot assign `{}` to a `memoryview` element of `float`",
+                value_ty.name()
+            ),
+            Span::new(0, 0),
+        )
+        .with_help("use a `float` value here"));
     }
     Ok(())
 }

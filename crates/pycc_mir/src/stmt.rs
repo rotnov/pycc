@@ -603,11 +603,34 @@ pub(super) fn lower_stmt(
                 .as_ref()
                 .map(|v| lower_expr(v, scopes, classes, current_class)),
         ),
-        HirStmt::DictSet { dict, key, value } => MirStmt::DictSet {
-            dict: dict.clone(),
-            key: lower_expr(key, scopes, classes, current_class),
-            value: lower_expr(value, scopes, classes, current_class),
-        },
+        // `<name>[k] = v`. Part 1 of #1142 splits this one HIR node on the
+        // base's recorded type, exactly as `lower_expr`'s own `Subscript`
+        // arm splits the *load* on `base.ty()` -- `b[i]` there, `b[i] = v`
+        // here. The mechanism differs only because `HirStmt::DictSet.dict`
+        // is a bare `String` with no lowered expression to ask `ty()` of,
+        // so the type comes from `lookup` instead. `pycc_types` has already
+        // refused every store this split must not see.
+        HirStmt::DictSet { dict, key, value } => {
+            let key = lower_expr(key, scopes, classes, current_class);
+            let value = lower_expr(value, scopes, classes, current_class);
+            let base_ty = lookup(scopes, dict);
+            if base_ty == Ty::MemoryView {
+                MirStmt::BufferSet {
+                    base: MirExpr::Name {
+                        name: dict.clone(),
+                        ty: Ty::MemoryView,
+                    },
+                    index: key,
+                    value,
+                }
+            } else {
+                MirStmt::DictSet {
+                    dict: dict.clone(),
+                    key,
+                    value,
+                }
+            }
+        }
         // D-154 (Part 1 of #375): `base.attr = value`, resolved to a
         // compile-time slot index exactly like `MirExpr::AttrGet` above.
         // #377: if `attr` is a `@property` with a setter, the assignment is

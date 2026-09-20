@@ -178,3 +178,59 @@ fn a_buffer_length_read_walks_its_base_for_walrus_bindings() {
     };
     assert!(matches!(only, MirExpr::BufferLen { .. }), "{only:?}");
 }
+
+/// Part 1 of #1142: `b[i] = v` arrives as `HirStmt::DictSet` -- `pycc_hir`
+/// lowers every `<bare name>[k] = v` there -- and a `memoryview`-typed
+/// target routes it to `MirStmt::BufferSet` instead.
+///
+/// The base is rebuilt as a `MirExpr::Name` carrying `Ty::MemoryView`
+/// rather than left as the `String` `DictSet` holds: codegen's arm
+/// evaluates it like any other expression, and the type is what selects the
+/// `Scalar::MemoryView` the runtime call needs.
+#[test]
+fn a_subscript_store_into_a_memoryview_lowers_to_a_buffer_set() {
+    let hir = module_with_buffer_fn(
+        Ty::None,
+        vec![HirStmt::DictSet {
+            dict: "b".to_string(),
+            key: HirExpr::Name("i".to_string()),
+            value: HirExpr::FloatLiteral(1.5),
+        }],
+    );
+    let mir = build(&hir);
+    let [MirStmt::BufferSet { base, index, value }] = function_body(&mir) else {
+        panic!("expected a single buffer store");
+    };
+    assert_eq!(base.ty(), Ty::MemoryView);
+    assert_eq!(index.ty(), Ty::Int);
+    assert_eq!(value.ty(), Ty::Float);
+}
+
+/// The dispatch keys on the target's resolved type, so a `dict` target
+/// still lowers to `MirStmt::DictSet` -- every `d[k] = v` in the language
+/// goes through this same arm, and routing one of them to a buffer store
+/// would be a miscompile rather than a diagnostic.
+#[test]
+fn a_subscript_store_into_a_dict_still_lowers_to_a_dict_set() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "total".to_string(),
+            params: vec![("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictSet {
+                dict: "d".to_string(),
+                key: HirExpr::StringLiteral("k".to_string()),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let [MirStmt::DictSet { dict, .. }] = function_body(&mir) else {
+        panic!("expected a single dict store");
+    };
+    assert_eq!(dict, "d");
+}

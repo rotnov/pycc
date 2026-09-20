@@ -29,6 +29,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Int,
             },
             ExtExport {
@@ -37,6 +38,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: Vec::new(),
+                param_writable: Vec::new(),
                 return_ty: Ty::Int,
             },
             ExtExport {
@@ -45,6 +47,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
+                param_writable: vec![false; 2],
                 return_ty: Ty::Int,
             },
             ExtExport {
@@ -53,6 +56,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Float],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Float,
             },
             ExtExport {
@@ -61,6 +65,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Bool],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Bool,
             },
             ExtExport {
@@ -69,6 +74,7 @@ fn every_public_carriable_module_level_function_is_exported_in_source_order() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
+                param_writable: vec![false; 1],
                 return_ty: Ty::None,
             },
         ]
@@ -104,6 +110,7 @@ fn a_private_name_a_method_and_a_monomorphized_specialization_are_not_exports() 
             method: None,
             receiver: ExtReceiver::None,
             params: Vec::new(),
+            param_writable: Vec::new(),
             return_ty: Ty::Int,
         }]
     );
@@ -130,6 +137,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 method: None,
                 receiver: ExtReceiver::None,
                 params: Vec::new(),
+                param_writable: Vec::new(),
                 return_ty: Ty::Int,
             },
             // Definition order, last definition's signature: the entry keeps
@@ -140,6 +148,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int, Ty::Int],
+                param_writable: vec![false; 2],
                 return_ty: Ty::Int,
             },
             ExtExport {
@@ -148,6 +157,7 @@ fn a_rebound_public_name_is_exported_once_with_the_last_definition_s_signature()
                 method: None,
                 receiver: ExtReceiver::None,
                 params: Vec::new(),
+                param_writable: Vec::new(),
                 return_ty: Ty::Int,
             },
         ]
@@ -227,6 +237,7 @@ fn a_bool_signature_is_carried_rather_than_gapped_and_keeps_its_own_slot() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
+            param_writable: vec![false; 1],
             return_ty: Ty::Bool,
         }]
     );
@@ -248,6 +259,7 @@ fn a_str_signature_is_carried_rather_than_gapped_in_either_position() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str],
+            param_writable: vec![false; 1],
             return_ty: Ty::Str,
         }]
     );
@@ -274,6 +286,7 @@ fn a_tuple_signature_is_carried_rather_than_gapped_in_either_position() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
+            param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
         }]
     );
@@ -488,6 +501,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 method: Some("scale".to_string()),
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Int,
             },
             ExtExport {
@@ -496,6 +510,7 @@ fn a_public_static_and_class_method_of_a_public_class_are_exported() {
                 method: Some("make".to_string()),
                 receiver: ExtReceiver::NullCls,
                 params: vec![Ty::Int],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Int,
             },
         ]
@@ -859,6 +874,7 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
             // `flat_attr_layout`'s, not the parameter count -- they agree
             // here only because the fixture declares two attributes.
             params: vec![Ty::Int, Ty::Int],
+            param_writable: vec![false; 2],
             slot_count: 2,
         }]
     );
@@ -1037,6 +1053,7 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             class: "Grid".to_string(),
             name: "Grid.__init__".to_string(),
             params: Vec::new(),
+            param_writable: Vec::new(),
             slot_count: 2,
         }]
     );
@@ -1812,5 +1829,108 @@ fn a_base_method_every_witness_shadows_is_not_exported_and_never_a_c0003() {
             .map(|e| e.name.as_str())
             .collect::<Vec<_>>(),
         vec!["Derived.twice"]
+    );
+}
+
+/// Part 1 of #1142: `collect_exports` records which buffer parameters the
+/// body stores into, and only those.
+///
+/// The three-parameter shape is the point. The flag is per parameter, so a
+/// buffer the body only reads stays read-only -- acquiring it writable
+/// would refuse the read-only exporters D-244's boundary has always
+/// accepted -- and the `int` beside them is inert, since `PyBUF_WRITABLE`
+/// has no meaning for a slot that acquires no buffer.
+#[test]
+fn an_exports_buffer_parameter_is_writable_exactly_when_its_body_stores_into_it() {
+    let hir = module(vec![func_with_body(
+        "mix",
+        &[
+            ("read", Ty::MemoryView),
+            ("written", Ty::MemoryView),
+            ("n", Ty::Int),
+        ],
+        Ty::None,
+        vec![pycc_hir::HirStmt::While {
+            test: pycc_hir::HirExpr::BoolLiteral(true),
+            body: vec![element_store("written")],
+        }],
+    )]);
+    let exports = collect_exports(&hir).expect("a carriable signature");
+    assert_eq!(
+        exports
+            .iter()
+            .map(|e| &e.param_writable)
+            .collect::<Vec<_>>(),
+        vec![&vec![false, true, false]]
+    );
+}
+
+/// The flags are indexed against the *post-split* parameter list, so a
+/// method whose receiver was dropped does not shift them by one.
+///
+/// An off-by-one here would acquire the wrong slot writable: `self` never
+/// crosses the boundary, so a flag list still counting it would mark the
+/// buffer after the written one, or run past the end.
+#[test]
+fn an_instance_methods_writability_flags_skip_the_dropped_receiver() {
+    let class = "Grid";
+    let mut hir = module_with_classes(
+        vec![
+            init_func(class, &[("w", Ty::Int)], Ty::None),
+            func_with_body(
+                &format!("{class}.fill"),
+                &[
+                    ("self", Ty::Instance(Box::new(class.to_string()))),
+                    ("b", Ty::MemoryView),
+                ],
+                Ty::None,
+                vec![element_store("b")],
+            ),
+        ],
+        vec![(class.to_string(), constructible_class_def(class))],
+    );
+    declare_member(&mut hir, class, Member::Method("fill"));
+    let exports = collect_exports(&hir).expect("a carriable signature");
+    let fill = exports
+        .iter()
+        .find(|e| e.name == "Grid.fill")
+        .expect("the method is exported");
+    assert_eq!(fill.params, vec![Ty::MemoryView]);
+    assert_eq!(fill.param_writable, vec![true]);
+}
+
+/// The same walk on a constructor, which `collect_exports` never sees:
+/// `__init__` is refused as an export outright, so `ctor_descriptor` has to
+/// look its body up for itself. Left unplumbed, `Py_tp_init` would acquire
+/// read-only storage this body writes through.
+#[test]
+fn a_constructors_buffer_parameter_carries_the_same_writability_flag() {
+    let class = "Grid";
+    let mut hir = module_with_classes(
+        vec![
+            func_with_body(
+                &format!("{class}.__init__"),
+                &[
+                    ("self", Ty::Instance(Box::new(class.to_string()))),
+                    ("b", Ty::MemoryView),
+                    ("read", Ty::MemoryView),
+                ],
+                Ty::None,
+                vec![element_store("b")],
+            ),
+            func(
+                &format!("{class}.area"),
+                &[("self", Ty::Instance(Box::new(class.to_string())))],
+                Ty::Int,
+            ),
+        ],
+        vec![(class.to_string(), constructible_class_def(class))],
+    );
+    declare_member(&mut hir, class, Member::Method("area"));
+    let exports = collect_exports(&hir).expect("a carriable signature");
+    let ctors = collect_constructors(&hir, &collect_class_publications(&hir, &exports));
+    assert_eq!(
+        ctors.iter().map(|c| &c.param_writable).collect::<Vec<_>>(),
+        vec![&vec![true, false]]
     );
 }

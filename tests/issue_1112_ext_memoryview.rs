@@ -380,16 +380,15 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
 ",
         ),
         (
-            // Part 2 of #1027 (#1113) admitted `v[0]` as a *load*, so the
-            // subscript this arm used to spell is no longer a capability
-            // gap. An element **store** is: Part 2 reads only, the
-            // wrapper requests no `PyBUF_WRITABLE`, and the target of an
-            // assignment is still an ordinary read of `v` reaching the
-            // same seam -- so the arm keeps its subject and moves to the
-            // subscript form that is still refused.
-            "1112_write_subscript",
+            // Part 2 of #1027 (#1113) admitted `v[0]` as a *load* and
+            // Part 1 of #1142 admitted `v[0] = 1.0` as a store, so neither
+            // subscript form this arm has spelled is a capability gap any
+            // more. Aliasing the name into a local is, and it reaches the
+            // same read seam -- so the arm keeps its subject and moves
+            // there, as it did the last two times.
+            "1112_alias_local",
             "def total(v: memoryview) -> int:
-    v[0] = 1.0
+    x = v
     return 0
 ",
         ),

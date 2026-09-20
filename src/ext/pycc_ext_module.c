@@ -733,15 +733,21 @@ typedef struct {
  * `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` is the request. C-contiguity is what
  * makes a plain pointer walk correct at all, and it implies `PyBUF_STRIDES`
  * and so `PyBUF_ND`, which is what makes `ndim` and `shape` populated for
- * arms 3 and 4 to read. `PyBUF_WRITABLE` is deliberately *not* requested:
- * Part 1 never writes through the pointer, and requesting it would refuse
- * the read-only views this boundary is meant to accept.
+ * arms 3 and 4 to read. `PyBUF_WRITABLE` is added to the request exactly
+ * when `writable` is non-zero, which the generator sets for a parameter
+ * whose own body stores into it (Part 1 of #1142). A parameter the body
+ * only reads keeps the read-only request, so the read-only views this
+ * boundary has always accepted are still accepted; a parameter the body
+ * writes must not be backed by read-only storage, and CPython's own
+ * `BufferError` for that case propagates verbatim -- this shim authors no
+ * text for it, because the exporter's message already names the cause
+ * better than a pycc-authored one could.
  *
  * Every symbol used here is in the limited API at this shim's
  * `Py_LIMITED_API 0x030D0000` floor.
  */
 static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssize_t index,
-                                      Py_buffer *out)
+                                      int writable, Py_buffer *out)
 {
     PyObject *type_name;
     const char *declared;
@@ -759,7 +765,9 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
         }
         return -1;
     }
-    if (PyObject_GetBuffer(obj, out, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) != 0) {
+    if (PyObject_GetBuffer(obj, out,
+                           PyBUF_C_CONTIGUOUS | PyBUF_FORMAT |
+                               (writable ? PyBUF_WRITABLE : 0)) != 0) {
         return -1;
     }
     ndim = out->ndim;

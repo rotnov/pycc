@@ -15911,6 +15911,65 @@ fn a_buffer_length_read_whose_base_is_not_a_memoryview_is_an_internal_error() {
 }
 
 #[test]
+#[should_panic(expected = "a buffer element store's base did not evaluate to a memoryview")]
+fn a_buffer_element_store_whose_base_is_not_a_memoryview_is_an_internal_error() {
+    // `MirStmt::BufferSet` is produced by exactly one lowering arm, which
+    // keys on the target name's `Ty::MemoryView` (`pycc_mir`'s `DictSet`
+    // arm), so a base of any other type means that dispatch regressed --
+    // the same argument the load's and the length read's own defensive
+    // arms record. The deliberately mistyped `int` base below is a shape
+    // no type-checked program can produce.
+    compile_ext_items_checking_ir(
+        "buffer_element_store_bad_base",
+        buffer_fn_items(
+            vec![MirStmt::BufferSet {
+                base: MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                },
+                index: MirExpr::IntLiteral(0),
+                value: MirExpr::FloatLiteral(1.0),
+            }],
+            Ty::None,
+        ),
+        |_| unreachable!("codegen should have panicked"),
+    );
+}
+
+/// The store emits exactly one D-173 guard, where the length read emits
+/// none and the element load emits one: the void setter's only exception
+/// path is the `IndexError` the runtime helper raises, so dropping the
+/// guard would let an out-of-range store run the rest of the body.
+#[test]
+fn a_buffer_element_store_emits_one_pending_exception_guard() {
+    compile_ext_items_checking_ir(
+        "buffer_store_has_guard",
+        buffer_fn_items(
+            vec![MirStmt::BufferSet {
+                base: MirExpr::Name {
+                    name: "b".to_string(),
+                    ty: Ty::MemoryView,
+                },
+                index: MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                },
+                value: MirExpr::FloatLiteral(1.0),
+            }],
+            Ty::None,
+        ),
+        |ir| {
+            assert_eq!(
+                ir.matches("call i8 @pycc_rt_exception_active()").count(),
+                1,
+                "{ir}"
+            );
+            assert_eq!(ir.matches("@pycc_rt_buffer_f64_set").count(), 2, "{ir}");
+        },
+    );
+}
+
+#[test]
 #[should_panic(expected = "a buffer element load's base did not evaluate to a memoryview")]
 fn a_buffer_element_load_whose_base_is_not_a_memoryview_is_an_internal_error() {
     // `MirExpr::BufferGet` is produced by exactly one lowering arm, which

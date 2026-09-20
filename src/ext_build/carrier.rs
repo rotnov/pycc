@@ -39,7 +39,15 @@ pub(crate) enum BoundaryCarrier {
     /// plus a `Py_buffer` the wrapper owns for the whole call. The only
     /// carrier that owes cleanup on *both* the bail path and the success
     /// path -- see [`BoundaryCarrier::cleanup`].
-    Buffer,
+    ///
+    /// `writable` selects the `PyObject_GetBuffer` request (Part 1 of
+    /// #1142): `true` adds `PyBUF_WRITABLE` for a parameter the compiled
+    /// body stores into, and `false` -- the only value [`boundary_carrier`]
+    /// itself ever produces -- leaves the read-only request D-244's
+    /// 2026-09-17 Part-1-of-#1027 amendment statement (c) established. It
+    /// is a property of a function *body*, not of a [`Ty`], so it is set
+    /// where each slot vector is built and never here.
+    Buffer { writable: bool },
 }
 
 /// What one already-unpacked argument slot owes the wrapper before it
@@ -77,7 +85,7 @@ impl BoundaryCarrier {
             // buffer it borrowed) and `tuple[memoryview]` has no `_at`
             // element shim. Answering `None` is what turns both into the
             // ordinary `C0003` capability gap.
-            BoundaryCarrier::Buffer => None,
+            BoundaryCarrier::Buffer { .. } => None,
         }
     }
 
@@ -89,7 +97,7 @@ impl BoundaryCarrier {
             // Every numeric scalar is a copied machine word, and a `tuple`'s
             // elements are copied out by value, so neither owes anything.
             BoundaryCarrier::Scalar(..) | BoundaryCarrier::Tuple(_) => None,
-            BoundaryCarrier::Buffer => Some(SlotCleanup::BufferRelease),
+            BoundaryCarrier::Buffer { .. } => Some(SlotCleanup::BufferRelease),
         }
     }
 }
@@ -171,7 +179,13 @@ pub(crate) fn boundary_carrier(ty: &Ty) -> Option<BoundaryCarrier> {
         // exports a buffer, C-contiguous, `ndim == 1`, format `"d"` --
         // live in `pycc_ext_unpack_memoryview`, because none of them is a
         // property of the *declared* type this table answers about.
-        Ty::MemoryView => Some(BoundaryCarrier::Buffer),
+        //
+        // Part 1 of #1142: `writable: false` is the *only* answer this
+        // function gives. Writability is a property of the body that
+        // receives the parameter, which a pure function of a `Ty` cannot
+        // see -- `wrapper_for` and `tp_init_c` overwrite the flag from
+        // `ExtExport`/`ExtCtor` where they build their slot vectors.
+        Ty::MemoryView => Some(BoundaryCarrier::Buffer { writable: false }),
         _ => None,
     }
 }

@@ -13,7 +13,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
-| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs` and `tests/issue_1114_numpy_oracle.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
+| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs` and `tests/issue_1142_ext_buffer_store.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
@@ -803,6 +803,16 @@ the sweep and the per-record shapes — and the third is independent of both:
    removes a wrapper; it does not change what this prerequisite reports, which
    was already met, and it does not bear on prerequisite 2 — no count below is
    re-measured by it, and none is restated here.
+   Annotated 2026-09-20 (Part 1 of [#1142](https://github.com/rotnov/pycc/issues/1142)):
+   the buffer gained an element **store**, `b[i] = v`, so a subject may now
+   write its result back through a buffer parameter instead of only reading
+   one. This prerequisite reports on the *ingress* of the committed input,
+   which was already met, so the store does not change it either; it is
+   recorded here because the same annotation's absence would leave the
+   operation set above reading as two operations when it is three. No count
+   under prerequisite 2 is re-measured by it, and none is restated here — the
+   denominator enumerates module-level functions by signature, and a store in
+   a body changes no signature.
 2. **Either reading needs an admissible subject to exist at all**, and none
    does. Reported as counts, so that nothing about the proprietary codebase is
    published beyond them ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6). Of the **133** module-level fully

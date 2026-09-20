@@ -66,8 +66,12 @@ fn refusal_arms(carrier: &BoundaryCarrier, name: &str, index: usize) -> Vec<Stri
         // pair to name. The four run-time checks the helper applies
         // (exports a buffer, C-contiguous, `ndim == 1`, format `"d"`) are all
         // inside it, so this one arm is the whole refusal at this slot.
-        BoundaryCarrier::Buffer => vec![format!(
-            "if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, &b{index}) != 0) {{"
+        // `0` is the writability argument: every program in this
+        // harness only reads its buffer parameter, so Part 1 of #1142's
+        // bit is off and the request stays read-only.
+        BoundaryCarrier::Buffer { .. } => vec![format!(
+            "if (pycc_ext_unpack_memoryview(args[{index}], \"{name}\", {index}, 0, &b{index}) \
+             != 0) {{"
         )],
     }
 }
@@ -86,7 +90,7 @@ fn call_site(name: &str, params: &[(&str, Ty)], return_ty: &Ty) -> String {
     let first = match boundary_carrier(&types[0]).expect("an admitted argument type") {
         BoundaryCarrier::Scalar(..) => "a0".to_string(),
         BoundaryCarrier::Tuple(_) => "a0_0".to_string(),
-        BoundaryCarrier::Buffer => "&a0".to_string(),
+        BoundaryCarrier::Buffer { .. } => "&a0".to_string(),
     };
     if pycc_codegen::ext_thunk_required(name, &types, return_ty) {
         format!("{}({first}", pycc_codegen::ext_thunk_symbol(name))

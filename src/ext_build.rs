@@ -452,9 +452,53 @@ pub(crate) struct ExtExport {
     /// different arities on the two sides of one symbol is the silent ABI
     /// mismatch the thunk exists to prevent.
     pub(crate) params: Vec<Ty>,
+    /// Per-parameter writability, parallel to [`ExtExport::params`] and
+    /// carrying `true` exactly where that parameter is a `memoryview` the
+    /// body stores into (Part 1 of #1142, `pycc_hir::body_stores_into`).
+    ///
+    /// Carried here rather than derived in [`boundary_carrier`], which is a
+    /// pure function of a `Ty` and cannot see a body, and rather than
+    /// folded into [`ExtExport::params`], which every other consumer reads
+    /// as a plain type list. `false` for every non-buffer parameter, where
+    /// it is inert.
+    pub(crate) param_writable: Vec<bool>,
     /// The declared return type, which picks the cast's return type and the
     /// egress: a `pycc_ext_pack_*` call, or `Py_RETURN_NONE` for `-> None`.
     pub(crate) return_ty: Ty,
+}
+
+/// One export's or constructor's slot vector, with Part 1 of #1142's
+/// writability applied.
+///
+/// The single place a [`BoundaryCarrier::Buffer`]'s `writable` flag is ever
+/// set, shared by [`wrapper_for`] and `method_types`' `tp_init_c` -- the
+/// only two places a slot vector is built -- so a `METH_FASTCALL` wrapper
+/// and a `Py_tp_init` can never request different buffer flags for the same
+/// declared parameter of the same body.
+pub(crate) fn slot_carriers(params: &[Ty], param_writable: &[bool]) -> Vec<BoundaryCarrier> {
+    // `zip` truncates to the shorter side rather than failing, and a slot
+    // vector shorter than `params` would emit a wrapper that unpacks fewer
+    // arguments than it declares. The two vectors are built together in
+    // `collect_exports` and `ctor_descriptor`, so a mismatch is a bug in a
+    // fixture or in a future producer, and it is made loud here rather than
+    // silently miscompiled.
+    assert_eq!(
+        params.len(),
+        param_writable.len(),
+        "pycc: internal error: a slot vector's writability flags must be parallel to its parameters"
+    );
+    params
+        .iter()
+        .zip(param_writable)
+        .map(|(ty, writable)| {
+            match boundary_carrier(ty).expect("only carriable parameters are collected") {
+                BoundaryCarrier::Buffer { .. } => BoundaryCarrier::Buffer {
+                    writable: *writable,
+                },
+                other => other,
+            }
+        })
+        .collect()
 }
 
 /// Derives the export set from the typed program, per D-244 rule 1: every
@@ -559,6 +603,7 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             name,
             params,
             return_ty,
+            body,
             ..
         } = item
         else {
@@ -647,6 +692,17 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             method,
             receiver,
             params: carried_params.iter().map(|(_, ty)| ty.clone()).collect(),
+            // Part 1 of #1142. The walk runs over the *post-split* carried
+            // tail, so the flags line up with `params` even for a method
+            // whose receiver was dropped above, and it is keyed on the
+            // parameter's own source name because that is what
+            // `HirStmt::DictSet` carries.
+            param_writable: carried_params
+                .iter()
+                .map(|(param_name, ty)| {
+                    *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
+                })
+                .collect(),
             return_ty: return_ty.clone(),
         };
         // A module may rebind a public name -- two `def`s, a `def` over an
@@ -922,10 +978,26 @@ fn ctor_descriptor(module: &HirModule, class: &str) -> Option<ExtCtor> {
     {
         return None;
     }
+    let body = module.items.iter().find_map(|item| match item {
+        HirItem::Function {
+            name: held, body, ..
+        } if held == name => Some(body.as_slice()),
+        _ => None,
+    });
+    // `resolved_init` found `name` in `module.items` to produce the
+    // signature above, so the same lookup cannot miss now; `unwrap_or` is
+    // the total spelling of that rather than a second panic site.
+    let body = body.unwrap_or(&[]);
     Some(ExtCtor {
         class: class.to_string(),
         name: name.to_string(),
         params: carried.iter().map(|(_, ty)| ty.clone()).collect(),
+        param_writable: carried
+            .iter()
+            .map(|(param_name, ty)| {
+                *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
+            })
+            .collect(),
         slot_count: instance_slot_count(module, class_def),
     })
 }
@@ -994,6 +1066,14 @@ pub(crate) struct ExtCtor {
     /// `pycc_rt_instance_new`. Their count is the arity `tp_init` checks
     /// `PyTuple_Size(args)` against.
     pub(crate) params: Vec<Ty>,
+    /// Per-parameter writability, parallel to [`ExtCtor::params`] and
+    /// meaning exactly what [`ExtExport::param_writable`] means.
+    ///
+    /// A `memoryview` `__init__` parameter is a live ingress path
+    /// `collect_exports` never sees -- it refuses `__init__` outright -- so
+    /// the flag has to be computed here too, or `Py_tp_init` would acquire
+    /// read-only for a constructor body the checker admits a store in.
+    pub(crate) param_writable: Vec<bool>,
     /// The slot count `pycc_rt_instance_new` is called with.
     pub(crate) slot_count: usize,
 }
@@ -1649,11 +1729,7 @@ fn wrapper_for(export: &ExtExport) -> String {
     // set is the helper's business and never narrows the local.
     // `collect_exports` refused every type these two lookups cannot name, so
     // an export in hand always has both.
-    let slots: Vec<BoundaryCarrier> = export
-        .params
-        .iter()
-        .map(|ty| boundary_carrier(ty).expect("collect_exports admits only carriable parameters"))
-        .collect();
+    let slots: Vec<BoundaryCarrier> = slot_carriers(&export.params, &export.param_writable);
     let return_c = return_c_type(&export.return_ty).expect("a carriable return type");
     let returns_none = export.return_ty == Ty::None;
     // One entry per element of a returned `tuple`, and empty for every
@@ -1790,7 +1866,7 @@ fn wrapper_for(export: &ExtExport) -> String {
             BoundaryCarrier::Tuple(elements) => {
                 call_args.extend((0..elements.len()).map(|element| format!("a{index}_{element}")))
             }
-            BoundaryCarrier::Buffer => call_args.push(format!("&a{index}")),
+            BoundaryCarrier::Buffer { .. } => call_args.push(format!("&a{index}")),
         }
     }
     call_args.extend((0..out_slots.len()).map(|index| format!("&r{index}")));
@@ -1889,7 +1965,7 @@ fn arg_slot_locals(slots: &[BoundaryCarrier]) -> String {
             // function releases on every exit past that point), and the
             // `{ptr, len}` pair that is all the compiled body ever sees of
             // it.
-            BoundaryCarrier::Buffer => {
+            BoundaryCarrier::Buffer { .. } => {
                 out.push_str(&format!("    Py_buffer b{index};\n"));
                 out.push_str(&format!("    {BUFFER_VIEW_C_TYPE} a{index};\n"));
             }
@@ -1969,10 +2045,17 @@ fn unpack_args(
             // and a *copy* of `shape[0]`. `b{index}.shape` itself is
             // exporter-owned storage that dies at `PyBuffer_Release`, so it
             // is never carried across the boundary.
-            BoundaryCarrier::Buffer => {
+            BoundaryCarrier::Buffer { writable } => {
+                // The sole consumer of Part 1 of #1142's writability bit.
+                // `1` asks the shim for `PyBUF_WRITABLE`, which is the only
+                // thing that makes the element store this parameter's body
+                // performs a write to storage the exporter agreed to share
+                // mutably; a read-only exporter is refused here, by
+                // CPython's own `BufferError`, rather than scribbled over.
+                let writable = i32::from(*writable);
                 out.push_str(&format!(
                     "    if (pycc_ext_unpack_memoryview({arg}, \"{source_name}\", {index}, \
-                     &b{index}) != 0) {{\n{cleanup}{fail}    }}\n"
+                     {writable}, &b{index}) != 0) {{\n{cleanup}{fail}    }}\n"
                 ));
                 out.push_str(&format!("    a{index}.ptr = b{index}.buf;\n"));
                 out.push_str(&format!(
@@ -2014,7 +2097,7 @@ fn c_param_list(slots: &[BoundaryCarrier], out_slots: &[(&'static str, &'static 
             BoundaryCarrier::Tuple(elements) => {
                 types.extend(elements.iter().map(|(c_type, _)| (*c_type).to_string()));
             }
-            BoundaryCarrier::Buffer => types.push(format!("{BUFFER_VIEW_C_TYPE} *")),
+            BoundaryCarrier::Buffer { .. } => types.push(format!("{BUFFER_VIEW_C_TYPE} *")),
         }
     }
     types.extend(out_slots.iter().map(|(c_type, _)| format!("{c_type} *")));

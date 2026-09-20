@@ -225,6 +225,7 @@ pub(super) fn block_always_terminates(body: &[MirStmt]) -> bool {
             | MirStmt::ForList { .. }
             | MirStmt::ForObject { .. }
             | MirStmt::DictSet { .. }
+            | MirStmt::BufferSet { .. }
             | MirStmt::ForDict { .. }
             | MirStmt::ForSet { .. }
             | MirStmt::ListCompAssign { .. }

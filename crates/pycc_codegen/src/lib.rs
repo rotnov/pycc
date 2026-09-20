@@ -5298,6 +5298,11 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // a temporary stub: no future codegen task ever needs `d[k] = v` to
         // introduce a new binding, since it structurally cannot.
         MirStmt::DictSet { .. } => {}
+        // `b[i] = v` (Part 1 of #1142) writes through a buffer parameter's
+        // storage -- same reasoning as `DictSet` immediately above, and
+        // stronger still: a `memoryview` has no producing expression at
+        // all, so its base is always an existing parameter binding.
+        MirStmt::BufferSet { .. } => {}
         // `base.attr = value` (D-154, Part 1 of #375) reassigns an
         // existing instance's attribute slot, not a name -- same reasoning
         // as `DictSet` immediately above.
@@ -7558,6 +7563,50 @@ fn emit_stmt<'ctx>(
                     }
                 }
             }
+            Ok(())
+        }
+        // `b[i] = v` on a `memoryview` parameter (Part 1 of #1142): the
+        // store counterpart of `MirExpr::BufferGet` above, sharing its
+        // base extraction and its index decoding verbatim so the load and
+        // the store can never disagree about either.
+        //
+        // The `guard_statement_effects` call is load-bearing and is
+        // deliberately *not* copied from `MirStmt::DictSet` below, which
+        // has none: `pycc_rt_dict_set` cannot raise, while
+        // `pycc_rt_buffer_f64_set` raises `IndexError` exactly as the load
+        // does. The load lets `expression_can_set_exception` guard the
+        // expression that consumes its `0.0` sentinel; a `void` setter has
+        // no consumer, so the statement-level guard is the *only* thing
+        // that ever observes the raise. Omit it and an out-of-range store
+        // as a function's last statement would return normally. The
+        // precedent copied here is `MirStmt::Call`'s own guard above.
+        MirStmt::BufferSet { base, index, value } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let Scalar::MemoryView(base_ptr) = base_scalar else {
+                panic!(
+                    "pycc_codegen: internal error: a buffer element store's base did not \
+                     evaluate to a memoryview"
+                )
+            };
+            let index_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, index);
+            let encoded_index = to_numeric_encoded_int(context, builder, index_scalar);
+            let raw_index = build_untag_checked(builder, rt, encoded_index, "buffer_untag_index");
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            // `pycc_types` admits only a `Ty::Float` value here, so this is
+            // the identity arm of `to_float`; it is used rather than an
+            // inline `Scalar::Float` destructure so the store carries no
+            // panic the load does not.
+            let element = to_float(context, builder, rt, value_scalar);
+            builder
+                .build_call(
+                    rt.buffer_f64_set,
+                    &[base_ptr.into(), raw_index.into(), element.into()],
+                    "buffer_set",
+                )
+                .expect("build_call should not fail for a declared runtime function");
+            guard_statement_effects(context, builder, rt);
             Ok(())
         }
         // `d[k] = v` (PR-11 Task 5, D-123): insert-or-update --
