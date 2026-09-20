@@ -250,13 +250,14 @@ pub fn lower_module(
     // user binding in *any* module withholds the seed program-wide, through
     // `LoweredModule::mentions_dunder_name`, so a seed and a user binding of this
     // name never coexist in a linked program.
-    // Both scans run here, against the driver's own import answers --
-    // `state.imports` before the loop below appends this module's own
-    // `import` statements, which is exactly the slice
-    // `class::enum_call::module_bindings` already folds `TYPE_CHECKING`
-    // guards against. One slice for both halves of THE RULE keeps the entry
-    // gate and the dependency gate from disagreeing about which guarded
-    // bodies are dead.
+    // Both scans run here, before the loop below has appended this module's
+    // own `import` statements, so they take the driver's answers
+    // (`state.imports`) and reconstruct the module's own stdlib imports
+    // themselves -- see `dunder_name::scan_imports`, which exists so an
+    // aliased `if t.TYPE_CHECKING:` folds in the scans exactly as it folds in
+    // `lower_stmt`. One slice for both halves of THE RULE keeps the entry gate
+    // and the dependency gate from disagreeing about which guarded bodies are
+    // dead.
     if let Some(item) = dunder_name::seed_item(module, module_name, &state.imports) {
         state.items.push(item);
     }

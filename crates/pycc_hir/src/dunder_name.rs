@@ -125,9 +125,10 @@ fn references_dunder_name(module: &ModModule, imports: &[ImportBinding]) -> bool
             visitor::walk_expr(self, expr);
         }
     }
+    let imports = scan_imports(module, imports);
     let mut scan = ReferenceScan {
         found: false,
-        imports,
+        imports: &imports,
     };
     scan.visit_body(&module.body);
     scan.found
@@ -338,12 +339,53 @@ pub(crate) fn binds_dunder_name_at_module_scope(
             visitor::walk_expr(self, expr);
         }
     }
+    let imports = scan_imports(module, imports);
     let mut scan = BindingScan {
         found: false,
-        imports,
+        imports: &imports,
     };
     scan.visit_body(&module.body);
     scan.found
+}
+
+/// `driver_imports` plus the `ImportBinding::Module` entries this module's own
+/// module-scope `import <stdlib> [as <alias>]` statements will produce.
+///
+/// Both scans run before the lowering loop has appended any of the module's own
+/// imports, so without this they would see only the driver's answers. That is
+/// not merely a smaller slice, it is a *divergence* from lowering: an aliased
+/// `import typing as t` then `if t.TYPE_CHECKING:` folds in `lower_stmt` and
+/// would not fold here, so the dead assignment inside would count as a live
+/// module-scope binding, withhold the seed, and turn the module's live
+/// `__name__` read into a `T0021` for a program CPython runs.
+///
+/// Only [`ImportBinding::Module`] is reconstructed, because
+/// `expr::std_receiver` -- the one lookup `stmt::is_type_checking_guard`
+/// performs -- reads no other variant. Position is deliberately not modelled:
+/// lowering sees only the imports *preceding* the statement it is lowering,
+/// while this slice covers the whole module, so a guard written *above* its own
+/// `import typing as t` folds here and not there. That module does not compile
+/// either way -- the guard is a read of an unbound name, a `NameError` under
+/// CPython and a diagnostic here -- so the seed never becomes observable.
+fn scan_imports(module: &ModModule, driver_imports: &[ImportBinding]) -> Vec<ImportBinding> {
+    let mut imports = driver_imports.to_vec();
+    for stmt in &module.body {
+        let Stmt::Import(import) = stmt else {
+            continue;
+        };
+        for alias in &import.names {
+            if let Some(module) = pycc_std::resolve_module(alias.name.as_str()) {
+                imports.push(ImportBinding::Module {
+                    local_name: alias
+                        .asname
+                        .as_ref()
+                        .map_or_else(|| alias.name.to_string(), |asname| asname.to_string()),
+                    module,
+                });
+            }
+        }
+    }
+    imports
 }
 
 /// The `orelse` of a module-scope `if TYPE_CHECKING:` whose body `lower_stmt`
@@ -361,10 +403,8 @@ pub(crate) fn binds_dunder_name_at_module_scope(
 /// `imports` reaches `is_type_checking_guard` unchanged, so the recognized
 /// spellings are exactly the ones lowering folds. The bare `TYPE_CHECKING` and
 /// the qualified `typing.TYPE_CHECKING` resolve with no import binding at all;
-/// an aliased `import typing as t` then `t.TYPE_CHECKING` needs the binding, so
-/// passing a short import slice only under-recognizes, which withholds the seed
-/// -- the pre-#1156 behavior, and the safe direction, exactly as
-/// `class::enum_call::module_bindings` already documents for the same fold.
+/// an aliased `import typing as t` then `t.TYPE_CHECKING` needs the binding,
+/// which [`scan_imports`] supplies.
 fn folded_type_checking_orelse<'a>(
     stmt: &'a Stmt,
     imports: &[ImportBinding],

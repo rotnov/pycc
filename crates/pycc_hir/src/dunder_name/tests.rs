@@ -7,11 +7,12 @@ use crate::module::lower_module;
 use crate::pycc_parser_test_helper::parse;
 use crate::{HirModule, ResolvedImports};
 
-/// Every unit test here runs the scans with no import bindings, which is what
-/// `lower_module` passes for a module the driver resolved no project import
-/// for. The bare `TYPE_CHECKING` and the qualified `typing.TYPE_CHECKING`
-/// guards both fold against an empty slice; only an aliased `t.TYPE_CHECKING`
-/// would need a binding, and that case is covered by `lower`'s own path.
+/// Every unit test here runs the scans with no *driver* import bindings, which
+/// is what `lower_module` passes for a module the driver resolved no project
+/// import for. That is not a reduced fixture: `scan_imports` adds the module's
+/// own module-scope stdlib `import` statements on top of this slice, so the
+/// aliased `import typing as t` spelling resolves here exactly as it does under
+/// `lower`.
 const NO_IMPORTS: &[ImportBinding] = &[];
 
 fn references(source: &str) -> bool {
@@ -409,4 +410,29 @@ fn the_else_arm_of_a_folded_guard_is_still_live() {
 #[test]
 fn a_non_type_checking_guard_binds_normally() {
     assert!(binds("if flag:\n    __name__ = 7\n"));
+}
+
+#[test]
+fn an_aliased_type_checking_guard_folds_the_same_way() {
+    // `scan_imports` reconstructs the `typing as t` binding `std_receiver`
+    // needs, so this folds exactly as the bare and qualified spellings do.
+    let source = "import typing as t\n\nif t.TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n";
+    assert!(!binds(source));
+    assert!(references(source));
+    assert!(seed(source, Some("m")).is_some());
+}
+
+#[test]
+fn an_alias_of_another_stdlib_module_does_not_fold() {
+    // `scan_imports` records every stdlib alias, but `is_type_checking_guard`
+    // still admits only `typing`, so an unrelated module's attribute is a
+    // live guard.
+    let source = "import math as t\n\nif t.TYPE_CHECKING:\n    __name__ = 7\n";
+    assert!(binds(source));
+}
+
+#[test]
+fn a_non_stdlib_alias_does_not_fold() {
+    let source = "import nowhere as t\n\nif t.TYPE_CHECKING:\n    __name__ = 7\n";
+    assert!(binds(source));
 }

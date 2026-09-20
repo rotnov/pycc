@@ -115,6 +115,20 @@ fn a_qualified_type_checking_guarded_binding_leaves_the_seed_intact() {
 }
 
 #[test]
+fn an_aliased_type_checking_guarded_binding_leaves_the_seed_intact() {
+    // The spelling that needs a real import binding to resolve: the scans
+    // reconstruct the module's own `typing as t` alias, so they fold exactly
+    // the body `lower_stmt` folds.
+    assert_eq!(
+        build_and_run(
+            "name_type_checking_aliased",
+            "import typing as t\n\nif t.TYPE_CHECKING:\n    __name__ = 7\n\nprint(__name__)\n",
+        ),
+        "__main__\n",
+    );
+}
+
+#[test]
 fn the_else_arm_of_a_type_checking_guard_still_binds() {
     // Only the guarded body is dead. The `else` is live whenever the guard is
     // skipped -- at run time, always -- so it shadows the seed like any other
