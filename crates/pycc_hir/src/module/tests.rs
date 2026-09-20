@@ -543,7 +543,7 @@ fn lower_with_not_found(source: &str, code: &'static str, message: &str) -> Vec<
             },
         );
     }
-    lower_module(&parsed, &resolved).expect_err("fixture must fail to lower")
+    lower_module(&parsed, &resolved, None).expect_err("fixture must fail to lower")
 }
 
 #[test]
@@ -854,7 +854,7 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
         crate::ResolvedImport::Foreign,
     );
 
-    let lowered = lower_module(&module, &resolved).expect("a foreign import must lower");
+    let lowered = lower_module(&module, &resolved, None).expect("a foreign import must lower");
     assert_eq!(
         lowered.hir.imports,
         vec![ImportBinding::Foreign {

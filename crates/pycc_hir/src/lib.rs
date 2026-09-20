@@ -2,6 +2,7 @@ use pycc_diag::{Diagnostic, Span};
 
 mod class;
 mod container;
+mod dunder_name;
 mod exception;
 mod expr;
 mod func;
@@ -19,6 +20,7 @@ pub use class::{
     declares_name_outside_class_attrs, flat_attr_layout,
 };
 pub use container::{check_container_ty, check_tuple_element_ty};
+pub use dunder_name::DUNDER_NAME;
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
     FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,

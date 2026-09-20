@@ -36,7 +36,7 @@ fn lower_foreign(source: &str) -> Result<pycc_hir::HirModule, Vec<pycc_diag::Dia
         pycc_hir::ResolvedImport::Foreign,
     );
     let parsed = pycc_parser::parse(source).expect("test fixture must parse");
-    pycc_hir::lower_module(&parsed, &resolved).map(|lowered| lowered.hir)
+    pycc_hir::lower_module(&parsed, &resolved, None).map(|lowered| lowered.hir)
 }
 
 fn check_source(source: &str) -> Result<(), Vec<pycc_diag::Diagnostic>> {

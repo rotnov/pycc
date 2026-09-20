@@ -82,7 +82,17 @@ enum Resolution {
 }
 
 /// Loads the whole program reachable from `entry`.
-pub(crate) fn load(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
+///
+/// `entry_module_name` is the `__name__` value the *entry* module is compiled
+/// with (W0 of #882, #1156); every module loaded recursively from it is a
+/// dependency and receives `None`. Part 1 of #881 links the whole program into
+/// one flat namespace, so seeding a `__name__` global per module would collide
+/// -- withholding it from dependencies is the fail-closed choice until
+/// per-module namespaces land.
+pub(crate) fn load(
+    entry: &Path,
+    entry_module_name: Option<&str>,
+) -> Result<LoadedProgram, FrontendFailure> {
     let display = entry.to_string_lossy().into_owned();
     let canonical = canonicalize(entry, &display)?;
     let mut entry_dir = canonical.clone();
@@ -96,8 +106,9 @@ pub(crate) fn load(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
         entry_dir,
         entry_display_dir,
         root: None,
+        entry_module_name: entry_module_name.map(str::to_string),
     };
-    loader.load_module(&canonical, display)?;
+    loader.load_module(&canonical, display, true)?;
     Ok(LoadedProgram {
         modules: loader.modules,
     })
@@ -114,12 +125,23 @@ struct Loader {
     entry_dir: PathBuf,
     entry_display_dir: PathBuf,
     root: Option<RootInfo>,
+    /// The `__name__` value the entry module is compiled with, or `None` when
+    /// the caller supplied none (#1156). Only the entry module ever sees it.
+    entry_module_name: Option<String>,
 }
 
 impl Loader {
     /// Parses, resolves and lowers one module, loading every dependency it
     /// imports first. Returns its index in `modules`.
-    fn load_module(&mut self, canonical: &Path, display: String) -> Result<usize, FrontendFailure> {
+    ///
+    /// `is_entry` selects the module that receives the program's `__name__`
+    /// value (#1156); `resolve` always loads dependencies with `false`.
+    fn load_module(
+        &mut self,
+        canonical: &Path,
+        display: String,
+        is_entry: bool,
+    ) -> Result<usize, FrontendFailure> {
         if let Some(index) = self.memo.get(canonical) {
             return Ok(*index);
         }
@@ -164,7 +186,42 @@ impl Loader {
                 Resolution::Unanswered => {}
             }
         }
-        let module = pycc_hir::lower_module(&parsed, &resolved)
+        // W0 of #882 (#1156): any *dependency* that mentions `__name__` at all
+        // withholds the entry module's seed program-wide. Part 1 of #881 links
+        // every module into one flat namespace, so the seed and a dependency's
+        // use of the name are the same global, and `program::link` places every
+        // dependency's top-level statements *ahead* of the entry module's items
+        // -- the seed among them. Two failures follow from that ordering, and
+        // one gate closes both. A dependency *binding*: a `str`-valued one is
+        // silently overwritten by the seed, and one of any other type fails the
+        // whole program with `T0023`. A dependency *read*: it observes the
+        // global before the seed has stored anything, which `pycc check`
+        // accepts and the built artifact then aborts on at codegen's
+        // uninitialized-global trap -- the one outcome D-246 rules out, since
+        // every divergence it admits is meant to be a diagnostic. The read need
+        // not be textually top-level either: a dependency's top-level call to
+        // one of its own functions reaches a function-body read just the same,
+        // which is why the dependency test is "mentions" rather than "binds".
+        // Withholding restores the pre-#1156 behavior in every case -- the
+        // dependency's own binding is the one global, or the name is undefined
+        // and the read is a `T0021`, exactly as before this feature existed.
+        // Dependencies are lowered before the entry module, so every one of
+        // them is already in `self.modules` here.
+        //
+        // The predicate is `pycc_hir`'s own, published on `LoweredModule`, so
+        // both halves of the gate answer their question the same way. An
+        // earlier revision asked `definition_spans` instead, which records
+        // neither a dependency's import bindings (`import __name__` binds an
+        // opaque `object` in an `--ext` program) nor anything nested inside a
+        // top-level compound statement, and so answered "no" for both.
+        let dependency_uses_dunder_name = self
+            .modules
+            .iter()
+            .any(|loaded| loaded.module.mentions_dunder_name);
+        let module_name = (is_entry && !dependency_uses_dunder_name)
+            .then_some(self.entry_module_name.as_deref())
+            .flatten();
+        let module = pycc_hir::lower_module(&parsed, &resolved, module_name)
             .map_err(|diagnostics| FrontendFailure::compile(&display, &source, diagnostics))?;
         drop(resolved);
 
@@ -230,9 +287,9 @@ impl Loader {
             {
                 continue;
             }
-            self.load_module(&init_canonical, init_display)?;
+            self.load_module(&init_canonical, init_display, false)?;
         }
-        let index = self.load_module(&canonical, target.display)?;
+        let index = self.load_module(&canonical, target.display, false)?;
         Ok(Resolution::Loaded {
             index,
             submodules: target.submodules,

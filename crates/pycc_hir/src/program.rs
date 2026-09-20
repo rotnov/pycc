@@ -153,6 +153,10 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             hir,
             shadowed_builtin_exception_name: _,
             definition_spans,
+            // The driver (`src/modules.rs`) consumes this before `link` runs:
+            // it decides whether the entry module is seeded at all, so by the
+            // time modules reach linking the answer has already been applied.
+            mentions_dunder_name: _,
         } = input.module;
         let mut own: HashSet<&str> = HashSet::new();
         for (name, span) in &definition_spans {

@@ -50,7 +50,7 @@ fn inc_from_source(source: &str) -> String {
     let dir = pycc_scratch::ScratchDir::new("ext_exception_classes").expect("scratch");
     let src = dir.join("m.py");
     std::fs::write(&src, source).expect("write source");
-    let module = crate::frontend::resolve_frontend(&src)
+    let module = crate::frontend::resolve_frontend(&src, Some("m"))
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
     generate_exports_inc("m", &[], &collect_user_exception_classes(&module), &[], &[])
 }

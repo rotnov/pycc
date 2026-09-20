@@ -23,6 +23,13 @@ use pycc_hir::{HirModule, LinkInput};
 use pycc_types::DiagnosticKey;
 use std::path::Path;
 
+/// The `__name__` value every non-`--ext` compilation gives its entry module
+/// (W0 of #882, #1156). CPython names the module it runs as a script
+/// `__main__`, which is what makes the `if __name__ == "__main__":` idiom
+/// take its true branch in a `pycc build`/`pycc run` artifact; `pycc check`
+/// uses the same value so a program checks exactly as it builds.
+pub(crate) const NATIVE_MODULE_NAME: &str = "__main__";
+
 /// Every diagnostic collected for one file of the program, with the source
 /// they render against. `diagnostics` is never empty: a file with none is
 /// never added to [`FrontendFailure::Compile`].
@@ -192,8 +199,17 @@ impl ProgramSources {
 
 /// Loads and links the entry file's whole import closure into the single
 /// `HirModule` the rest of the pipeline consumes.
-fn link_frontend(path: &Path) -> Result<(HirModule, ProgramSources), FrontendFailure> {
-    let program: LoadedProgram = modules::load(path)?;
+///
+/// `module_name` is the `__name__` value the entry module is compiled with
+/// (W0 of #882, #1156): `"__main__"` for `pycc check` and for a native
+/// `pycc build`/`pycc run`, and the extension module's own name for a
+/// `pycc build --ext`. It reaches `pycc_hir::lower_module` through
+/// `modules::load`, which gives it to the entry module alone.
+fn link_frontend(
+    path: &Path,
+    module_name: Option<&str>,
+) -> Result<(HirModule, ProgramSources), FrontendFailure> {
+    let program: LoadedProgram = modules::load(path, module_name)?;
     let mut files = Vec::with_capacity(program.modules.len());
     let mut bounds = Vec::with_capacity(program.modules.len());
     let mut import_bounds = Vec::with_capacity(program.modules.len());
@@ -241,12 +257,15 @@ fn link_frontend(path: &Path) -> Result<(HirModule, ProgramSources), FrontendFai
 }
 
 pub(crate) fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
-    let (hir, sources) = link_frontend(path)?;
+    let (hir, sources) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
     pycc_types::check_all_keyed(&hir).map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
 
-pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure> {
-    let (hir, sources) = link_frontend(path)?;
+pub(crate) fn resolve_frontend(
+    path: &Path,
+    module_name: Option<&str>,
+) -> Result<HirModule, FrontendFailure> {
+    let (hir, sources) = link_frontend(path, module_name)?;
     pycc_types::check_and_resolve_all_keyed(&hir)
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
@@ -290,7 +309,7 @@ pub(crate) fn resolve_frontend(path: &Path) -> Result<HirModule, FrontendFailure
 /// correct, because `I0405`'s contract is scoped to a *build* without
 /// `--ext`.
 pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, FrontendFailure> {
-    let (hir, sources) = link_frontend(path)?;
+    let (hir, sources) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
     let import_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
     // Keyed by *item* index rather than import position: a `memoryview`
     // annotation lives on an `HirItem::Function`, not in the import table,
