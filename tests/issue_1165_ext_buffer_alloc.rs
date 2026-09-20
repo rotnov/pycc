@@ -416,6 +416,91 @@ def go(n: int) -> float:
     );
 }
 
+/// #1166 review finding: the native gate must honour statement (h)'s
+/// *function-local* arm too, not only the module-wide one.
+///
+/// This is `a_function_local_rebinding_of_the_spelling_wins_over_the_producer`
+/// built natively. The two type-checking recognizers already decline here, so
+/// `--ext` and `pycc check` both report the program's own `UnboundLocalError`
+/// analogue; the native gate, unaware of function-local names, instead
+/// reported `I0405` -- whose remedy is "rebuild with `--ext`", which lands on
+/// a different error about a different cause. A diagnostic that misidentifies
+/// the defect and prescribes an inapplicable remedy is a defect of its own,
+/// so the assertion is that native mode now reports the same `T0021` the
+/// other two modes do, and no `I0405` at all.
+#[test]
+fn a_function_local_rebinding_keeps_its_own_meaning_natively_too() {
+    let dir = fixture(
+        "1165_native_local_shadow",
+        "\
+def go(n: int) -> float:
+    a = ndarray(4)
+    ndarray = 1
+    return float(ndarray)
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("local name `ndarray` is not bound before this use"),
+        "{err}"
+    );
+}
+
+/// The parameter arm of the same finding, which the body-local arm above does
+/// not cover: `function_local_names` starts from the parameter list, and a
+/// parameter is a binding from the first statement rather than one the
+/// whole-body pre-pass has to reach. Calling an `int` parameter is the
+/// program's own error in every mode, so the native gate must stay silent.
+#[test]
+fn a_parameter_named_for_the_spelling_keeps_its_own_meaning_natively() {
+    let dir = fixture(
+        "1165_native_param_shadow",
+        "\
+def go(ndarray: int) -> float:
+    a = ndarray(4)
+    return float(a)
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("name `ndarray` is bound to a non-callable value"),
+        "{err}"
+    );
+}
+
+/// The function-local layer is per *spelling*, not per function: a body that
+/// binds `ndarray` says nothing about `NDArray`, so the producer call on the
+/// unshadowed spelling is still a real allocation and still refused. This
+/// pins the shape the gate is built out of -- collapsing the per-spelling
+/// filter into "this function binds some producer spelling" would silently
+/// let this program through the gate while the checker still admits it.
+#[test]
+fn one_shadowed_spelling_does_not_disarm_the_other() {
+    let dir = fixture(
+        "1165_native_one_spelling_shadowed",
+        "\
+def go(n: int) -> float:
+    ndarray = 1
+    a = NDArray(4)
+    return a[0]
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("allocates buffer storage with `NDArray(n)`"),
+        "{err}"
+    );
+}
+
 /// The native gate is a property of the artifact mode, so it needs the
 /// driver. Its message states the `--ext` boundary rather than the missing
 /// interpreter, because the allocation itself would link and run natively.

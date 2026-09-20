@@ -297,3 +297,32 @@ pub(crate) fn producer_assignment_ty(
 pub fn is_buffer_producer_spelling(callee: &str) -> bool {
     is_producer_spelling(callee)
 }
+
+/// The producer spellings `params`/`body` bind as function-local names, for
+/// the same one consumer outside this crate as
+/// [`is_buffer_producer_spelling`].
+///
+/// `src/memoryview_mode.rs`'s native-mode body gate has to reproduce
+/// [`producer_assignment_ty`]'s statement-(h) decline *exactly*, and that
+/// decline's fourth arm is `crate::is_local` over
+/// `crate::function_local_names`. Exporting the composition of those two
+/// private helpers -- rather than letting the gate re-derive locality with a
+/// walk of its own -- is what makes the gate's skip sound by construction:
+/// the gate skips a spelling only where this returns it, this returns
+/// exactly what the checker's fourth arm tests, and where that arm declines
+/// the checker never binds `Ty::MemoryView`, so no allocation the gate
+/// stopped refusing can reach a native artifact. A hand-rolled locality test
+/// could diverge, and in the one direction that matters.
+///
+/// Filtered to the producer spellings so the export stays as narrow as
+/// [`is_buffer_producer_spelling`]: `function_local_names` itself and the
+/// whole local-name vocabulary stay crate-private.
+pub fn function_local_producer_spellings<'a>(
+    params: &'a [(String, Ty)],
+    body: &'a [pycc_hir::HirStmt],
+) -> Vec<&'a str> {
+    crate::function_local_names(params, body)
+        .into_iter()
+        .filter(|name| is_producer_spelling(name))
+        .collect()
+}

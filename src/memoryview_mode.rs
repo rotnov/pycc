@@ -345,15 +345,31 @@ fn ext_return_gap(name: &str) -> Diagnostic {
 /// other position, in every artifact mode. A producer this walk does not
 /// find is therefore already refused by the checker behind it.
 ///
-/// D-244's #1129 statement (h) is honoured with the same three-part shadow
-/// set the checker uses (`lookup_class`, `lookup_function`, `env.bindings`),
-/// read from the HIR: a program's own `class ndarray`, `def ndarray`, or
-/// module-level `ndarray = ...` keeps its own meaning and is not reported.
-/// A value-less module-level `ndarray: int` is not such a binding; see
-/// [`shadowed_producer_spellings`].
-/// Over-refusal is the failure mode that matters here -- it rejects a legal
-/// program -- so the set is widened to the whole module rather than scoped
-/// per function.
+/// D-244's #1129 statement (h) is honoured with the same shadow set the
+/// checker uses, in two layers. The module-wide layer mirrors the checker's
+/// `lookup_class`, `lookup_function` and `env.bindings` arms, read from the
+/// HIR: a program's own `class ndarray`, `def ndarray`, or module-level
+/// `ndarray = ...` keeps its own meaning and is not reported. A value-less
+/// module-level `ndarray: int` is not such a binding; see
+/// [`shadowed_producer_spellings`]. Over-refusal is the failure mode that
+/// matters for that layer -- it rejects a legal program -- so it is widened
+/// to the whole module rather than scoped per function.
+///
+/// The per-function layer added on top of it mirrors the checker's fourth
+/// arm, `crate::is_local` over `function_local_names`, and is supplied by
+/// `pycc_types::function_local_producer_spellings` so that the two are the
+/// same computation rather than two walks that agree today: a parameter
+/// named for a producer spelling, or a body that binds the spelling
+/// anywhere, makes the name local throughout that function, exactly as in
+/// CPython. Without this layer the gate reported `I0405` -- whose remedy is
+/// "rebuild with `--ext`" -- for a program that has no producer at all and
+/// that `--ext` and `pycc check` both refuse for its own, unrelated reason
+/// (`T0021`), prescribing a remedy that does not apply. The layer cannot
+/// under-refuse, by construction rather than by inspection: it skips a
+/// spelling only where `buffer::producer_assignment_ty`'s statement-(h)
+/// block declines the call, and where that block declines, nothing binds
+/// `Ty::MemoryView`, so there is no artifact-owned allocation left for a
+/// native executable to carry.
 ///
 /// `pycc check` selects no artifact mode and so does not run this gate, the
 /// same deliberate divergence [`refuse_in_native_mode`] already has: the
@@ -367,9 +383,14 @@ pub(crate) fn refuse_buffer_producers_in_native_mode(
         .iter()
         .enumerate()
         .filter_map(|(index, item)| {
-            let HirItem::Function { name, body, .. } = item else {
+            let HirItem::Function {
+                name, params, body, ..
+            } = item
+            else {
                 return None;
             };
+            let mut shadowed = shadowed.clone();
+            shadowed.extend(pycc_types::function_local_producer_spellings(params, body));
             let callee = producer_bound_in(body, &shadowed)?;
             Some((index, producer_gap(name, callee)))
         })
@@ -380,8 +401,11 @@ pub(crate) fn refuse_buffer_producers_in_native_mode(
     Err(gaps)
 }
 
-/// The producer spellings the program itself rebinds, which
-/// [`refuse_buffer_producers_in_native_mode`] must leave alone.
+/// The *module-wide* producer spellings the program itself rebinds, which
+/// [`refuse_buffer_producers_in_native_mode`] must leave alone. The
+/// function-local layer that gate adds on top of this set is
+/// `pycc_types::function_local_producer_spellings`; this function does not
+/// see it.
 ///
 /// A module-level `AnnAssign` counts only when it carries an initializer.
 /// `HirStmt::AnnAssign`'s `value` is an `Option`, and a value-less `ndarray:

@@ -506,6 +506,40 @@ fn the_exported_spelling_predicate_names_exactly_the_two_producers() {
     assert!(!crate::is_buffer_producer_spelling("memoryview"));
 }
 
+/// The second export the native-mode gate consumes: the producer spellings a
+/// function binds locally, filtered out of `function_local_names` so the gate
+/// tests locality with the same computation
+/// `buffer::producer_assignment_ty`'s statement-(h) block does. A parameter
+/// and a body binding are both locals; a non-producer local is not returned,
+/// and a function that binds neither returns nothing.
+#[test]
+fn the_exported_local_spellings_are_the_producers_a_function_binds() {
+    let params = vec![("ndarray".to_string(), Ty::Int)];
+    assert_eq!(
+        crate::function_local_producer_spellings(&params, &[]),
+        vec!["ndarray"]
+    );
+
+    let body = vec![
+        HirStmt::Assign {
+            target: "NDArray".to_string(),
+            value: HirExpr::IntLiteral(1),
+        },
+        HirStmt::Assign {
+            target: "other".to_string(),
+            value: HirExpr::IntLiteral(2),
+        },
+    ];
+    assert_eq!(
+        crate::function_local_producer_spellings(&[], &body),
+        vec!["NDArray"]
+    );
+    assert_eq!(
+        crate::function_local_producer_spellings(&[], &body[1..]),
+        Vec::<&str>::new()
+    );
+}
+
 /// A module of two functions: an unannotated private helper `_h(n)` whose
 /// body is `body`, and an annotated `f()` that calls it with `4`.
 ///

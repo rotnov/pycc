@@ -19,7 +19,7 @@ mod string_conversion;
 mod tests;
 mod unop;
 
-pub use buffer::is_buffer_producer_spelling;
+pub use buffer::{function_local_producer_spellings, is_buffer_producer_spelling};
 pub(crate) use enum_lower::{
     check_enum_loop_body_function, check_enum_loop_body_module, enum_member_attr_type,
     unroll_enum_loops,
