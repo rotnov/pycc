@@ -910,6 +910,28 @@ pub enum MirStmt {
         key: MirExpr,
         value: MirExpr,
     },
+    /// `b[i] = v` on a `memoryview`-typed base (Part 1 of #1142) -- the
+    /// store counterpart of [`MirExpr::BufferGet`], and a **statement**
+    /// rather than an expression because `pycc_hir` lowers every
+    /// `<name>[k] = v` to `HirStmt::DictSet` and never to a `Subscript`
+    /// store. Being a statement is load-bearing rather than incidental:
+    /// `pycc_codegen`'s `expression_can_set_exception` is a `&MirExpr`
+    /// predicate, so the `IndexError` this node can leave pending is
+    /// observed by `guard_statement_effects` at the statement level and
+    /// by nothing else.
+    ///
+    /// Unlike [`MirStmt::DictSet`] immediately above, `base` is a lowered
+    /// `MirExpr` and not a bare name: codegen then reuses
+    /// [`MirExpr::BufferGet`]'s own `Scalar::MemoryView` extraction rather
+    /// than the dict-specific by-name read. `pycc_types` admits the store
+    /// only on a bare `HirExpr::Name` base, so in practice this is always
+    /// a [`MirExpr::Name`] -- carrying it as an expression is what keeps
+    /// the load and the store on one codegen path.
+    BufferSet {
+        base: MirExpr,
+        index: MirExpr,
+        value: MirExpr,
+    },
     /// `for var in dict:` (mirrors `HirStmt::ForList` on a dict-typed base --
     /// see `lower_stmt`'s own `HirStmt::ForList` arm for why a dict-typed
     /// base is lowered to this node instead of `MirStmt::ForList`). `dict` is
@@ -1422,6 +1444,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::NoOp
             | MirStmt::Unreachable
             | MirStmt::DictSet { .. }
+            | MirStmt::BufferSet { .. }
             | MirStmt::ListCompAssign { .. }
             | MirStmt::DictCompAssign { .. }
             | MirStmt::SetCompAssign { .. }

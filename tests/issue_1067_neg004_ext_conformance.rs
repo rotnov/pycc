@@ -289,8 +289,10 @@ assert m.take_tuple_fb((SubFloat(1.5), True)) == 1.5
 #
 # `bytearray(8)` is the conforming witness's backing store rather than a
 # `bytes`: rule 7 admits a read-only buffer just as it admits a writable
-# one (Part 1 requests `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT` and never
-# `PyBUF_WRITABLE`), and a `bytearray` is what the release probe below
+# one for a parameter this module only reads (the request is
+# `PyBUF_C_CONTIGUOUS | PyBUF_FORMAT`; Part 1 of #1142 adds
+# `PyBUF_WRITABLE` only for a parameter whose own body stores into it, and
+# no export here does), and a `bytearray` is what the release probe below
 # needs.
 good_view = memoryview(bytearray(8)).cast('d')
 

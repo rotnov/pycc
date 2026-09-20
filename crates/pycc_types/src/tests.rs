@@ -22188,3 +22188,135 @@ fn int_and_str_of_a_foreign_object_with_a_second_argument_keep_their_c0001_refus
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Part 1 of #1142: the element *store* `b[i] = v`.
+//
+// The store arrives as `HirStmt::DictSet`, so `check_dict_set` dispatches on
+// the target's resolved type before it asks for a `Ty::Dict`. Each test below
+// pins one arm of that dispatch, and the refusal cluster above is unchanged:
+// the store is the second admitted use of the name, not a widening of the
+// read surface.
+// ---------------------------------------------------------------------------
+
+/// `b[i] = v` type-checks with an `int` index and a `float` value, without
+/// the `C0001` the bare name still gets everywhere else.
+#[test]
+fn storing_a_float_into_a_memoryview_element_is_accepted() {
+    let hir = memoryview_subject(
+        Ty::None,
+        vec![HirStmt::DictSet {
+            dict: "b".to_string(),
+            key: HirExpr::Name("i".to_string()),
+            value: HirExpr::FloatLiteral(1.5),
+        }],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// D-086 again, on the index only: `b[True] = 1.0` is ordinary Python.
+#[test]
+fn a_bool_index_on_a_memoryview_store_is_accepted() {
+    let hir = memoryview_subject(
+        Ty::None,
+        vec![HirStmt::DictSet {
+            dict: "b".to_string(),
+            key: HirExpr::BoolLiteral(true),
+            value: HirExpr::FloatLiteral(1.5),
+        }],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The index arm reuses the load's own `T0021` and its exact wording, so
+/// `b["k"]` and `b["k"] = 1.0` read the same.
+#[test]
+fn a_non_int_index_on_a_memoryview_store_is_t0021() {
+    let hir = memoryview_subject(
+        Ty::None,
+        vec![HirStmt::DictSet {
+            dict: "b".to_string(),
+            key: HirExpr::StringLiteral("k".to_string()),
+            value: HirExpr::FloatLiteral(1.5),
+        }],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message.contains("`memoryview` index must be `int`"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("`str`"), "{}", err.message);
+}
+
+/// The element type is `float` and D-086 grants no int-to-float widening,
+/// so `b[i] = 1` is refused rather than silently converted -- which is also
+/// what lets codegen see exactly one scalar shape at the value position.
+#[test]
+fn storing_a_non_float_into_a_memoryview_element_is_t0021() {
+    for (value, rendered) in [
+        (HirExpr::IntLiteral(1), "`int`"),
+        (HirExpr::StringLiteral("v".to_string()), "`str`"),
+    ] {
+        let hir = memoryview_subject(
+            Ty::None,
+            vec![HirStmt::DictSet {
+                dict: "b".to_string(),
+                key: HirExpr::Name("i".to_string()),
+                value,
+            }],
+        );
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("to a `memoryview` element of `float`"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains(rendered), "{}", err.message);
+    }
+}
+
+/// The dispatch keys on the target's type, so every other target is
+/// untouched: a `list[int]` still gets `T0033` from the same function, and
+/// the store surface opened here is exactly one type wide.
+#[test]
+fn a_store_into_a_non_dict_non_buffer_target_is_still_t0033() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("xs".to_string(), Ty::Set(Box::new(Ty::Int)))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictSet {
+                dict: "xs".to_string(),
+                key: HirExpr::IntLiteral(0),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0033");
+}
+
+/// A store through a name that is not bound at all is still the "not
+/// defined" refusal, not a buffer arm: admitting the buffer at a store
+/// target widens which *type* is accepted there, never which names are.
+#[test]
+fn a_store_into_an_undefined_name_is_unchanged() {
+    let hir = memoryview_subject(
+        Ty::None,
+        vec![HirStmt::DictSet {
+            dict: "nope".to_string(),
+            key: HirExpr::IntLiteral(0),
+            value: HirExpr::FloatLiteral(1.0),
+        }],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(err.message.contains("not defined"), "{}", err.message);
+}

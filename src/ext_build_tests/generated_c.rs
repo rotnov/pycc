@@ -85,6 +85,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
             method: None,
             receiver: ExtReceiver::None,
             params: Vec::new(),
+            param_writable: Vec::new(),
             return_ty: Ty::Int,
         }],
     );
@@ -113,6 +114,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::Int,
         }],
     );
@@ -144,6 +146,7 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Int],
+            param_writable: vec![false; 2],
             return_ty: Ty::Int,
         }],
     );
@@ -178,6 +181,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::Int,
         }],
     );
@@ -203,6 +207,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Float],
+            param_writable: vec![false; 1],
             return_ty: Ty::Float,
         }],
     );
@@ -234,6 +239,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
+            param_writable: vec![false; 1],
             return_ty: Ty::Bool,
         }],
     );
@@ -264,6 +270,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::None,
         }],
     );
@@ -288,6 +295,7 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Float, Ty::Bool],
+            param_writable: vec![false; 3],
             return_ty: Ty::Float,
         }],
     );
@@ -326,6 +334,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::None,
         }],
     );
@@ -356,6 +365,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str],
+            param_writable: vec![false; 1],
             return_ty: Ty::Str,
         }],
     );
@@ -388,6 +398,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Str],
+            param_writable: vec![false; 2],
             return_ty: Ty::Str,
         }],
     );
@@ -659,6 +670,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
+            param_writable: vec![false; 1],
             return_ty: Ty::Int,
         }],
     );
@@ -713,6 +725,7 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
         }],
     );
@@ -784,6 +797,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![],
+            param_writable: vec![],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
         }],
     );
@@ -816,6 +830,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int]))],
+            param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int])),
         }],
     );
@@ -843,6 +858,7 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
                 Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
                 Ty::Tuple(Box::new(vec![Ty::Float, Ty::Bool])),
             ],
+            param_writable: vec![false; 2],
             return_ty: Ty::Float,
         }],
     );
@@ -889,6 +905,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Tuple(Box::new(vec![Ty::Int]))],
+            param_writable: vec![false; 2],
             return_ty: Ty::Str,
         }],
     );
@@ -922,6 +939,7 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
             method: None,
             receiver: ExtReceiver::None,
             params: Vec::new(),
+            param_writable: Vec::new(),
             return_ty: Ty::Tuple(Box::new(vec![Ty::Float, Ty::Float])),
         }],
     );
@@ -966,6 +984,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))],
+            param_writable: vec![false; 1],
             return_ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
         }],
     );
@@ -993,6 +1012,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
+            param_writable: vec![false; 1],
             return_ty: Ty::Int,
         }],
     );
@@ -1014,6 +1034,7 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))],
+            param_writable: vec![false; 1],
             return_ty: Ty::None,
         }],
     );
@@ -1294,9 +1315,71 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::MemoryView; count],
+            param_writable: vec![false; count],
             return_ty,
         }],
     )
+}
+
+/// Part 1 of #1142's writability bit reaches the generated request, and
+/// reaches only the parameter it belongs to.
+///
+/// The two-parameter case is the one worth pinning: a flag applied to the
+/// slot vector as a whole rather than per slot would either acquire
+/// argument 0 writable -- refusing read-only exporters the body never
+/// writes -- or acquire argument 1 read-only, which is the memory-safety
+/// direction. The `0`/`1` here is the fourth argument of
+/// `pycc_ext_unpack_memoryview`, the only consumer of the bit.
+#[test]
+fn only_a_buffer_parameter_its_body_stores_into_is_acquired_writable() {
+    let inc = inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: "mix".to_string(),
+            class: None,
+            method: None,
+            receiver: ExtReceiver::None,
+            params: vec![Ty::MemoryView, Ty::MemoryView],
+            param_writable: vec![false, true],
+            return_ty: Ty::None,
+        }],
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_memoryview(args[0], \"mix\", 0, 0, &b0)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_memoryview(args[1], \"mix\", 1, 1, &b1)"),
+        "{inc}"
+    );
+}
+
+/// The same bit on a constructor's slot vector, which `tp_init_c` builds
+/// separately: D-244's admissibility matrix is one matrix, so a
+/// `memoryview` `__init__` parameter its body stores into must be acquired
+/// exactly as an export's would be. Left unplumbed, this path would write
+/// through storage acquired read-only.
+#[test]
+fn a_constructor_buffer_parameter_its_body_stores_into_is_acquired_writable() {
+    let inc = generate_exports_inc(
+        "m",
+        &[instance_export("Grid", "area", vec![], Ty::Int)],
+        &[],
+        &flat_publications(&[instance_export("Grid", "area", vec![], Ty::Int)]),
+        &[ExtCtor {
+            class: "Grid".to_string(),
+            name: "Grid.__init__".to_string(),
+            params: vec![Ty::MemoryView],
+            param_writable: vec![true],
+            slot_count: 1,
+        }],
+    );
+    assert!(
+        inc.contains(
+            "pycc_ext_unpack_memoryview(PyTuple_GetItem(args, 0), \"Grid.__init__\", 0, 1, &b0)"
+        ),
+        "{inc}"
+    );
 }
 
 #[test]
@@ -1308,7 +1391,7 @@ fn a_memoryview_parameter_acquires_a_buffer_and_carries_only_a_copied_pair() {
     // One refusal arm, ahead of the call, exactly like every other slot.
     assert!(
         inc.contains(
-            "    if (pycc_ext_unpack_memoryview(args[0], \"total\", 0, &b0) != 0) {\n        \
+            "    if (pycc_ext_unpack_memoryview(args[0], \"total\", 0, 0, &b0) != 0) {\n        \
              return NULL;\n    }\n"
         ),
         "{inc}"
@@ -1376,7 +1459,7 @@ fn a_second_memoryview_argument_that_refuses_releases_the_first() {
     // that a refusal happened.
     assert!(
         inc.contains(
-            "    if (pycc_ext_unpack_memoryview(args[1], \"dot\", 1, &b1) != 0) {\n        \
+            "    if (pycc_ext_unpack_memoryview(args[1], \"dot\", 1, 0, &b1) != 0) {\n        \
              PyBuffer_Release(&b0);\n        return NULL;\n    }\n"
         ),
         "{inc}"
@@ -1384,7 +1467,7 @@ fn a_second_memoryview_argument_that_refuses_releases_the_first() {
     // Argument 1's own bail owes nothing: nothing was acquired yet.
     assert!(
         inc.contains(
-            "    if (pycc_ext_unpack_memoryview(args[0], \"dot\", 0, &b0) != 0) {\n        \
+            "    if (pycc_ext_unpack_memoryview(args[0], \"dot\", 0, 0, &b0) != 0) {\n        \
              return NULL;\n    }\n"
         ),
         "{inc}"
@@ -1411,12 +1494,13 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
+            param_writable: vec![false; 3],
             return_ty: Ty::Int,
         }],
     );
     assert!(
         inc.contains(
-            "    if (pycc_ext_unpack_memoryview(args[1], \"label\", 1, &b1) != 0) {\n        \
+            "    if (pycc_ext_unpack_memoryview(args[1], \"label\", 1, 0, &b1) != 0) {\n        \
              pycc_rt_str_decref(a0);\n        return NULL;\n    }\n"
         ),
         "{inc}"
@@ -1450,6 +1534,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
             method: None,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str],
+            param_writable: vec![false; 1],
             return_ty: Ty::Str,
         }],
     );
@@ -1472,6 +1557,7 @@ fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> E
         class: Some(class.to_string()),
         method: Some(method.to_string()),
         receiver: ExtReceiver::None,
+        param_writable: vec![false; params.len()],
         params,
         return_ty,
     }
@@ -1485,6 +1571,7 @@ fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> Ex
         class: Some(class.to_string()),
         method: Some(method.to_string()),
         receiver: ExtReceiver::NullCls,
+        param_writable: vec![false; params.len()],
         params,
         return_ty,
     }
@@ -1569,6 +1656,7 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
                 method: None,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
+                param_writable: vec![false; 1],
                 return_ty: Ty::Int,
             },
             static_export("Grid", "scale", vec![Ty::Int], Ty::Int),
@@ -1752,6 +1840,7 @@ fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) ->
         class: Some(class.to_string()),
         method: Some(method.to_string()),
         receiver: ExtReceiver::SelfInstance,
+        param_writable: vec![false; params.len()],
         params,
         return_ty,
     }
@@ -1761,6 +1850,7 @@ fn grid_ctor(params: Vec<Ty>, slot_count: usize) -> ExtCtor {
     ExtCtor {
         class: "Grid".to_string(),
         name: "Grid.__init__".to_string(),
+        param_writable: vec![false; params.len()],
         params,
         slot_count,
     }
@@ -1961,7 +2051,7 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
     assert!(
         inc.contains(
             "    if (pycc_ext_unpack_memoryview(PyTuple_GetItem(args, 0), \"Grid.__init__\", \
-             0, &b0) != 0) {\n        return -1;\n    }\n    a0.ptr = b0.buf;\n    \
+             0, 0, &b0) != 0) {\n        return -1;\n    }\n    a0.ptr = b0.buf;\n    \
              a0.len = (long long)b0.shape[0];\n"
         ),
         "{inc}"

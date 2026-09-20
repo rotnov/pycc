@@ -1,5 +1,6 @@
 use pycc_diag::{Diagnostic, Span};
 
+mod buffer_store;
 mod class;
 mod container;
 mod dunder_name;
@@ -14,6 +15,7 @@ mod program;
 mod stmt;
 mod typecheck;
 
+pub use buffer_store::body_stores_into;
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
     ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember,
@@ -708,7 +710,11 @@ pub enum HirStmt {
     /// type information, so a `list[int]` target also lowers to this node
     /// today (`pycc_types` rejects it with `T0033`, mirroring how
     /// `ForList`'s own `list` field is resolved to `Ty::List`, `Ty::Dict`,
-    /// or rejected downstream, not here).
+    /// or rejected downstream, not here). Since Part 1 of #1142 a
+    /// `memoryview` target lowers here too: `pycc_types` admits it as a
+    /// buffer element store and `pycc_mir` lowers *that* one to
+    /// `MirStmt::BufferSet` instead of `MirStmt::DictSet`, so this node
+    /// stays the single type-blind shape for every `<name>[k] = v`.
     DictSet {
         dict: String,
         key: HirExpr,

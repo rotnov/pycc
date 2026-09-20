@@ -31,6 +31,18 @@ fn shim_c() -> String {
 }
 
 fn func(name: &str, params: &[(&str, Ty)], return_ty: Ty) -> HirItem {
+    func_with_body(name, params, return_ty, Vec::new())
+}
+
+/// [`func`], with a body -- the Part-1-of-#1142 writability walk is the
+/// one collector input that reads a function's statements rather than only
+/// its signature.
+fn func_with_body(
+    name: &str,
+    params: &[(&str, Ty)],
+    return_ty: Ty,
+    body: Vec<pycc_hir::HirStmt>,
+) -> HirItem {
     HirItem::Function {
         name: name.to_string(),
         params: params
@@ -38,7 +50,16 @@ fn func(name: &str, params: &[(&str, Ty)], return_ty: Ty) -> HirItem {
             .map(|(n, ty)| ((*n).to_string(), ty.clone()))
             .collect(),
         return_ty,
-        body: Vec::new(),
+        body,
+    }
+}
+
+/// `<name>[0] = 1.0` as a statement, the shape `body_stores_into` answers.
+fn element_store(name: &str) -> pycc_hir::HirStmt {
+    pycc_hir::HirStmt::DictSet {
+        dict: name.to_string(),
+        key: pycc_hir::HirExpr::IntLiteral(0),
+        value: pycc_hir::HirExpr::FloatLiteral(1.0),
     }
 }
 

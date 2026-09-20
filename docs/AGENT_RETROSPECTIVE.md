@@ -33,6 +33,38 @@ never a merge gate.
 
 ---
 
+## 2026-09-20 — Two `cargo llvm-cov` cycles wasted: the merge-base gates were run before committing, and the tree was edited after the profile was taken
+
+**What happened.** While implementing Part 1 of #1142, the full local gate
+set was run against an uncommitted working tree. `git merge-base
+origin/main HEAD` was `HEAD`, so
+`scripts/check_decision_immutability.py` reported "0 decision files
+compared" and `scripts/check_diff_coverage.py` measured an empty diff —
+both reported success while checking nothing, and the two new files
+(`crates/pycc_hir/src/buffer_store.rs`,
+`tests/issue_1142_ext_buffer_store.rs`) were untracked and therefore
+invisible to `git diff` and to `deep-review --working` as well. After
+committing, a second `cargo llvm-cov` run was needed. A third was then
+needed because doc comments were inserted into two already-profiled
+files, which shifts every later line number in them and invalidates the
+join between the `.lcov` and the diff.
+
+**Root cause.** Every merge-base-relative gate in this repository measures
+*committed* state; running one early looks identical to running one that
+passes. And an `.lcov` export is only valid for the exact source it was
+taken from — a pure comment insertion is not a no-op for it.
+
+**What fixed it.** Committing first, then re-running the gate set; and
+freezing the tree (including comments) before the coverage run.
+
+**Lesson.** Commit before running any gate that takes `$(git merge-base
+origin/main HEAD)` as an argument, and read its own count line — "0 files
+compared" is a failed setup, not a pass. Land every edit, including
+comment-only ones, before starting `cargo llvm-cov`; a ~10-minute
+instrumented run is not something to re-spend on a docstring.
+
+---
+
 ## 2026-09-20 — A 60-byte `docs/ROADMAP.md` edit burned a CI round because no local gate covers the llms.txt per-resource budget
 
 **What happened.** PR #1160 answered a reviewer finding by rewriting one

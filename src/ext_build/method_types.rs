@@ -9,8 +9,8 @@
 
 use super::export_name::ExtReceiver;
 use super::{
-    ExtCtor, ExtPublishedClass, arg_slot_locals, boundary_carrier, buffer_releases, c_param_list,
-    source_level_name, unpack_args,
+    ExtCtor, ExtPublishedClass, arg_slot_locals, buffer_releases, c_param_list, source_level_name,
+    unpack_args,
 };
 
 /// The exact C declaration of the generated method-class registration entry
@@ -208,11 +208,7 @@ pub(crate) fn method_types_c(publications: &[ExtPublishedClass], ctors: &[ExtCto
 fn tp_init_c(ctor: &ExtCtor) -> String {
     let class = &ctor.class;
     let arity = ctor.params.len();
-    let slots: Vec<_> = ctor
-        .params
-        .iter()
-        .map(|ty| boundary_carrier(ty).expect("ctor_descriptor admits only carriable parameters"))
-        .collect();
+    let slots: Vec<_> = super::slot_carriers(&ctor.params, &ctor.param_writable);
     let symbol = pycc_codegen::mangle_ext_name(&ctor.name);
     let source_name = source_level_name(&ctor.name);
     let carried = c_param_list(&slots, &[]);
@@ -257,7 +253,7 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
         // could ever execute, which the 100%-changed-lines invariant does
         // not admit (D-242 rule 1).
         call_args.push(match slot {
-            super::BoundaryCarrier::Buffer => format!("&a{index}"),
+            super::BoundaryCarrier::Buffer { .. } => format!("&a{index}"),
             _ => format!("a{index}"),
         });
     }

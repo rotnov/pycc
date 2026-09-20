@@ -1718,8 +1718,9 @@ pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty) -> Result<(), Diagnost
             format!(
                 "using `{name}`, which is bound to a buffer parameter of a \
                  `pycc build --ext` export, is valid Python but not implemented yet; \
-                 #1027 and #1129 admit a buffer only as such a parameter, read one \
-                 element at a time with `{name}[i]` over `range(len({name}))`"
+                 #1027, #1129 and #1142 admit a buffer only as such a parameter, read \
+                 one element at a time with `{name}[i]` over `range(len({name}))`, and \
+                 store one with `{name}[i] = 1.0`"
             ),
             Span::new(0, 0),
         ));

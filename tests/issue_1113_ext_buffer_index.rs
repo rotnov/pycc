@@ -128,16 +128,20 @@ def total(b: memoryview) -> float:
 /// Every *other* use of the name is still the Part 1 capability gap, and
 /// the reworded message now points at the one use that works.
 ///
-/// A store is the case worth pinning: `b[i] = v` looks like the admitted
-/// load and is not one -- Part 2 reads only -- and the refusal it gets is
-/// the read refusal on the name, not a silent acceptance.
+/// Aliasing is the case worth pinning: `x = b` is the shortest way a
+/// buffer could escape the slot its own parameter name binds, and D-244's
+/// 2026-09-17 Part-1-of-#1027 amendment statement (e) makes the wholly-
+/// wrapper-owned lifetime true *by construction* only as long as that
+/// escape is refused. The subject was the element store `b[0] = 1.0` until
+/// Part 1 of #1142 admitted it; the arm's subject has always been the
+/// shared read seam rather than whichever operation happens to reach it.
 #[test]
-fn storing_into_a_buffer_element_is_still_a_capability_gap() {
+fn aliasing_a_buffer_into_a_local_is_still_a_capability_gap() {
     let dir = fixture(
-        "1113_element_store",
+        "1113_alias_local",
         "\
 def total(b: memoryview) -> float:
-    b[0] = 1.0
+    x = b
     return 0.0
 ",
     );

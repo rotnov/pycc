@@ -85,6 +85,15 @@ pub(super) struct RtFns<'ctx> {
     /// `[0, len)` leaves the D-173 pending `IndexError` set and returns a
     /// `0.0` sentinel, which the caller's `exception_exit` block checks for.
     pub(super) buffer_f64_get: FunctionValue<'ctx>,
+    /// Part 1 of #1142's bounds-checked buffer element store
+    /// (`pycc_rt_buffer_f64_set`): the same pointer and already-untagged
+    /// raw `i64` index `buffer_f64_get` takes, plus the `f64` to write, and
+    /// no return value.
+    ///
+    /// Being `void` is what makes its D-173 check a *statement*-level one:
+    /// there is no result for `expression_can_set_exception` to guard, so
+    /// the emitting arm calls `guard_statement_effects` itself.
+    pub(super) buffer_f64_set: FunctionValue<'ctx>,
     /// #1116's buffer element count (`pycc_rt_buffer_len`): takes the same
     /// `PyccExtBufferView` pointer and returns the `len` word as a **raw,
     /// untagged** `i64`, exactly as `int_list_len` below does for a list.
@@ -373,6 +382,10 @@ pub(super) fn declare_rt_functions<'ctx>(
         buffer_f64_get: declare(
             "pycc_rt_buffer_f64_get",
             f64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        buffer_f64_set: declare(
+            "pycc_rt_buffer_f64_set",
+            void_type.fn_type(&[ptr_type.into(), i64_type.into(), f64_type.into()], false),
         ),
         buffer_len: declare(
             "pycc_rt_buffer_len",

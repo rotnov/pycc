@@ -1511,7 +1511,16 @@ unsafe fn buffer_f64_get(view: &PyccExtBufferView, index: i64) -> f64 {
         );
         return 0.0;
     }
-    unsafe { *(view.ptr as *const f64).offset(index as isize) }
+    // The `--ext` wrapper admits an exporter on four properties --
+    // writable-or-not, one-dimensional, C-contiguous, format `"d"` -- and
+    // none of them implies that the exporter's storage is 8-byte aligned.
+    // `memoryview(bytearray(17))[1:].cast("d")` satisfies every one of them
+    // on CPython and reports a data address that is `1 mod 8`, so a plain
+    // `*const f64` dereference here would be undefined behavior on a buffer
+    // the boundary is required to accept. `read_unaligned` costs nothing on
+    // an aligned address and keeps the unaligned exporter working rather
+    // than turning it into a refusal.
+    unsafe { core::ptr::read_unaligned((view.ptr as *const f64).add(index as usize)) }
 }
 
 /// Reads the element at `index` of a `pycc build --ext` export's `memoryview`
@@ -1536,6 +1545,72 @@ unsafe fn buffer_f64_get(view: &PyccExtBufferView, index: i64) -> f64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_buffer_f64_get(view: *const PyccExtBufferView, index: i64) -> f64 {
     unsafe { buffer_f64_get(&*view, index) }
+}
+
+/// The private half of [`pycc_rt_buffer_f64_set`], sharing
+/// [`buffer_f64_get`]'s bounds rule verbatim so the load and the store can
+/// never disagree about which indices are in range.
+///
+/// # Safety
+/// `view.ptr` must address `view.len` contiguous, **writable** `f64` values
+/// whenever `index` is in range. The generated `--ext` wrapper guarantees
+/// that by acquiring the buffer with `PyBUF_WRITABLE` for exactly the
+/// parameters the compiled body stores into (Part 1 of #1142).
+unsafe fn buffer_f64_set(view: &PyccExtBufferView, index: i64, value: f64) {
+    if index < 0 || index >= view.len {
+        // The same two deviations the load carries, stated once per
+        // operation rather than shared through a helper so neither can be
+        // silently relaxed on one side: D-173's pending-exception flag in
+        // place of a panic across the FFI boundary, and D-108's refusal of
+        // a negative index instead of CPython's resolve-from-the-end.
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "index out of bounds on dimension 1",
+        );
+        return;
+    }
+    // Unaligned for the same reason the load is, and stated again rather
+    // than shared so neither side can be relaxed alone: the four properties
+    // the wrapper checks do not imply 8-byte alignment, and
+    // `memoryview(bytearray(17))[1:].cast("d")` is a CPython buffer that
+    // passes all four at a data address `1 mod 8`.
+    unsafe { core::ptr::write_unaligned((view.ptr as *mut f64).add(index as usize), value) };
+}
+
+/// Writes `value` to the element at `index` of a `pycc build --ext`
+/// export's `memoryview` parameter (Python's `b[i] = v`, Part 1 of #1142),
+/// bounds-checked against the `len` the wrapper copied out of the
+/// exporter's `shape[0]`.
+///
+/// The sibling of [`pycc_rt_buffer_f64_get`], and `*const` for the same
+/// reason that one is: `PyccExtBufferView::ptr` is already `*mut c_void`,
+/// so the view itself is only ever read and the mutability lives entirely
+/// in the storage it points at.
+///
+/// Sets the pending `IndexError` flag (D-173) and returns **without
+/// dereferencing `ptr`** on an out-of-range index. Unlike the load there is
+/// no sentinel to return, so this is a `void` helper: the generated code's
+/// statement-level guard is the only thing that ever observes the raise,
+/// which is why `pycc_codegen`'s `MirStmt::BufferSet` arm calls
+/// `guard_statement_effects` immediately after this call.
+///
+/// # Element representation
+/// `index` is a raw element offset, obtained by decoding an int-compatible
+/// expression with `pycc_rt_int_untag_checked`. `value` is an ordinary
+/// unencoded `Ty::Float`.
+///
+/// # Safety
+/// `view` must be a live `PyccExtBufferView` whose `ptr` addresses `len`
+/// contiguous **writable** `f64` values -- which is what the generated
+/// wrapper guarantees for the whole duration of the compiled call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_buffer_f64_set(
+    view: *const PyccExtBufferView,
+    index: i64,
+    value: f64,
+) {
+    unsafe { buffer_f64_set(&*view, index, value) }
 }
 
 /// Returns the element count of a `pycc build --ext` export's `memoryview`
@@ -3958,6 +4033,127 @@ mod tests {
         };
         let result = unsafe { buffer_f64_get(&view, 0) };
         assert_eq!(result, 0.0);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn buffer_f64_set_writes_every_in_range_element() {
+        pycc_rt_exception_clear();
+        let mut storage = [0.0f64; 3];
+        let view = PyccExtBufferView {
+            ptr: storage.as_mut_ptr() as *mut core::ffi::c_void,
+            len: 3,
+        };
+        unsafe {
+            buffer_f64_set(&view, 0, 1.5);
+            buffer_f64_set(&view, 1, 2.5);
+            buffer_f64_set(&view, 2, 3.5);
+        }
+        assert_eq!(storage, [1.5, 2.5, 3.5]);
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    /// The four properties the `--ext` wrapper checks -- writable, one
+    /// dimension, C-contiguous, format `"d"` -- say nothing about the
+    /// alignment of the exporter's storage.
+    /// `memoryview(bytearray(17))[1:].cast("d")` passes all four on CPython
+    /// and reports a data address that is `1 mod 8`, so both accessors have
+    /// to use the unaligned primitives; a plain `f64` dereference there is
+    /// undefined behavior. An unaligned exporter must keep working, so this
+    /// asserts a round trip rather than a refusal.
+    #[test]
+    fn buffer_f64_round_trips_through_a_misaligned_view() {
+        pycc_rt_exception_clear();
+        #[repr(align(8))]
+        struct AlignedBytes([u8; 24]);
+        let mut storage = AlignedBytes([0u8; 24]);
+        // One byte past an 8-byte-aligned base, so every element address is
+        // `1 mod 8` -- the same residue the `bytearray(17)[1:]` witness has.
+        let base = unsafe { storage.0.as_mut_ptr().add(1) };
+        assert_eq!(base as usize % core::mem::align_of::<f64>(), 1);
+        let view = PyccExtBufferView {
+            ptr: base as *mut core::ffi::c_void,
+            len: 2,
+        };
+        unsafe {
+            buffer_f64_set(&view, 0, 1.5);
+            buffer_f64_set(&view, 1, -2.25);
+            assert_eq!(buffer_f64_get(&view, 0), 1.5);
+            assert_eq!(buffer_f64_get(&view, 1), -2.25);
+        }
+        // The writes landed at the misaligned offsets themselves, not at a
+        // rounded-down aligned address: byte 0 is untouched.
+        assert_eq!(storage.0[0], 0);
+        assert_eq!(storage.0[1..9], 1.5f64.to_ne_bytes());
+        assert_eq!(storage.0[9..17], (-2.25f64).to_ne_bytes());
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    #[test]
+    fn buffer_f64_set_past_the_end_sets_the_index_error_flag_and_writes_nothing() {
+        // D-173's flag, and the "returns without dereferencing `ptr`" half
+        // of the contract: the storage is untouched.
+        pycc_rt_exception_clear();
+        let mut storage = [7.0f64, 8.0];
+        let view = PyccExtBufferView {
+            ptr: storage.as_mut_ptr() as *mut core::ffi::c_void,
+            len: 2,
+        };
+        unsafe { buffer_f64_set(&view, 2, 99.0) };
+        assert_eq!(storage, [7.0, 8.0]);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_INDEX_ERROR)
+        );
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn buffer_f64_set_rejects_negative_indices_with_exception_flag() {
+        // D-108: `b[-1] = v` is refused rather than resolved from the end,
+        // exactly as the load refuses `b[-1]`.
+        pycc_rt_exception_clear();
+        let mut storage = [7.0f64, 8.0];
+        let view = PyccExtBufferView {
+            ptr: storage.as_mut_ptr() as *mut core::ffi::c_void,
+            len: 2,
+        };
+        unsafe { buffer_f64_set(&view, -1, 99.0) };
+        assert_eq!(storage, [7.0, 8.0]);
+        assert_eq!(pycc_rt_exception_active(), 1);
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn buffer_f64_set_on_an_empty_view_refuses_index_zero() {
+        pycc_rt_exception_clear();
+        let view = PyccExtBufferView {
+            ptr: core::ptr::null_mut(),
+            len: 0,
+        };
+        unsafe { buffer_f64_set(&view, 0, 1.0) };
+        assert_eq!(pycc_rt_exception_active(), 1);
+        pycc_rt_exception_clear();
+    }
+
+    /// The `extern "C"` wrapper generated code actually calls, exercised
+    /// directly for the same reason the load's is.
+    #[test]
+    fn pycc_rt_buffer_f64_set_wrapper_writes_and_raises() {
+        pycc_rt_exception_clear();
+        let mut storage = [0.0f64, 0.0];
+        let view = PyccExtBufferView {
+            ptr: storage.as_mut_ptr() as *mut core::ffi::c_void,
+            len: 2,
+        };
+        unsafe {
+            pycc_rt_buffer_f64_set(&view, 1, 4.25);
+            assert_eq!(pycc_rt_exception_active(), 0);
+            pycc_rt_buffer_f64_set(&view, 99, 1.0);
+        }
+        assert_eq!(storage, [0.0, 4.25]);
         assert_eq!(pycc_rt_exception_active(), 1);
         pycc_rt_exception_clear();
     }
