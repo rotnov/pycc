@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-20 — A 60-byte `docs/ROADMAP.md` edit burned a CI round because no local gate covers the llms.txt per-resource budget
+
+**What happened.** PR #1160 answered a reviewer finding by rewriting one
+sentence in `docs/ROADMAP.md`'s `Language surface` row, lengthening it by 66
+bytes. Every local gate passed, including
+`ruby scripts/check_pages_performance_budget.rb --skip-lighthouse`. CI's
+`build` job then failed in 12 seconds: `llms.txt non-optional document
+'Roadmap' is 174140 bytes, exceeding its 174080-byte per-resource budget
+(issue #207)`. The file had been sitting at 174074 bytes — six bytes of
+headroom.
+
+**Root cause.** Two different checkers, and the local habit reaches for the
+wrong one. `check_pages_performance_budget.rb` measures the published page
+artifacts; the llms.txt per-resource budget lives in `scripts/check-site.sh`.
+That script is not a usable local substitute either: in this worktree it
+exits early at the pre-existing `evidence-heroes.json` first-parent failure
+(umbrella #802), long before the budget block, so running it locally reports
+nothing about the very byte count that fails in CI.
+
+**What fixed it.** Rewording the same sentence to 57 characters against the
+54 it replaced — `seeded when only the entry module mentions it, as a read,`
+— which lands the file at 174076 bytes.
+
+**Lesson.** Before editing any document `site/llms-txt-context-manifest.json`
+lists as non-optional, measure first: `wc -c docs/ROADMAP.md` against the
+174080-byte budget, and treat the difference as the edit's byte allowance.
+When a rewrite must be longer than what it replaces and the allowance is
+gone, shorten the replacement rather than looking for bytes elsewhere in the
+row — an accurate sentence usually has a shorter accurate form, and trimming
+unrelated prose to make room enlarges the diff a reviewer must check.
+
 ## 2026-09-19 — Three clean reviewer rounds missed a language-semantics divergence an external bot caught in one
 
 **What happened.** The #1145 `--ext` instance-method work ran the pinned local
