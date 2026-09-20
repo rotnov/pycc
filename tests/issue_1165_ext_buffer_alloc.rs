@@ -755,6 +755,231 @@ def bad() -> None:
     );
 }
 
+/// Runs `pycc check` on the entry module.
+fn check_only(dir: &Path) -> Output {
+    pycc()
+        .arg("check")
+        .arg(dir.join("alloc_probe.py"))
+        .output()
+        .expect("pycc should spawn")
+}
+
+/// The source every module-alias arm below shares: `import math as ndarray`
+/// binds the producer spelling to the `math` module, so the program's own
+/// binding wins under D-244 #1129 statement (h) and `ndarray(4)` is
+/// CPython's `TypeError: 'module' object is not callable`, not an
+/// allocation.
+const ALIASED_SPELLING: &str = "\
+import math as ndarray
+
+
+def go(n: int) -> int:
+    a = ndarray(4)
+    return n
+";
+
+/// The miscompile pin, and the reason this arm is a category worse than the
+/// four statement-(h) arms before it.
+///
+/// A stdlib module alias binds the spelling in `Environment::std_module_aliases`
+/// and in no other table, so the producer's statement-(h) guard -- which
+/// consulted the class, generic, function, module-binding and function-local
+/// tables -- did not see it. `pycc build --ext` therefore **succeeded**, and
+/// the artifact it emitted allocated a buffer for a call the program's own
+/// binding makes a `TypeError`. That is a wrong artifact out of a silent
+/// success, not a misdirected message: nothing refused it in any mode.
+#[test]
+fn a_module_alias_of_the_spelling_is_not_a_silent_ext_allocation() {
+    let dir = fixture("1165_alias_shadow_ext", ALIASED_SPELLING);
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[T0021]"), "{err}");
+    assert!(
+        err.contains("call to undefined function `ndarray`"),
+        "{err}"
+    );
+}
+
+/// The same program under `pycc check`, which selects no artifact mode and
+/// so reaches neither the native gate nor the `ext` lowering: it used to
+/// exit 0 on a program CPython raises on.
+#[test]
+fn a_module_alias_of_the_spelling_is_refused_by_check() {
+    let dir = fixture("1165_alias_shadow_check", ALIASED_SPELLING);
+    let check = check_only(&dir);
+    assert!(!check.status.success(), "{}", stderr_of(&check));
+    // `pycc check` reports on stdout, unlike `pycc build`.
+    let err = stdout_of(&check);
+    assert!(err.contains("error[T0021]"), "{err}");
+    assert!(
+        err.contains("call to undefined function `ndarray`"),
+        "{err}"
+    );
+}
+
+/// The native gate's own arm. It walks the HIR rather than an
+/// `Environment`, so it needs the import-derived shadow of its own
+/// (`pycc_types::imported_producer_spellings`); without it the gate told
+/// this program to rebuild with `--ext`, a remedy for an allocation the
+/// program does not make and that `--ext` refuses too.
+#[test]
+fn a_module_alias_of_the_spelling_is_not_a_native_producer_gap() {
+    let dir = fixture("1165_alias_shadow_native", ALIASED_SPELLING);
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0405]"), "{err}");
+    assert!(
+        err.contains("call to undefined function `ndarray`"),
+        "{err}"
+    );
+}
+
+/// The solver's mirror, which the annotated arms above never reach: the
+/// constraint solver runs over *unannotated* private helpers (#142), so
+/// `_helper` is the only shape that exercises
+/// `constraints::resolved_producer_call`'s own statement-(h) guard and the
+/// alias gate in its `Call` arm. Before the fix this program built silently
+/// too.
+///
+/// `b = a` is what separates the two solver seams rather than decoration:
+/// the admitting seam (`resolved_producer_call`) marks `a` artifact-owned,
+/// and `module::merge_solver_first` makes the owned-use `C0001` that marks
+/// then raises the message the compiler emits -- so without that seam's own
+/// alias arm this program is refused in the *producer's* words instead of
+/// the program's own `T0021`.
+#[test]
+fn a_module_alias_of_the_spelling_is_declined_by_the_solver_too() {
+    let dir = fixture(
+        "1165_alias_shadow_solver",
+        "\
+import math as ndarray
+
+
+def _helper(n):
+    a = ndarray(4)
+    b = a
+    return n
+
+
+def go(n: int) -> int:
+    return _helper(n)
+",
+    );
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[T0021]"), "{err}");
+    assert!(
+        err.contains("call to undefined function `ndarray`"),
+        "{err}"
+    );
+}
+
+/// The keep path: the alias arm is per *spelling*, exactly as the
+/// function-local layer is. An `import math as m` binds `m`, says nothing
+/// about `ndarray`, and must leave a genuine producer call in place -- an
+/// over-suppression here would silently stop refusing a native allocation.
+///
+/// The `--ext` half is written as the owned-use refusal for
+/// `a_bool_length_is_admitted_as_a_one_element_request`'s reason (a
+/// successful `--ext` build needs CPython development headers): `b = a` is
+/// reachable only when `a` is bound to artifact-owned buffer storage, so
+/// that message proves the producer was still admitted.
+#[test]
+fn an_unrelated_module_alias_leaves_the_producer_in_place() {
+    let ext_dir = fixture(
+        "1165_alias_keep_ext",
+        "\
+import math as m
+
+
+def go(n: int) -> float:
+    a = ndarray(4)
+    b = a
+    return float(n) + m.sqrt(b[0])
+",
+    );
+    let build = build_ext(&ext_dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("call to undefined function"), "{err}");
+    assert!(
+        err.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{err}"
+    );
+
+    // The native half drops the `b = a` discriminator: that owned-use
+    // refusal is raised in every artifact mode and would preempt the gate
+    // this arm is pinning.
+    let native_dir = fixture(
+        "1165_alias_keep_native",
+        "\
+import math as m
+
+
+def go(n: int) -> float:
+    a = ndarray(4)
+    return float(n) + m.sqrt(a[0])
+",
+    );
+    let native = build_native(&native_dir);
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    let native_err = stderr_of(&native);
+    assert!(native_err.contains("error[I0405]"), "{native_err}");
+    assert!(
+        native_err.contains("allocates buffer storage with `ndarray(n)`"),
+        "{native_err}"
+    );
+}
+
+/// The inventory's other two import forms, pinned so a later change cannot
+/// open either one silently into the hole this commit closed. Neither needs
+/// a statement-(h) arm today: `from ... import ... as ...` is refused before
+/// any binding exists, and a non-stdlib `import ndarray` binds an opaque
+/// CPython module object the foreign-import path refuses.
+#[test]
+fn the_other_import_forms_of_the_spelling_stay_refused() {
+    let symbol_dir = fixture(
+        "1165_alias_from_import",
+        "\
+from math import sqrt as ndarray
+
+
+def go(n: int) -> int:
+    a = ndarray(4)
+    return n
+",
+    );
+    let symbol = build_ext(&symbol_dir);
+    assert!(!symbol.status.success(), "{}", stdout_of(&symbol));
+    assert!(
+        stderr_of(&symbol).contains("error[C0001]"),
+        "{}",
+        stderr_of(&symbol)
+    );
+
+    let foreign_dir = fixture(
+        "1165_alias_foreign_import",
+        "\
+import ndarray
+
+
+def go(n: int) -> int:
+    a = ndarray(4)
+    return n
+",
+    );
+    let foreign = build_ext(&foreign_dir);
+    assert!(!foreign.status.success(), "{}", stdout_of(&foreign));
+    assert!(
+        stderr_of(&foreign).contains("error[I0404]"),
+        "{}",
+        stderr_of(&foreign)
+    );
+}
+
 /// The whole of Part 2a in one hosted run: the artifact allocates its own
 /// storage, stores into it, reads it back, and frees it.
 #[test]

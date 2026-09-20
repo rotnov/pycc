@@ -245,11 +245,27 @@ pub(crate) fn producer_assignment_ty(
     // mirror is `crate::constraints::resolved_producer_call`; both then let
     // the ordinary `Call` walk report the program's own error, which for a
     // syntactic local is the solver's `unbound_local` (`T0021`).
+    //
+    // `std_module_aliases` is the fifth arm for the same reason, and it is
+    // the one arm that was a *miscompile* rather than a misdirected
+    // message: `import math as ndarray` binds the spelling to the `math`
+    // module, but a stdlib module alias is recorded only in that table --
+    // never in `env.bindings` -- so without this arm `a = ndarray(4)`
+    // allocated a buffer for a program whose own binding makes the call
+    // CPython's `TypeError: 'module' object is not callable`. Declining
+    // here hands it to the ordinary `Call` walk, which reports `T0021`
+    // exactly as it does for an unaliased spelling. `docs/TYPE_SYSTEM.md`'s
+    // `memoryview` row is the canonical enumeration of the binding kinds
+    // statement (h) covers.
     if env.lookup_class(callee).is_some()
         || env.lookup_generic(callee).is_some()
         || env.lookup_function(callee).is_some()
         || env.bindings.contains_key(callee.as_str())
         || crate::is_local(local_names, callee)
+        || env
+            .std_module_aliases
+            .iter()
+            .any(|(alias, _)| alias == callee)
     {
         return None;
     }
@@ -323,6 +339,42 @@ pub fn function_local_producer_spellings<'a>(
 ) -> Vec<&'a str> {
     crate::function_local_names(params, body)
         .into_iter()
+        .filter(|name| is_producer_spelling(name))
+        .collect()
+}
+
+/// The producer spellings a module's own import table binds, for the same
+/// one consumer outside this crate as [`function_local_producer_spellings`].
+///
+/// `import math as ndarray` binds the spelling to the `math` module, so
+/// D-244 #1129 statement (h) makes it the program's own meaning and
+/// [`producer_assignment_ty`] declines the call. The check phase reads that
+/// fact from `crate::Environment`'s `std_module_aliases`, which
+/// `crate::std_receiver::bind_std_module_aliases` fills;
+/// `src/memoryview_mode.rs`'s native-mode body gate walks the HIR instead
+/// and has no environment to ask, so this export gives it the same
+/// computation rather than a second walk that agrees today.
+///
+/// The predicate is deliberately *exactly* `bind_std_module_aliases`' -- an
+/// `ImportBinding::Module` whose `local_name` is not the module's canonical
+/// spelling -- and must never be widened to the other `ImportBinding`
+/// variants. Membership in that gate's shadow set means "skip the refusal",
+/// so a set wider than the checker's decline set is under-refusal: an
+/// artifact-owned allocation reaching a native executable.
+/// `ImportBinding::Symbol` (`from math import sqrt as ndarray`) and
+/// `ImportBinding::Foreign` (`import ndarray`) are refused upstream
+/// (`C0001` and `I0404`), so neither needs an entry here.
+pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&str> {
+    imports
+        .iter()
+        .filter_map(|binding| match binding {
+            pycc_hir::ImportBinding::Module { local_name, module }
+                if local_name != pycc_std::module_name(*module) =>
+            {
+                Some(local_name.as_str())
+            }
+            _ => None,
+        })
         .filter(|name| is_producer_spelling(name))
         .collect()
 }

@@ -489,8 +489,23 @@ pub(crate) fn producer_gaps_the_check_admits(
 /// this gate skipped its refusal, and an artifact-owned buffer allocation
 /// reached a **native** executable, past the `--ext`-only boundary
 /// [`producer_gap`] exists to state.
+///
+/// A stdlib module alias (`import math as ndarray`) is such a binding too,
+/// and is supplied by `pycc_types::imported_producer_spellings` for the same
+/// composition-not-re-derivation reason the per-function layer is supplied
+/// by `pycc_types::function_local_producer_spellings`. That helper's own doc
+/// comment owns why the predicate must stay exactly the checker's. Like the
+/// per-function layer, that arm is a mirror rather than the only thing
+/// standing between the program and a native allocation:
+/// [`producer_gaps_the_check_admits`] drops the gap anyway, because the
+/// checker refuses the aliased call with `T0021` and the function therefore
+/// fails its own check. The invariant that keeps both mirrors safe is that
+/// this set stays a *subset* of what
+/// `pycc_types::buffer::producer_assignment_ty` declines -- a wider set
+/// would hide a gap the checker did not refuse.
 fn shadowed_producer_spellings(hir: &HirModule) -> HashSet<&str> {
     let mut shadowed: HashSet<&str> = HashSet::new();
+    shadowed.extend(pycc_types::imported_producer_spellings(&hir.imports));
     for (name, _) in &hir.class_defs {
         if pycc_types::is_buffer_producer_spelling(name) {
             shadowed.insert(name.as_str());

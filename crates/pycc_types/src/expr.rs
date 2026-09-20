@@ -743,7 +743,24 @@ pub(crate) fn infer_expr_in(
                 // including the bare `HirStmt::ExprStmt` whose arm discards
                 // the inferred type, and which would otherwise leak one
                 // allocation per call -- arrives here.
-                if crate::buffer::is_producer_spelling(callee) {
+                //
+                // The alias gate is statement (h)'s fifth arm, in the
+                // position `is_local` holds further above: `import math as
+                // ndarray` binds the spelling to the `math` module, and a
+                // module alias lives in no table the lookups above consult,
+                // so without it this line refused the program's *own* call
+                // with the producer's position message. Declining leaves the
+                // `T0021` below, which is what an aliased spelling that is
+                // not a producer (`import math as m`, then `m(4)`) already
+                // reports. `crate::buffer::producer_assignment_ty` owns the
+                // full reason; `docs/TYPE_SYSTEM.md`'s `memoryview` row is
+                // the canonical enumeration.
+                if crate::buffer::is_producer_spelling(callee)
+                    && !env
+                        .std_module_aliases
+                        .iter()
+                        .any(|(alias, _)| alias == callee)
+                {
                     return Err(if env.in_function_body {
                         crate::buffer::producer_position_unsupported(callee)
                     } else {

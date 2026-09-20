@@ -509,6 +509,14 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 /// `crate::buffer::producer_assignment_ty`; declining here hands the value to
 /// the ordinary `Call` walk, whose own `is_local` gate (further down this
 /// file, ahead of the producer refusal) reports `unbound_local`.
+///
+/// `std_module_aliases` is the mirror of that same check's fifth arm: a
+/// stdlib module alias (`import math as ndarray`) binds the spelling but is
+/// recorded in no other table, so without it this solver -- which runs over
+/// unannotated private helpers -- allocated a buffer for a program whose own
+/// binding makes the call CPython's `TypeError`. See
+/// `crate::buffer::producer_assignment_ty` for the full reason, and
+/// `docs/TYPE_SYSTEM.md`'s `memoryview` row for the canonical enumeration.
 fn resolved_producer_call<'a>(
     signatures: &HashMap<String, SignatureTerms>,
     env: &ConstraintEnvironment<'_, '_>,
@@ -522,6 +530,10 @@ fn resolved_producer_call<'a>(
         || env.shadowed_producers.contains(callee.as_str())
         || env.bindings.contains_key(callee.as_str())
         || is_local(env.local_names, callee)
+        || env
+            .std_module_aliases
+            .iter()
+            .any(|(alias, _)| alias == callee)
         || args.len() != 1
         || !env.in_function_body
     {
@@ -878,10 +890,19 @@ pub(crate) fn collect_expr_constraints(
             //
             // The callee-bound gate further above already returned for a
             // name the module binds to a *value*, so only the two spelling
-            // shadows remain to check here.
+            // shadows and the module-alias binding remain to check here. The
+            // last of those is statement (h)'s fifth arm: a stdlib module
+            // alias binds the spelling but is a value in no table, so
+            // without it this line refused the program's own call with the
+            // producer's position message instead of letting the walk below
+            // report it. See `crate::buffer::producer_assignment_ty`.
             if crate::buffer::is_producer_spelling(callee)
                 && !signatures.contains_key(callee)
                 && !env.shadowed_producers.contains(callee.as_str())
+                && !env
+                    .std_module_aliases
+                    .iter()
+                    .any(|(alias, _)| alias == callee)
             {
                 return Err(if env.in_function_body {
                     crate::buffer::producer_position_unsupported(callee)
