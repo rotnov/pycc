@@ -7580,6 +7580,17 @@ fn emit_stmt<'ctx>(
         // that ever observes the raise. Omit it and an out-of-range store
         // as a function's last statement would return normally. The
         // precedent copied here is `MirStmt::Call`'s own guard above.
+        //
+        // A *sub-expression* that raises is already handled before the
+        // write: `emit_expr` guards any operand for which
+        // `expression_can_set_exception` holds -- a `b[0] = b[99]` load
+        // among them -- and branches away before this arm reaches
+        // `buffer_f64_set`, so no write lands on a sentinel operand. The
+        // one unguarded case is the bigint index, which
+        // `build_untag_checked` aborts on: that is the pre-existing D-141
+        // boundary `MirExpr::BufferGet` and `MirStmt::DictSet` already sit
+        // on (`docs/RUNTIME.md`'s object-model "still aborts" line), not
+        // something the store introduces.
         MirStmt::BufferSet { base, index, value } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let Scalar::MemoryView(base_ptr) = base_scalar else {

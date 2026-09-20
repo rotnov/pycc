@@ -383,12 +383,14 @@ fn every_read_of_a_memoryview_parameter_is_the_same_capability_gap() {
             // Part 2 of #1027 (#1113) admitted `v[0]` as a *load* and
             // Part 1 of #1142 admitted `v[0] = 1.0` as a store, so neither
             // subscript form this arm has spelled is a capability gap any
-            // more. Aliasing the name into a local is, and it reaches the
-            // same read seam -- so the arm keeps its subject and moves
-            // there, as it did the last two times.
-            "1112_alias_local",
+            // more. A truth test reads the name and still is -- and it is
+            // deliberately not the aliasing shape the `1112_read_alias`
+            // arm below already pins, so the table keeps six distinct
+            // witnesses of the one seam rather than five and a duplicate.
+            "1112_read_truth_test",
             "def total(v: memoryview) -> int:
-    x = v
+    if v:
+        return 1
     return 0
 ",
         ),
