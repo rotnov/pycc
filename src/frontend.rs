@@ -380,13 +380,21 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     let resolved = match pycc_types::check_and_resolve_all_keyed(&hir) {
         Ok(resolved) => resolved,
         Err(check_keyed) => {
-            keyed.extend(
+            // The import gaps collected above are dropped on this path,
+            // exactly as the `?` this `match` replaced dropped them: a
+            // program with both a type error and a foreign import reports
+            // the type error alone, which `issue_1080_foreign_object.rs`'s
+            // `a_type_error_is_reported_before_the_native_foreign_refusal`
+            // pins. A producer gap is not an import gap -- it has survived
+            // its own per-function filter against this very verdict, so it
+            // is reported beside the type errors rather than behind them.
+            let mut refused =
                 crate::memoryview_mode::producer_gaps_the_check_admits(producer_gaps, &check_keyed)
                     .into_iter()
-                    .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
-            );
-            keyed.extend(attribute(&sources, check_keyed));
-            return Err(sources.group(keyed));
+                    .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic))
+                    .collect::<Vec<_>>();
+            refused.extend(attribute(&sources, check_keyed));
+            return Err(sources.group(refused));
         }
     };
     keyed.extend(
