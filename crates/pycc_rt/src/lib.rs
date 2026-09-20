@@ -1639,6 +1639,126 @@ pub unsafe extern "C" fn pycc_rt_buffer_len(view: *const PyccExtBufferView) -> i
     unsafe { (*view).len }
 }
 
+/// Net count of live artifact-owned [`PyccExtBufferView`] allocations:
+/// incremented by [`pycc_rt_buffer_f64_alloc`] and decremented by the one
+/// path in [`pycc_rt_buffer_f64_free`] that actually releases storage. A
+/// steady-state value of zero across a sequence of calls is exactly the
+/// "the compiled function freed every buffer it allocated" property Part 2a
+/// of #1142 (#1165) is about.
+///
+/// `Relaxed` is the correct ordering for the same reason [`STR_LIVE`]'s is:
+/// the counter orders nothing else, no reader infers the state of any other
+/// memory from it, and a probe reads it from the same thread that made the
+/// calls it is measuring.
+///
+/// Only *artifact-owned* storage moves this counter. A `memoryview`
+/// **parameter**'s view is a wrapper-side stack local the artifact never
+/// allocated and never frees, so it is invisible here -- which is what makes
+/// a difference between two reads a statement about the producer alone.
+static BUFFER_LIVE: AtomicI64 = AtomicI64::new(0);
+
+/// The current value of the live artifact-owned-buffer counter.
+///
+/// Deliberately **not** `#[cfg(test)]`-gated, for the reason
+/// [`pycc_rt_str_live_objects`] states in full: its consumer is a hosted
+/// D-244 `ext` module, which links the ordinary non-test `libpycc_rt.a`, so
+/// a test-only symbol would simply not exist there. The cost of exporting it
+/// unconditionally is one relaxed atomic per buffer allocation and per
+/// buffer free.
+///
+/// The value is only meaningful as a *difference* between two reads taken
+/// around a known sequence of calls.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_buffer_live_views() -> i64 {
+    BUFFER_LIVE.load(Ordering::Relaxed)
+}
+
+/// Allocates artifact-owned storage for `len` `f64` elements and the
+/// [`PyccExtBufferView`] that addresses it (Python's `ndarray(n)` /
+/// `NDArray(n)`, Part 2a of #1142 -- issue #1165).
+///
+/// The returned pointer is the *view*, already pointing at the storage, so
+/// compiled code keeps handling exactly the `*const PyccExtBufferView` that
+/// [`pycc_rt_buffer_f64_get`], [`pycc_rt_buffer_f64_set`] and
+/// [`pycc_rt_buffer_len`] already take: a produced buffer and a parameter
+/// buffer are the same shape to codegen, and nothing new reaches its
+/// calling convention.
+///
+/// # Zero-fill is a deliberate deviation from `numpy.ndarray(n)`
+/// CPython's `numpy.ndarray(5)` returns *uninitialized* storage. This
+/// zero-fills, on two grounds recorded in D-244's #1165 amendment: Part 2b
+/// hands this storage to a host process, and uninitialized artifact heap
+/// reaching one is an information-disclosure surface; and a deterministic
+/// producer is what lets a conformance test assert anything at all about
+/// the value before a store.
+///
+/// # Length
+/// `len < 0` sets a pending `ValueError` (D-173) and returns null, matching
+/// CPython's own `ValueError: negative dimensions are not allowed`. The
+/// caller's generated code checks the pending flag after this call, and the
+/// null is safe for the epilogue to hand straight to
+/// [`pycc_rt_buffer_f64_free`]. `len == 0` is admitted and yields a
+/// zero-length view, which every existing helper already handles.
+///
+/// # Allocator pairing
+/// The storage is a `Box<[f64]>` and the view is a `Box<PyccExtBufferView>`,
+/// and [`pycc_rt_buffer_f64_free`] reconstructs *those same two boxes*. The
+/// pairing is stated as a `Box` round trip rather than as a hand-built
+/// `core::alloc::Layout` precisely so the size and alignment cannot drift
+/// between the two halves: a mismatched-layout deallocation is undefined
+/// behavior that no test notices by accident.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
+    if len < 0 {
+        raise_builtin(
+            EXCEPTION_TYPE_VALUE_ERROR,
+            "ValueError",
+            "negative dimensions are not allowed",
+        );
+        return core::ptr::null_mut();
+    }
+    let storage: Box<[f64]> = vec![0.0f64; len as usize].into_boxed_slice();
+    let ptr = Box::into_raw(storage) as *mut f64;
+    let view = Box::new(PyccExtBufferView {
+        ptr: ptr as *mut core::ffi::c_void,
+        len,
+    });
+    BUFFER_LIVE.fetch_add(1, Ordering::Relaxed);
+    Box::into_raw(view)
+}
+
+/// Releases storage produced by [`pycc_rt_buffer_f64_alloc`].
+///
+/// A documented **no-op on null**, exactly like [`pycc_rt_str_decref`]'s
+/// null arm and for the same reason: the generated epilogue runs over every
+/// buffer slot the function declared, including one a path never assigned,
+/// whose slot `storage_slot_at_entry` null-initialized.
+///
+/// `view.len` is read *before* the storage is released and the view struct
+/// is released *last*, because the storage box's length is what makes its
+/// deallocation layout the same one [`pycc_rt_buffer_f64_alloc`] used.
+///
+/// # Safety
+/// `view` must be null or a pointer returned by
+/// [`pycc_rt_buffer_f64_alloc`] that has not already been freed. It must
+/// never be a `memoryview` **parameter**'s view: that storage belongs to the
+/// host's exporter, and the checker refuses every shape that could route one
+/// here (Part 2a of #1142 refuses assignment to a buffer parameter for
+/// exactly this reason).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_buffer_f64_free(view: *mut PyccExtBufferView) {
+    if view.is_null() {
+        return;
+    }
+    let view = unsafe { Box::from_raw(view) };
+    // Read `len` off the view before the storage box is rebuilt: the slice
+    // length is half of the `Box<[f64]>` layout the allocation used.
+    let storage = core::ptr::slice_from_raw_parts_mut(view.ptr as *mut f64, view.len as usize);
+    drop(unsafe { Box::from_raw(storage) });
+    BUFFER_LIVE.fetch_sub(1, Ordering::Relaxed);
+    drop(view);
+}
+
 /// Returns `list`'s current element count (Python's `len(list)`, D-105's
 /// v0.2 `list[int]` slice).
 ///
@@ -4188,6 +4308,75 @@ mod tests {
             assert_eq!(pycc_rt_buffer_len(&view), 4);
             assert_eq!(pycc_rt_buffer_len(&empty), 0);
         }
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    /// The allocator pairing of #1165, pinned as a round trip: allocate,
+    /// write every element through the same `buffer_f64_set` a compiled body
+    /// uses, read them all back, and free. A mismatched deallocation layout
+    /// is undefined behavior that no test notices by accident, so this test
+    /// exists to give the debug allocator a well-formed pairing to check.
+    #[test]
+    fn buffer_f64_alloc_free_round_trips_through_the_element_helpers() {
+        pycc_rt_exception_clear();
+        let view = pycc_rt_buffer_f64_alloc(4);
+        assert!(!view.is_null());
+        assert_eq!(pycc_rt_exception_active(), 0);
+        unsafe {
+            assert_eq!(pycc_rt_buffer_len(view), 4);
+            // The zero-fill deviation from `numpy.ndarray(n)`, asserted
+            // before any store.
+            for i in 0..4 {
+                assert_eq!(pycc_rt_buffer_f64_get(view, i), 0.0);
+            }
+            for i in 0..4 {
+                pycc_rt_buffer_f64_set(view, i, 1.5 + i as f64);
+            }
+            for i in 0..4 {
+                assert_eq!(pycc_rt_buffer_f64_get(view, i), 1.5 + i as f64);
+            }
+            pycc_rt_buffer_f64_free(view);
+        }
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    /// `ndarray(0)` is admitted: a zero-length view whose `len` is `0`, which
+    /// every existing helper already handles, and whose free is the same
+    /// `Box<[f64]>` round trip.
+    #[test]
+    fn buffer_f64_alloc_admits_a_zero_length_request() {
+        pycc_rt_exception_clear();
+        let view = pycc_rt_buffer_f64_alloc(0);
+        assert!(!view.is_null());
+        unsafe {
+            assert_eq!(pycc_rt_buffer_len(view), 0);
+            pycc_rt_buffer_f64_free(view);
+        }
+        assert_eq!(pycc_rt_exception_active(), 0);
+    }
+
+    /// `ndarray(-1)` raises `ValueError` through D-173's pending-exception
+    /// protocol and returns null, matching CPython's own
+    /// `ValueError: negative dimensions are not allowed`.
+    #[test]
+    fn buffer_f64_alloc_refuses_a_negative_length() {
+        pycc_rt_exception_clear();
+        let view = pycc_rt_buffer_f64_alloc(-1);
+        assert!(view.is_null());
+        assert_eq!(pycc_rt_exception_active(), 1);
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_VALUE_ERROR)
+        );
+        pycc_rt_exception_clear();
+    }
+
+    /// The null arm of the free is a no-op, which is what makes a generated
+    /// epilogue safe over a slot a path never assigned.
+    #[test]
+    fn buffer_f64_free_is_a_no_op_on_null() {
+        pycc_rt_exception_clear();
+        unsafe { pycc_rt_buffer_f64_free(core::ptr::null_mut()) };
         assert_eq!(pycc_rt_exception_active(), 0);
     }
 
