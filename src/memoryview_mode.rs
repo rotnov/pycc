@@ -371,6 +371,11 @@ fn ext_return_gap(name: &str) -> Diagnostic {
 /// `Ty::MemoryView`, so there is no artifact-owned allocation left for a
 /// native executable to carry.
 ///
+/// What this walk does *not* decide is whether the call the checker sees is
+/// an allocation at all: it matches a spelling and an arity, not a length.
+/// [`producer_gaps_the_check_admits`] is the semantic half, and owns why it
+/// is a separate filter rather than a test this walk could make itself.
+///
 /// `pycc check` selects no artifact mode and so does not run this gate, the
 /// same deliberate divergence [`refuse_in_native_mode`] already has: the
 /// refusal's whole subject is *which artifact* is being built.
@@ -399,6 +404,73 @@ pub(crate) fn refuse_buffer_producers_in_native_mode(
         return Ok(());
     }
     Err(gaps)
+}
+
+/// The [`refuse_buffer_producers_in_native_mode`] gaps the type check has
+/// not already contradicted, given that check's own verdict (`check`), and
+/// the whole of this gate's semantic validation.
+///
+/// The walk above recognizes a producer *syntactically* -- spelling, arity,
+/// and D-244 #1129 statement (h) -- because it has to: it runs before the
+/// type check, for the reason `src/frontend.rs`'s `resolve_frontend_native`
+/// states, and the checker admits `a = ndarray(n)` in every artifact mode,
+/// so there is no mode-aware verdict to wait for. What that recognition
+/// cannot see is the *length expression*. `a = ndarray("x")` and
+/// `a = ndarray(missing)` match the spelling and the arity and bind nothing
+/// at all: the checker refuses them with `T0033` and `T0021`, which is also
+/// exactly what `--ext` and `pycc check` report. Reporting `I0405` for them
+/// prescribed "rebuild with `--ext`" for a program `--ext` refuses too --
+/// the same defect commit 4c72b4a5 closed for statement (h)'s
+/// function-local arm, in the arm next to it.
+///
+/// Validating the length inside this gate is not an option, and that was
+/// measured rather than assumed: the length may read a module-level global
+/// (`N = 4` / `a = ndarray(N)`), so any environment built here that is
+/// narrower than `pycc_types`' own would infer a failure where there is
+/// none and *skip* -- an artifact-owned allocation reaching a native
+/// executable, the one direction this gate must never fail in. The only
+/// environment wide enough is the checker's, so the gate consumes the
+/// checker's verdict instead of re-deriving it.
+///
+/// The join is per *function*, which is what keeps it a filter rather than
+/// a phase reorder: [`pycc_types::KeyedDiagnostics`] keys each diagnostic
+/// by the failing item's index in `hir.items`, the same index space this
+/// gate's gaps carry, so a gap is dropped exactly when that function's own
+/// check failed. A function that allocates and checks clean still gets
+/// `I0405`, including when a *different* function in the same program
+/// fails. A function that allocates and fails its own check for an
+/// unrelated reason (`a = ndarray(4)` and then `return "x"`) reports that
+/// failure instead, deliberately: `--ext` refuses that program identically,
+/// so `I0405`'s remedy does not apply to it either, by 4c72b4a5's own
+/// criterion.
+///
+/// A `TopLevel` or `Module` key suppresses every gap. Such a list is never
+/// mixed with `Function` keys -- `pycc_types::KeyedDiagnostics`' own
+/// contract -- because a module-level failure stops the driver before it
+/// checks any function body, so there is no evidence about any function and
+/// the gate claims nothing.
+///
+/// It cannot under-refuse: a program with no producer produces no gap to
+/// keep, and a gap this filter drops belongs to a function the checker has
+/// already refused, so no artifact is emitted for it at all.
+pub(crate) fn producer_gaps_the_check_admits(
+    gaps: Vec<(usize, Diagnostic)>,
+    check: &pycc_types::KeyedDiagnostics,
+) -> Vec<(usize, Diagnostic)> {
+    let mut failed: HashSet<usize> = HashSet::new();
+    for (key, _) in check {
+        match key {
+            pycc_types::DiagnosticKey::Function(index) => {
+                failed.insert(*index);
+            }
+            pycc_types::DiagnosticKey::TopLevel(_) | pycc_types::DiagnosticKey::Module => {
+                return Vec::new();
+            }
+        }
+    }
+    gaps.into_iter()
+        .filter(|(index, _)| !failed.contains(index))
+        .collect()
 }
 
 /// The *module-wide* producer spellings the program itself rebinds, which

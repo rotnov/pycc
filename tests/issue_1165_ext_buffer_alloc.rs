@@ -517,6 +517,168 @@ fn allocating_buffer_storage_natively_is_refused_in_its_own_words() {
     );
 }
 
+/// #1166 review finding A: a call the checker refuses for its *length* is
+/// not an allocation, so the native gate must not answer it with `I0405`.
+///
+/// The gate's walk matches a spelling and an arity. `ndarray("x")` and
+/// `ndarray(missing)` match both and bind nothing: `--ext` and `pycc check`
+/// report `T0033` and `T0021` for them, so an `I0405` telling the user to
+/// rebuild with `--ext` prescribed a remedy that lands on a different error
+/// about a different cause -- the defect
+/// `a_function_local_rebinding_keeps_its_own_meaning_natively_too` closed for
+/// statement (h)'s local arm, in the arm beside it.
+#[test]
+fn a_length_the_checker_refuses_is_not_a_native_allocation() {
+    for (category, source, code) in [
+        (
+            "1165_native_length_type",
+            "\
+def go(n: int) -> int:
+    a = ndarray(\"x\")
+    return n
+",
+            "error[T0033]",
+        ),
+        (
+            "1165_native_length_unbound",
+            "\
+def go(n: int) -> int:
+    a = ndarray(missing)
+    return n
+",
+            "error[T0021]",
+        ),
+    ] {
+        let dir = fixture(category, source);
+        let build = build_native(&dir);
+        assert!(!build.status.success(), "{}", stdout_of(&build));
+        let err = stderr_of(&build);
+        assert!(err.contains(code), "{err}");
+        assert!(!err.contains("I0405"), "{err}");
+    }
+}
+
+/// The under-refusal direction of the filter above, and the reason the gate
+/// consumes the checker's verdict instead of inferring the length itself.
+///
+/// A length may read a module-level global, so any environment the gate
+/// could build for itself would have to reproduce the checker's own
+/// top-level pass; a narrower one infers a failure where there is none and
+/// *skips*, letting an artifact-owned allocation into a native executable.
+/// A `bool` length is admitted for the same reason `ndarray(True)` requests
+/// one element, so it must stay refused natively too.
+#[test]
+fn a_length_the_checker_admits_is_still_a_native_allocation() {
+    for (category, source) in [
+        (
+            "1165_native_global_length",
+            "\
+N = 4
+
+
+def go(n: int) -> int:
+    a = ndarray(N)
+    return n
+",
+        ),
+        (
+            "1165_native_bool_length",
+            "\
+def go(n: int) -> int:
+    a = ndarray(True)
+    return n
+",
+        ),
+    ] {
+        let dir = fixture(category, source);
+        let build = build_native(&dir);
+        assert!(!build.status.success(), "{}", stdout_of(&build));
+        let err = stderr_of(&build);
+        assert!(err.contains("error[I0405]"), "{err}");
+        assert!(
+            err.contains("a native executable has no host to carry it to"),
+            "{err}"
+        );
+    }
+}
+
+/// The filter is per *function*, not per module: an allocating function that
+/// checks clean is still named when a different function in the same program
+/// fails its own check, and both diagnostics are reported together.
+#[test]
+fn a_clean_allocation_is_named_beside_another_functions_failure() {
+    let dir = fixture(
+        "1165_native_mixed_failure",
+        "\
+def alloc(n: int) -> int:
+    a = ndarray(4)
+    return n
+
+
+def broken(n: int) -> str:
+    return 1
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0405]"), "{err}");
+    assert!(err.contains("error[T0022]"), "{err}");
+}
+
+/// A module-level failure stops the check driver before it visits any
+/// function body, so it carries no evidence about any function and every
+/// producer gap is suppressed rather than guessed at.
+#[test]
+fn a_module_level_failure_suppresses_every_producer_gap() {
+    let dir = fixture(
+        "1165_native_module_failure",
+        "\
+X: int = \"s\"
+
+
+def go(n: int) -> int:
+    a = ndarray(4)
+    return n
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[T0025]"), "{err}");
+    assert!(!err.contains("I0405"), "{err}");
+}
+
+/// The one path with no check verdict to filter against: a `memoryview` in a
+/// *signature* refuses the program before the type check runs, exactly so the
+/// signature gets the `I0405` it is documented to get. The producer gap is
+/// reported unfiltered beside it -- the program is already refused under the
+/// same code for a reason that does apply.
+#[test]
+fn a_buffer_signature_and_an_allocation_are_both_named() {
+    let dir = fixture(
+        "1165_native_signature_and_producer",
+        "\
+def go(v: memoryview) -> int:
+    a = ndarray(4)
+    return 1
+",
+    );
+    let build = build_native(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(
+        err.contains("`go`'s parameter `v` requires `pycc build --ext`")
+            || err.contains("requires `pycc build --ext`"),
+        "{err}"
+    );
+    assert!(
+        err.contains("a native executable has no host to carry it to"),
+        "{err}"
+    );
+    assert_eq!(err.matches("error[I0405]").count(), 2, "{err}");
+}
+
 /// The whole of Part 2a in one hosted run: the artifact allocates its own
 /// storage, stores into it, reads it back, and frees it.
 #[test]
