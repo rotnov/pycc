@@ -1754,8 +1754,10 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// constraint solver runs first and would otherwise report the parameter
 /// message for every owned read before the check phase ever looked.
 ///
-/// The parameter arm's text is unchanged verbatim -- eight assertions pin
-/// its prefix -- and the owned arm is [`crate::buffer::owned_buffer_use_unsupported`],
+/// The parameter arm's *prefix* is unchanged verbatim -- eight assertions pin
+/// it -- while its tail was corrected: it used to assert that #1027, #1129
+/// and #1142 admit a buffer only as such a parameter, which Part 2a's second
+/// provenance falsified. The owned arm is [`crate::buffer::owned_buffer_use_unsupported`],
 /// which names the owned case and the reason it is still refused (there is
 /// nowhere for the value to go until egress lands in Part 2b).
 pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty, owned: bool) -> Result<(), Diagnostic> {
@@ -1768,7 +1770,7 @@ pub(crate) fn reject_memoryview_read(name: &str, ty: &Ty, owned: bool) -> Result
             format!(
                 "using `{name}`, which is bound to a buffer parameter of a \
                  `pycc build --ext` export, is valid Python but not implemented yet; \
-                 #1027, #1129 and #1142 admit a buffer only as such a parameter, read \
+                 the name cannot be used as a whole value here -- read \
                  one element at a time with `{name}[i]` over `range(len({name}))`, and \
                  store one with `{name}[i] = 1.0`"
             ),
@@ -1802,8 +1804,9 @@ pub(crate) fn reject_memoryview_declaration(
             "C0001",
             format!(
                 "declaring `{target}` as a buffer is valid Python but not implemented \
-                 yet; Part 1 of #1027 and #1129 admit a buffer only as a parameter of a \
-                 `pycc build --ext` export"
+                 yet; this declaration binds no buffer storage to the name, and a \
+                 `pycc build --ext` export admits the annotation in its signature or on \
+                 a declaration whose initializer allocates the storage"
             ),
             Span::new(0, 0),
         ));

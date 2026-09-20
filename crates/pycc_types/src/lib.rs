@@ -1970,8 +1970,10 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             //
             // Part 2a of #1142 (#1165) admits one shape this refusal used to
             // cover: `a: NDArray = ndarray(n)`. The call is *gated* rather
-            // than the contract widened, so the refusal's own message -- and
-            // the value-less shape it exists for -- stay byte-identical.
+            // than the contract widened, so the value-less shape the refusal
+            // exists for is unchanged. Its message is not byte-identical: the
+            // tail claiming a buffer is admitted only as a parameter was
+            // corrected once Part 2a gave the type a second provenance.
             let produced = value
                 .as_ref()
                 .and_then(|value| buffer::producer_assignment_ty(env, &[], value));

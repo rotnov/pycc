@@ -308,8 +308,8 @@ fn ext_return_gap(name: &str) -> Diagnostic {
         severity: Severity::Error,
         message: format!(
             "`{name}`'s return type is a buffer, which is valid Python but not implemented \
-             yet; Part 1 of #1027 and #1129 admit a buffer only as a parameter of a \
-             `pycc build --ext` export, so no expression produces one to return"
+             yet; a `pycc build --ext` export cannot hand buffer storage back to its \
+             caller, so no buffer-typed value may leave a function in either mode"
         ),
         span: None,
         label: None,

@@ -495,7 +495,19 @@ fn every_non_parameter_ndarray_position_is_refused() {
     let err = stderr_of(&ext);
     assert!(err.contains("error[C0001]"), "{err}");
     assert!(err.contains("`_f`'s return type is a buffer"), "{err}");
-    assert!(err.contains("#1129"), "{err}");
+    // This used to pin `#1129` as the proxy for "kept in step with its two
+    // siblings in `crates/pycc_types`". Part 2a of #1142 (#1165) retired the
+    // whole issue list from this message: `ndarray(n)` made its old tail --
+    // "no expression produces one to return" -- false, and a fresh list
+    // would go stale again the same way when egress lands in Part 2b
+    // (#1164). The two properties the citation was standing in for are
+    // asserted directly instead: the refusal still names the artifact mode
+    // it is scoped to, and it no longer claims nothing can produce a buffer.
+    assert!(err.contains("pycc build --ext"), "{err}");
+    assert!(
+        !err.contains("no expression produces one to return"),
+        "{err}"
+    );
     // And the spelling the user did not write appears nowhere in the
     // diagnostic. Scoped to the `error[C0001]` line rather than asserted
     // over the whole stream: stderr also carries scratch paths and, on some
