@@ -935,10 +935,16 @@ def go(n: int) -> float:
 }
 
 /// The inventory's other two import forms, pinned so a later change cannot
-/// open either one silently into the hole this commit closed. Neither needs
-/// a statement-(h) arm today: `from ... import ... as ...` is refused before
-/// any binding exists, and a non-stdlib `import ndarray` binds an opaque
-/// CPython module object the foreign-import path refuses.
+/// open either one silently into the hole this commit closed.
+/// `from ... import ... as ...` is refused before any binding exists and so
+/// needs no statement-(h) arm at all; a non-stdlib `import ndarray` binds an
+/// opaque CPython module object the foreign-import path refuses, which needs
+/// no arm in the *check* phase -- `foreign::bind_foreign_objects_at` binds
+/// the name into `Environment::bindings` as `Ty::Object`, so
+/// `buffer::producer_assignment_ty`'s `bindings` arm already declines -- but
+/// does need one in the solver, whose own table is separate. The arm and the
+/// message it protects are pinned by
+/// `a_foreign_import_of_the_spelling_is_declined_by_the_solver_too` below.
 #[test]
 fn the_other_import_forms_of_the_spelling_stay_refused() {
     let symbol_dir = fixture(
@@ -977,6 +983,150 @@ def go(n: int) -> int:
         stderr_of(&foreign).contains("error[I0404]"),
         "{}",
         stderr_of(&foreign)
+    );
+}
+
+/// The sixth statement-(h) arm (#1165 review round 7), and the one whose
+/// absence was a *diagnostic-quality* defect rather than a miscompile: the
+/// program is refused either way, but in the wrong words and at the wrong
+/// line.
+///
+/// A foreign `import ndarray` binds the spelling only in the solver's
+/// `foreign_objects` table -- it is deliberately kept out of
+/// `ConstraintEnvironment::bindings`, unlike the check phase's own
+/// `Environment`, where `foreign::bind_foreign_objects_at` records it as
+/// `Ty::Object` -- so `constraints::resolved_producer_call`'s guard did not
+/// see it and treated the call as the intrinsic producer. `b = a` then read
+/// a name the solver had marked artifact-owned, and
+/// `module::merge_solver_first` made that owned-buffer `C0001` the reported
+/// diagnostic, displacing the `I0404` foreign refusal and pointing the span
+/// at the `import` line.
+///
+/// `go` is fully annotated on purpose: the solver walks every body, not
+/// only unannotated private helpers, so the simplest shape reproduces it.
+/// Both directions are asserted -- presence of `I0404` alone would pass
+/// while the wrong `C0001` was still emitted alongside it.
+#[test]
+fn a_foreign_import_of_the_spelling_is_declined_by_the_solver_too() {
+    const SOURCE: &str = "\
+import ndarray
+
+
+def go(n: int) -> int:
+    a = ndarray(n)
+    b = a
+    return n
+";
+    let dir = fixture("1165_foreign_shadow_solver", SOURCE);
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0404]"), "{err}");
+    assert!(
+        !err.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{err}"
+    );
+
+    // `pycc check` selects no artifact mode and reports on stdout; the
+    // solver runs there too, so the same two assertions hold.
+    let check_dir = fixture("1165_foreign_shadow_check", SOURCE);
+    let check = check_only(&check_dir);
+    assert!(!check.status.success(), "{}", stderr_of(&check));
+    let out = stdout_of(&check);
+    assert!(out.contains("error[I0404]"), "{out}");
+    assert!(
+        !out.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{out}"
+    );
+
+    // The native gate needs no arm of its own -- probed and confirmed: the
+    // foreign refusal preempts it, so this program never reaches `I0405`.
+    let native_dir = fixture("1165_foreign_shadow_native", SOURCE);
+    let native = build_native(&native_dir);
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    let native_err = stderr_of(&native);
+    assert!(native_err.contains("error[I0404]"), "{native_err}");
+    assert!(!native_err.contains("error[I0405]"), "{native_err}");
+}
+
+/// The shape the round-7 review named: a private helper with no annotations
+/// at all, which is the only body the constraint solver was ever expected to
+/// walk. Same two assertions as the annotated arm above.
+#[test]
+fn a_foreign_import_shadows_the_producer_in_an_unannotated_helper() {
+    let dir = fixture(
+        "1165_foreign_shadow_helper",
+        "\
+import ndarray
+
+
+def _h(n):
+    a = ndarray(n)
+    b = a
+    return n
+
+
+def go(n: int) -> int:
+    return _h(n)
+",
+    );
+    let build = build_ext(&dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(err.contains("error[I0404]"), "{err}");
+    assert!(
+        !err.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{err}"
+    );
+}
+
+/// The keep path for the foreign arm, written exactly as the module-alias
+/// keep path above: the arm is keyed on a name the program's own import
+/// table binds, so the *same* shape without any `import ndarray` must still
+/// be the intrinsic producer. Over-suppression here would silently stop
+/// refusing a native allocation.
+///
+/// The `--ext` half is the owned-use refusal for the reason that keep path
+/// states (a successful `--ext` build needs CPython development headers):
+/// `b = a` is reachable only when `a` is bound to artifact-owned buffer
+/// storage, so that message proves the producer was still admitted. The
+/// native half drops `b = a`, whose refusal is raised in every artifact mode
+/// and would preempt the gate being pinned.
+#[test]
+fn no_foreign_import_leaves_the_producer_in_place() {
+    let ext_dir = fixture(
+        "1165_foreign_keep_ext",
+        "\
+def go(n: int) -> int:
+    a = ndarray(n)
+    b = a
+    return n
+",
+    );
+    let build = build_ext(&ext_dir);
+    assert!(!build.status.success(), "{}", stdout_of(&build));
+    let err = stderr_of(&build);
+    assert!(!err.contains("error[I0404]"), "{err}");
+    assert!(
+        err.contains("bound to buffer storage this `pycc build --ext` artifact allocated"),
+        "{err}"
+    );
+
+    let native_dir = fixture(
+        "1165_foreign_keep_native",
+        "\
+def go(n: int) -> int:
+    a = ndarray(n)
+    return n
+",
+    );
+    let native = build_native(&native_dir);
+    assert!(!native.status.success(), "{}", stdout_of(&native));
+    let native_err = stderr_of(&native);
+    assert!(native_err.contains("error[I0405]"), "{native_err}");
+    assert!(
+        native_err.contains("allocates buffer storage with `ndarray(n)`"),
+        "{native_err}"
     );
 }
 

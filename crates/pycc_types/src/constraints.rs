@@ -517,6 +517,20 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 /// binding makes the call CPython's `TypeError`. See
 /// `crate::buffer::producer_assignment_ty` for the full reason, and
 /// `docs/TYPE_SYSTEM.md`'s `memoryview` row for the canonical enumeration.
+///
+/// `foreign_objects` is the sixth arm, and it is one the check-phase mirror
+/// does not need: `crate::foreign::bind_foreign_objects_at` binds a foreign
+/// `import ndarray` into the check phase's own `bindings` as `Ty::Object`,
+/// so that mirror's `bindings` arm already declines, while the solver
+/// deliberately keeps foreign names *out* of `bindings` and records them in
+/// this separate table instead (see the `Name` arm for why). Without this
+/// arm the solver treats the foreign call as the intrinsic producer and
+/// marks the assigned name artifact-owned, so a second use of it raises the
+/// owned-buffer `C0001` -- and `crate::module`'s `merge_solver_first` makes
+/// that the reported diagnostic, displacing the `I0404` foreign refusal the
+/// check phase correctly produces and pointing the span at the `import`
+/// line. The program is refused either way; only the message is wrong. See
+/// `docs/TYPE_SYSTEM.md`'s `memoryview` row for the canonical enumeration.
 fn resolved_producer_call<'a>(
     signatures: &HashMap<String, SignatureTerms>,
     env: &ConstraintEnvironment<'_, '_>,
@@ -534,6 +548,7 @@ fn resolved_producer_call<'a>(
             .std_module_aliases
             .iter()
             .any(|(alias, _)| alias == callee)
+        || env.foreign_objects.contains(callee.as_str())
         || args.len() != 1
         || !env.in_function_body
     {
