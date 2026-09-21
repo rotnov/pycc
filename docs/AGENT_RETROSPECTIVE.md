@@ -33,6 +33,22 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — A 100%-covered diff shipped a host-aborting null dereference because no test had the shape
+
+Every gate for #1164 was green, including 100% coverage of the lines the
+diff added, yet `try: return a` / `finally: a[0] = 42.0` over an
+artifact-owned buffer aborted the hosting CPython interpreter: the frame
+cleared the returned buffer's slot at the `return` *statement*, before the
+finalizer ran. Not a coverage-*percentage* gap but a coverage-*shape* gap
+— no test in the suite returned an owned buffer from inside a
+`try/finally`, so the covered lines were never executed in the ordering
+that breaks them, and a hosted execution found what the local gates could
+not for the second time on this boundary (the first being the #1166
+eleven-round loop). Lesson: on an ownership-transfer boundary, enumerate
+the control-flow shapes that can interpose code between a statement and
+the frame exit and test each one, rather than trusting a line-coverage
+percentage that says every line ran.
+
 ## 2026-09-21 — A fail-fast site checker hid a diff-caused budget failure behind a pre-existing one
 
 **What happened.** On the #1164 branch `sh scripts/check-site.sh` exited 1
