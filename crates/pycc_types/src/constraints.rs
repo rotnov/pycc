@@ -266,6 +266,41 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
         }
     }
 
+    /// Part 2a of #1142 (#1165), round-11 review finding 2: drop `name`'s
+    /// artifact-owned buffer provenance because `name` is about to stop
+    /// denoting that buffer.
+    ///
+    /// Provenance is flat and flow-insensitive, which `crate::buffer`'s
+    /// `buffer_parameter_rebinding` doc justifies with "no name can change
+    /// provenance mid-function". A *parameter*-bound name cannot, because
+    /// rebinding one is refused outright. An artifact-*owned* name can:
+    /// reassigning one is deliberately admitted (codegen frees the previous
+    /// allocation before the store, D-074), and every other binder --
+    /// `for`, a comprehension target, a walrus, a `match` capture, an
+    /// `except ... as` name -- rebinds without asking this seam at all.
+    ///
+    /// Clearing the marker alone is not the fix: `crate::expr::
+    /// reject_memoryview_read` takes the provenance flag *and* the term, so
+    /// a cleared marker over a surviving `Ok(Ty::MemoryView)` binding swaps
+    /// the owned refusal for the parameter one -- a different wrong answer,
+    /// not an answer. The binding is therefore dropped with it, and the
+    /// name is recorded as opaquely-but-definitely bound so a later read
+    /// reports "no term" (`Ok(None)`) rather than `unbound_local`. A caller
+    /// that immediately rebinds `name` to a real term overwrites that
+    /// entry, and `HirExpr::Name`'s lookup prefers `bindings` over the
+    /// opaque marker, so the marker it leaves behind is inert.
+    ///
+    /// With the solver no longer claiming a buffer that is gone, the read
+    /// stops raising `C0001` and the check phase's own answer for the
+    /// reassignment -- `T0023`, from `crate::check_assignment` -- is the
+    /// one `crate::module::merge_solver_first` reports.
+    pub(crate) fn rebind_over_owned_buffer(&mut self, name: &str) {
+        if self.owned_buffers.remove(name) {
+            self.bindings.remove(name);
+            self.opaque_bindings.insert(name.to_string());
+        }
+    }
+
     /// Whether `receiver` is bound at this use site, for the solver's
     /// stdlib-receiver shadow check (`shadowed_std_receiver`): a term
     /// binding (a maybe-bound name's term stays in `bindings` -- only
@@ -1769,9 +1804,13 @@ fn bind_named_expr_targets(
             env.defs_rebound.remove(name.as_str());
             env.maybe_bindings.remove(name.as_str());
             env.opaque_bindings.remove(name.as_str());
-            if let Some(term) =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
-            {
+            let term = collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            // Round-11 review finding 2: a walrus rebinds its target, so it
+            // drops any artifact-owned buffer provenance the name carried,
+            // exactly as the `Assign` arm does and after the value is
+            // collected for the same reason.
+            env.rebind_over_owned_buffer(name);
+            if let Some(term) = term {
                 env.bindings.entry(name.clone()).or_insert(term);
             } else {
                 // The solver produced no term for the walrus value (e.g. a
@@ -1983,14 +2022,20 @@ pub(crate) fn collect_block_constraints(
                     env.owned_buffers.insert(target.clone());
                     continue;
                 }
-                if let Some(term) = collect_expr_constraints(
+                let term = collect_expr_constraints(
                     signatures,
                     parents,
                     concrete,
                     &mut constraints.binops,
                     env,
                     value,
-                )? {
+                )?;
+                // Round-11 review finding 2: the initializer is collected
+                // first and the stale provenance dropped only afterwards,
+                // because the initializer may still read the buffer the
+                // name is about to stop denoting (`a = a[0]`).
+                env.rebind_over_owned_buffer(target);
+                if let Some(term) = term {
                     env.bindings.entry(target.clone()).or_insert(term);
                 } else {
                     // The target is unconditionally assigned, but the
@@ -2112,6 +2157,9 @@ pub(crate) fn collect_block_constraints(
                             annotation: annotation.clone(),
                         });
                 }
+                // Round-11 review finding 2: see the plain `Assign` arm --
+                // collected first, invalidated after, bound below.
+                env.rebind_over_owned_buffer(target);
                 // A scalar target has the declared type even when the
                 // collector cannot produce an initializer term. A non-scalar
                 // target is still bound, but deliberately remains unresolved:
@@ -2395,6 +2443,10 @@ pub(crate) fn collect_block_constraints(
                     .chain(env.opaque_bindings.iter())
                     .cloned()
                     .collect();
+                // Round-11 review finding 2: the loop variable rebinds the
+                // name on every iteration, so any artifact-owned buffer
+                // provenance it carried is stale from here on.
+                env.rebind_over_owned_buffer(var);
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -2430,6 +2482,8 @@ pub(crate) fn collect_block_constraints(
                     env,
                     iter,
                 )?;
+                // Round-11 review finding 2: see the `ForList` arm.
+                env.rebind_over_owned_buffer(var);
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -2565,18 +2619,18 @@ pub(crate) fn collect_block_constraints(
             // was never visited at all -- see
             // `private_helper_parameter_is_inferred_through_a_comprehension_s_elt`).
             HirStmt::ListCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 elt,
-                ..
             }
             | HirStmt::SetCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 elt,
-                ..
             } => {
                 bind_comp_loop_var(
                     signatures,
@@ -2605,14 +2659,27 @@ pub(crate) fn collect_block_constraints(
                     env,
                     elt,
                 )?;
+                // Round-11 review finding 2: this solver binds no term for a
+                // comprehension `target` at all, so before this call the
+                // name kept whatever it was bound to before -- including an
+                // artifact-owned `Ty::MemoryView`, which a later read then
+                // refused with the owned-buffer `C0001` instead of letting
+                // the check phase report its `T0023` for the reassignment.
+                // The comprehension's own sub-expressions are collected
+                // first, since they may still read that buffer.
+                //
+                // `var` needs no such call: it is the D-117 synthesized
+                // internal loop name (see `HirStmt::ListCompAssign`'s own
+                // doc comment), which cannot collide with a source name.
+                env.rebind_over_owned_buffer(target);
             }
             HirStmt::DictCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 key,
                 value,
-                ..
             } => {
                 bind_comp_loop_var(
                     signatures,
@@ -2649,6 +2716,8 @@ pub(crate) fn collect_block_constraints(
                     env,
                     value,
                 )?;
+                // Round-11 review finding 2: see the list/set arm above.
+                env.rebind_over_owned_buffer(target);
             }
             HirStmt::Match { subject, cases } => {
                 collect_expr_constraints(
@@ -2678,6 +2747,21 @@ pub(crate) fn collect_block_constraints(
                         .cloned()
                         .collect();
                     let mut case_env = env.clone();
+                    // Round-11 review finding 2: a `case` pattern's capture
+                    // names rebind inside the case body. This solver binds
+                    // no term for them (a capture's type is the subject's,
+                    // which the check phase resolves), so without this the
+                    // name kept its artifact-owned `Ty::MemoryView` binding
+                    // and a read of it -- in the body or, through the join
+                    // below, after the `match` -- raised the owned-buffer
+                    // `C0001` over the check phase's `T0023`. Dropped in the
+                    // case environment rather than in `env` so the join
+                    // helper carries it out only for the paths that rebind.
+                    let mut captures = Vec::new();
+                    crate::collect_pattern_capture_names(&case.pattern, &mut captures);
+                    for capture in captures {
+                        case_env.rebind_over_owned_buffer(capture);
+                    }
                     collect_block_constraints(
                         signatures,
                         parents,
@@ -2736,6 +2820,11 @@ pub(crate) fn collect_block_constraints(
                         && let Some(name) = &handler.name
                     {
                         let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
+                        // Round-11 review finding 2: an `as` name rebinds,
+                        // so it drops any artifact-owned buffer provenance
+                        // it carried; the join helper then carries that
+                        // invalidation back out of the handler environment.
+                        henv.rebind_over_owned_buffer(name);
                         henv.bindings
                             .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
                     }
@@ -2814,6 +2903,8 @@ pub(crate) fn collect_block_constraints(
                 for handler in handlers {
                     let mut henv = env.clone();
                     if let Some(name) = &handler.name {
+                        // Round-11 review finding 2: see the plain `Try` arm.
+                        henv.rebind_over_owned_buffer(name);
                         henv.bindings.insert(
                             name.clone(),
                             Ok(Ty::Instance(Box::new("ExceptionGroup".to_string()))),

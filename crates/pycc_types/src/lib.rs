@@ -727,7 +727,7 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
 
 /// PEP 634-636 (#381, PR-21): collects all capture names introduced by a
 /// pattern (recursively), for `collect_local_names`'s pre-pass.
-fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'a str>) {
+pub(crate) fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'a str>) {
     match pattern {
         HirPattern::Wildcard
         | HirPattern::Literal(_)
@@ -1083,7 +1083,14 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // *parameter* is refused. See `buffer::buffer_parameter_rebinding` for
     // the two independent grounds; the one that matters most here is that
     // the flat, flow-insensitive `owned_buffers` set below is sound only
-    // because no name can change provenance mid-function. Reassigning an
+    // because no name can acquire *parameter* provenance mid-function.
+    // Artifact-owned provenance can be lost mid-function, which the
+    // solver's `ConstraintEnvironment::rebind_over_owned_buffer` handles
+    // (#1166 round-11 review finding 2); this phase needs no mirror of it,
+    // because every way a name stops denoting its owned buffer is a
+    // reassignment this function has already refused by the time such a
+    // stale marker could be read -- `T0023` here for an incompatible
+    // rebinding, and at a join for a name the branches bind differently. Reassigning an
     // artifact-*owned* buffer stays admitted -- codegen frees the previous
     // allocation before the store (D-074) -- so the guard keys on
     // provenance, not on the type alone.

@@ -16715,7 +16715,9 @@ fn a_buffer_allocations_length_temporary_is_released_before_the_guard() {
             let guard = ir[decode..]
                 .find("@pycc_rt_exception_active")
                 .map(|offset| decode + offset)
-                .unwrap_or_else(|| panic!("the pre-allocator guard should follow the decode: {ir}"));
+                .unwrap_or_else(|| {
+                    panic!("the pre-allocator guard should follow the decode: {ir}")
+                });
             assert!(
                 ir[decode..guard].contains("@pycc_rt_bigint_release"),
                 "{ir}"
