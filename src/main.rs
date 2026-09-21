@@ -458,15 +458,18 @@ fn plan_ext(
             gaps,
         )))
     })?;
-    // Every function whose return type is a buffer except the one shape
-    // Part 2b of #1142 (#1164) admits -- a public *module-level* export.
-    // A private function, a specialization, or any method (exported or not)
-    // would otherwise reach codegen's own panic for a `memoryview`-typed
-    // call result, which `pycc_types`' call interception covers only for a
-    // module-level `def`; `refuse_in_ext_mode`'s own doc comment carries
-    // the argument in full. It is handed the export set because a buffer
-    // return type is carriable now, so `collect_exports` above no longer
-    // refuses one on its own.
+    // Every function whose return type is a buffer except the shapes the
+    // `--ext` boundary admits: Part 2b of #1142 (#1164) admitted a public
+    // *module-level* export, and #1174 widened that to the whole export
+    // set, a public method of a public class included. What is left --
+    // a private function, a private method, a method of a private or
+    // exception class, a specialization -- would otherwise reach codegen's
+    // own panic for a `memoryview`-typed call result;
+    // `refuse_in_ext_mode`'s own doc comment carries the argument in full,
+    // including why #1174's interception at the four method-resolution
+    // exits is what makes the widening safe. It is handed the export set
+    // because a buffer return type is carriable now, so `collect_exports`
+    // above no longer refuses one on its own.
     //
     // Position: this runs inside `plan_ext`, which `run_build` calls
     // *before* `compile_to_object_with_options`, so a refusal here is what

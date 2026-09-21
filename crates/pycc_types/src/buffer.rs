@@ -436,6 +436,60 @@ pub(crate) fn buffer_returning_call_unsupported(callee: &str) -> Diagnostic {
     )
 }
 
+/// `Err(C0001)` for a call to a *method* whose return type is the buffer
+/// type.
+///
+/// The method-shaped sibling of [`buffer_returning_call_unsupported`], which
+/// serves the module-level `f()` route in `expr.rs`. #1174 widens the
+/// `pycc build --ext` admission from a public module-level `def` to a public
+/// method of a public class, so a buffer-returning method now *exists* in a
+/// well-formed program, and every intra-artifact route to its return value
+/// has to be refused where the module-level route already was. The reason is
+/// unchanged: the compiled callee hands back a raw `PyccExtBufferView *` with
+/// no owner, which `crates/pycc_codegen/src/call_result.rs`'s `Ty::MemoryView`
+/// arm panics on. Only the generated `--ext` wrapper gives that pointer an
+/// owner.
+///
+/// `class_name` is the class the *resolver* was asked about, which for a
+/// `super().m()` call is the calling method's own class rather than the base
+/// class that declares `m`. The renderer states where the call was written,
+/// not where the callee lives; the alternative would need the resolved MRO
+/// entry threaded through every exit for no reader benefit.
+pub(crate) fn buffer_returning_method_call_unsupported(
+    class_name: &str,
+    method: &str,
+) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "calling `{class_name}.{method}`, whose return type is a buffer, is valid \
+             Python but not implemented yet; #1174 hands such a buffer to the CPython host \
+             across the `pycc build --ext` boundary and admits no intra-artifact caller -- \
+             allocate the buffer with `a = ndarray(n)` in the function that reads it"
+        ),
+        Span::new(0, 0),
+    )
+}
+
+/// The interception every method-call resolver exit shares: refuse the call
+/// when the resolved return type is the buffer type, otherwise fall through.
+///
+/// Placed at each exit *after* the callee's signature is known and *before*
+/// `check_call_args`, matching `expr.rs`'s own ordering for the module-level
+/// route, so a wrong-argument call to a buffer-returning method reports the
+/// unsupported-return refusal rather than an argument mismatch the caller
+/// cannot act on.
+pub(crate) fn refuse_buffer_returning_method(
+    class_name: &str,
+    method: &str,
+    return_ty: &Ty,
+) -> Result<(), Diagnostic> {
+    if matches!(return_ty, Ty::MemoryView) {
+        return Err(buffer_returning_method_call_unsupported(class_name, method));
+    }
+    Ok(())
+}
+
 /// `Err(C0001)` for a buffer **egress** in a function that also contains a
 /// `return` inside a `finally` clause (Part 2b of #1142, #1164 review
 /// round 5).

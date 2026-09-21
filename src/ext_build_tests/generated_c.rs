@@ -2252,10 +2252,13 @@ fn a_buffer_returning_export_releases_its_parameters_before_packing() {
 fn a_buffer_returning_method_packs_through_the_same_arm() {
     // The method boundary #1131 added dispatches on the same `return_ty`,
     // so the egress arm has to answer there too rather than only for a
-    // module-level function. `src/memoryview_mode.rs` refuses a
-    // buffer-returning *method* at the source level today, so this pins the
-    // wrapper renderer's own behaviour against the day that narrowing is
-    // lifted -- the alternative is a `BoundaryCarrier::into_scalar` panic.
+    // module-level function. This was a speculative pin when it was written
+    // -- `src/memoryview_mode.rs` still refused a buffer-returning *method*
+    // at the source level, and the arm existed against the day that
+    // narrowing was lifted. #1174 lifted it, so this now covers a live
+    // path: `tests/issue_1174_method_buffer_return.rs` builds exactly this
+    // shape end to end, and this unit test is the renderer-level half of
+    // it -- the alternative is a `BoundaryCarrier::into_scalar` panic.
     let inc = inc_no_classes(
         "m",
         &[ExtExport {
