@@ -14,9 +14,10 @@
     "cpu": "Apple M3 Max",
     "cores": 16,
     "memory_bytes": 137438953472,
-    "os": "macOS 26.5.1 (build 25F80)",
+    "os": "macOS 27.0 (build 26A428)",
     "power_profile": "AC power, pmset powermode 0 (automatic), Low Power Mode off"
   },
+  "machine_os_amendment": "Amendment (2026-09-21): `machine.os` was re-registered from `macOS 26.5.1 (build 25F80)` to `macOS 27.0 (build 26A428)`. It is the same physical machine, updated in place: `model_identifier`, `cpu`, `cores` and `memory_bytes` are unchanged and still match what the host reports. The amendment was made while the compile-unchanged census measured zero scorable subjects (issue #1039, re-measured at 0638dc9c), so no arm had been built and no result of any kind existed that could have influenced it. Amending the pin once a subject exists would be the \"machine chosen after a result was seen\" shape docs/TESTING.md's \"Arms\" bullet declares inadmissible, which is why this was settled before rather than after.",
   "compile_unchanged_denominator": 133,
   "compile_unchanged_set_sha256": "2464174c089a2287c0414fd4004ef7cb83fc9f6fe5b4820f885d595343761b7d",
   "compile_unchanged_subtrees": ["src"],

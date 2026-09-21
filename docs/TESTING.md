@@ -1021,18 +1021,53 @@ the sweep and the per-record shapes — and the third is independent of both:
    through fifth corrections state. A **seventh correction follows with PR 2
    of #1143**; no PR 2 figure appears here.
 
-3. **The pre-registered machine pin no longer matches this host**, which
-   would refuse a scored run on its own even with a subject in hand. The
+   **Seventh correction (2026-09-21, re-measured at `0638dc9c`): both named
+   remedies landed and the census did not move by a single row.** #1143's PR 2
+   became #1146 and merged at `b1de5499` (the `Ty::Instance` receiver carrier),
+   and #1170 merged at `0638dc9c` (the `memoryview` return arm, Part 2b of
+   #1142). The 2026-09-19 comment on #1039 named exactly those two as what
+   stood between the array-taking, loop-bearing rows and a carryable signature,
+   cheapest first, and singled out the return arm as sufficient on its own for
+   four of the six. Re-running the census at `0638dc9c` with the same predicate
+   refutes that: the denominator re-derives to `count=133` with a digest
+   byte-identical to the committed `compile_unchanged_set_sha256`, and every
+   row of the table is unchanged, including the module-level carryable count,
+   which is 23 under both the old and the new rule. **Scorable subjects: 0.**
+   The measurement, with each row's exact refusal reproduced empirically on a
+   synthetic shape, is published on
+   [#1039](https://github.com/rotnov/pycc/issues/1039#issuecomment-5767793679).
+   Two conditions the earlier corrections never named are what the four
+   buffer-in/buffer-out rows hit first, and neither is tracked by any issue
+   those corrections cite: a **method** may not return a buffer (the admission
+   is module-level-only), and a returned buffer must be **artifact-owned** (a
+   parameter, a slice of one, and an intra-artifact call's result are each
+   `C0001`). `Self` is also not a separate gap — it produces the same `C0003`
+   named-type-return message as any other named type. Prerequisite 2 stays
+   unmet, now for those two reasons rather than for the ones the third through
+   sixth corrections state.
+
+3. **The pre-registered machine pin no longer matched this host**, which
+   would have refused a scored run on its own even with a subject in hand. The
    **Arms** bullet binds the run to the five fields
    `scripts/bench_hosted_ext_precommit.json` records, and the runner's
-   `assert_hosts_the_arms` compares each as an exact string. Four still match
-   (`Mac15,9`, `Apple M3 Max`, 16 cores, 137438953472 bytes); the fifth does
-   not — the record pins `macOS 26.5.1 (build 25F80)` and this host composes
-   `macOS 27.0 (build 26A428)`. Resolving this is a separate decision from
-   the subject: it means either re-pinning the record (which is itself a
-   pre-registration change, with the same "chosen after a result is seen"
-   hazard the protocol's preamble names) or running on a host that still
-   matches.
+   `assert_hosts_the_arms` compares each as an exact string. Four still matched
+   (`Mac15,9`, `Apple M3 Max`, 16 cores, 137438953472 bytes); the fifth did
+   not — the record pinned `macOS 26.5.1 (build 25F80)` and this host composes
+   `macOS 27.0 (build 26A428)`.
+
+   **Resolved 2026-09-21 by re-pinning the record**, recorded in it as
+   `machine_os_amendment`. Re-pinning is itself a pre-registration change and
+   carries the "chosen after a result is seen" hazard the protocol's preamble
+   names, so the decision was *when* rather than *whether*: it was made while
+   the seventh correction above had just measured **zero** scorable subjects,
+   so no arm had been built and no result of any kind existed that could have
+   influenced it. Deferring it until a subject exists would have put the
+   amendment on the wrong side of that hazard even if its content were
+   identical. It is the same physical machine, updated in place: the other four
+   fields are unchanged and still match what the host reports, so this
+   re-pin does not relocate the run. The alternative — running on a host that
+   still matches — was rejected because no such host exists here; the pinned
+   OS was an in-place upgrade of the only machine available, not a second one.
 
 One thing did hold and does not need re-verifying. The denominator was
 re-derived at commit `8ad29658` with the same command and subtree the record
