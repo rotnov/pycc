@@ -8229,9 +8229,14 @@ fn emit_stmt<'ctx>(
                         // (`C0001`): its storage belongs to the host's
                         // exporter, which the wrapper releases on the way
                         // out, so handing it back would hand back a
-                        // dangling view. The null store above is the other
-                        // half of this arm -- without it the frame's
-                        // epilogue would free what is being returned.
+                        // dangling view. This arm stores nothing into the
+                        // slot: the ownership transfer happens later, in
+                        // the frame's owned-slot epilogue, where the
+                        // `buffer_epilogue_returned` identity test skips
+                        // exactly the pointer being returned and releases
+                        // every other owned slot. Clearing the slot here
+                        // instead is what made a `finally` block observe a
+                        // null name and abort the host.
                         Scalar::MemoryView(v) => v.into(),
                     };
                     if let Some(ft) = finally_target {
