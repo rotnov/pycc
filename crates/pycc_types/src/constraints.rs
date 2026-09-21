@@ -2522,10 +2522,37 @@ pub(crate) fn collect_block_constraints(
                 // return (an `Err(var)` inference variable standing in for an
                 // unannotated helper) declines, so only a written
                 // `-> memoryview` annotation admits an egress.
+                //
+                // The third conjunct is this walker's half of the
+                // definite-assignment check `crate::check_stmt_in_function`'s
+                // own comment enumerates (review round 3 of #1164). The two
+                // walkers must agree on the admission predicate, and this is
+                // the only spelling available here: `ConstraintEnvironment`
+                // carries no three-way lattice, only the `maybe_bindings`
+                // side-table, so the test is `!maybe` rather than
+                // `== Definitely`. Like the check phase's conjunct it reads
+                // the *result* of a join and so closes every join form at
+                // once -- `join_if_branches_solver`, `join_loop_body_solver`
+                // (the `while`, `for`-`range`, `for`-list, `match`-case and
+                // `try` arms all route through it) and the `for` loop
+                // variable's own insertion.
+                //
+                // It is deliberately **not independently observable**, and
+                // stands for consistency rather than for a diagnostic of its
+                // own: `collect_expr_constraints`'s `Name` arm tests
+                // `maybe_bindings` before it reaches `bindings`, so a
+                // maybe-bound operand answers `Ok(None)` and the fall-through
+                // unifies nothing either way. The check phase's `T0041` is
+                // the user-facing gate, exactly as D-147 places it. What the
+                // conjunct buys is that the solver can never *widen* the
+                // admission past the check phase's -- the subset property
+                // `docs/TYPE_SYSTEM.md`'s `memoryview` row requires of this
+                // mirror -- if either arm's `Name` ordering later changes.
                 if let Some(expr) = value
                     && let Some(name) =
                         crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
                     && env.owned_buffers.contains(name)
+                    && !env.maybe_bindings.contains(name)
                 {
                     continue;
                 }

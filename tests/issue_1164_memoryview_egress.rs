@@ -620,3 +620,120 @@ fn a_superseding_return_does_not_free_the_pointer_the_slot_loop_already_released
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// The public-CLI half of the definite-assignment narrowing (review round 3
+/// of #1164), in Python source rather than in hand-built HIR.
+///
+/// The admission consulted only `owned_buffers`, which joins as a *union*,
+/// while the binding joins on the `Definitely`/`Maybe`/unbound lattice. A
+/// buffer allocated on one path and read back after the join was therefore
+/// admitted: `pycc check` printed nothing and exited 0, and the compiled
+/// artifact loaded the null-initialized slot on the other path, handing the
+/// host an internal `SystemError` where `docs/TYPE_SYSTEM.md`'s
+/// definite-assignment contract owes a `T0041`.
+///
+/// Every join form is a row, `for`-over-a-list included -- the one form the
+/// unit-level table in `crates/pycc_types/src/tests/buffer_producer.rs`
+/// leaves to this file, since a list iterable has no one-line HIR spelling.
+/// Both directions are asserted per row: the possibly-unbound program is
+/// refused with `T0041`, and the definitely-assigned twin of the same shape
+/// is still admitted, so the narrowing cannot be satisfied by refusing the
+/// egress outright.
+#[test]
+fn a_possibly_unbound_buffer_is_refused_at_the_egress_return() {
+    let refused = [
+        ("if", "    if c:\n        a = ndarray(4)\n"),
+        (
+            "if_else_one_arm",
+            "    if c:\n        a = ndarray(4)\n    else:\n        other = 1\n",
+        ),
+        (
+            "while",
+            "    i = 0\n    while i < 2:\n        a = ndarray(4)\n        i = i + 1\n",
+        ),
+        (
+            "for_range",
+            "    for i in range(2):\n        a = ndarray(4)\n",
+        ),
+        (
+            "for_list",
+            "    xs = [1, 2]\n    for x in xs:\n        a = ndarray(4)\n",
+        ),
+        (
+            "match",
+            "    match c:\n        case True:\n            a = ndarray(4)\n        case _:\n            other = 1\n",
+        ),
+        (
+            "try",
+            "    try:\n        a = ndarray(4)\n    except ValueError:\n        other = 1\n",
+        ),
+    ];
+    for (label, body) in refused {
+        let source = format!("def make(c: bool) -> memoryview:\n{body}    return a\n");
+        let dir = fixture(&format!("1164_unbound_{label}"), &source);
+        let check = pycc()
+            .arg("check")
+            .arg(dir.join("egress_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        let report = format!("{}{}", stdout_of(&check), stderr_of(&check));
+        assert!(!check.status.success(), "{label}: {report}");
+        assert!(report.contains("error[T0041]"), "{label}: {report}");
+        assert!(!report.contains("panicked"), "{label}: {report}");
+
+        // ...and the `--ext` build path, which is the one that would have
+        // emitted the null load, reports the same diagnostic rather than
+        // reaching codegen.
+        let build = build_ext(&dir);
+        let build_report = stderr_of(&build);
+        assert!(!build.status.success(), "{label}: {build_report}");
+        assert!(
+            build_report.contains("error[T0041]"),
+            "{label}: {build_report}"
+        );
+    }
+
+    // The regression direction: the definitely-assigned twin of each join
+    // shape is still admitted. `try` has no twin -- its join reports every
+    // body binding back as `Maybe` whatever the handlers do, which is the
+    // language's own contract and not this admission's, and the unit-level
+    // table pins that the equivalent `int` program is refused identically.
+    let admitted = [
+        (
+            "if_else_both_arms",
+            "    if c:\n        a = ndarray(4)\n    else:\n        a = ndarray(8)\n",
+        ),
+        (
+            "while_over_pre_bound",
+            "    a = ndarray(4)\n    i = 0\n    while i < 2:\n        a = ndarray(8)\n        i = i + 1\n",
+        ),
+        (
+            "for_range_over_pre_bound",
+            "    a = ndarray(4)\n    for i in range(2):\n        a = ndarray(8)\n",
+        ),
+        (
+            "for_list_over_pre_bound",
+            "    a = ndarray(4)\n    xs = [1, 2]\n    for x in xs:\n        a = ndarray(8)\n",
+        ),
+        (
+            "match_every_case",
+            "    match c:\n        case True:\n            a = ndarray(4)\n        case _:\n            a = ndarray(8)\n",
+        ),
+        (
+            "rebound_after_a_one_armed_join",
+            "    if c:\n        a = ndarray(4)\n    a = ndarray(8)\n",
+        ),
+    ];
+    for (label, body) in admitted {
+        let source = format!("def make(c: bool) -> memoryview:\n{body}    return a\n");
+        let dir = fixture(&format!("1164_bound_{label}"), &source);
+        let check = pycc()
+            .arg("check")
+            .arg(dir.join("egress_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        let report = format!("{}{}", stdout_of(&check), stderr_of(&check));
+        assert!(check.status.success(), "{label}: {report}");
+        assert!(!report.contains("error["), "{label}: {report}");
+    }
+}

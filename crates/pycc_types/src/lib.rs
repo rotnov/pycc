@@ -2906,13 +2906,37 @@ fn check_stmt_in_function(
             // storage the wrapper releases at call exit is the use-after-free
             // #1142 exists to forbid, and is not what this admits.
             //
-            // Returning `Ok(())` rather than an inferred type skips the
-            // assignability check below deliberately: the operand's type is
-            // `Ty::MemoryView` by construction of `owned_buffers`, and the
-            // declared type is `Ty::MemoryView` by
+            // An early-return admission owes an account of *every* check the
+            // ordinary path would have run, not only the one it was designed
+            // to bypass. Two run below, and the two answers differ.
+            //
+            // The **assignability** check is bypassed deliberately: the
+            // operand's type is `Ty::MemoryView` by construction of
+            // `owned_buffers`, and the declared type is `Ty::MemoryView` by
             // `admitted_buffer_return`'s own test, so the two agree.
+            //
+            // The **definite-assignment** check is *not* bypassed, and the
+            // third conjunct below is what keeps it. `owned_buffers` joins as
+            // a union across control flow while the binding joins on the
+            // `Definitely`/`Maybe`/unbound lattice, so the two sets disagree
+            // for exactly the name that is owned on some path and unbound on
+            // another (review round 3 of #1164). Consulting `owned_buffers`
+            // alone admitted `if c: a = ndarray(4)` / `return a`, whose false
+            // path loads the null-initialized slot and hands the host an
+            // internal `SystemError` instead of the `T0041` this contract
+            // owes -- see `docs/TYPE_SYSTEM.md`'s definite-assignment clause.
+            //
+            // The conjunct tests the *result* of a join rather than any
+            // particular join, so it closes every join form at once -- `if`
+            // without `else`, an `if`/`else` binding on one side only, a
+            // `while`, `for`-`range` or `for`-list body, a non-exhaustive
+            // `match`, and a `try` body -- rather than the one
+            // counter-example that prompted it. It also fails closed on
+            // `None`: a name that is not bound at all falls through to the
+            // ordinary `T0021`.
             if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty))
                 && env.owned_buffers.contains(name)
+                && matches!(env.binding_state(name), Some(BindingState::Definitely(_)))
             {
                 return Ok(());
             }

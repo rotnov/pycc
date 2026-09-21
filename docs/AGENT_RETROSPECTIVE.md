@@ -33,6 +33,28 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — An early-return admission accounted for one bypassed check, not every one
+
+Three review rounds on the #1164 branch each found the same class of defect:
+an admission path that returns early and thereby skips a check the ordinary
+path would have run. Round 3's instance was the egress admission in both type
+walkers' `HirStmt::Return` arm, which returned `Ok(())` as soon as the
+returned name was in `owned_buffers`. Its comment accounted for exactly one
+bypassed check — assignability, correctly argued to be redundant — and said
+nothing about the definite-assignment check on the same path. `owned_buffers`
+joins as a union while the binding joins on the `Definitely`/`Maybe`/unbound
+lattice, so `if c: a = ndarray(4)` / `return a` was admitted, `pycc check`
+exited 0, and the compiled frame handed the CPython host an internal
+`SystemError` from a null slot instead of the owed `T0041`.
+
+**Lesson:** an early-return admission owes an explicit account of *every*
+check it bypasses, enumerated at the point it is written — not only the one it
+was designed to bypass. Writing that enumeration is what surfaces the checks
+whose redundancy was assumed rather than argued; the round-3 defect was
+visible in the comment's own silence before it was visible in a test.
+
+---
+
 ## 2026-09-21 — A fix's own new state went unenumerated, so the same seam failed a second time
 
 The #1164 round-1 fix replaced a wrong ownership-transfer point with a new
