@@ -71,20 +71,29 @@ pub(crate) enum SlotCleanup {
 }
 
 impl BoundaryCarrier {
-    /// The single C slot this carrier occupies, or `None` for a `tuple`,
-    /// which occupies several.
+    /// The single C slot this carrier occupies, or `None` for a carrier
+    /// this accessor does not decide: a `tuple`, which occupies several
+    /// slots, or a buffer, whose one admitted position is answered before
+    /// the accessor is reached.
     pub(crate) fn into_scalar(self) -> Option<(&'static str, &'static str)> {
         match self {
             BoundaryCarrier::Scalar(c_type, helper) => Some((c_type, helper)),
             BoundaryCarrier::Tuple(_) => None,
-            // Not a scalar in the sense this accessor is asked about. The
-            // two callers are `return_c_type` and the `tuple`-element
-            // lookup in `boundary_carrier`, and a `memoryview` is admitted
-            // at neither position: it cannot be returned (there is no
-            // CPython object to hand back -- the wrapper released the
-            // buffer it borrowed) and `tuple[memoryview]` has no `_at`
-            // element shim. Answering `None` is what turns both into the
-            // ordinary `C0003` capability gap.
+            // Not a scalar in the sense this accessor is asked about, and
+            // since Part 2b of #1142 (#1164) only *one* of the two callers
+            // still asks about a buffer at all. `return_c_type` answers the
+            // top-level return position in its own `Ty::MemoryView` arm and
+            // never consults this accessor for it, which is where the
+            // admission is deliberately stated -- see that arm.
+            //
+            // What is left here is the `tuple`-element lookup in
+            // `boundary_carrier`, and that refusal is unchanged:
+            // `tuple[memoryview]` has no `_at` element shim and no wrapper
+            // that could unpack one, so answering `None` is what turns it
+            // into the ordinary `C0003` capability gap instead of rendered C
+            // naming an undeclared helper. A future caller that asks about
+            // some third position gets that same refusal by default, which
+            // is the conservative direction.
             BoundaryCarrier::Buffer { .. } => None,
         }
     }
