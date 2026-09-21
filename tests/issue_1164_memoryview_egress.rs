@@ -433,6 +433,14 @@ fn a_finalizer_that_raises_releases_the_buffer_the_abandoned_return_left_behind(
 /// "`orphaned != 0` means the record is the pointer's sole owner", and a
 /// superseding `return` is its second mutator.
 ///
+/// `double_rebind` is the carrier arm: the orphan flag is raised by the first
+/// rebind, then a *second*, non-matching rebind of the same slot runs before
+/// any `return` reads the flag back. Only `raised = select(is_pending, 1,
+/// previously)`'s `previously` operand carries it across that store, and the
+/// superseding return must still release the original predecessor exactly
+/// once. Every other arm has at most one intervening rebind, so none of them
+/// reaches that operand.
+///
 /// `unorphaned_predecessor` and `repeats` are the two states the release must
 /// *not* fire in -- a predecessor still held by its own slot, and a
 /// predecessor that is the very pointer being returned again. Without them a
@@ -504,6 +512,19 @@ def repeats(n: int) -> memoryview:
     finally:
         while True:
             return a
+
+
+def double_rebind(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 4.0
+        return a
+    finally:
+        a = ndarray(n)
+        a = ndarray(n)
+        a[0] = 6.0
+        while True:
+            return a
 ";
 
 /// The leak arm of the multi-write set, and the reason it is a *counter*
@@ -539,7 +560,7 @@ fn a_superseded_pending_return_is_released_rather_than_leaked() {
              live.argtypes = []\n\
              assert live() == 0, live()\n\
              names = ('supersedes', 'supersedes_then_rebinds', 'unorphaned_predecessor', \
-             'repeats')\n\
+             'repeats', 'double_rebind')\n\
              for name in names:\n\
              \x20   for _ in range(64):\n\
              \x20       v = getattr(m, name)(8)\n\
