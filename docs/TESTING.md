@@ -1041,7 +1041,12 @@ the sweep and the per-record shapes — and the third is independent of both:
    those corrections cite: a **method** may not return a buffer (the admission
    is module-level-only), and a returned buffer must be **artifact-owned** (a
    parameter, a slice of one, and an intra-artifact call's result are each
-   `C0001`). `Self` is also not a separate gap — it produces the same `C0003`
+   `C0001`). The measurement above stands as taken; the first of those two
+   conditions no longer holds going forward, because
+   [#1174](https://github.com/rotnov/pycc/issues/1174) widened the admission
+   to a public method of a public class. The second is unchanged, and this
+   count was never re-measured under the new rule, so the scorable-subject
+   figure is the one the old rule produced. `Self` is also not a separate gap — it produces the same `C0003`
    named-type-return message as any other named type. Prerequisite 2 stays
    unmet, now for those two reasons rather than for the ones the third through
    sixth corrections state.

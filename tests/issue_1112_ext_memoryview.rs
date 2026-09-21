@@ -221,17 +221,27 @@ def make() -> memoryview:
     assert!(!err.contains("its return type `-> memoryview`"), "{err}");
 }
 
-/// The shape #1164 opens, refused everywhere it is *not* a public
-/// module-level export. Neither arm calls the producer, so what answers is
+/// The shape #1164 opens, refused everywhere it is *not* an export. The
+/// arm does not call the producer, so what answers is
 /// `src/memoryview_mode.rs`'s own gap rather than the intra-artifact call
 /// refusal above -- which is the point: the two refusals bound different
 /// halves of the boundary and must stay distinguishable.
+///
+/// #1174 narrowed this test. It carried four arms while the exemption was
+/// *exported and module-level*: a private module-level `def` plus a
+/// `@staticmethod`, a `@classmethod` and an instance method of a **public**
+/// class, all three refused purely for being methods. Those three are
+/// admissions now, and `tests/issue_1174_method_buffer_return.rs` asserts
+/// them -- together with the arms that still refuse a method (a private
+/// method, a method of a private class, an exception class, an unreachable
+/// instance method, a `@property` getter) and the `.static` / `.classmethod`
+/// mangled-suffix assertions this loop used to carry, which need a
+/// method-bearing subject to mean anything.
 #[test]
 fn a_buffer_producer_outside_the_export_set_is_refused_in_ext_mode() {
-    const CASES: [(&str, &str, &str); 4] = [
-        (
-            "1112_private_producer",
-            "def _make() -> memoryview:
+    const CASES: [(&str, &str, &str); 1] = [(
+        "1112_private_producer",
+        "def _make() -> memoryview:
     a = ndarray(4)
     return a
 
@@ -239,50 +249,8 @@ fn a_buffer_producer_outside_the_export_set_is_refused_in_ext_mode() {
 def total() -> int:
     return 0
 ",
-            "`_make`'s return type is a buffer",
-        ),
-        (
-            "1112_method_producer",
-            "class Grid:
-    @staticmethod
-    def make() -> memoryview:
-        a = ndarray(4)
-        return a
-
-
-def total() -> int:
-    return 0
-",
-            "`Grid.make`'s return type is a buffer",
-        ),
-        (
-            "1112_classmethod_producer",
-            "class Grid:
-    @classmethod
-    def build(cls) -> memoryview:
-        a = ndarray(4)
-        return a
-
-
-def total() -> int:
-    return 0
-",
-            "`Grid.build`'s return type is a buffer",
-        ),
-        (
-            "1112_instance_method_producer",
-            "class Grid:
-    def rows(self) -> memoryview:
-        a = ndarray(4)
-        return a
-
-
-def total() -> int:
-    return 0
-",
-            "`Grid.rows`'s return type is a buffer",
-        ),
-    ];
+        "`_make`'s return type is a buffer",
+    )];
     for (category, source, expected) in CASES {
         let dir = fixture(category, source);
         let ext = build_ext(&dir);
@@ -291,19 +259,12 @@ def total() -> int:
         assert!(!err.contains("panicked"), "{err}");
         assert!(err.contains("error[C0001]"), "{err}");
         assert!(err.contains(expected), "{category}: {err}");
-        // The remediation names the one admitted shape, and the message
-        // renders the *source-level* method name rather than the mangled
-        // `Grid.make.static` spelling the export table carries.
+        // The remediation still names the admitted module-level shape, which
+        // is the one this arm's subject must move to.
         assert!(
             err.contains("move the buffer-producing code into a public module-level `def`"),
             "{category}: {err}"
         );
-        // Every mangled suffix `pycc_hir` can attach, none of which may
-        // reach the reader: `.static`, `.classmethod`, and the bare
-        // `Class.method` an instance method carries (which needs no
-        // stripping and is asserted by the expected text above).
-        assert!(!err.contains(".static"), "{category}: {err}");
-        assert!(!err.contains(".classmethod"), "{category}: {err}");
         assert!(!err.contains("error[C0003]"), "{category}: {err}");
     }
 }

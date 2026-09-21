@@ -204,11 +204,14 @@ pub(super) fn lower_protocol_class(
                     return Err(unsupported(
                         format!(
                             "protocol method `{class_name}.{method_name}` returns a \
-                             buffer, which is not supported yet -- no class could \
-                             satisfy it, because no compiled function may return a \
-                             buffer: #1027 and #1129 admit one as a parameter of a \
-                             `pycc build --ext` export, and Part 2a of #1142 produces \
-                             one only as storage the allocating frame frees on exit"
+                             buffer, which is not supported yet -- a protocol is \
+                             dispatched dynamically, and a buffer return reaches the \
+                             CPython host only through the statically generated \
+                             wrapper of a `pycc build --ext` export (#1174), which a \
+                             protocol member has none of: #1027 and #1129 admit a \
+                             buffer as a parameter of such an export, and Part 2a of \
+                             #1142 produces one as storage the allocating frame frees \
+                             on exit"
                         ),
                         method_def.range,
                     ));

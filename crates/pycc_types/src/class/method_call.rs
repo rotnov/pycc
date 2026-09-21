@@ -2,17 +2,29 @@
 //! `crates/pycc_types/src/class.rs` per AGENTS.md's file-decomposition rule
 //! and D-185's per-file tracking issue (#549): this is one cohesion-driven
 //! seam of that ~4,900-line file, not a rewrite. Every diagnostic message
-//! and every check is unchanged except for the new #815 synthetic-class
-//! guard added in the same commit that moved this function -- the only
-//! other edits are the ones the module boundary forces (visibility
-//! keywords and `use` lines).
+//! and every check is unchanged except for two guards added after the move
+//! -- the #815 synthetic-class guard, added in the commit that moved this
+//! function, and the #1174 buffer-return interception described below --
+//! the only other edits being the ones the module boundary forces
+//! (visibility keywords and `use` lines).
 //!
 //! The seam is `base.method(args)` resolution against a class's MRO: given
 //! a receiver type and a method name, walk the MRO (most-derived first,
 //! matching CPython's own method resolution order) and check the call's
-//! arguments against the first method found. Everything else -- attribute
-//! access, instantiation, static/class-method dispatch, `super()` calls,
-//! and protocol conformance -- stays in `class.rs` or `class/binding.rs`.
+//! arguments against the first method found. Everything else lives in a
+//! sibling: instantiation and class binding in `class/binding.rs`,
+//! static/class-method dispatch in `class/static_call.rs`, `super()` calls
+//! in `class/super_call.rs`, and attribute access plus protocol conformance
+//! in `class.rs` itself.
+//!
+//! #1174 added the one check here that is not part of the original move: a
+//! buffer-returning method's return value may not be handed to an
+//! intra-artifact caller, refused through
+//! `crate::buffer::refuse_buffer_returning_method`. The *protocol* arm above
+//! deliberately does not get that check -- `pycc_hir`'s
+//! `class/protocol.rs` refuses a `-> memoryview` protocol member at its
+//! declaration, so no protocol member can have that return type and a check
+//! here would be dead code the coverage gate could not reach.
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
@@ -109,6 +121,10 @@ pub(crate) fn resolve_method_call(
                 )
             });
             let method_param_tys = &param_tys[1..]; // exclude `self`
+            // #1174: a buffer-returning method is now declarable, so this
+            // exit has to refuse handing its return value to an
+            // intra-artifact caller.
+            crate::buffer::refuse_buffer_returning_method(class_name, method, return_ty)?;
             check_call_args(method, arg_tys, method_param_tys, Some(env))?;
             return Ok(return_ty.clone());
         }

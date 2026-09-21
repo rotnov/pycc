@@ -1358,13 +1358,16 @@ buffer from and no way such a function could ever be called. Rebuild with \
 `pycc build --ext`, or change the annotation to a type a native artifact \
 can carry. Under `--ext` both signature positions are admitted, but not \
 symmetrically. A parameter is admitted anywhere in the export set. A return \
-is admitted from a *public module-level* export only, where the generated \
-wrapper turns storage the artifact allocated with `a = ndarray(n)` into a \
-real `memoryview` the host owns (Part 2b of #1142, #1164); the same return \
-type anywhere else -- a private function, a method, a specialization -- is \
-the `C0001` capability gap, as is an intra-artifact *call* to a \
-buffer-returning function, which has no wrapper to own the result. A \
-public module-level export is refused too when the function contains a \
+is admitted from any *public export* -- a module-level `def` and, since \
+#1174, a public method of a public class -- where the generated wrapper \
+turns storage the artifact allocated with `a = ndarray(n)` into a real \
+`memoryview` the host owns (Part 2b of #1142, #1164); the same return type \
+outside the export set -- a private function, a private method, a method \
+of a private or exception class, an instance method no published \
+constructible class reaches, a `@property` getter, a specialization -- is \
+the `C0001` capability gap, as is an intra-artifact *call* to a buffer-returning \
+function or method, which has no wrapper to own the result. A public \
+export is refused too when the function contains a \
 `return` anywhere inside a `finally` clause, because the compiled frame \
 tracks one pending buffer return per call and a suspended outer return \
 would outlive the record (#1173). A \
