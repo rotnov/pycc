@@ -33,6 +33,41 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — A fail-fast site checker hid a diff-caused budget failure behind a pre-existing one
+
+**What happened.** On the #1164 branch `sh scripts/check-site.sh` exited 1
+with a single line: the status hero's pinned subject commit is not on the
+first-parent history of `HEAD`. That failure reproduced byte-for-byte on a
+detached worktree at `origin/main`, so it was recorded as pre-existing and
+not diff-caused, and the gate was almost declared attributed. It was not.
+`scripts/check-site.sh` runs under `set -eu` and that hero check is its
+*first* check, at line 50 of 2914 — every later check, on both trees, had
+never run. Re-running a scratch copy with the two evidence checks
+commented out surfaced the real failure: this branch's `docs/ROADMAP.md`
+edit took the file to 174200 bytes against its 174080-byte issue #207
+per-resource budget. `origin/main` sits at 174077 — three bytes of
+headroom — so the overflow was entirely the branch's own.
+
+**Root cause.** "Identical output on both trees" proves the *first*
+failure is pre-existing. Under `set -e` it proves nothing at all about the
+rest of the script, because neither tree executed the rest. The comparison
+answered the question it was pointed at while the question that mattered —
+does this diff introduce a failure of its own? — stayed unasked.
+
+**What fixed it.** Trimming `docs/ROADMAP.md` by 162 bytes: two issue
+references in the edited paragraph were reduced to the bare `#NNNN` form
+its neighbours already use, and the new egress clause was rewritten
+compactly. The file is now 174038 bytes and the full site check passes to
+completion with the two known-failing evidence checks skipped.
+
+**Lesson.** When a fail-fast checker (`set -e`, early `exit`) stops at its
+first failure, attributing that failure does not clear the checker. Find
+where the run aborted, then re-run the remainder with only the attributed
+check neutralized in a scratch copy — never by editing the tracked script
+— and attribute what comes out. A budget check with three bytes of
+headroom on the default branch is a trap for the next documentation edit,
+and it will be hidden the same way as long as an earlier check is red.
+
 ## 2026-09-21 — Nine review rounds on one pull request, because each round patched the condition the reviewer named instead of the condition set the reviewer's example belonged to
 
 **What happened.** PR #1166 (buffer storage for `pycc build --ext`, issue
