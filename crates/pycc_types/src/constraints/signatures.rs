@@ -157,6 +157,9 @@ pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
         // A module-level environment: `child_for_function` is what flips
         // this, and this constructor's result is that same module scope.
         in_function_body: false,
+        // Part 2b of #1142 (#1164): module scope has no function body to
+        // walk; `check_function_in` sets this per function.
+        returns_inside_finally: false,
         narrowed: HashMap::new(),
         // Overwritten at `check_with_environment_all`'s entry, the common
         // sink of both `Environment` constructors (#962).
@@ -255,6 +258,9 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // producer is refused there outright.
         owned_buffers: HashSet::new(),
         in_function_body: false,
+        // Part 2b of #1142 (#1164): module-level code is not a function
+        // body, so there is no body to walk for a `return` in a `finally`.
+        returns_inside_finally: false,
         // Part 2a of #1142 (#1165): D-244 #1129 statement (h) applied per
         // spelling. A `def ndarray` is already covered by `signatures`; a
         // `class ndarray` is what this set adds, because the solver has no
@@ -347,6 +353,10 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // one place the function-body flag is set.
             owned_buffers: HashSet::new(),
             in_function_body: true,
+            // Part 2b of #1142 (#1164), review round 5: the same
+            // whole-function predicate the check phase reads, from the same
+            // `pycc_hir` walk, so the two admissions cannot drift.
+            returns_inside_finally: pycc_hir::body_returns_inside_finally(body),
             shadowed_producers: globals.shadowed_producers.clone(),
             finals: HashSet::new(),
         };

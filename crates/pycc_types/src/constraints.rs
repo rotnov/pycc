@@ -206,6 +206,20 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// in for the distinction (a function with no locals also has an empty
     /// slice).
     pub(crate) in_function_body: bool,
+    /// The solver's counterpart of `Environment::returns_inside_finally`,
+    /// and the solver half of review round 5's egress narrowing.
+    ///
+    /// Computed from the same `pycc_hir::body_returns_inside_finally` walk,
+    /// so the two phases cannot drift: the predicate exists once, in
+    /// `pycc_hir`, and both environments carry its answer rather than
+    /// re-deriving it.
+    ///
+    /// Unlike the check phase's, this one is *not* independently observable
+    /// -- the solver runs first, so `crate::module::merge_solver_first`
+    /// reports whichever refusal fires, and both phases raise the same
+    /// `crate::buffer::buffer_return_inside_finally` text. What it buys is
+    /// that the solver can never admit an egress the check phase refuses.
+    pub(crate) returns_inside_finally: bool,
     /// Part 2a of #1142 (#1165): the buffer-producer spellings this module
     /// binds itself, which therefore keep the program's own meaning
     /// (D-244 #1129 statement (h)).
@@ -261,6 +275,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             std_module_aliases: Vec::new(),
             owned_buffers: HashSet::new(),
             in_function_body: false,
+            returns_inside_finally: false,
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
         }
@@ -2548,12 +2563,19 @@ pub(crate) fn collect_block_constraints(
                 // admission past the check phase's -- the subset property
                 // `docs/TYPE_SYSTEM.md`'s `memoryview` row requires of this
                 // mirror -- if either arm's `Name` ordering later changes.
+                //
+                // Review round 5's fourth conjunct is a refusal rather than
+                // a decline, exactly as in the check phase: see
+                // `crate::buffer::buffer_return_inside_finally`.
                 if let Some(expr) = value
                     && let Some(name) =
                         crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
                     && env.owned_buffers.contains(name)
                     && !env.maybe_bindings.contains(name)
                 {
+                    if env.returns_inside_finally {
+                        return Err(crate::buffer::buffer_return_inside_finally(name));
+                    }
                     continue;
                 }
                 let actual = match value {

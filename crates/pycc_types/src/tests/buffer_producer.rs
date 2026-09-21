@@ -1920,3 +1920,163 @@ fn the_solver_declines_a_possibly_unbound_owned_buffer_return() {
     let err = check(&hir).unwrap_err();
     assert_eq!(err.code, "T0041", "{}", err.message);
 }
+
+/// The fragment of `crate::buffer::buffer_return_inside_finally` these
+/// assertions pin. Kept distinct from [`OWNED_BUFFER_REFUSAL`] on purpose:
+/// the two refusals answer different questions, and a test that accepted
+/// either would pass for a fall-through that never reached the new one.
+const RETURN_IN_FINALLY_REFUSAL: &str = "a `return` inside a `finally` clause";
+
+/// The tail of `crate::buffer::owned_buffer_use_unsupported`, for the "and
+/// the *other* owned-buffer refusal is absent" half of the assertions below.
+/// [`OWNED_BUFFER_REFUSAL`] cannot serve there: the new message deliberately
+/// opens with the same "bound to buffer storage this artifact allocated"
+/// clause -- it is about the same kind of name -- so only the tail
+/// distinguishes a refusal that reached review round 5's conjunct from one
+/// that fell through to the #1165 message.
+const OWNED_BUFFER_REFUSAL_TAIL: &str = "#1165 admits such a buffer only inside the function";
+
+/// `try: <body>  finally: while True: <finalbody>`, the shape the
+/// pre-existing PEP 765 `L0001` rule deliberately does not reach: it follows
+/// CPython in clearing its `finally` context on loop entry, so a `return`
+/// under the loop is valid Python that reaches the buffer egress.
+fn try_returning_from_a_loop_in_finally(body: Vec<HirStmt>, returned: HirExpr) -> HirStmt {
+    HirStmt::Try {
+        body,
+        handlers: Vec::new(),
+        orelse: Vec::new(),
+        finalbody: vec![HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Return(Some(returned))],
+        }],
+    }
+}
+
+/// Review round 5 of #1164: the buffer egress is refused outright in a
+/// function that also contains a `return` inside a `finally`.
+///
+/// That shape leaves two returns suspended at once, which the codegen's
+/// *single* per-frame pending-return record cannot describe -- the inner
+/// return supersedes the record and releases the orphaned outer buffer,
+/// then a raising finalizer cancels the inner return and the outer one
+/// resumes over freed storage, segfaulting the hosting interpreter. The
+/// narrowing makes that record's cardinality assumption a checked property
+/// of every admitted program.
+#[test]
+fn a_return_inside_a_finally_refuses_the_buffer_egress() {
+    let hir = func(
+        vec![],
+        Ty::MemoryView,
+        vec![
+            alloc_four("ndarray"),
+            try_returning_from_a_loop_in_finally(
+                vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+                HirExpr::Name("a".to_string()),
+            ),
+        ],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001", "{}", err.message);
+    assert!(
+        err.message.contains(RETURN_IN_FINALLY_REFUSAL),
+        "{}",
+        err.message
+    );
+    assert!(
+        !err.message.contains(OWNED_BUFFER_REFUSAL_TAIL),
+        "{}",
+        err.message
+    );
+}
+
+/// The solver's half of the same narrowing, on
+/// [`the_solver_admits_an_owned_buffer_return`]'s model: the module carries
+/// an unannotated helper so the constraint solver walks the annotated body
+/// too. The solver runs first, so without its own copy of the fourth
+/// conjunct it would admit the egress and the program would compile.
+#[test]
+fn the_solver_refuses_a_buffer_egress_with_a_return_inside_a_finally() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+            },
+            HirItem::Function {
+                name: "g".to_string(),
+                params: vec![],
+                return_ty: Ty::MemoryView,
+                body: vec![
+                    alloc_four("ndarray"),
+                    try_returning_from_a_loop_in_finally(
+                        vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+                        HirExpr::Name("a".to_string()),
+                    ),
+                ],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(call(
+                    "_h",
+                    vec![HirExpr::IntLiteral(4)],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001", "{}", err.message);
+    assert!(
+        err.message.contains(RETURN_IN_FINALLY_REFUSAL),
+        "{}",
+        err.message
+    );
+}
+
+/// The narrowing is gated at the egress admission, not on the function as a
+/// whole: a `-> int` function with a `return` inside a `finally` keeps
+/// exactly the behavior it had before review round 5. Without this pin the
+/// refusal could be moved up to `check_function_in` and break every
+/// non-buffer program with that shape while every other test here stayed
+/// green.
+#[test]
+fn a_return_inside_a_finally_leaves_a_non_buffer_function_alone() {
+    let hir = func(
+        vec![],
+        Ty::Int,
+        vec![try_returning_from_a_loop_in_finally(
+            vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+            HirExpr::IntLiteral(3),
+        )],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// A `finally` with no `return` beneath it does not narrow anything: the
+/// surviving admitted shape is a single pending return with finalizers
+/// interposed, which `tests/issue_1164_memoryview_egress.rs` exercises
+/// end-to-end against a real CPython host.
+#[test]
+fn a_finally_without_a_return_still_admits_the_buffer_egress() {
+    let hir = func(
+        vec![],
+        Ty::MemoryView,
+        vec![
+            alloc_four("ndarray"),
+            HirStmt::Try {
+                body: vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+                handlers: Vec::new(),
+                orelse: Vec::new(),
+                finalbody: vec![alloc_four("ndarray")],
+            },
+        ],
+    );
+    assert!(check(&hir).is_ok());
+}

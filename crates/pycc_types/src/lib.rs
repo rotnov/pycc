@@ -2711,6 +2711,11 @@ fn check_function_in(
     // already been validated by that function's own
     // `generic_type_param_name` call, and a non-generic function returns
     // `Ok(None)` unconditionally.
+    // Part 2b of #1142 (#1164), review round 5: the single pending-return
+    // record's precondition, computed once for the whole body. Read only by
+    // the buffer-egress admission in `check_stmt_in_function`'s
+    // `HirStmt::Return` arm; see `crate::buffer::buffer_return_inside_finally`.
+    env.returns_inside_finally = pycc_hir::body_returns_inside_finally(body);
     env.own_type_param = generic_type_param_name(params, return_ty).ok().flatten();
     // #433: extract the class name from a mangled `<ClassName>.<method>`
     // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next
@@ -2934,10 +2939,21 @@ fn check_stmt_in_function(
             // counter-example that prompted it. It also fails closed on
             // `None`: a name that is not bound at all falls through to the
             // ordinary `T0021`.
+            //
+            // The fourth conjunct is review round 5's, and unlike the third
+            // it is a *refusal* rather than a decline: see
+            // `crate::buffer::buffer_return_inside_finally` for the host
+            // crash it closes and why the mechanism's cardinality
+            // assumption, not the set of paths reaching it, is what had to
+            // change. It is a whole-function property, so it is computed
+            // once in `check_function_in` rather than re-walked here.
             if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty))
                 && env.owned_buffers.contains(name)
                 && matches!(env.binding_state(name), Some(BindingState::Definitely(_)))
             {
+                if env.returns_inside_finally {
+                    return Err(crate::buffer::buffer_return_inside_finally(name));
+                }
                 return Ok(());
             }
             let actual = infer_expr_in(env, local_names, expr)?;

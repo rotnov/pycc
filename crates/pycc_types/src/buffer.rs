@@ -435,3 +435,50 @@ pub(crate) fn buffer_returning_call_unsupported(callee: &str) -> Diagnostic {
         Span::new(0, 0),
     )
 }
+
+/// `Err(C0001)` for a buffer **egress** in a function that also contains a
+/// `return` inside a `finally` clause (Part 2b of #1142, #1164 review
+/// round 5).
+///
+/// The narrowing that makes the single pending-return record's own
+/// precondition checked rather than assumed. `crates/pycc_codegen/src/lib.rs`
+/// tracks a returned buffer's ownership in **one** per-frame record -- a
+/// pointer slot plus an orphan flag -- which can describe exactly one
+/// suspended return. A `return` lexically inside a `finally` is the only
+/// shape that puts two returns in flight at once: the outer `return` is
+/// suspended while its finalizer runs, the inner one overwrites the record
+/// and releases the orphaned predecessor, and a finalizer that then raises
+/// cancels the inner return so the outer one resumes -- handing the host a
+/// `memoryview` over freed storage and segfaulting the interpreter.
+///
+/// Refusing the *admission* rather than growing the record is deliberate.
+/// Four review rounds on this mechanism each closed one path into it; the
+/// cardinality assumption underneath them is what this closes, and the
+/// whole class with it. A correct multi-pending egress needs a stack of
+/// records keyed by suspended-return context, which is tracked separately.
+///
+/// Raised only at the egress admission, so a `-> int` function with a
+/// `return` inside a `finally` keeps exactly the behavior it has today:
+/// this narrows what buffer egress admits, and nothing else.
+///
+/// pycc already refuses a *bare* `return` inside a `finally` with `L0001`
+/// (PEP 765, #738). That check is syntactic and follows CPython in clearing
+/// its `finally` context on loop entry, so `while True: return a` escapes
+/// it; `pycc_hir::body_returns_inside_finally` is the transitive predicate
+/// this refusal uses instead. `C0001` is the code because this is a
+/// capability gap in an unimplemented feature, not a context violation --
+/// the same ground as every other refusal in this module (D-148).
+pub(crate) fn buffer_return_inside_finally(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "returning `{name}`, which is bound to buffer storage this `pycc build --ext` \
+             artifact allocated, from a function that also contains a `return` inside a \
+             `finally` clause is valid Python but not implemented yet; #1164 tracks one \
+             pending buffer return per call, and a `return` inside a `finally` can leave \
+             a second one suspended -- move the inner `return` out of the `finally` \
+             clause"
+        ),
+        Span::new(0, 0),
+    )
+}

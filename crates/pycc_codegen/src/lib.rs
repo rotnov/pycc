@@ -8020,16 +8020,31 @@ fn emit_stmt<'ctx>(
                     // only owner, store the new pointer, and clear the flag.
                     // A raw store here -- which is what this arm used to do --
                     // left both halves of the invariant broken whenever one
-                    // frame reached a second `return`, which a `return` inside
-                    // a loop inside `finally` does (the HIR resets its
-                    // `in_finally` state on loop entry, so the `L0001` refusal
-                    // of a bare `return` in `finally` does not reach it):
-                    // the superseded pointer's only record was gone, leaking
-                    // one buffer per call, and the surviving flag then
-                    // described a pointer that was no longer pending, so the
-                    // epilogue's trailing release freed the *new* pointer that
-                    // the owned-slot loop had already released -- a double free
-                    // that aborts the hosting interpreter.
+                    // frame reached a second `return`: the superseded
+                    // pointer's only record was gone, leaking one buffer per
+                    // call, and the surviving flag then described a pointer
+                    // that was no longer pending, so the epilogue's trailing
+                    // release freed the *new* pointer that the owned-slot loop
+                    // had already released -- a double free that aborts the
+                    // hosting interpreter.
+                    //
+                    // A second `return` is still reachable after review round
+                    // 5 narrowed the egress admission
+                    // (`pycc_types::buffer::buffer_return_inside_finally`
+                    // now refuses a buffer egress from any function with a
+                    // `return` inside a `finally`). That narrowing removes
+                    // only the *simultaneous* case -- two returns in flight at
+                    // once -- because that requires the inner `return` to sit
+                    // lexically inside a `finally` the outer one's exit path
+                    // runs. The *sequential* case survives and is what this
+                    // transition serves: `try: return a` / `finally: raise`,
+                    // caught by an enclosing handler, then `a = ndarray(n)`
+                    // (which orphans the abandoned pointer) and a second
+                    // `return a`. `cancelled_then_rebind` and
+                    // `cancelled_then_rebind_then_raises` in
+                    // `tests/issue_1164_memoryview_egress.rs` are that shape;
+                    // each kills one half of this transition, the release and
+                    // the flag clear respectively.
                     //
                     // With one invariant-preserving mutator, "how many
                     // syntactic paths reach a second `return`" stops being a
@@ -8077,8 +8092,10 @@ fn emit_stmt<'ctx>(
                         // "a different pointer" is what keeps an unorphaned
                         // predecessor -- still held by its own slot, which the
                         // epilogue's loop will release -- from being freed
-                        // twice; `try: return a` followed by `finally: while
-                        // True: return b` is that shape. The inequality makes
+                        // twice; a `return a` abandoned by a raising
+                        // finalizer, caught, and followed by a second `return
+                        // b` on a still-slot-held `b` is that shape. The
+                        // inequality makes
                         // the symmetric state unreachable rather than merely
                         // improbable: an orphaned record is by definition held
                         // by no slot, so no later `return` can load it back and
