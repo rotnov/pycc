@@ -243,8 +243,12 @@ fn a_returned_buffer_transfers_ownership_rather_than_leaking_or_double_freeing()
 /// leaves the frame, which is the distinction ownership transfer turns on.
 ///
 /// `overrides` -- a `finally` that returns a buffer of its own -- is absent
-/// deliberately: `return` inside `finally` is refused by the parser with
-/// `L0001`, so that member of the set is unreachable rather than handled.
+/// deliberately, but only its *bare* form is caught upstream: a `return`
+/// written directly in a `finally` body is refused by the parser with
+/// `L0001`. That check is syntactic and does not survive loop entry, so
+/// `finally: while True: return a` reaches codegen; since review round 5 it
+/// is refused with `C0001` by `body_returns_inside_finally` instead. See
+/// `REFUSED_MULTI_RETURN_SUBJECT` below for those shapes.
 /// `with` is absent for the same reason, refused with `C0001` ("statement
 /// kind not supported yet: a `with` statement").
 const FINALLY_SUBJECT: &str = "\

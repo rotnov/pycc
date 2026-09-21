@@ -1364,6 +1364,10 @@ real `memoryview` the host owns (Part 2b of #1142, #1164); the same return \
 type anywhere else -- a private function, a method, a specialization -- is \
 the `C0001` capability gap, as is an intra-artifact *call* to a \
 buffer-returning function, which has no wrapper to own the result. A \
+public module-level export is refused too when the function contains a \
+`return` anywhere inside a `finally` clause, because the compiled frame \
+tracks one pending buffer return per call and a suspended outer return \
+would outlive the record (#1173). A \
 signature is the only position the type is \
 admitted at in either mode: a `memoryview` *declaration* (`x: memoryview`, \
 at module scope or in a function body) is a `C0001` capability gap in both, \
