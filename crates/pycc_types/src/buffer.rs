@@ -381,3 +381,104 @@ pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&
         .filter(|name| is_producer_spelling(name))
         .collect()
 }
+
+/// The name an admitted buffer **egress** returns, or `None` when this
+/// `return` is not the one shape Part 2b of #1142 (#1164) admits.
+///
+/// The shape is deliberately exact: a bare name, in a function whose
+/// *declared* return type is the buffer type. Both walkers call this from
+/// their own `HirStmt::Return` arm, before the operand is ever inferred, on
+/// the same **interception** model `crate::expr::reject_memoryview_read`'s
+/// doc comment records for `b[i]` and `len(b)` -- the refusal itself is not
+/// weakened, only the set of expressions that reach it narrows by one.
+///
+/// Membership in the caller's own `owned_buffers` set is the caller's half
+/// of the test and is deliberately *not* asked here: that set lives on two
+/// different environments (the check phase's [`crate::Environment`] and the
+/// solver's `ConstraintEnvironment`), and leaving the provenance question
+/// with each walker is what keeps a *parameter*-bound name -- `return b` --
+/// falling through to the parameter refusal, which is the use-after-free
+/// #1142 exists to forbid.
+///
+/// A declared return type other than the buffer type declines here, so
+/// `def f(n: int) -> float: a = ndarray(n); return a` keeps exactly the
+/// refusal it has today.
+pub(crate) fn admitted_buffer_return<'a>(
+    expr: &'a pycc_hir::HirExpr,
+    declared_return: Option<&Ty>,
+) -> Option<&'a str> {
+    match (expr, declared_return) {
+        (pycc_hir::HirExpr::Name(name), Some(Ty::MemoryView)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// `Err(C0001)` for a call whose callee returns the buffer type.
+///
+/// Part 2b of #1142 (#1164) admits a buffer return at the `pycc build --ext`
+/// boundary -- where the generated wrapper turns the artifact's storage into
+/// a real `memoryview` the host owns -- and nowhere else. An *intra-artifact*
+/// call to such a function has no such wrapper: the compiled callee hands
+/// back a raw `PyccExtBufferView *` with no owner, which
+/// `crates/pycc_codegen/src/call_result.rs`'s `Ty::MemoryView` arm panics on.
+/// This refusal is what keeps that panic unreachable from source, which is
+/// #1164's own completion criterion.
+pub(crate) fn buffer_returning_call_unsupported(callee: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "calling `{callee}`, whose return type is a buffer, is valid Python but not \
+             implemented yet; #1164 hands such a buffer to the CPython host across the \
+             `pycc build --ext` boundary and admits no intra-artifact caller -- allocate \
+             the buffer with `a = ndarray(n)` in the function that reads it"
+        ),
+        Span::new(0, 0),
+    )
+}
+
+/// `Err(C0001)` for a buffer **egress** in a function that also contains a
+/// `return` inside a `finally` clause (Part 2b of #1142, #1164 review
+/// round 5).
+///
+/// The narrowing that makes the single pending-return record's own
+/// precondition checked rather than assumed. `crates/pycc_codegen/src/lib.rs`
+/// tracks a returned buffer's ownership in **one** per-frame record -- a
+/// pointer slot plus an orphan flag -- which can describe exactly one
+/// suspended return. A `return` lexically inside a `finally` is the only
+/// shape that puts two returns in flight at once: the outer `return` is
+/// suspended while its finalizer runs, the inner one overwrites the record
+/// and releases the orphaned predecessor, and a finalizer that then raises
+/// cancels the inner return so the outer one resumes -- handing the host a
+/// `memoryview` over freed storage and segfaulting the interpreter.
+///
+/// Refusing the *admission* rather than growing the record is deliberate.
+/// Four review rounds on this mechanism each closed one path into it; the
+/// cardinality assumption underneath them is what this closes, and the
+/// whole class with it. A correct multi-pending egress needs a stack of
+/// records keyed by suspended-return context, which is tracked separately.
+///
+/// Raised only at the egress admission, so a `-> int` function with a
+/// `return` inside a `finally` keeps exactly the behavior it has today:
+/// this narrows what buffer egress admits, and nothing else.
+///
+/// pycc already refuses a *bare* `return` inside a `finally` with `L0001`
+/// (PEP 765, #738). That check is syntactic and follows CPython in clearing
+/// its `finally` context on loop entry, so `while True: return a` escapes
+/// it; `pycc_hir::body_returns_inside_finally` is the transitive predicate
+/// this refusal uses instead. `C0001` is the code because this is a
+/// capability gap in an unimplemented feature, not a context violation --
+/// the same ground as every other refusal in this module (D-148).
+pub(crate) fn buffer_return_inside_finally(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "returning `{name}`, which is bound to buffer storage this `pycc build --ext` \
+             artifact allocated, from a function that also contains a `return` inside a \
+             `finally` clause is valid Python but not implemented yet; the compiled frame tracks one \
+             pending buffer return per call, and a `return` inside a `finally` can leave \
+             a second one suspended (#1173) -- move the inner `return` out of the \
+             `finally` clause"
+        ),
+        Span::new(0, 0),
+    )
+}

@@ -15,7 +15,7 @@ mod program;
 mod stmt;
 mod typecheck;
 
-pub use buffer_store::body_stores_into;
+pub use buffer_store::{body_returns_inside_finally, body_stores_into};
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
     ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember,

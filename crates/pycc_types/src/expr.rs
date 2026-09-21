@@ -715,6 +715,15 @@ pub(crate) fn infer_expr_in(
             if let Some(generic_func) = env.lookup_generic(callee) {
                 return Ok(instantiate_generic_call(generic_func, arg_tys)?.return_ty);
             }
+            // Part 2b of #1142 (#1164): a buffer-returning function is
+            // callable from the CPython host through its generated wrapper
+            // and from nowhere else. `crate::buffer`'s own diagnostic
+            // carries the reason; refusing here is what keeps
+            // `crates/pycc_codegen/src/call_result.rs`'s `Ty::MemoryView`
+            // panic unreachable from source.
+            if let Some((_, Ty::MemoryView)) = env.lookup_function(callee) {
+                return Err(crate::buffer::buffer_returning_call_unsupported(callee));
+            }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
                 // Issue #142: before falling back to T0021 ("call to undefined
                 // function"), check whether `callee` is a known Python 3.14

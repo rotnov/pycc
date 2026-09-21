@@ -1356,13 +1356,19 @@ exporter before the call and released it again afterwards. A \
 native artifact embeds no interpreter, so there is nothing to acquire a \
 buffer from and no way such a function could ever be called. Rebuild with \
 `pycc build --ext`, or change the annotation to a type a native artifact \
-can carry. Under `--ext` the parameter position is admitted and the return \
-position is not -- a `memoryview` return is the `C0003` capability gap \
-instead, because the wrapper has released the buffer by the time it would \
-have to hand one back -- that `C0003` is the export walk's own refusal, so \
-it covers a *public* function; the same return type on a function the walk \
-never visits (a private one, a method, a specialization) is the `C0001` \
-capability gap a declaration gets. A signature is the only position the type is \
+can carry. Under `--ext` both signature positions are admitted, but not \
+symmetrically. A parameter is admitted anywhere in the export set. A return \
+is admitted from a *public module-level* export only, where the generated \
+wrapper turns storage the artifact allocated with `a = ndarray(n)` into a \
+real `memoryview` the host owns (Part 2b of #1142, #1164); the same return \
+type anywhere else -- a private function, a method, a specialization -- is \
+the `C0001` capability gap, as is an intra-artifact *call* to a \
+buffer-returning function, which has no wrapper to own the result. A \
+public module-level export is refused too when the function contains a \
+`return` anywhere inside a `finally` clause, because the compiled frame \
+tracks one pending buffer return per call and a suspended outer return \
+would outlive the record (#1173). A \
+signature is the only position the type is \
 admitted at in either mode: a `memoryview` *declaration* (`x: memoryview`, \
 at module scope or in a function body) is a `C0001` capability gap in both, \
 because the annotation alone produces no value to bind to the name. Since \

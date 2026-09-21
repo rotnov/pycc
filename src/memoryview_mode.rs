@@ -239,26 +239,23 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// advice ("rename it to `_name` to keep it out of the export set") pointed
 /// straight at that crash.
 ///
-/// **A public `memoryview`-returning `@staticmethod` or `@classmethod` of a
-/// public class now reports `C0003` instead of the `C0001` this walk used
-/// to give it.** That is the export boundary's own diagnostic taking over a
-/// signature it now owns, not a new refusal: the program was already
-/// rejected, and only the code and the wording change. It also means such a
-/// method's `C0003` *suppresses* the `C0001`s this walk would have reported
-/// in the same run, because `plan_ext` aborts on `collect_exports`' gaps
-/// before reaching here. That arm is newly reachable rather than new: the
-/// same suppression has always applied to a public module-level function's
-/// `C0003`, and `C0003`'s own "every gap in a program is reported at once"
-/// is a statement about the export-boundary gap set, which is collected in
-/// full before the first is reported.
+/// **Superseded by Part 2b of #1142 (#1164) for the `C0003` half.** A
+/// buffer return type is carriable now, so no function reaches
+/// `collect_exports`' gap set on account of it and the `C0003` takeover
+/// described above no longer happens: a public `memoryview`-returning
+/// `@staticmethod` or `@classmethod` is admitted by the export boundary and
+/// refused here, with this function's own `C0001`, for the reason the
+/// exemption paragraph below gives. The suppression note still describes
+/// `collect_exports` correctly for every *other* unexportable signature.
 ///
 /// `C0001` rather than `C0003`: `docs/DIAGNOSTICS.md` defines `C0003` as a
 /// *public* function's signature failing to cross the boundary, which a
 /// private one is not. This is the same versioned capability gap
 /// `crates/pycc_types`'s `reject_memoryview_declaration` and
-/// `reject_memoryview_read` report, for the same underlying reason: neither
-/// #1027 nor #1129 adds an expression that *produces* a buffer, so there is
-/// nothing a function could return. The message is worded like those two
+/// `reject_memoryview_read` report. Its *ground* has changed since #1027:
+/// a buffer-producing expression now exists (`a = ndarray(n)`, Part 2a of
+/// #1142), so the gap is no longer "nothing could produce one" but "only
+/// one position can hand one out". The message is worded like those two
 /// siblings, and for the same reason: it names the type as "a buffer"
 /// rather than in any of its three spellings (#1134 added `NDArray`), so a
 /// user who wrote `ndarray` or `NDArray` is not told about a `memoryview`
@@ -277,12 +274,30 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// [`refuse_in_native_mode`] refuses both positions there, private
 /// functions included.
 ///
-/// Called after `collect_exports`, so an offender that is *in the export
-/// set* -- a public module-level function, or a public `@staticmethod` or
-/// `@classmethod` of a public non-exception class -- has already been
-/// reported as the `C0003` its documented boundary owes it and never
-/// reaches this walk.
-pub(crate) fn refuse_in_ext_mode(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
+/// Called after `collect_exports`, and handed its result: Part 2b of #1142
+/// (#1164) made a buffer return type *carriable*, so the export set is no
+/// longer a set this walk can assume was already refused.
+///
+/// The exemption is deliberately narrower than "is exported". It is
+/// **exported and module-level** -- a dot-free name -- and a method is
+/// refused here even when `collect_exports` admits it. The reason is
+/// `pycc_codegen`'s `call_result.rs`, whose `Ty::MemoryView` panic #1164's
+/// completion criteria require to stay unreachable. `pycc_types` intercepts
+/// a buffer-returning *call* (`crate::buffer::buffer_returning_call_
+/// unsupported`) at `HirExpr::Call`, which is the only route to a
+/// module-level `def`. A method's return type is resolved instead through
+/// `class::resolve_method_call`, `resolve_static_or_class_method_call` and
+/// `resolve_super_method_call` from `HirExpr::MethodCall`, none of which
+/// that interception covers -- so `g.make()` inside the artifact would reach
+/// the panic. Refusing the *declaration* closes all three at once, and does
+/// so before `compile_to_object_with_options` runs (`plan_ext` is called
+/// first), which is what makes the panic unreachable rather than merely
+/// unlikely. Admitting a buffer-returning method is a separate change that
+/// must extend the call interception to the method-resolution paths.
+pub(crate) fn refuse_in_ext_mode(
+    hir: &HirModule,
+    exports: &[crate::ext_build::ExtExport],
+) -> Result<(), Vec<Diagnostic>> {
     let gaps: Vec<Diagnostic> = hir
         .items
         .iter()
@@ -293,7 +308,16 @@ pub(crate) fn refuse_in_ext_mode(hir: &HirModule) -> Result<(), Vec<Diagnostic>>
             else {
                 return None;
             };
-            (*return_ty == Ty::MemoryView).then(|| ext_return_gap(name))
+            if *return_ty != Ty::MemoryView {
+                return None;
+            }
+            // `!name.contains('.')` is the module-level test: a method
+            // arrives here with the mangled dotted name `Grid.make` or
+            // `Grid.make.static`, and a module-level `def` never contains a
+            // dot.
+            let exported_module_level =
+                !name.contains('.') && exports.iter().any(|export| export.name == *name);
+            (!exported_module_level).then(|| ext_return_gap(name))
         })
         .collect();
     if gaps.is_empty() {
@@ -303,13 +327,22 @@ pub(crate) fn refuse_in_ext_mode(hir: &HirModule) -> Result<(), Vec<Diagnostic>>
 }
 
 fn ext_return_gap(name: &str) -> Diagnostic {
+    // The *source-level* spelling, for the reason `capability_gap` states in
+    // full: a method arrives mangled, and Part 2b of #1142 (#1164) made this
+    // message the one a public `@staticmethod` gets -- so left alone it would
+    // name `Grid.make.static`, which the user never wrote. It was `C0003`,
+    // which already rendered the source-level name, that reported that case
+    // before.
+    let name = crate::ext_build::source_level_name(name);
     Diagnostic {
         code: "C0001",
         severity: Severity::Error,
         message: format!(
             "`{name}`'s return type is a buffer, which is valid Python but not implemented \
-             yet; a `pycc build --ext` export cannot hand buffer storage back to its \
-             caller, so no buffer-typed value may leave a function in either mode"
+             yet; Part 2b of #1142 (#1164) hands a buffer back to the CPython host from a \
+             *public module-level* `pycc build --ext` export only, and no other function \
+             may return one -- move the buffer-producing code into a public module-level \
+             `def`"
         ),
         span: None,
         label: None,
@@ -652,6 +685,21 @@ mod tests {
         }
     }
 
+    /// One export-set entry, keyed on the only field
+    /// [`refuse_in_ext_mode`] reads. Every other field is inert here: the
+    /// walk asks whether a name is present, never how it is carried.
+    fn export(name: &str, return_ty: Ty) -> crate::ext_build::ExtExport {
+        crate::ext_build::ExtExport {
+            name: name.to_string(),
+            class: None,
+            method: None,
+            receiver: crate::ext_build::ExtReceiver::None,
+            params: Vec::new(),
+            param_writable: Vec::new(),
+            return_ty,
+        }
+    }
+
     #[test]
     fn a_program_without_a_memoryview_annotation_is_admitted() {
         let admitted = hir(vec![func(
@@ -664,19 +712,25 @@ mod tests {
 
     #[test]
     fn ext_mode_refuses_a_memoryview_return_type_on_a_function_no_export_walk_visits() {
-        let gaps = refuse_in_ext_mode(&hir(vec![
-            // A `memoryview` parameter is not this gate's business: the
-            // read refusal in `crates/pycc_types` already closes it.
-            func("total", vec![("v".to_string(), Ty::MemoryView)], Ty::Int),
-            // A non-function item is skipped: only a signature can name a
-            // return type at all.
-            HirItem::TopLevelStmt(pycc_hir::HirStmt::Assign {
-                target: "n".to_string(),
-                value: pycc_hir::HirExpr::IntLiteral(1),
-            }),
-            func("_make", Vec::new(), Ty::MemoryView),
-            func("Buf.view", Vec::new(), Ty::MemoryView),
-        ]))
+        let gaps = refuse_in_ext_mode(
+            &hir(vec![
+                // A `memoryview` parameter is not this gate's business: the
+                // read refusal in `crates/pycc_types` already closes it.
+                func("total", vec![("v".to_string(), Ty::MemoryView)], Ty::Int),
+                // A non-function item is skipped: only a signature can name a
+                // return type at all.
+                HirItem::TopLevelStmt(pycc_hir::HirStmt::Assign {
+                    target: "n".to_string(),
+                    value: pycc_hir::HirExpr::IntLiteral(1),
+                }),
+                func("_make", Vec::new(), Ty::MemoryView),
+                func("Buf.view", Vec::new(), Ty::MemoryView),
+            ]),
+            // Part 2b of #1142 (#1164): an empty export set, so nothing here is
+            // exempt. `Buf.view` is refused *even when exported*, which the
+            // sibling test below pins separately.
+            &[],
+        )
         .expect_err("a `memoryview` return type is refused under --ext");
         let messages: Vec<&str> = gaps.iter().map(|gap| gap.message.as_str()).collect();
         assert_eq!(gaps.len(), 2, "{messages:?}");
@@ -702,7 +756,61 @@ mod tests {
             vec![("v".to_string(), Ty::MemoryView)],
             Ty::Float,
         )]);
-        assert!(refuse_in_ext_mode(&admitted).is_ok());
+        assert!(refuse_in_ext_mode(&admitted, &[]).is_ok());
+    }
+
+    /// Part 2b of #1142 (#1164): the exemption is *exported and
+    /// module-level*, and both halves of that conjunction are load-bearing.
+    ///
+    /// `make` is exported and dot-free, so it is admitted -- that is the
+    /// whole egress this part adds. `Buf.view` is in the same export set and
+    /// is still refused, because a method's return type resolves through
+    /// `class::resolve_method_call` and its siblings, which `pycc_types`'
+    /// buffer-returning-call interception does not cover; admitting it would
+    /// make `pycc_codegen`'s `call_result.rs` panic reachable from
+    /// `g.view()`. `_make` is module-level but unexported, and is refused for
+    /// the same reason stated of the other direction.
+    #[test]
+    fn ext_mode_admits_an_exported_module_level_buffer_return_and_nothing_else() {
+        let exports = vec![
+            export("make", Ty::MemoryView),
+            export("Buf.view", Ty::MemoryView),
+        ];
+        let program = hir(vec![
+            func("make", Vec::new(), Ty::MemoryView),
+            func("_make", Vec::new(), Ty::MemoryView),
+            func("Buf.view", Vec::new(), Ty::MemoryView),
+        ]);
+        let gaps = refuse_in_ext_mode(&program, &exports)
+            .expect_err("an unexported or dotted buffer return is still refused");
+        let messages: Vec<&str> = gaps.iter().map(|gap| gap.message.as_str()).collect();
+        assert_eq!(gaps.len(), 2, "{messages:?}");
+        assert!(
+            messages[0].contains("`_make`'s return type is a buffer"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].contains("`Buf.view`'s return type is a buffer"),
+            "{messages:?}"
+        );
+        // Two-directional: the admitted export is not merely absent from the
+        // gap list, it is admitted when it is the only item in the program.
+        assert!(
+            refuse_in_ext_mode(
+                &hir(vec![func("make", Vec::new(), Ty::MemoryView)]),
+                &exports,
+            )
+            .is_ok()
+        );
+        // And a *name* match alone is not the test: an export set holding a
+        // different name leaves `make` refused.
+        assert!(
+            refuse_in_ext_mode(
+                &hir(vec![func("make", Vec::new(), Ty::MemoryView)]),
+                &[export("other", Ty::MemoryView)],
+            )
+            .is_err()
+        );
     }
 
     #[test]

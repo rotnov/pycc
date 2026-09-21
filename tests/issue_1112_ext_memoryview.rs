@@ -205,8 +205,107 @@ def make() -> memoryview:
     let ext = build_ext(&dir);
     assert!(!ext.status.success(), "{}", stdout_of(&ext));
     let err = stderr_of(&ext);
-    assert!(err.contains("error[C0003]"), "{err}");
-    assert!(err.contains("its return type `-> memoryview`"), "{err}");
+    // Part 2b of #1142 (#1164) admits the *signature*: a public module-level
+    // `-> memoryview` export is now carried across the boundary, so the
+    // `C0003` capability gap that used to answer this program is gone. What
+    // still refuses it is its body -- `return make()` is an intra-artifact
+    // call to a buffer-returning function, which has no wrapper to own the
+    // result. Asserted two-directionally so a regression that reinstates the
+    // old gap cannot pass as "still refused".
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(
+        err.contains("calling `make`, whose return type is a buffer"),
+        "{err}"
+    );
+    assert!(!err.contains("error[C0003]"), "{err}");
+    assert!(!err.contains("its return type `-> memoryview`"), "{err}");
+}
+
+/// The shape #1164 opens, refused everywhere it is *not* a public
+/// module-level export. Neither arm calls the producer, so what answers is
+/// `src/memoryview_mode.rs`'s own gap rather than the intra-artifact call
+/// refusal above -- which is the point: the two refusals bound different
+/// halves of the boundary and must stay distinguishable.
+#[test]
+fn a_buffer_producer_outside_the_export_set_is_refused_in_ext_mode() {
+    const CASES: [(&str, &str, &str); 4] = [
+        (
+            "1112_private_producer",
+            "def _make() -> memoryview:
+    a = ndarray(4)
+    return a
+
+
+def total() -> int:
+    return 0
+",
+            "`_make`'s return type is a buffer",
+        ),
+        (
+            "1112_method_producer",
+            "class Grid:
+    @staticmethod
+    def make() -> memoryview:
+        a = ndarray(4)
+        return a
+
+
+def total() -> int:
+    return 0
+",
+            "`Grid.make`'s return type is a buffer",
+        ),
+        (
+            "1112_classmethod_producer",
+            "class Grid:
+    @classmethod
+    def build(cls) -> memoryview:
+        a = ndarray(4)
+        return a
+
+
+def total() -> int:
+    return 0
+",
+            "`Grid.build`'s return type is a buffer",
+        ),
+        (
+            "1112_instance_method_producer",
+            "class Grid:
+    def rows(self) -> memoryview:
+        a = ndarray(4)
+        return a
+
+
+def total() -> int:
+    return 0
+",
+            "`Grid.rows`'s return type is a buffer",
+        ),
+    ];
+    for (category, source, expected) in CASES {
+        let dir = fixture(category, source);
+        let ext = build_ext(&dir);
+        assert!(!ext.status.success(), "{}", stdout_of(&ext));
+        let err = stderr_of(&ext);
+        assert!(!err.contains("panicked"), "{err}");
+        assert!(err.contains("error[C0001]"), "{err}");
+        assert!(err.contains(expected), "{category}: {err}");
+        // The remediation names the one admitted shape, and the message
+        // renders the *source-level* method name rather than the mangled
+        // `Grid.make.static` spelling the export table carries.
+        assert!(
+            err.contains("move the buffer-producing code into a public module-level `def`"),
+            "{category}: {err}"
+        );
+        // Every mangled suffix `pycc_hir` can attach, none of which may
+        // reach the reader: `.static`, `.classmethod`, and the bare
+        // `Class.method` an instance method carries (which needs no
+        // stripping and is asserted by the expected text above).
+        assert!(!err.contains(".static"), "{category}: {err}");
+        assert!(!err.contains(".classmethod"), "{category}: {err}");
+        assert!(!err.contains("error[C0003]"), "{category}: {err}");
+    }
 }
 
 /// The same return type on a *private* function, which `collect_exports`
@@ -232,15 +331,18 @@ def total() -> int:
     let err = stderr_of(&ext);
     assert!(!err.contains("panicked"), "{err}");
     assert!(err.contains("error[C0001]"), "{err}");
-    // Spelling-neutral since #1129: this site names the *type*, and the
-    // same message answers a `-> ndarray` return, so it says "a buffer"
-    // rather than any one spelling. `C0003` above still quotes the whole
-    // signature position back, which is why it still reads `-> memoryview`.
-    assert!(err.contains("`_make`'s return type is a buffer"), "{err}");
+    // Part 2b of #1142 (#1164): the body's own `return _make()` is now what
+    // refuses this program, ahead of the export-set gap, because an
+    // intra-artifact call to a buffer-returning function has no wrapper to
+    // own the result. The property the round-4 fix pinned is unchanged and
+    // is what this test still exists for: a refusal rather than a panic.
+    assert!(
+        err.contains("calling `_make`, whose return type is a buffer"),
+        "{err}"
+    );
     // Part 2a of #1142 (#1165) gave the buffer type a second provenance:
-    // `ndarray(n)` *is* an expression that produces one. The refusal stays --
-    // egress is Part 2b (#1164) -- but its justification may never regress to
-    // the claim that nothing can produce a buffer to return.
+    // `ndarray(n)` *is* an expression that produces one, so no refusal here
+    // may regress to the claim that nothing can produce a buffer to return.
     assert!(
         !err.contains("no expression produces one to return"),
         "{err}"

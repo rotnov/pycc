@@ -2201,3 +2201,75 @@ fn a_derived_class_table_carries_its_base_s_rows_and_its_own_tp_init() {
         .expect("Derived registered");
     assert!(base_at < derived_at, "{inc}");
 }
+
+// --- Part 2b of #1142 (#1164): the buffer return position -------------------
+
+#[test]
+fn a_buffer_returning_export_declares_the_carrier_pointer_and_packs_it() {
+    // The result slot is declared with `BUFFER_VIEW_RETURN_C_TYPE` rather
+    // than routed through `BoundaryCarrier::into_scalar`, whose own
+    // admissible set stays scalar-only so that `tuple[memoryview]` keeps
+    // being refused. The declaration and the packer call are asserted
+    // together: a declaration without the packer would not compile, and a
+    // packer call over a wrongly declared slot would compile and be wrong.
+    let inc = memoryview_inc("make", 0, Ty::MemoryView);
+    assert!(inc.contains("    PyccExtBufferView * result;\n"), "{inc}");
+    assert!(
+        inc.contains("    return pycc_ext_pack_memoryview(result);\n}\n\n"),
+        "{inc}"
+    );
+    // The compiled callee's own C signature returns the carrier pointer, so
+    // the cast the wrapper calls through has to say so too.
+    assert!(
+        inc.contains("((PyccExtBufferView * (*)(void))fnptr_make)()"),
+        "{inc}"
+    );
+    // ...and nothing reaches the scalar packers by accident.
+    assert!(!inc.contains("pycc_ext_pack_int(result)"), "{inc}");
+    assert!(!inc.contains("Py_RETURN_NONE"), "{inc}");
+}
+
+#[test]
+fn a_buffer_returning_export_releases_its_parameters_before_packing() {
+    // The ordering the egress arm shares with every other packer: a
+    // `memoryview` **parameter** is the host's, borrowed for exactly one
+    // call, so it is released on the way out -- and the release has to
+    // precede the pack, which is a `return`. Asserted as adjacency rather
+    // than as presence, because a release emitted after the pack is dead
+    // code that a presence-only assertion accepts.
+    let inc = memoryview_inc("make", 1, Ty::MemoryView);
+    assert!(
+        inc.contains(
+            "    PyBuffer_Release(&b0);\n    return pycc_ext_pack_memoryview(result);\n}\n\n"
+        ),
+        "{inc}"
+    );
+    // Exactly two releases: the two exits reachable with the buffer held.
+    assert_eq!(inc.matches("PyBuffer_Release(&b0);").count(), 2, "{inc}");
+}
+
+#[test]
+fn a_buffer_returning_method_packs_through_the_same_arm() {
+    // The method boundary #1131 added dispatches on the same `return_ty`,
+    // so the egress arm has to answer there too rather than only for a
+    // module-level function. `src/memoryview_mode.rs` refuses a
+    // buffer-returning *method* at the source level today, so this pins the
+    // wrapper renderer's own behaviour against the day that narrowing is
+    // lifted -- the alternative is a `BoundaryCarrier::into_scalar` panic.
+    let inc = inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: "Grid.make".to_string(),
+            class: Some("Grid".to_string()),
+            method: Some("make".to_string()),
+            receiver: ExtReceiver::None,
+            params: vec![],
+            param_writable: vec![],
+            return_ty: Ty::MemoryView,
+        }],
+    );
+    assert!(
+        inc.contains("    return pycc_ext_pack_memoryview(result);\n"),
+        "{inc}"
+    );
+}

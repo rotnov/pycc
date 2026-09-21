@@ -204,6 +204,21 @@ pub struct Environment {
     /// to tell those apart, and this flag is what tells it which environment
     /// it is looking at.
     pub(crate) in_function_body: bool,
+    /// Part 2b of #1142 (#1164), review round 5: whether the function body
+    /// being checked contains a `return` lexically inside any `finally`
+    /// clause, at any nesting depth.
+    ///
+    /// Set once per function from `pycc_hir::body_returns_inside_finally`
+    /// (see that predicate for why the shape is refused and why the
+    /// pre-existing PEP 765 `L0001` rule cannot answer this question), and
+    /// read only at the buffer-egress admission in
+    /// `crate::check_stmt_in_function`'s `HirStmt::Return` arm. `false` in
+    /// the module-level environment, which has no function body to walk.
+    ///
+    /// A whole-function constant rather than a per-statement context, so the
+    /// clones this struct takes across branch joins carry it unchanged and
+    /// no join rule is owed for it.
+    pub(crate) returns_inside_finally: bool,
     /// Part 2a of #1142 (#1165): the names whose `Ty::MemoryView` binding is
     /// storage **this artifact allocated** (`a = ndarray(n)`), as opposed to
     /// a buffer parameter the `pycc build --ext` wrapper borrowed from the

@@ -319,16 +319,21 @@ fn a_tuple_of_something_uncarriable_is_a_capability_gap_naming_the_tuple() {
     // reader who wrote `ndarray` and is shown a list naming only
     // `memoryview` reads it as "not that type at all". #1134 added the
     // third spelling `NDArray` on the same reasoning -- it is the one 18 of
-    // the 19 array-parameter occurrences in the #1039 census use.
+    // the 19 array-parameter occurrences in the #1039 census use. Part 2b of
+    // #1142 (#1164) removed the return position's "except the buffer"
+    // carve-out: a buffer return is now carried, so a message that still
+    // excluded it would send a reader who wrote a valid `-> memoryview`
+    // signature looking for a gap that no longer exists.
     assert!(
         message.contains(
             "a parameter must be `int`, `float`, `bool`, `str`, `memoryview` (or its \
              other spellings `ndarray` and `NDArray`) or a `tuple` of \
              `int`/`float`/`bool`, and a \
-             return type must be one of those except the buffer, or `None`"
+             return type must be one of those, or `None`"
         ),
         "{message}"
     );
+    assert!(!message.contains("except the buffer"), "{message}");
 }
 
 #[test]

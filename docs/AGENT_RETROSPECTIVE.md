@@ -33,6 +33,135 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — Four fix rounds on one mechanism, none of which questioned how many things it assumed were in flight
+
+Part 2b of #1142 (#1164) tracks a returned buffer's ownership in a single
+per-frame pending-return record: one pointer slot and one orphan flag. Four
+consecutive review rounds each found a defect in it, and each round fixed the
+*shape* it was handed — a superseding return, a raising finalizer, a rebinding
+finalizer, a possibly-unbound name — by adding one more transition to the same
+record. Round 2's amendment even argued explicitly that the set of syntactic
+paths no longer mattered because every mutator restored the record's
+invariant. Round 5 then produced a reproduction that segfaults the hosting
+interpreter: a `return` inside a `finally` does not *replace* the pending
+return, it *suspends* it, so the language admits a stack where the
+implementation has one slot. Every earlier round had been enumerating paths
+into the mechanism while its cardinality assumption went unexamined, and each
+new transition made the next defect more expensive to find.
+
+Root cause: the rounds treated "which shapes reach this code" as the open
+question, when the open question was "how many of them can be live at once".
+What fixed it: narrowing the admission instead of growing the state — refusing
+the egress for any function containing a `return` lexically inside a `finally`
+body, a whole-function lexical constant both type walkers read from one shared
+transitive helper, with the removed capability filed as #1173.
+
+Lesson: when a fix round recurs on the same seam, stop extending the mechanism
+and re-examine the precondition it assumes about *how many things can be in
+flight*, not the set of paths that reach it. Narrowing an admission so a
+precondition becomes checkable is usually cheaper and safer than adding state
+to make the mechanism hold more.
+
+## 2026-09-21 — An early-return admission accounted for one bypassed check, not every one
+
+Three review rounds on the #1164 branch each found the same class of defect:
+an admission path that returns early and thereby skips a check the ordinary
+path would have run. Round 3's instance was the egress admission in both type
+walkers' `HirStmt::Return` arm, which returned `Ok(())` as soon as the
+returned name was in `owned_buffers`. Its comment accounted for exactly one
+bypassed check — assignability, correctly argued to be redundant — and said
+nothing about the definite-assignment check on the same path. `owned_buffers`
+joins as a union while the binding joins on the `Definitely`/`Maybe`/unbound
+lattice, so `if c: a = ndarray(4)` / `return a` was admitted, `pycc check`
+exited 0, and the compiled frame handed the CPython host an internal
+`SystemError` from a null slot instead of the owed `T0041`.
+
+**Lesson:** an early-return admission owes an explicit account of *every*
+check it bypasses, enumerated at the point it is written — not only the one it
+was designed to bypass. Writing that enumeration is what surfaces the checks
+whose redundancy was assumed rather than argued; the round-3 defect was
+visible in the comment's own silence before it was visible in a test.
+
+---
+
+## 2026-09-21 — A fix's own new state went unenumerated, so the same seam failed a second time
+
+The #1164 round-1 fix replaced a wrong ownership-transfer point with a new
+bookkeeping mechanism: a pending-return slot plus an orphan flag. Its
+commit message enumerated the *control-flow* shapes that reach that
+mechanism — a finalizer that reads, raises, or rebinds; a nested `try`; a
+`return` in a loop inside a `try` — and declared the set closed. It never
+enumerated the *state machine* of the mechanism it had just introduced.
+The record has two writers, and the `return` writer stored over it raw:
+a frame that reaches a second `return` while one is pending (which
+`finally: while True: return a` does, because the front end's `L0001`
+refusal of a bare `return` in a `finally` body does not survive loop entry)
+leaked the superseded allocation and left the flag describing a pointer
+that was no longer pending, so the epilogue's trailing release freed a
+pointer the slot loop had already released — a host abort. Round 2 fixed it
+by making that writer's transition total (release the predecessor when the
+frame is its sole owner, store, clear the flag), which turns the
+correctness argument into an invariant rather than a list of shapes.
+
+**Lesson:** when a fix introduces new state, the enumeration owes an
+account of that state's own transitions — every writer, and what each one
+leaves the invariant in — not only of the paths that reach it. An
+enumeration of reaching paths is complete for a fix that *removes* a
+mechanism and incomplete by construction for one that *adds* one.
+
+---
+
+## 2026-09-21 — A 100%-covered diff shipped a host-aborting null dereference because no test had the shape
+
+Every gate for #1164 was green, including 100% coverage of the lines the
+diff added, yet `try: return a` / `finally: a[0] = 42.0` over an
+artifact-owned buffer aborted the hosting CPython interpreter: the frame
+cleared the returned buffer's slot at the `return` *statement*, before the
+finalizer ran. Not a coverage-*percentage* gap but a coverage-*shape* gap
+— no test in the suite returned an owned buffer from inside a
+`try/finally`, so the covered lines were never executed in the ordering
+that breaks them, and a hosted execution found what the local gates could
+not for the second time on this boundary (the first being the #1166
+eleven-round loop). Lesson: on an ownership-transfer boundary, enumerate
+the control-flow shapes that can interpose code between a statement and
+the frame exit and test each one, rather than trusting a line-coverage
+percentage that says every line ran.
+
+## 2026-09-21 — A fail-fast site checker hid a diff-caused budget failure behind a pre-existing one
+
+**What happened.** On the #1164 branch `sh scripts/check-site.sh` exited 1
+with a single line: the status hero's pinned subject commit is not on the
+first-parent history of `HEAD`. That failure reproduced byte-for-byte on a
+detached worktree at `origin/main`, so it was recorded as pre-existing and
+not diff-caused, and the gate was almost declared attributed. It was not.
+`scripts/check-site.sh` runs under `set -eu` and that hero check is its
+*first* check, at line 50 of 2914 — every later check, on both trees, had
+never run. Re-running a scratch copy with the two evidence checks
+commented out surfaced the real failure: this branch's `docs/ROADMAP.md`
+edit took the file to 174200 bytes against its 174080-byte issue #207
+per-resource budget. `origin/main` sits at 174077 — three bytes of
+headroom — so the overflow was entirely the branch's own.
+
+**Root cause.** "Identical output on both trees" proves the *first*
+failure is pre-existing. Under `set -e` it proves nothing at all about the
+rest of the script, because neither tree executed the rest. The comparison
+answered the question it was pointed at while the question that mattered —
+does this diff introduce a failure of its own? — stayed unasked.
+
+**What fixed it.** Trimming `docs/ROADMAP.md` by 162 bytes: two issue
+references in the edited paragraph were reduced to the bare `#NNNN` form
+its neighbours already use, and the new egress clause was rewritten
+compactly. The file is now 174038 bytes and the full site check passes to
+completion with the two known-failing evidence checks skipped.
+
+**Lesson.** When a fail-fast checker (`set -e`, early `exit`) stops at its
+first failure, attributing that failure does not clear the checker. Find
+where the run aborted, then re-run the remainder with only the attributed
+check neutralized in a scratch copy — never by editing the tracked script
+— and attribute what comes out. A budget check with three bytes of
+headroom on the default branch is a trap for the next documentation edit,
+and it will be hidden the same way as long as an earlier check is red.
+
 ## 2026-09-21 — Nine review rounds on one pull request, because each round patched the condition the reviewer named instead of the condition set the reviewer's example belonged to
 
 **What happened.** PR #1166 (buffer storage for `pycc build --ext`, issue

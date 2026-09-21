@@ -286,6 +286,29 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         Ty::Int => out.push_str(&format!(
             "    return pycc_ext_pack_int(\"{source_name}\", result);\n}}\n\n"
         )),
+        // Part 2b of #1142 (#1164): its own arm rather than the generic one
+        // below, because that arm resolves its packer through
+        // `BoundaryCarrier::into_scalar`, which answers `None` for a buffer
+        // and would panic here. Loosening `into_scalar` instead is the trap:
+        // its other caller is the `tuple`-element lookup, so a `Buffer` arm
+        // there admits `tuple[memoryview]`, for which no element shim exists.
+        // `return_c_type` states the egress at exactly the top-level return
+        // position, and this arm is its other half.
+        //
+        // `result` is the `PyccExtBufferView *` the compiled function
+        // produced -- artifact-owned storage -- and the packer takes
+        // ownership of it on every path, including its own failures. It
+        // therefore takes no `source_name`: nothing it can refuse is a
+        // property of the function, only of the allocation.
+        //
+        // Position: after `buffer_releases`, which the shared emission above
+        // already ran. A released *parameter* view and a returned
+        // artifact-owned one are disjoint allocations -- the parameter's
+        // belongs to the host's exporter and the return's to this artifact --
+        // so an export that both takes a `memoryview` and returns one
+        // releases the first and hands back the second with no interaction
+        // between them.
+        Ty::MemoryView => out.push_str("    return pycc_ext_pack_memoryview(result);\n}\n\n"),
         ty => {
             let (_, helper) = boundary_carrier(ty)
                 .and_then(BoundaryCarrier::into_scalar)

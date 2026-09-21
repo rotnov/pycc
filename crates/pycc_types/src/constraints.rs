@@ -206,6 +206,20 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// in for the distinction (a function with no locals also has an empty
     /// slice).
     pub(crate) in_function_body: bool,
+    /// The solver's counterpart of `Environment::returns_inside_finally`,
+    /// and the solver half of review round 5's egress narrowing.
+    ///
+    /// Computed from the same `pycc_hir::body_returns_inside_finally` walk,
+    /// so the two phases cannot drift: the predicate exists once, in
+    /// `pycc_hir`, and both environments carry its answer rather than
+    /// re-deriving it.
+    ///
+    /// Unlike the check phase's, this one is *not* independently observable
+    /// -- the solver runs first, so `crate::module::merge_solver_first`
+    /// reports whichever refusal fires, and both phases raise the same
+    /// `crate::buffer::buffer_return_inside_finally` text. What it buys is
+    /// that the solver can never admit an egress the check phase refuses.
+    pub(crate) returns_inside_finally: bool,
     /// Part 2a of #1142 (#1165): the buffer-producer spellings this module
     /// binds itself, which therefore keep the program's own meaning
     /// (D-244 #1129 statement (h)).
@@ -261,6 +275,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             std_module_aliases: Vec::new(),
             owned_buffers: HashSet::new(),
             in_function_body: false,
+            returns_inside_finally: false,
             shadowed_producers: HashSet::new(),
             finals: HashSet::new(),
         }
@@ -1394,6 +1409,15 @@ pub(crate) fn collect_expr_constraints(
                     return Ok(Some(Ok(if callee == "int" { Ty::Int } else { Ty::Str })));
                 }
             }
+            // Part 2b of #1142 (#1164), the solver half of `crate::expr`'s
+            // own buffer-returning-call refusal. The two must not drift: this
+            // solver runs first, so without the mirror an intra-artifact call
+            // to a buffer-returning export resolves to a `Ty::MemoryView`
+            // term here and is reported as some later type error rather than
+            // as the named capability gap it is.
+            if let Some((_, _, Ok(Ty::MemoryView))) = signatures.get(callee) {
+                return Err(crate::buffer::buffer_returning_call_unsupported(callee));
+            }
             let Some(signature) = signatures.get(callee) else {
                 // Issue #142: a private helper calling a known callable
                 // builtin (e.g. `ValueError("x")`) gets the same `C0001`
@@ -2502,6 +2526,58 @@ pub(crate) fn collect_block_constraints(
                 let Some(return_term) = return_term.clone() else {
                     continue;
                 };
+                // Part 2b of #1142 (#1164), the solver half of
+                // `crate::check_stmt_in_function`'s own egress interception.
+                // It must run here, before `collect_expr_constraints` reaches
+                // the `Name` seam above, for the ordering reason the `len`
+                // and `Subscript` interceptions already record: that seam
+                // calls `reject_memoryview_read` and would report the owned
+                // refusal for the very expression this admits. The declared
+                // return type is `return_term`'s `Ok` arm -- an *inferred*
+                // return (an `Err(var)` inference variable standing in for an
+                // unannotated helper) declines, so only a written
+                // `-> memoryview` annotation admits an egress.
+                //
+                // The third conjunct is this walker's half of the
+                // definite-assignment check `crate::check_stmt_in_function`'s
+                // own comment enumerates (review round 3 of #1164). The two
+                // walkers must agree on the admission predicate, and this is
+                // the only spelling available here: `ConstraintEnvironment`
+                // carries no three-way lattice, only the `maybe_bindings`
+                // side-table, so the test is `!maybe` rather than
+                // `== Definitely`. Like the check phase's conjunct it reads
+                // the *result* of a join and so closes every join form at
+                // once -- `join_if_branches_solver`, `join_loop_body_solver`
+                // (the `while`, `for`-`range`, `for`-list, `match`-case and
+                // `try` arms all route through it) and the `for` loop
+                // variable's own insertion.
+                //
+                // It is deliberately **not independently observable**, and
+                // stands for consistency rather than for a diagnostic of its
+                // own: `collect_expr_constraints`'s `Name` arm tests
+                // `maybe_bindings` before it reaches `bindings`, so a
+                // maybe-bound operand answers `Ok(None)` and the fall-through
+                // unifies nothing either way. The check phase's `T0041` is
+                // the user-facing gate, exactly as D-147 places it. What the
+                // conjunct buys is that the solver can never *widen* the
+                // admission past the check phase's -- the subset property
+                // `docs/TYPE_SYSTEM.md`'s `memoryview` row requires of this
+                // mirror -- if either arm's `Name` ordering later changes.
+                //
+                // Review round 5's fourth conjunct is a refusal rather than
+                // a decline, exactly as in the check phase: see
+                // `crate::buffer::buffer_return_inside_finally`.
+                if let Some(expr) = value
+                    && let Some(name) =
+                        crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
+                    && env.owned_buffers.contains(name)
+                    && !env.maybe_bindings.contains(name)
+                {
+                    if env.returns_inside_finally {
+                        return Err(crate::buffer::buffer_return_inside_finally(name));
+                    }
+                    continue;
+                }
                 let actual = match value {
                     Some(expr) => collect_expr_constraints(
                         signatures,

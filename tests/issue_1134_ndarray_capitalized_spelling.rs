@@ -261,9 +261,11 @@ fn every_non_parameter_ndarray_capitalized_position_is_refused() {
     assert!(err.contains("error[C0001]"), "{err}");
     assert!(err.contains("declaring `x` as a buffer"), "{err}");
 
-    // A public `-> NDArray` return under `--ext`: `C0003`, resolved on the
-    // program before `plan_ext` probes the host toolchain, so it needs no
-    // development headers.
+    // A public `-> NDArray` return under `--ext` is *admitted* since Part 2b
+    // of #1142 (#1164). What refuses this program is its body: an
+    // intra-artifact call to a buffer-returning function has no wrapper to
+    // own the result. Two-directional, so a regression that reinstates the
+    // old `C0003` gap cannot pass as "still refused".
     let dir = fixture("1134_return", "def make() -> NDArray:\n    return make()\n");
     let ext = pycc()
         .arg("build")
@@ -275,12 +277,33 @@ fn every_non_parameter_ndarray_capitalized_position_is_refused() {
         .expect("pycc should spawn");
     assert!(!ext.status.success(), "{}", stdout_of(&ext));
     let err = stderr_of(&ext);
-    assert!(err.contains("error[C0003]"), "{err}");
-    assert!(err.contains("its return type `-> memoryview`"), "{err}");
-    // The remediation enumerates what the boundary does carry, so it has to
-    // name this spelling too — and this is the spelling the census says a
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(
+        err.contains("calling `make`, whose return type is a buffer"),
+        "{err}"
+    );
+    assert!(!err.contains("error[C0003]"), "{err}");
+
+    // The `C0003` remediation still enumerates what the boundary does carry,
+    // so it still has to name this spelling — the one the census says a
     // reader is most likely to have written. Shown a list without it, they
-    // read the list as "not that type at all".
+    // read the list as "not that type at all". Reached through an
+    // uncarriable *parameter* now that the return position is carried.
+    let dir = fixture(
+        "1134_gap_list",
+        "def take(v: list[int]) -> int:\n    return 0\n",
+    );
+    let ext = pycc()
+        .arg("build")
+        .arg(dir.join("nd_probe.py"))
+        .arg("-o")
+        .arg(dir.join("nd_probe"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(!ext.status.success(), "{}", stdout_of(&ext));
+    let err = stderr_of(&ext);
+    assert!(err.contains("error[C0003]"), "{err}");
     assert!(
         err.contains("(or its other spellings `ndarray` and `NDArray`)"),
         "{err}"
