@@ -1677,6 +1677,51 @@ pub extern "C" fn pycc_rt_buffer_live_views() -> i64 {
 /// [`PyccExtBufferView`] that addresses it (Python's `ndarray(n)` /
 /// `NDArray(n)`, Part 2a of #1142 -- issue #1165).
 ///
+/// Decodes the user-supplied `ndarray(n)` length word for #1165's producer.
+///
+/// This is the one D-141 `int` ingress position that must **not** go
+/// through `int_untag_checked`. That decoder `panic!`s on a bigint or
+/// malformed word, and a panic unwinding past a plain `extern "C" fn`
+/// boundary is caught there and turned into a process abort -- which, for a
+/// D-244 `ext` artifact, kills the host CPython interpreter rather than
+/// raising anything the host could catch. `make(2 ** 62 - 1)` on a built
+/// `--ext` module exited 134 before this function existed.
+///
+/// So the length is decoded through `decode_inline_or_raise` instead: a
+/// bigint leaves a pending `OverflowError` (D-173) and yields the
+/// type-valid sentinel `0`. `int_untag_checked` itself is deliberately left
+/// alone. Its other call sites -- a list index, a slice bound, a `str`
+/// repeat count, container and comprehension element validation -- consume
+/// the decoded word with no guard behind them, so returning `0` there would
+/// turn a loud abort into a silent wrong answer; converting them needs each
+/// site's own guard and is tracked separately (see #1168 and its follow-up).
+/// This site is safe because `pycc_codegen` emits
+/// `guard_statement_effects` between this call and
+/// [`pycc_rt_buffer_f64_alloc`], so the sentinel never reaches the
+/// allocator: the generated code branches to the installed exception target
+/// first, which is also what keeps this raise from being reported over by
+/// the allocator's own negative-length `ValueError`.
+///
+/// Bool markers decode to `0`/`1` exactly as `int_untag_checked` decodes
+/// them, so `ndarray(True)` keeps its D-086 meaning.
+///
+/// Split into a private ordinary-ABI function plus the thin `extern "C"`
+/// wrapper below, following this crate's convention (see the implementation
+/// notes above `int_add`, `range_continue` and `int_to_float`). Here the
+/// split is for this crate's own tests rather than to guard an unwind: this
+/// function never panics, which is the entire point of it.
+fn buffer_alloc_untag_len(tagged: i64) -> i64 {
+    // `unwrap_or(0)` rather than `unwrap_or_default()`: the `0` is the
+    // documented *type-valid sentinel* `decode_inline_or_raise`'s contract
+    // requires, not an incidental default.
+    decode_inline_or_raise(tagged, "sizing a buffer with").unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_buffer_alloc_untag_len(tagged: i64) -> i64 {
+    buffer_alloc_untag_len(tagged)
+}
+
 /// The returned pointer is the *view*, already pointing at the storage, so
 /// compiled code keeps handling exactly the `*const PyccExtBufferView` that
 /// [`pycc_rt_buffer_f64_get`], [`pycc_rt_buffer_f64_set`] and
@@ -1700,6 +1745,14 @@ pub extern "C" fn pycc_rt_buffer_live_views() -> i64 {
 /// [`pycc_rt_buffer_f64_free`]. `len == 0` is admitted and yields a
 /// zero-length view, which every existing helper already handles.
 ///
+/// A length whose storage cannot be reserved -- `len * 8` past `isize::MAX`,
+/// or a genuine allocator failure -- sets a pending `RuntimeError` and
+/// returns null the same way. The reservation is fallible
+/// (`Vec::try_reserve_exact`) precisely so that case cannot `panic!` across
+/// this `extern "C"` boundary and abort the host interpreter; see the
+/// comment at the check for why the class is `RuntimeError` rather than
+/// CPython's `MemoryError`.
+///
 /// # Allocator pairing
 /// The storage is a `Box<[f64]>` and the view is a `Box<PyccExtBufferView>`,
 /// and [`pycc_rt_buffer_f64_free`] reconstructs *those same two boxes*. The
@@ -1717,7 +1770,41 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
         );
         return core::ptr::null_mut();
     }
-    let storage: Box<[f64]> = vec![0.0f64; len as usize].into_boxed_slice();
+    // #1166 round 8. `vec![0.0f64; len]` `panic!`s when `len * 8` exceeds
+    // `isize::MAX` (and aborts outright on a genuine allocator failure), and
+    // a panic unwinding past this `extern "C"` boundary is caught here and
+    // turned into a process abort -- the host CPython interpreter's, for a
+    // D-244 `ext` artifact. `ndarray(2 ** 62 - 1)` exited 134 that way, with
+    // no bigint anywhere in it: the length is an ordinary inline smallint,
+    // so the length *decoder* cannot be what catches this.
+    //
+    // `try_reserve_exact` is what makes the reservation fallible instead:
+    // it reports both the capacity overflow and a real allocator failure as
+    // an `Err` rather than unwinding. `resize` to exactly the reserved
+    // capacity cannot reallocate, and `into_boxed_slice` on a vector whose
+    // length equals its capacity is a no-op, so neither step reintroduces an
+    // aborting allocation path.
+    //
+    // `RuntimeError` is a deliberate deviation, following `int_pow`'s
+    // negative-exponent arm: CPython raises `MemoryError` here
+    // (`bytearray(2 ** 62)` and `[0.0] * (2 ** 62)` both do), but this
+    // runtime carries no `MemoryError` tag -- `pycc_hir`'s
+    // `BUILTIN_EXCEPTION_CLASSES` does not list the class -- so there is no
+    // conformant class it can name yet. Adding one is a cross-cutting
+    // change to the class table, the `ext` bridge's tag switch and their
+    // pinned counts, tracked separately rather than widened into this fix.
+    let mut storage: Vec<f64> = Vec::new();
+    if storage.try_reserve_exact(len as usize).is_err() {
+        raise_builtin(
+            EXCEPTION_TYPE_RUNTIME_ERROR,
+            "RuntimeError",
+            "a buffer of this length cannot be allocated (CPython raises MemoryError; \
+             this version has no MemoryError class to name)",
+        );
+        return core::ptr::null_mut();
+    }
+    storage.resize(len as usize, 0.0f64);
+    let storage: Box<[f64]> = storage.into_boxed_slice();
     let ptr = Box::into_raw(storage) as *mut f64;
     let view = Box::new(PyccExtBufferView {
         ptr: ptr as *mut core::ffi::c_void,
@@ -4316,6 +4403,89 @@ mod tests {
     /// uses, read them all back, and free. A mismatched deallocation layout
     /// is undefined behavior that no test notices by accident, so this test
     /// exists to give the debug allocator a well-formed pairing to check.
+    #[test]
+    fn buffer_alloc_untag_len_raises_instead_of_aborting_on_a_bigint_length() {
+        // #1166 round 8's P1. `ndarray(2 ** 62 - 1)` on a built `--ext`
+        // module used to decode its length through
+        // `pycc_rt_int_untag_checked`, whose `panic!` becomes a process
+        // abort at its own `extern "C"` boundary: the hosted repro exited
+        // 134, killing the host CPython interpreter.
+        //
+        // Called through the `pub extern "C"` wrapper rather than the
+        // private function -- the opposite of this module's convention for
+        // `int_pow`/`int_to_float`, and deliberately so. That convention
+        // exists because those wrappers *could* abort; this one cannot, and
+        // calling it is what proves that at the exact boundary the defect
+        // lived on. Both arms are asserted in both directions: the value and
+        // the pending state.
+        pycc_rt_exception_clear();
+        assert_eq!(pycc_rt_buffer_alloc_untag_len(tag_smallint(4)), 4);
+        assert_eq!(pycc_rt_exception_active(), 0);
+
+        // D-086: a bool marker is a valid length and still decodes to 0/1.
+        assert_eq!(pycc_rt_buffer_alloc_untag_len(tag_smallint(0)), 0);
+        assert_eq!(pycc_rt_exception_active(), 0);
+
+        let sentinel = pycc_rt_buffer_alloc_untag_len(a_bigint_word());
+        assert_eq!(sentinel, 0, "the refusal returns the type-valid sentinel");
+        assert_overflow_raised("sizing a buffer with");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn a_buffer_allocation_of_the_refusal_sentinel_would_itself_succeed() {
+        // Why the decoder's raise is not self-guarding, and therefore why
+        // `pycc_codegen` must branch away between the decode and the
+        // allocator: the sentinel `0` is a *valid* length. The allocator
+        // accepts it, raises nothing, and hands back a live view -- which on
+        // the refusal path no `MirStmt::Assign` would ever store into the
+        // frame's owned slot. This is the leak the emitted guard prevents,
+        // pinned as a runtime property so the codegen ordering test above
+        // has something to be an ordering *of*.
+        pycc_rt_exception_clear();
+        let view = pycc_rt_buffer_f64_alloc(0);
+        assert!(!view.is_null(), "a zero length is admitted, not refused");
+        assert_eq!(pycc_rt_exception_active(), 0);
+        unsafe {
+            assert_eq!(pycc_rt_buffer_len(view), 0);
+            pycc_rt_buffer_f64_free(view);
+        }
+    }
+
+    #[test]
+    fn buffer_f64_alloc_raises_instead_of_aborting_on_an_unreservable_length() {
+        // #1166 round 8's second abort door, found while writing the hosted
+        // arm for the first: `ndarray(2 ** 62 - 1)` needs no bigint at all --
+        // the length is an ordinary inline smallint that decodes fine and
+        // then overflows `Vec`'s capacity, whose `panic!` this
+        // `extern "C" fn` turns into a process abort. Measured at exit 134
+        // before the fix.
+        //
+        // `i64::MAX` is chosen so `try_reserve_exact` reports capacity
+        // overflow arithmetically, without attempting a real allocation.
+        pycc_rt_exception_clear();
+        let view = pycc_rt_buffer_f64_alloc(i64::MAX);
+        assert!(view.is_null(), "the refusal must not hand back a view");
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR, "{message}");
+        assert!(message.contains("cannot be allocated"), "{message}");
+        // The deviation is stated in the message rather than in the class,
+        // because this runtime has no `MemoryError` tag to raise.
+        assert!(message.contains("MemoryError"), "{message}");
+        pycc_rt_exception_clear();
+
+        // The other direction: an ordinary length is unaffected by the new
+        // fallible reservation, and still zero-fills.
+        let view = pycc_rt_buffer_f64_alloc(3);
+        assert!(!view.is_null());
+        assert_eq!(pycc_rt_exception_active(), 0);
+        unsafe {
+            assert_eq!(pycc_rt_buffer_len(view), 3);
+            assert_eq!(pycc_rt_buffer_f64_get(view, 2), 0.0);
+            pycc_rt_buffer_f64_free(view);
+        }
+    }
+
     #[test]
     fn buffer_f64_alloc_free_round_trips_through_the_element_helpers() {
         pycc_rt_exception_clear();

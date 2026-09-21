@@ -18,6 +18,11 @@
 //! * and the leak arm, which reads `pycc_rt_buffer_live_views` -- the
 //!   allocator pair's own balance counter -- out of the built extension
 //!   module with `ctypes` and asserts it is back at zero after every call.
+//! * the two refused-length arms, which are the observations that can only
+//!   be made from a *hosted* run: a length that aborts and a length that
+//!   raises both print to stderr, so only the host process's own exit
+//!   status tells them apart (134 against 0);
+//! * and the leak arm, whose bullet continues below.
 //!   The library is opened by `alloc_probe.__file__`, the sibling
 //!   `issue_1054_ext_str_release.rs` probe's convention, so the handle
 //!   refers to the same mapping the import created. That arm is the one
@@ -132,6 +137,16 @@ def alloc_then_raise(n: int) -> float:
 
 /// The `NDArray` spelling reaches the same producer, so the second
 /// spelling is proven at the artifact level and not only in the checker.
+/// #1166 round 8. `ndarray(n + 1)` rather than `ndarray(n)`: a bigint
+/// length can only be reached by *promotion* inside the artifact, because
+/// the `ext` wrapper rejects an argument outside `[-2**62, 2**62-1]` before
+/// the body runs. `n = 2 ** 62 - 1` makes `n + 1` promote, which is exactly
+/// the shape the original repro used.
+const SUBJECT_PROMOTED_LEN: &str = "\
+def sized(n: int) -> float:
+    a = ndarray(n + 1)
+    return float(len(a))
+";
 const SUBJECT_NDARRAY: &str = "\
 def size(n: int) -> float:
     a = NDArray(n)
@@ -1191,6 +1206,94 @@ fn a_negative_length_raises_value_error_at_the_boundary() {
          print('ok')\n",
     );
     assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// #1166 round 8's P1, corroborated on a real artifact: neither door out of
+/// the `ndarray(n)` length aborts the host interpreter any more.
+///
+/// Two distinct defects shared this arm, and the exit status is what found
+/// the second one.
+///
+/// 1. A **bigint** length was decoded by `pycc_rt_int_untag_checked`, which
+///    `panic!`s on a bigint word; a panic unwinding past a plain
+///    `extern "C" fn` boundary is caught there and turned into a process
+///    abort, and for a D-244 `ext` artifact that process is the host CPython
+///    interpreter. `sized(2 ** 62 - 1)` exited **134**, with
+///    `pycc_rt_int_untag_checked` on the backtrace. Reachable only by
+///    promotion (`n + 1`), since the wrapper rejects a bigint *argument*
+///    first -- hence the separate subject.
+/// 2. An **oversized inline** length needs no bigint at all:
+///    `build_and_sum(2 ** 62 - 1)` decoded cleanly and then overflowed
+///    `Vec`'s capacity inside `pycc_rt_buffer_f64_alloc`, whose `panic!` the
+///    same boundary turned into the same abort. Also measured at 134.
+///
+/// The exit status is the load-bearing assertion in both arms. An aborting
+/// process prints its panic text to stderr, so a stderr-content check alone
+/// passes on the defect as well as on the fix; only the status separates
+/// them. Each arm additionally asserts that an in-range length still returns
+/// its value, so a fix that refused everything could not pass either.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_bigint_length_raises_overflow_error_instead_of_aborting_the_host() {
+    let dir = fixture("1165_hosted_bigint", SUBJECT_PROMOTED_LEN);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import alloc_probe\n\
+         assert alloc_probe.sized(3) == 4.0, alloc_probe.sized(3)\n\
+         try:\n\
+         \x20   alloc_probe.sized(2 ** 62 - 1)\n\
+         except OverflowError as error:\n\
+         \x20   assert 'bigint' in str(error), str(error)\n\
+         else:\n\
+         \x20   raise AssertionError('a bigint length returned normally')\n\
+         print('ok')\n",
+    );
+    // Explicitly the *status*, not `success()`'s boolean and not stderr:
+    // 134 is what the abort produced, and naming it is what makes this
+    // test's failure message point at the right defect.
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the host must not abort (134 was the defect): {}",
+        stderr_of(&run)
+    );
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// The second door of the same P1: an oversized *inline* length, where the
+/// abort was inside the allocator rather than the decoder. See
+/// `a_bigint_length_raises_overflow_error_instead_of_aborting_the_host` for
+/// the full account. `RuntimeError` rather than CPython's `MemoryError`
+/// because this runtime carries no `MemoryError` tag to name.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_unallocatable_length_raises_instead_of_aborting_the_host() {
+    let dir = fixture("1165_hosted_oversized", SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import alloc_probe\n\
+         assert alloc_probe.build_and_sum(4) == 8.0, alloc_probe.build_and_sum(4)\n\
+         try:\n\
+         \x20   alloc_probe.build_and_sum(2 ** 62 - 1)\n\
+         except RuntimeError as error:\n\
+         \x20   assert 'cannot be allocated' in str(error), str(error)\n\
+         else:\n\
+         \x20   raise AssertionError('an unallocatable length returned normally')\n\
+         print('ok')\n",
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the host must not abort (134 was the defect): {}",
+        stderr_of(&run)
+    );
     assert_eq!(stdout_of(&run), "ok\n");
 }
 

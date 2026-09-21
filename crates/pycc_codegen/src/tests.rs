@@ -16506,16 +16506,62 @@ fn owned_buffer_fn_items(body: Vec<MirStmt>) -> Vec<MirItem> {
 
 #[test]
 fn a_buffer_allocation_untags_its_length_and_calls_the_runtime_allocator() {
-    // The length reaches the runtime as a raw `i64`, decoded through the
-    // same shared checked untag every other D-141 operand uses: the
-    // allocator takes an element count, not a tagged `int`, and handing it
-    // the tagged form would allocate twice the requested length.
+    // The length reaches the runtime as a raw `i64`: the allocator takes an
+    // element count, not a tagged `int`, and handing it the tagged form
+    // would allocate twice the requested length.
+    //
+    // #1166 round 8: the decoder is `pycc_rt_buffer_alloc_untag_len`, *not*
+    // the shared `pycc_rt_int_untag_checked` every other D-141 operand uses.
+    // That one `panic!`s on a bigint, and the panic becomes a process abort
+    // at its own `extern "C"` boundary -- the host CPython interpreter's,
+    // for a D-244 `ext` artifact. Asserted two-directionally: the
+    // non-aborting decoder is present *and* the aborting one is absent, so a
+    // half-applied edit that emitted both cannot pass.
     compile_ext_items_checking_ir(
         "buffer_allocation",
         owned_buffer_fn_items(vec![buffer_alloc_a()]),
         |ir| {
-            assert!(ir.contains("call i64 @pycc_rt_int_untag_checked"), "{ir}");
+            assert!(
+                ir.contains("call i64 @pycc_rt_buffer_alloc_untag_len"),
+                "{ir}"
+            );
+            // A `declare` for every runtime function is emitted whether or
+            // not it is called, so the negative is on the *call*.
+            assert!(!ir.contains("call i64 @pycc_rt_int_untag_checked"), "{ir}");
             assert!(ir.contains("call ptr @pycc_rt_buffer_f64_alloc"), "{ir}");
+        },
+    );
+}
+
+#[test]
+fn a_buffer_allocations_length_decoder_can_branch_away_before_it_allocates() {
+    // #1166 round 8, the P1 this arm exists to close. The decoder's own
+    // bigint refusal raises `OverflowError` (D-173) and returns the
+    // type-valid sentinel `0`, and `0` is a *valid* length -- so if the
+    // allocator call were reachable from the decode without an intervening
+    // branch, the refusal would allocate a zero-length view that
+    // `MirStmt::Assign` never stores, leaking it.
+    //
+    // `guard_statement_effects` repositions the builder into a fresh
+    // continuation block, so the property is a *block* separation, not mere
+    // text order: pinned here as a conditional branch plus a new label
+    // between the decode and the allocator call. A presence-only assertion
+    // on the guard passes with or without that separation.
+    compile_ext_items_checking_ir(
+        "buffer_alloc_decoder_branch",
+        owned_buffer_fn_items(vec![buffer_alloc_a()]),
+        |ir| {
+            let decode = ir
+                .find("call i64 @pycc_rt_buffer_alloc_untag_len")
+                .unwrap_or_else(|| panic!("the length decode should be emitted: {ir}"));
+            let alloc = ir[decode..]
+                .find("@pycc_rt_buffer_f64_alloc")
+                .map(|offset| decode + offset)
+                .unwrap_or_else(|| panic!("the allocator call should follow the decode: {ir}"));
+            let between = &ir[decode..alloc];
+            assert!(between.contains("@pycc_rt_exception_active"), "{ir}");
+            assert!(between.contains("br i1 "), "{ir}");
+            assert!(between.contains("effect_exc_cont"), "{ir}");
         },
     );
 }

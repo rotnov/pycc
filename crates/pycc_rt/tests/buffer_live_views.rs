@@ -59,6 +59,28 @@ fn buffer_live_views_counts_allocation_and_the_freeing_release() {
     );
     pycc_rt_exception_clear();
 
+    // #1166 round 8's second refusal, on the same counter invariant: a
+    // length whose storage cannot even be reserved (`i64::MAX` overflows
+    // the byte arithmetic before any allocator is asked) used to `panic!`
+    // inside `Vec`, which at this `extern "C"` boundary is a process
+    // abort rather than an unwind -- `ndarray(2 ** 62 - 1)` on a built
+    // `--ext` module exited 134 and took the host interpreter with it.
+    // It now raises, and like every other refusal must leave the counter
+    // where it found it.
+    //
+    // It is also the arm that has to be made from *this* binary rather
+    // than from `lib.rs`'s own unit tests to be visible to the coverage
+    // gate at all; `docs/TESTING.md`'s "A runtime function an integration
+    // test links is measured from that binary" states why.
+    let unreservable = pycc_rt_buffer_f64_alloc(i64::MAX);
+    assert!(unreservable.is_null());
+    assert_eq!(
+        pycc_rt_buffer_live_views(),
+        2,
+        "a length that cannot be reserved must not move the counter"
+    );
+    pycc_rt_exception_clear();
+
     // The null free is a no-op on the counter as well as on memory.
     unsafe { pycc_rt_buffer_f64_free(core::ptr::null_mut()) };
     assert_eq!(

@@ -112,6 +112,15 @@ pub(super) struct RtFns<'ctx> {
     /// pending `ValueError` set and returns null, which is why
     /// `expression_can_set_exception` answers `true` for `MirExpr::BufferAlloc`.
     pub(super) buffer_f64_alloc: FunctionValue<'ctx>,
+    /// #1165's non-aborting decoder for the `ndarray(n)` length word
+    /// (`pycc_rt_buffer_alloc_untag_len`). `int_untag_checked` above
+    /// `panic!`s on a bigint, and that panic becomes a process abort at its
+    /// own `extern "C"` boundary -- the host interpreter's, for a D-244
+    /// `ext` artifact. This decoder raises `OverflowError` (D-173) and
+    /// returns the sentinel `0` instead, which the
+    /// `guard_statement_effects` emitted between it and `buffer_f64_alloc`
+    /// consumes before the allocator can see it.
+    pub(super) buffer_alloc_untag_len: FunctionValue<'ctx>,
     /// #1165's release for storage `buffer_f64_alloc` produced
     /// (`pycc_rt_buffer_f64_free`): takes the view pointer and returns
     /// nothing.
@@ -409,6 +418,10 @@ pub(super) fn declare_rt_functions<'ctx>(
         buffer_len: declare(
             "pycc_rt_buffer_len",
             i64_type.fn_type(&[ptr_type.into()], false),
+        ),
+        buffer_alloc_untag_len: declare(
+            "pycc_rt_buffer_alloc_untag_len",
+            i64_type.fn_type(&[i64_type.into()], false),
         ),
         buffer_f64_alloc: declare(
             "pycc_rt_buffer_f64_alloc",

@@ -912,6 +912,35 @@ fn build_untag_checked<'ctx>(
         .into_int_value()
 }
 
+/// Calls #1165's non-aborting length decoder
+/// (`pycc_rt_buffer_alloc_untag_len`) for the `ndarray(n)` producer.
+///
+/// `build_untag_checked` above cannot serve this one site:
+/// `pycc_rt_int_untag_checked` `panic!`s on a bigint or malformed word, and
+/// that panic is caught at its own `extern "C"` boundary and turned into a
+/// process abort -- which for a D-244 `ext` artifact aborts the *host*
+/// CPython interpreter. This decoder raises `OverflowError` (D-173) and
+/// returns the type-valid sentinel `0`, which the `guard_statement_effects`
+/// the call site emits immediately afterwards branches away on, so the
+/// sentinel never reaches `pycc_rt_buffer_f64_alloc`.
+///
+/// Every *other* `build_untag_checked` site keeps the aborting decoder on
+/// purpose: they consume the decoded word with nothing guarding a sentinel,
+/// so a silent `0` there would be a wrong answer rather than a loud stop.
+fn build_buffer_alloc_untag_len<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    tagged: IntValue<'ctx>,
+    name: &str,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.buffer_alloc_untag_len, &[tagged.into()], name)
+        .expect("build_call should not fail for a well-formed untag")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_buffer_alloc_untag_len returns a non-void i64")
+        .into_int_value()
+}
+
 /// Reads one encoded element out of a `PyIntListObj`. The positional index
 /// is a raw runtime counter; the returned word is already a user-visible
 /// D-141 int-compatible value and is forwarded unchanged.
@@ -3944,9 +3973,17 @@ fn emit_expr_unchecked<'ctx>(
         // exactly as the two arms above -- `pycc_rt` owns the zero-fill, the
         // negative-length refusal and the allocator pairing.
         //
-        // The length is decoded exactly as a buffer index is: `Ty::Int` (or
-        // `bool`, per D-086) arrives D-141 encoded, and `build_untag_checked`
-        // rejects a bigint or malformed word before the runtime sees it. The
+        // `Ty::Int` (or `bool`, per D-086) arrives D-141 encoded, so the
+        // length is decoded before the allocator sees it -- but *not* the
+        // way a buffer index is. `build_untag_checked` calls
+        // `pycc_rt_int_untag_checked`, which `panic!`s on a bigint or
+        // malformed word, and that panic is turned into a process abort at
+        // its own `extern "C"` boundary: for a D-244 `ext` artifact, an
+        // abort of the *host* CPython interpreter, which no host code can
+        // catch. This arm therefore decodes through
+        // `build_buffer_alloc_untag_len` instead, whose runtime function
+        // raises `OverflowError` (D-173) and returns the type-valid
+        // sentinel `0`. The
         // D-173 raise a negative length leaves pending is declared by
         // `expression_can_set_exception`, which emits the guard that reads
         // it; the null view the refusal returns is safe for the epilogue,
@@ -3956,7 +3993,8 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::BufferAlloc { len } => {
             let len_scalar = emit_expr(context, builder, module, rt, user_functions, locals, len);
             let encoded_len = to_numeric_encoded_int(context, builder, len_scalar);
-            let raw_len = build_untag_checked(builder, rt, encoded_len, "buffer_untag_alloc_len");
+            let raw_len =
+                build_buffer_alloc_untag_len(builder, rt, encoded_len, "buffer_untag_alloc_len");
             // #1166 review finding F5: check the pending state *before*
             // allocating, not only after.
             //
@@ -3975,9 +4013,17 @@ fn emit_expr_unchecked<'ctx>(
             // target without allocating, which is what makes the arm's
             // "a refused allocation leaves nothing for the unwind path to
             // release" claim hold for a *stale* pending exception as well as
-            // for the allocator's own negative-length raise. It also covers
-            // `build_untag_checked` above, whose own refusal sets the pending
-            // state and returns a sentinel word.
+            // for the allocator's own negative-length raise. It is also what
+            // makes `build_buffer_alloc_untag_len` above safe: that decoder's
+            // bigint refusal sets the pending state and returns the sentinel
+            // `0`, and `0` is a *valid* length, so without this guard the
+            // allocator would succeed on it and produce a zero-length view
+            // that `MirStmt::Assign` never gets to store -- the same leak
+            // shape as the stale-exception case above, reached through the
+            // decoder instead. `decode_inline_or_raise`'s own contract
+            // requires exactly this: return the sentinel before reaching any
+            // further `raise_builtin`, since `raise_builtin` installs
+            // unconditionally and would otherwise report over this raise.
             guard_statement_effects(context, builder, rt);
             let view = builder
                 .build_call(rt.buffer_f64_alloc, &[raw_len.into()], "buffer_alloc")
