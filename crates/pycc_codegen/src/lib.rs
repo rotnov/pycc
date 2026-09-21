@@ -7676,6 +7676,48 @@ fn emit_stmt<'ctx>(
                     let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
+                    // Part 2b of #1142 (#1164): a returned artifact-owned
+                    // buffer leaves through the *slot*, so the slot must stop
+                    // claiming it. The frame's owned-slot epilogue frees every
+                    // buffer slot unconditionally, and the host holds the
+                    // returned `memoryview` for as long as it likes, so
+                    // leaving the pointer in place would free storage the host
+                    // is still reading -- a use-after-free, not a leak.
+                    //
+                    // Storing null rather than removing the slot from the
+                    // release list is what keeps this correct under control
+                    // flow: `if c: return a` leaves the slot live on the arm
+                    // that did not return, and the epilogue still frees it
+                    // there. The null is the runtime's documented no-op, the
+                    // same value a never-assigned local carries.
+                    //
+                    // **Ordering is load-then-null:** `emit_expr` above
+                    // already read the pointer out of the slot, so the store
+                    // cannot race the read it feeds.
+                    //
+                    // Narrowed to a bare `Name` read of an *owned local*.
+                    // `initialized.is_some()` is the discriminator:
+                    // `storage_slot_at_entry` gives a local that flag and a
+                    // parameter none, and a `memoryview` parameter's storage
+                    // belongs to the host's exporter -- it is not in the
+                    // release list and must not be cleared. `pycc_types`
+                    // admits no other shape at a buffer return position, so
+                    // any other expression here is already refused upstream.
+                    if expected_return_ty == pycc_mir::Ty::MemoryView
+                        && let MirExpr::Name { name, .. } = expr
+                        && let Some(slot) = locals.get(name)
+                        && slot.ty == pycc_mir::Ty::MemoryView
+                        && slot.initialized.is_some()
+                    {
+                        builder
+                            .build_store(
+                                slot.ptr,
+                                context
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .const_null(),
+                            )
+                            .expect("build_store should not fail for a returned buffer slot");
+                    }
                     if expected_return_ty == pycc_mir::Ty::None {
                         // `None` parameters, call results, and stored names
                         // use a canonical `i8 0` carrier inside expressions,
@@ -7765,21 +7807,24 @@ fn emit_stmt<'ctx>(
                         // object ownership is leak-only, see `Scalar`'s own
                         // `Object` doc comment.
                         Scalar::Object(v) => v.into(),
-                        // Defensive (Part 2 of #1027): a `-> memoryview`
-                        // return annotation is refused outright, and
-                        // `return b` is a bare read of the name refused
-                        // with `C0001` -- by `reject_memoryview_read` for a
-                        // wrapper-borrowed parameter, and by
-                        // `owned_buffer_use_unsupported` for the artifact-
-                        // owned storage Part 2a of #1142 (#1165) added.
-                        // Keeping egress refused for *both* provenances is
-                        // what makes Part 2a's free-at-function-exit sound;
-                        // lifting it for the owned one is Part 2b (#1164).
-                        // Nothing else has the type.
-                        Scalar::MemoryView(_) => panic!(
-                            "pycc_codegen: internal error: returning a memoryview value is not \
-                             supported yet -- pycc_types should have refused this before codegen"
-                        ),
+                        // Part 2b of #1142 (#1164): pass-through by
+                        // pointer, identical in kind to `List`'s and
+                        // `Instance`'s arms above -- `ty_to_basic_type`'s
+                        // own `Ty::MemoryView` arm already gave the
+                        // function's LLVM signature the same pointer return
+                        // type, and the value is the `PyccExtBufferView *`
+                        // `pycc_rt_buffer_f64_alloc` produced.
+                        //
+                        // Only *artifact-owned* storage reaches here. A
+                        // `memoryview` **parameter** is still refused at a
+                        // return position by `reject_memoryview_read`
+                        // (`C0001`): its storage belongs to the host's
+                        // exporter, which the wrapper releases on the way
+                        // out, so handing it back would hand back a
+                        // dangling view. The null store above is the other
+                        // half of this arm -- without it the frame's
+                        // epilogue would free what is being returned.
+                        Scalar::MemoryView(v) => v.into(),
                     };
                     if let Some(ft) = finally_target {
                         // Route through finally: store the return value,

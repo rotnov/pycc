@@ -2893,6 +2893,29 @@ fn check_stmt_in_function(
             Ok(())
         }
         HirStmt::Return(Some(expr)) => {
+            // Part 2b of #1142 (#1164): the one position an artifact-owned
+            // buffer name is admitted as a whole value. Intercepted here,
+            // before `infer_expr_in` reaches its `Name` arm's
+            // `reject_memoryview_read`, on the model that arm's own doc
+            // comment records for `b[i]` and `len(b)` -- the refusal is not
+            // weakened, the set of expressions that reach it narrows by one.
+            //
+            // The provenance test is this environment's own `owned_buffers`,
+            // so `return b` on a buffer *parameter* falls through to the
+            // parameter refusal unchanged: handing the host back a view over
+            // storage the wrapper releases at call exit is the use-after-free
+            // #1142 exists to forbid, and is not what this admits.
+            //
+            // Returning `Ok(())` rather than an inferred type skips the
+            // assignability check below deliberately: the operand's type is
+            // `Ty::MemoryView` by construction of `owned_buffers`, and the
+            // declared type is `Ty::MemoryView` by
+            // `admitted_buffer_return`'s own test, so the two agree.
+            if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty))
+                && env.owned_buffers.contains(name)
+            {
+                return Ok(());
+            }
             let actual = infer_expr_in(env, local_names, expr)?;
             if !class::is_assignable_env(env, &actual, &return_ty) {
                 // #380 (PR-20): if the mismatch involves a protocol,

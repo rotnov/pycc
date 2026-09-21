@@ -1394,6 +1394,15 @@ pub(crate) fn collect_expr_constraints(
                     return Ok(Some(Ok(if callee == "int" { Ty::Int } else { Ty::Str })));
                 }
             }
+            // Part 2b of #1142 (#1164), the solver half of `crate::expr`'s
+            // own buffer-returning-call refusal. The two must not drift: this
+            // solver runs first, so without the mirror an intra-artifact call
+            // to a buffer-returning export resolves to a `Ty::MemoryView`
+            // term here and is reported as some later type error rather than
+            // as the named capability gap it is.
+            if let Some((_, _, Ok(Ty::MemoryView))) = signatures.get(callee) {
+                return Err(crate::buffer::buffer_returning_call_unsupported(callee));
+            }
             let Some(signature) = signatures.get(callee) else {
                 // Issue #142: a private helper calling a known callable
                 // builtin (e.g. `ValueError("x")`) gets the same `C0001`
@@ -2502,6 +2511,24 @@ pub(crate) fn collect_block_constraints(
                 let Some(return_term) = return_term.clone() else {
                     continue;
                 };
+                // Part 2b of #1142 (#1164), the solver half of
+                // `crate::check_stmt_in_function`'s own egress interception.
+                // It must run here, before `collect_expr_constraints` reaches
+                // the `Name` seam above, for the ordering reason the `len`
+                // and `Subscript` interceptions already record: that seam
+                // calls `reject_memoryview_read` and would report the owned
+                // refusal for the very expression this admits. The declared
+                // return type is `return_term`'s `Ok` arm -- an *inferred*
+                // return (an `Err(var)` inference variable standing in for an
+                // unannotated helper) declines, so only a written
+                // `-> memoryview` annotation admits an egress.
+                if let Some(expr) = value
+                    && let Some(name) =
+                        crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
+                    && env.owned_buffers.contains(name)
+                {
+                    continue;
+                }
                 let actual = match value {
                     Some(expr) => collect_expr_constraints(
                         signatures,

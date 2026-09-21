@@ -261,18 +261,23 @@ fn a_refusal_inside_the_length_argument_is_reported_unchanged() {
     assert!(err.message.contains("missing"), "{}", err.message);
 }
 
-/// Any use of owned storage beyond the three admitted operations is refused
-/// in the *owned* wording, not the buffer-parameter one: `return a` here is
-/// refused because egress does not exist yet, while the same statement on a
-/// parameter is refused because it would hand back a view the host lent.
+/// Any use of owned storage beyond the admitted operations is refused in
+/// the *owned* wording, not the buffer-parameter one. The probe is an alias
+/// `z = a`, not `return a`: Part 2b of #1142 (#1164) admits the return of an
+/// owned name, so the statement that used to carry this assertion now type
+/// checks. Aliasing is still refused, and it is refused through the same
+/// `crate::expr::reject_memoryview_read` owned arm.
 #[test]
 fn any_other_use_of_owned_storage_names_the_artifact_as_its_owner() {
     let hir = func(
         vec![],
-        Ty::MemoryView,
+        Ty::None,
         vec![
             alloc_four("ndarray"),
-            HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+            HirStmt::Assign {
+                target: "z".to_string(),
+                value: HirExpr::Name("a".to_string()),
+            },
         ],
     );
     let err = check(&hir).unwrap_err();
@@ -283,6 +288,64 @@ fn any_other_use_of_owned_storage_names_the_artifact_as_its_owner() {
         "{}",
         err.message
     );
+}
+
+/// ...and the one use Part 2b of #1142 (#1164) *does* admit: returning the
+/// owned name from a function whose declared return type is the buffer type.
+/// Two-directional, so a future change that reinstates the refusal cannot
+/// pass by merely changing its wording.
+#[test]
+fn returning_owned_storage_is_admitted_by_egress() {
+    for callee in ["ndarray", "NDArray"] {
+        let hir = func(
+            vec![],
+            Ty::MemoryView,
+            vec![
+                alloc_four(callee),
+                HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+            ],
+        );
+        assert!(check(&hir).is_ok(), "{callee}");
+    }
+}
+
+/// Egress admits the *owned* name only. A buffer parameter returned from the
+/// same signature keeps its own pre-existing refusal, because handing back a
+/// view the host lent for one call is a use-after-free rather than a missing
+/// capability.
+#[test]
+fn returning_a_buffer_parameter_is_still_refused_by_its_own_arm() {
+    let hir = func(
+        vec![("b".to_string(), Ty::MemoryView)],
+        Ty::MemoryView,
+        vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(err.message.contains("buffer parameter"), "{}", err.message);
+    assert!(
+        !err.message
+            .contains("this `pycc build --ext` artifact allocated"),
+        "{}",
+        err.message
+    );
+}
+
+/// Egress keys on the declared return type, not on the operand alone: an
+/// owned name returned from a function declared to return something else is
+/// still the ordinary return-type mismatch, not a silent admission.
+#[test]
+fn returning_owned_storage_from_a_non_buffer_signature_is_a_type_error() {
+    let hir = func(
+        vec![],
+        Ty::Float,
+        vec![
+            alloc_four("ndarray"),
+            HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+        ],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_ne!(err.code, "C0003", "{}", err.message);
 }
 
 /// ...and a buffer *parameter* keeps its own message verbatim, so the two
@@ -445,18 +508,24 @@ fn a_module_level_binding_of_the_spelling_shadows_the_producer() {
 /// Provenance survives a branch join in every joining shape: a name bound to
 /// owned storage on one arm is still owned storage after the join, so the
 /// use refusal that follows is the owned one rather than the parameter one.
+/// The post-join probe is an alias rather than `return a`, which #1164 now
+/// admits; `owned_storage_returned_after_a_branch_join_is_admitted` covers
+/// the joining shape on the admitted side.
 #[test]
 fn owned_provenance_survives_a_branch_join() {
     let hir = func(
         vec![("c".to_string(), Ty::Bool)],
-        Ty::MemoryView,
+        Ty::None,
         vec![
             HirStmt::If {
                 test: HirExpr::Name("c".to_string()),
                 body: vec![alloc_four("ndarray")],
                 orelse: vec![alloc_four("NDArray")],
             },
-            HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+            HirStmt::Assign {
+                target: "z".to_string(),
+                value: HirExpr::Name("a".to_string()),
+            },
         ],
     );
     let err = check(&hir).unwrap_err();
@@ -477,6 +546,50 @@ fn owned_provenance_survives_a_branch_join() {
 fn owned_provenance_survives_a_loop_join() {
     let hir = func(
         vec![("c".to_string(), Ty::Bool)],
+        Ty::None,
+        vec![
+            alloc_four("ndarray"),
+            HirStmt::While {
+                test: HirExpr::Name("c".to_string()),
+                body: vec![alloc_four("NDArray")],
+            },
+            HirStmt::Assign {
+                target: "z".to_string(),
+                value: HirExpr::Name("a".to_string()),
+            },
+        ],
+    );
+    let err = check(&hir).unwrap_err();
+    assert!(
+        err.message
+            .contains("this `pycc build --ext` artifact allocated"),
+        "{}",
+        err.message
+    );
+}
+
+/// The joining shapes on the admitted side: a name bound to owned storage on
+/// both arms of a branch, and one reallocated inside a loop body, are each
+/// still returnable after the join. Egress reads the same `owned_buffers`
+/// set the refusal above reads, so the two tests move together.
+#[test]
+fn owned_storage_returned_after_a_branch_join_is_admitted() {
+    let branch = func(
+        vec![("c".to_string(), Ty::Bool)],
+        Ty::MemoryView,
+        vec![
+            HirStmt::If {
+                test: HirExpr::Name("c".to_string()),
+                body: vec![alloc_four("ndarray")],
+                orelse: vec![alloc_four("NDArray")],
+            },
+            HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+        ],
+    );
+    assert!(check(&branch).is_ok());
+
+    let loop_join = func(
+        vec![("c".to_string(), Ty::Bool)],
         Ty::MemoryView,
         vec![
             alloc_four("ndarray"),
@@ -487,13 +600,7 @@ fn owned_provenance_survives_a_loop_join() {
             HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
         ],
     );
-    let err = check(&hir).unwrap_err();
-    assert!(
-        err.message
-            .contains("this `pycc build --ext` artifact allocated"),
-        "{}",
-        err.message
-    );
+    assert!(check(&loop_join).is_ok());
 }
 
 /// The public spelling predicate `src/memoryview_mode.rs`'s native-mode gate
@@ -1329,4 +1436,159 @@ fn a_buffer_allocated_in_only_one_branch_is_contested_by_the_other() {
     assert_eq!(err.code, "T0023");
     assert!(!err.message.contains(OWNED_BUFFER_REFUSAL));
     assert!(!err.message.contains(PARAMETER_BUFFER_REFUSAL));
+}
+
+/// The solver half of Part 2b of #1142 (#1164)'s egress interception. The
+/// module carries an unannotated helper so the constraint solver -- not the
+/// concrete fast path -- is what walks `g`'s `return a`, and the admission
+/// must hold there too: the solver runs first, so without its own
+/// interception the owned-buffer `C0001` would displace the admission before
+/// the check phase ever looked.
+#[test]
+fn the_solver_admits_an_owned_buffer_return() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+            },
+            HirItem::Function {
+                name: "g".to_string(),
+                params: vec![],
+                return_ty: Ty::MemoryView,
+                body: vec![
+                    alloc_four("ndarray"),
+                    HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+                ],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(call(
+                    "_h",
+                    vec![HirExpr::IntLiteral(4)],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok());
+}
+
+/// An *inferred* return type declines the egress admission: only a written
+/// `-> memoryview` annotation admits one, so an unannotated helper that
+/// returns its own owned storage keeps the owned-buffer refusal.
+#[test]
+fn an_inferred_return_type_does_not_admit_an_owned_buffer_return() {
+    let hir = unannotated_helper_module(
+        vec![
+            alloc_four("ndarray"),
+            HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+        ],
+        Ty::Int,
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message.contains(OWNED_BUFFER_REFUSAL),
+        "{}",
+        err.message
+    );
+}
+
+/// An intra-artifact call to a buffer-returning function is refused by the
+/// check phase, naming the callee. This is what keeps
+/// `crates/pycc_codegen/src/call_result.rs`'s `Ty::MemoryView` panic
+/// unreachable from source (#1164's third completion criterion).
+#[test]
+fn calling_a_buffer_returning_function_is_refused() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "make".to_string(),
+                params: vec![],
+                return_ty: Ty::MemoryView,
+                body: vec![
+                    alloc_four("ndarray"),
+                    HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+                ],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::MemoryView,
+                body: vec![HirStmt::Return(Some(call("make", vec![])))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("calling `make`, whose return type is a buffer"),
+        "{}",
+        err.message
+    );
+    assert!(
+        !err.message.contains(OWNED_BUFFER_REFUSAL),
+        "{}",
+        err.message
+    );
+}
+
+/// ...and the solver refuses the same call with the same text, so the two
+/// walkers cannot drift. The unannotated helper is what routes the call
+/// through the solver rather than the concrete fast path.
+#[test]
+fn the_solver_refuses_calling_a_buffer_returning_function() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "make".to_string(),
+                params: vec![],
+                return_ty: Ty::MemoryView,
+                body: vec![
+                    alloc_four("ndarray"),
+                    HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+                ],
+            },
+            HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(call("make", vec![])))],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(call(
+                    "_h",
+                    vec![HirExpr::IntLiteral(4)],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001");
+    assert!(
+        err.message
+            .contains("calling `make`, whose return type is a buffer"),
+        "{}",
+        err.message
+    );
 }

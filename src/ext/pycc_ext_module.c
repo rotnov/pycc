@@ -684,6 +684,16 @@ typedef struct {
 } PyccExtBufferView;
 
 /*
+ * Part 2b of #1142 (#1164): the release entry point for *artifact-owned*
+ * buffer storage, declared here rather than with `pycc_rt`'s other externs at
+ * the top of the file because it is the one whose signature names a type this
+ * file defines. Its sole C caller is the exporter's `tp_dealloc` below. It is
+ * a documented no-op on NULL, and it must never be handed a `memoryview`
+ * *parameter*'s view -- that storage belongs to the host's own exporter.
+ */
+extern void pycc_rt_buffer_f64_free(PyccExtBufferView *view);
+
+/*
  * Unpacks one argument at a buffer parameter -- spelled `memoryview`,
  * `ndarray` or `NDArray` in the source, one pycc type whichever was
  * written. Returns 0 with `*out`
@@ -1523,7 +1533,240 @@ static void pycc_ext_instance_dealloc(PyObject *self)
 }
 
 /* Generated companion: module name macros, per-export wrappers, method table. */
+/*
+ * Part 2b of #1142 (#1164): the buffer egress, defined below but called from
+ * the generated wrappers in the companion `#include`d next -- the same
+ * forward-declaration shape `pycc_ext_module_exec` already uses in the other
+ * direction. The definition cannot move above the include: the exporter
+ * type's `PyType_Spec` names `PYCC_EXT_MODULE_NAME_STR`, which the companion
+ * defines.
+ */
+static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view);
+
 #include "pycc_ext_exports.inc"
+
+/*
+ * Part 2b of #1142 (#1164): the artifact-owned buffer exporter.
+ *
+ * A compiled function that returns a buffer hands the wrapper the
+ * `PyccExtBufferView *` `pycc_rt_buffer_f64_alloc` produced -- artifact-owned
+ * storage with no CPython object anywhere in it. The host must receive a real
+ * `memoryview`, and a `memoryview` only ever exists over an *exporter*, so
+ * this type is that exporter: one refcounted object per returned buffer,
+ * holding the view and freeing it in `tp_dealloc`.
+ *
+ * That is what moves the free off the compiled frame's own epilogue. A
+ * returned buffer is the one buffer the frame must *not* free (see
+ * `pycc_codegen`'s `MirStmt::Return`), because the host may hold the
+ * `memoryview` arbitrarily long after the call returned; the exporter's
+ * refcount is the lifetime that replaces the frame's.
+ *
+ * The type object itself is a file static rather than module state. `m_size`
+ * is 0, so there is no module state to put it in, and
+ * `Py_MOD_MULTIPLE_INTERPRETERS_NOT_SUPPORTED` plus the free-threading
+ * refusal in `PyInit_` mean exactly one interpreter on one GIL ever reaches
+ * it -- the same single-interpreter argument `pycc_rt`'s non-atomic refcounts
+ * already rest on.
+ */
+typedef struct {
+    PyObject_HEAD
+    PyccExtBufferView *view;
+    /*
+     * `Py_buffer.shape` and `.strides` must outlive the `getbuffer` call, so
+     * they live in the exporter rather than on its stack. Both are constant
+     * for the object's whole life -- the storage is never resized -- so two
+     * concurrent views sharing them observe the same values.
+     */
+    Py_ssize_t shape[1];
+    Py_ssize_t strides[1];
+} PyccExtBufferObj;
+
+/*
+ * The exporter type, created once in `pycc_ext_exec_module` and never
+ * released: it has to outlive every `memoryview` the host still holds, and a
+ * module reload runs the exec slot again against the same file static.
+ */
+static PyObject *pycc_ext_buffer_type = NULL;
+
+/*
+ * `Py_bf_getbuffer`, filled field by field.
+ *
+ * Every field is written on every call, including the ones a given `flags`
+ * makes NULL: `PyObject_GetBuffer` does not zero the caller's `Py_buffer`, so
+ * a field left alone is indeterminate storage the consumer would read.
+ *
+ * `readonly` is always 0. The storage is the artifact's own heap block, so
+ * there is no host-imposed read-only view of it to respect, and a `memoryview`
+ * the host cannot write would be a silently narrower object than the one
+ * `ndarray(n)` describes.
+ *
+ * `view->obj` takes a reference to the exporter, which is what keeps the
+ * storage alive for exactly as long as the consumer holds the buffer:
+ * `PyBuffer_Release` drops it, and the last drop runs `tp_dealloc`.
+ */
+static int pycc_ext_buffer_getbuffer(PyObject *self, Py_buffer *view, int flags)
+{
+    PyccExtBufferObj *obj = (PyccExtBufferObj *)self;
+    if (obj->view == NULL) {
+        /*
+         * `view->obj` is NULLed before the failure return because that is
+         * what the buffer protocol requires of an exporter that refuses: a
+         * consumer may still call `PyBuffer_Release` on the structure it
+         * passed in, and a stale non-NULL `obj` would be decrefed.
+         */
+        view->obj = NULL;
+        PyErr_SetString(PyExc_BufferError, "this buffer's storage has been released");
+        return -1;
+    }
+    obj->shape[0] = (Py_ssize_t)obj->view->len;
+    obj->strides[0] = (Py_ssize_t)sizeof(double);
+    view->buf = obj->view->ptr;
+    view->obj = Py_NewRef(self);
+    view->len = (Py_ssize_t)obj->view->len * (Py_ssize_t)sizeof(double);
+    view->itemsize = (Py_ssize_t)sizeof(double);
+    view->readonly = 0;
+    view->ndim = 1;
+    /*
+     * The three shape-describing fields are conditional on what the consumer
+     * asked for, exactly as the buffer protocol requires: a `PyBUF_SIMPLE`
+     * consumer treats a non-NULL `format` or `shape` as a contract violation.
+     * The storage is C-contiguous and one-dimensional, so no request this
+     * boundary can receive is refusable on its shape.
+     */
+    view->format = ((flags & PyBUF_FORMAT) == PyBUF_FORMAT) ? (char *)"d" : NULL;
+    view->shape = ((flags & PyBUF_ND) == PyBUF_ND) ? obj->shape : NULL;
+    view->strides = ((flags & PyBUF_STRIDES) == PyBUF_STRIDES) ? obj->strides : NULL;
+    view->suboffsets = NULL;
+    view->internal = NULL;
+    return 0;
+}
+
+/*
+ * `Py_bf_releasebuffer`, deliberately empty.
+ *
+ * `shape` and `strides` belong to the exporter, not to the view, so there is
+ * nothing per-view to free; and the reference `getbuffer` put in `view->obj`
+ * is released by `PyBuffer_Release` itself, *after* this slot runs. Dropping
+ * it here as well would be a double decref.
+ */
+static void pycc_ext_buffer_releasebuffer(PyObject *self, Py_buffer *view)
+{
+    (void)self;
+    (void)view;
+}
+
+/*
+ * The storage's one release point. The heap-type pattern is
+ * `pycc_ext_instance_dealloc`'s, and its comment carries the reasoning for
+ * the `Py_tp_free`-then-`Py_DECREF(tp)` order; the difference here is the
+ * `pycc_rt_buffer_f64_free` in front of it, which is what actually returns
+ * the artifact-owned block.
+ *
+ * `view` is cleared before the object is freed so that the field is never
+ * read again from a partially destroyed object, and so `pycc_rt_buffer_f64_free`
+ * -- a documented no-op on NULL -- cannot be handed the same pointer twice.
+ */
+static void pycc_ext_buffer_dealloc(PyObject *self)
+{
+    PyTypeObject *tp = Py_TYPE(self);
+    PyccExtBufferObj *obj = (PyccExtBufferObj *)self;
+    freefunc tp_free;
+    pycc_rt_buffer_f64_free(obj->view);
+    obj->view = NULL;
+    tp_free = (freefunc)PyType_GetSlot(tp, Py_tp_free);
+    tp_free(self);
+    Py_DECREF(tp);
+}
+
+static PyType_Slot pycc_ext_buffer_type_slots[] = {
+    {Py_tp_dealloc, pycc_ext_buffer_dealloc},
+    {Py_bf_getbuffer, pycc_ext_buffer_getbuffer},
+    {Py_bf_releasebuffer, pycc_ext_buffer_releasebuffer},
+    {0, NULL},
+};
+
+/*
+ * `Py_TPFLAGS_DISALLOW_INSTANTIATION` for the same reason a non-constructible
+ * class carries it: nothing in Python may produce one of these, because an
+ * exporter with a NULL `view` describes no storage. The only producer is
+ * `pycc_ext_pack_memoryview`. The leading underscore keeps the name out of the
+ * space a user class could collide with, and it is never published as a
+ * module attribute in any case.
+ */
+static PyType_Spec pycc_ext_buffer_type_spec = {
+    PYCC_EXT_MODULE_NAME_STR "._buffer",
+    sizeof(PyccExtBufferObj),
+    0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION | Py_TPFLAGS_IMMUTABLETYPE,
+    pycc_ext_buffer_type_slots,
+};
+
+/*
+ * The buffer egress: takes ownership of `view` unconditionally and returns a
+ * new `memoryview` over it, or NULL with an exception set.
+ *
+ * **The ownership boundary is the successful `tp_alloc`.** Before it, nothing
+ * else can reach the storage, so a failure frees it directly. After it, the
+ * exporter owns it and `tp_dealloc` is the only thing that may free it -- so
+ * every later failure path releases the *exporter* and frees nothing itself.
+ * Freeing directly after the store would be a double free, and returning
+ * without freeing before it would be a leak.
+ *
+ * Both calls that can fail are checked: `tp_alloc` and
+ * `PyMemoryView_FromObject`. No Rust allocation runs on this path at all, so
+ * nothing here can abort the host interpreter the way an infallible `Box::new`
+ * across the `extern "C"` boundary would.
+ */
+static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view)
+{
+    PyObject *exporter;
+    PyObject *result;
+    allocfunc tp_alloc;
+    /*
+     * Neither arm is reachable from a well-formed artifact: the wrapper
+     * checks `pycc_rt`'s pending flag before calling this, so a failed
+     * allocation has already returned, and the exec slot fails the import
+     * outright when the type cannot be created. Both are still handled,
+     * because the alternative to a `SystemError` here is a NULL dereference
+     * inside the host.
+     */
+    if (view == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc: internal error: a buffer return produced no storage");
+        return NULL;
+    }
+    if (pycc_ext_buffer_type == NULL) {
+        pycc_rt_buffer_f64_free(view);
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc: internal error: the buffer exporter type is not registered");
+        return NULL;
+    }
+    /*
+     * `PyType_GetSlot(tp, Py_tp_alloc)` because the limited API exposes no
+     * other way to reach a heap type's allocator, exactly as
+     * `pycc_ext_instance_dealloc` reaches `Py_tp_free`. It zeroes the object,
+     * so `view` starts NULL and the `shape`/`strides` arrays start defined
+     * even if `getbuffer` never runs; and, this being a heap type, it takes
+     * the type reference that `pycc_ext_buffer_dealloc` discharges.
+     */
+    tp_alloc = (allocfunc)PyType_GetSlot((PyTypeObject *)pycc_ext_buffer_type, Py_tp_alloc);
+    exporter = tp_alloc((PyTypeObject *)pycc_ext_buffer_type, 0);
+    if (exporter == NULL) {
+        pycc_rt_buffer_f64_free(view);
+        return NULL;
+    }
+    ((PyccExtBufferObj *)exporter)->view = view;
+    /*
+     * `PyMemoryView_FromObject` takes its own reference to the exporter
+     * through the buffer it acquires, so the wrapper's own reference is
+     * released on both arms -- the failing one included, which is what makes
+     * a failure here free the storage exactly once, through `tp_dealloc`.
+     */
+    result = PyMemoryView_FromObject(exporter);
+    Py_DECREF(exporter);
+    return result;
+}
+
 
 /*
  * PEP 489 multi-phase initialization. The module body cannot run in
@@ -1547,6 +1790,24 @@ static int pycc_ext_exec_module(PyObject *module)
      * a failure here fails the import loudly rather than importing a module
      * whose `except m.MyError:` silently never matches.
      */
+    /*
+     * Part 2b of #1142 (#1164): the buffer exporter type, before anything
+     * that could call into compiled code, because a compiled function that
+     * returns a buffer needs it the first time it is called. Created at most
+     * once: a module reload runs this slot again against the same file
+     * static, and creating a second type object would leave `memoryview`s
+     * from before the reload exporting through a type nothing else holds.
+     *
+     * Not published as a module attribute -- it is not part of the module's
+     * Python-visible surface, and `Py_TPFLAGS_DISALLOW_INSTANTIATION` means
+     * a host that reached it anyway could do nothing with it.
+     */
+    if (pycc_ext_buffer_type == NULL) {
+        pycc_ext_buffer_type = PyType_FromSpec(&pycc_ext_buffer_type_spec);
+        if (pycc_ext_buffer_type == NULL) {
+            return -1;
+        }
+    }
     if (pycc_ext_register_exception_classes(module) != 0) {
         return -1;
     }

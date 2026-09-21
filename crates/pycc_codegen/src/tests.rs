@@ -16001,13 +16001,75 @@ fn a_buffer_element_load_whose_base_is_not_a_memoryview_is_an_internal_error() {
 }
 
 #[test]
-#[should_panic(expected = "returning a memoryview value is not supported yet")]
-fn returning_a_memoryview_value_is_an_internal_error() {
-    // `-> memoryview` is refused as a return annotation outright, and
-    // `return b` is a bare read of the name refused with `C0001`, so
-    // nothing else can carry the type out of a function.
+fn returning_owned_buffer_storage_loads_it_and_then_nulls_its_slot() {
+    // Part 2b of #1142 (#1164). The returned view leaves through the slot,
+    // and the frame's owned-slot epilogue frees every buffer slot on every
+    // return path -- so the slot must stop claiming the storage before the
+    // epilogue runs, or the host receives a `memoryview` over freed memory.
+    //
+    // Asserted as an *ordering*, not as presence: a null store emitted
+    // before the load would return null, and a presence-only assertion
+    // passes either way. The three pinned positions are the load out of the
+    // slot, the null store into it, and the store of the loaded value into
+    // the epilogue's return slot -- in that order, inside the returning
+    // block.
     compile_ext_items_checking_ir(
         "buffer_returned",
+        vec![MirItem::Function {
+            name: "allocate".to_string(),
+            params: vec![],
+            return_ty: Ty::MemoryView,
+            body: vec![
+                buffer_alloc_a(),
+                MirStmt::Return(Some(MirExpr::Name {
+                    name: "a".to_string(),
+                    ty: Ty::MemoryView,
+                })),
+            ],
+        }],
+        |ir| {
+            // The LLVM signature returns the carrier pointer, not `void`.
+            assert!(ir.contains("define ptr @pyfn_allocate()"), "{ir}");
+            let block = ir
+                .split("global_ready:")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no returning block: {ir}"));
+            let load_at = block
+                .find("%load = load ptr, ptr %a")
+                .unwrap_or_else(|| panic!("no load out of the slot: {ir}"));
+            let null_at = block
+                .find("store ptr null, ptr %a")
+                .unwrap_or_else(|| panic!("the returned slot was not cleared: {ir}"));
+            let handoff_at = block
+                .find("store ptr %load, ptr %str_epilogue_ret_slot")
+                .unwrap_or_else(|| panic!("the loaded view was not returned: {ir}"));
+            assert!(load_at < null_at, "{ir}");
+            assert!(null_at < handoff_at, "{ir}");
+            // ...and the epilogue still frees the slot unconditionally, so
+            // a path that returns nothing still releases what it allocated.
+            // The null store is what makes that free a documented no-op on
+            // the returning path rather than a use-after-free.
+            assert!(
+                ir.contains("call void @pycc_rt_buffer_f64_free(ptr %buffer_epilogue_live)"),
+                "{ir}"
+            );
+        },
+    );
+}
+
+#[test]
+fn returning_a_buffer_parameter_leaves_its_slot_alone() {
+    // The `initialized.is_some()` discriminator's other arm. A `memoryview`
+    // **parameter**'s storage belongs to the host's exporter: the slot is
+    // not in the frame's release list, so clearing it would be pointless,
+    // and a future edit that cleared every buffer slot rather than only the
+    // owned ones would silently start losing the host's pointer.
+    //
+    // `pycc_types` refuses this shape at the source level
+    // (`reject_memoryview_read`'s parameter arm), so the MIR below is hand
+    // built: the assertion guards the codegen arm, not a reachable program.
+    compile_ext_items_checking_ir(
+        "buffer_parameter_returned",
         buffer_fn_items(
             vec![MirStmt::Return(Some(MirExpr::Name {
                 name: "b".to_string(),
@@ -16015,7 +16077,24 @@ fn returning_a_memoryview_value_is_an_internal_error() {
             }))],
             Ty::MemoryView,
         ),
-        |_| unreachable!("codegen should have panicked"),
+        |ir| {
+            assert!(ir.contains("define ptr @pyfn_element("), "{ir}");
+            // The slot is null-initialized at entry like every other one, so
+            // the assertion is that *no second* null store appears -- and
+            // that the one that does precedes the load feeding the return.
+            assert_eq!(
+                ir.matches("store ptr null, ptr %b").count(),
+                1,
+                "the host's buffer pointer was cleared: {ir}"
+            );
+            let null_at = ir
+                .find("store ptr null, ptr %b")
+                .unwrap_or_else(|| panic!("no entry initialization: {ir}"));
+            let load_at = ir
+                .find("%load = load ptr, ptr %b")
+                .unwrap_or_else(|| panic!("no load out of the slot: {ir}"));
+            assert!(null_at < load_at, "{ir}");
+        },
     );
 }
 

@@ -458,15 +458,20 @@ fn plan_ext(
             gaps,
         )))
     })?;
-    // The rest of the program, which `collect_exports` never visits: a
-    // private function, a specialization, or a method the export set does
-    // not admit -- an instance method, a property, or any method of a
-    // private or exception class -- whose return type is `memoryview` would
-    // otherwise reach codegen's own panic for a `memoryview`-typed call
-    // result (Part 1 of #1027). A public `@staticmethod` or `@classmethod`
-    // of a public non-exception class *is* visited by `collect_exports`
-    // now, and is refused above as a `C0003` rather than here.
-    memoryview_mode::refuse_in_ext_mode(typed_hir).map_err(|gaps| {
+    // Every function whose return type is a buffer except the one shape
+    // Part 2b of #1142 (#1164) admits -- a public *module-level* export.
+    // A private function, a specialization, or any method (exported or not)
+    // would otherwise reach codegen's own panic for a `memoryview`-typed
+    // call result, which `pycc_types`' call interception covers only for a
+    // module-level `def`; `refuse_in_ext_mode`'s own doc comment carries
+    // the argument in full. It is handed the export set because a buffer
+    // return type is carriable now, so `collect_exports` above no longer
+    // refuses one on its own.
+    //
+    // Position: this runs inside `plan_ext`, which `run_build` calls
+    // *before* `compile_to_object_with_options`, so a refusal here is what
+    // keeps that panic unreachable rather than merely unlikely.
+    memoryview_mode::refuse_in_ext_mode(typed_hir, &exports).map_err(|gaps| {
         ExitCode::from(report_build_failure(frontend::FrontendFailure::compile(
             &source_path.display().to_string(),
             "",

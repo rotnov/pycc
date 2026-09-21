@@ -460,20 +460,35 @@ fn every_non_parameter_ndarray_position_is_refused() {
     assert!(err.contains("error[C0001]"), "{err}");
     assert!(err.contains("declaring `x` as a buffer"), "{err}");
 
-    // A public `-> ndarray` return under `--ext`: `C0003`. The wrapper has
-    // released the buffer by the time it would have to hand one back, and
-    // no development headers are needed to say so — `plan_ext` resolves the
-    // capability gap on the program before it probes the host toolchain.
+    // A public `-> ndarray` return under `--ext` is *admitted* since Part 2b
+    // of #1142 (#1164), so what refuses this program is its body: an
+    // intra-artifact call to a buffer-returning function has no wrapper to
+    // own the result. Two-directional, so a regression that reinstates the
+    // old `C0003` gap cannot pass as "still refused".
     let dir = fixture("1129_return", "def make() -> ndarray:\n    return make()\n");
     let ext = build_ext(&dir);
     assert!(!ext.status.success(), "{}", stdout_of(&ext));
     let err = stderr_of(&ext);
+    assert!(err.contains("error[C0001]"), "{err}");
+    assert!(
+        err.contains("calling `make`, whose return type is a buffer"),
+        "{err}"
+    );
+    assert!(!err.contains("error[C0003]"), "{err}");
+
+    // The `C0003` remediation still enumerates what the boundary carries,
+    // so it still has to name every spelling: a user who reached the message
+    // by writing `ndarray` or `NDArray` and is shown a list without it reads
+    // the list as "not that type at all". Reached through an uncarriable
+    // *parameter* now that the return position is carried.
+    let dir = fixture(
+        "1129_gap_list",
+        "def take(v: list[int]) -> int:\n    return 0\n",
+    );
+    let ext = build_ext(&dir);
+    assert!(!ext.status.success(), "{}", stdout_of(&ext));
+    let err = stderr_of(&ext);
     assert!(err.contains("error[C0003]"), "{err}");
-    assert!(err.contains("its return type `-> memoryview`"), "{err}");
-    // The remediation enumerates what the boundary carries, so it has to
-    // name every other spelling too: a user who reached this message by
-    // writing `ndarray` or `NDArray` and is shown a list without it reads
-    // the list as "not that type at all".
     assert!(
         err.contains("(or its other spellings `ndarray` and `NDArray`)"),
         "{err}"
@@ -488,7 +503,7 @@ fn every_non_parameter_ndarray_position_is_refused() {
     // were reworded, and no existing assertion would have caught it.
     let dir = fixture(
         "1129_private_return",
-        "def _f() -> ndarray:\n    return _f()\n",
+        "def _f() -> ndarray:\n    a = ndarray(4)\n    return a\n",
     );
     let ext = build_ext(&dir);
     assert!(!ext.status.success(), "{}", stdout_of(&ext));

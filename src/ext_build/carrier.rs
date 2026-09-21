@@ -113,6 +113,18 @@ impl BoundaryCarrier {
 /// nothing downstream can dereference `shape` after the release.
 pub(crate) const BUFFER_VIEW_C_TYPE: &str = "PyccExtBufferView";
 
+/// The C return type of a compiled function that hands back artifact-owned
+/// buffer storage (Part 2b of #1142, #1164): a pointer to the same
+/// [`BUFFER_VIEW_C_TYPE`] pair, which is what `pycc_codegen`'s
+/// `ty_to_basic_type` gives `Ty::MemoryView` -- one opaque pointer.
+///
+/// A `&'static str` of its own rather than a `format!` of the typedef name,
+/// because [`return_c_type`] answers `Option<&'static str>` and because the
+/// spelling is pinned by a generated-C assertion: a disagreement between
+/// this and the compiled callee's own return width is a silent miscompile,
+/// never a compile error on either side.
+pub(crate) const BUFFER_VIEW_RETURN_C_TYPE: &str = "PyccExtBufferView *";
+
 /// The C slots one type the boundary admits uses inside a generated
 /// wrapper, or `None` when this pycc version's boundary cannot carry `ty`
 /// in either position.
@@ -214,6 +226,21 @@ pub(crate) fn carries_param(ty: &Ty) -> bool {
 pub(crate) fn return_c_type(ty: &Ty) -> Option<&'static str> {
     match ty {
         Ty::None => Some("void"),
+        // Part 2b of #1142 (#1164): the buffer's own return arm, and
+        // deliberately *here* rather than in
+        // [`BoundaryCarrier::into_scalar`]. `into_scalar`'s other caller is
+        // [`boundary_carrier`]'s `tuple`-element lookup, so a `Buffer` arm
+        // there would silently admit `tuple[memoryview]` -- which has no
+        // `_at` element shim and no wrapper that can unpack it, and would
+        // render C naming an undeclared helper instead of the ordinary
+        // `C0003` capability gap. Egress is a property of the *top-level*
+        // return position alone, so it is stated at exactly that position.
+        //
+        // The value handed back is artifact-owned storage, which the
+        // wrapper turns into a real `memoryview` over a refcounted exporter
+        // (`pycc_ext_pack_memoryview`). Unlike a *parameter*'s buffer, it
+        // owes no `PyBuffer_Release`: nothing was borrowed from the host.
+        Ty::MemoryView => Some(BUFFER_VIEW_RETURN_C_TYPE),
         // Still asked of `boundary_carrier`: `tuple[list[int]]` is a tuple
         // whose element the boundary cannot carry, and answering `void`
         // for it unconditionally would admit a signature no wrapper can
@@ -266,9 +293,15 @@ pub(crate) fn render_ty(ty: &Ty) -> &'static str {
         // Part 1 of #1026: the spelling `Ty::name()` uses, so the gap
         // message names the same thing a `T0023` about the binding would.
         Ty::Object => "object",
-        // Part 1 of #1027: reachable from a real signature, because a
-        // `memoryview` *return* type is a capability gap while the
-        // parameter position is admitted.
+        // Part 1 of #1027, and unreachable from a real signature since Part
+        // 2b of #1142 (#1164) admitted the return position: both positions
+        // now carry a bare buffer, so nothing refuses one by its own type.
+        // Kept rather than folded into the `_` arm below because this table
+        // is a rendering of `Ty`, not a list of currently-refusable types --
+        // a future position that refuses a buffer should name it, not say
+        // "that type" -- and because `tuple[memoryview]` is still refused,
+        // which renders as `tuple` only by the deliberate coarseness the
+        // paragraph above describes.
         Ty::MemoryView => "memoryview",
         _ => "that type",
     }
@@ -312,10 +345,11 @@ pub(crate) fn capability_gap(name: &str, offender: &str) -> Diagnostic {
              `float`, `bool`, `str`, `memoryview` (or its other spellings `ndarray` and \
              `NDArray`) or a \
              `tuple` of `int`/`float`/`bool`, and a \
-             return type must be one of those except the buffer, or `None` \
+             return type must be one of those, or `None` \
              (D-244 rule \
-             1 exports every public module-level function, and a public `@staticmethod` or \
-             `@classmethod` of a public class, so there is no way to opt one \
+             1 exports every public module-level function, and a public method of a public \
+             class -- an instance method as well as a `@staticmethod` or `@classmethod` -- so \
+             there is no way to opt one \
              out) -- rename it to `{owner}_{member}` to keep it out of the export set, or build \
              without --ext"
         ),

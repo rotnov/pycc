@@ -381,3 +381,57 @@ pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&
         .filter(|name| is_producer_spelling(name))
         .collect()
 }
+
+/// The name an admitted buffer **egress** returns, or `None` when this
+/// `return` is not the one shape Part 2b of #1142 (#1164) admits.
+///
+/// The shape is deliberately exact: a bare name, in a function whose
+/// *declared* return type is the buffer type. Both walkers call this from
+/// their own `HirStmt::Return` arm, before the operand is ever inferred, on
+/// the same **interception** model `crate::expr::reject_memoryview_read`'s
+/// doc comment records for `b[i]` and `len(b)` -- the refusal itself is not
+/// weakened, only the set of expressions that reach it narrows by one.
+///
+/// Membership in the caller's own `owned_buffers` set is the caller's half
+/// of the test and is deliberately *not* asked here: that set lives on two
+/// different environments (the check phase's [`crate::Environment`] and the
+/// solver's `ConstraintEnvironment`), and leaving the provenance question
+/// with each walker is what keeps a *parameter*-bound name -- `return b` --
+/// falling through to the parameter refusal, which is the use-after-free
+/// #1142 exists to forbid.
+///
+/// A declared return type other than the buffer type declines here, so
+/// `def f(n: int) -> float: a = ndarray(n); return a` keeps exactly the
+/// refusal it has today.
+pub(crate) fn admitted_buffer_return<'a>(
+    expr: &'a pycc_hir::HirExpr,
+    declared_return: Option<&Ty>,
+) -> Option<&'a str> {
+    match (expr, declared_return) {
+        (pycc_hir::HirExpr::Name(name), Some(Ty::MemoryView)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// `Err(C0001)` for a call whose callee returns the buffer type.
+///
+/// Part 2b of #1142 (#1164) admits a buffer return at the `pycc build --ext`
+/// boundary -- where the generated wrapper turns the artifact's storage into
+/// a real `memoryview` the host owns -- and nowhere else. An *intra-artifact*
+/// call to such a function has no such wrapper: the compiled callee hands
+/// back a raw `PyccExtBufferView *` with no owner, which
+/// `crates/pycc_codegen/src/call_result.rs`'s `Ty::MemoryView` arm panics on.
+/// This refusal is what keeps that panic unreachable from source, which is
+/// #1164's own completion criterion.
+pub(crate) fn buffer_returning_call_unsupported(callee: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "calling `{callee}`, whose return type is a buffer, is valid Python but not \
+             implemented yet; #1164 hands such a buffer to the CPython host across the \
+             `pycc build --ext` boundary and admits no intra-artifact caller -- allocate \
+             the buffer with `a = ndarray(n)` in the function that reads it"
+        ),
+        Span::new(0, 0),
+    )
+}
