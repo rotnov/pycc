@@ -33,6 +33,35 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — Four fix rounds on one mechanism, none of which questioned how many things it assumed were in flight
+
+Part 2b of #1142 (#1164) tracks a returned buffer's ownership in a single
+per-frame pending-return record: one pointer slot and one orphan flag. Four
+consecutive review rounds each found a defect in it, and each round fixed the
+*shape* it was handed — a superseding return, a raising finalizer, a rebinding
+finalizer, a possibly-unbound name — by adding one more transition to the same
+record. Round 2's amendment even argued explicitly that the set of syntactic
+paths no longer mattered because every mutator restored the record's
+invariant. Round 5 then produced a reproduction that segfaults the hosting
+interpreter: a `return` inside a `finally` does not *replace* the pending
+return, it *suspends* it, so the language admits a stack where the
+implementation has one slot. Every earlier round had been enumerating paths
+into the mechanism while its cardinality assumption went unexamined, and each
+new transition made the next defect more expensive to find.
+
+Root cause: the rounds treated "which shapes reach this code" as the open
+question, when the open question was "how many of them can be live at once".
+What fixed it: narrowing the admission instead of growing the state — refusing
+the egress for any function containing a `return` lexically inside a `finally`
+body, a whole-function lexical constant both type walkers read from one shared
+transitive helper, with the removed capability filed as #1173.
+
+Lesson: when a fix round recurs on the same seam, stop extending the mechanism
+and re-examine the precondition it assumes about *how many things can be in
+flight*, not the set of paths that reach it. Narrowing an admission so a
+precondition becomes checkable is usually cheaper and safer than adding state
+to make the mechanism hold more.
+
 ## 2026-09-21 — An early-return admission accounted for one bypassed check, not every one
 
 Three review rounds on the #1164 branch each found the same class of defect:

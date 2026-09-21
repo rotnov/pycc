@@ -307,6 +307,17 @@ def rebinds_and_raises(n: int) -> memoryview:
         raise ValueError(\"boom\")
 
 
+def double_rebind_and_raises(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        return a
+    finally:
+        a = ndarray(n)
+        a = ndarray(n)
+        a[0] = 6.0
+        raise ValueError(\"boom\")
+
+
 def plain(n: int) -> memoryview:
     a = ndarray(n)
     a[0] = 5.0
@@ -348,7 +359,7 @@ fn a_returned_buffer_survives_every_finalizer_interposed_before_the_frame_exits(
              assert list(m.in_loop(4)) == [4.0, 0.0, 0.0, 0.0], list(m.in_loop(4))\n\
              assert list(m.rebinds(4)) == [1.0, 0.0, 0.0, 0.0], list(m.rebinds(4))\n\
              assert list(m.plain(4)) == [5.0, 0.0, 0.0, 0.0], list(m.plain(4))\n\
-             for name in ('raises', 'rebinds_and_raises'):\n\
+             for name in ('raises', 'rebinds_and_raises', 'double_rebind_and_raises'):\n\
              \x20   try:\n\
              \x20       getattr(m, name)(4)\n\
              \x20   except ValueError:\n\
@@ -378,6 +389,16 @@ fn a_returned_buffer_survives_every_finalizer_interposed_before_the_frame_exits(
 /// still names the storage, because the finalizer rebound the local slot
 /// away from it before raising.
 ///
+/// `double_rebind_and_raises` is the **carrier** arm. The orphan flag is
+/// raised by the first rebind, then a *second*, non-matching rebind of the
+/// same slot runs before anything reads the flag back. Only `raised =
+/// select(is_pending, 1, previously)`'s `previously` operand carries it
+/// across that store, and only the raising exit makes the carry observable:
+/// on a transferred return the epilogue's own `transferred` test suppresses
+/// the release whatever the flag says, so replacing `previously` with a zero
+/// is invisible there and leaks one buffer per call here. Every other arm has
+/// at most one intervening rebind, so none of them reaches that operand.
+///
 /// Not compiled on Windows, matching this file's other counter-reading arm
 /// and for its reason: the counter is linked into the `.pyd` from a static
 /// archive but is absent from its export table.
@@ -397,7 +418,7 @@ fn a_finalizer_that_raises_releases_the_buffer_the_abandoned_return_left_behind(
              live.restype = ctypes.c_longlong\n\
              live.argtypes = []\n\
              assert live() == 0, live()\n\
-             for name in ('raises', 'rebinds_and_raises'):\n\
+             for name in ('raises', 'rebinds_and_raises', 'double_rebind_and_raises'):\n\
              \x20   for _ in range(64):\n\
              \x20       try:\n\
              \x20           getattr(m, name)(8)\n\
@@ -424,107 +445,83 @@ fn a_finalizer_that_raises_releases_the_buffer_the_abandoned_return_left_behind(
 /// The subject for the **multi-write** set: a frame that reaches a second
 /// `return` while an earlier one is still pending.
 ///
-/// `FINALLY_SUBJECT`'s note that `return` inside `finally` is refused with
-/// `L0001` is true only of a *bare* one. The HIR resets its `in_finally`
-/// state on loop entry, so `while True: return a` inside a `finally` body is
-/// accepted, and that is the vehicle every shape here uses. What it reaches
-/// is not a control-flow shape but the pending record's own state machine:
-/// `(pending, orphaned)` is one two-field state whose invariant is
-/// "`orphaned != 0` means the record is the pointer's sole owner", and a
-/// superseding `return` is its second mutator.
+/// Review round 5 of #1164 narrowed the buffer-egress admission to refuse
+/// any function containing a `return` inside a `finally`
+/// (`REFUSED_MULTI_RETURN_SUBJECT` below is what that removed, and
+/// `pycc_types::buffer::buffer_return_inside_finally` carries the host crash
+/// that forced it). That narrowing removes the *simultaneous* case only --
+/// two returns in flight at once, which requires the inner `return` to sit
+/// lexically inside a `finally` the outer one's exit path runs. A second
+/// `return` reached **sequentially** survives, and is what this subject
+/// exercises: a `return` abandoned by a raising finalizer is caught by an
+/// enclosing handler, the name is rebound (which orphans the abandoned
+/// pointer), and a second `return` then supersedes the pending record.
 ///
-/// `double_rebind` is the carrier arm: the orphan flag is raised by the first
-/// rebind, then a *second*, non-matching rebind of the same slot runs before
-/// any `return` reads the flag back. Only `raised = select(is_pending, 1,
-/// previously)`'s `previously` operand carries it across that store, and the
-/// superseding return must still release the original predecessor exactly
-/// once. Every other arm has at most one intervening rebind, so none of them
-/// reaches that operand.
+/// What it reaches is not a control-flow shape but the pending record's own
+/// state machine: `(pending, orphaned)` is one two-field state whose
+/// invariant is "`orphaned != 0` means the record is the pointer's sole
+/// owner", and a superseding `return` is its second mutator. Each arm kills
+/// one half of that mutator's transition, verified by mutation:
 ///
-/// `unorphaned_predecessor` and `repeats` are the two states the release must
-/// *not* fire in -- a predecessor still held by its own slot, and a
-/// predecessor that is the very pointer being returned again. Without them a
-/// naive "always free the predecessor" would pass every other arm here and
-/// double-free those two. `supersedes_then_rebinds` raises the orphan flag
-/// *after* the superseding return rather than before it, which is the only
-/// ordering the other arms do not cover.
+/// * `cancelled_then_rebind` kills the **release**. Neutering the
+///   superseding store's release leaves the orphaned predecessor with no
+///   owner at all and leaks one buffer per call -- 64 live views after 64
+///   calls, where the balance arm below asserts 0.
+/// * `cancelled_then_rebind_then_raises` kills the **flag clear**. Leaving
+///   the inherited orphan flag raised makes the epilogue's trailing release
+///   free the new pointer the owned-slot loop had already released, and
+///   `pycc build --ext` links that epilogue into a plain `extern "C" fn`
+///   where the allocator's abort kills the hosting interpreter (`SIGABRT`,
+///   exit 134). No balance reading can substitute for that observable,
+///   because the process never reaches the reading.
+///
+/// `two_sequential_returns` is the regression direction for both: two
+/// `return` statements of two different owned buffers with nothing pending
+/// between them, so the superseding store runs twice with an *unorphaned*
+/// predecessor and must not release anything. Without it a naive "always
+/// free the predecessor" would pass both arms above and double-free here.
 ///
 /// Every expectation below is CPython's own answer for the same program with
 /// `ndarray(n)` read as `[0.0] * n`, checked against `python3` directly.
 const MULTI_RETURN_SUBJECT: &str = "\
-def supersedes(n: int) -> memoryview:
-    a = ndarray(n)
-    try:
-        a[0] = 1.0
-        return a
-    finally:
-        a = ndarray(n)
-        a[0] = 7.0
-        while True:
-            return a
-
-
-def supersedes_then_raises(n: int) -> memoryview:
-    a = ndarray(n)
-    try:
-        a[0] = 1.0
-        return a
-    finally:
-        try:
-            a = ndarray(n)
-            while True:
-                return a
-        finally:
-            raise ValueError(\"boom\")
-
-
-def supersedes_then_rebinds(n: int) -> memoryview:
+def cancelled_then_rebind(n: int) -> memoryview:
     a = ndarray(n)
     try:
         try:
+            a[0] = 1.0
             return a
         finally:
-            a = ndarray(n)
-            a[1] = 5.0
-            while True:
+            raise ValueError(\"x\")
+    except ValueError:
+        pass
+    a = ndarray(n)
+    a[1] = 2.0
+    return a
+
+
+def cancelled_then_rebind_then_raises(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        try:
+            try:
                 return a
-    finally:
+            finally:
+                raise ValueError(\"x\")
+        except ValueError:
+            pass
         a = ndarray(n)
-        a[0] = 9.0
+        return a
+    finally:
+        raise TypeError(\"y\")
 
 
-def unorphaned_predecessor(n: int) -> memoryview:
+def two_sequential_returns(c: bool, n: int) -> memoryview:
     a = ndarray(n)
     b = ndarray(n)
-    try:
-        b[0] = 2.0
+    b[0] = 3.0
+    if c:
         return a
-    finally:
-        while True:
-            return b
-
-
-def repeats(n: int) -> memoryview:
-    a = ndarray(n)
-    try:
-        a[0] = 3.0
-        return a
-    finally:
-        while True:
-            return a
-
-
-def double_rebind(n: int) -> memoryview:
-    a = ndarray(n)
-    try:
-        a[0] = 4.0
-        return a
-    finally:
-        a = ndarray(n)
-        a = ndarray(n)
-        a[0] = 6.0
-        while True:
-            return a
+    return b
 ";
 
 /// The leak arm of the multi-write set, and the reason it is a *counter*
@@ -534,11 +531,11 @@ def double_rebind(n: int) -> memoryview:
 /// balance, and only over a loop -- one call leaking one buffer and one call
 /// releasing one too many show the same single-iteration reading.
 ///
-/// `supersedes_then_raises` is deliberately absent: it is the other arm's
-/// subject, and keeping the two disjoint is what makes each mutation kill
-/// exactly one test. Reverting the release at the superseding store fails
-/// this arm and leaves the other green; reverting the flag clear does the
-/// reverse.
+/// `cancelled_then_rebind_then_raises` is deliberately absent: it is the
+/// other arm's subject, and keeping the two disjoint is what makes each
+/// mutation kill exactly one test. Reverting the release at the superseding
+/// store fails this arm and leaves the other green; reverting the flag clear
+/// does the reverse.
 ///
 /// Not compiled on Windows, matching this file's other counter-reading arms
 /// and for their reason: the counter is linked into the `.pyd` from a static
@@ -559,14 +556,17 @@ fn a_superseded_pending_return_is_released_rather_than_leaked() {
              live.restype = ctypes.c_longlong\n\
              live.argtypes = []\n\
              assert live() == 0, live()\n\
-             names = ('supersedes', 'supersedes_then_rebinds', 'unorphaned_predecessor', \
-             'repeats', 'double_rebind')\n\
-             for name in names:\n\
+             for _ in range(64):\n\
+             \x20   v = m.cancelled_then_rebind(8)\n\
+             \x20   assert live() == 1, live()\n\
+             \x20   del v\n\
+             \x20   assert live() == 0, live()\n\
+             for c in (True, False):\n\
              \x20   for _ in range(64):\n\
-             \x20       v = getattr(m, name)(8)\n\
-             \x20       assert live() == 1, (name, live())\n\
+             \x20       v = m.two_sequential_returns(c, 8)\n\
+             \x20       assert live() == 1, (c, live())\n\
              \x20       del v\n\
-             \x20       assert live() == 0, (name, live())\n\
+             \x20       assert live() == 0, (c, live())\n\
              print('ok')\n",
         )
         .current_dir(&*dir)
@@ -601,17 +601,17 @@ fn a_superseding_return_does_not_free_the_pointer_the_slot_loop_already_released
             "import egress_probe as m\n\
              for _ in range(64):\n\
              \x20   try:\n\
-             \x20       m.supersedes_then_raises(8)\n\
-             \x20   except ValueError:\n\
+             \x20       m.cancelled_then_rebind_then_raises(8)\n\
+             \x20   except TypeError:\n\
              \x20       pass\n\
              \x20   else:\n\
-             \x20       raise AssertionError('supersedes_then_raises')\n\
-             assert list(m.supersedes(4)) == [7.0, 0.0, 0.0, 0.0], list(m.supersedes(4))\n\
-             assert list(m.supersedes_then_rebinds(4)) == [0.0, 5.0, 0.0, 0.0], \
-             list(m.supersedes_then_rebinds(4))\n\
-             assert list(m.unorphaned_predecessor(4)) == [2.0, 0.0, 0.0, 0.0], \
-             list(m.unorphaned_predecessor(4))\n\
-             assert list(m.repeats(4)) == [3.0, 0.0, 0.0, 0.0], list(m.repeats(4))\n\
+             \x20       raise AssertionError('cancelled_then_rebind_then_raises')\n\
+             assert list(m.cancelled_then_rebind(4)) == [0.0, 2.0, 0.0, 0.0], \
+             list(m.cancelled_then_rebind(4))\n\
+             assert list(m.two_sequential_returns(True, 4)) == [0.0, 0.0, 0.0, 0.0], \
+             list(m.two_sequential_returns(True, 4))\n\
+             assert list(m.two_sequential_returns(False, 4)) == [3.0, 0.0, 0.0, 0.0], \
+             list(m.two_sequential_returns(False, 4))\n\
              print('ok')\n",
         )
         .current_dir(&*dir)
@@ -619,6 +619,210 @@ fn a_superseding_return_does_not_free_the_pointer_the_slot_loop_already_released
         .expect("python3 should spawn");
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// What review round 5 of #1164 removed: every shape that puts two `return`
+/// statements in flight at once.
+///
+/// These six functions were admitted before that round, and the first of
+/// them -- with a raising innermost finalizer -- segfaulted the hosting
+/// CPython interpreter. The outer `return a` makes `a` pending; the
+/// finalizer rebinds `a`, orphaning it; the nested `return b` overwrites the
+/// single pending record and releases the orphaned predecessor; the inner
+/// `finally` raises, cancelling the nested return; the surrounding handler
+/// catches it, the outer finalizer completes, and the **outer return
+/// resumes** -- handing the host a `memoryview` over freed storage.
+///
+/// The refusal is a property of the *admission*, not of the named shape:
+/// every function here contains a `return` lexically inside a `finally`, and
+/// that is the whole test. Each is checked separately, so a refusal that
+/// fired for only one of them cannot pass for the rest.
+///
+/// `cancel` is the reproduction itself and is the transitivity pin: its
+/// inner `return` sits four blocks below the `finally` that encloses it
+/// (`try`/`finally` inside `while` inside a `try`, inside the `finally`
+/// body), so a check of the `finally` clause's direct children answers
+/// "no return here" and re-admits the segfault.
+const REFUSED_MULTI_RETURN_SUBJECT: [(&str, &str); 7] = [
+    (
+        "cancel",
+        "def cancel(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       a[0] = 1.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       a = ndarray(n)\n\
+         \x20       a[0] = 2.0\n\
+         \x20       try:\n\
+         \x20           while True:\n\
+         \x20               b = ndarray(n)\n\
+         \x20               try:\n\
+         \x20                   b[0] = 3.0\n\
+         \x20                   return b\n\
+         \x20               finally:\n\
+         \x20                   raise ValueError(\"x\")\n\
+         \x20       except ValueError:\n\
+         \x20           pass\n",
+    ),
+    (
+        "supersedes",
+        "def supersedes(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       a[0] = 1.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       a = ndarray(n)\n\
+         \x20       a[0] = 7.0\n\
+         \x20       while True:\n\
+         \x20           return a\n",
+    ),
+    (
+        "supersedes_then_raises",
+        "def supersedes_then_raises(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       a[0] = 1.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       try:\n\
+         \x20           a = ndarray(n)\n\
+         \x20           while True:\n\
+         \x20               return a\n\
+         \x20       finally:\n\
+         \x20           raise ValueError(\"boom\")\n",
+    ),
+    (
+        "supersedes_then_rebinds",
+        "def supersedes_then_rebinds(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       try:\n\
+         \x20           return a\n\
+         \x20       finally:\n\
+         \x20           a = ndarray(n)\n\
+         \x20           a[1] = 5.0\n\
+         \x20           while True:\n\
+         \x20               return a\n\
+         \x20   finally:\n\
+         \x20       a = ndarray(n)\n\
+         \x20       a[0] = 9.0\n",
+    ),
+    (
+        "unorphaned_predecessor",
+        "def unorphaned_predecessor(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   b = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       b[0] = 2.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       while True:\n\
+         \x20           return b\n",
+    ),
+    (
+        "repeats",
+        "def repeats(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       a[0] = 3.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       while True:\n\
+         \x20           return a\n",
+    ),
+    (
+        "double_rebind",
+        "def double_rebind(n: int) -> memoryview:\n\
+         \x20   a = ndarray(n)\n\
+         \x20   try:\n\
+         \x20       a[0] = 4.0\n\
+         \x20       return a\n\
+         \x20   finally:\n\
+         \x20       a = ndarray(n)\n\
+         \x20       a = ndarray(n)\n\
+         \x20       a[0] = 6.0\n\
+         \x20       while True:\n\
+         \x20           return a\n",
+    ),
+];
+
+/// The public-CLI half of review round 5's narrowing: every shape in
+/// [`REFUSED_MULTI_RETURN_SUBJECT`] is refused, by `pycc check` and by the
+/// `--ext` build path that would otherwise have emitted the segfaulting
+/// artifact.
+///
+/// The message is pinned, not just the code: `C0001` alone is satisfied by
+/// the #1165 owned-buffer refusal falling through, which would be a
+/// diagnostic that lies about why the program is rejected.
+#[test]
+fn a_return_inside_a_finally_is_refused_at_the_buffer_egress() {
+    for (label, source) in REFUSED_MULTI_RETURN_SUBJECT {
+        let dir = fixture(&format!("1164_refused_{label}"), source);
+        let check = pycc()
+            .arg("check")
+            .arg(dir.join("egress_probe.py"))
+            .output()
+            .expect("pycc should spawn");
+        let report = format!("{}{}", stdout_of(&check), stderr_of(&check));
+        assert!(!check.status.success(), "{label}: {report}");
+        assert!(report.contains("error[C0001]"), "{label}: {report}");
+        assert!(
+            report.contains("a `return` inside a `finally` clause"),
+            "{label}: {report}"
+        );
+        assert!(!report.contains("panicked"), "{label}: {report}");
+
+        let build = build_ext(&dir);
+        let build_report = stderr_of(&build);
+        assert!(!build.status.success(), "{label}: {build_report}");
+        assert!(
+            build_report.contains("a `return` inside a `finally` clause"),
+            "{label}: {build_report}"
+        );
+    }
+}
+
+/// The regression direction of the same narrowing: a `return` inside a
+/// `finally` in a function whose return type is *not* the buffer type keeps
+/// exactly the behavior it had before this round.
+///
+/// The refusal is gated at the egress admission, so this program still
+/// compiles and still prints CPython's own answer. Moving the check up to
+/// the function level would break every program of this shape while every
+/// other test in this file stayed green.
+#[test]
+fn a_return_inside_a_finally_still_compiles_for_a_non_buffer_return() {
+    let source = "\
+def pick() -> int:
+    try:
+        return 1
+    finally:
+        while True:
+            return 3
+
+
+def main() -> None:
+    print(pick())
+
+
+main()
+";
+    let dir = fixture("1164_non_buffer_return_in_finally", source);
+    let out = dir.join("non_buffer");
+    let build = pycc()
+        .arg("build")
+        .arg(dir.join("egress_probe.py"))
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(&out).output().expect("artifact should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "3\n");
 }
 
 /// The public-CLI half of the definite-assignment narrowing (review round 3
