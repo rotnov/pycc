@@ -1794,21 +1794,28 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     // it reports both the capacity overflow and a real allocator failure as
     // an `Err` rather than unwinding.
     //
-    // The two steps after it are non-aborting only under a stated
-    // assumption, not as an unconditional property of the API.
-    // `try_reserve_exact` guarantees capacity *at least* the request, and
-    // the argument that neither step reintroduces an aborting allocation --
-    // `resize` to exactly the reserved capacity cannot reallocate, and
-    // `into_boxed_slice` on a vector whose length equals its capacity skips
-    // `shrink_to_fit` -- needs the capacity to come back *exactly* `len`.
-    // That is what the default `Global` allocator does, and no
-    // `#[global_allocator]` is declared anywhere in this workspace. An
-    // allocator that reported a larger capacity (a size-class allocator,
-    // say) would leave a vector whose length is below its capacity, so
-    // `into_boxed_slice` would call `shrink_to_fit`, whose failure path is
-    // the infallible `handle_alloc_error` -- a process abort, the exact
-    // class this function exists to close. Introducing one therefore means
-    // revisiting this step, not just this comment.
+    // The two steps after it are non-aborting under a condition worth
+    // naming rather than as an unconditional property of the API, since
+    // `try_reserve_exact` itself guarantees capacity only *at least* the
+    // request. The argument -- `resize` to exactly the reserved capacity
+    // cannot reallocate, and `into_boxed_slice` on a vector whose length
+    // equals its capacity skips `shrink_to_fit` -- holds only while the
+    // capacity comes back exactly `len`. Where a vector's length is below
+    // its capacity, `into_boxed_slice` does call `shrink_to_fit`, whose
+    // failure path is the infallible `handle_alloc_error`: a process abort,
+    // the exact class this function exists to close.
+    //
+    // What makes it exact is `RawVec`'s own bookkeeping rather than this
+    // crate's choice of allocator. `RawVec` records the capacity it
+    // *requested*, not the length of the block the allocator handed back --
+    // "allocators currently return a `NonNull<[u8]>` whose length matches
+    // the size requested. If that ever changes, the capacity here should
+    // change to `ptr.len() / size_of::<T>()`" (`alloc::raw_vec`). So a
+    // `#[global_allocator]` that over-allocated could not reopen this path
+    // (and none is declared in this workspace in any case), while a future
+    // std that recorded the returned block length could. The condition to
+    // re-check is `len == capacity` at the `into_boxed_slice` below, not
+    // the allocator in use.
     //
     // `RuntimeError` is a deliberate deviation, following `int_pow`'s
     // negative-exponent arm: CPython raises `MemoryError` here

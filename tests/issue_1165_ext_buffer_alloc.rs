@@ -153,6 +153,9 @@ def sized(n: int) -> float:
 /// holds a live view when the second allocation is refused, which is the
 /// only arrangement in which a free emitted before the refusal branched
 /// away would release a view the exception-exit epilogue then frees again.
+/// `#[cfg]`d to match its sole consumer below: an unconditional const with a
+/// windows-gated user is dead code there, and `-D warnings` fails on it.
+#[cfg(not(target_os = "windows"))]
 const SUBJECT_REALLOC_THEN_RAISE: &str = "\
 def realloc_then_raise(n: int) -> float:
     a = ndarray(n)

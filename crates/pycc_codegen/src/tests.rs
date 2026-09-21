@@ -16644,6 +16644,20 @@ fn a_refused_reallocation_never_reaches_the_free_before_its_own_store() {
             // Substring, not an exact label: LLVM uniquifies the name once
             // two statements each emit a continuation block.
             assert!(between.contains("effect_exc_cont"), "{ir}");
+            // The window above pins the separation but not *which* free it
+            // landed on: hoisting `free_buffer_slot_before_store` above
+            // `emit_expr` in the `MirStmt::Assign` arm would move the second
+            // statement's free upstream of the whole window, leaving the
+            // epilogue's free to satisfy it. Counting what precedes the
+            // second allocation closes that: exactly one, statement 1's
+            // free-before-store over a slot the entry block null-initialized.
+            assert_eq!(
+                ir[..second]
+                    .matches("call void @pycc_rt_buffer_f64_free")
+                    .count(),
+                1,
+                "{ir}"
+            );
         },
     );
 }
