@@ -474,10 +474,10 @@ pub(crate) fn buffer_return_inside_finally(name: &str) -> Diagnostic {
         format!(
             "returning `{name}`, which is bound to buffer storage this `pycc build --ext` \
              artifact allocated, from a function that also contains a `return` inside a \
-             `finally` clause is valid Python but not implemented yet; #1164 tracks one \
+             `finally` clause is valid Python but not implemented yet; the compiled frame tracks one \
              pending buffer return per call, and a `return` inside a `finally` can leave \
-             a second one suspended -- move the inner `return` out of the `finally` \
-             clause"
+             a second one suspended (#1173) -- move the inner `return` out of the \
+             `finally` clause"
         ),
         Span::new(0, 0),
     )
