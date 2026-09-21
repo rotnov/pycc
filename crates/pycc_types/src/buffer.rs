@@ -134,7 +134,10 @@ pub(crate) fn producer_at_module_scope(callee: &str) -> Diagnostic {
 ///
 /// A `bool` is *not* such a case: it is an `int` by the representation table
 /// (`docs/TYPE_SYSTEM.md`, rule 4/D-086), so `ndarray(True)` requests one
-/// element. See [`producer_assignment_ty`]'s own length check.
+/// element. See [`producer_assignment_ty`]'s own length check, and
+/// `crate::constraints::reject_non_int_producer_length` for the solver's
+/// mirror of it -- whose absence made this refusal unreachable for an
+/// unannotated private helper until #1165's review round 8.
 pub(crate) fn producer_length_not_an_int(callee: &str, len_ty: &Ty) -> Diagnostic {
     Diagnostic::error(
         "T0033",

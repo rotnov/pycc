@@ -218,6 +218,30 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// *spelling*: a module defining `class ndarray` must still be able to
     /// call `NDArray(n)`.
     pub(crate) shadowed_producers: HashSet<String>,
+    /// #1165 review round 8: the names a `Final` annotation has bound in
+    /// this scope, the solver's counterpart of `Environment::finals`.
+    ///
+    /// Consulted at the buffer producer's admitting seam only
+    /// (`reject_final_rebinding`), exactly as the parameter-rebinding guard
+    /// beside it mirrors one `crate::check_assignment` refusal rather than
+    /// the whole function: the solver has no `Final` model of its own, and
+    /// the reason this one member of it is needed is that a producer
+    /// assignment the solver admits records artifact-owned provenance whose
+    /// later use raises a `C0001` that displaces the check phase's `T0045`.
+    /// Every other `Final` reassignment is refused by the check phase with
+    /// no solver diagnostic to compete with it.
+    ///
+    /// Seeded empty for each function body rather than inherited from
+    /// module scope, on the `owned_buffers` precedent, and the two phases
+    /// were confirmed to agree there rather than argued to: rebinding a
+    /// module-level `Final` name to a producer call inside a function body
+    /// makes the *check* phase admit the producer and raise the same
+    /// owned-buffer `C0001`, because a function-local assignment binds a
+    /// new local instead of rebinding the module-level name. An empty start
+    /// therefore matches the check phase exactly here, and can otherwise
+    /// only ever be *narrower* than it -- the safe direction for a seam
+    /// whose answer displaces the check phase's.
+    pub(crate) finals: HashSet<String>,
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -238,6 +262,7 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             owned_buffers: HashSet::new(),
             in_function_body: false,
             shadowed_producers: HashSet::new(),
+            finals: HashSet::new(),
         }
     }
 
@@ -491,7 +516,36 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
 }
 
 /// Part 2a of #1142 (#1165): the solver's answer to "is this expression a
-/// buffer producer *here*?", returning the length argument when it is.
+/// buffer producer *here*?", returning the spelling and the length argument
+/// when it is.
+///
+/// # The subset invariant this seam and its callers owe the check phase
+///
+/// `crate::module::merge_solver_first` reports the solver's diagnostic for a
+/// function whenever it has one, so the solver's *admitted* set must be a
+/// subset of `crate::buffer::producer_assignment_ty`'s: admitting one
+/// program that mirror refuses means recording an artifact-owned binding
+/// whose later use raises the owned-buffer `C0001`, and that wrong message
+/// displaces the check phase's correct one. Three consecutive review rounds
+/// on this seam each found one missing member of the check phase's
+/// admission conditions (`std_module_aliases`, `foreign_objects`, and the
+/// length-type check below), so the conditions are enumerated here in full
+/// and split across this predicate and its callers exactly as the check
+/// phase splits them:
+///
+/// * here -- the call shape, the spelling, statement (h), the arity, and
+///   the function-body scope;
+/// * at each caller -- the parameter-rebinding guard
+///   (`reject_buffer_parameter_rebinding`), the length type
+///   (`reject_non_int_producer_length`), and, on the `AnnAssign` arm only,
+///   the declared annotation (`reject_producer_annotation_mismatch`).
+///
+/// One condition of the check phase's is deliberately *not* mirrored, and
+/// the difference is recorded rather than closed: an unresolved length term
+/// (`def _h(n): a = ndarray(n)`, where the caller later fixes `n` to `str`)
+/// is admitted here, because refusing it needs a length constraint carried
+/// to the end of solving rather than one more guard at this seam. See
+/// `reject_non_int_producer_length`'s own doc comment.
 ///
 /// The solver's own statement (h): a `def` of the spelling is in
 /// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
@@ -535,7 +589,7 @@ fn resolved_producer_call<'a>(
     signatures: &HashMap<String, SignatureTerms>,
     env: &ConstraintEnvironment<'_, '_>,
     expr: &'a HirExpr,
-) -> Option<&'a HirExpr> {
+) -> Option<(&'a str, &'a HirExpr)> {
     let HirExpr::Call { callee, args } = expr else {
         return None;
     };
@@ -554,7 +608,79 @@ fn resolved_producer_call<'a>(
     {
         return None;
     }
-    Some(&args[0])
+    Some((callee.as_str(), &args[0]))
+}
+
+/// Part 2a of #1142 (#1165): the solver's mirror of
+/// `crate::buffer::producer_assignment_ty`'s own `Int | Bool` length check,
+/// applied to the term the producer's length argument collected.
+///
+/// Without it the solver discarded that term and recorded an owned buffer
+/// for `a = ndarray("x")`, so a later use of `a` raised the owned-buffer
+/// `C0001` and `crate::module::merge_solver_first` displaced the check
+/// phase's correct `T0033` with it -- the same shape as the
+/// `std_module_aliases` and `foreign_objects` omissions before it. See
+/// `resolved_producer_call`'s doc comment for the invariant all three
+/// violate.
+///
+/// `bool` is admitted alongside `int` for the reason
+/// `crate::buffer::producer_assignment_ty` spells out: the representation
+/// table makes a `bool` an `int` (`docs/TYPE_SYSTEM.md`, rule 4/D-086).
+///
+/// The guard fires only on a term that *resolves* to a concrete type. An
+/// unresolved term is admitted rather than refused, and that is the one
+/// place the solver stays deliberately wider than the check phase: the
+/// producer's length is very often the helper's own unannotated parameter
+/// (`a = ndarray(n)`), whose term is still a variable at this point in the
+/// walk, and refusing it would refuse the admitted shape this seam exists
+/// for. A term that a *later* call-site constraint resolves to a non-`int`
+/// therefore still reaches the check phase's `T0033` rather than this one --
+/// unless a use of the owned name in the same body raises the owned `C0001`
+/// first, which is the residue this guard does not reach and which needs a
+/// deferred length constraint, not a seventh mirrored arm.
+fn reject_non_int_producer_length(
+    callee: &str,
+    len_term: Option<TypeTerm>,
+    parents: &mut [usize],
+    concrete: &[Option<Ty>],
+) -> Result<(), Diagnostic> {
+    if let Some(term) = len_term
+        && let Some(len_ty) = resolved_term(term, parents, concrete)
+        && !matches!(len_ty, Ty::Int | Ty::Bool)
+    {
+        return Err(crate::buffer::producer_length_not_an_int(callee, &len_ty));
+    }
+    Ok(())
+}
+
+/// Part 2a of #1142 (#1165): the solver's mirror of
+/// `check_stmt_in_function`'s `AnnAssign` assignability test, applied where
+/// the producer is admitted under a declared annotation.
+///
+/// Without it `a: int = ndarray(4)` bound `a` as artifact-owned storage in
+/// the solver while the check phase correctly refused the statement, so a
+/// later use of `a` raised the owned-buffer `C0001` and
+/// `crate::module::merge_solver_first` reported that instead of the
+/// `T0025`. See `resolved_producer_call`'s doc comment for the invariant.
+///
+/// `crate::is_assignable` rather than a `matches!` on `Ty::MemoryView`
+/// because it is the *same* predicate the check phase reaches: that arm
+/// calls `class::is_assignable_env`, whose `Instance`/`Protocol` arms cannot
+/// match a `from` of `Ty::MemoryView`, so it falls through to this function
+/// -- including its `Optional` clause, which a hand-rolled match would drop.
+/// The one residual difference is the *message* for a protocol annotation,
+/// where the check phase raises a detailed `T0046` conformance error it can
+/// only build from a class table the solver does not have; the refusal
+/// itself agrees.
+fn reject_producer_annotation_mismatch(target: &str, annotation: &Ty) -> Result<(), Diagnostic> {
+    if crate::is_assignable(Ty::MemoryView, annotation.clone()) {
+        return Ok(());
+    }
+    Err(crate::annotation_initializer_mismatch(
+        target,
+        &Ty::MemoryView,
+        annotation,
+    ))
 }
 
 /// Part 2a of #1142 (#1165): the solver's mirror of `crate::check_assignment`'s
@@ -584,6 +710,35 @@ fn reject_buffer_parameter_rebinding(
         && !env.owned_buffers.contains(target)
     {
         return Err(crate::buffer::buffer_parameter_rebinding(target));
+    }
+    Ok(())
+}
+
+/// #1165 review round 8: the solver's mirror of `crate::check_assignment`'s
+/// PEP 591 `Final` refusal, applied at the producer's admitting seam
+/// alongside `reject_buffer_parameter_rebinding`.
+///
+/// The condition is that refusal's, minus one conjunct the solver cannot
+/// reach. The check phase also requires the name to be in `bindings`,
+/// because its `finals` set additionally holds a *value-less* `x:
+/// Final[int]` declaration, whose own first assignment must stay admitted.
+/// This solver records a `Final` name only at the producer seam, and only
+/// after that statement's binding -- its value-less `AnnAssign` arm is a
+/// deliberate no-op -- so membership in `finals` already implies membership
+/// in `bindings`, and repeating the conjunct here would be a branch no test
+/// could kill.
+///
+/// Needed for the same reason the parameter guard beside it is: without it
+/// the solver admitted `a = ndarray(8)` on a `Final` name, recorded
+/// artifact-owned provenance for it, and a later use of that name raised
+/// the owned-buffer `C0001` that `crate::module::merge_solver_first` then
+/// reported in place of the check phase's correct `T0045`.
+fn reject_final_rebinding(
+    env: &ConstraintEnvironment<'_, '_>,
+    target: &str,
+) -> Result<(), Diagnostic> {
+    if env.finals.contains(target) {
+        return Err(crate::final_reassignment(target));
     }
     Ok(())
 }
@@ -1801,12 +1956,19 @@ pub(crate) fn collect_block_constraints(
                 // for the buffer producer, mirroring `crate::check_stmt`'s.
                 // The length argument is still collected so its own
                 // constraints (and its own diagnostics) are not skipped.
-                if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                if let Some((callee, len_arg)) = resolved_producer_call(signatures, env, value) {
                     // Guard first, matching `check_assignment`'s order: a
                     // parameter rebinding is refused before the length
                     // argument's own constraints are collected.
                     reject_buffer_parameter_rebinding(env, target)?;
-                    collect_expr_constraints(
+                    reject_final_rebinding(env, target)?;
+                    // The collected term is *used*, not discarded: it is the
+                    // length type the check phase's own seam refuses when it
+                    // is not an `int`. See `reject_non_int_producer_length`,
+                    // and `resolved_producer_call` for why an admitted set
+                    // wider than the check phase's shows up as a wrong
+                    // message rather than a wrong program.
+                    let len_term = collect_expr_constraints(
                         signatures,
                         parents,
                         concrete,
@@ -1814,6 +1976,7 @@ pub(crate) fn collect_block_constraints(
                         env,
                         len_arg,
                     )?;
+                    reject_non_int_producer_length(callee, len_term, parents, concrete)?;
                     env.bindings
                         .entry(target.clone())
                         .or_insert(Ok(Ty::MemoryView));
@@ -1844,7 +2007,7 @@ pub(crate) fn collect_block_constraints(
                 target,
                 value: Some(value),
                 annotation,
-                is_final: _,
+                is_final,
             } => {
                 // Part 4 of #1026 (PR 4c of #1083) deliberately adds **no
                 // branch here**, unlike PRs 4a and 4b, whose `float`/`bool`/
@@ -1888,10 +2051,11 @@ pub(crate) fn collect_block_constraints(
                 // the term is already the concrete `Ty::MemoryView`, never
                 // an `Err(var)`, so `apply_annotation_defaults` would skip
                 // it anyway.
-                if let Some(len_arg) = resolved_producer_call(signatures, env, value) {
+                if let Some((callee, len_arg)) = resolved_producer_call(signatures, env, value) {
                     // See the plain `Assign` arm: guard before collecting.
                     reject_buffer_parameter_rebinding(env, target)?;
-                    collect_expr_constraints(
+                    reject_final_rebinding(env, target)?;
+                    let len_term = collect_expr_constraints(
                         signatures,
                         parents,
                         concrete,
@@ -1899,10 +2063,33 @@ pub(crate) fn collect_block_constraints(
                         env,
                         len_arg,
                     )?;
+                    reject_non_int_producer_length(callee, len_term, parents, concrete)?;
+                    // The one condition this arm adds over the plain
+                    // `Assign` arm, mirroring the check phase's own extra
+                    // step: the declared annotation must admit a buffer.
+                    reject_producer_annotation_mismatch(target, annotation)?;
                     env.bindings
                         .entry(target.clone())
                         .or_insert(Ok(Ty::MemoryView));
                     env.owned_buffers.insert(target.clone());
+                    // Recorded *after* the binding, exactly where
+                    // `check_stmt_in_function` records it, and that order is
+                    // the rule rather than a detail: a declaration's own
+                    // first assignment is not a reassignment, so recording
+                    // before `reject_final_rebinding` above would refuse the
+                    // declaration itself.
+                    //
+                    // Recorded here only, and not on this arm's ordinary
+                    // (non-producer) path, because this is the only binding
+                    // whose later reassignment the solver can *mask*: a
+                    // `Final` name the solver does not bind to
+                    // `Ty::MemoryView` records no artifact-owned provenance,
+                    // so no later use of it produces a solver diagnostic to
+                    // displace the check phase's `T0045` with. A recording
+                    // that changes no outcome is a guard no test can kill.
+                    if *is_final {
+                        env.finals.insert(target.clone());
+                    }
                     continue;
                 }
                 if let Some(term) = collect_expr_constraints(

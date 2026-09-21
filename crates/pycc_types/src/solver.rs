@@ -39,6 +39,13 @@ pub(crate) fn join_if_branches_solver(
         .extend(body_env.owned_buffers.iter().cloned());
     env.owned_buffers
         .extend(orelse_env.owned_buffers.iter().cloned());
+    // #1165 review round 8: `Final` names join the same way and for the
+    // same reason -- the check phase walks one environment through both
+    // branches, so a `Final` declared in either one is still `Final` after
+    // the join, and a solver set that lost it would admit a reassignment
+    // the check phase refuses.
+    env.finals.extend(body_env.finals.iter().cloned());
+    env.finals.extend(orelse_env.finals.iter().cloned());
     // Merge bindings: first-binding-wins (body first, then orelse).
     // `entry().or_insert()` preserves the existing binding for pre-existing
     // names and takes the body's term for new names introduced by the body.
@@ -150,6 +157,8 @@ pub(crate) fn join_loop_body_solver(
     // handler and `else` environments through this helper too.
     env.owned_buffers
         .extend(body_env.owned_buffers.iter().cloned());
+    // #1165 review round 8: see `join_if_branches_solver`.
+    env.finals.extend(body_env.finals.iter().cloned());
     for (name, term) in &body_env.bindings {
         if !pre_existing.contains(name) {
             env.bindings.entry(name.clone()).or_insert(term.clone());

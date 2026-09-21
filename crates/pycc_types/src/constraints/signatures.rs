@@ -265,6 +265,11 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             .map(|(class_name, _)| class_name.clone())
             .filter(|class_name| crate::buffer::is_producer_spelling(class_name))
             .collect(),
+        // #1165 review round 8: module scope binds no `Final` name this
+        // solver consults -- the set is read only at the buffer producer's
+        // seam, which module scope refuses outright. See the field's own
+        // doc comment for why each body starts empty too.
+        finals: HashSet::new(),
     };
     // Part 1 of #1026: a foreign import binds a definite name whose type is
     // `Ty::Object`. It is recorded in `opaque_bindings` so that every piece
@@ -343,6 +348,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             owned_buffers: HashSet::new(),
             in_function_body: true,
             shadowed_producers: globals.shadowed_producers.clone(),
+            finals: HashSet::new(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);

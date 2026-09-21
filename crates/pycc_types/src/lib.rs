@@ -989,6 +989,47 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
     || matches!(&to, Ty::Optional(inner) if from == Ty::None || is_assignable(from.clone(), (**inner).clone()))
 }
 
+/// The canonical `T0025`: an annotated assignment whose initializer type is
+/// not assignable to the declared annotation.
+///
+/// One function rather than one construction per arm because three call
+/// sites now raise it -- `check_stmt`'s and `check_stmt_in_function`'s
+/// `AnnAssign` arms, and `constraints::reject_producer_annotation_mismatch`,
+/// the solver's mirror of the second (Part 2a of #1142, issue #1165).
+/// AGENTS.md's no-paraphrase rule makes that decisive: the solver's answer
+/// beats the check phase's under `crate::module::merge_solver_first`, so a
+/// message that drifted from this one would be the message the user sees.
+pub(crate) fn annotation_initializer_mismatch(
+    target: &str,
+    inferred: &Ty,
+    annotation: &Ty,
+) -> Diagnostic {
+    Diagnostic::error(
+        "T0025",
+        format!(
+            "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
+            inferred.name(),
+            annotation.name()
+        ),
+        Span::new(0, 0),
+    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+}
+
+/// The canonical PEP 591 `T0045`: a second assignment to a `Final` name.
+///
+/// Shared with `constraints::reject_final_rebinding`, the solver's mirror of
+/// the [`check_assignment`] refusal above, for the reason
+/// [`annotation_initializer_mismatch`] is shared: the solver's answer for a
+/// function displaces the check phase's, so the two must not paraphrase each
+/// other apart.
+pub(crate) fn final_reassignment(target: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0045",
+        format!("cannot reassign `Final` name `{target}`"),
+        Span::new(0, 0),
+    )
+}
+
 fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
     let is_numeric_like = |t: &Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
     (is_numeric_like(&a) && is_numeric_like(&b)) || (a == Ty::Str && b == Ty::Str)
@@ -1061,11 +1102,7 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // name in `declared`, not `bindings`, so the first real assignment is
     // the *initial* assignment and must be allowed.
     if env.finals.contains(target) && env.bindings.contains_key(target) {
-        return Err(Diagnostic::error(
-            "T0045",
-            format!("cannot reassign `Final` name `{target}`"),
-            Span::new(0, 0),
-        ));
+        return Err(final_reassignment(target));
     }
     // Every value assignment re-shadows a same-named `def` (D-110),
     // including a compatible-type reassignment of a name that already has a
@@ -2016,15 +2053,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     {
                         class::assignable_error(env, &inferred, annotation)
                     } else {
-                        Diagnostic::error(
-                            "T0025",
-                            format!(
-                                "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
-                                inferred.name(),
-                                annotation.name()
-                            ),
-                            Span::new(0, 0),
-                        ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+                        annotation_initializer_mismatch(target, &inferred, annotation)
                     };
                     return Err(diag);
                 }
@@ -3246,15 +3275,7 @@ fn check_stmt_in_function(
                     {
                         class::assignable_error(env, &inferred, annotation)
                     } else {
-                        Diagnostic::error(
-                            "T0025",
-                            format!(
-                                "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
-                                inferred.name(),
-                                annotation.name()
-                            ),
-                            Span::new(0, 0),
-                        ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+                        annotation_initializer_mismatch(target, &inferred, annotation)
                     };
                     return Err(diag);
                 }
