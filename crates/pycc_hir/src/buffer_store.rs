@@ -93,6 +93,145 @@ fn stmt_stores_into(stmt: &HirStmt, name: &str) -> bool {
     }
 }
 
+/// Whether `body` contains a `return` statement lexically inside the
+/// `finally` clause of any `try` statement, at any nesting depth
+/// (Part 2b of #1142, #1164 review round 5).
+///
+/// This is the checked precondition of `crates/pycc_codegen/src/lib.rs`'s
+/// **single** per-frame pending-return record. That record -- one pointer
+/// slot plus one orphan flag -- can describe exactly one suspended return,
+/// and a second `return` reached while an earlier one is still in flight
+/// overwrites it. Two returns are in flight *simultaneously* only when the
+/// second one is lexically inside a `finally` that the first one's own exit
+/// path runs, so refusing that shape at the buffer-egress admission turns
+/// "at most one return is pending at a time" from an assumption into a
+/// property of every admitted program. `crates/pycc_types/src/buffer.rs`'s
+/// `buffer_return_inside_finally` is the refusal, and this is its predicate.
+///
+/// It must be **transitive**, and the reason is a concrete host crash: the
+/// reproduction that prompted it is a `return` inside a `try`/`finally`
+/// inside a `while` inside a `finally` body, which a check of a `finally`
+/// body's direct children misses entirely. `pycc_hir`'s own PEP 765
+/// `L0001` rule (`crate::stmt`'s `in_finally`) is deliberately *not* that
+/// predicate and cannot be reused as one: it follows CPython and clears
+/// `in_finally` on loop entry, so `while True: return a` inside a `finally`
+/// is valid Python that this walk must still see.
+///
+/// The `match` below is exhaustive with no `_` arm for
+/// [`body_stores_into`]'s reason, and the failure mode is the same class:
+/// a missed recursion re-admits a shape that hands the host a `memoryview`
+/// over freed storage.
+///
+/// There is no arm for a nested function definition because [`HirStmt`] has
+/// no such variant -- a `def` inside a `def` never reaches this
+/// representation -- so "do not descend into nested functions" is vacuous
+/// here rather than enforced.
+pub fn body_returns_inside_finally(body: &[HirStmt]) -> bool {
+    body.iter().any(stmt_returns_inside_finally)
+}
+
+fn stmt_returns_inside_finally(stmt: &HirStmt) -> bool {
+    match stmt {
+        // The one arm that answers the question rather than recursing: a
+        // `finally` clause is entered, so *any* `return` anywhere beneath it
+        // counts. The other three parts of the same `try` are ordinary
+        // nested blocks and keep recursing.
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            body_contains_return(finalbody)
+                || body_returns_inside_finally(body)
+                || handlers
+                    .iter()
+                    .any(|handler| body_returns_inside_finally(&handler.body))
+                || body_returns_inside_finally(orelse)
+                || body_returns_inside_finally(finalbody)
+        }
+        HirStmt::If { body, orelse, .. } => {
+            body_returns_inside_finally(body) || body_returns_inside_finally(orelse)
+        }
+        HirStmt::While { body, .. }
+        | HirStmt::ForRange { body, .. }
+        | HirStmt::ForList { body, .. }
+        | HirStmt::ForObject { body, .. } => body_returns_inside_finally(body),
+        HirStmt::Match { cases, .. } => cases
+            .iter()
+            .any(|case| body_returns_inside_finally(&case.body)),
+        // No nested block, so no `finally` can begin here.
+        HirStmt::ExprStmt(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
+        | HirStmt::DictSet { .. }
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::Return(_)
+        | HirStmt::AttrSet { .. }
+        | HirStmt::Raise { .. } => false,
+    }
+}
+
+/// Whether `body` contains a `return` statement at any nesting depth.
+///
+/// Called only on a `finally` clause's own statements, where the enclosing
+/// `finally` has already been entered, so every nested block -- including a
+/// nested `try`'s own `finally` -- is searched uniformly and the
+/// [`HirStmt::Try`] arm needs no special case.
+fn body_contains_return(body: &[HirStmt]) -> bool {
+    body.iter().any(stmt_contains_return)
+}
+
+fn stmt_contains_return(stmt: &HirStmt) -> bool {
+    match stmt {
+        HirStmt::Return(_) => true,
+        HirStmt::If { body, orelse, .. } => {
+            body_contains_return(body) || body_contains_return(orelse)
+        }
+        HirStmt::While { body, .. }
+        | HirStmt::ForRange { body, .. }
+        | HirStmt::ForList { body, .. }
+        | HirStmt::ForObject { body, .. } => body_contains_return(body),
+        HirStmt::Match { cases, .. } => cases.iter().any(|case| body_contains_return(&case.body)),
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            body_contains_return(body)
+                || handlers
+                    .iter()
+                    .any(|handler| body_contains_return(&handler.body))
+                || body_contains_return(orelse)
+                || body_contains_return(finalbody)
+        }
+        HirStmt::ExprStmt(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
+        | HirStmt::DictSet { .. }
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::AttrSet { .. }
+        | HirStmt::Raise { .. } => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +337,235 @@ mod tests {
             assert!(body_stores_into(body, "b"), "shape {index}: {body:?}");
             assert!(!body_stores_into(body, "c"), "shape {index}: {body:?}");
         }
+    }
+
+    /// Every nested block a `return` can hide in *below* a `finally`, so a
+    /// variant the finally-side walk failed to recurse into would re-admit a
+    /// buffer egress that hands the host freed storage.
+    #[test]
+    fn a_return_is_found_inside_every_block_nested_under_a_finally() {
+        let hidden: Vec<Vec<HirStmt>> = vec![
+            vec![HirStmt::Return(None)],
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Return(None)],
+                orelse: vec![],
+            }],
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![],
+                orelse: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForObject {
+                var: "i".to_string(),
+                iter: Box::new(HirExpr::IntLiteral(0)),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::Match {
+                subject: HirExpr::IntLiteral(0),
+                cases: vec![HirMatchCase {
+                    pattern: HirPattern::Wildcard,
+                    guard: None,
+                    body: vec![HirStmt::Return(None)],
+                }],
+            }],
+            vec![try_stmt(
+                vec![HirStmt::Return(None)],
+                vec![],
+                vec![],
+                vec![],
+            )],
+            vec![try_stmt(
+                vec![],
+                vec![HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![HirStmt::Return(None)],
+                }],
+                vec![],
+                vec![],
+            )],
+            vec![try_stmt(
+                vec![],
+                vec![],
+                vec![HirStmt::Return(None)],
+                vec![],
+            )],
+            vec![try_stmt(
+                vec![],
+                vec![],
+                vec![],
+                vec![HirStmt::Return(None)],
+            )],
+            vec![HirStmt::TryStar {
+                body: vec![HirStmt::Return(None)],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+        ];
+        for (index, finalbody) in hidden.iter().enumerate() {
+            let body = vec![try_stmt(vec![], vec![], vec![], finalbody.clone())];
+            assert!(
+                body_returns_inside_finally(&body),
+                "shape {index}: {body:?}"
+            );
+        }
+        assert!(!body_returns_inside_finally(&[try_stmt(
+            vec![],
+            vec![],
+            vec![],
+            vec![store("b"), leaf_without_return()],
+        )]));
+    }
+
+    /// The other half: a `try` whose `finally` is clean, with the `return`
+    /// in each of the *other* three parts and in every block around the
+    /// `try` itself. None of these puts two returns in flight, so admitting
+    /// them is the point -- an over-broad predicate would refuse the shape
+    /// that still ships.
+    #[test]
+    fn a_return_outside_every_finally_is_not_reported() {
+        let clean: Vec<Vec<HirStmt>> = vec![
+            vec![HirStmt::Return(None)],
+            vec![try_stmt(
+                vec![HirStmt::Return(None)],
+                vec![],
+                vec![],
+                vec![],
+            )],
+            vec![try_stmt(
+                vec![],
+                vec![HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![HirStmt::Return(None)],
+                }],
+                vec![],
+                vec![],
+            )],
+            vec![try_stmt(
+                vec![],
+                vec![],
+                vec![HirStmt::Return(None)],
+                vec![],
+            )],
+            vec![HirStmt::TryStar {
+                body: vec![HirStmt::Return(None)],
+                handlers: vec![HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![HirStmt::Return(None)],
+                }],
+                orelse: vec![HirStmt::Return(None)],
+                finalbody: vec![store("b")],
+            }],
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Return(None)],
+                orelse: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::ForObject {
+                var: "i".to_string(),
+                iter: Box::new(HirExpr::IntLiteral(0)),
+                body: vec![HirStmt::Return(None)],
+            }],
+            vec![HirStmt::Match {
+                subject: HirExpr::IntLiteral(0),
+                cases: vec![HirMatchCase {
+                    pattern: HirPattern::Wildcard,
+                    guard: None,
+                    body: vec![HirStmt::Return(None)],
+                }],
+            }],
+            vec![store("b"), leaf_without_return()],
+            vec![],
+        ];
+        for (index, body) in clean.iter().enumerate() {
+            assert!(
+                !body_returns_inside_finally(body),
+                "shape {index}: {body:?}"
+            );
+        }
+    }
+
+    /// The transitivity pin, and the exact shape of the host crash that
+    /// prompted this predicate: `return` inside a `try`/`finally` inside a
+    /// `while` inside a `finally` body.
+    ///
+    /// The first assertion is what makes the second one mean something: the
+    /// `finally` clause's own direct children contain no `Return` at all, so
+    /// a walk of those children alone answers `false` and re-admits the
+    /// segfaulting program. Only the transitive walk sees it.
+    #[test]
+    fn the_reproductions_return_is_four_blocks_below_its_finally() {
+        let inner = try_stmt(
+            vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+            vec![],
+            vec![],
+            vec![HirStmt::Raise {
+                exc: None,
+                cause: None,
+            }],
+        );
+        let finalbody = vec![
+            store("a"),
+            HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![inner],
+            },
+        ];
+        assert!(
+            !finalbody
+                .iter()
+                .any(|stmt| matches!(stmt, HirStmt::Return(_))),
+            "the finally clause's own children must hold no `Return`, or this \
+             test would pass for a non-transitive walk too"
+        );
+        assert!(body_returns_inside_finally(&[try_stmt(
+            vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+            vec![],
+            vec![],
+            finalbody,
+        )]));
+    }
+
+    /// A statement carrying no nested block and no `return` of its own, so
+    /// the finally-side leaf arm answers it.
+    fn leaf_without_return() -> HirStmt {
+        HirStmt::ExprStmt(HirExpr::IntLiteral(0))
     }
 
     fn try_stmt(
