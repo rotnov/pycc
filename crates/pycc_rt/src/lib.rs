@@ -1759,19 +1759,30 @@ pub extern "C" fn pycc_rt_buffer_alloc_untag_len(tagged: i64) -> i64 {
 ///
 /// A length whose storage cannot be reserved -- `len * 8` past `isize::MAX`,
 /// or a genuine allocator failure -- sets a pending `RuntimeError` and
-/// returns null the same way. The reservation is fallible
-/// (`Vec::try_reserve_exact`) precisely so that case cannot `panic!` across
-/// this `extern "C"` boundary and abort the host interpreter; see the
-/// comment at the check for why the class is `RuntimeError` rather than
-/// CPython's `MemoryError`.
+/// returns null the same way. *Both* allocations this function performs are
+/// fallible (`Vec::try_reserve_exact`), the elements and the two-word view
+/// alike, precisely so that case cannot `panic!` or `handle_alloc_error`
+/// across this `extern "C"` boundary and abort the host interpreter; see
+/// the comment at the check for why the class is `RuntimeError` rather than
+/// CPython's `MemoryError`. Under a *genuine* out-of-memory condition the
+/// pending `RuntimeError` is itself built by `raise_builtin`, whose message
+/// and exception objects are still ordinary infallible allocations shared
+/// with every other raise site in this runtime; closing that is a
+/// runtime-wide change tracked separately, so the guarantee this function
+/// makes on its own is exact for the capacity-overflow case and
+/// best-effort for a true allocator failure.
 ///
 /// # Allocator pairing
-/// The storage is a `Box<[f64]>` and the view is a `Box<PyccExtBufferView>`,
-/// and [`pycc_rt_buffer_f64_free`] reconstructs *those same two boxes*. The
-/// pairing is stated as a `Box` round trip rather than as a hand-built
-/// `core::alloc::Layout` precisely so the size and alignment cannot drift
-/// between the two halves: a mismatched-layout deallocation is undefined
-/// behavior that no test notices by accident.
+/// The storage is a `Box<[f64]>` and the view is a one-element
+/// `Box<[PyccExtBufferView]>`, and [`pycc_rt_buffer_f64_free`] reconstructs
+/// *those same two boxes*. The pairing is stated as a `Box` round trip
+/// rather than as a hand-built `core::alloc::Layout` precisely so the size
+/// and alignment cannot drift between the two halves: a mismatched-layout
+/// deallocation is undefined behavior that no test notices by accident.
+/// That is also why the view is a slice box rather than a
+/// `Box<PyccExtBufferView>` rebuilt from a `Vec`'s pointer: the two layouts
+/// do agree today, but only the round trip keeps them agreeing by
+/// construction.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     if len < 0 {
@@ -1825,8 +1836,20 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     // conformant class it can name yet. Adding one is a cross-cutting
     // change to the class table, the `ext` bridge's tag switch and their
     // pinned counts, tracked separately rather than widened into this fix.
+    //
+    // #1166 round 11. The element storage was not the only allocation on
+    // this path: the two-word `PyccExtBufferView` itself was a `Box::new`,
+    // which is *infallible* -- on a genuine allocator failure it calls
+    // `handle_alloc_error`, which aborts. Reserving the elements fallibly
+    // and then aborting on the sixteen bytes that describe them closes
+    // nothing, so the view is reserved through the same fallible path, and
+    // both reservations report through the one failure arm below. The
+    // `||` short-circuits, so the view is reserved only once the elements
+    // are: there is no window in which a refused length has already
+    // committed an allocation.
     let mut storage: Vec<f64> = Vec::new();
-    if storage.try_reserve_exact(len as usize).is_err() {
+    let mut view: Vec<PyccExtBufferView> = Vec::new();
+    if storage.try_reserve_exact(len as usize).is_err() || view.try_reserve_exact(1).is_err() {
         raise_builtin(
             EXCEPTION_TYPE_RUNTIME_ERROR,
             "RuntimeError",
@@ -1838,12 +1861,18 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     storage.resize(len as usize, 0.0f64);
     let storage: Box<[f64]> = storage.into_boxed_slice();
     let ptr = Box::into_raw(storage) as *mut f64;
-    let view = Box::new(PyccExtBufferView {
+    // `push` cannot reallocate into a capacity already reserved for one
+    // element, and `into_boxed_slice` on a length-one vector of capacity
+    // one skips `shrink_to_fit` -- the same two conditions, and the same
+    // `RawVec` exactness argument, that make the element storage above
+    // non-aborting.
+    view.push(PyccExtBufferView {
         ptr: ptr as *mut core::ffi::c_void,
         len,
     });
+    let view: Box<[PyccExtBufferView]> = view.into_boxed_slice();
     BUFFER_LIVE.fetch_add(1, Ordering::Relaxed);
-    Box::into_raw(view)
+    Box::into_raw(view) as *mut PyccExtBufferView
 }
 
 /// Releases storage produced by [`pycc_rt_buffer_f64_alloc`].
@@ -1853,7 +1882,7 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
 /// buffer slot the function declared, including one a path never assigned,
 /// whose slot `storage_slot_at_entry` null-initialized.
 ///
-/// `view.len` is read *before* the storage is released and the view struct
+/// `view[0].len` is read *before* the storage is released and the view box
 /// is released *last*, because the storage box's length is what makes its
 /// deallocation layout the same one [`pycc_rt_buffer_f64_alloc`] used.
 ///
@@ -1869,10 +1898,16 @@ pub unsafe extern "C" fn pycc_rt_buffer_f64_free(view: *mut PyccExtBufferView) {
     if view.is_null() {
         return;
     }
-    let view = unsafe { Box::from_raw(view) };
+    // Rebuilt as the *one-element slice box* the allocation produced, not as
+    // a `Box<PyccExtBufferView>`: since #1166's round-11 review the view is
+    // reserved fallibly through a one-element `Vec`, and reconstructing the
+    // same box is what keeps the deallocation layout identical to the one
+    // the allocation used without a hand-written layout argument.
+    let view = unsafe { Box::from_raw(core::ptr::slice_from_raw_parts_mut(view, 1)) };
     // Read `len` off the view before the storage box is rebuilt: the slice
     // length is half of the `Box<[f64]>` layout the allocation used.
-    let storage = core::ptr::slice_from_raw_parts_mut(view.ptr as *mut f64, view.len as usize);
+    let storage =
+        core::ptr::slice_from_raw_parts_mut(view[0].ptr as *mut f64, view[0].len as usize);
     drop(unsafe { Box::from_raw(storage) });
     BUFFER_LIVE.fetch_sub(1, Ordering::Relaxed);
     drop(view);
