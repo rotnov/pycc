@@ -1481,3 +1481,113 @@ fn a_refused_reallocation_leaves_exactly_one_view_for_the_exception_exit() {
     );
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// The subject for the round-11 leak arm below: two exports that each raise
+/// exactly once per call, differing *only* in whether the refused length was
+/// a freshly owned bigint. `promoted` reaches the decoder's `OverflowError`
+/// through `n + 1`; `negative` reaches the allocator's `ValueError` with an
+/// ordinary inline length and no bigint anywhere in it.
+#[cfg(unix)]
+const SUBJECT_LEAK_PROBE: &str = "\
+def promoted(n: int) -> float:
+    a = ndarray(n + 1)
+    return float(len(a))
+
+
+def negative(n: int) -> float:
+    a = ndarray(n)
+    return float(len(a))
+";
+
+/// Runs `export(argument)` in a loop, catching the refusal every trip, and
+/// returns the host interpreter's own peak resident set together with the
+/// number of exceptions it actually caught.
+///
+/// The measurement is taken *inside* CPython, with `resource.getrusage`,
+/// rather than by reaping the child with `wait4` the way
+/// `tests/issue_146_bigint_release.rs`'s `peak_rss` module does. Both read
+/// the same `ru_maxrss` field; doing it in-process keeps this arm inside
+/// this file's existing `run_hosted` convention and needs no `libc`
+/// dependency here. `resource` is Unix-only, which is why the whole arm is
+/// `#[cfg(unix)]`.
+#[cfg(unix)]
+fn hosted_peak_rss(dir: &Path, export: &str, argument: &str, trips: u32) -> (f64, u32) {
+    let run = run_hosted(
+        dir,
+        &format!(
+            "import resource, alloc_probe\n\
+             caught = 0\n\
+             for _ in range({trips}):\n\
+             \x20   try:\n\
+             \x20       alloc_probe.{export}({argument})\n\
+             \x20   except (OverflowError, ValueError):\n\
+             \x20       caught += 1\n\
+             print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)\n\
+             print(caught)\n"
+        ),
+    );
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    let out = stdout_of(&run);
+    let mut lines = out.lines();
+    let rss: f64 = lines
+        .next()
+        .unwrap_or_else(|| panic!("the probe should print a peak RSS: {out}"))
+        .trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("peak RSS should parse ({error}): {out}"));
+    let caught: u32 = lines
+        .next()
+        .unwrap_or_else(|| panic!("the probe should print a catch count: {out}"))
+        .trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("the catch count should parse ({error}): {out}"));
+    (rss, caught)
+}
+
+/// #1166 round 11's P1, on a real artifact: repeatedly catching the refused
+/// length does not grow the host process by one `BigIntObj` per call.
+///
+/// A single catch leaks a single object, which no "raises `OverflowError`"
+/// assertion can see -- so this loops, and reads the one observable this
+/// repository already uses for a bigint leak (`tests/issue_146_bigint_release.rs`'s
+/// peak-RSS module; there is no `pycc_rt_bigint_live_objects` counter to read
+/// the way the buffer arms read `pycc_rt_buffer_live_views`).
+///
+/// Stated as a ratio against a *second shape* rather than against a second
+/// trip count, which is the departure from #146's own form and the thing
+/// that makes the arm meaningful here. Every raise out of an `ext` export
+/// leaks its own exception machinery today -- an enumerated D-181 residual,
+/// measured at roughly 160 bytes per catch and unrelated to this fix -- so a
+/// same-shape 1x/2x ratio reads ~1.8 whether or not the bigint is retired.
+/// `negative` raises exactly as often through the same wrapper and the same
+/// pending-exception protocol, with no bigint in it, so that residual is
+/// present in both readings and cancels; what remains is the length's own
+/// birth reference.
+///
+/// Measured on the fix's own branch: 105.4MB against 79.5MB (ratio 1.33)
+/// before the release call, 86.2MB against 79.6MB (ratio 1.08) after it.
+/// The threshold sits between them with margin on both sides. The catch
+/// counts are asserted too, so a future change that stopped raising at all
+/// could not pass this by making both loops cheap.
+#[test]
+#[cfg(unix)]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn repeatedly_catching_a_refused_bigint_length_does_not_leak_one_per_call() {
+    const TRIPS: u32 = 400_000;
+    let dir = fixture("1165_hosted_len_leak", SUBJECT_LEAK_PROBE);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let (leaking_shape, caught) = hosted_peak_rss(&dir, "promoted", "2 ** 62 - 1", TRIPS);
+    assert_eq!(caught, TRIPS, "every trip must raise");
+    let (control, control_caught) = hosted_peak_rss(&dir, "negative", "-1", TRIPS);
+    assert_eq!(control_caught, TRIPS, "every control trip must raise");
+
+    let ratio = leaking_shape / control;
+    assert!(
+        ratio < 1.20,
+        "catching a refused bigint length must not cost a live object per call: \
+         promoted={leaking_shape} control={control} ratio={ratio:.4} \
+         (a leaked `BigIntObj` per catch reads as ratio ~1.33)"
+    );
+}

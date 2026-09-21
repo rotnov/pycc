@@ -8885,7 +8885,7 @@ fn compiles_mixed_int_and_float_addition() {
         items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
             target: "y".to_string(),
             value: MirExpr::BinOp {
-                op: pycc_mir::BinOpKind::Add,
+                op: BinOpKind::Add,
                 left: Box::new(MirExpr::IntLiteral(1)),
                 right: Box::new(MirExpr::FloatLiteral(1.5)),
                 ty: pycc_mir::Ty::Float,
@@ -8907,7 +8907,7 @@ fn compiles_bool_arithmetic_promoted_to_int() {
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "z".to_string(),
                 value: MirExpr::BinOp {
-                    op: pycc_mir::BinOpKind::Add,
+                    op: BinOpKind::Add,
                     left: Box::new(MirExpr::BoolLiteral(true)),
                     right: Box::new(MirExpr::BoolLiteral(true)),
                     ty: pycc_mir::Ty::Int,
@@ -16656,6 +16656,98 @@ fn a_refused_reallocation_never_reaches_the_free_before_its_own_store() {
                     .matches("call void @pycc_rt_buffer_f64_free")
                     .count(),
                 1,
+                "{ir}"
+            );
+        },
+    );
+}
+
+/// An `--ext` module holding one `n: int` function with `body`, for the
+/// arms that need a *parameter* to build a borrowed length out of.
+fn owned_buffer_fn_items_taking_n(body: Vec<MirStmt>) -> Vec<MirItem> {
+    vec![MirItem::Function {
+        name: "allocate".to_string(),
+        params: vec![("n".to_string(), Ty::Int)],
+        return_ty: Ty::None,
+        body,
+    }]
+}
+
+/// `a = ndarray(<len>)` over an arbitrary length expression.
+fn buffer_alloc_a_of(len: MirExpr) -> MirStmt {
+    MirStmt::Assign {
+        target: "a".to_string(),
+        value: MirExpr::BufferAlloc { len: Box::new(len) },
+    }
+}
+
+#[test]
+fn a_buffer_allocations_length_temporary_is_released_before_the_guard() {
+    // #1166 round 11, finding 1. `a = ndarray(n + 1)` with `n == 2 ** 62 - 1`
+    // evaluates the length to a freshly owned `BigIntObj`, and the decoder
+    // below refuses it with a *catchable* `OverflowError`. Every exception
+    // edge out of this arm therefore abandons a birth reference unless the
+    // arm retires it first, and repeatedly catching that exception leaked one
+    // bigint per call in the host process.
+    //
+    // Asserted as an ordering rather than as presence, for the reason the
+    // round-8 decoder arm above states: a release emitted *after*
+    // `guard_statement_effects` is skipped by exactly the edges that leak,
+    // and a presence-only assertion passes either way. The window is
+    // therefore the decode through the pre-allocator guard's own pending
+    // read -- which is also what pins the release ahead of the stale-pending
+    // short circuit, not merely ahead of the allocator.
+    compile_ext_items_checking_ir(
+        "buffer_alloc_len_release",
+        owned_buffer_fn_items_taking_n(vec![buffer_alloc_a_of(MirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(MirExpr::Name {
+                name: "n".to_string(),
+                ty: Ty::Int,
+            }),
+            right: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        })]),
+        |ir| {
+            let decode = ir
+                .find("call i64 @pycc_rt_buffer_alloc_untag_len")
+                .unwrap_or_else(|| panic!("the length decode should be emitted: {ir}"));
+            let guard = ir[decode..]
+                .find("@pycc_rt_exception_active")
+                .map(|offset| decode + offset)
+                .unwrap_or_else(|| panic!("the pre-allocator guard should follow the decode: {ir}"));
+            assert!(
+                ir[decode..guard].contains("@pycc_rt_bigint_release"),
+                "{ir}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_borrowed_buffer_length_is_not_released_by_the_allocation() {
+    // The other direction of the arm above, and the one that makes the
+    // release a classification rather than an unconditional emission: in
+    // `a = ndarray(n)` the length is a plain `Name` read, which owns no
+    // reference of its own -- `n`'s own storage still refers to the word.
+    // Releasing it here would be a double release, not a leak, so this is
+    // pinned in the same window the positive arm asserts over.
+    compile_ext_items_checking_ir(
+        "buffer_alloc_borrowed_len",
+        owned_buffer_fn_items_taking_n(vec![buffer_alloc_a_of(MirExpr::Name {
+            name: "n".to_string(),
+            ty: Ty::Int,
+        })]),
+        |ir| {
+            let decode = ir
+                .find("call i64 @pycc_rt_buffer_alloc_untag_len")
+                .unwrap_or_else(|| panic!("the length decode should be emitted: {ir}"));
+            let alloc = ir[decode..]
+                .find("@pycc_rt_buffer_f64_alloc")
+                .map(|offset| decode + offset)
+                .unwrap_or_else(|| panic!("the allocator call should follow the decode: {ir}"));
+            assert!(
+                !ir[decode..alloc].contains("@pycc_rt_bigint_release"),
                 "{ir}"
             );
         },

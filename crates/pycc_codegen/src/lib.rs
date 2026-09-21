@@ -3995,6 +3995,48 @@ fn emit_expr_unchecked<'ctx>(
             let encoded_len = to_numeric_encoded_int(context, builder, len_scalar);
             let raw_len =
                 build_buffer_alloc_untag_len(builder, rt, encoded_len, "buffer_untag_alloc_len");
+            // #1166 round 11, finding 1: retire the length's own birth
+            // reference here, unconditionally, before anything below can
+            // branch away.
+            //
+            // `n + 1` with `n == 2 ** 62 - 1` evaluates to a freshly owned
+            // `BigIntObj`, and `to_numeric_encoded_int` passes that pointer
+            // through unchanged. Every edge out of this arm that is reached
+            // *after* the decode either abandons the value or consumes it:
+            //
+            //   * the decoder's own `OverflowError` on a bigint or malformed
+            //     word -- the reviewer's case, and the only one a real
+            //     program reaches with a live bigint, since promotion is the
+            //     only way a bigint length exists here at all;
+            //   * an exception already pending when this arm was reached,
+            //     which the guard below short-circuits on;
+            //   * the allocator's own negative-length `ValueError` and
+            //     unreservable-length `RuntimeError`, both raised after
+            //     `raw_len` is computed;
+            //   * and the ordinary fallthrough.
+            //
+            // Retiring the reference *before* the guard is what covers the
+            // first two as well as the last two: a release emitted after
+            // `guard_statement_effects` would be skipped by exactly the
+            // edges that leak. Repeatedly catching the `OverflowError`
+            // leaked one `BigIntObj` per call in the host process before
+            // this call existed.
+            //
+            // Unconditional rather than exception-edge-only, and a bare
+            // release rather than a `push_pending_int_release_if_temporary`:
+            // `raw_len` (or the decoder's sentinel `0`) is the only thing
+            // read below, so the word is dead on *every* edge -- and
+            // `rt.exceptions.pending_int_releases` is documented to carry an
+            // *enclosing* node's operand, "never this call site's own
+            // operand" (see `guard_statement_effects` and each push site).
+            // Pushing this arm's own operand there would have the unwind
+            // block release a word this arm must also retire on the normal
+            // path, which is a double release rather than a leak.
+            //
+            // `release_if_int_temporary`'s own classification keeps a
+            // borrowed length (`a = ndarray(n)`, where `n` names the value)
+            // untouched, so only a birth reference is retired.
+            release_if_int_temporary(context, builder, rt, len, encoded_len);
             // #1166 review finding F5: check the pending state *before*
             // allocating, not only after.
             //
