@@ -24,12 +24,73 @@ use crate::ConstraintEnvironment;
 /// `pre_existing` is the set of binding names that were in `env.bindings`
 /// before the `if` — names introduced by only one branch are maybe-bound,
 /// names introduced by both branches are definitely bound.
+/// Part 2a of #1142 (#1165), round-11 review finding 2: carry a branch's
+/// buffer-provenance *invalidation* back out of the branch.
+///
+/// Provenance joins as a union, which can only ever add names. A branch that
+/// rebinds an artifact-owned name -- `else: a = 1`, `except ... as a`,
+/// `case a:`, a loop body's `a = 1` -- therefore had its invalidation
+/// silently undone, either by the ancestor's own surviving marker or by the
+/// *other* branch's marker for a name both branches introduce. The stale
+/// `Ok(Ty::MemoryView)` binding was merged back with it, so a later read
+/// raised the owned-buffer `C0001` and displaced the check phase's `T0023`
+/// for the reassignment.
+///
+/// A name is contested when some joined branch has a binding or an opaque
+/// marker for it and does *not* own it: that branch reached the join with
+/// the name denoting something else. Contested names are invalidated,
+/// which is the conservative reading -- the solver stops answering for a
+/// name whose provenance depends on the path, and the check phase's own
+/// diagnostic stands.
+///
+/// Written as "has a binding and does not own it" rather than as an
+/// intersection of the owned sets, because an intersection would also drop
+/// a name only *one* branch introduces (`if c: a = ndarray(4)` followed by
+/// `a[0]`), which is the union's own keep path and must survive. Run after
+/// the binding merge, since the merge is what re-imports the stale term.
+fn invalidate_contested_owned_buffers(
+    env: &mut ConstraintEnvironment,
+    branches: &[&ConstraintEnvironment],
+) {
+    let contested: Vec<String> = env
+        .owned_buffers
+        .iter()
+        .filter(|name| {
+            branches.iter().any(|branch| {
+                (branch.bindings.contains_key(name.as_str())
+                    || branch.opaque_bindings.contains(name.as_str()))
+                    && !branch.owned_buffers.contains(name.as_str())
+            })
+        })
+        .cloned()
+        .collect();
+    for name in contested {
+        env.rebind_over_owned_buffer(&name);
+    }
+}
+
 pub(crate) fn join_if_branches_solver(
     env: &mut ConstraintEnvironment,
     body_env: &ConstraintEnvironment,
     orelse_env: &ConstraintEnvironment,
     pre_existing: &HashSet<String>,
 ) {
+    // Part 2a of #1142 (#1165): buffer provenance joins as a union, exactly
+    // as `crate::join_if_branches` does it for the check phase. `env` is
+    // both branches' ancestor, so this never loses a name either branch
+    // owned, and never invents one neither did. Placed here rather than at
+    // the eleven call sites so a future join site cannot silently skip it.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
+    env.owned_buffers
+        .extend(orelse_env.owned_buffers.iter().cloned());
+    // #1165 review round 8: `Final` names join the same way and for the
+    // same reason -- the check phase walks one environment through both
+    // branches, so a `Final` declared in either one is still `Final` after
+    // the join, and a solver set that lost it would admit a reassignment
+    // the check phase refuses.
+    env.finals.extend(body_env.finals.iter().cloned());
+    env.finals.extend(orelse_env.finals.iter().cloned());
     // Merge bindings: first-binding-wins (body first, then orelse).
     // `entry().or_insert()` preserves the existing binding for pre-existing
     // names and takes the body's term for new names introduced by the body.
@@ -124,6 +185,7 @@ pub(crate) fn join_if_branches_solver(
             env.maybe_bindings.insert((*name).clone());
         }
     }
+    invalidate_contested_owned_buffers(env, &[body_env, orelse_env]);
 }
 
 /// Issue #359 (Part 2 of #118): joins a loop body environment back into
@@ -136,6 +198,13 @@ pub(crate) fn join_loop_body_solver(
     body_env: &ConstraintEnvironment,
     pre_existing: &HashSet<String>,
 ) {
+    // Part 2a of #1142 (#1165): see `join_if_branches_solver` -- provenance
+    // is a union here for the same reason, and the `Try` arms route their
+    // handler and `else` environments through this helper too.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
+    // #1165 review round 8: see `join_if_branches_solver`.
+    env.finals.extend(body_env.finals.iter().cloned());
     for (name, term) in &body_env.bindings {
         if !pre_existing.contains(name) {
             env.bindings.entry(name.clone()).or_insert(term.clone());
@@ -155,4 +224,5 @@ pub(crate) fn join_loop_body_solver(
             env.maybe_bindings.insert(name.clone());
         }
     }
+    invalidate_contested_owned_buffers(env, &[body_env]);
 }

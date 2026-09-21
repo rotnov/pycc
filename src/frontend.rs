@@ -280,9 +280,9 @@ pub(crate) fn resolve_frontend(
 /// against that dependency, not against the entry path (PR 1c of #1080
 /// review finding 2).
 ///
-/// Order matters twice, and the two gates resolve it differently.
+/// Order matters three times, and the gates resolve it differently.
 ///
-/// Both are *computed* before the type check, against the linked HIR whose
+/// All three are *computed* before the type check, against the linked HIR whose
 /// item indices still line up with the per-file bounds --
 /// `check_and_resolve_all_keyed` runs monomorphization and enum lowering,
 /// which rewrite the item list and recompute those positions.
@@ -304,6 +304,26 @@ pub(crate) fn resolve_frontend(
 /// same program, so prioritizing it never swallows an `I0403` that would
 /// otherwise have been reported.
 ///
+/// The buffer-producer gate is the third case (#1165). Its walk is computed
+/// before the type check like the others, because the checker admits
+/// `a = ndarray(n)` in every artifact mode and so never produces a
+/// mode-aware verdict to wait for. Its *report* is then filtered by that
+/// same check, per function, through
+/// `crate::memoryview_mode::producer_gaps_the_check_admits`: a producer
+/// whose length the checker refuses is not an allocation, and reporting
+/// `I0405` for it prescribed a remedy `--ext` does not satisfy either.
+/// That filter is unconditional -- it applies on every path this function
+/// can report a producer gap from, including the `memoryview` early return
+/// above, which obtains a verdict *purely* to filter with and discards the
+/// verdict's own diagnostics.
+///
+/// The inventory, because a missed site is exactly how this defect reached
+/// review twice: `resolve_frontend_native` has three producer-gap report
+/// sites -- the `refused_a_buffer` early return (filtered), the type-check
+/// `Err` arm (filtered), and the `Ok(resolved)` tail (provably needs no
+/// filter, because reaching it means the check returned `Ok` and so keys no
+/// error to any function).
+///
 /// `pycc check` selects no artifact mode and so runs neither gate:
 /// [`check_frontend`] reports the `C0001` read refusal there, which is
 /// correct, because `I0405`'s contract is scoped to a *build* without
@@ -319,6 +339,12 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     // `ProtocolMember::Method` in `hir.class_defs`, never an
     // `HirItem::Function`, so it resolves through the class bounds instead.
     let protocol_gaps = crate::memoryview_mode::refuse_protocol_methods_in_native_mode(&hir);
+    // Keyed by *item* index like the signature walk, and *computed* in the
+    // same pre-check pass for a different reason (#1165): the checker has no
+    // artifact-mode awareness and *admits* `a = ndarray(n)`, so there is no
+    // mode-aware verdict to wait for -- running the walk afterwards would
+    // mean never running it at all.
+    let producer_gaps = crate::memoryview_mode::refuse_buffer_producers_in_native_mode(&hir);
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
     if let Err(gaps) = import_gaps {
         keyed.extend(
@@ -326,7 +352,7 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
         );
     }
-    let refused_a_memoryview_signature = memoryview_gaps.is_err() || protocol_gaps.is_err();
+    let refused_a_buffer = memoryview_gaps.is_err() || protocol_gaps.is_err();
     if let Err(gaps) = memoryview_gaps {
         keyed.extend(
             gaps.into_iter()
@@ -339,11 +365,82 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
                 .map(|(index, diagnostic)| (sources.owner_of_class(index), diagnostic)),
         );
     }
-    if refused_a_memoryview_signature {
+    let producer_gaps = producer_gaps.err().unwrap_or_default();
+    if refused_a_buffer {
+        // A check verdict *is* obtained here, and its own diagnostics are
+        // thrown away rather than reported. Both halves are deliberate.
+        //
+        // Discarding them is the #1115 guarantee: `reject_memoryview_read`
+        // refuses almost every use of a `memoryview`-typed name with
+        // `C0001`, so a body that reads its own parameter fails the check,
+        // and reporting that verdict here would replace the signature-level
+        // `I0405` this early return exists to deliver.
+        // `issue_1112_ext_memoryview.rs`'s
+        // `a_memoryview_parameter_is_refused_with_i0405_even_when_the_body_reads_it`
+        // pins that, and is the regression guard for this call.
+        //
+        // Obtaining it is the producer gate's own semantic validation, which
+        // `producer_gaps_the_check_admits` owns and which is no less required
+        // on this path than on the `Err` arm below: a producer whose length the
+        // checker refuses (`a = ndarray("x")`) is not an allocation, and
+        // `I0405` would prescribe `--ext` for a program `--ext` refuses with
+        // `T0033`. The signature gap beside it does not make that remedy any
+        // less misdirected.
+        //
+        // The filter is function-scoped, so a function that both reads its
+        // own `memoryview` parameter and allocates loses its (correct)
+        // producer gap here. That over-suppression is accepted: the program
+        // stays refused, the surviving `I0405` still prescribes `--ext`, and
+        // `--ext` genuinely fixes it, so no user is misdirected -- they see
+        // one fewer redundant line. The alternative, excluding `C0001` from
+        // the filtering verdict by diagnostic code, was rejected: it would
+        // encode "C0001 is the set of refusals `--ext` removes" in a fourth
+        // place no canonical enumeration owns, which is the treadmill
+        // https://github.com/rotnov/pycc/issues/1168 was filed to stop.
+        let producer_gaps = match pycc_types::check_and_resolve_all_keyed(&hir) {
+            Ok(_) => producer_gaps,
+            Err(check_keyed) => {
+                crate::memoryview_mode::producer_gaps_the_check_admits(producer_gaps, &check_keyed)
+            }
+        };
+        keyed.extend(
+            producer_gaps
+                .into_iter()
+                .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
+        );
         return Err(sources.group(keyed));
     }
-    let resolved = pycc_types::check_and_resolve_all_keyed(&hir)
-        .map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
+    // The producer walk's own semantic validation, and the one place it
+    // happens: `producer_gaps_the_check_admits` owns why the join is here,
+    // why it is per function, and why the gate cannot validate a length
+    // itself. A surviving gap is reported *beside* the type errors rather
+    // than swallowed by them, so a clean allocating function is still named
+    // when some other function in the same program fails to check.
+    let resolved = match pycc_types::check_and_resolve_all_keyed(&hir) {
+        Ok(resolved) => resolved,
+        Err(check_keyed) => {
+            // The import gaps collected above are dropped on this path,
+            // exactly as the `?` this `match` replaced dropped them: a
+            // program with both a type error and a foreign import reports
+            // the type error alone, which `issue_1080_foreign_object.rs`'s
+            // `a_type_error_is_reported_before_the_native_foreign_refusal`
+            // pins. A producer gap is not an import gap -- it has survived
+            // its own per-function filter against this very verdict, so it
+            // is reported beside the type errors rather than behind them.
+            let mut refused =
+                crate::memoryview_mode::producer_gaps_the_check_admits(producer_gaps, &check_keyed)
+                    .into_iter()
+                    .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic))
+                    .collect::<Vec<_>>();
+            refused.extend(attribute(&sources, check_keyed));
+            return Err(sources.group(refused));
+        }
+    };
+    keyed.extend(
+        producer_gaps
+            .into_iter()
+            .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
+    );
     if keyed.is_empty() {
         return Ok(resolved);
     }

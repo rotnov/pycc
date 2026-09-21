@@ -230,6 +230,33 @@ pub(super) fn lower_expr(
                     ty: Ty::Instance(Box::new(callee.clone())),
                 }));
             }
+            // #1165 (Part 2a of #1142): `ndarray(n)` / `NDArray(n)`
+            // produces artifact-owned buffer storage. Placed *after* the
+            // class-instantiation lookup directly above and under the same
+            // `$fn:` shadow guard `float`/`bool`/`int`/`str` carry below,
+            // which together deliver D-244 #1129 statement (h) -- a
+            // program's own `class ndarray` or `def NDArray` keeps its own
+            // meaning, in call position exactly as in annotation position.
+            // `pycc_types`' own interception mirrors this ordering, inside
+            // the `env.lookup_function(callee)` fall-through.
+            //
+            // Deliberately not a `MirExpr::Call`: see `MirExpr::BufferAlloc`'s
+            // own doc comment for why routing the producer through the
+            // ordinary call path would take a `Ty::MemoryView` into
+            // `pycc_codegen::call_result`'s panic.
+            //
+            // Only the one-argument shape is claimed, matching the checker,
+            // which refuses every other arity before MIR ever runs.
+            if (callee == "ndarray" || callee == "NDArray")
+                && args.len() == 1
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                return MirExpr::BufferAlloc {
+                    len: Box::new(args.into_iter().next().expect("checked len() == 1")),
+                };
+            }
             let ty = if callee == "print" {
                 Ty::None
             } else if callee == "math.sqrt" {

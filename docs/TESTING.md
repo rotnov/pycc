@@ -2046,6 +2046,27 @@ python3 -B scripts/check_diff_coverage.py --lcov target/coverage.lcov --diff tar
 cargo llvm-cov report
 ```
 
+### A runtime function an integration test links is measured from that binary
+
+`llvm-cov`'s export keeps one record per function across the objects it is
+given, so a `pycc_rt` function that an integration-test binary under
+`crates/pycc_rt/tests/` also links is reported from *that* binary's copy and
+the lib-test binary's counters for it are discarded. A line exercised only by
+a `#[cfg(test)] mod tests` unit test in `crates/pycc_rt/src/lib.rs` then reads
+as uncovered in the `--workspace` export the gate consumes, even though
+`cargo llvm-cov --lib -p pycc_rt` shows it covered and the unit test passes.
+`pycc_rt_buffer_f64_alloc` is one such function (`crates/pycc_rt/tests/buffer_live_views.rs`
+links it), which is why its refusal arms are asserted there as well as in the
+unit tests.
+
+When a changed `pycc_rt` line is covered by `-p pycc_rt --lib` but uncovered
+by `--workspace`, this is the first thing to check; it is not flakiness. The
+one-run diagnostic is a workspace export with a test-name filter
+(`cargo llvm-cov --workspace --lcov --output-path … -- <filter>`): if the
+function's lines export as `0` while its tests are listed as `ok`, its
+counters are being shadowed, and the assertion must be made from an
+integration test to be visible to the gate.
+
 **Threat model:** `scripts/check_roadmap_evidence.rb` audits the coverage
 job by named properties (see "Roadmap acceptance evidence" above), which
 proves *shape* — unprivileged sandbox, trusted binary, workspace denominator,

@@ -21,6 +21,7 @@ use crate::binop::numeric_result_type;
 // generic-monomorphization-arms, import-alias, `__init__`-rank,
 // `Optional[T]`-narrowing, pattern-matching, protocol-argument,
 // `typing.TYPE_CHECKING`-marker and `typing.cast` clusters.
+mod buffer_producer;
 mod constraints;
 mod empty_container_registry;
 mod enum_unrolling;
@@ -159,6 +160,13 @@ fn declaring_a_memoryview_local_is_a_capability_gap() {
         err.message
     );
     assert!(err.message.contains("pycc build --ext"), "{}", err.message);
+    // Same correction as the read arm: the refusal stands, but not on the
+    // claim that a buffer is admitted only as a parameter (#1165).
+    assert!(
+        !err.message.contains("only as a parameter"),
+        "{}",
+        err.message
+    );
 }
 
 // Part 1 of #1027, round 3 of the pinned review: `HirStmt::ForList` holds
@@ -193,6 +201,14 @@ fn iterating_a_memoryview_parameter_is_the_read_capability_gap() {
     assert!(
         err.message
             .contains("using `v`, which is bound to a buffer parameter"),
+        "{}",
+        err.message
+    );
+    // The prefix above is pinned by eight assertions; the tail may not
+    // regress to claiming a buffer originates only as such a parameter,
+    // which Part 2a of #1142 (#1165) falsified with `ndarray(n)`.
+    assert!(
+        !err.message.contains("only as such a parameter"),
         "{}",
         err.message
     );

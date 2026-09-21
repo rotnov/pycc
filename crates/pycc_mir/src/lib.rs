@@ -446,6 +446,35 @@ pub enum MirExpr {
     BufferLen {
         base: Box<MirExpr>,
     },
+    /// `ndarray(n)` / `NDArray(n)` (Part 2a of #1142, issue #1165): the
+    /// allocation of `n` zero-filled contiguous `f64`s that the artifact
+    /// itself owns, together with the [`PyccExtBufferView`-shaped] pair that
+    /// addresses them.
+    ///
+    /// Deliberately **not** a [`MirExpr::Call`]. Routing the producer through
+    /// the ordinary call path would make its result an ordinary call result,
+    /// which is what takes a `Ty::MemoryView` into
+    /// `pycc_codegen::call_result`'s `Ty::MemoryView` panic. A node of its
+    /// own keeps that panic unreachable by construction, exactly as
+    /// [`MirExpr::BufferGet`] and [`MirExpr::BufferLen`] keep the scalar
+    /// `len` lowering away from `expect_list_pointer`.
+    ///
+    /// [`MirExpr::ty`] answers [`Ty::MemoryView`] here unconditionally: the
+    /// producer's element type and dimensionality are fixed by the same
+    /// one-dimensional `"d"` contract the `--ext` unpack shim requires, so
+    /// there is nothing per-node to carry.
+    ///
+    /// The allocation can fail -- a negative `len` raises `ValueError`
+    /// (D-173) and yields a null view -- which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers `true`
+    /// for this node, on [`MirExpr::BufferGet`]'s precedent rather than
+    /// [`MirExpr::BufferLen`]'s: it returns a value and lets the consumer
+    /// guard.
+    ///
+    /// [`PyccExtBufferView`-shaped]: MirExpr::BufferGet
+    BufferAlloc {
+        len: Box<MirExpr>,
+    },
     /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
     /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
     /// into a fixed-arity all-`float` tuple.
@@ -691,6 +720,13 @@ impl MirExpr {
             // count is an `int` unconditionally. See the variant's own
             // documentation.
             MirExpr::BufferLen { .. } => Ty::Int,
+            // Hardcoded for the same reason once more, and it is this fact
+            // that the rest of Part 2a rests on: the producer's result is
+            // the very same `Ty::MemoryView` a `memoryview` parameter
+            // carries, so `MirExpr::BufferGet`, `MirExpr::BufferLen` and
+            // `MirStmt::BufferSet` all dispatch onto an owned buffer with no
+            // change at all. See the variant's own documentation.
+            MirExpr::BufferAlloc { .. } => Ty::MemoryView,
             // Rebuilt from `arity` rather than read from a field: the
             // annotation this node exists for is a fixed-arity tuple whose
             // every element is `float`, so the arity is the whole type.
@@ -812,6 +848,10 @@ impl MirExpr {
             // The base is this node's only child too -- `len(b)` takes no
             // index -- so a walrus can hide only there.
             | MirExpr::BufferLen { base }
+            // #1165: the length is this node's only child -- the producer
+            // takes no base -- so a walrus can hide only there
+            // (`ndarray((n := 4))`).
+            | MirExpr::BufferAlloc { len: base }
             // PR 4c of #1083: the base is the node's only child -- `arity`
             // is a `usize`, not an expression -- so a walrus can hide only
             // there (`x: tuple[float, float] = (o := numpy).pair`).

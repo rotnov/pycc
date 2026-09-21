@@ -205,9 +205,10 @@ pub(super) fn lower_protocol_class(
                         format!(
                             "protocol method `{class_name}.{method_name}` returns a \
                              buffer, which is not supported yet -- no class could \
-                             satisfy it, because Part 1 of #1027 and #1129 add no \
-                             expression that produces a buffer; they admit one only as a \
-                             parameter of a `pycc build --ext` export"
+                             satisfy it, because no compiled function may return a \
+                             buffer: #1027 and #1129 admit one as a parameter of a \
+                             `pycc build --ext` export, and Part 2a of #1142 produces \
+                             one only as storage the allocating frame frees on exit"
                         ),
                         method_def.range,
                     ));
@@ -298,8 +299,12 @@ pub(super) fn lower_protocol_class(
                 // reason, one type further out. A slot is a single `i64`
                 // word (D-154) and `is_scalar_slot_type` restricts every
                 // path that establishes one, so no class could satisfy a
-                // buffer-typed attribute either -- and unlike a container
-                // there is no producing expression to satisfy it *with*.
+                // buffer-typed attribute either. Part 2a of #1142 (#1165)
+                // added the type's first producing expression, and does not
+                // weaken this: `a = ndarray(n)` binds a *local* name inside
+                // the allocating function and nothing may carry the value
+                // out of it, so there is still no value a class could store
+                // in such a slot.
                 // Kept as its own arm rather than folded into the container
                 // list above because the message's reasoning differs: a
                 // buffer is admitted at a `pycc build --ext`
@@ -311,9 +316,10 @@ pub(super) fn lower_protocol_class(
                             "protocol attribute `{class_name}.{attr_name}` has a buffer \
                              type, which is not supported yet -- no class could \
                              satisfy it, because every class attribute slot is restricted to \
-                             a scalar type (`int`, `float`, `bool`, `str`); Part 1 of #1027 \
-                             and #1129 admit a buffer only as a parameter of a \
-                             `pycc build --ext` export"
+                             a scalar type (`int`, `float`, `bool`, `str`); #1027 and #1129 \
+                             admit a buffer as a parameter of a `pycc build --ext` export, \
+                             and Part 2a of #1142 only as a local binding inside the \
+                             function that allocated it"
                         ),
                         ann.range,
                     ));

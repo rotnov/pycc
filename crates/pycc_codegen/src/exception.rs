@@ -93,7 +93,16 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // the failure handling. A by-name entry rather than a widening of
         // the `Subscript` arm below, which asks its base's type: a
         // `BufferGet` is always fallible, with no base type to consult.
-        | MirExpr::BufferGet { .. } => true,
+        | MirExpr::BufferGet { .. }
+        // #1165: `BufferAlloc` joins `BufferGet` rather than `BufferLen`,
+        // and here the dependency is live for the identical reason --
+        // `pycc_rt_buffer_f64_alloc` sets pycc's own D-173 pending state and
+        // returns a *null* view for a negative length, so this guard is the
+        // whole of the failure handling. The null is what makes the guard
+        // sufficient rather than merely conservative: the epilogue's free is
+        // a documented no-op on it, so a refused allocation leaves nothing
+        // for the unwind path to release.
+        | MirExpr::BufferAlloc { .. } => true,
         MirExpr::BinOp { op, .. } => matches!(
             op,
             pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod

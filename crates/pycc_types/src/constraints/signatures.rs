@@ -140,6 +140,9 @@ pub(crate) fn annotated_function_environment(hir: &HirModule) -> Environment {
     }
     let mut env = Environment {
         bindings: HashMap::new(),
+        // Part 2a of #1142 (#1165): a module-level environment owns no
+        // buffers; the producer is refused at module scope.
+        owned_buffers: HashSet::new(),
         declared: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
@@ -247,6 +250,26 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // shadow check; copied field-by-field into every per-function
         // environment below.
         std_module_aliases: crate::std_receiver::bind_std_module_aliases(&hir.imports),
+        // Part 2a of #1142 (#1165): module-level code is not a function
+        // body, and nothing at module scope can own a buffer -- the
+        // producer is refused there outright.
+        owned_buffers: HashSet::new(),
+        in_function_body: false,
+        // Part 2a of #1142 (#1165): D-244 #1129 statement (h) applied per
+        // spelling. A `def ndarray` is already covered by `signatures`; a
+        // `class ndarray` is what this set adds, because the solver has no
+        // class table of its own.
+        shadowed_producers: hir
+            .class_defs
+            .iter()
+            .map(|(class_name, _)| class_name.clone())
+            .filter(|class_name| crate::buffer::is_producer_spelling(class_name))
+            .collect(),
+        // #1165 review round 8: module scope binds no `Final` name this
+        // solver consults -- the set is read only at the buffer producer's
+        // seam, which module scope refuses outright. See the field's own
+        // doc comment for why each body starts empty too.
+        finals: HashSet::new(),
     };
     // Part 1 of #1026: a foreign import binds a definite name whose type is
     // `Ty::Object`. It is recorded in `opaque_bindings` so that every piece
@@ -319,6 +342,13 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             // not a `.clone()`), so the alias table must be named here or
             // every function body would silently get an empty one.
             std_module_aliases: globals.std_module_aliases.clone(),
+            // Part 2a of #1142 (#1165): a fresh body starts with no owned
+            // buffers -- module scope cannot produce one -- and this is the
+            // one place the function-body flag is set.
+            owned_buffers: HashSet::new(),
+            in_function_body: true,
+            shadowed_producers: globals.shadowed_producers.clone(),
+            finals: HashSet::new(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);

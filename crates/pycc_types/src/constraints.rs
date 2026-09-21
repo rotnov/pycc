@@ -186,6 +186,62 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// each per-function environment there; the stdlib receiver shadow
     /// check in `collect_expr_constraints` reads it.
     pub(crate) std_module_aliases: Vec<(String, pycc_std::StdModule)>,
+    /// Part 2a of #1142 (#1165): the solver's mirror of
+    /// `Environment::owned_buffers` -- names bound to buffer storage this
+    /// artifact allocated rather than to a host-borrowed parameter.
+    ///
+    /// A mirror is required rather than convenient. The solver runs before
+    /// the check phase, so the `Name` arm's `reject_memoryview_read` above
+    /// is the *first* seam any owned read reaches; without this set every
+    /// one of them would report the parameter message and the provenance
+    /// distinction would be unobservable no matter what the check phase
+    /// went on to record.
+    pub(crate) owned_buffers: HashSet<String>,
+    /// Part 2a of #1142 (#1165): `true` while a *function body* is being
+    /// collected, `false` for the module's own top-level statements.
+    ///
+    /// The solver's counterpart of `Environment::in_function_body`, and
+    /// needed for the same one reason: the buffer producer is refused at
+    /// module scope with its own diagnostic, and `local_names` cannot stand
+    /// in for the distinction (a function with no locals also has an empty
+    /// slice).
+    pub(crate) in_function_body: bool,
+    /// Part 2a of #1142 (#1165): the buffer-producer spellings this module
+    /// binds itself, which therefore keep the program's own meaning
+    /// (D-244 #1129 statement (h)).
+    ///
+    /// The check phase needs no equivalent -- `env.lookup_class` and
+    /// `env.lookup_generic` already run ahead of its interception -- but
+    /// `ConstraintEnvironment` carries no class table at all, and
+    /// `signatures` covers only `def`s. Seeded once per module in
+    /// `constraints::signatures` from the HIR's own class table, per
+    /// *spelling*: a module defining `class ndarray` must still be able to
+    /// call `NDArray(n)`.
+    pub(crate) shadowed_producers: HashSet<String>,
+    /// #1165 review round 8: the names a `Final` annotation has bound in
+    /// this scope, the solver's counterpart of `Environment::finals`.
+    ///
+    /// Consulted at the buffer producer's admitting seam only
+    /// (`reject_final_rebinding`), exactly as the parameter-rebinding guard
+    /// beside it mirrors one `crate::check_assignment` refusal rather than
+    /// the whole function: the solver has no `Final` model of its own, and
+    /// the reason this one member of it is needed is that a producer
+    /// assignment the solver admits records artifact-owned provenance whose
+    /// later use raises a `C0001` that displaces the check phase's `T0045`.
+    /// Every other `Final` reassignment is refused by the check phase with
+    /// no solver diagnostic to compete with it.
+    ///
+    /// Seeded empty for each function body rather than inherited from
+    /// module scope, on the `owned_buffers` precedent, and the two phases
+    /// were confirmed to agree there rather than argued to: rebinding a
+    /// module-level `Final` name to a producer call inside a function body
+    /// makes the *check* phase admit the producer and raise the same
+    /// owned-buffer `C0001`, because a function-local assignment binds a
+    /// new local instead of rebinding the module-level name. An empty start
+    /// therefore matches the check phase exactly here, and can otherwise
+    /// only ever be *narrower* than it -- the safe direction for a seam
+    /// whose answer displaces the check phase's.
+    pub(crate) finals: HashSet<String>,
 }
 
 impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
@@ -203,6 +259,45 @@ impl<'scope, 'hir> ConstraintEnvironment<'scope, 'hir> {
             opaque_bindings: HashSet::new(),
             foreign_objects: HashSet::new(),
             std_module_aliases: Vec::new(),
+            owned_buffers: HashSet::new(),
+            in_function_body: false,
+            shadowed_producers: HashSet::new(),
+            finals: HashSet::new(),
+        }
+    }
+
+    /// Part 2a of #1142 (#1165), round-11 review finding 2: drop `name`'s
+    /// artifact-owned buffer provenance because `name` is about to stop
+    /// denoting that buffer.
+    ///
+    /// Provenance is flat and flow-insensitive, which `crate::buffer`'s
+    /// `buffer_parameter_rebinding` doc justifies with "no name can change
+    /// provenance mid-function". A *parameter*-bound name cannot, because
+    /// rebinding one is refused outright. An artifact-*owned* name can:
+    /// reassigning one is deliberately admitted (codegen frees the previous
+    /// allocation before the store, D-074), and every other binder --
+    /// `for`, a comprehension target, a walrus, a `match` capture, an
+    /// `except ... as` name -- rebinds without asking this seam at all.
+    ///
+    /// Clearing the marker alone is not the fix: `crate::expr::
+    /// reject_memoryview_read` takes the provenance flag *and* the term, so
+    /// a cleared marker over a surviving `Ok(Ty::MemoryView)` binding swaps
+    /// the owned refusal for the parameter one -- a different wrong answer,
+    /// not an answer. The binding is therefore dropped with it, and the
+    /// name is recorded as opaquely-but-definitely bound so a later read
+    /// reports "no term" (`Ok(None)`) rather than `unbound_local`. A caller
+    /// that immediately rebinds `name` to a real term overwrites that
+    /// entry, and `HirExpr::Name`'s lookup prefers `bindings` over the
+    /// opaque marker, so the marker it leaves behind is inert.
+    ///
+    /// With the solver no longer claiming a buffer that is gone, the read
+    /// stops raising `C0001` and the check phase's own answer for the
+    /// reassignment -- `T0023`, from `crate::check_assignment` -- is the
+    /// one `crate::module::merge_solver_first` reports.
+    pub(crate) fn rebind_over_owned_buffer(&mut self, name: &str) {
+        if self.owned_buffers.remove(name) {
+            self.bindings.remove(name);
+            self.opaque_bindings.insert(name.to_string());
         }
     }
 
@@ -455,6 +550,234 @@ fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>
     }
 }
 
+/// Part 2a of #1142 (#1165): the solver's answer to "is this expression a
+/// buffer producer *here*?", returning the spelling and the length argument
+/// when it is.
+///
+/// # The subset invariant this seam and its callers owe the check phase
+///
+/// `crate::module::merge_solver_first` reports the solver's diagnostic for a
+/// function whenever it has one, so the solver's *admitted* set must be a
+/// subset of `crate::buffer::producer_assignment_ty`'s: admitting one
+/// program that mirror refuses means recording an artifact-owned binding
+/// whose later use raises the owned-buffer `C0001`, and that wrong message
+/// displaces the check phase's correct one. Three consecutive review rounds
+/// on this seam each found one missing member of the check phase's
+/// admission conditions (`std_module_aliases`, `foreign_objects`, and the
+/// length-type check below), so the conditions are enumerated here in full
+/// and split across this predicate and its callers exactly as the check
+/// phase splits them:
+///
+/// * here -- the call shape, the spelling, statement (h), the arity, and
+///   the function-body scope;
+/// * at each caller -- the parameter-rebinding guard
+///   (`reject_buffer_parameter_rebinding`), the length type
+///   (`reject_non_int_producer_length`), and, on the `AnnAssign` arm only,
+///   the declared annotation (`reject_producer_annotation_mismatch`).
+///
+/// One condition of the check phase's is deliberately *not* mirrored, and
+/// the difference is recorded rather than closed: an unresolved length term
+/// (`def _h(n): a = ndarray(n)`, where the caller later fixes `n` to `str`)
+/// is admitted here, because refusing it needs a length constraint carried
+/// to the end of solving rather than one more guard at this seam. See
+/// `reject_non_int_producer_length`'s own doc comment.
+///
+/// The solver's own statement (h): a `def` of the spelling is in
+/// `signatures`, a `class` of it is in `shadowed_producers` (the solver has
+/// no class table), a module-level value binding of it is in `bindings`, and
+/// a *function-local* binding of it is in `local_names`. Any of the four
+/// means the program's own meaning wins.
+///
+/// `local_names` cannot be folded into the `bindings` check and is not
+/// redundant with it: `constraints::signatures` deliberately *removes* every
+/// local name from the per-function `bindings` map it seeds, and a local is
+/// re-entered there only once the walk reaches its binding statement. A body
+/// that binds the spelling after using it therefore has an empty `bindings`
+/// answer at the use site, while CPython makes the name local for the whole
+/// body and raises `UnboundLocalError`. The check-phase mirror is
+/// `crate::buffer::producer_assignment_ty`; declining here hands the value to
+/// the ordinary `Call` walk, whose own `is_local` gate (further down this
+/// file, ahead of the producer refusal) reports `unbound_local`.
+///
+/// `std_module_aliases` is the mirror of that same check's fifth arm: a
+/// stdlib module alias (`import math as ndarray`) binds the spelling but is
+/// recorded in no other table, so without it this solver -- which runs over
+/// unannotated private helpers -- allocated a buffer for a program whose own
+/// binding makes the call CPython's `TypeError`. See
+/// `crate::buffer::producer_assignment_ty` for the full reason, and
+/// `docs/TYPE_SYSTEM.md`'s `memoryview` row for the canonical enumeration.
+///
+/// `foreign_objects` is the sixth arm, and it is one the check-phase mirror
+/// does not need: `crate::foreign::bind_foreign_objects_at` binds a foreign
+/// `import ndarray` into the check phase's own `bindings` as `Ty::Object`,
+/// so that mirror's `bindings` arm already declines, while the solver
+/// deliberately keeps foreign names *out* of `bindings` and records them in
+/// this separate table instead (see the `Name` arm for why). Without this
+/// arm the solver treats the foreign call as the intrinsic producer and
+/// marks the assigned name artifact-owned, so a second use of it raises the
+/// owned-buffer `C0001` -- and `crate::module`'s `merge_solver_first` makes
+/// that the reported diagnostic, displacing the `I0404` foreign refusal the
+/// check phase correctly produces and pointing the span at the `import`
+/// line. The program is refused either way; only the message is wrong. See
+/// `docs/TYPE_SYSTEM.md`'s `memoryview` row for the canonical enumeration.
+fn resolved_producer_call<'a>(
+    signatures: &HashMap<String, SignatureTerms>,
+    env: &ConstraintEnvironment<'_, '_>,
+    expr: &'a HirExpr,
+) -> Option<(&'a str, &'a HirExpr)> {
+    let HirExpr::Call { callee, args } = expr else {
+        return None;
+    };
+    if !crate::buffer::is_producer_spelling(callee)
+        || signatures.contains_key(callee)
+        || env.shadowed_producers.contains(callee.as_str())
+        || env.bindings.contains_key(callee.as_str())
+        || is_local(env.local_names, callee)
+        || env
+            .std_module_aliases
+            .iter()
+            .any(|(alias, _)| alias == callee)
+        || env.foreign_objects.contains(callee.as_str())
+        || args.len() != 1
+        || !env.in_function_body
+    {
+        return None;
+    }
+    Some((callee.as_str(), &args[0]))
+}
+
+/// Part 2a of #1142 (#1165): the solver's mirror of
+/// `crate::buffer::producer_assignment_ty`'s own `Int | Bool` length check,
+/// applied to the term the producer's length argument collected.
+///
+/// Without it the solver discarded that term and recorded an owned buffer
+/// for `a = ndarray("x")`, so a later use of `a` raised the owned-buffer
+/// `C0001` and `crate::module::merge_solver_first` displaced the check
+/// phase's correct `T0033` with it -- the same shape as the
+/// `std_module_aliases` and `foreign_objects` omissions before it. See
+/// `resolved_producer_call`'s doc comment for the invariant all three
+/// violate.
+///
+/// `bool` is admitted alongside `int` for the reason
+/// `crate::buffer::producer_assignment_ty` spells out: the representation
+/// table makes a `bool` an `int` (`docs/TYPE_SYSTEM.md`, rule 4/D-086).
+///
+/// The guard fires only on a term that *resolves* to a concrete type. An
+/// unresolved term is admitted rather than refused, and that is the one
+/// place the solver stays deliberately wider than the check phase: the
+/// producer's length is very often the helper's own unannotated parameter
+/// (`a = ndarray(n)`), whose term is still a variable at this point in the
+/// walk, and refusing it would refuse the admitted shape this seam exists
+/// for. A term that a *later* call-site constraint resolves to a non-`int`
+/// therefore still reaches the check phase's `T0033` rather than this one --
+/// unless a use of the owned name in the same body raises the owned `C0001`
+/// first, which is the residue this guard does not reach and which needs a
+/// deferred length constraint, not a seventh mirrored arm.
+fn reject_non_int_producer_length(
+    callee: &str,
+    len_term: Option<TypeTerm>,
+    parents: &mut [usize],
+    concrete: &[Option<Ty>],
+) -> Result<(), Diagnostic> {
+    if let Some(term) = len_term
+        && let Some(len_ty) = resolved_term(term, parents, concrete)
+        && !matches!(len_ty, Ty::Int | Ty::Bool)
+    {
+        return Err(crate::buffer::producer_length_not_an_int(callee, &len_ty));
+    }
+    Ok(())
+}
+
+/// Part 2a of #1142 (#1165): the solver's mirror of
+/// `check_stmt_in_function`'s `AnnAssign` assignability test, applied where
+/// the producer is admitted under a declared annotation.
+///
+/// Without it `a: int = ndarray(4)` bound `a` as artifact-owned storage in
+/// the solver while the check phase correctly refused the statement, so a
+/// later use of `a` raised the owned-buffer `C0001` and
+/// `crate::module::merge_solver_first` reported that instead of the
+/// `T0025`. See `resolved_producer_call`'s doc comment for the invariant.
+///
+/// `crate::is_assignable` rather than a `matches!` on `Ty::MemoryView`
+/// because it is the *same* predicate the check phase reaches: that arm
+/// calls `class::is_assignable_env`, whose `Instance`/`Protocol` arms cannot
+/// match a `from` of `Ty::MemoryView`, so it falls through to this function
+/// -- including its `Optional` clause, which a hand-rolled match would drop.
+/// The one residual difference is the *message* for a protocol annotation,
+/// where the check phase raises a detailed `T0046` conformance error it can
+/// only build from a class table the solver does not have; the refusal
+/// itself agrees.
+fn reject_producer_annotation_mismatch(target: &str, annotation: &Ty) -> Result<(), Diagnostic> {
+    if crate::is_assignable(Ty::MemoryView, annotation.clone()) {
+        return Ok(());
+    }
+    Err(crate::annotation_initializer_mismatch(
+        target,
+        &Ty::MemoryView,
+        annotation,
+    ))
+}
+
+/// Part 2a of #1142 (#1165): the solver's mirror of `crate::check_assignment`'s
+/// buffer-parameter guard, applied at the producer's admitting seam.
+///
+/// Without it the solver admits `b = ndarray(4)` on a `memoryview`
+/// *parameter* `b` and marks `b` artifact-owned, so a later read of `b` in
+/// the same pass reaches `reject_memoryview_read` with `owned = true` and
+/// raises the *owned* refusal. `crate::module`'s `merge_solver_first` makes
+/// that wrong wording the one the compiler emits, overruling the check
+/// phase, which flags the same statement with the correct *parameter*
+/// wording. See `buffer::buffer_parameter_rebinding` for the two independent
+/// grounds the refusal rests on.
+///
+/// Keying on `Some(Ok(Ty::MemoryView))` rather than on "a term that may
+/// unify to `MemoryView`" is exact here, not an approximation: an `Err(var)`
+/// term is only ever resolved to a concrete type by
+/// `apply_annotation_defaults`, whose `is_private_solver_scalar` guard
+/// admits `Int | Float | Bool | Str | None` only, so no inferred term can
+/// become `MemoryView`. A `memoryview` parameter's term is therefore always
+/// the concrete `Ok(Ty::MemoryView)` this guard matches.
+fn reject_buffer_parameter_rebinding(
+    env: &ConstraintEnvironment<'_, '_>,
+    target: &str,
+) -> Result<(), Diagnostic> {
+    if matches!(env.bindings.get(target), Some(Ok(Ty::MemoryView)))
+        && !env.owned_buffers.contains(target)
+    {
+        return Err(crate::buffer::buffer_parameter_rebinding(target));
+    }
+    Ok(())
+}
+
+/// #1165 review round 8: the solver's mirror of `crate::check_assignment`'s
+/// PEP 591 `Final` refusal, applied at the producer's admitting seam
+/// alongside `reject_buffer_parameter_rebinding`.
+///
+/// The condition is that refusal's, minus one conjunct the solver cannot
+/// reach. The check phase also requires the name to be in `bindings`,
+/// because its `finals` set additionally holds a *value-less* `x:
+/// Final[int]` declaration, whose own first assignment must stay admitted.
+/// This solver records a `Final` name only at the producer seam, and only
+/// after that statement's binding -- its value-less `AnnAssign` arm is a
+/// deliberate no-op -- so membership in `finals` already implies membership
+/// in `bindings`, and repeating the conjunct here would be a branch no test
+/// could kill.
+///
+/// Needed for the same reason the parameter guard beside it is: without it
+/// the solver admitted `a = ndarray(8)` on a `Final` name, recorded
+/// artifact-owned provenance for it, and a later use of that name raised
+/// the owned-buffer `C0001` that `crate::module::merge_solver_first` then
+/// reported in place of the check phase's correct `T0045`.
+fn reject_final_rebinding(
+    env: &ConstraintEnvironment<'_, '_>,
+    target: &str,
+) -> Result<(), Diagnostic> {
+    if env.finals.contains(target) {
+        return Err(crate::final_reassignment(target));
+    }
+    Ok(())
+}
+
 pub(crate) fn collect_expr_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -531,7 +854,11 @@ pub(crate) fn collect_expr_constraints(
                     // stays: a call's callee is a bare string, not a `Name`
                     // expression, so it never reaches this seam.
                     if let Some(ty) = resolved_term(term.clone(), parents, concrete) {
-                        crate::expr::reject_memoryview_read(name, &ty)?;
+                        crate::expr::reject_memoryview_read(
+                            name,
+                            &ty,
+                            env.owned_buffers.contains(name),
+                        )?;
                     }
                     Ok(Some(term))
                 }
@@ -714,7 +1041,11 @@ pub(crate) fn collect_expr_constraints(
                 // is (`C0001`), not D-110's "no value in the current subset
                 // is callable" (`T0021`).
                 if let Some(ty) = resolved_term(term, parents, concrete) {
-                    crate::expr::reject_memoryview_read(callee, &ty)?;
+                    crate::expr::reject_memoryview_read(
+                        callee,
+                        &ty,
+                        env.owned_buffers.contains(callee),
+                    )?;
                 }
                 return Err(non_callable_binding(callee));
             }
@@ -752,6 +1083,37 @@ pub(crate) fn collect_expr_constraints(
                 && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
             {
                 return Ok(Some(Ok(Ty::Int)));
+            }
+            // Part 2a of #1142 (#1165), the solver half of `crate::expr`'s
+            // own producer refusal: `ndarray(n)`/`NDArray(n)` is admitted
+            // only as an assignment's whole right-hand side, which
+            // `collect_block_constraints` handles before the value reaches
+            // this walk. Placed before the argument recursion for the same
+            // ordering reason the `len` interception above is: the recursion
+            // reaches the `Name` seam, which would report a read refusal for
+            // an argument of the very expression being refused.
+            //
+            // The callee-bound gate further above already returned for a
+            // name the module binds to a *value*, so only the two spelling
+            // shadows and the module-alias binding remain to check here. The
+            // last of those is statement (h)'s fifth arm: a stdlib module
+            // alias binds the spelling but is a value in no table, so
+            // without it this line refused the program's own call with the
+            // producer's position message instead of letting the walk below
+            // report it. See `crate::buffer::producer_assignment_ty`.
+            if crate::buffer::is_producer_spelling(callee)
+                && !signatures.contains_key(callee)
+                && !env.shadowed_producers.contains(callee.as_str())
+                && !env
+                    .std_module_aliases
+                    .iter()
+                    .any(|(alias, _)| alias == callee)
+            {
+                return Err(if env.in_function_body {
+                    crate::buffer::producer_position_unsupported(callee)
+                } else {
+                    crate::buffer::producer_at_module_scope(callee)
+                });
             }
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
@@ -1177,6 +1539,12 @@ pub(crate) fn collect_expr_constraints(
             // unsatisfiable constraint inside it is a real error and must
             // surface -- but its *term* is discarded exactly as the list
             // path discards it: the index type gate is the check phase's.
+            //
+            // Still only a bare `Name` base after Part 2a of #1142 (#1165),
+            // for the reason `crate::expr`'s own arm records: the producer
+            // is admitted only as an assignment's whole right-hand side, so
+            // `ndarray(4)[0]` is refused by this walker's `Call` arm before
+            // the base recursion below can reach it.
             if let HirExpr::Name(buffer_name) = base.as_ref()
                 && let Some(term) = env.bindings.get(buffer_name).cloned()
                 && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
@@ -1436,9 +1804,13 @@ fn bind_named_expr_targets(
             env.defs_rebound.remove(name.as_str());
             env.maybe_bindings.remove(name.as_str());
             env.opaque_bindings.remove(name.as_str());
-            if let Some(term) =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
-            {
+            let term = collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            // Round-11 review finding 2: a walrus rebinds its target, so it
+            // drops any artifact-owned buffer provenance the name carried,
+            // exactly as the `Assign` arm does and after the value is
+            // collected for the same reason.
+            env.rebind_over_owned_buffer(name);
+            if let Some(term) = term {
                 env.bindings.entry(name.clone()).or_insert(term);
             } else {
                 // The solver produced no term for the walrus value (e.g. a
@@ -1619,14 +1991,51 @@ pub(crate) fn collect_block_constraints(
                 // to be — it is either replaced by a real term below, or
                 // reinstated as opaque by the `else` arm.
                 env.opaque_bindings.remove(target.as_str());
-                if let Some(term) = collect_expr_constraints(
+                // Part 2a of #1142 (#1165): the solver's one admitting seam
+                // for the buffer producer, mirroring `crate::check_stmt`'s.
+                // The length argument is still collected so its own
+                // constraints (and its own diagnostics) are not skipped.
+                if let Some((callee, len_arg)) = resolved_producer_call(signatures, env, value) {
+                    // Guard first, matching `check_assignment`'s order: a
+                    // parameter rebinding is refused before the length
+                    // argument's own constraints are collected.
+                    reject_buffer_parameter_rebinding(env, target)?;
+                    reject_final_rebinding(env, target)?;
+                    // The collected term is *used*, not discarded: it is the
+                    // length type the check phase's own seam refuses when it
+                    // is not an `int`. See `reject_non_int_producer_length`,
+                    // and `resolved_producer_call` for why an admitted set
+                    // wider than the check phase's shows up as a wrong
+                    // message rather than a wrong program.
+                    let len_term = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        len_arg,
+                    )?;
+                    reject_non_int_producer_length(callee, len_term, parents, concrete)?;
+                    env.bindings
+                        .entry(target.clone())
+                        .or_insert(Ok(Ty::MemoryView));
+                    env.owned_buffers.insert(target.clone());
+                    continue;
+                }
+                let term = collect_expr_constraints(
                     signatures,
                     parents,
                     concrete,
                     &mut constraints.binops,
                     env,
                     value,
-                )? {
+                )?;
+                // Round-11 review finding 2: the initializer is collected
+                // first and the stale provenance dropped only afterwards,
+                // because the initializer may still read the buffer the
+                // name is about to stop denoting (`a = a[0]`).
+                env.rebind_over_owned_buffer(target);
+                if let Some(term) = term {
                     env.bindings.entry(target.clone()).or_insert(term);
                 } else {
                     // The target is unconditionally assigned, but the
@@ -1643,7 +2052,7 @@ pub(crate) fn collect_block_constraints(
                 target,
                 value: Some(value),
                 annotation,
-                is_final: _,
+                is_final,
             } => {
                 // Part 4 of #1026 (PR 4c of #1083) deliberately adds **no
                 // branch here**, unlike PRs 4a and 4b, whose `float`/`bool`/
@@ -1682,6 +2091,52 @@ pub(crate) fn collect_block_constraints(
                 // removal above; `HirExpr::Name`'s lookup already prefers
                 // `bindings` over `opaque_bindings` either way.
                 env.opaque_bindings.remove(target.as_str());
+                // Part 2a of #1142 (#1165): see the plain `Assign` arm. No
+                // `AnnotationDefaultConstraint` is pushed for a producer --
+                // the term is already the concrete `Ty::MemoryView`, never
+                // an `Err(var)`, so `apply_annotation_defaults` would skip
+                // it anyway.
+                if let Some((callee, len_arg)) = resolved_producer_call(signatures, env, value) {
+                    // See the plain `Assign` arm: guard before collecting.
+                    reject_buffer_parameter_rebinding(env, target)?;
+                    reject_final_rebinding(env, target)?;
+                    let len_term = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        len_arg,
+                    )?;
+                    reject_non_int_producer_length(callee, len_term, parents, concrete)?;
+                    // The one condition this arm adds over the plain
+                    // `Assign` arm, mirroring the check phase's own extra
+                    // step: the declared annotation must admit a buffer.
+                    reject_producer_annotation_mismatch(target, annotation)?;
+                    env.bindings
+                        .entry(target.clone())
+                        .or_insert(Ok(Ty::MemoryView));
+                    env.owned_buffers.insert(target.clone());
+                    // Recorded *after* the binding, exactly where
+                    // `check_stmt_in_function` records it, and that order is
+                    // the rule rather than a detail: a declaration's own
+                    // first assignment is not a reassignment, so recording
+                    // before `reject_final_rebinding` above would refuse the
+                    // declaration itself.
+                    //
+                    // Recorded here only, and not on this arm's ordinary
+                    // (non-producer) path, because this is the only binding
+                    // whose later reassignment the solver can *mask*: a
+                    // `Final` name the solver does not bind to
+                    // `Ty::MemoryView` records no artifact-owned provenance,
+                    // so no later use of it produces a solver diagnostic to
+                    // displace the check phase's `T0045` with. A recording
+                    // that changes no outcome is a guard no test can kill.
+                    if *is_final {
+                        env.finals.insert(target.clone());
+                    }
+                    continue;
+                }
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1702,6 +2157,9 @@ pub(crate) fn collect_block_constraints(
                             annotation: annotation.clone(),
                         });
                 }
+                // Round-11 review finding 2: see the plain `Assign` arm --
+                // collected first, invalidated after, bound below.
+                env.rebind_over_owned_buffer(target);
                 // A scalar target has the declared type even when the
                 // collector cannot produce an initializer term. A non-scalar
                 // target is still bound, but deliberately remains unresolved:
@@ -1985,6 +2443,10 @@ pub(crate) fn collect_block_constraints(
                     .chain(env.opaque_bindings.iter())
                     .cloned()
                     .collect();
+                // Round-11 review finding 2: the loop variable rebinds the
+                // name on every iteration, so any artifact-owned buffer
+                // provenance it carried is stale from here on.
+                env.rebind_over_owned_buffer(var);
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -2020,6 +2482,8 @@ pub(crate) fn collect_block_constraints(
                     env,
                     iter,
                 )?;
+                // Round-11 review finding 2: see the `ForList` arm.
+                env.rebind_over_owned_buffer(var);
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
@@ -2155,18 +2619,18 @@ pub(crate) fn collect_block_constraints(
             // was never visited at all -- see
             // `private_helper_parameter_is_inferred_through_a_comprehension_s_elt`).
             HirStmt::ListCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 elt,
-                ..
             }
             | HirStmt::SetCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 elt,
-                ..
             } => {
                 bind_comp_loop_var(
                     signatures,
@@ -2195,14 +2659,27 @@ pub(crate) fn collect_block_constraints(
                     env,
                     elt,
                 )?;
+                // Round-11 review finding 2: this solver binds no term for a
+                // comprehension `target` at all, so before this call the
+                // name kept whatever it was bound to before -- including an
+                // artifact-owned `Ty::MemoryView`, which a later read then
+                // refused with the owned-buffer `C0001` instead of letting
+                // the check phase report its `T0023` for the reassignment.
+                // The comprehension's own sub-expressions are collected
+                // first, since they may still read that buffer.
+                //
+                // `var` needs no such call: it is the D-117 synthesized
+                // internal loop name (see `HirStmt::ListCompAssign`'s own
+                // doc comment), which cannot collide with a source name.
+                env.rebind_over_owned_buffer(target);
             }
             HirStmt::DictCompAssign {
+                target,
                 var,
                 iter,
                 cond,
                 key,
                 value,
-                ..
             } => {
                 bind_comp_loop_var(
                     signatures,
@@ -2239,6 +2716,8 @@ pub(crate) fn collect_block_constraints(
                     env,
                     value,
                 )?;
+                // Round-11 review finding 2: see the list/set arm above.
+                env.rebind_over_owned_buffer(target);
             }
             HirStmt::Match { subject, cases } => {
                 collect_expr_constraints(
@@ -2268,6 +2747,21 @@ pub(crate) fn collect_block_constraints(
                         .cloned()
                         .collect();
                     let mut case_env = env.clone();
+                    // Round-11 review finding 2: a `case` pattern's capture
+                    // names rebind inside the case body. This solver binds
+                    // no term for them (a capture's type is the subject's,
+                    // which the check phase resolves), so without this the
+                    // name kept its artifact-owned `Ty::MemoryView` binding
+                    // and a read of it -- in the body or, through the join
+                    // below, after the `match` -- raised the owned-buffer
+                    // `C0001` over the check phase's `T0023`. Dropped in the
+                    // case environment rather than in `env` so the join
+                    // helper carries it out only for the paths that rebind.
+                    let mut captures = Vec::new();
+                    crate::collect_pattern_capture_names(&case.pattern, &mut captures);
+                    for capture in captures {
+                        case_env.rebind_over_owned_buffer(capture);
+                    }
                     collect_block_constraints(
                         signatures,
                         parents,
@@ -2326,6 +2820,11 @@ pub(crate) fn collect_block_constraints(
                         && let Some(name) = &handler.name
                     {
                         let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
+                        // Round-11 review finding 2: an `as` name rebinds,
+                        // so it drops any artifact-owned buffer provenance
+                        // it carried; the join helper then carries that
+                        // invalidation back out of the handler environment.
+                        henv.rebind_over_owned_buffer(name);
                         henv.bindings
                             .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
                     }
@@ -2404,6 +2903,8 @@ pub(crate) fn collect_block_constraints(
                 for handler in handlers {
                     let mut henv = env.clone();
                     if let Some(name) = &handler.name {
+                        // Round-11 review finding 2: see the plain `Try` arm.
+                        henv.rebind_over_owned_buffer(name);
                         henv.bindings.insert(
                             name.clone(),
                             Ok(Ty::Instance(Box::new("ExceptionGroup".to_string()))),

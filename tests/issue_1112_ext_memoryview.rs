@@ -237,6 +237,14 @@ def total() -> int:
     // rather than any one spelling. `C0003` above still quotes the whole
     // signature position back, which is why it still reads `-> memoryview`.
     assert!(err.contains("`_make`'s return type is a buffer"), "{err}");
+    // Part 2a of #1142 (#1165) gave the buffer type a second provenance:
+    // `ndarray(n)` *is* an expression that produces one. The refusal stays --
+    // egress is Part 2b (#1164) -- but its justification may never regress to
+    // the claim that nothing can produce a buffer to return.
+    assert!(
+        !err.contains("no expression produces one to return"),
+        "{err}"
+    );
 
     let native = pycc()
         .arg("build")

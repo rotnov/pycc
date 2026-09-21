@@ -33,6 +33,163 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — Nine review rounds on one pull request, because each round patched the condition the reviewer named instead of the condition set the reviewer's example belonged to
+
+**What happened.** PR #1166 (buffer storage for `pycc build --ext`, issue
+#1165) went through nine successive automated review rounds. Rounds 6, 7
+and 8 each reported a different user-visible wrong diagnostic, and each was
+fixed by adding one more arm at the same seam: the constraint solver's
+producer-admission predicate re-derives a *subset* of the check phase's
+admission conditions, and `merge_solver_first` lets the solver's incomplete
+answer displace the checker's correct one, so every omitted member of that
+set surfaces as a wrong diagnostic rather than as a silent difference.
+Round 6's brief named three recognizer sites; the implementing agent found
+four. Round 9 was a different axis at the same seam and the first P1 — an
+`--ext` artifact aborting its CPython host process.
+
+**Root cause.** Three rounds were treated as three defects because each
+arrived with its own counter-example. They were one defect: an incomplete
+set difference. Answering a counter-example extends the set by exactly one
+member and leaves every other missing member to be discovered by the next
+counter-example — which is precisely what rounds 7 and 8 were.
+
+**What fixed it.** At round 8 the fork ("patch the named condition or
+restructure") went to an independent stronger reviewer per
+[D-127](decisions/D-127-autonomous-agent-operation-model.md), which
+reframed rounds 6/7/8 as one structural defect and required enumerating
+*both* phases' full condition sets before touching code. That enumeration
+found PEP 591 `Final` (`T0045`) and the declared-annotation arms
+(`T0025`/`T0046`) — members no counter-example had pointed at, reachable
+only by reading `check_assignment`. The completed enumeration was published
+on #1168 so the eventual unification is reviewable rather than speculative.
+
+**Lesson.** When a review finding names one condition in a predicate that
+mirrors another phase's predicate, do not patch the named condition. Fix
+the set difference: enumerate both predicates' full condition sets, and
+close every member, or record each deliberately-open one. A second round
+on the same seam is the signal that the first round patched a symptom — at
+that point stop patching and enumerate, rather than waiting for the third.
+Two guards added under this rule turned out to be unkillable by any test
+and were removed rather than left in as decoration; a set-difference
+closure is not an excuse to add code no test can reach.
+
+## 2026-09-21 — The pinned local reviewer returned clean on the diff whose next automated round found a silent miscompile
+
+**What happened.** On PR #1166 the D-068 pinned local reviewer
+(`ievo:deep-reviewer`) reported no actionable findings at round 5. Round 6,
+from the automated GitHub reviewer, was a silent miscompile: `import math
+as ndarray` followed by `a = ndarray(4)` passed `pycc check`, passed
+`pycc build --ext`, and produced an artifact that really allocated buffer
+storage, where CPython answers that call with `TypeError: 'module' object
+is not callable`.
+
+**Root cause.** The pinned reviewer's checklist covers completeness, drift,
+contract fidelity and the other axes it enumerates, all of which it applied
+correctly. It does not cover "enumerate every binding kind the recognizers
+consult, then check each one against the rule the document says they
+implement" — an axis that needs the recognizer set and the binding-kind set
+to be built and compared, not a diff to be read.
+
+**Lesson.** A clean pinned-reviewer verdict is evidence about the axes that
+reviewer checks, not evidence that a diff is correct. For a change that
+adds a case to a rule other code already branches on, build the
+affected-site inventory yourself — the owning specification's own
+enumeration is the checklist — and do not treat the local review as a
+substitute for it. The reviewer is an additional high-signal pass, exactly
+as `AGENTS.md` already says, and the corollary is that its silence on an
+axis it does not check carries no information.
+
+## 2026-09-21 — A line covered by a `pycc_rt` unit test still read as uncovered, because the workspace coverage export reports that function from the integration-test binary instead
+
+**What happened.** PR #1166's round-8 fix added a refusal arm to
+`pycc_rt_buffer_f64_alloc` and a `#[cfg(test)] mod tests` unit test that
+exercises it. `cargo llvm-cov --lib -p pycc_rt` showed the arm covered
+(`DA:1798,1`); `cargo llvm-cov --workspace`, which is what CI and
+`scripts/check_diff_coverage.py` consume, showed `DA:1798,0` and failed
+the 100% diff-coverage invariant. Roughly an hour went into treating this
+as flakiness — re-running the workspace export twice and suspecting the
+first run's overlap with a concurrent `cargo test` — before it was
+narrowed by running the workspace export with a test-name filter.
+
+**Root cause.** `llvm-cov`'s export keeps one record per function across
+the objects it is given. `crates/pycc_rt/tests/buffer_live_views.rs` is an
+integration-test binary that links `pycc_rt_buffer_f64_alloc`, so that
+binary's copy is the one reported and the lib-test binary's counters for
+the same function are discarded entirely. A filtered run made this
+unambiguous: with `-- tests::buffer` every `pycc_rt` lib test for the
+function ran and passed, and the exported counts for the whole function
+were still `0`. The unit test was real and passing; it simply could not
+be seen. Nothing about the arm, the diff, or the gate was wrong.
+
+**What fixed it.** Asserting the same refusal from
+`crates/pycc_rt/tests/buffer_live_views.rs` — where it also belongs on
+that file's own subject, since a refused allocation must not move the
+live-view counter.
+
+**Lesson.** When a `pycc_rt` line is covered by `-p pycc_rt --lib` but
+uncovered by `--workspace`, do not re-run the export looking for
+flakiness. Check whether any binary under `crates/pycc_rt/tests/` links
+the same function: if one does, only that binary's execution counts, and
+the assertion has to be made from there (or from another integration
+test) to be visible to the gate. The diagnostic that settles it in one
+run is a workspace export with a test-name filter — if the function's
+lines are `0` while its tests are listed as `ok`, the counters are being
+shadowed, not lost to a race.
+
+## 2026-09-20 — A green local test suite hid two CI failures at once: the coverage job has no CPython, and the hosted probe assumed a POSIX module suffix
+
+**What happened.** PR #1166 (#1165, Part 2a of #1142) was pushed with every
+local gate green, including `cargo test --workspace -- --include-ignored`
+with only the known environmental failures. CI came back red on
+`build-test-coverage`, and a second failure on
+`native-build-test (windows-latest)` was still pending at the moment the
+first one was diagnosed. Both were in the diff's own new tests, and neither
+could fail on this machine.
+
+**Root cause.** Two independent environment assumptions, both invisible
+locally:
+
+1. `a_program_that_defines_the_spelling_keeps_its_own_meaning` asserted a
+   *successful* `pycc build --ext`, which links against CPython development
+   headers. The coverage job's "Set up CPython 3.14.7 conformance oracle"
+   step runs *after* the coverage gate, so the runner is still on the
+   image's default interpreter at that point and the build refuses on the
+   `Py_LIMITED_API` floor. This machine has the headers, so the test passed
+   here.
+2. The `ctypes` leak probe opened the built module by a hard-coded
+   `./alloc_probe.abi3.so`. Windows builds a `.pyd`.
+
+**What fixed it.** The first test was rewritten to prove the same shadowing
+property through a *front-end refusal* rather than a successful build —
+the five sibling tests that assert diagnostics all passed on the same
+runner, which establishes that type checking precedes the interpreter
+probe, so a refusal-shaped assertion needs no headers at all. The probe now
+opens the module through its own `__file__` and carries the
+`#[cfg(not(target_os = "windows"))]` gate that
+`tests/issue_1054_ext_str_release.rs` already applies to its identical
+counter probe, gated on the one arm rather than the whole file so the
+diagnostic arms keep running on Windows.
+
+**Lesson.** Two distinct rules, both cheap to apply before pushing:
+
+- A test that asserts a *successful* `--ext` build cannot run in the
+  coverage job. Either mark it `#[ignore]` and accept that it contributes
+  no line coverage, or restate its property as a front-end refusal, which
+  runs everywhere. Deciding this when the test is written costs nothing;
+  discovering it from a red runner costs a full CI cycle.
+- When a new test loads a built artifact by filename, copy the
+  platform gate from the nearest existing test that does the same thing
+  rather than writing the path fresh. The precedent already encodes which
+  platforms the technique works on.
+
+And one about diagnosis rather than authorship: when CI reports a failure,
+enumerate *every* failing job before concluding what the cause is. The
+first red check was treated as the cause while a second job was still
+pending; had the fix round not re-read the run's full failed-test list, it
+would have shipped a fix that left CI red.
+
+---
+
 ## 2026-09-20 — Two `cargo llvm-cov` cycles wasted: the merge-base gates were run before committing, and the tree was edited after the profile was taken
 
 **What happened.** While implementing Part 1 of #1142, the full local gate

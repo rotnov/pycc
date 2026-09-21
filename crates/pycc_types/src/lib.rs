@@ -1,4 +1,5 @@
 mod binop;
+mod buffer;
 mod class;
 mod constraints;
 mod empty_container;
@@ -18,6 +19,9 @@ mod string_conversion;
 mod tests;
 mod unop;
 
+pub use buffer::{
+    function_local_producer_spellings, imported_producer_spellings, is_buffer_producer_spelling,
+};
 pub(crate) use enum_lower::{
     check_enum_loop_body_function, check_enum_loop_body_module, enum_member_attr_type,
     unroll_enum_loops,
@@ -457,7 +461,11 @@ fn lookup_bound_name_inner(
             // refused as a `T0033` type error instead of the `C0001`
             // capability gap the type actually is.
             if !admit_buffer {
-                reject_memoryview_read(name, ty)?;
+                // Part 2a of #1142 (#1165): provenance comes from the same
+                // environment the binding did, so an artifact-owned name
+                // iterated with `for x in a` gets the owned refusal rather
+                // than one that calls it a borrowed parameter.
+                reject_memoryview_read(name, ty, env.owned_buffers.contains(name))?;
             }
             Ok(ty.clone())
         }
@@ -719,7 +727,7 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
 
 /// PEP 634-636 (#381, PR-21): collects all capture names introduced by a
 /// pattern (recursively), for `collect_local_names`'s pre-pass.
-fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'a str>) {
+pub(crate) fn collect_pattern_capture_names<'a>(pattern: &'a HirPattern, names: &mut Vec<&'a str>) {
     match pattern {
         HirPattern::Wildcard
         | HirPattern::Literal(_)
@@ -981,6 +989,47 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
     || matches!(&to, Ty::Optional(inner) if from == Ty::None || is_assignable(from.clone(), (**inner).clone()))
 }
 
+/// The canonical `T0025`: an annotated assignment whose initializer type is
+/// not assignable to the declared annotation.
+///
+/// One function rather than one construction per arm because three call
+/// sites now raise it -- `check_stmt`'s and `check_stmt_in_function`'s
+/// `AnnAssign` arms, and `constraints::reject_producer_annotation_mismatch`,
+/// the solver's mirror of the second (Part 2a of #1142, issue #1165).
+/// AGENTS.md's no-paraphrase rule makes that decisive: the solver's answer
+/// beats the check phase's under `crate::module::merge_solver_first`, so a
+/// message that drifted from this one would be the message the user sees.
+pub(crate) fn annotation_initializer_mismatch(
+    target: &str,
+    inferred: &Ty,
+    annotation: &Ty,
+) -> Diagnostic {
+    Diagnostic::error(
+        "T0025",
+        format!(
+            "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
+            inferred.name(),
+            annotation.name()
+        ),
+        Span::new(0, 0),
+    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+}
+
+/// The canonical PEP 591 `T0045`: a second assignment to a `Final` name.
+///
+/// Shared with `constraints::reject_final_rebinding`, the solver's mirror of
+/// the [`check_assignment`] refusal above, for the reason
+/// [`annotation_initializer_mismatch`] is shared: the solver's answer for a
+/// function displaces the check phase's, so the two must not paraphrase each
+/// other apart.
+pub(crate) fn final_reassignment(target: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0045",
+        format!("cannot reassign `Final` name `{target}`"),
+        Span::new(0, 0),
+    )
+}
+
 fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
     let is_numeric_like = |t: &Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
     (is_numeric_like(&a) && is_numeric_like(&b)) || (a == Ty::Str && b == Ty::Str)
@@ -1030,6 +1079,25 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // Releasing the object would also become this crate's problem, which is
     // the ownership question Part 2 explicitly defers (`docs/RUNTIME.md`).
     foreign::reject_object_operand(&ty, "binding a CPython object to a name")?;
+    // Part 2a of #1142 (#1165): assigning to a name bound to a buffer
+    // *parameter* is refused. See `buffer::buffer_parameter_rebinding` for
+    // the two independent grounds; the one that matters most here is that
+    // the flat, flow-insensitive `owned_buffers` set below is sound only
+    // because no name can acquire *parameter* provenance mid-function.
+    // Artifact-owned provenance can be lost mid-function, which the
+    // solver's `ConstraintEnvironment::rebind_over_owned_buffer` handles
+    // (#1166 round-11 review finding 2); this phase needs no mirror of it,
+    // because every way a name stops denoting its owned buffer is a
+    // reassignment this function has already refused by the time such a
+    // stale marker could be read -- `T0023` here for an incompatible
+    // rebinding, and at a join for a name the branches bind differently. Reassigning an
+    // artifact-*owned* buffer stays admitted -- codegen frees the previous
+    // allocation before the store (D-074) -- so the guard keys on
+    // provenance, not on the type alone.
+    if matches!(env.lookup_any(target), Some(Ty::MemoryView)) && !env.owned_buffers.contains(target)
+    {
+        return Err(buffer::buffer_parameter_rebinding(target));
+    }
     // PEP 591 (#383): reject reassignment of a `Final` name. The `finals`
     // set is populated *after* the initial assignment's `check_assignment`
     // call returns (in `check_stmt`/`check_stmt_in_function`'s `AnnAssign`
@@ -1041,11 +1109,7 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // name in `declared`, not `bindings`, so the first real assignment is
     // the *initial* assignment and must be allowed.
     if env.finals.contains(target) && env.bindings.contains_key(target) {
-        return Err(Diagnostic::error(
-            "T0045",
-            format!("cannot reassign `Final` name `{target}`"),
-            Span::new(0, 0),
-        ));
+        return Err(final_reassignment(target));
     }
     // Every value assignment re-shadows a same-named `def` (D-110),
     // including a compatible-type reassignment of a name that already has a
@@ -1357,6 +1421,16 @@ fn join_if_branches(
         }
     }
     env.bindings = joined;
+    // Part 2a of #1142 (#1165): provenance joins as a union. A name owned on
+    // either path is owned for every reader after the join -- the alternative
+    // (intersection) would report the *parameter* refusal for a name no
+    // parameter ever bound. Codegen's epilogue is safe on the untaken path
+    // because `storage_slot_at_entry` null-initializes the slot and
+    // `pycc_rt_buffer_f64_free` is a documented no-op on null.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
+    env.owned_buffers
+        .extend(orelse_env.owned_buffers.iter().cloned());
     // Blocker fix (D-068 review of #780): reconcile the `narrowed` overlay
     // the same way `bindings` is reconciled just above, instead of leaving
     // it as whatever it was before this `if` ran. See
@@ -1395,6 +1469,10 @@ fn join_loop_body(env: &mut Environment, body_env: &Environment) {
             }
         }
     }
+    // Part 2a of #1142 (#1165): see `join_if_branches` -- a buffer allocated
+    // in a loop body is owned after the loop, whether or not the body ran.
+    env.owned_buffers
+        .extend(body_env.owned_buffers.iter().cloned());
     // Blocker fix (D-068 review of #780): a loop may run zero or more
     // times, so a name stays narrowed after the loop only if the body
     // still narrows it to the same type it had going in -- the loop
@@ -1433,6 +1511,12 @@ fn join_match_branches(env: &mut Environment, case_envs: &[Environment], exhaust
         }
     }
     env.bindings = joined;
+    // Part 2a of #1142 (#1165): see `join_if_branches` -- provenance is a
+    // union over every case environment.
+    for case_env in case_envs {
+        env.owned_buffers
+            .extend(case_env.owned_buffers.iter().cloned());
+    }
     // Blocker fix (D-068 review of #780): reconcile `narrowed` the same
     // conservative way as `join_if_branches`/`join_loop_body`. `env` itself
     // (pre-match) stands in for the implicit "no case matched" path -- safe
@@ -1906,6 +1990,15 @@ fn check_while_body_in_place(env: &mut Environment, body: &[HirStmt]) -> Result<
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
+            // Part 2a of #1142 (#1165): this is `check_stmt`, the
+            // *module-scope* statement walk, so it deliberately carries no
+            // admitting seam for the buffer producer -- the function-scope
+            // walk (`check_stmt_in_function`) is the only one that admits it.
+            // A module-level `a = ndarray(n)` reaches `infer_expr` below and
+            // is refused by `expr.rs`'s `Call` arm with
+            // `buffer::producer_at_module_scope`, on its own ground: a
+            // module-level frame gets no owned-slot epilogue, so the
+            // free-at-exit lifetime has no exit to run at.
             let ty = infer_expr(env, value)?;
             check_assignment(env, target, ty)
         }
@@ -1920,9 +2013,24 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // `expr::reject_memoryview_declaration`. Checked ahead of the
             // value/no-value split so both shapes route through the one
             // contract.
-            reject_memoryview_declaration(target, annotation)?;
+            //
+            // Part 2a of #1142 (#1165) admits one shape this refusal used to
+            // cover: `a: NDArray = ndarray(n)`. The call is *gated* rather
+            // than the contract widened, so the value-less shape the refusal
+            // exists for is unchanged. Its message is not byte-identical: the
+            // tail claiming a buffer is admitted only as a parameter was
+            // corrected once Part 2a gave the type a second provenance.
+            let produced = value
+                .as_ref()
+                .and_then(|value| buffer::producer_assignment_ty(env, &[], value));
+            if produced.is_none() {
+                reject_memoryview_declaration(target, annotation)?;
+            }
             if let Some(value) = value {
-                let inferred = infer_expr(env, value)?;
+                let inferred = match produced {
+                    Some(produced) => produced?,
+                    None => infer_expr(env, value)?,
+                };
                 // Part 4 of #1026 (PR 4c of #1083): a foreign CPython
                 // object under a fixed-arity all-`float` tuple annotation
                 // is admitted here, ahead of the assignability test, rather
@@ -1952,15 +2060,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     {
                         class::assignable_error(env, &inferred, annotation)
                     } else {
-                        Diagnostic::error(
-                            "T0025",
-                            format!(
-                                "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
-                                inferred.name(),
-                                annotation.name()
-                            ),
-                            Span::new(0, 0),
-                        ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+                        annotation_initializer_mismatch(target, &inferred, annotation)
                     };
                     return Err(diag);
                 }
@@ -1987,6 +2087,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     annotation.clone()
                 };
                 check_assignment(env, target, bind_ty)?;
+                // Part 2a of #1142 (#1165): no owned-buffer provenance is
+                // recorded here, for the same reason the plain `Assign` arm
+                // above admits no producer -- at module scope `inferred` is
+                // never `Ty::MemoryView`, because the only expression that
+                // could produce one is refused by `buffer::
+                // producer_at_module_scope` before this point.
             } else {
                 // No initializer: register no *binding* (a premature read
                 // still raises the existing T0021 -- collect_local_names
@@ -3123,6 +3229,19 @@ fn check_stmt_in_function(
             // and every container diagnostic in this crate renders at `1:1`.
             // A `T0003` from a nested element position (`[[]]`) keeps the
             // generic wording; see `name_binding`'s own documentation.
+            // Part 2a of #1142 (#1165): the buffer producer is admitted at
+            // exactly this position -- an assignment's whole right-hand side
+            // -- and `buffer::producer_assignment_ty` is the one seam that
+            // admits it. `None` means the value is not a producer here
+            // (including when the program's own `class`/`def`/binding of the
+            // spelling wins, D-244 #1129 statement (h)) and the ordinary
+            // inference below runs unchanged.
+            if let Some(produced) = buffer::producer_assignment_ty(env, local_names, value) {
+                let ty = produced?;
+                check_assignment(env, target, ty)?;
+                env.owned_buffers.insert(target.clone());
+                return Ok(());
+            }
             let ty = infer_expr_in(env, local_names, value)
                 .map_err(|d| empty_container::name_binding(d, target, value))?;
             check_assignment(env, target, ty)
@@ -3138,10 +3257,23 @@ fn check_stmt_in_function(
             // `expr::reject_memoryview_declaration`. Checked ahead of the
             // value/no-value split so both shapes route through the one
             // contract.
-            reject_memoryview_declaration(target, annotation)?;
+            //
+            // Part 2a of #1142 (#1165): see the module-scope arm's comment --
+            // the refusal is gated, not widened, so `a: NDArray = ndarray(n)`
+            // is admitted while a value-less `a: NDArray` is refused exactly
+            // as before.
+            let produced = value
+                .as_ref()
+                .and_then(|value| buffer::producer_assignment_ty(env, local_names, value));
+            if produced.is_none() {
+                reject_memoryview_declaration(target, annotation)?;
+            }
             if let Some(value) = value {
-                let inferred = infer_expr_in(env, local_names, value)
-                    .map_err(|d| empty_container::name_binding(d, target, value))?;
+                let inferred = match produced {
+                    Some(produced) => produced?,
+                    None => infer_expr_in(env, local_names, value)
+                        .map_err(|d| empty_container::name_binding(d, target, value))?,
+                };
                 if !class::is_assignable_env(env, &inferred, annotation) {
                     // #380 (PR-20): if the mismatch involves a protocol,
                     // produce a detailed T0046 conformance error.
@@ -3150,15 +3282,7 @@ fn check_stmt_in_function(
                     {
                         class::assignable_error(env, &inferred, annotation)
                     } else {
-                        Diagnostic::error(
-                            "T0025",
-                            format!(
-                                "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
-                                inferred.name(),
-                                annotation.name()
-                            ),
-                            Span::new(0, 0),
-                        ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+                        annotation_initializer_mismatch(target, &inferred, annotation)
                     };
                     return Err(diag);
                 }
@@ -3175,6 +3299,14 @@ fn check_stmt_in_function(
                     annotation.clone()
                 };
                 check_assignment(env, target, bind_ty)?;
+                // Part 2a of #1142 (#1165): record the provenance the read
+                // seams dispatch on. A `Ty::MemoryView` can only reach this
+                // point from the producer -- the gated declaration refusal
+                // above rejects every other initializer under a buffer
+                // annotation -- so this needs no second look at `value`.
+                if matches!(inferred, Ty::MemoryView) {
+                    env.owned_buffers.insert(target.clone());
+                }
             } else {
                 // See the module-scope `check_stmt` arm's comment (issue
                 // #245): retain the declared type via `env.declare` without
