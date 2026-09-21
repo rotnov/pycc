@@ -1844,9 +1844,10 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     // and then aborting on the sixteen bytes that describe them closes
     // nothing, so the view is reserved through the same fallible path, and
     // both reservations report through the one failure arm below. The
-    // `||` short-circuits, so the view is reserved only once the elements
-    // are: there is no window in which a refused length has already
-    // committed an allocation.
+    // `||` short-circuits, so a refused *length* commits no allocation at
+    // all; in the other direction -- elements reserved, view refused --
+    // the element reservation has been committed, and `storage`'s own drop
+    // at the early return releases it.
     let mut storage: Vec<f64> = Vec::new();
     let mut view: Vec<PyccExtBufferView> = Vec::new();
     if storage.try_reserve_exact(len as usize).is_err() || view.try_reserve_exact(1).is_err() {

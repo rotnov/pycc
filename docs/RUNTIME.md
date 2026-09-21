@@ -624,9 +624,19 @@ what it still does not do is compute the bigint result, which is #1040.
 Separately, D-141's own runtime `int` boundary
 (`pycc_rt_int_untag_checked`: a container value, a list index, a `str` repeat
 count, a slice bound) is untouched by Part C and still aborts. Those four are
-the whole of the aborting set: the `ndarray(n)` length, which Part 2a of #1142
+the whole of the aborting set *among the `int`-boundary positions*: the
+`ndarray(n)` length, which Part 2a of #1142
 ([#1165](https://github.com/rotnov/pycc/issues/1165)) added after Part C, is
-deliberately decoded by `pycc_rt_buffer_alloc_untag_len` instead and raises. That boundary is
+deliberately decoded by `pycc_rt_buffer_alloc_untag_len` instead and raises.
+That count is not an inventory of every way this runtime can abort: an
+infallible allocation is a separate class, and one that no `int` boundary is
+involved in. #1166's round-11 review closed the one such allocation on the
+`ndarray(n)` path -- the `PyccExtBufferView` itself, now reserved fallibly
+beside its elements -- while every raise site in this runtime, including the
+two that path uses, still builds its message and exception objects
+infallibly, so a genuine out-of-memory condition can still abort inside the
+raise that was meant to report it. Closing that is runtime-wide and is not
+#1165's. That boundary is
 emitted *ahead* of `pycc_rt_int_set_add`, so a compiled `s.add(v)` with a
 bigint `v` aborts there before reaching the converted guard, which remains as
 defense-in-depth for a direct ABI caller. An exception that
