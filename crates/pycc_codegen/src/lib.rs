@@ -334,6 +334,32 @@ struct UserFunction<'ctx> {
     direct_value: Option<FunctionValue<'ctx>>,
 }
 
+/// Part 2b of #1142 (#1164): the `locals` key under which a
+/// `memoryview`-returning frame records the buffer pointer a `return`
+/// statement has made pending.
+///
+/// A reserved key rather than a threaded parameter: the two sites that need
+/// it -- `MirStmt::Return` and [`free_buffer_slot_before_store`] -- already
+/// both receive `locals`, and nothing in this crate ever walks that map by
+/// entry, so a key no Python identifier can spell is invisible to every
+/// other reader. The leading digit is the same "compiler-generated, not
+/// user-spellable" convention `0gen_` monomorphization names already use.
+///
+/// Seeded only when the frame both returns a `memoryview` and owns at least
+/// one buffer slot; every other frame's IR is unchanged by its existence.
+const PENDING_RETURN_BUFFER_KEY: &str = "0pending_return_buffer";
+
+/// Part 2b of #1142 (#1164): the companion flag to
+/// [`PENDING_RETURN_BUFFER_KEY`], set when a rebinding of the pending
+/// buffer's own name leaves [`PENDING_RETURN_BUFFER_KEY`] as the pointer's
+/// *sole* owner.
+///
+/// Without it the epilogue could not tell "the pending pointer is still in
+/// some local slot, which will release it" from "the pending pointer was
+/// rebound away and nothing else names it". Freeing unconditionally would
+/// double-free the first; never freeing leaks the second.
+const PENDING_RETURN_ORPHANED_KEY: &str = "0pending_return_orphaned";
+
 /// #382 (PR-22 Part 2): A pending `finally` target that `return`
 /// statements inside a `try` body must route through before completing.
 /// When a `MirStmt::Return` is emitted and the `finally_stack` is
@@ -5128,8 +5154,95 @@ fn free_buffer_slot_before_store<'ctx>(
         )
         .expect("build_load should not fail for this function's own alloca")
         .into_pointer_value();
+    // Part 2b of #1142 (#1164): a rebinding that happens while a `return` of
+    // this same pointer is pending must not release it -- the value is on
+    // its way to the host. That is reachable: `try: return a` followed by
+    // `finally: a = ndarray(n)` runs this store *after* the return statement
+    // made `a`'s pointer pending, so an unguarded free here would hand the
+    // host a view over storage this frame had already released.
+    //
+    // Skipping the free makes the pending slot the pointer's sole owner, so
+    // the orphan flag is raised in the same breath; the frame's owned-slot
+    // epilogue reads it to decide whether it must release the pending
+    // pointer itself (when the return was abandoned by a raising finalizer)
+    // or leave it to the host (when the return proceeded). Branch-free on
+    // the `select` model the epilogue uses, so the emitted block keeps the
+    // straight-line shape #1165 gave it.
+    let release = match locals.get(PENDING_RETURN_BUFFER_KEY) {
+        None => old,
+        Some(pending) => {
+            let pending_ptr = builder
+                .build_load(
+                    context.ptr_type(inkwell::AddressSpace::default()),
+                    pending.ptr,
+                    "pending_return_buffer",
+                )
+                .expect("build_load should not fail for the pending-return slot")
+                .into_pointer_value();
+            // Both halves are load-bearing. The equality alone is true for
+            // the *first* allocation into a never-assigned slot, where `old`
+            // and the pending record are both the entry null: that would
+            // raise the orphan flag on a frame that never rebound anything,
+            // and the epilogue would then release a pointer its own slot
+            // loop had already released -- a double free on every
+            // exception exit, which is what an unguarded equality actually
+            // produced here before this conjunction was added.
+            let is_live = builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    old,
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null(),
+                    "buffer_store_old_is_live",
+                )
+                .expect("build_int_compare should not fail for two pointers");
+            let is_same = builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    old,
+                    pending_ptr,
+                    "buffer_store_matches_pending",
+                )
+                .expect("build_int_compare should not fail for two pointers");
+            let is_pending = builder
+                .build_and(is_live, is_same, "buffer_store_is_pending")
+                .expect("build_and should not fail for two i1 values");
+            let orphaned = &locals[PENDING_RETURN_ORPHANED_KEY];
+            let previously = builder
+                .build_load(
+                    context.i8_type(),
+                    orphaned.ptr,
+                    "pending_return_was_orphaned",
+                )
+                .expect("build_load should not fail for the pending-return orphan flag")
+                .into_int_value();
+            let raised = builder
+                .build_select(
+                    is_pending,
+                    context.i8_type().const_int(1, false),
+                    previously,
+                    "pending_return_orphaned",
+                )
+                .expect("build_select should not fail for two i8 flags");
+            builder
+                .build_store(orphaned.ptr, raised)
+                .expect("build_store should not fail for the pending-return orphan flag");
+            builder
+                .build_select(
+                    is_pending,
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null(),
+                    old,
+                    "buffer_free_old_release",
+                )
+                .expect("build_select should not fail for two pointers")
+                .into_pointer_value()
+        }
+    };
     builder
-        .build_call(rt.buffer_f64_free, &[old.into()], "buffer_free_old")
+        .build_call(rt.buffer_f64_free, &[release.into()], "buffer_free_old")
         .expect("build_call should not fail for a well-formed buffer free");
 }
 
@@ -6596,6 +6709,59 @@ fn compile_to_object_with_observer(
                 // replaces any global slot seeded above.
                 fn_locals.insert(local_name, slot);
             }
+            // Part 2b of #1142 (#1164): the pending-return record, seeded
+            // only for a frame that can actually hand a buffer back and owns
+            // at least one buffer slot to hand. Both allocas belong to the
+            // entry block, where the builder still is, on the same model as
+            // every storage slot above.
+            //
+            // Seeded *after* the binding loop above deliberately: that loop
+            // is what fills `owned_buffer_slots`, and a synthetic entry
+            // picked up as an ordinary `memoryview` local would join the
+            // release list and make the epilogue free the returned pointer a
+            // second time.
+            let pending_return_slots =
+                if *return_ty == pycc_mir::Ty::MemoryView && !owned_buffer_slots.is_empty() {
+                    let pending = builder
+                        .build_alloca(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            "pending_return_buffer_slot",
+                        )
+                        .expect("build_alloca should not fail for the pending-return slot");
+                    builder
+                        .build_store(
+                            pending,
+                            context
+                                .ptr_type(inkwell::AddressSpace::default())
+                                .const_null(),
+                        )
+                        .expect("build_store should not fail for the pending-return slot init");
+                    let orphaned = builder
+                        .build_alloca(context.i8_type(), "pending_return_orphaned_slot")
+                        .expect("build_alloca should not fail for the pending-return orphan flag");
+                    builder
+                        .build_store(orphaned, context.i8_type().const_zero())
+                        .expect("build_store should not fail for the orphan flag init");
+                    fn_locals.insert(
+                        PENDING_RETURN_BUFFER_KEY.to_string(),
+                        StorageSlot {
+                            ptr: pending,
+                            ty: pycc_mir::Ty::MemoryView,
+                            initialized: None,
+                        },
+                    );
+                    fn_locals.insert(
+                        PENDING_RETURN_ORPHANED_KEY.to_string(),
+                        StorageSlot {
+                            ptr: orphaned,
+                            ty: pycc_mir::Ty::Bool,
+                            initialized: None,
+                        },
+                    );
+                    Some((pending, orphaned))
+                } else {
+                    None
+                };
             // #1054: when this function owns at least one entry-block
             // `str` slot, every way out of it is routed through a single
             // synthetic outermost `finally` frame whose block releases
@@ -6793,8 +6959,50 @@ fn compile_to_object_with_observer(
                 // model above -- the null a never-assigned local still
                 // holds is the runtime's documented no-op, which is what
                 // covers a buffer allocated in only one arm of an `if`.
-                // Freeing here is sound because `pycc_types` refuses every
-                // position that would let the value escape this function.
+                //
+                // Part 2b of #1142 (#1164): **this block is where ownership
+                // of a returned buffer transfers**, and it is the only
+                // place it can correctly happen. A `return` statement makes
+                // a value *pending*; it is not the point control leaves the
+                // frame. Between the two, `finally_stack` interposes every
+                // user finalizer -- which may read the returned name, raise,
+                // or return a different buffer of its own -- so a transfer
+                // performed at the `return` statement is wrong for all three
+                // (a finalizer reading a cleared slot dereferences null and
+                // aborts the hosting interpreter; a finalizer that raises or
+                // overrides the return abandons the pointer the statement
+                // already disowned). Every exit routes through this one
+                // block with the value that is actually being returned
+                // already stored in `ret_slot`, so the transfer is decided
+                // here by identity against that value.
+                //
+                // Branch-free by construction: `select` replaces the
+                // returned pointer with the null `pycc_rt_buffer_f64_free`
+                // documents as a no-op, so the release loop keeps the single
+                // straight-line shape #1165 gave it. No two owned slots can
+                // hold one pointer -- a bare read of an owned buffer name is
+                // refused by `owned_buffer_use_unsupported` everywhere but
+                // this return position, so `b = a` cannot alias -- which is
+                // what makes "skip the one slot whose value is being
+                // returned" release each allocation exactly once.
+                let returned_buffer =
+                    if owned_buffer_slots.is_empty() || *return_ty != pycc_mir::Ty::MemoryView {
+                        None
+                    } else {
+                        let slot = ret_slot.expect(
+                        "a `memoryview`-returning function's owned-slot epilogue has a ret_slot",
+                    );
+                        Some(
+                            builder
+                                .build_load(
+                                    context.ptr_type(inkwell::AddressSpace::default()),
+                                    slot,
+                                    "buffer_epilogue_returned",
+                                )
+                                .expect("build_load should not fail for the epilogue ret_slot")
+                                .into_pointer_value(),
+                        )
+                    };
                 for slot_ptr in &owned_buffer_slots {
                     let live = builder
                         .build_load(
@@ -6806,8 +7014,101 @@ fn compile_to_object_with_observer(
                             "build_load should not fail for a buffer slot this function allocated",
                         )
                         .into_pointer_value();
+                    let release = match returned_buffer {
+                        None => live,
+                        Some(returned) => {
+                            let transferred = builder
+                                .build_int_compare(
+                                    inkwell::IntPredicate::EQ,
+                                    live,
+                                    returned,
+                                    "buffer_epilogue_transferred",
+                                )
+                                .expect("build_int_compare should not fail for two pointers");
+                            builder
+                                .build_select(
+                                    transferred,
+                                    context
+                                        .ptr_type(inkwell::AddressSpace::default())
+                                        .const_null(),
+                                    live,
+                                    "buffer_epilogue_release",
+                                )
+                                .expect("build_select should not fail for two pointers")
+                                .into_pointer_value()
+                        }
+                    };
                     builder
-                        .build_call(rt.buffer_f64_free, &[live.into()], "buffer_epilogue_free")
+                        .build_call(
+                            rt.buffer_f64_free,
+                            &[release.into()],
+                            "buffer_epilogue_free",
+                        )
+                        .expect("build_call should not fail for pycc_rt_buffer_f64_free");
+                }
+                // Part 2b of #1142 (#1164): the one pointer the loop above
+                // cannot see. A finalizer that rebound the returned name left
+                // the pending record as that pointer's sole owner, so it is
+                // released here -- unless it is the value actually being
+                // returned, in which case it belongs to the host now.
+                //
+                // Gated on the orphan flag rather than on the record alone:
+                // unorphaned, the pending pointer is still in some local slot
+                // and the loop above already released it, so freeing it again
+                // here would be a double free on every exception exit.
+                if let (Some((pending_ptr, orphaned_ptr)), Some(returned)) =
+                    (pending_return_slots, returned_buffer)
+                {
+                    let pending = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            pending_ptr,
+                            "buffer_epilogue_pending",
+                        )
+                        .expect("build_load should not fail for the pending-return slot")
+                        .into_pointer_value();
+                    let orphaned = builder
+                        .build_load(context.i8_type(), orphaned_ptr, "buffer_epilogue_orphaned")
+                        .expect("build_load should not fail for the pending-return orphan flag")
+                        .into_int_value();
+                    let was_orphaned = builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            orphaned,
+                            context.i8_type().const_zero(),
+                            "buffer_epilogue_was_orphaned",
+                        )
+                        .expect("build_int_compare should not fail for an i8 flag");
+                    let transferred = builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            pending,
+                            returned,
+                            "buffer_epilogue_pending_transferred",
+                        )
+                        .expect("build_int_compare should not fail for two pointers");
+                    let null = context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null();
+                    let unless_transferred = builder
+                        .build_select(transferred, null, pending, "buffer_epilogue_pending_keep")
+                        .expect("build_select should not fail for two pointers")
+                        .into_pointer_value();
+                    let release = builder
+                        .build_select(
+                            was_orphaned,
+                            unless_transferred,
+                            null,
+                            "buffer_epilogue_pending_release",
+                        )
+                        .expect("build_select should not fail for two pointers")
+                        .into_pointer_value();
+                    builder
+                        .build_call(
+                            rt.buffer_f64_free,
+                            &[release.into()],
+                            "buffer_epilogue_pending_free",
+                        )
                         .expect("build_call should not fail for pycc_rt_buffer_f64_free");
                 }
                 match ret_slot {
@@ -7677,46 +7978,39 @@ fn emit_stmt<'ctx>(
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
                     // Part 2b of #1142 (#1164): a returned artifact-owned
-                    // buffer leaves through the *slot*, so the slot must stop
-                    // claiming it. The frame's owned-slot epilogue frees every
-                    // buffer slot unconditionally, and the host holds the
-                    // returned `memoryview` for as long as it likes, so
-                    // leaving the pointer in place would free storage the host
-                    // is still reading -- a use-after-free, not a leak.
+                    // buffer leaves through the frame's owned-slot
+                    // epilogue, and **nothing about ownership happens
+                    // here**. This statement only makes the value pending:
+                    // when `finally_stack` is non-empty the value is stored
+                    // to the innermost frame's `ret_slot` and control is
+                    // routed through every interposed user finalizer before
+                    // it reaches the epilogue. Clearing the slot here --
+                    // which is what this arm used to do -- made the slot
+                    // stop naming live storage while those finalizers were
+                    // still running, so `finally: a[0] = 42.0` dereferenced
+                    // null and aborted the hosting interpreter, and a
+                    // finalizer that raised or returned a buffer of its own
+                    // abandoned the pointer this statement had disowned.
                     //
-                    // Storing null rather than removing the slot from the
-                    // release list is what keeps this correct under control
-                    // flow: `if c: return a` leaves the slot live on the arm
-                    // that did not return, and the epilogue still frees it
-                    // there. The null is the runtime's documented no-op, the
-                    // same value a never-assigned local carries.
+                    // The transfer therefore lives in the epilogue, which is
+                    // the one point control actually leaves the frame; see
+                    // the `buffer_epilogue_returned` block there for how it
+                    // decides which slot not to release.
                     //
-                    // **Ordering is load-then-null:** `emit_expr` above
-                    // already read the pointer out of the slot, so the store
-                    // cannot race the read it feeds.
-                    //
-                    // Narrowed to a bare `Name` read of an *owned local*.
-                    // `initialized.is_some()` is the discriminator:
-                    // `storage_slot_at_entry` gives a local that flag and a
-                    // parameter none, and a `memoryview` parameter's storage
-                    // belongs to the host's exporter -- it is not in the
-                    // release list and must not be cleared. `pycc_types`
-                    // admits no other shape at a buffer return position, so
-                    // any other expression here is already refused upstream.
-                    if expected_return_ty == pycc_mir::Ty::MemoryView
-                        && let MirExpr::Name { name, .. } = expr
-                        && let Some(slot) = locals.get(name)
-                        && slot.ty == pycc_mir::Ty::MemoryView
-                        && slot.initialized.is_some()
+                    // What this statement does record is that the pointer is
+                    // now *pending*: a finalizer that rebinds the name it
+                    // came from would otherwise release it out from under the
+                    // host, so `free_buffer_slot_before_store` reads this
+                    // record to keep its hands off. Written for every
+                    // `memoryview` return shape rather than only a bare
+                    // `Name`, since the epilogue's own identity test makes a
+                    // record that no slot ever held a harmless no-op.
+                    if let Scalar::MemoryView(returned) = scalar
+                        && let Some(pending) = locals.get(PENDING_RETURN_BUFFER_KEY)
                     {
                         builder
-                            .build_store(
-                                slot.ptr,
-                                context
-                                    .ptr_type(inkwell::AddressSpace::default())
-                                    .const_null(),
-                            )
-                            .expect("build_store should not fail for a returned buffer slot");
+                            .build_store(pending.ptr, returned)
+                            .expect("build_store should not fail for the pending-return slot");
                     }
                     if expected_return_ty == pycc_mir::Ty::None {
                         // `None` parameters, call results, and stored names

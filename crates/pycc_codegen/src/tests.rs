@@ -16001,18 +16001,19 @@ fn a_buffer_element_load_whose_base_is_not_a_memoryview_is_an_internal_error() {
 }
 
 #[test]
-fn returning_owned_buffer_storage_loads_it_and_then_nulls_its_slot() {
-    // Part 2b of #1142 (#1164). The returned view leaves through the slot,
-    // and the frame's owned-slot epilogue frees every buffer slot on every
-    // return path -- so the slot must stop claiming the storage before the
-    // epilogue runs, or the host receives a `memoryview` over freed memory.
+fn returning_owned_buffer_storage_transfers_it_in_the_epilogue_not_at_the_return() {
+    // Part 2b of #1142 (#1164). Ownership of a returned buffer transfers at
+    // the frame's owned-slot epilogue, which is the one point control
+    // actually leaves the frame -- **not** at the `return` statement, which
+    // only makes the value pending. Between the two, `finally_stack`
+    // interposes every user finalizer.
     //
-    // Asserted as an *ordering*, not as presence: a null store emitted
-    // before the load would return null, and a presence-only assertion
-    // passes either way. The three pinned positions are the load out of the
-    // slot, the null store into it, and the store of the loaded value into
-    // the epilogue's return slot -- in that order, inside the returning
-    // block.
+    // Both directions are pinned, because only the pair excludes the
+    // regression: the returning block must *not* clear the slot (clearing it
+    // there made a finalizer that reads the name dereference null and abort
+    // the hosting interpreter), and the epilogue must decide by identity
+    // against the value actually being returned (without that the epilogue
+    // frees storage the host is still reading).
     compile_ext_items_checking_ir(
         "buffer_returned",
         vec![MirItem::Function {
@@ -16037,20 +16038,162 @@ fn returning_owned_buffer_storage_loads_it_and_then_nulls_its_slot() {
             let load_at = block
                 .find("%load = load ptr, ptr %a")
                 .unwrap_or_else(|| panic!("no load out of the slot: {ir}"));
-            let null_at = block
-                .find("store ptr null, ptr %a")
-                .unwrap_or_else(|| panic!("the returned slot was not cleared: {ir}"));
+            // The regression direction. A `store ptr null, ptr %a` here is
+            // exactly the defect: the slot stops naming live storage while
+            // user finalizers are still running.
+            assert!(
+                !block.contains("store ptr null, ptr %a"),
+                "the returning block cleared the slot: {ir}"
+            );
+            // What the statement does instead: record the pointer as
+            // pending, so a finalizer that rebinds the name cannot release
+            // it out from under the host.
+            let pending_at = block
+                .find("store ptr %load, ptr %pending_return_buffer_slot")
+                .unwrap_or_else(|| panic!("the pending return was not recorded: {ir}"));
             let handoff_at = block
                 .find("store ptr %load, ptr %str_epilogue_ret_slot")
                 .unwrap_or_else(|| panic!("the loaded view was not returned: {ir}"));
-            assert!(load_at < null_at, "{ir}");
-            assert!(null_at < handoff_at, "{ir}");
-            // ...and the epilogue still frees the slot unconditionally, so
-            // a path that returns nothing still releases what it allocated.
-            // The null store is what makes that free a documented no-op on
-            // the returning path rather than a use-after-free.
+            assert!(load_at < pending_at, "{ir}");
+            assert!(pending_at < handoff_at, "{ir}");
+            // ...and the epilogue releases the slot only when it does not
+            // hold the value being returned. The `select` is the transfer:
+            // `pycc_rt_buffer_f64_free`'s documented null no-op is what the
+            // returning path gets instead of a free.
+            let epilogue = ir
+                .split("pycc_str_epilogue:")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no owned-slot epilogue: {ir}"));
             assert!(
-                ir.contains("call void @pycc_rt_buffer_f64_free(ptr %buffer_epilogue_live)"),
+                epilogue
+                    .contains("%buffer_epilogue_returned = load ptr, ptr %str_epilogue_ret_slot"),
+                "{ir}"
+            );
+            assert!(
+                epilogue.contains(
+                    "%buffer_epilogue_transferred = icmp eq ptr %buffer_epilogue_live, \
+                     %buffer_epilogue_returned"
+                ),
+                "{ir}"
+            );
+            assert!(
+                epilogue.contains(
+                    "%buffer_epilogue_release = select i1 %buffer_epilogue_transferred, ptr null, \
+                     ptr %buffer_epilogue_live"
+                ),
+                "{ir}"
+            );
+            assert!(
+                epilogue
+                    .contains("call void @pycc_rt_buffer_f64_free(ptr %buffer_epilogue_release)"),
+                "{ir}"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_abandoned_pending_return_is_released_only_once_nothing_else_names_it() {
+    // Part 2b of #1142 (#1164), the arm the per-slot loop cannot reach. A
+    // `finally` that rebinds the returned name runs
+    // `free_buffer_slot_before_store` *after* the `return` statement made
+    // that pointer pending, so the store site must keep its hands off it --
+    // and the pending record then becomes the pointer's sole owner, which
+    // the epilogue has to release when a raising finalizer abandoned the
+    // return.
+    //
+    // The conjunction is what makes both safe. `old == pending` alone is
+    // true for the *first* allocation into a never-assigned slot, where both
+    // are the entry null: that raised the orphan flag on a frame that never
+    // rebound anything, and the epilogue then released a pointer the slot
+    // loop had already released -- a double free on every exception exit.
+    //
+    // Two `ndarray` allocations rather than one because the second is what
+    // reaches the store site's release path at all; the shape is
+    // `a_reallocating_function_frees_the_old_view_before_it_stores_the_new_one`'s,
+    // lifted to a `memoryview`-returning frame.
+    compile_ext_items_checking_ir(
+        "buffer_returned_rebound",
+        vec![MirItem::Function {
+            name: "allocate".to_string(),
+            params: vec![],
+            return_ty: Ty::MemoryView,
+            body: vec![
+                buffer_alloc_a(),
+                buffer_alloc_a(),
+                MirStmt::Return(Some(MirExpr::Name {
+                    name: "a".to_string(),
+                    ty: Ty::MemoryView,
+                })),
+            ],
+        }],
+        |ir| {
+            // The store site's guard, both halves.
+            assert!(
+                ir.contains("%buffer_store_old_is_live = icmp ne ptr %old_buffer, null"),
+                "the null guard is missing: {ir}"
+            );
+            assert!(
+                ir.contains(
+                    "%buffer_store_matches_pending = icmp eq ptr %old_buffer, \
+                     %pending_return_buffer"
+                ),
+                "{ir}"
+            );
+            assert!(
+                ir.contains(
+                    "%buffer_store_is_pending = and i1 %buffer_store_old_is_live, \
+                     %buffer_store_matches_pending"
+                ),
+                "the guard is not a conjunction: {ir}"
+            );
+            assert!(
+                ir.contains(
+                    "%buffer_free_old_release = select i1 %buffer_store_is_pending, ptr null, \
+                     ptr %old_buffer"
+                ),
+                "{ir}"
+            );
+            // ...and the orphan flag it raises, which is the only thing that
+            // lets the epilogue distinguish "still in a slot" from "rebound
+            // away".
+            assert!(
+                ir.contains(
+                    "%pending_return_orphaned = select i1 %buffer_store_is_pending, i8 1, \
+                     i8 %pending_return_was_orphaned"
+                ),
+                "{ir}"
+            );
+            // The epilogue's trailing release, gated on that flag *and* on
+            // the pending pointer not being the returned one.
+            let epilogue = ir
+                .split("pycc_str_epilogue:")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no owned-slot epilogue: {ir}"));
+            assert!(
+                epilogue.contains(
+                    "%buffer_epilogue_was_orphaned = icmp ne i8 %buffer_epilogue_orphaned, 0"
+                ),
+                "{ir}"
+            );
+            assert!(
+                epilogue.contains(
+                    "%buffer_epilogue_pending_keep = select i1 \
+                     %buffer_epilogue_pending_transferred, ptr null, ptr %buffer_epilogue_pending"
+                ),
+                "{ir}"
+            );
+            assert!(
+                epilogue.contains(
+                    "%buffer_epilogue_pending_release = select i1 %buffer_epilogue_was_orphaned, \
+                     ptr %buffer_epilogue_pending_keep, ptr null"
+                ),
+                "the trailing release is not gated on the orphan flag: {ir}"
+            );
+            assert!(
+                epilogue.contains(
+                    "call void @pycc_rt_buffer_f64_free(ptr %buffer_epilogue_pending_release)"
+                ),
                 "{ir}"
             );
         },
@@ -16059,15 +16202,20 @@ fn returning_owned_buffer_storage_loads_it_and_then_nulls_its_slot() {
 
 #[test]
 fn returning_a_buffer_parameter_leaves_its_slot_alone() {
-    // The `initialized.is_some()` discriminator's other arm. A `memoryview`
-    // **parameter**'s storage belongs to the host's exporter: the slot is
-    // not in the frame's release list, so clearing it would be pointless,
-    // and a future edit that cleared every buffer slot rather than only the
-    // owned ones would silently start losing the host's pointer.
+    // The other provenance. A `memoryview` **parameter**'s storage belongs
+    // to the host's exporter: the slot is not in the frame's release list,
+    // so the frame must neither clear it nor free it -- an edit that treated
+    // every buffer slot as artifact-owned would either lose the host's
+    // pointer or hand its exporter a pointer this frame had freed.
     //
     // `pycc_types` refuses this shape at the source level
     // (`reject_memoryview_read`'s parameter arm), so the MIR below is hand
     // built: the assertion guards the codegen arm, not a reachable program.
+    //
+    // Part 2b of #1142 (#1164) narrows what this can assert. The pending
+    // record and the epilogue both exist only for a frame that owns at least
+    // one buffer *local*; this frame owns none, so the assertions are that
+    // no owned-slot machinery appears at all around a parameter.
     compile_ext_items_checking_ir(
         "buffer_parameter_returned",
         buffer_fn_items(
@@ -16094,6 +16242,16 @@ fn returning_a_buffer_parameter_leaves_its_slot_alone() {
                 .find("%load = load ptr, ptr %b")
                 .unwrap_or_else(|| panic!("no load out of the slot: {ir}"));
             assert!(null_at < load_at, "{ir}");
+            // Nothing frees the host's buffer, and the frame allocates no
+            // pending-return record for a parameter it does not own.
+            assert!(
+                !ir.contains("call void @pycc_rt_buffer_f64_free"),
+                "the host's buffer was released by the callee: {ir}"
+            );
+            assert!(
+                !ir.contains("pending_return_buffer_slot"),
+                "a frame that owns no buffer local got a pending-return record: {ir}"
+            );
         },
     );
 }

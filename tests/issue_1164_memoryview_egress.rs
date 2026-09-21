@@ -237,3 +237,186 @@ fn a_returned_buffer_transfers_ownership_rather_than_leaking_or_double_freeing()
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// The subject for the `finally`-interposed set. Every shape here puts user
+/// code *between* the `return` statement and the point control actually
+/// leaves the frame, which is the distinction ownership transfer turns on.
+///
+/// `overrides` -- a `finally` that returns a buffer of its own -- is absent
+/// deliberately: `return` inside `finally` is refused by the parser with
+/// `L0001`, so that member of the set is unreachable rather than handled.
+/// `with` is absent for the same reason, refused with `C0001` ("statement
+/// kind not supported yet: a `with` statement").
+const FINALLY_SUBJECT: &str = "\
+def reads(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 1.0
+        return a
+    finally:
+        a[0] = 42.0
+
+
+def raises(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        return a
+    finally:
+        raise ValueError(\"boom\")
+
+
+def nested(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        try:
+            return a
+        finally:
+            a[0] = 1.0
+    finally:
+        a[1] = 2.0
+
+
+def in_loop(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        i = 0
+        while i < n:
+            a[i] = 3.0
+            return a
+        return a
+    finally:
+        a[0] = 4.0
+
+
+def rebinds(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 1.0
+        return a
+    finally:
+        a = ndarray(n)
+        a[0] = 7.0
+
+
+def rebinds_and_raises(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        return a
+    finally:
+        a = ndarray(n)
+        raise ValueError(\"boom\")
+
+
+def plain(n: int) -> memoryview:
+    a = ndarray(n)
+    a[0] = 5.0
+    return a
+";
+
+/// The abort arm. A `finally` that *reads* the returned name must still see
+/// live storage, and the value the host receives must be what CPython would
+/// hand back.
+///
+/// Ownership does not transfer at the `return` statement -- that statement
+/// only makes the value pending -- so the name stays bound until control
+/// actually leaves the frame. Clearing it at the statement made
+/// `finally: a[0] = 42.0` dereference null inside a plain `extern "C" fn`,
+/// where a Rust panic cannot unwind and becomes a process abort: the
+/// **hosting interpreter** dies, not just the call.
+///
+/// The observable is therefore the host's own exit status, which is why this
+/// probe asserts `run.status.success()` before it asserts any value: a
+/// harness that only compared stdout would report a confusing empty-output
+/// mismatch for what is really a killed interpreter. The per-function
+/// expectations are CPython's own semantics for each shape -- `reads` sees
+/// the finalizer's write, `rebinds` does not (the finalizer rebound the
+/// *name*, not the object already pending), and `plain` is the
+/// no-`try`-at-all regression direction.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_returned_buffer_survives_every_finalizer_interposed_before_the_frame_exits() {
+    let dir = fixture("1164_finally_hosted", FINALLY_SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import egress_probe as m\n\
+             assert list(m.reads(4)) == [42.0, 0.0, 0.0, 0.0], list(m.reads(4))\n\
+             assert list(m.nested(4)) == [1.0, 2.0, 0.0, 0.0], list(m.nested(4))\n\
+             assert list(m.in_loop(4)) == [4.0, 0.0, 0.0, 0.0], list(m.in_loop(4))\n\
+             assert list(m.rebinds(4)) == [1.0, 0.0, 0.0, 0.0], list(m.rebinds(4))\n\
+             assert list(m.plain(4)) == [5.0, 0.0, 0.0, 0.0], list(m.plain(4))\n\
+             for name in ('raises', 'rebinds_and_raises'):\n\
+             \x20   try:\n\
+             \x20       getattr(m, name)(4)\n\
+             \x20   except ValueError:\n\
+             \x20       pass\n\
+             \x20   else:\n\
+             \x20       raise AssertionError(name)\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// The leak arm, and a **different observable** from the abort arm above on
+/// purpose. A finalizer that raises abandons the pending return: the value
+/// never reaches the host, so the frame still owns it and must release it.
+/// Nothing about that shape crashes or returns a wrong value -- the only
+/// witness is the allocator's own balance, so a probe that asserted "does
+/// not abort" would pass while every raising call leaked one buffer.
+///
+/// Looped for the same reason the neighbouring transfer arm is looped: a
+/// single iteration shows the right balance whether the frame leaks one view
+/// per call or releases one too many. `rebinds_and_raises` is the arm that
+/// needs the loop most -- there the pending pointer is the *only* thing that
+/// still names the storage, because the finalizer rebound the local slot
+/// away from it before raising.
+///
+/// Not compiled on Windows, matching this file's other counter-reading arm
+/// and for its reason: the counter is linked into the `.pyd` from a static
+/// archive but is absent from its export table.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_finalizer_that_raises_releases_the_buffer_the_abandoned_return_left_behind() {
+    let dir = fixture("1164_finally_balance", FINALLY_SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import ctypes, egress_probe as m\n\
+             live = ctypes.CDLL(m.__file__).pycc_rt_buffer_live_views\n\
+             live.restype = ctypes.c_longlong\n\
+             live.argtypes = []\n\
+             assert live() == 0, live()\n\
+             for name in ('raises', 'rebinds_and_raises'):\n\
+             \x20   for _ in range(64):\n\
+             \x20       try:\n\
+             \x20           getattr(m, name)(8)\n\
+             \x20       except ValueError:\n\
+             \x20           pass\n\
+             \x20       else:\n\
+             \x20           raise AssertionError(name)\n\
+             \x20   assert live() == 0, (name, live())\n\
+             for name in ('reads', 'nested', 'in_loop', 'rebinds', 'plain'):\n\
+             \x20   for _ in range(64):\n\
+             \x20       v = getattr(m, name)(8)\n\
+             \x20       assert live() == 1, (name, live())\n\
+             \x20       del v\n\
+             \x20       assert live() == 0, (name, live())\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
