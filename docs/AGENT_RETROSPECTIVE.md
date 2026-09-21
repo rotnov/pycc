@@ -33,6 +33,43 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — A line covered by a `pycc_rt` unit test still read as uncovered, because the workspace coverage export reports that function from the integration-test binary instead
+
+**What happened.** PR #1166's round-8 fix added a refusal arm to
+`pycc_rt_buffer_f64_alloc` and a `#[cfg(test)] mod tests` unit test that
+exercises it. `cargo llvm-cov --lib -p pycc_rt` showed the arm covered
+(`DA:1798,1`); `cargo llvm-cov --workspace`, which is what CI and
+`scripts/check_diff_coverage.py` consume, showed `DA:1798,0` and failed
+the 100% diff-coverage invariant. Roughly an hour went into treating this
+as flakiness — re-running the workspace export twice and suspecting the
+first run's overlap with a concurrent `cargo test` — before it was
+narrowed by running the workspace export with a test-name filter.
+
+**Root cause.** `llvm-cov`'s export keeps one record per function across
+the objects it is given. `crates/pycc_rt/tests/buffer_live_views.rs` is an
+integration-test binary that links `pycc_rt_buffer_f64_alloc`, so that
+binary's copy is the one reported and the lib-test binary's counters for
+the same function are discarded entirely. A filtered run made this
+unambiguous: with `-- tests::buffer` every `pycc_rt` lib test for the
+function ran and passed, and the exported counts for the whole function
+were still `0`. The unit test was real and passing; it simply could not
+be seen. Nothing about the arm, the diff, or the gate was wrong.
+
+**What fixed it.** Asserting the same refusal from
+`crates/pycc_rt/tests/buffer_live_views.rs` — where it also belongs on
+that file's own subject, since a refused allocation must not move the
+live-view counter.
+
+**Lesson.** When a `pycc_rt` line is covered by `-p pycc_rt --lib` but
+uncovered by `--workspace`, do not re-run the export looking for
+flakiness. Check whether any binary under `crates/pycc_rt/tests/` links
+the same function: if one does, only that binary's execution counts, and
+the assertion has to be made from there (or from another integration
+test) to be visible to the gate. The diagnostic that settles it in one
+run is a workspace export with a test-name filter — if the function's
+lines are `0` while its tests are listed as `ok`, the counters are being
+shadowed, not lost to a race.
+
 ## 2026-09-20 — A green local test suite hid two CI failures at once: the coverage job has no CPython, and the hosted probe assumed a POSIX module suffix
 
 **What happened.** PR #1166 (#1165, Part 2a of #1142) was pushed with every
