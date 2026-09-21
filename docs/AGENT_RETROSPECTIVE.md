@@ -33,6 +33,72 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — Nine review rounds on one pull request, because each round patched the condition the reviewer named instead of the condition set the reviewer's example belonged to
+
+**What happened.** PR #1166 (buffer storage for `pycc build --ext`, issue
+#1165) went through nine successive automated review rounds. Rounds 6, 7
+and 8 each reported a different user-visible wrong diagnostic, and each was
+fixed by adding one more arm at the same seam: the constraint solver's
+producer-admission predicate re-derives a *subset* of the check phase's
+admission conditions, and `merge_solver_first` lets the solver's incomplete
+answer displace the checker's correct one, so every omitted member of that
+set surfaces as a wrong diagnostic rather than as a silent difference.
+Round 6's brief named three recognizer sites; the implementing agent found
+four. Round 9 was a different axis at the same seam and the first P1 — an
+`--ext` artifact aborting its CPython host process.
+
+**Root cause.** Three rounds were treated as three defects because each
+arrived with its own counter-example. They were one defect: an incomplete
+set difference. Answering a counter-example extends the set by exactly one
+member and leaves every other missing member to be discovered by the next
+counter-example — which is precisely what rounds 7 and 8 were.
+
+**What fixed it.** At round 8 the fork ("patch the named condition or
+restructure") went to an independent stronger reviewer per
+[D-127](decisions/D-127-autonomous-agent-operation-model.md), which
+reframed rounds 6/7/8 as one structural defect and required enumerating
+*both* phases' full condition sets before touching code. That enumeration
+found PEP 591 `Final` (`T0045`) and the declared-annotation arms
+(`T0025`/`T0046`) — members no counter-example had pointed at, reachable
+only by reading `check_assignment`. The completed enumeration was published
+on #1168 so the eventual unification is reviewable rather than speculative.
+
+**Lesson.** When a review finding names one condition in a predicate that
+mirrors another phase's predicate, do not patch the named condition. Fix
+the set difference: enumerate both predicates' full condition sets, and
+close every member, or record each deliberately-open one. A second round
+on the same seam is the signal that the first round patched a symptom — at
+that point stop patching and enumerate, rather than waiting for the third.
+Two guards added under this rule turned out to be unkillable by any test
+and were removed rather than left in as decoration; a set-difference
+closure is not an excuse to add code no test can reach.
+
+## 2026-09-21 — The pinned local reviewer returned clean on the diff whose next automated round found a silent miscompile
+
+**What happened.** On PR #1166 the D-068 pinned local reviewer
+(`ievo:deep-reviewer`) reported no actionable findings at round 5. Round 6,
+from the automated GitHub reviewer, was a silent miscompile: `import math
+as ndarray` followed by `a = ndarray(4)` passed `pycc check`, passed
+`pycc build --ext`, and produced an artifact that really allocated buffer
+storage, where CPython answers that call with `TypeError: 'module' object
+is not callable`.
+
+**Root cause.** The pinned reviewer's checklist covers completeness, drift,
+contract fidelity and the other axes it enumerates, all of which it applied
+correctly. It does not cover "enumerate every binding kind the recognizers
+consult, then check each one against the rule the document says they
+implement" — an axis that needs the recognizer set and the binding-kind set
+to be built and compared, not a diff to be read.
+
+**Lesson.** A clean pinned-reviewer verdict is evidence about the axes that
+reviewer checks, not evidence that a diff is correct. For a change that
+adds a case to a rule other code already branches on, build the
+affected-site inventory yourself — the owning specification's own
+enumeration is the checklist — and do not treat the local review as a
+substitute for it. The reviewer is an additional high-signal pass, exactly
+as `AGENTS.md` already says, and the corollary is that its silence on an
+axis it does not check carries no information.
+
 ## 2026-09-21 — A line covered by a `pycc_rt` unit test still read as uncovered, because the workspace coverage export reports that function from the integration-test binary instead
 
 **What happened.** PR #1166's round-8 fix added a refusal arm to
