@@ -33,6 +33,33 @@ never a merge gate.
 
 ---
 
+## 2026-09-21 — A fix's own new state went unenumerated, so the same seam failed a second time
+
+The #1164 round-1 fix replaced a wrong ownership-transfer point with a new
+bookkeeping mechanism: a pending-return slot plus an orphan flag. Its
+commit message enumerated the *control-flow* shapes that reach that
+mechanism — a finalizer that reads, raises, or rebinds; a nested `try`; a
+`return` in a loop inside a `try` — and declared the set closed. It never
+enumerated the *state machine* of the mechanism it had just introduced.
+The record has two writers, and the `return` writer stored over it raw:
+a frame that reaches a second `return` while one is pending (which
+`finally: while True: return a` does, because the front end's `L0001`
+refusal of a bare `return` in a `finally` body does not survive loop entry)
+leaked the superseded allocation and left the flag describing a pointer
+that was no longer pending, so the epilogue's trailing release freed a
+pointer the slot loop had already released — a host abort. Round 2 fixed it
+by making that writer's transition total (release the predecessor when the
+frame is its sole owner, store, clear the flag), which turns the
+correctness argument into an invariant rather than a list of shapes.
+
+**Lesson:** when a fix introduces new state, the enumeration owes an
+account of that state's own transitions — every writer, and what each one
+leaves the invariant in — not only of the paths that reach it. An
+enumeration of reaching paths is complete for a fix that *removes* a
+mechanism and incomplete by construction for one that *adds* one.
+
+---
+
 ## 2026-09-21 — A 100%-covered diff shipped a host-aborting null dereference because no test had the shape
 
 Every gate for #1164 was green, including 100% coverage of the lines the

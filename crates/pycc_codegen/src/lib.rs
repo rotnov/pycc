@@ -8005,12 +8005,126 @@ fn emit_stmt<'ctx>(
                     // `memoryview` return shape rather than only a bare
                     // `Name`, since the epilogue's own identity test makes a
                     // record that no slot ever held a harmless no-op.
+                    //
+                    // `(pending, orphaned)` is **one two-field state** with a
+                    // coupling invariant: `orphaned != 0` means the pending
+                    // record is the pointer's *sole* owner, so nothing else
+                    // will release it. The record therefore has exactly two
+                    // mutators, and each must leave that invariant standing.
+                    // `free_buffer_slot_before_store` is the other one, and it
+                    // raises the flag in the same breath that it makes the
+                    // record the sole owner.
+                    //
+                    // This one supersedes the record, so its transition is
+                    // total: release the predecessor when this frame is its
+                    // only owner, store the new pointer, and clear the flag.
+                    // A raw store here -- which is what this arm used to do --
+                    // left both halves of the invariant broken whenever one
+                    // frame reached a second `return`, which a `return` inside
+                    // a loop inside `finally` does (the HIR resets its
+                    // `in_finally` state on loop entry, so the `L0001` refusal
+                    // of a bare `return` in `finally` does not reach it):
+                    // the superseded pointer's only record was gone, leaking
+                    // one buffer per call, and the surviving flag then
+                    // described a pointer that was no longer pending, so the
+                    // epilogue's trailing release freed the *new* pointer that
+                    // the owned-slot loop had already released -- a double free
+                    // that aborts the hosting interpreter.
+                    //
+                    // With one invariant-preserving mutator, "how many
+                    // syntactic paths reach a second `return`" stops being a
+                    // question correctness depends on: the state is restored at
+                    // every write, so a third and fourth write are the same
+                    // transition applied again.
+                    //
+                    // Clearing the flag unconditionally is sound because the
+                    // new pointer is, at this instant, held by a live local
+                    // slot: an owned buffer originates only at `a = ndarray(n)`
+                    // bound to a simple local name, and the read admitted at
+                    // this return position loads it back out of that slot.
+                    // "Not orphaned" is therefore true by construction of
+                    // every pending store.
                     if let Scalar::MemoryView(returned) = scalar
                         && let Some(pending) = locals.get(PENDING_RETURN_BUFFER_KEY)
                     {
+                        let superseded = builder
+                            .build_load(
+                                context.ptr_type(inkwell::AddressSpace::default()),
+                                pending.ptr,
+                                "superseded_return_buffer",
+                            )
+                            .expect("build_load should not fail for the pending-return slot")
+                            .into_pointer_value();
+                        let orphaned = &locals[PENDING_RETURN_ORPHANED_KEY];
+                        let was_orphaned = builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::NE,
+                                builder
+                                    .build_load(
+                                        context.i8_type(),
+                                        orphaned.ptr,
+                                        "superseded_return_orphaned",
+                                    )
+                                    .expect(
+                                        "build_load should not fail for the pending-return orphan flag",
+                                    )
+                                    .into_int_value(),
+                                context.i8_type().const_zero(),
+                                "superseded_return_was_orphaned",
+                            )
+                            .expect("build_int_compare should not fail for an i8 flag");
+                        // Both halves again. Gating on the flag rather than on
+                        // "a different pointer" is what keeps an unorphaned
+                        // predecessor -- still held by its own slot, which the
+                        // epilogue's loop will release -- from being freed
+                        // twice; `try: return a` followed by `finally: while
+                        // True: return b` is that shape. The inequality makes
+                        // the symmetric state unreachable rather than merely
+                        // improbable: an orphaned record is by definition held
+                        // by no slot, so no later `return` can load it back and
+                        // name it again, but one `icmp` removes the dependence
+                        // on that argument entirely.
+                        let differs = builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::NE,
+                                superseded,
+                                returned,
+                                "superseded_return_differs",
+                            )
+                            .expect("build_int_compare should not fail for two pointers");
+                        let stale = builder
+                            .build_and(was_orphaned, differs, "superseded_return_is_stale")
+                            .expect("build_and should not fail for two i1 values");
+                        // Branch-free on the `select`-plus-null-free model the
+                        // epilogue and the free-before-store both already use,
+                        // so a single-`return` frame keeps the straight-line
+                        // shape it has today and pays one extra no-op free.
+                        let release = builder
+                            .build_select(
+                                stale,
+                                superseded,
+                                context
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .const_null(),
+                                "superseded_return_release",
+                            )
+                            .expect("build_select should not fail for two pointers")
+                            .into_pointer_value();
+                        builder
+                            .build_call(
+                                rt.buffer_f64_free,
+                                &[release.into()],
+                                "superseded_return_free",
+                            )
+                            .expect("build_call should not fail for pycc_rt_buffer_f64_free");
                         builder
                             .build_store(pending.ptr, returned)
                             .expect("build_store should not fail for the pending-return slot");
+                        builder
+                            .build_store(orphaned.ptr, context.i8_type().const_zero())
+                            .expect(
+                                "build_store should not fail for the pending-return orphan flag",
+                            );
                     }
                     if expected_return_ty == pycc_mir::Ty::None {
                         // `None` parameters, call results, and stored names

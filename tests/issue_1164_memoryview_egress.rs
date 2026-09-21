@@ -420,3 +420,182 @@ fn a_finalizer_that_raises_releases_the_buffer_the_abandoned_return_left_behind(
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// The subject for the **multi-write** set: a frame that reaches a second
+/// `return` while an earlier one is still pending.
+///
+/// `FINALLY_SUBJECT`'s note that `return` inside `finally` is refused with
+/// `L0001` is true only of a *bare* one. The HIR resets its `in_finally`
+/// state on loop entry, so `while True: return a` inside a `finally` body is
+/// accepted, and that is the vehicle every shape here uses. What it reaches
+/// is not a control-flow shape but the pending record's own state machine:
+/// `(pending, orphaned)` is one two-field state whose invariant is
+/// "`orphaned != 0` means the record is the pointer's sole owner", and a
+/// superseding `return` is its second mutator.
+///
+/// `unorphaned_predecessor` and `repeats` are the two states the release must
+/// *not* fire in -- a predecessor still held by its own slot, and a
+/// predecessor that is the very pointer being returned again. Without them a
+/// naive "always free the predecessor" would pass every other arm here and
+/// double-free those two. `supersedes_then_rebinds` raises the orphan flag
+/// *after* the superseding return rather than before it, which is the only
+/// ordering the other arms do not cover.
+///
+/// Every expectation below is CPython's own answer for the same program with
+/// `ndarray(n)` read as `[0.0] * n`, checked against `python3` directly.
+const MULTI_RETURN_SUBJECT: &str = "\
+def supersedes(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 1.0
+        return a
+    finally:
+        a = ndarray(n)
+        a[0] = 7.0
+        while True:
+            return a
+
+
+def supersedes_then_raises(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 1.0
+        return a
+    finally:
+        try:
+            a = ndarray(n)
+            while True:
+                return a
+        finally:
+            raise ValueError(\"boom\")
+
+
+def supersedes_then_rebinds(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        try:
+            return a
+        finally:
+            a = ndarray(n)
+            a[1] = 5.0
+            while True:
+                return a
+    finally:
+        a = ndarray(n)
+        a[0] = 9.0
+
+
+def unorphaned_predecessor(n: int) -> memoryview:
+    a = ndarray(n)
+    b = ndarray(n)
+    try:
+        b[0] = 2.0
+        return a
+    finally:
+        while True:
+            return b
+
+
+def repeats(n: int) -> memoryview:
+    a = ndarray(n)
+    try:
+        a[0] = 3.0
+        return a
+    finally:
+        while True:
+            return a
+";
+
+/// The leak arm of the multi-write set, and the reason it is a *counter*
+/// assertion rather than a value assertion: a superseding `return` that
+/// overwrote an orphaned predecessor's record returned exactly the right
+/// `memoryview` and did not crash. The only witness is the allocator's
+/// balance, and only over a loop -- one call leaking one buffer and one call
+/// releasing one too many show the same single-iteration reading.
+///
+/// `supersedes_then_raises` is deliberately absent: it is the other arm's
+/// subject, and keeping the two disjoint is what makes each mutation kill
+/// exactly one test. Reverting the release at the superseding store fails
+/// this arm and leaves the other green; reverting the flag clear does the
+/// reverse.
+///
+/// Not compiled on Windows, matching this file's other counter-reading arms
+/// and for their reason: the counter is linked into the `.pyd` from a static
+/// archive but is absent from its export table.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_superseded_pending_return_is_released_rather_than_leaked() {
+    let dir = fixture("1164_multi_return_balance", MULTI_RETURN_SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import ctypes, egress_probe as m\n\
+             live = ctypes.CDLL(m.__file__).pycc_rt_buffer_live_views\n\
+             live.restype = ctypes.c_longlong\n\
+             live.argtypes = []\n\
+             assert live() == 0, live()\n\
+             names = ('supersedes', 'supersedes_then_rebinds', 'unorphaned_predecessor', \
+             'repeats')\n\
+             for name in names:\n\
+             \x20   for _ in range(64):\n\
+             \x20       v = getattr(m, name)(8)\n\
+             \x20       assert live() == 1, (name, live())\n\
+             \x20       del v\n\
+             \x20       assert live() == 0, (name, live())\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// The double-free arm of the multi-write set, and a **different observable**
+/// again. A superseding `return` that left the inherited orphan flag raised
+/// made the epilogue's trailing release free the new pointer that the
+/// owned-slot loop had just released. `pycc build --ext` links that epilogue
+/// into a plain `extern "C" fn`, where the allocator's abort is not a failed
+/// call but a dead interpreter, so the observable is the host's own exit
+/// status -- which no balance reading can substitute for, because the process
+/// never reaches the reading.
+///
+/// The value expectations ride along for the shapes that return normally:
+/// each is CPython's own answer for the same program, so an artifact that
+/// stopped aborting by returning the wrong buffer would still fail here.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_superseding_return_does_not_free_the_pointer_the_slot_loop_already_released() {
+    let dir = fixture("1164_multi_return_hosted", MULTI_RETURN_SUBJECT);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "import egress_probe as m\n\
+             for _ in range(64):\n\
+             \x20   try:\n\
+             \x20       m.supersedes_then_raises(8)\n\
+             \x20   except ValueError:\n\
+             \x20       pass\n\
+             \x20   else:\n\
+             \x20       raise AssertionError('supersedes_then_raises')\n\
+             assert list(m.supersedes(4)) == [7.0, 0.0, 0.0, 0.0], list(m.supersedes(4))\n\
+             assert list(m.supersedes_then_rebinds(4)) == [0.0, 5.0, 0.0, 0.0], \
+             list(m.supersedes_then_rebinds(4))\n\
+             assert list(m.unorphaned_predecessor(4)) == [2.0, 0.0, 0.0, 0.0], \
+             list(m.unorphaned_predecessor(4))\n\
+             assert list(m.repeats(4)) == [3.0, 0.0, 0.0, 0.0], list(m.repeats(4))\n\
+             print('ok')\n",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}

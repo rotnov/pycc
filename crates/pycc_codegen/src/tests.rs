@@ -16201,6 +16201,111 @@ fn an_abandoned_pending_return_is_released_only_once_nothing_else_names_it() {
 }
 
 #[test]
+fn a_superseding_return_releases_the_orphaned_record_it_replaces_and_clears_the_flag() {
+    // Part 2b of #1142 (#1164), round 2: the pending record's own state
+    // machine rather than the control-flow shapes that reach it.
+    //
+    // `(pending, orphaned)` is one two-field state whose invariant is
+    // "`orphaned != 0` means the record is the pointer's sole owner". It has
+    // exactly two mutators. `free_buffer_slot_before_store` is the one the
+    // test above pins; this is the other. A `return` that supersedes an
+    // earlier one -- which `finally: while True: return a` reaches, because
+    // the HIR resets its `in_finally` state on loop entry and the `L0001`
+    // refusal of a bare `return` in `finally` therefore does not cover it --
+    // used to store the new pointer raw, which broke the invariant twice
+    // over: the superseded pointer's sole record was overwritten and its
+    // storage leaked, and the surviving flag then described a pointer that
+    // was no longer pending, so the epilogue's trailing release freed the
+    // *new* pointer that the owned-slot loop had already released.
+    //
+    // The transition is pinned rather than the shape: with one
+    // invariant-preserving mutator, a third and a fourth `return` are the
+    // same transition applied again, so no enumeration of syntactic paths
+    // carries the correctness argument. A single-`return` frame emits the
+    // same instructions (`stale` is statically false there at runtime, not
+    // in the IR), which is why this fixture needs no `finally` to pin them.
+    compile_ext_items_checking_ir(
+        "buffer_return_supersedes",
+        vec![MirItem::Function {
+            name: "allocate".to_string(),
+            params: vec![],
+            return_ty: Ty::MemoryView,
+            body: vec![
+                buffer_alloc_a(),
+                MirStmt::Return(Some(MirExpr::Name {
+                    name: "a".to_string(),
+                    ty: Ty::MemoryView,
+                })),
+            ],
+        }],
+        |ir| {
+            let block = ir
+                .split("global_ready:")
+                .nth(1)
+                .unwrap_or_else(|| panic!("no returning block: {ir}"));
+            // The predecessor is read back before it can be overwritten.
+            let read_at = block
+                .find("%superseded_return_buffer = load ptr, ptr %pending_return_buffer_slot")
+                .unwrap_or_else(|| panic!("the superseded record is not read: {ir}"));
+            assert!(
+                block.contains(
+                    "%superseded_return_orphaned = load i8, ptr %pending_return_orphaned_slot"
+                ),
+                "{ir}"
+            );
+            // Both halves of the release guard. Gating on the flag is what
+            // keeps an *unorphaned* predecessor -- still held by its own
+            // slot, which the epilogue's loop releases -- from being freed
+            // twice; `try: return a` with `finally: while True: return b` is
+            // that shape. The inequality makes the symmetric state
+            // unreachable rather than merely improbable.
+            assert!(
+                block.contains(
+                    "%superseded_return_was_orphaned = icmp ne i8 %superseded_return_orphaned, 0"
+                ),
+                "the release is not gated on the orphan flag: {ir}"
+            );
+            assert!(
+                block.contains(
+                    "%superseded_return_differs = icmp ne ptr %superseded_return_buffer, %load"
+                ),
+                "the release does not exclude the value being returned: {ir}"
+            );
+            assert!(
+                block.contains(
+                    "%superseded_return_is_stale = and i1 %superseded_return_was_orphaned, \
+                     %superseded_return_differs"
+                ),
+                "the guard is not a conjunction: {ir}"
+            );
+            assert!(
+                block.contains(
+                    "%superseded_return_release = select i1 %superseded_return_is_stale, \
+                     ptr %superseded_return_buffer, ptr null"
+                ),
+                "{ir}"
+            );
+            let free_at = block
+                .find("call void @pycc_rt_buffer_f64_free(ptr %superseded_return_release)")
+                .unwrap_or_else(|| panic!("the superseded record is not released: {ir}"));
+            // ...and the transition completes: the new pointer is recorded
+            // and the flag it inherited is cleared. Leaving the flag raised
+            // is the double-free half of the defect, so the clear is pinned
+            // separately from the release and ordered after it.
+            let store_at = block
+                .find("store ptr %load, ptr %pending_return_buffer_slot")
+                .unwrap_or_else(|| panic!("the pending return was not recorded: {ir}"));
+            let clear_at = block
+                .find("store i8 0, ptr %pending_return_orphaned_slot")
+                .unwrap_or_else(|| panic!("the inherited orphan flag was not cleared: {ir}"));
+            assert!(read_at < free_at, "{ir}");
+            assert!(free_at < store_at, "{ir}");
+            assert!(store_at < clear_at, "{ir}");
+        },
+    );
+}
+
+#[test]
 fn returning_a_buffer_parameter_leaves_its_slot_alone() {
     // The other provenance. A `memoryview` **parameter**'s storage belongs
     // to the host's exporter: the slot is not in the frame's release list,
