@@ -1592,3 +1592,42 @@ fn the_solver_refuses_calling_a_buffer_returning_function() {
         err.message
     );
 }
+
+/// The egress admission in `check_stmt_in_function` skips the ordinary
+/// assignability check whenever the returned name is in `owned_buffers`,
+/// trusting that membership implies a `Ty::MemoryView` term. That invariant
+/// is maintained by the contested-join invalidation rule, not by the
+/// admission itself, so this pins the one shape where a regression in that
+/// rule would turn into a *silent* admission rather than a diagnostic: a
+/// contested name returned from a function that really is annotated
+/// `-> memoryview`. Every other contested read reports through a position
+/// the admission never reaches.
+#[test]
+fn a_contested_buffer_is_not_silently_admitted_by_the_egress_return() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "make".to_string(),
+            params: vec![],
+            return_ty: Ty::MemoryView,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![alloc_four("ndarray")],
+                    orelse: vec![rebind_a(HirExpr::IntLiteral(1))],
+                },
+                HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+            ],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "T0023", "{}", err.message);
+    assert!(
+        !err.message.contains(OWNED_BUFFER_REFUSAL),
+        "{}",
+        err.message
+    );
+}
