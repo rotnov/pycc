@@ -1673,10 +1673,6 @@ pub extern "C" fn pycc_rt_buffer_live_views() -> i64 {
     BUFFER_LIVE.load(Ordering::Relaxed)
 }
 
-/// Allocates artifact-owned storage for `len` `f64` elements and the
-/// [`PyccExtBufferView`] that addresses it (Python's `ndarray(n)` /
-/// `NDArray(n)`, Part 2a of #1142 -- issue #1165).
-///
 /// Decodes the user-supplied `ndarray(n)` length word for #1165's producer.
 ///
 /// This is the one D-141 `int` ingress position that must **not** go
@@ -1722,6 +1718,10 @@ pub extern "C" fn pycc_rt_buffer_alloc_untag_len(tagged: i64) -> i64 {
     buffer_alloc_untag_len(tagged)
 }
 
+/// Allocates artifact-owned storage for `len` `f64` elements and the
+/// [`PyccExtBufferView`] that addresses it (Python's `ndarray(n)` /
+/// `NDArray(n)`, Part 2a of #1142 -- issue #1165).
+///
 /// The returned pointer is the *view*, already pointing at the storage, so
 /// compiled code keeps handling exactly the `*const PyccExtBufferView` that
 /// [`pycc_rt_buffer_f64_get`], [`pycc_rt_buffer_f64_set`] and
@@ -1744,6 +1744,18 @@ pub extern "C" fn pycc_rt_buffer_alloc_untag_len(tagged: i64) -> i64 {
 /// null is safe for the epilogue to hand straight to
 /// [`pycc_rt_buffer_f64_free`]. `len == 0` is admitted and yields a
 /// zero-length view, which every existing helper already handles.
+///
+/// Both the reservation and the `resize` narrow `len` to `usize`, while the
+/// recorded `PyccExtBufferView.len` keeps the original `i64`. That is sound
+/// only where `usize` is at least 64 bits wide: on a narrower target a large
+/// `len` would truncate for the storage while the view still advertised the
+/// full length, and the `i64`-against-`i64` bounds check in
+/// [`pycc_rt_buffer_f64_get`] and [`pycc_rt_buffer_f64_set`]
+/// (`index < 0 || index >= view.len`) would admit an index past the end of
+/// that storage. Every Tier-1 target is 64-bit -- `docs/ROADMAP.md`'s
+/// platform table lists Linux x64/arm64, macOS x64/arm64 and Windows x64 --
+/// so the case is unreachable as built; a 32-bit target would have to refuse
+/// a `len` past `usize::MAX` here rather than truncate it.
 ///
 /// A length whose storage cannot be reserved -- `len * 8` past `isize::MAX`,
 /// or a genuine allocator failure -- sets a pending `RuntimeError` and
@@ -1780,10 +1792,23 @@ pub extern "C" fn pycc_rt_buffer_f64_alloc(len: i64) -> *mut PyccExtBufferView {
     //
     // `try_reserve_exact` is what makes the reservation fallible instead:
     // it reports both the capacity overflow and a real allocator failure as
-    // an `Err` rather than unwinding. `resize` to exactly the reserved
-    // capacity cannot reallocate, and `into_boxed_slice` on a vector whose
-    // length equals its capacity is a no-op, so neither step reintroduces an
-    // aborting allocation path.
+    // an `Err` rather than unwinding.
+    //
+    // The two steps after it are non-aborting only under a stated
+    // assumption, not as an unconditional property of the API.
+    // `try_reserve_exact` guarantees capacity *at least* the request, and
+    // the argument that neither step reintroduces an aborting allocation --
+    // `resize` to exactly the reserved capacity cannot reallocate, and
+    // `into_boxed_slice` on a vector whose length equals its capacity skips
+    // `shrink_to_fit` -- needs the capacity to come back *exactly* `len`.
+    // That is what the default `Global` allocator does, and no
+    // `#[global_allocator]` is declared anywhere in this workspace. An
+    // allocator that reported a larger capacity (a size-class allocator,
+    // say) would leave a vector whose length is below its capacity, so
+    // `into_boxed_slice` would call `shrink_to_fit`, whose failure path is
+    // the infallible `handle_alloc_error` -- a process abort, the exact
+    // class this function exists to close. Introducing one therefore means
+    // revisiting this step, not just this comment.
     //
     // `RuntimeError` is a deliberate deviation, following `int_pow`'s
     // negative-exponent arm: CPython raises `MemoryError` here

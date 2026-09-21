@@ -147,6 +147,18 @@ def sized(n: int) -> float:
     a = ndarray(n + 1)
     return float(len(a))
 ";
+/// The reassign-then-refuse shape, which `SUBJECT`'s `alloc_then_raise`
+/// cannot carry: there the refused allocation binds a *different* name, so
+/// the slot being overwritten is still null. Here the same name already
+/// holds a live view when the second allocation is refused, which is the
+/// only arrangement in which a free emitted before the refusal branched
+/// away would release a view the exception-exit epilogue then frees again.
+const SUBJECT_REALLOC_THEN_RAISE: &str = "\
+def realloc_then_raise(n: int) -> float:
+    a = ndarray(n)
+    a = ndarray(-1)
+    return a[0]
+";
 const SUBJECT_NDARRAY: &str = "\
 def size(n: int) -> float:
     a = NDArray(n)
@@ -1414,5 +1426,55 @@ fn no_allocation_outlives_the_call_that_made_it() {
          print('ok')\n",
     );
     assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}
+
+/// The #1166 round 9 review's reassign-then-refused-allocation arm, on a
+/// real artifact. `a = ndarray(n)` then `a = ndarray(-1)`: the slot holds a
+/// **live** view when the second allocation is refused, so the frame leaves
+/// through its exception exit owing exactly one free. A free emitted before
+/// the refusal branched away would make that two, and a double free is not
+/// something the balance counter alone would report -- so the arm asserts
+/// both that the process survives 64 such calls and that the balance returns
+/// to zero.
+///
+/// The primary gate is the codegen-side
+/// `a_refused_reallocation_never_reaches_the_free_before_its_own_store`,
+/// which pins the block separation itself and runs in CI's coverage job;
+/// this is corroboration on the built module. Windows is excluded for the
+/// reason `no_allocation_outlives_the_call_that_made_it` states.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_refused_reallocation_leaves_exactly_one_view_for_the_exception_exit() {
+    let dir = fixture("1165_hosted_refused_realloc", SUBJECT_REALLOC_THEN_RAISE);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import ctypes, alloc_probe\n\
+         live = ctypes.CDLL(alloc_probe.__file__).pycc_rt_buffer_live_views\n\
+         live.restype = ctypes.c_longlong\n\
+         live.argtypes = []\n\
+         assert live() == 0, live()\n\
+         for _ in range(64):\n\
+         \x20   try:\n\
+         \x20       alloc_probe.realloc_then_raise(8)\n\
+         \x20   except ValueError:\n\
+         \x20       pass\n\
+         \x20   else:\n\
+         \x20       raise AssertionError('realloc_then_raise returned normally')\n\
+         assert live() == 0, live()\n\
+         print('ok')\n",
+    );
+    // The status explicitly, not `success()`'s boolean: a double free aborts,
+    // and naming the expectation is what makes the failure point at it.
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "the host must not abort: {}",
+        stderr_of(&run)
+    );
     assert_eq!(stdout_of(&run), "ok\n");
 }

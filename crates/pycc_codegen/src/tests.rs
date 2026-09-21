@@ -16602,6 +16602,53 @@ fn a_reallocating_function_frees_the_old_view_before_it_stores_the_new_one() {
 }
 
 #[test]
+fn a_refused_reallocation_never_reaches_the_free_before_its_own_store() {
+    // #1166 round 9 review, the reassign-then-refused-allocation ordering.
+    // `a = ndarray(4); a = ndarray(-1)` is the one shape neither neighbour
+    // covers: `a_reallocating_function_frees_the_old_view_before_it_stores_the_new_one`
+    // reallocates *successfully*, and the hosted `alloc_then_raise` refuses
+    // on a *different* name, where the slot being overwritten is null anyway.
+    // Here the slot holds a live view when the second allocation is refused,
+    // so freeing it before the refusal branched away would release a view the
+    // exception-exit epilogue then frees again -- a double free.
+    //
+    // What makes that unreachable is block separation, not text order:
+    // `expression_can_set_exception` answers `true` for `MirExpr::BufferAlloc`,
+    // so `emit_expr`'s post-call `guard_statement_effects` repositions the
+    // builder into a fresh continuation block before `MirStmt::Assign` reaches
+    // `free_buffer_slot_before_store`. Pinned the way the round-8 decoder test
+    // pins its own separation: the window between the second allocator call
+    // and the next free must carry the pending-state read, a conditional
+    // branch, and the continuation label. A bare "no free here" assertion
+    // would be unkillable -- the mutation that matters moves the free
+    // *upstream*, out of any such window -- and "a free exists afterwards"
+    // is confounded by the epilogue's own free.
+    compile_ext_items_checking_ir(
+        "buffer_refused_realloc_order",
+        owned_buffer_fn_items(vec![buffer_alloc_a(), buffer_alloc_a()]),
+        |ir| {
+            let first = ir
+                .find("@pycc_rt_buffer_f64_alloc")
+                .unwrap_or_else(|| panic!("the first allocator call should be emitted: {ir}"));
+            let second = ir[first + 1..]
+                .find("@pycc_rt_buffer_f64_alloc")
+                .map(|offset| first + 1 + offset)
+                .unwrap_or_else(|| panic!("the second allocator call should be emitted: {ir}"));
+            let free = ir[second..]
+                .find("call void @pycc_rt_buffer_f64_free")
+                .map(|offset| second + offset)
+                .unwrap_or_else(|| panic!("a free should follow the second allocation: {ir}"));
+            let between = &ir[second..free];
+            assert!(between.contains("@pycc_rt_exception_active"), "{ir}");
+            assert!(between.contains("br i1 "), "{ir}");
+            // Substring, not an exact label: LLVM uniquifies the name once
+            // two statements each emit a continuation block.
+            assert!(between.contains("effect_exc_cont"), "{ir}");
+        },
+    );
+}
+
+#[test]
 fn a_buffer_allocation_checks_the_pending_state_before_it_allocates() {
     // #1166 review finding F5. `emit_expr` guards *after*
     // `emit_expr_unchecked` returns, so an exception already pending when
