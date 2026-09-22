@@ -108,7 +108,7 @@ pub(crate) fn is_zero_arg_super_call(expr: &Expr) -> bool {
 /// the operand first (what `lower_expr`'s own unsigned `Number::Int` arm
 /// does, correctly, for an unsigned literal) would reject that source as out
 /// of range. Checking after the sign is applied accepts it.
-fn fold_int_literal_sign(
+pub(crate) fn fold_int_literal_sign(
     value: &Int,
     negate: bool,
     range: std::ops::Range<u32>,
@@ -143,8 +143,10 @@ fn fold_int_literal_sign(
 /// `signatures` is the enclosing module's keyword-bindable signature table
 /// (Part 1 of #884, #1125), collected from its top-level `def`s before any
 /// item is lowered and threaded exactly as `imports` is. It is read in
-/// exactly one place: the `Expr::Call` arm below, which uses it both to
-/// decide whether a keyword call is bindable at all and to bind one that is.
+/// exactly one place: the `Expr::Call` arm below, which uses it to decide
+/// whether a keyword call is bindable at all, to bind one that is, and --
+/// since Part 2 of #884 (#1189) -- to decide whether a zero-keyword call
+/// short of its callee's arity must have trailing defaults filled.
 /// Every other arm ignores it.
 pub(crate) fn lower_expr(
     expr: &Expr,
@@ -585,7 +587,22 @@ pub(crate) fn lower_expr(
                 .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
                 .collect::<Result<Vec<_>, _>>()?;
             let args = if call.arguments.keywords.is_empty() {
-                args
+                // Part 2 of #884 (#1189): a zero-keyword call that is short
+                // of its callee's arity is routed through the same binder,
+                // which fills each unsupplied defaulted parameter. Every
+                // other all-positional call keeps the unbound path, so the
+                // arity diagnostic for an over-long call stays where it was.
+                if keyword_bind::needs_default_fill(signatures, callee.id.as_str(), args.len()) {
+                    keyword_bind::bind_keyword_arguments(
+                        signatures,
+                        callee.id.as_str(),
+                        args,
+                        Vec::new(),
+                        std::ops::Range::<u32>::from(call.range),
+                    )?
+                } else {
+                    args
+                }
             } else {
                 let mut supplied = Vec::with_capacity(call.arguments.keywords.len());
                 for keyword in &call.arguments.keywords {

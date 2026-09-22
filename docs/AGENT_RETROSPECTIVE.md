@@ -33,6 +33,69 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — A static, module-wide signature table bound calls to a name the runtime dispatches in source order
+
+Part 1 of #884 (issue #1125, commit `a600ec3f` on `main`) bound keyword call
+arguments against `SignatureTable`, collected once per module from its
+top-level `def`s, with a later `def` of the same name replacing an earlier
+one. pycc's runtime dispatch of a redefined module-level name is source-order
+sensitive, though (issue #22's function-pointer slot): a call made before the
+second `def` runs the first one. For `def foo(a, b)`, `foo(a=10, b=1)`, then
+`def foo(b, a)` and the same call again, pycc printed `-9 9` where CPython
+prints `9 9` -- silent wrong output, shipped to `main`. Part 2 (#1189) reused
+the table for default filling and inherited the defect (`2 2` for `1 2`).
+The Part 2 review round found it; it was not caught before Part 1 merged.
+
+Root cause: the table's "last `def` wins" rule was justified by analogy to
+Python's rebinding of a module-level name, without checking that analogy
+against how pycc actually dispatches a rebound name, or against the fact
+that a static per-call-site resolution cannot know which binding a call will
+observe at run time.
+
+What fixed it: the table now admits only a name bound exactly once in module
+scope (`crates/pycc_hir/src/expr/keyword_bind/rebound.rs`), so a keyword call
+to a redefined name keeps `C0001` and a short call gets the ordinary `T0021`
+arity error; `docs/TYPE_SYSTEM.md`, "Keyword arguments and default parameter
+values on a redefined name", states the rule.
+
+Lesson: any static call-site resolution -- a signature table, a devirtualized
+target, a folded constant keyed on a name -- must be checked against the
+language's rebinding semantics and against pycc's own dispatch model before
+it lands. Write the redefinition test (a call before and after a second
+binding of the same name, compared against CPython) as part of the first
+pull request that introduces the table, not the second one that reuses it.
+
+## 2026-09-22 — HIR-level tests written against an arity diagnostic `pycc_hir` never emits
+
+Implementing issue #1189 (default parameter values, Part 2 of #884), five
+new unit tests in `crates/pycc_hir/src/expr/keyword_bind.rs` asserted that
+`crate::lower_checked` rejects a call whose argument count disagrees with
+its callee's arity — a short call to a `def` with no default, an over-long
+call to a defaulted `def`, a short call to a callee outside the signature
+table. All five failed: `lower_checked` returned `Ok`. `pycc_hir` performs
+no arity checking at all; arity is `pycc_types`' job, and the only arity
+diagnostics `pycc_hir` produces are the ones `keyword_bind`'s own binder
+raises for a call it was asked to bind.
+
+Root cause: the tests were written from the *user-visible* behaviour of
+`pycc check` rather than from the contract of the layer under test. Because
+this part deliberately keeps all of its work inside `pycc_hir`, the layer's
+observable output for an unbindable call is the shape of the lowered
+argument vector, not a diagnostic.
+
+Fixed by re-aiming each arm at the argument vector it actually owns
+(`assert_eq!(args, vec![HirExpr::IntLiteral(1)])` where the binder must
+leave a short call untouched), and by moving the end-to-end diagnostic
+assertions to `tests/issue_1189_default_params.rs`, which drives the public
+CLI and therefore does see `pycc_types`' output.
+
+Lesson: before asserting a diagnostic in a crate-internal unit test, check
+which crate emits that diagnostic. A diagnostic produced by a later pass is
+only observable from an integration test that runs the whole pipeline; in a
+single-crate test, assert the data structure that crate produces.
+
+---
+
 ## 2026-09-22 — A `--ext` test that asserted a successful build instead of an empty diagnostic set
 
 Issue #1181's new suite added `a_renamed_receiver_builds_as_an_ext_export`

@@ -503,6 +503,15 @@ today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
 `docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than
 restating it.
 
+A default parameter value is filled at compile time, spliced into the call's
+positional argument vector while the calling module is lowered (Part 2 of #884,
+[#1189](https://github.com/rotnov/pycc/issues/1189)), so it never reaches the
+generated wrapper and D-244 rule 7 is unchanged by it: the wrapper's arity check
+counts every declared parameter, a defaulted one included, so a host call that
+omits a defaulted argument raises the wrapper's arity-mismatch `TypeError`.
+[#1194](https://github.com/rotnov/pycc/issues/1194) tracks widening the host
+boundary to serve defaults.
+
 | Annotation | As a parameter | As a return type |
 |---|---|---|
 | `int` | carried; accepts `int` and `bool` (the `docs/TYPE_SYSTEM.md` type table's subtype rule), `OverflowError` outside the inline range | carried |

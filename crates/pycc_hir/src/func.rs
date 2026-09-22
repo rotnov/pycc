@@ -14,9 +14,14 @@
 //! `pub(crate)`, so every existing `crate::`-qualified call site keeps
 //! resolving unchanged.
 
+pub(crate) mod params;
+#[cfg(test)]
+mod params_tests;
+
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirItem, ImportBinding, Ty, stmt, unsupported};
+use params::DefaultPolicy;
 use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
 
@@ -134,13 +139,17 @@ pub(crate) fn lower_params(
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
-    // Every parameter kind and default value below is silently absent from
-    // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
-    // of this function only ever iterated `.args` and never checked for any
-    // of these, so a function using them got a wrong signature built from
-    // whatever plain positional args happened to exist, instead of the
-    // explicit capability diagnostic every other out-of-scope construct in
-    // this file produces (self-review finding, pre-merge).
+    // Every parameter kind below is silently absent from
+    // `parameters.args` -- an earlier version of this function only ever
+    // iterated `.args` and never checked for any of these, so a function
+    // using them got a wrong signature built from whatever plain positional
+    // args happened to exist, instead of the explicit capability diagnostic
+    // every other out-of-scope construct in this file produces (self-review
+    // finding, pre-merge). The checks themselves now live in `params`,
+    // shared with `class::lower_method`; a *default value* is no longer one
+    // of them -- Part 2 of #884 (#1189) implements it for this path, and
+    // `lower_arg_list`'s `DefaultPolicy` below is what keeps every other
+    // path rejecting it.
     //
     // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
     // `/` marker) are lowered via the same `lower_arg_list` path as ordinary
@@ -155,24 +164,7 @@ pub(crate) fn lower_params(
     // signature, and excludes the leading `posonlyargs` entries from the set
     // a keyword may name — naming one is a `T0021`, as in CPython. A
     // parameter after the `/` marker stays bindable by name.
-    if parameters.vararg.is_some() {
-        return Err(unsupported(
-            "`*args` is not supported yet",
-            parameters.range,
-        ));
-    }
-    if !parameters.kwonlyargs.is_empty() {
-        return Err(unsupported(
-            "keyword-only parameters are not supported yet",
-            parameters.range,
-        ));
-    }
-    if parameters.kwarg.is_some() {
-        return Err(unsupported(
-            "`**kwargs` is not supported yet",
-            parameters.range,
-        ));
-    }
+    params::reject_unsupported_parameter_shapes(parameters)?;
     // PEP 570 (#383): lower `posonlyargs` (before `/`) via the same
     // `lower_arg_list` path as ordinary `args`, prepending them. The full
     // parameter list is `posonlyargs ++ args`.
@@ -184,6 +176,7 @@ pub(crate) fn lower_params(
         None,
         aliases,
         class_defs,
+        DefaultPolicy::Admit,
     )?;
     params.extend(lower_arg_list(
         &parameters.args,
@@ -193,6 +186,7 @@ pub(crate) fn lower_params(
         None,
         aliases,
         class_defs,
+        DefaultPolicy::Admit,
     )?);
     Ok(params)
 }
@@ -207,6 +201,16 @@ pub(crate) fn lower_params(
 /// every top-level function's own shape validation, unchanged) so both
 /// callers share this one per-parameter annotation-resolution rule instead
 /// of duplicating it.
+///
+/// `policy` decides what a default value means here (Part 2 of #884, #1189).
+/// Under [`DefaultPolicy::Reject`] -- every method and protocol-member
+/// caller -- the pre-existing capability check runs unchanged and *before*
+/// annotation resolution, so a method parameter whose annotation would
+/// itself be rejected still reports the capability message first. Under
+/// [`DefaultPolicy::Admit`] -- `lower_params`' two calls, and nothing else
+/// -- the annotation is resolved first and `params::check_default` then
+/// applies every default rule.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_arg_list(
     args: &[pycc_ast::ParameterWithDefault],
     is_public: bool,
@@ -215,32 +219,36 @@ pub(crate) fn lower_arg_list(
     class_name: Option<&str>,
     aliases: &[(String, Ty)],
     class_defs: &[ClassAnnotationInfo],
+    policy: DefaultPolicy,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     args.iter()
         .map(|param| {
-            if param.default.is_some() {
+            if policy == DefaultPolicy::Reject && param.default.is_some() {
                 return Err(unsupported(
                     "default parameter values are not supported yet",
                     param.range,
                 ));
             }
             let name = param.parameter.name.as_str();
-            match &param.parameter.annotation {
-                Some(ann) => Ok((
-                    name.to_string(),
-                    annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
-                        .map_err(|error| with_bare_container_advice(error, ann))?,
-                )),
-                None if is_public => Err(Diagnostic::error(
-                    "T0001",
-                    format!(
-                        "parameter `{name}` of public function `{fn_name}` needs a type annotation"
-                    ),
-                    Span::new(0, 0),
-                )
-                .with_help(format!("add a type annotation to parameter `{name}`"))),
-                None => Ok((name.to_string(), Ty::Infer)),
+            let ty = match &param.parameter.annotation {
+                Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
+                    .map_err(|error| with_bare_container_advice(error, ann))?,
+                None if is_public => {
+                    return Err(Diagnostic::error(
+                        "T0001",
+                        format!(
+                            "parameter `{name}` of public function `{fn_name}` needs a type annotation"
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(format!("add a type annotation to parameter `{name}`")));
+                }
+                None => Ty::Infer,
+            };
+            if let Some(default) = param.default.as_deref() {
+                params::check_default(default, name, fn_name, &ty)?;
             }
+            Ok((name.to_string(), ty))
         })
         .collect()
 }

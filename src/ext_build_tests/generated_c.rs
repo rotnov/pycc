@@ -2586,3 +2586,32 @@ fn a_slice_egress_branches_every_parameter_of_the_identity_chain() {
         "{inc}"
     );
 }
+
+#[test]
+fn a_source_level_default_does_not_reach_the_generated_wrapper() {
+    // Part 2 of #884 (#1189) fills a default while the *calling module* is
+    // lowered, so HIR carries no trace of it and the host boundary is
+    // unchanged: the wrapper still demands every declared argument. D-244
+    // rule 7 is therefore untouched, and #1194 tracks widening it.
+    let dir = pycc_scratch::ScratchDir::new("ext_default_params").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(
+        &src,
+        "def add(a: int, b: int = 2) -> int:\n    return a + b\n",
+    )
+    .expect("write source");
+    let module = crate::frontend::resolve_frontend(&src, Some("m"))
+        .unwrap_or_else(|_| panic!("the fixture must type-check"));
+    let exports = collect_exports(&module).expect("a carriable program");
+    assert_eq!(exports.len(), 1, "{exports:?}");
+    assert_eq!(exports[0].params, vec![Ty::Int, Ty::Int], "{exports:?}");
+    let inc = generate_exports_inc("m", &exports, &[], &flat_publications(&exports), &[]);
+    assert!(
+        inc.contains("add() takes exactly 2 arguments (%zd given)"),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("pycc_ext_unpack_int(args[1], \"add\", 1, &a1)"),
+        "{inc}"
+    );
+}

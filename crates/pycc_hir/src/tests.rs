@@ -1929,14 +1929,32 @@ fn a_non_bare_name_annotation_returns_a_capability_error() {
 }
 
 #[test]
-fn a_default_parameter_value_returns_a_capability_error() {
-    // Regression test (self-review finding, pre-merge): lower_params
-    // used to only read `.parameter`, silently ignoring `.default` --
-    // producing a wrong signature (as if `b` had no default at all)
-    // instead of an explicit capability diagnostic.
-    assert_capability_error_message(
-        "def f(a: int, b: int = 2) -> int:\n    return a + b\n",
-        "default parameter values are not supported yet",
+fn a_default_parameter_value_lowers_the_parameter_with_its_annotated_type() {
+    // Part 2 of #884 (#1189): a module-level `def` may now carry a literal
+    // default. The lowered parameter list is exactly the one the same `def`
+    // without the default produces -- a default changes no `Ty`, which is
+    // what keeps `check_incompatible_redefinitions` comparing two such
+    // `def`s equal. (This test replaces the pre-#1189
+    // `a_default_parameter_value_returns_a_capability_error`, whose own
+    // regression subject -- `lower_params` reading `.parameter` and silently
+    // ignoring `.default` -- is now covered by the call-site fill tests in
+    // `expr::keyword_bind`, since a silently ignored default would leave the
+    // signature table with no default to splice.)
+    let module =
+        pycc_parser_test_helper::parse("def f(a: int, b: int = 2) -> int:\n    return a + b\n");
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("a".to_string())),
+                right: Box::new(HirExpr::Name("b".to_string())),
+            }))],
+        }]
     );
 }
 
@@ -1963,13 +1981,23 @@ fn a_positional_only_parameter_lowers_successfully() {
 }
 
 #[test]
-fn a_positional_only_parameter_with_a_default_value_is_rejected() {
-    // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
-    // (default values are unsupported) must fire, not be silently
-    // bypassed by the posonlyargs concatenation.
-    assert_capability_error_message(
-        "def f(a: int = 0, /) -> int:\n    return a\n",
-        "default parameter values are not supported yet",
+fn a_positional_only_parameter_with_a_default_value_lowers() {
+    // PEP 570 (#383) + Part 2 of #884 (#1189): a default *before* the `/`
+    // marker goes through the posonlyargs `lower_arg_list` call, which must
+    // validate and keep it rather than have the concatenation bypass it.
+    // `crates/pycc_hir/src/expr/keyword_bind.rs` owns the two call-site
+    // halves of this shape: such a parameter fills positionally, and naming
+    // it by keyword stays the PEP 570 `T0021`.
+    let module = pycc_parser_test_helper::parse("def f(a: int = 0, /) -> int:\n    return a\n");
+    let hir = lower_checked(&module).unwrap();
+    assert_eq!(
+        hir.items,
+        vec![HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("a".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("a".to_string())))],
+        }]
     );
 }
 
