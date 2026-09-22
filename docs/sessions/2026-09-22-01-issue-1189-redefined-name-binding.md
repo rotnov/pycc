@@ -48,7 +48,7 @@ binding, because a call inside a function body runs at a time its source
 position does not fix, so the rule withdraws binding outright instead of
 choosing a `def` by position.
 
-## Known follow-ups (observed, not filed)
+## Known follow-ups
 
 Probing the binding forms turned up two pre-existing wrong-output defects.
 Neither involves keyword binding or default filling, both involve fully
@@ -56,11 +56,13 @@ positional calls, and neither is fixed here:
 
 - `def sqrt(a: float = 4.0) -> float`, then `from math import sqrt`, then
   `print(sqrt(9.0))` prints `9.0`. The later import does not rebind the name
-  in pycc; CPython prints `3.0`.
+  in pycc; CPython prints `3.0`. The unsupported bare `from math import sqrt`
+  is #1157; the repro is recorded there as a comment (it also reproduces
+  with a `def sqrt` that has no default).
 - A module-level `match 1:` with `case foo:` does not rebind a
   zero-parameter `def foo() -> None`, so a later `foo()` still calls the
   function. CPython raises `TypeError` because `foo` is then the integer
-  `1`.
+  `1`. Filed as #1195 (v0.4).
 
 Both reproduce on this branch's rebuilt binary exactly as written.
 
