@@ -644,11 +644,15 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         };
         // `receiver` is decided lexically, from the mangled suffix alone,
         // because `classify_export_name` cannot see HIR. The guarantee that
-        // such a function really leads with `cls`/`self` lives in another
+        // such a function really leads with a receiver lives in another
         // crate -- `crates/pycc_hir/src/class.rs` refuses a `@classmethod`
-        // that does not take `cls` first and requires a regular method's
-        // first parameter to be named `self` -- so this site states that
-        // cross-crate invariant instead of slicing on the strength of it.
+        // that does not take `cls` first, and requires a regular method to
+        // declare a receiver as its first parameter, lowering it under the
+        // canonical name `self` whatever the source spelled it (#1181;
+        // `crates/pycc_hir/src/class/receiver.rs`). The invariant this site
+        // rests on is *positional*, so the #1181 relaxation of the source
+        // spelling does not weaken it -- this site states that cross-crate
+        // invariant instead of slicing on the strength of it.
         let carried_params = if receiver == ExtReceiver::None {
             &params[..]
         } else {
@@ -658,7 +662,8 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
                     "pycc: internal error: `{name}` is spelled as a method with a \
                      receiver but has no parameters -- pycc_hir::class refuses a \
                      `@classmethod` without a leading `cls` and a regular method \
-                     without a leading `self`, so this HIR should never have been built"
+                     without a leading receiver parameter, so this HIR should never \
+                     have been built"
                 ),
             }
         };

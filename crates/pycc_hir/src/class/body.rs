@@ -504,7 +504,16 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         )?;
         if method_name == "__init__" {
             init_seen = true;
-            attrs = collect_init_attrs(&method_def.body, &params)?;
+            // #1181: `collect_init_attrs` tests the body's receiver
+            // expression against the receiver's *source* spelling, which
+            // `params[0].0` no longer carries (it is always the canonical
+            // `self`). Derive it here, where `method_def` is already in
+            // scope, rather than widening `lower_method`'s return type.
+            // `lower_method` has already run and accepted this `__init__`,
+            // so it declares at least one parameter.
+            let receiver_split =
+                super::receiver::split_receiver(&method_def.parameters, method_def.range.into())?;
+            attrs = collect_init_attrs(&method_def.body, &params, receiver_split.name())?;
         }
         match &kind {
             MethodKind::Regular { is_override } => {

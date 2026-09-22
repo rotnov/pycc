@@ -46,8 +46,12 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
     // is absent. Inside a `@classmethod` the first parameter is bound as
     // `cls` and inside a `@staticmethod` there is no receiver at all
     // (`pycc_hir::class`), so a `self` binding here can only be a regular
-    // method's receiver: `pycc_hir` requires a regular method's first
-    // parameter and requires it to be named literally `self`. Reject the
+    // method's receiver: `pycc_hir` requires a regular method to declare a
+    // first parameter, and `pycc_hir::class::receiver` lowers that
+    // parameter under the canonical name `self` whatever the source spelled
+    // it (#1181) -- the *positional* invariant this test rests on survives
+    // that relaxation, the naming one is now the compiler's own
+    // canonicalization rather than a rule imposed on the source. Reject the
     // receiver-less forms as a capability gap (`C0001`) rather than
     // letting them reach `pycc_mir` and abort the compiler. The single
     // approximation is a `@classmethod` or `@staticmethod` that itself
@@ -133,8 +137,12 @@ pub(crate) fn resolve_super_method_call(
     // is absent. Inside a `@classmethod` the first parameter is bound as
     // `cls` and inside a `@staticmethod` there is no receiver at all
     // (`pycc_hir::class`), so a `self` binding here can only be a regular
-    // method's receiver: `pycc_hir` requires a regular method's first
-    // parameter and requires it to be named literally `self`. Reject the
+    // method's receiver: `pycc_hir` requires a regular method to declare a
+    // first parameter, and `pycc_hir::class::receiver` lowers that
+    // parameter under the canonical name `self` whatever the source spelled
+    // it (#1181) -- the *positional* invariant this test rests on survives
+    // that relaxation, the naming one is now the compiler's own
+    // canonicalization rather than a rule imposed on the source. Reject the
     // receiver-less forms as a capability gap (`C0001`) rather than
     // letting them reach `pycc_mir` and abort the compiler. The single
     // approximation is a `@classmethod` or `@staticmethod` that itself
@@ -393,10 +401,14 @@ mod tests {
             "T0047 should name the declaring class, got: {}",
             err.message
         );
+        // #1181: a method's receiver may be spelled with any identifier and
+        // a renamed receiver may not mention `self` at all, so the help names
+        // the receiver generically -- this crate never sees the source
+        // spelling (`crates/pycc_hir/src/class/receiver.rs` canonicalizes it).
         assert_eq!(
             err.help.as_deref(),
-            Some("read it through `self` instead: `self.x`"),
-            "T0047 should point at the equivalent `self` read"
+            Some("read it through the method's own receiver instead: `<receiver>.x`"),
+            "T0047 should point at the equivalent receiver read"
         );
     }
 

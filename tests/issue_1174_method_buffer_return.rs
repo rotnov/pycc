@@ -235,8 +235,10 @@ fn a_returned_buffer_from_each_method_kind_reaches_the_host_and_transfers_owners
 /// * `Buf[0]` -- PEP 560's `__class_getitem__`, which `expr.rs` routes
 ///   through `resolve_static_or_class_method_call` too. Written as a
 ///   `@classmethod` taking `cls`: a plain `def __class_getitem__(i: int)`
-///   is rejected earlier with "a method's first parameter must be named
-///   `self`" and would test nothing.
+///   is rejected earlier -- since #1181 by `class::receiver`'s
+///   implicitly-rebound-dunder guard, which keeps requiring `self` for
+///   `__new__`/`__init_subclass__`/`__class_getitem__` -- and would test
+///   nothing.
 const CALL_ROUTES: [(&str, &str, &str); 6] = [
     (
         "1174_call_instance",

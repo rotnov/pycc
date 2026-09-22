@@ -120,62 +120,71 @@ pub(super) fn lower_protocol_class(
                 // today, and each other spelling keeps the more specific
                 // diagnostic it already reported.
                 reject_reserved_protocol_method_name(&method_name, method_def.range.into())?;
-                // Lower the method's parameter and return types.
-                // `self` is handled specially (assigned
-                // `Ty::Instance(class_name)` directly, bypassing
-                // `annotation_to_ty`), matching how `lower_method`
-                // handles it for regular methods. The remaining
-                // parameters go through `lower_arg_list`.
+                // Lower the method's parameter and return types. The
+                // receiver is handled specially (the member signature does
+                // not carry it -- `pycc_types::class`'s conformance check
+                // skips exactly one parameter on the implementation side),
+                // matching how `lower_method` handles it for regular
+                // methods. The remaining parameters go through
+                // `lower_arg_list`.
+                //
+                // #1181: stripped *positionally*, not by the name `self`,
+                // since a protocol method's receiver may be spelled
+                // anything. Deliberately **not** a bare
+                // `args.split_first()`: PEP 570's positional-only receiver
+                // (`def val(this, /, x: int)`) lives in `posonlyargs`, and
+                // `args` then holds only the real parameters -- splitting
+                // that list would eat `x` and leave an arity-0 member
+                // against a 1-parameter implementation. Split off
+                // `posonlyargs` first and fall back to `args` only when it
+                // is empty, the same two-branch shape `class::receiver`'s
+                // own `split_receiver` uses. Positional stripping is safe
+                // here because this function rejects *every* decorator on a
+                // protocol method before this point, so no
+                // `@staticmethod`/`@classmethod` member's first real
+                // parameter can be eaten. A protocol method declaring no
+                // parameter at all keeps the pre-#1181 graceful handling:
+                // nothing is stripped.
+                let posonlyargs = &method_def.parameters.posonlyargs;
                 let all_args = &method_def.parameters.args;
-                let (params, return_ty) =
-                    if !all_args.is_empty() && all_args[0].parameter.name.as_str() == "self" {
-                        // Strip `self` and lower the rest.
-                        let rest = &all_args[1..];
-                        let method_is_public = crate::is_public_name(&method_name);
-                        let p = crate::lower_arg_list(
-                            rest,
-                            method_is_public,
-                            &method_name,
-                            type_param.as_deref(),
-                            Some(&class_name),
-                            &[],
-                            class_name_defs,
-                        )?;
-                        let r = crate::lower_return_annotation(
-                            method_def.returns.as_deref(),
-                            method_is_public,
-                            &method_name,
-                            type_param.as_deref(),
-                            Some(&class_name),
-                            &[],
-                            class_name_defs,
-                        )?;
-                        (p, r)
-                    } else {
-                        // No `self` parameter — this is unusual for a
-                        // protocol method but we handle it gracefully by
-                        // lowering all parameters.
-                        let method_is_public = crate::is_public_name(&method_name);
-                        let p = crate::lower_arg_list(
-                            all_args,
-                            method_is_public,
-                            &method_name,
-                            type_param.as_deref(),
-                            Some(&class_name),
-                            &[],
-                            class_name_defs,
-                        )?;
-                        let r = crate::lower_return_annotation(
-                            method_def.returns.as_deref(),
-                            method_is_public,
-                            &method_name,
-                            type_param.as_deref(),
-                            Some(&class_name),
-                            &[],
-                            class_name_defs,
-                        )?;
-                        (p, r)
-                    };
+                let (posonly_rest, args_rest) = if let Some((_, rest)) = posonlyargs.split_first() {
+                    (rest, all_args.as_slice())
+                } else if let Some((_, rest)) = all_args.split_first() {
+                    (&[][..], rest)
+                } else {
+                    (&[][..], &[][..])
+                };
+                let (params, return_ty) = {
+                    let method_is_public = crate::is_public_name(&method_name);
+                    let mut p = crate::lower_arg_list(
+                        posonly_rest,
+                        method_is_public,
+                        &method_name,
+                        type_param.as_deref(),
+                        Some(&class_name),
+                        &[],
+                        class_name_defs,
+                    )?;
+                    p.extend(crate::lower_arg_list(
+                        args_rest,
+                        method_is_public,
+                        &method_name,
+                        type_param.as_deref(),
+                        Some(&class_name),
+                        &[],
+                        class_name_defs,
+                    )?);
+                    let r = crate::lower_return_annotation(
+                        method_def.returns.as_deref(),
+                        method_is_public,
+                        &method_name,
+                        type_param.as_deref(),
+                        Some(&class_name),
+                        &[],
+                        class_name_defs,
+                    )?;
+                    (p, r)
+                };
                 // Part 1 of #1027: a protocol method's `-> memoryview` is
                 // unsatisfiable in *every* artifact mode, so it is refused
                 // here at the declaration rather than by either of
