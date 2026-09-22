@@ -33,6 +33,45 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — A `--ext` test that asserted a successful build instead of an empty diagnostic set
+
+Issue #1181's new suite added `a_renamed_receiver_builds_as_an_ext_export`
+(since renamed `a_renamed_receiver_is_admitted_as_an_ext_export`), a
+non-`#[ignore]`d test asserting `pycc build --ext` exits successfully. It
+passed locally and failed the `build-test-coverage` job with
+`--ext needs CPython 3.13 or newer to build against (found 3.9)`: the macOS
+runner's `python3` is 3.9, so the build reaches `clang` and stops at the
+interpreter-version check. That is one full CI round — open, wait, read the
+job log, fix, re-push — spent on a property the test never owned.
+
+Root cause: the test's assertion confused *what the change affects* with
+*what the environment provides*. The change affects whether the frontend
+admits the program under `--ext`; whether a host can finish linking it does
+not depend on the diff at all. The repository already encodes exactly this
+split and states the reason in prose —
+`tests/issue_1174_method_buffer_return.rs`'s admission arm asserts the
+*absence* of `C0003`/`C0001`/`I0405`/`T0` and of a panic, and
+`tests/issue_1145_ext_instance_methods.rs` puts every arm that needs a real
+artifact behind `#[ignore = "requires a CPython 3.13+ with development
+headers on PATH"]` — but the new test was written from the issue's own
+wording ("builds as an ext export") rather than from the neighbouring
+convention.
+
+Fixed by re-aiming the arm at diagnostic absence and keeping the
+interpreter-dependent half in the already-`#[ignore]`d companion. Verified
+against the actual CI condition rather than by reasoning about it:
+`PYCC_PYTHON=/usr/bin/python3` (3.9.6 on this host) reproduces the CI error
+verbatim from a direct `pycc build --ext`, and the test suite is green under
+that same override.
+
+**Lesson:** a `--ext` test that is not `#[ignore]`d must never assert
+`build.status.success()`. Assert the absence of the diagnostics the change
+owns; a successful link is an environment property, and CI's macOS runner
+carries a CPython older than `--ext` accepts. More generally, when adding a
+test to an area that already has sibling suites, read one sibling's
+corresponding arm before writing the assertion — the convention there
+usually encodes an environment constraint the issue text does not mention.
+
 ## 2026-09-22 — A review brief that never named the shapes an out-of-band side channel fails in
 
 Issue #1179 added an out-of-band side channel: a compiled export returns the

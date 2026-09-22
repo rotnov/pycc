@@ -779,8 +779,10 @@ no attribute '<attr>'` under the pinned conformance oracle. pycc used to \
 resolve this form against `self`'s own slot and return a value, which meant \
 a program compiled and printed a different answer than CPython gave for the \
 same expression; it is now rejected instead. Nothing is lost by the \
-rejection: `super().<attr>` and `self.<attr>` read the identical slot, so \
-the fix is always to spell the read `self.<attr>`. The class-level members \
+rejection: `super().<attr>` and a read through the method's own receiver \
+read the identical slot, so the fix is always to spell the read \
+`<receiver>.<attr>` -- whatever identifier that method spells its receiver \
+with (#1181). The class-level members \
 a `super` object genuinely does proxy are unaffected: a base class \
 `@property` (a class-level descriptor) and a base class class attribute \
 (#911), which is a real entry in that class's `__dict__` and folds to its \

@@ -166,7 +166,12 @@ fn super_instance_attr_read_is_a_check_error() {
 
     // `render_human` deliberately has no `help:` line yet (D-043); the
     // suggestion reaches users through the JSON diagnostic format's `help`
-    // array (D-152), so that is where the equivalent `self` read is asserted.
+    // array (D-152), so that is where the equivalent receiver read is
+    // asserted. Since #1181 a method's receiver may be spelled with any
+    // identifier and a renamed receiver may not mention `self` at all, so the
+    // help names the receiver generically rather than hardcoding `self.<attr>`
+    // -- `pycc_types` never sees the source spelling (see
+    // `crates/pycc_hir/src/class/receiver.rs`).
     let json = Command::new(pycc_bin())
         .args(["check", src.to_str().unwrap(), "--error-format", "json"])
         .output()
@@ -177,8 +182,8 @@ fn super_instance_attr_read_is_a_check_error() {
         String::from_utf8_lossy(&json.stderr)
     );
     assert!(
-        json_rendered.contains("self.x"),
-        "T0047's JSON `help` should suggest the equivalent `self` read, got: {json_rendered}"
+        json_rendered.contains("`<receiver>.x`"),
+        "T0047's JSON `help` should suggest the equivalent receiver read, got: {json_rendered}"
     );
 }
 

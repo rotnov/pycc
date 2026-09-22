@@ -69,6 +69,7 @@ pub use mro::flat_attr_layout;
 mod protocol;
 #[cfg(test)]
 mod protocol_return_tests;
+mod receiver;
 mod reserved_names;
 mod shadow;
 pub use shadow::declares_name_outside_class_attrs;
@@ -1464,6 +1465,11 @@ fn lower_method(
     // `Ty::Instance(class_name)`, matching `self`'s own type in this
     // compiler's static-dispatch model) as its first parameter. A
     // regular/property method takes `self` as before.
+    // #1181: set by the `_ =>` arm below to the receiver's *source*
+    // spelling, so the alias statement can be prepended to the lowered body
+    // once the body exists. `None` for `@staticmethod` (no receiver) and
+    // `@classmethod` (its own `cls` rule, `class.rs`'s own arm).
+    let mut receiver_name: Option<String> = None;
     let params = match kind {
         MethodKind::StaticMethod => {
             // PEP 570 (#383): for `@staticmethod`, posonlyargs come first
@@ -1548,63 +1554,24 @@ fn lower_method(
             p
         }
         _ => {
-            // PEP 570 (#383): `self` is the first parameter overall — it
-            // may be in `posonlyargs` (if `/` follows it) or in `args`.
-            if parameters.posonlyargs.is_empty() && parameters.args.is_empty() {
-                return Err(unsupported(
-                    "a method must take `self` as its first parameter",
-                    def.range,
-                ));
-            }
-            let (self_param, posonly_rest, args_rest) = if !parameters.posonlyargs.is_empty() {
-                let (self_p, rest_pos) = parameters.posonlyargs.split_first().unwrap();
-                (self_p, rest_pos, parameters.args.as_slice())
-            } else {
-                let (self_p, rest_args) = parameters.args.split_first().unwrap();
-                (self_p, &[][..], rest_args)
-            };
-            if self_param.parameter.name.as_str() != "self" {
-                return Err(unsupported(
-                    "a method's first parameter must be named `self`",
-                    parameters.range,
-                ));
-            }
-            if self_param.default.is_some() {
-                return Err(unsupported(
-                    "`self` cannot have a default value",
-                    parameters.range,
-                ));
-            }
-            if self_param.parameter.annotation.is_some() {
-                return Err(unsupported(
-                    "an explicit type annotation on `self` is not supported yet",
-                    parameters.range,
-                ));
-            }
-            // #377: a `@property` getter takes only `self` (no additional
-            // parameters); a `@<name>.setter` setter takes exactly one
-            // additional parameter (the value to assign). A regular method
-            // has no arity constraint beyond the structural checks above.
-            let extra_count = posonly_rest.len() + args_rest.len();
-            match kind {
-                MethodKind::PropertyGetter { .. } if extra_count > 0 => {
-                    return Err(unsupported(
-                        "a `@property` getter must take only `self` (no additional parameters)",
-                        parameters.range,
-                    ));
-                }
-                MethodKind::PropertySetter { .. } if extra_count != 1 => {
-                    return Err(unsupported(
-                        "a `@<name>.setter` setter must take exactly one parameter besides `self`",
-                        parameters.range,
-                    ));
-                }
-                _ => {}
-            }
+            // #1181: the receiver is the first positional parameter whatever
+            // it is spelled; `class::receiver` owns every part of that
+            // decision (see its own module doc comment for the rule and for
+            // why the two guards below exist). Both guards run *here*,
+            // before the `stmt::lower_body` call further down: `global`,
+            // `nonlocal` and `del` each report their own `C0001` from that
+            // pass, so a scan placed after it would never reach those shapes
+            // with the receiver's own message.
+            let split = receiver::split_receiver(parameters, def.range.into())?;
+            receiver::check_receiver_param(&split, parameters.range.into())?;
+            receiver::check_property_arity(kind, &split, parameters.range.into())?;
+            receiver::check_renamed_receiver(def, method_name, &split)?;
+            receiver_name = Some(split.name().to_string());
+            let (posonly_rest, args_rest) = (split.posonly_rest, split.args_rest);
             let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-            let mut p = vec![("self".to_string(), self_ty)];
-            // PEP 570 (#383): remaining posonlyargs follow `self`, before
-            // ordinary `args`.
+            let mut p = vec![(receiver::CANONICAL_RECEIVER.to_string(), self_ty)];
+            // PEP 570 (#383): remaining posonlyargs follow the receiver,
+            // before ordinary `args`.
             p.extend(lower_arg_list(
                 posonly_rest,
                 params_is_public,
@@ -1661,6 +1628,22 @@ fn lower_method(
             imports,
             signatures,
         )?
+    };
+    // #1181: when the source spells the receiver anything other than the
+    // canonical `self`, open the lowered body with `<name> = self` so the
+    // user's spelling is an ordinary local bound to the canonical receiver
+    // (see `class::receiver`'s module doc comment). Applied uniformly,
+    // including to `MethodKind::AbstractMethod`'s synthesized
+    // `Return(None)` body above: an abstract method is registered as a
+    // function but never called, so an unused alias there is inert, and a
+    // separate branch would only be a second thing to keep in step.
+    let body = match receiver_name.as_deref() {
+        Some(name) if name != receiver::CANONICAL_RECEIVER => {
+            let mut aliased = vec![receiver::alias_stmt(name)];
+            aliased.extend(body);
+            aliased
+        }
+        _ => body,
     };
     // #377/#436: compute the mangled name based on the method kind. A
     // regular method uses `<Class>.<name>`. A property getter uses the
@@ -1809,11 +1792,19 @@ fn synthesize_dataclass_repr(class_name: &str, fields: &[(String, Ty)]) -> HirIt
 /// the already-established slot type -- this pre-scan's only job is
 /// deciding *which* attributes exist and their *first-assignment* type).
 ///
-/// `params` is `lower_method`'s own full parameter list (including `self`
-/// as its first entry) -- used to resolve a bare-parameter-name RHS's `Ty`.
+/// `params` is `lower_method`'s own full parameter list (whose first entry
+/// is always the *canonical* receiver name, `self`, whatever the source
+/// spelled -- see `class::receiver`) -- used to resolve a
+/// bare-parameter-name RHS's `Ty`.
+///
+/// #1181: `receiver_name` is the receiver's *source* spelling, which is what
+/// the body actually writes. Comparing against the literal `self` instead
+/// would make `def __init__(this): this.v = 1` establish zero attribute
+/// slots, and every later read of `c.v` would fail with `T0044`.
 fn collect_init_attrs(
     init_body: &[Stmt],
     params: &[(String, Ty)],
+    receiver_name: &str,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     let mut attrs: Vec<(String, Ty)> = Vec::new();
     for stmt in init_body {
@@ -1846,14 +1837,14 @@ fn collect_init_attrs(
         let Expr::Name(receiver) = attr.value.as_ref() else {
             continue;
         };
-        if receiver.id.as_str() != "self" {
+        if receiver.id.as_str() != receiver_name {
             continue;
         }
         let attr_name = attr.attr.to_string();
         if attrs.iter().any(|(name, _)| *name == attr_name) {
             continue;
         }
-        let ty = slot_ty_from_init_rhs(&assign.value, params)?;
+        let ty = slot_ty_from_init_rhs(&assign.value, params, receiver_name)?;
         attrs.push((attr_name, ty));
     }
     Ok(attrs)
@@ -1918,7 +1909,11 @@ fn validate_init_subclass_body(
 /// explicit authorization ("any class-body statement kind other than a
 /// `def` or a `self.<attr> = ...` inside `__init__` is `C0001` for this
 /// PR").
-fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Diagnostic> {
+fn slot_ty_from_init_rhs(
+    value: &Expr,
+    params: &[(String, Ty)],
+    receiver_name: &str,
+) -> Result<Ty, Diagnostic> {
     match value {
         // Two guarded arms of the same top-level `match`, deliberately
         // *asymmetric* rather than two structurally identical `matches!`
@@ -1960,9 +1955,19 @@ fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Di
         // as `Ty::Float` by the negation above is therefore never
         // observable from any real parsed source.
         Expr::Name(name) => {
+            // #1181: `params[0].0` is the *canonical* receiver name, so an
+            // RHS naming the receiver has to be resolved through the
+            // source spelling -- otherwise `def __init__(this, v: int):
+            // this.x = this` takes the unresolvable-name path below instead
+            // of its `self`-spelled twin's `Ty::Instance` path.
+            let lookup = if name.id.as_str() == receiver_name {
+                receiver::CANONICAL_RECEIVER
+            } else {
+                name.id.as_str()
+            };
             let resolved = params
                 .iter()
-                .find(|(param_name, _)| param_name == name.id.as_str())
+                .find(|(param_name, _)| param_name == lookup)
                 .map(|(_, ty)| ty.clone());
             match resolved {
                 // Only a scalar-typed parameter (int/float/bool/str) may
@@ -1988,8 +1993,8 @@ fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Di
                 Some(ty @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))) => Ok(ty),
                 Some(other) => Err(unsupported(
                     format!(
-                        "`self.<attr> = {}` cannot establish an attribute of type `{}` yet \
-                         -- only a scalar (int/float/bool/str) parameter is supported",
+                        "`{receiver_name}.<attr> = {}` cannot establish an attribute of type \
+                         `{}` yet -- only a scalar (int/float/bool/str) parameter is supported",
                         name.id,
                         other.name()
                     ),
@@ -1997,7 +2002,7 @@ fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Di
                 )),
                 None => Err(unsupported(
                     format!(
-                        "`self.<attr> = {}` must reference one of `__init__`'s own \
+                        "`{receiver_name}.<attr> = {}` must reference one of `__init__`'s own \
                          parameters to establish the attribute's type, or use a scalar \
                          literal",
                         name.id
@@ -2483,8 +2488,34 @@ mod tests {
     }
 
     #[test]
-    fn a_method_whose_first_parameter_is_not_named_self_is_unsupported() {
-        assert_c0001("class C:\n    def __init__(this) -> None:\n        return\n");
+    fn a_method_whose_receiver_is_not_spelled_self_is_accepted_and_aliased() {
+        // #1181 removed the rule this test used to assert. The receiver is
+        // lowered under the canonical name `self`, and the body opens with
+        // the `this = self` alias -- the two facts the whole change rests on,
+        // asserted here on the HIR directly rather than only through the CLI
+        // (`tests/issue_1181_receiver_spelling.rs` covers the behavior).
+        let module = lower_ok("class C:\n    def __init__(this) -> None:\n        return\n");
+        assert_eq!(
+            module.items,
+            vec![crate::HirItem::Function {
+                name: "C.__init__".to_string(),
+                params: vec![("self".to_string(), Ty::Instance(Box::new("C".to_string())))],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::Assign {
+                        target: "this".to_string(),
+                        value: crate::HirExpr::Name("self".to_string()),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+            "the receiver is lowered canonically and the body opens with its alias"
+        );
+    }
+
+    #[test]
+    fn a_method_with_no_receiver_at_all_is_unsupported() {
+        assert_c0001("class C:\n    def __init__() -> None:\n        return\n");
     }
 
     #[test]
@@ -4453,11 +4484,25 @@ mod tests {
     }
 
     #[test]
-    fn a_protocol_method_without_self_and_unsupported_param_annotation_is_rejected() {
-        // This exercises the `?` error path on lower_arg_list in the
-        // no-`self` branch of protocol method lowering (line 701).
+    fn a_protocol_method_with_an_unsupported_param_annotation_is_rejected() {
+        // Exercises the `?` error path on `lower_arg_list` in protocol
+        // method lowering. #1181 made the receiver strip *positional*, so
+        // the offending annotation has to sit on a parameter after the
+        // receiver -- with `def foo(x: Frobnicate)` the bad annotation is
+        // now the receiver's own and is stripped before it is ever lowered.
         assert_c0001(
-            "from typing import Protocol\nclass P(Protocol):\n    def foo(x: Frobnicate) -> int: ...\n",
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(this, x: Frobnicate) -> int: ...\n",
+        );
+    }
+
+    #[test]
+    fn a_protocol_method_with_an_unsupported_posonly_param_annotation_is_rejected() {
+        // #1181 split the receiver strip across `posonlyargs` and `args`, so
+        // the two `lower_arg_list` calls have two separate `?` error paths.
+        // This one is the `posonlyargs` call's: `x` stays in `posonlyargs`
+        // after the receiver is stripped from that same list.
+        assert_c0001(
+            "from typing import Protocol\nclass P(Protocol):\n    def foo(this, x: Frobnicate, /) -> int: ...\n",
         );
     }
 

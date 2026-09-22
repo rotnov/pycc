@@ -379,7 +379,15 @@ fn t0047_super_instance_attr(attr: &str, declaring_class: &str) -> Diagnostic {
         ),
         Span::new(0, 0),
     )
-    .with_help(format!("read it through `self` instead: `self.{attr}`"))
+    // #1181: the receiver's *source* spelling never crosses into this crate
+    // -- `pycc_hir::class::receiver` lowers it under the canonical name
+    // `self` precisely so nothing here has to know it -- so the help names
+    // the receiver without asserting how it is spelled. Naming `self` would
+    // tell a user whose receiver is spelled `this` to write the one thing
+    // that crate's own occurrence guard forbids.
+    .with_help(format!(
+        "read it through the method's own receiver instead: `<receiver>.{attr}`"
+    ))
 }
 
 /// Validates a call's arguments against a resolved `(param_tys, return_ty)`
