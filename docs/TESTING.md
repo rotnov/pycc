@@ -513,6 +513,24 @@ rule 6); only numbers are published.
   `scripts/check_roadmap_evidence.rb` refuse a `null`, so registering it is that
   run's first action, in a stage commit of its own, and no roadmap box can cite
   this protocol's evidence before then.
+- **Workload admissibility.** The Subject bullet fixes *which* function is the
+  subject once a workload is chosen, but it presumes such a function exists.
+  [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
+  supplies the missing predicate, and it is checked against a profile of the
+  candidate workload *before* that workload is adopted. A workload is an
+  admissible subject source only when one function in that profile satisfies all
+  four clauses: it is the workload's **own** source rather than a dependency's
+  or the interpreter's; it is Python rather than a C extension; it is
+  loop-bearing by **statement** loops, a comprehension alone not qualifying;
+  and it accounts for at least
+  **20%** of the profile's summed self time. Exportability is deliberately not
+  part of the predicate — whether the subject can be reached from a host is
+  already governed by
+  [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+  rule 1 and by
+  [D-038](./decisions/D-038-a-leading-underscore-marks-a-top-level-function.md).
+  A workload that fails any clause is refused, and the refusal is a statement
+  about that workload, never a result for the compiler.
 - **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
   artifact. All three run back to back in one session on one machine, on the
   same OS and power profile, with no other timed work on the box. Which machine
@@ -724,9 +742,15 @@ rule 6); only numbers are published.
 
 ### Status: the protocol has no admissible subject
 
-Nothing above is amended by this subsection, and nothing above has been
-amended since it was committed. The protocol is unchanged, the
-pre-registration record is unchanged, and `subject_sha256` is still `null`.
+Nothing above is amended by this subsection. The protocol above has been
+amended exactly once since it was committed: the **Workload admissibility**
+bullet, added on 2026-09-22 by
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
+which supplies a predicate the protocol presumed rather than revising how a
+chosen subject is measured. `subject_sha256` is still `null`; the record's
+only amended field is `machine.os`, re-pinned on 2026-09-21 and recorded there
+as `machine_os_amendment` (prerequisite 3 below), and no other field has
+changed.
 This records why no run has been scored against it, so that a later session
 does not re-derive the same findings. It was corrected on 2026-09-17, when the
 count prerequisite 2 reports was measured rather than asserted, and again on
@@ -745,6 +769,15 @@ predicate the export rule uses — so it could not see methods. Re-run over the
 bodies of public classes, exactly one public method takes a numpy-array
 parameter and contains loops, and it is unreachable only because of where it
 is defined. That is a fifth boundary gap (#1131), not a workload property.
+A fifth correction, on 2026-09-22, settles the question the closing
+paragraph below left open — what the protocol takes as its subject — by
+pre-registering an admissibility predicate for the *workload* rather than
+revising the Subject bullet:
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
+whose operational form is the **Workload admissibility** bullet above. Under
+it the reference workload is refused, so prerequisite 2 is no longer a
+prerequisite of this workload's run at all: there is no run to prepare here,
+and an admissible replacement workload is what #1039 now waits on.
 Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
@@ -1080,25 +1113,39 @@ names, and returned `count=133` with a digest byte-identical to the committed
 `compile_unchanged_set_sha256`. There is no drift in the "compiles unchanged"
 denominator.
 
-The operative blocker is therefore prerequisite 2, for both readings, now
-joined by prerequisite 3. Neither has an issue tracking it, because neither
+The operative blocker was therefore prerequisite 2, for both readings, joined
+by prerequisite 3. **Annotated 2026-09-22 ([D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)):** neither is operative any longer, because this workload is refused and has no run to prepare. Neither has an issue tracking it, because neither
 is straightforwardly a compiler gap: the **Subject** bullet requires a
 byte-identical function that both compiles *and* consumes the committed
 input, from a codebase that currently offers none, so closing it could
 equally mean revising what the protocol takes as its subject — and a subject
 revised now, with the 3.41x figure from #1114 already in hand, decides the
-bet instead of measuring it. That is left open here rather than settled, but
-it must be settled before #1039 can resume — and landing #1027 alone does
-not settle it. The compilation diagnostics are the actionable residue: they
+bet instead of measuring it. That was left open here on 2026-09-18 and is
+settled as of 2026-09-22 by
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md):
+the protocol keeps the Subject bullet as written and gains a predicate on the
+*workload* instead, under which this reference workload yields no subject and
+is refused. #1039 therefore resumes on an admissible replacement workload, not
+on landing #1027. The compilation diagnostics are the actionable residue: they
 are ordinary capability gaps, dominated by dependency-level import families and
 tracked chiefly by [#882](https://github.com/rotnov/pycc/issues/882), sized
 against a real codebase — but read them with prerequisite 2's cascade-suppression
 caveat, which is why their count is not a remaining total.
 
-The protocol's **Input** bullet forbids choosing a different workload after
-meeting any of these obstacles, so the committed generator, seed and digest
-stand as they are and the run waits rather than the obstacles reshaping the
-run.
+The protocol's **Input** bullet still forbids choosing a different workload
+*because* of these obstacles, and the **Workload admissibility** bullet does
+not relax that: a replacement is admissible only through the predicate
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
+fixed in advance, never because an obstacle was met. What that bullet does
+change is which obstacle is operative. This workload yields no subject at
+all, so the committed generator, seed, `input_sha256` and denominator describe
+a run that cannot be scored: a replacement workload replaces its input too, so
+those fields — `generator_path`, `seed`, `input_sha256` and every
+`compile_unchanged_*` field, the set digest included — are re-registered in
+their own pre-registration commit when an admissible workload is adopted, ahead
+of any run. `subject_sha256` is not part of that commit: it keeps the **Subject**
+bullet's own rule, registered as the scoring run's first action in a stage
+commit of its own. Until then nothing here is reshaped by an obstacle.
 
 #### What the boundary costs, measured (not part of the protocol)
 
