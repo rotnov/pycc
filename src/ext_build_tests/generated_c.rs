@@ -2595,8 +2595,11 @@ fn a_source_level_default_does_not_reach_the_generated_wrapper() {
     // rule 7 is therefore untouched, and #1194 tracks widening it.
     let dir = pycc_scratch::ScratchDir::new("ext_default_params").expect("scratch");
     let src = dir.join("m.py");
-    std::fs::write(&src, "def add(a: int, b: int = 2) -> int:\n    return a + b\n")
-        .expect("write source");
+    std::fs::write(
+        &src,
+        "def add(a: int, b: int = 2) -> int:\n    return a + b\n",
+    )
+    .expect("write source");
     let module = crate::frontend::resolve_frontend(&src, Some("m"))
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
     let exports = collect_exports(&module).expect("a carriable program");

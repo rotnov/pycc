@@ -164,7 +164,7 @@ pub(super) fn lower_protocol_class(
                         Some(&class_name),
                         &[],
                         class_name_defs,
-                    crate::func::params::DefaultPolicy::Reject,
+                        crate::func::params::DefaultPolicy::Reject,
                     )?;
                     p.extend(crate::lower_arg_list(
                         args_rest,
@@ -174,7 +174,7 @@ pub(super) fn lower_protocol_class(
                         Some(&class_name),
                         &[],
                         class_name_defs,
-                    crate::func::params::DefaultPolicy::Reject,
+                        crate::func::params::DefaultPolicy::Reject,
                     )?);
                     let r = crate::lower_return_annotation(
                         method_def.returns.as_deref(),

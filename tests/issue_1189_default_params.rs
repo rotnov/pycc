@@ -68,8 +68,7 @@ fn an_omitted_default_produces_the_same_output_as_its_explicit_twin() {
 #[test]
 fn every_call_shape_of_a_defaulted_def_agrees() {
     let dir = ScratchDir::new("e2e_issue_1189_shapes").expect("failed to create scratch dir");
-    const DEF: &str =
-        "def pair(a: int, b: int = 3) -> None:\n    print(a)\n    print(b)\n\n";
+    const DEF: &str = "def pair(a: int, b: int = 3) -> None:\n    print(a)\n    print(b)\n\n";
     let expected = "1\n3\n";
     for (name, call) in [
         ("positional_short", "pair(1)"),

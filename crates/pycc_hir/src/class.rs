@@ -1468,7 +1468,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?;
             p.extend(lower_arg_list(
                 &parameters.args,
@@ -1478,7 +1478,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }
@@ -1529,7 +1529,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1539,7 +1539,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }
@@ -1570,7 +1570,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1580,7 +1580,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
-            crate::func::params::DefaultPolicy::Reject,
+                crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }

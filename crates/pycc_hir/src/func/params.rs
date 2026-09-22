@@ -82,8 +82,7 @@ pub(crate) fn reject_unsupported_parameter_shapes(
 /// The message [`check_default`] reports for a default expression outside the
 /// admitted literal subset. Shared with the doc-comment-level statement of
 /// the subset in `docs/TYPE_SYSTEM.md`.
-pub(crate) const UNADMITTED_DEFAULT: &str =
-    "only a literal `int`, `float`, `bool`, `str`, or `None` default parameter value is \
+pub(crate) const UNADMITTED_DEFAULT: &str = "only a literal `int`, `float`, `bool`, `str`, or `None` default parameter value is \
      supported yet (a unary `-`/`+` may be applied to a numeric literal)";
 
 /// Recognizes a default expression this part can materialize at the call
@@ -122,16 +121,12 @@ pub(crate) fn literal_default(expr: &Expr) -> Option<HirExpr> {
             (UnaryOp::USub | UnaryOp::UAdd, Expr::NumberLiteral(lit)) => {
                 let negate = matches!(unary.op, UnaryOp::USub);
                 match &lit.value {
-                    Number::Int(i) => crate::expr::fold_int_literal_sign(
-                        i,
-                        negate,
-                        pycc_ast::expr_range(expr),
-                    )
-                    .ok()
-                    .map(HirExpr::IntLiteral),
-                    Number::Float(f) => {
-                        Some(HirExpr::FloatLiteral(if negate { -*f } else { *f }))
+                    Number::Int(i) => {
+                        crate::expr::fold_int_literal_sign(i, negate, pycc_ast::expr_range(expr))
+                            .ok()
+                            .map(HirExpr::IntLiteral)
                     }
+                    Number::Float(f) => Some(HirExpr::FloatLiteral(if negate { -*f } else { *f })),
                     _ => None,
                 }
             }

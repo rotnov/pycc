@@ -77,8 +77,7 @@ fn a_method_reports_the_same_shape_messages_as_a_module_level_def() {
         ),
         ("self, **kwargs", "`**kwargs` is not supported yet"),
     ] {
-        let source =
-            format!("class C:\n    def m({parameters}) -> None:\n        return\n");
+        let source = format!("class C:\n    def m({parameters}) -> None:\n        return\n");
         let diagnostic = lower_err(&source);
         assert_eq!(diagnostic.code, "C0001", "parameters: {parameters}");
         assert_eq!(diagnostic.message, message, "parameters: {parameters}");
@@ -337,12 +336,13 @@ fn a_receiver_parameter_keeps_its_own_default_message() {
 
 #[test]
 fn a_classmethod_cls_parameter_keeps_its_own_default_message() {
-    let diagnostic = lower_err(
-        "class C:\n    @classmethod\n    def m(cls = 1) -> None:\n        return\n",
-    );
+    let diagnostic =
+        lower_err("class C:\n    @classmethod\n    def m(cls = 1) -> None:\n        return\n");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("`cls` cannot have a default value"),
+        diagnostic
+            .message
+            .contains("`cls` cannot have a default value"),
         "{diagnostic:?}"
     );
 }
@@ -368,9 +368,8 @@ fn two_bad_defaults_in_one_module_are_both_reported() {
 fn one_bad_default_with_several_call_sites_is_reported_once() {
     // Rejection lives at the `def`, never at a call, so the user sees one
     // diagnostic however many times the function is called.
-    let diagnostics = lower_all_err(
-        "def f(a: int = OTHER) -> None:\n    return\n\nf(1)\nf(2)\nf(3)\n",
-    );
+    let diagnostics =
+        lower_all_err("def f(a: int = OTHER) -> None:\n    return\n\nf(1)\nf(2)\nf(3)\n");
     let unadmitted: Vec<_> = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.message == UNADMITTED_MESSAGE)

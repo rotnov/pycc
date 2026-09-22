@@ -149,7 +149,10 @@ fn signature_of(parameters: &Parameters) -> Option<Signature> {
         }
     }
     debug_assert!(
-        defaults.iter().skip_while(|d| d.is_none()).all(Option::is_some),
+        defaults
+            .iter()
+            .skip_while(|d| d.is_none())
+            .all(Option::is_some),
         "the parser guarantees a required prefix followed by a defaulted suffix"
     );
     Some(Signature {
@@ -175,8 +178,7 @@ pub(crate) fn needs_default_fill(
     positional_len: usize,
 ) -> bool {
     signatures.get(callee).is_some_and(|signature| {
-        positional_len < signature.names.len()
-            && signature.defaults.iter().any(Option::is_some)
+        positional_len < signature.names.len() && signature.defaults.iter().any(Option::is_some)
     })
 }
 
@@ -626,8 +628,7 @@ mod tests {
 
     // --- Part 2 of #884 (#1189): defaults filled at a short call ---------
 
-    const DEF_A_B2: &str =
-        "def f(a: int, b: int = 2) -> None:\n    print(a)\n    print(b)\n\n";
+    const DEF_A_B2: &str = "def f(a: int, b: int = 2) -> None:\n    print(a)\n    print(b)\n\n";
 
     /// Asserts that omitting a defaulted argument produces *exactly* the
     /// argument vector writing the same literal explicitly produces.
@@ -640,8 +641,15 @@ mod tests {
         let def = format!("def f(a: {annotation} = {literal}) -> None:\n    return\n\n");
         let filled = first_call_args(&format!("{def}f()\n"));
         let explicit = first_call_args(&format!("{def}f({literal})\n"));
-        assert_eq!(filled, explicit, "annotation `{annotation}`, default `{literal}`");
-        assert_eq!(filled, vec![expected], "annotation `{annotation}`, default `{literal}`");
+        assert_eq!(
+            filled, explicit,
+            "annotation `{annotation}`, default `{literal}`"
+        );
+        assert_eq!(
+            filled,
+            vec![expected],
+            "annotation `{annotation}`, default `{literal}`"
+        );
     }
 
     #[test]
@@ -682,11 +690,7 @@ mod tests {
         assert_default_matches_explicit("float", "1.5", HirExpr::FloatLiteral(1.5));
         assert_default_matches_explicit("bool", "True", HirExpr::BoolLiteral(true));
         assert_default_matches_explicit("bool", "False", HirExpr::BoolLiteral(false));
-        assert_default_matches_explicit(
-            "str",
-            "\"hi\"",
-            HirExpr::StringLiteral("hi".to_string()),
-        );
+        assert_default_matches_explicit("str", "\"hi\"", HirExpr::StringLiteral("hi".to_string()));
         assert_default_matches_explicit("int | None", "None", HirExpr::NoneLiteral);
     }
 
@@ -718,9 +722,7 @@ mod tests {
     #[test]
     fn a_def_whose_parameters_all_have_defaults_accepts_a_zero_argument_call() {
         assert_eq!(
-            first_call_args(
-                "def f(a: int = 1, b: str = \"s\") -> None:\n    return\n\nf()\n"
-            ),
+            first_call_args("def f(a: int = 1, b: str = \"s\") -> None:\n    return\n\nf()\n"),
             vec![
                 HirExpr::IntLiteral(1),
                 HirExpr::StringLiteral("s".to_string())
@@ -731,15 +733,11 @@ mod tests {
     #[test]
     fn a_default_on_either_side_of_the_slash_marker_is_filled() {
         assert_eq!(
-            first_call_args(
-                "def f(a: int = 1, /, b: int = 2) -> None:\n    return\n\nf()\n"
-            ),
+            first_call_args("def f(a: int = 1, /, b: int = 2) -> None:\n    return\n\nf()\n"),
             vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]
         );
         assert_eq!(
-            first_call_args(
-                "def f(a: int = 1, /, b: int = 2) -> None:\n    return\n\nf(9)\n"
-            ),
+            first_call_args("def f(a: int = 1, /, b: int = 2) -> None:\n    return\n\nf(9)\n"),
             vec![HirExpr::IntLiteral(9), HirExpr::IntLiteral(2)]
         );
     }
