@@ -478,6 +478,10 @@ fn rebinding_a_buffer_parameter_is_still_refused() {
 /// The host-side driver. Written to a file rather than passed to `python3
 /// -c` so it reads as ordinary Python; every assertion carries its own
 /// message so a failure names itself.
+///
+/// Only the hosted arm below consumes it, and that arm is Unix-only, so
+/// Windows would otherwise see an unused constant and fail `-D warnings`.
+#[cfg(not(target_os = "windows"))]
 const DRIVER: &str = r#"
 import array
 import ctypes
