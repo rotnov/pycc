@@ -31,9 +31,11 @@
 //!   its acquire/release are unobservable from Python.
 //!
 //! #1178's scope boundary is the **bare** parameter name. `return b[1:3]`
-//! is Part 2 (#1179) and `return g(b)` for a buffer-returning `g` stays
-//! refused by #1175's own scope boundary; both are pinned below so a later
-//! widening has to delete an assertion deliberately.
+//! is Part 2 (#1179), which admits it and owns its evidence in
+//! `tests/issue_1179_buffer_slice_return.rs`. `return g(b)` for a
+//! buffer-returning `g` stays refused by #1175's own scope boundary and is
+//! pinned below, so a later widening of *that* has to delete an assertion
+//! deliberately.
 
 use pycc_scratch::ScratchDir;
 use std::path::Path;
@@ -391,9 +393,12 @@ def total() -> int:
 /// a stated cause rather than by accident, so a later widening has to delete
 /// an assertion here.
 ///
-/// * a **slice** of a parameter -- Part 2 of #1175 (#1179). The returned
-///   view would span a sub-range, so the wrapper's pointer-identity test
-///   against `args[i]` no longer identifies the owner.
+/// A **slice** of a parameter was one of these arms and is no longer: Part 2
+/// of #1175 (#1179) admits it, carrying the sub-range out of the callee
+/// frame in three out-pointers so the wrapper's pointer-identity test
+/// against `args[i]` still names the owner exactly. Its evidence moved to
+/// `tests/issue_1179_buffer_slice_return.rs` rather than being deleted.
+///
 /// * a buffer-returning **call result** -- #1175's own scope boundary. A
 ///   value produced inside a callee frame need not equal any of this
 ///   wrapper's `args[i]` slots, so the identity test cannot name an owner
@@ -403,13 +408,7 @@ def total() -> int:
 /// * a `return` inside a `finally` -- #1164 review round 5's narrowing,
 ///   which Part 1 deliberately keeps for the caller-owned provenance too
 ///   (widening it is #1173's question).
-const SCOPE_BOUNDARY_REFUSALS: [(&str, &str); 4] = [
-    (
-        "1175_scope_slice",
-        "def first(b: memoryview) -> memoryview:
-    return b[1:3]
-",
-    ),
+const SCOPE_BOUNDARY_REFUSALS: [(&str, &str); 3] = [
     (
         "1175_scope_call_result",
         "def inner(b: memoryview) -> memoryview:

@@ -18,6 +18,10 @@ use std::process::Command;
 // far-over-threshold file further. See that module's own doc comment.
 mod d029_guard;
 
+// Part 2 of #1175 (#1179): the buffer sub-range egress's own tests, in a
+// cohesion-driven submodule for the same reason `d029_guard` has one.
+mod buffer_slice_egress;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any
@@ -3448,9 +3452,11 @@ fn ty_to_basic_type_gives_a_memoryview_a_pointer_representation() {
     // crosses the boundary is a pointer to the wrapper's own
     // `PyccExtBufferView`, not CPython's `Py_buffer`, so the emitted IR
     // depends on no CPython struct layout and the representation is the
-    // same plain pointer `Ty::Str`/`Ty::Object` already get -- which is
-    // also why `ext_thunk_required` still answers `false` for such an
-    // export.
+    // same plain pointer `Ty::Str`/`Ty::Object` already get. Since Part 2
+    // of #1175 (#1179) `ext_thunk_required` no longer answers `false` for
+    // every such export -- a body that returns `b[start:stop]` carries
+    // three out-pointers and so does need a thunk -- but that turns on the
+    // *body*, never on this representation.
     let context = Context::create();
     assert!(ty_to_basic_type(&context, Ty::MemoryView).is_pointer_type());
 }

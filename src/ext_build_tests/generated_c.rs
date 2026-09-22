@@ -83,6 +83,7 @@ fn a_nullary_export_declares_a_void_parameter_list_and_checks_its_arity() {
             name: "answer".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: Vec::new(),
             param_writable: Vec::new(),
@@ -112,6 +113,7 @@ fn a_unary_export_uses_the_singular_arity_message_and_unpacks_one_argument() {
             name: "square".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -144,6 +146,7 @@ fn a_binary_export_unpacks_each_argument_at_its_own_index() {
             name: "add".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
@@ -179,6 +182,7 @@ fn every_wrapper_checks_the_runtime_exception_flag_before_packing_a_result() {
             name: "risky".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -205,6 +209,7 @@ fn a_float_export_carries_a_double_through_every_slot_of_the_wrapper() {
             name: "scale".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Float],
             param_writable: vec![false; 1],
@@ -237,6 +242,7 @@ fn a_bool_export_uses_a_one_byte_c_type_to_match_the_compiled_i8_slot() {
             name: "negate".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Bool],
             param_writable: vec![false; 1],
@@ -268,6 +274,7 @@ fn a_none_returning_export_casts_to_void_and_declares_no_result_at_all() {
             name: "sink".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -293,6 +300,7 @@ fn a_mixed_signature_gives_each_slot_its_own_c_type_and_unpack_helper() {
             name: "mix".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int, Ty::Float, Ty::Bool],
             param_writable: vec![false; 3],
@@ -332,6 +340,7 @@ fn a_none_returning_wrapper_checks_the_exception_flag_before_returning_none() {
             name: "risky".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -363,6 +372,7 @@ fn a_str_export_carries_an_opaque_pointer_in_both_positions() {
             name: "shout".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             param_writable: vec![false; 1],
@@ -396,6 +406,7 @@ fn a_str_unpack_failure_releases_every_str_argument_already_taken() {
             name: "join".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Str],
             param_writable: vec![false; 2],
@@ -668,6 +679,7 @@ fn a_tuple_parameter_is_checked_once_then_unpacked_element_by_element() {
             name: "total".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))],
             param_writable: vec![false; 1],
@@ -723,6 +735,7 @@ fn a_tuple_return_arrives_through_out_pointers_and_is_packed_afterwards() {
             name: "split".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -795,6 +808,7 @@ fn a_tuple_return_retains_each_int_element_before_packing_it() {
             name: "split".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![],
             param_writable: vec![],
@@ -828,6 +842,7 @@ fn a_one_element_tuple_keeps_its_tuple_shape_in_both_directions() {
             name: "wrap".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int]))],
             param_writable: vec![false; 1],
@@ -853,6 +868,7 @@ fn several_tuple_parameters_keep_one_local_namespace_each() {
             name: "dot".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![
                 Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
@@ -903,6 +919,7 @@ fn an_earlier_str_argument_is_released_when_a_later_tuple_is_refused() {
             name: "tag".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::Tuple(Box::new(vec![Ty::Int]))],
             param_writable: vec![false; 2],
@@ -937,6 +954,7 @@ fn a_nullary_export_returning_a_tuple_declares_only_its_out_pointers() {
             name: "origin".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: Vec::new(),
             param_writable: Vec::new(),
@@ -982,6 +1000,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             name: "pair".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))],
             param_writable: vec![false; 1],
@@ -1010,6 +1029,7 @@ fn the_thunk_is_declared_as_a_function_and_called_without_a_cast() {
             name: "square".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Int],
             param_writable: vec![false; 1],
@@ -1032,6 +1052,7 @@ fn a_tuple_carrying_export_returning_none_assigns_nothing_and_fabricates_none() 
             name: "record".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))],
             param_writable: vec![false; 1],
@@ -1313,6 +1334,7 @@ fn memoryview_inc(name: &str, count: usize, return_ty: Ty) -> String {
             name: name.to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::MemoryView; count],
             param_writable: vec![false; count],
@@ -1338,6 +1360,7 @@ fn only_a_buffer_parameter_its_body_stores_into_is_acquired_writable() {
             name: "mix".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::MemoryView, Ty::MemoryView],
             param_writable: vec![false, true],
@@ -1492,6 +1515,7 @@ fn a_mixed_str_and_memoryview_signature_owes_each_slot_its_own_cleanup() {
             name: "label".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str, Ty::MemoryView, Ty::Int],
             param_writable: vec![false; 3],
@@ -1532,6 +1556,7 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
             name: "greet".to_string(),
             class: None,
             method: None,
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![Ty::Str],
             param_writable: vec![false; 1],
@@ -1556,6 +1581,7 @@ fn static_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> E
         name: format!("{class}.{method}.static"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
+        returns_buffer_slice: false,
         receiver: ExtReceiver::None,
         param_writable: vec![false; params.len()],
         params,
@@ -1570,6 +1596,7 @@ fn class_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) -> Ex
         name: format!("{class}.{method}.classmethod"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
+        returns_buffer_slice: false,
         receiver: ExtReceiver::NullCls,
         param_writable: vec![false; params.len()],
         params,
@@ -1654,6 +1681,7 @@ fn an_exported_method_is_never_a_flat_module_level_entry() {
                 name: "plain".to_string(),
                 class: None,
                 method: None,
+                returns_buffer_slice: false,
                 receiver: ExtReceiver::None,
                 params: vec![Ty::Int],
                 param_writable: vec![false; 1],
@@ -1839,6 +1867,7 @@ fn instance_export(class: &str, method: &str, params: Vec<Ty>, return_ty: Ty) ->
         name: format!("{class}.{method}"),
         class: Some(class.to_string()),
         method: Some(method.to_string()),
+        returns_buffer_slice: false,
         receiver: ExtReceiver::SelfInstance,
         param_writable: vec![false; params.len()],
         params,
@@ -2372,6 +2401,7 @@ fn a_caller_owned_buffer_returning_method_uses_the_declared_parameter_index() {
             name: "Grid.row".to_string(),
             class: Some("Grid".to_string()),
             method: Some("row".to_string()),
+            returns_buffer_slice: false,
             receiver: ExtReceiver::SelfInstance,
             params: vec![Ty::MemoryView],
             param_writable: vec![false],
@@ -2405,6 +2435,7 @@ fn a_buffer_returning_method_packs_through_the_same_arm() {
             name: "Grid.make".to_string(),
             class: Some("Grid".to_string()),
             method: Some("make".to_string()),
+            returns_buffer_slice: false,
             receiver: ExtReceiver::None,
             params: vec![],
             param_writable: vec![],
@@ -2413,6 +2444,145 @@ fn a_buffer_returning_method_packs_through_the_same_arm() {
     );
     assert!(
         inc.contains("    return pycc_ext_pack_memoryview(result);\n"),
+        "{inc}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Part 2 of #1175 (#1179): the buffer sub-range egress's generated C.
+// ---------------------------------------------------------------------------
+
+/// [`memoryview_inc`]'s slice-capable twin: the same export, with the
+/// out-slot fact set.
+fn memoryview_slice_inc(name: &str, count: usize) -> String {
+    inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: name.to_string(),
+            class: None,
+            method: None,
+            returns_buffer_slice: true,
+            receiver: ExtReceiver::None,
+            params: vec![Ty::MemoryView; count],
+            param_writable: vec![false; count],
+            return_ty: Ty::MemoryView,
+        }],
+    )
+}
+
+/// D4's byte-identity promise, asserted rather than argued: an export that
+/// does not carry a sub-range egress generates exactly the C it generated
+/// before #1179.
+///
+/// This is why the three bound locals sit on their own declaration path
+/// beside Part 1's `caller_owned`/`borrowed` instead of joining `out_slots`,
+/// and why the host-side derivation is a second packer entry point instead
+/// of three more parameters on the existing one. Every other test in this
+/// file that pins a `memoryview` wrapper's exact text is the rest of the
+/// guard; this one states the property directly.
+#[test]
+fn an_export_without_a_slice_egress_generates_unchanged_c() {
+    for (name, count, return_ty) in [
+        ("make", 1, Ty::MemoryView),
+        ("pick", 2, Ty::MemoryView),
+        ("make", 0, Ty::MemoryView),
+        ("total", 1, Ty::Float),
+    ] {
+        let inc = memoryview_inc(name, count, return_ty);
+        assert!(!inc.contains("slice_present"), "{inc}");
+        assert!(!inc.contains("slice_start"), "{inc}");
+        assert!(!inc.contains("slice_stop"), "{inc}");
+        assert!(
+            !inc.contains("pycc_ext_pack_memoryview_borrowed_slice"),
+            "{inc}"
+        );
+        assert!(!inc.contains("long long *"), "{inc}");
+        assert!(!inc.contains(pycc_codegen::EXT_THUNK_PREFIX), "{inc}");
+    }
+}
+
+/// The three out-slot locals, all initialized. `slice_present` must start at
+/// `0` because no pair of `long long` bounds can serve as an in-band
+/// whole-view sentinel -- `b[0:-1]` is a legal slice and `LLONG_MIN`/
+/// `LLONG_MAX` are legal bounds that clamp correctly -- and the two bound
+/// locals must start initialized because a call that raises leaves them
+/// untouched and an indeterminate read is undefined behaviour even where the
+/// value is discarded.
+#[test]
+fn a_slice_egress_declares_three_initialized_out_slot_locals() {
+    let inc = memoryview_slice_inc("head", 1);
+    assert!(
+        inc.contains(
+            "    long long slice_present = 0;\n    long long slice_start = 0;\n    \
+             long long slice_stop = 0;\n"
+        ),
+        "{inc}"
+    );
+}
+
+/// The declaration, the cast and the call all carry the three trailing
+/// pointers. Omitting them from any one of the three would be an ABI
+/// mismatch neither compiler can see across the object boundary.
+#[test]
+fn a_slice_egress_extends_the_prototype_the_cast_and_the_call() {
+    let inc = memoryview_slice_inc("head", 1);
+    assert!(
+        inc.contains(&format!(
+            "{BUFFER_VIEW_C_TYPE} *, long long *, long long *, long long *"
+        )),
+        "{inc}"
+    );
+    assert!(
+        inc.contains("&slice_present, &slice_start, &slice_stop"),
+        "{inc}"
+    );
+    // The compiled body still returns the whole view's pointer, so `result`
+    // is still bound and the identity chain still discriminates on it.
+    assert!(inc.contains("result = "), "{inc}");
+    assert!(inc.contains("if (result == &a0)"), "{inc}");
+    // ...and it goes through the export thunk, because pycc's own calling
+    // convention is not the platform C struct ABI.
+    assert!(inc.contains(pycc_codegen::EXT_THUNK_PREFIX), "{inc}");
+}
+
+/// The host-side derivation: Part 1's whole-window PEP 688 check still runs
+/// first, and the sub-range packer is selected at run time by the flag the
+/// compiled body wrote -- so an export that also contains a bare `return b`
+/// takes Part 1's path on that branch unchanged.
+#[test]
+fn a_slice_egress_selects_the_sub_range_packer_on_the_flag() {
+    let inc = memoryview_slice_inc("head", 1);
+    assert!(
+        inc.contains(concat!(
+            "    if (result == &a0) {\n        caller_owned = 1;\n",
+            "        borrowed = slice_present\n",
+            "            ? pycc_ext_pack_memoryview_borrowed_slice(args[0], &b0, \"head\", 0, 0, ",
+            "slice_start, slice_stop)\n",
+            "            : pycc_ext_pack_memoryview_borrowed(args[0], &b0, \"head\", 0, 0);\n",
+            "    }\n    PyBuffer_Release(&b0);\n",
+        )),
+        "{inc}"
+    );
+}
+
+/// Two buffer parameters: each arm of the identity chain gets its own
+/// branched packer call with its own argument index and its own `&b{i}`.
+#[test]
+fn a_slice_egress_branches_every_parameter_of_the_identity_chain() {
+    let inc = memoryview_slice_inc("pick", 2);
+    for index in 0..2 {
+        assert!(
+            inc.contains(&format!(
+                "pycc_ext_pack_memoryview_borrowed_slice(args[{index}], &b{index}, \
+                 \"pick\", {index}, 0, slice_start, slice_stop)"
+            )),
+            "{inc}"
+        );
+    }
+    assert_eq!(
+        inc.matches("pycc_ext_pack_memoryview_borrowed_slice")
+            .count(),
+        2,
         "{inc}"
     );
 }

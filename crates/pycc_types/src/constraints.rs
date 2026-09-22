@@ -2586,14 +2586,60 @@ pub(crate) fn collect_block_constraints(
                 // `admits_buffer_egress` is what makes that subset hold by
                 // construction rather than by two parallel edits.
                 if let Some(expr) = value
-                    && let Some(name) =
+                    && let Some((name, shape)) =
                         crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
                     && crate::buffer::admits_buffer_egress(
                         env.owned_buffers.contains(name),
                         !env.maybe_bindings.contains(name),
                         matches!(env.bindings.get(name), Some(Ok(Ty::MemoryView))),
+                        shape,
                     )
                 {
+                    // The post-admission block, kept line-for-line parallel
+                    // with the check phase's own (`crate::check_function`'s
+                    // `HirStmt::Return` arm) so a future divergence is
+                    // visible in review. See that block for why the `!owned`
+                    // gate is deliberately absent from both (#1179).
+                    if let crate::buffer::AdmittedBufferReturn::Slice {
+                        start,
+                        stop,
+                        has_step,
+                    } = shape
+                    {
+                        if has_step {
+                            return Err(crate::buffer::buffer_slice_step_unsupported(name));
+                        }
+                        // D1: this branch `continue`s before
+                        // `collect_expr_constraints` ever sees the operand,
+                        // so the bounds are walked here -- both to keep
+                        // propagating a genuine error such as an unbound
+                        // local, exactly as this file's own `HirExpr::Slice`
+                        // arm does, and to apply the `T0021` gate the
+                        // admitted branch owes. The gate fires only on a
+                        // term this solver actually pinned down, so the
+                        // solver's admission stays a subset of the check
+                        // phase's rather than refusing what the check phase
+                        // would still infer.
+                        for (label, bound) in [("start", start), ("stop", stop)] {
+                            if let Some(bound) = bound {
+                                let bound_term = collect_expr_constraints(
+                                    signatures,
+                                    parents,
+                                    concrete,
+                                    &mut constraints.binops,
+                                    env,
+                                    bound,
+                                )?;
+                                if let Some(Ok(bound_ty)) = bound_term
+                                    && !crate::is_assignable(bound_ty.clone(), Ty::Int)
+                                {
+                                    return Err(crate::buffer::buffer_slice_bound_not_an_int(
+                                        label, &bound_ty,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     if env.returns_inside_finally {
                         return Err(crate::buffer::buffer_return_inside_finally(name));
                     }

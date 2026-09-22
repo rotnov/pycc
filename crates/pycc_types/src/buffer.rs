@@ -423,14 +423,71 @@ pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&
 /// A declared return type other than the buffer type declines here, so
 /// `def f(n: int) -> float: a = ndarray(n); return a` keeps exactly the
 /// refusal it has today.
+///
+/// Part 2 of #1175 (#1179) adds the second admitted shape:
+/// `return b[start:stop]`, an `HirExpr::Slice` whose base is a bare name.
+/// The answer therefore names the shape as well as the name -- see
+/// [`AdmittedBufferReturn`]. The `step`, when one is written, is reported
+/// but **not** refused here: this function is environment-free, and the
+/// same syntax with a non-buffer base is an ordinary return-type mismatch
+/// that the step diagnostic would misdescribe. Both refusals a slice owes
+/// -- [`buffer_slice_step_unsupported`] and
+/// [`buffer_slice_bound_not_an_int`] -- are raised from the walkers'
+/// post-admission block, on the precedent of
+/// [`buffer_return_inside_finally`].
 pub(crate) fn admitted_buffer_return<'a>(
     expr: &'a pycc_hir::HirExpr,
     declared_return: Option<&Ty>,
-) -> Option<&'a str> {
-    match (expr, declared_return) {
-        (pycc_hir::HirExpr::Name(name), Some(Ty::MemoryView)) => Some(name.as_str()),
+) -> Option<(&'a str, AdmittedBufferReturn<'a>)> {
+    if !matches!(declared_return, Some(Ty::MemoryView)) {
+        return None;
+    }
+    match expr {
+        pycc_hir::HirExpr::Name(name) => Some((name.as_str(), AdmittedBufferReturn::Whole)),
+        pycc_hir::HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => match base.as_ref() {
+            pycc_hir::HirExpr::Name(name) => Some((
+                name.as_str(),
+                AdmittedBufferReturn::Slice {
+                    start: start.as_deref(),
+                    stop: stop.as_deref(),
+                    has_step: step.is_some(),
+                },
+            )),
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// The syntactic shape [`admitted_buffer_return`] matched, carried to
+/// [`admits_buffer_egress`] and to the walkers' shared post-admission block.
+///
+/// Part 2 of #1175 (#1179) adds the second variant. The two are not
+/// interchangeable at the admission gate: a sub-range is admitted for a
+/// **caller-owned** parameter only, while the whole view is admitted for
+/// both provenances (see [`admits_buffer_egress`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum AdmittedBufferReturn<'a> {
+    /// `return b` -- the whole view, either provenance.
+    Whole,
+    /// `return b[start:stop]` -- a sub-range of a caller-owned view.
+    ///
+    /// `start` and `stop` are the unlowered bound expressions, which the
+    /// admitted branch still owes a type check (D1): the interception is an
+    /// early exit, so the ordinary `crate::expr`'s `HirExpr::Slice` arm --
+    /// the one that raises `T0021` for a non-`int` bound -- never runs on
+    /// them. `has_step` records that a `step` was written at all; the
+    /// refusal it drives is [`buffer_slice_step_unsupported`].
+    Slice {
+        start: Option<&'a pycc_hir::HirExpr>,
+        stop: Option<&'a pycc_hir::HirExpr>,
+        has_step: bool,
+    },
 }
 
 /// Whether a name [`admitted_buffer_return`] picked out is an admitted
@@ -466,14 +523,89 @@ pub(crate) fn admitted_buffer_return<'a>(
 /// bound, so the conjunct is free on the caller-owned arm -- but it is
 /// spelled rather than assumed, because the two arms share one call site.
 ///
-/// The caller then owes exactly one further test, once, for both
-/// provenances: [`buffer_return_inside_finally`].
+/// * **Caller-owned sub-range** (Part 2 of #1175, #1179) -- the same
+///   parameter binding, returned as `b[start:stop]`. The compiled body
+///   still returns the parameter's own view pointer and the bounds travel
+///   out of band, so the wrapper's pointer-identity test and Part 1's
+///   PEP 688 whole-window check both run unchanged before the sub-range is
+///   derived host-side. This provenance is admitted for a parameter only,
+///   which is what the `shape` argument decides.
+///
+/// The caller then owes exactly one further test, once, for every
+/// provenance: [`buffer_return_inside_finally`]; a sub-range owes two more,
+/// [`buffer_slice_step_unsupported`] and [`buffer_slice_bound_not_an_int`].
 pub(crate) fn admits_buffer_egress(
     owned: bool,
     definitely_bound: bool,
     buffer_bound: bool,
+    shape: AdmittedBufferReturn<'_>,
 ) -> bool {
-    definitely_bound && (owned || buffer_bound)
+    match shape {
+        AdmittedBufferReturn::Whole => definitely_bound && (owned || buffer_bound),
+        // Part 2 of #1175 (#1179). `buffer_bound` alone cannot carry this
+        // arm and the three-conjunct formula above cannot either: for
+        // `a = ndarray(4); return a[1:3]` the walkers compute
+        // `owned = true, definitely_bound = true, buffer_bound = true`,
+        // which is the *same* triple the admitted artifact-owned bare name
+        // produces. Only the explicit `!owned` here keeps the artifact-owned
+        // slice unadmitted, so the walk falls through to
+        // `owned_buffer_use_unsupported` exactly as it does today. This is
+        // the single place that gate is spelled; the walkers'
+        // post-admission block must not repeat it.
+        AdmittedBufferReturn::Slice { .. } => definitely_bound && buffer_bound && !owned,
+    }
+}
+
+/// `Err(C0001)` for a buffer sub-range `return` that writes a `step`
+/// (Part 2 of #1175, #1179).
+///
+/// `PyccExtBufferView` is `{ void *ptr; long long len; }` and carries no
+/// stride, and D-244 statement (e)'s `PyBUF_C_CONTIGUOUS` acquire refuses a
+/// non-contiguous window outright, so a non-unit step is unrepresentable at
+/// this boundary. `b[::k]` cannot be decided at compile time at all.
+///
+/// Refusing `b[1:3:1]` -- which would be sound -- is a **deliberate
+/// conservative narrowing**, not an omission: it keeps the rule syntactic
+/// and keeps the refusal from depending on constant folding.
+///
+/// Deliberately not `crate::expr::reject_memoryview_read`'s message, whose
+/// remedy ("read one element at a time") would misdescribe this case: the
+/// position is admitted, only the `step` is not carried.
+///
+/// Raised from the walkers' post-admission block rather than from
+/// [`admitted_buffer_return`], which is environment-free and whose
+/// syntactic shape also matches `return lst[1:3:1]` for a `list[int]` `lst`
+/// in a function declared `-> memoryview` -- an ordinary return-type
+/// mismatch with no buffer boundary involved. Same placement, and for the
+/// same reason, as [`buffer_return_inside_finally`].
+pub(crate) fn buffer_slice_step_unsupported(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "returning a slice of `{name}` with a `step` from a `pycc build --ext` export is \
+             valid Python but not implemented yet; the compiled boundary carries a pointer and \
+             a length and no stride, so only a contiguous sub-range `{name}[start:stop]` is \
+             carried (#1179) -- drop the `step`"
+        ),
+        Span::new(0, 0),
+    )
+}
+
+/// `Err(T0021)` for a buffer sub-range `return` whose `start` or `stop` is
+/// not assignable to `int` (Part 2 of #1175, #1179).
+///
+/// Word-for-word `crate::expr`'s own `HirExpr::Slice` bound diagnostic,
+/// shared from here because the admitted branch exits before that arm runs
+/// (D1) and both walkers raise it from their post-admission block. A
+/// separate wording would make the same program report two different
+/// messages depending on whether its `return` was admitted.
+pub(crate) fn buffer_slice_bound_not_an_int(label: &str, bound_ty: &Ty) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("slice {label} must be `int`, got `{}`", bound_ty.name()),
+        Span::new(0, 0),
+    )
+    .with_help("use an `int` value")
 }
 
 /// `Err(C0001)` for a call whose callee returns the buffer type.

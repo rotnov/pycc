@@ -191,6 +191,12 @@ pub(super) fn block_always_terminates(body: &[MirStmt]) -> bool {
     for stmt in body {
         let terminates = match stmt {
             MirStmt::Return(_)
+            // Part 2 of #1175 (#1179): a buffer sub-range egress is a
+            // `return`, so it terminates its block exactly as `Return`
+            // does. Classified explicitly rather than left to inherit any
+            // grouping, because a wrong answer here is a missing LLVM
+            // terminator that still compiles.
+            | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::Raise { .. }
             | MirStmt::RaiseFrom { .. }
             | MirStmt::Reraise

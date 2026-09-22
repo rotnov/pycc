@@ -2963,13 +2963,49 @@ fn check_stmt_in_function(
             // path. The narrowing is deliberate and conservative, not a
             // necessity; the D-244 amendment records it as revisitable with
             // #1173.
-            if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty)) {
+            if let Some((name, shape)) =
+                crate::buffer::admitted_buffer_return(expr, Some(&return_ty))
+            {
                 let state = env.binding_state(name);
                 if crate::buffer::admits_buffer_egress(
                     env.owned_buffers.contains(name),
                     matches!(state, Some(BindingState::Definitely(_))),
                     state.is_some_and(|state| matches!(state.ty(), Ty::MemoryView)),
+                    shape,
                 ) {
+                    // The post-admission block, kept line-for-line parallel
+                    // with the solver's own (`crate::constraints`) so a
+                    // future divergence is visible in review. Every refusal
+                    // here exists *because* a buffer boundary was admitted;
+                    // the `!owned` gate is not one of them and lives in
+                    // `admits_buffer_egress`'s formula alone (#1179).
+                    if let crate::buffer::AdmittedBufferReturn::Slice {
+                        start,
+                        stop,
+                        has_step,
+                    } = shape
+                    {
+                        if has_step {
+                            return Err(crate::buffer::buffer_slice_step_unsupported(name));
+                        }
+                        // D1: this branch exits before `infer_expr_in` ever
+                        // sees the operand, so the bound type check the
+                        // ordinary `HirExpr::Slice` arm performs has to be
+                        // repeated here. Without it `b[1.5:3]` would reach
+                        // an `i64` out-slot write undiagnosed and `b[x:3]`
+                        // with `x` unbound would reach `pycc_mir::lookup`'s
+                        // "check should have rejected this HIR" panic.
+                        for (label, bound) in [("start", start), ("stop", stop)] {
+                            if let Some(bound) = bound {
+                                let bound_ty = infer_expr_in(env, local_names, bound)?;
+                                if !is_assignable(bound_ty.clone(), Ty::Int) {
+                                    return Err(crate::buffer::buffer_slice_bound_not_an_int(
+                                        label, &bound_ty,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     if env.returns_inside_finally {
                         return Err(crate::buffer::buffer_return_inside_finally(name));
                     }

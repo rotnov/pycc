@@ -415,6 +415,19 @@ pub(crate) struct ExtExport {
     /// method. `None` exactly when [`ExtExport::class`] is `None`, in which
     /// case [`ExtExport::name`] is itself the `ml_name`.
     pub(crate) method: Option<String>,
+    /// Whether this export's body returns a **sub-range** of one of its
+    /// `memoryview` parameters (Part 2 of #1175, #1179).
+    ///
+    /// Not a function of [`ExtExport::return_ty`]: a declared
+    /// `-> memoryview` is the same signature for a bare `return b`
+    /// (Part 1 of #1175), an artifact-owned `return a` (Part 2b of #1142)
+    /// and `return b[i:j]`, and only the last of the three carries the
+    /// three trailing `long long *` out-pointers
+    /// `pycc_codegen::ext_thunk_out_tys` describes. Keying the wrapper on
+    /// the declared type instead would move every existing
+    /// buffer-returning export onto the thunk path and change generated C
+    /// this task does not touch.
+    pub(crate) returns_buffer_slice: bool,
     /// Which leading receiver pointer the compiled function takes, and what
     /// the wrapper must supply for it.
     ///
@@ -563,6 +576,11 @@ pub(crate) struct ExtExport {
 /// 100%-coverage denominator for no behavioural gain.
 pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<Diagnostic>> {
     let mut exports: Vec<ExtExport> = Vec::new();
+    // Every compiled name any definition of which returns a buffer
+    // sub-range; see the union pass after the loop for why the fact is
+    // per-name rather than last-wins.
+    let mut slice_widened_names: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut gaps = Vec::new();
     for item in &module.items {
         let HirItem::Function {
@@ -669,6 +687,23 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
                     *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
                 })
                 .collect(),
+            // Part 2 of #1175 (#1179). The driver's half of the per-export
+            // "this body carries a buffer sub-range egress" fact; codegen
+            // recomputes the same fact from MIR
+            // (`pycc_codegen::body_returns_buffer_slice`) because
+            // `ExtExport` never crosses the crate boundary, and a parity
+            // test pins the two answers together. A divergence is not a
+            // wrong diagnostic: it is a generated C call form that does not
+            // match the compiled function's own signature.
+            //
+            // Keyed on the carried parameter's own source name, exactly as
+            // `param_writable` above is, and asked only of `memoryview`
+            // parameters -- which is the provenance half
+            // `pycc_hir::body_returns_slice_of` deliberately leaves to its
+            // caller.
+            returns_buffer_slice: carried_params.iter().any(|(param_name, ty)| {
+                *ty == Ty::MemoryView && pycc_hir::body_returns_slice_of(body, param_name)
+            }),
             return_ty: return_ty.clone(),
         };
         // A module may rebind a public name -- two `def`s, a `def` over an
@@ -694,6 +729,9 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
         // `f.classmethod`, which Python's own class body cannot mean.
         // Replacing keeps the last definition, which is what `Grid.f` binds
         // to in Python and what the shared `fnptr_` slot holds.
+        if export.returns_buffer_slice {
+            slice_widened_names.insert(export.name.clone());
+        }
         let key = export_dedup_key(&export);
         match exports
             .iter_mut()
@@ -702,6 +740,28 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             Some(held) => *held = export,
             None => exports.push(export),
         }
+    }
+    // Part 2 of #1175 (#1179), review round 2. The one field that is *not*
+    // resolved last-wins: whether the compiled function carries the three
+    // buffer-sub-range out-pointers is a property of the shared
+    // `fnptr_<name>` slot's single signature, not of the definition
+    // currently bound to it, so it unions over every definition of the
+    // compiled name exactly as `pycc_codegen::buffer_slice_out_names` does.
+    //
+    // Keyed on the compiled `name` rather than on `export_dedup_key`
+    // deliberately: the name is what codegen groups by, and a class that
+    // publishes one `ml_name` from two differently-mangled definitions
+    // shares the dedup key without sharing a signature.
+    //
+    // Taking the last definition's answer instead is what let
+    // `def f: return b[1:]` / `def f: return b` declare one arity in the
+    // generated C and compile another -- an ill-typed call across the
+    // object boundary that no compiler on either side can see. Widening a
+    // name whose active definition only does a bare `return b` is harmless:
+    // that return stores `has_slice = 0` and the wrapper hands back the
+    // whole view.
+    for export in &mut exports {
+        export.returns_buffer_slice = slice_widened_names.contains(&export.name);
     }
     if gaps.is_empty() {
         Ok(exports)

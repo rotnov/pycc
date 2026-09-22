@@ -35,7 +35,7 @@
 //! implementing class's method, not the protocol's stub, is what carries
 //! the body this walk reads.
 
-use crate::HirStmt;
+use crate::{HirExpr, HirStmt};
 
 /// Whether `body` contains an element store whose target is the name
 /// `name`, at any nesting depth.
@@ -88,6 +88,78 @@ fn stmt_stores_into(stmt: &HirStmt, name: &str) -> bool {
         | HirStmt::DictCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
         | HirStmt::Return(_)
+        | HirStmt::AttrSet { .. }
+        | HirStmt::Raise { .. } => false,
+    }
+}
+
+/// Whether `body` returns a step-free slice of `name`, at any nesting
+/// depth (Part 2 of #1175, #1179).
+///
+/// The driver-side half of the per-export "this body carries a buffer
+/// sub-range egress" fact `src/ext_build.rs` stores on `ExtExport` and
+/// `crates/pycc_codegen/src/ext.rs` recomputes from MIR. The shape is
+/// exactly the one `pycc_types::buffer::admitted_buffer_return` admits --
+/// `return <name>[start:stop]`, a bare-name base and no `step` -- so for a
+/// program that type-checked, this predicate and the codegen-side walk for
+/// `MirStmt::ReturnBufferSlice` answer the same question about the same
+/// function. A parity test pins them together rather than leaving the
+/// agreement to review.
+///
+/// Syntactic and total, like [`body_stores_into`] above: the caller
+/// supplies the provenance half by asking only about names it already knows
+/// to be `memoryview` parameters.
+#[must_use]
+pub fn body_returns_slice_of(body: &[HirStmt], name: &str) -> bool {
+    body.iter().any(|stmt| stmt_returns_slice_of(stmt, name))
+}
+
+fn stmt_returns_slice_of(stmt: &HirStmt, name: &str) -> bool {
+    match stmt {
+        HirStmt::Return(Some(HirExpr::Slice {
+            base, step: None, ..
+        })) => matches!(base.as_ref(), HirExpr::Name(base_name) if base_name == name),
+        HirStmt::If { body, orelse, .. } => {
+            body_returns_slice_of(body, name) || body_returns_slice_of(orelse, name)
+        }
+        HirStmt::While { body, .. }
+        | HirStmt::ForRange { body, .. }
+        | HirStmt::ForList { body, .. }
+        | HirStmt::ForObject { body, .. } => body_returns_slice_of(body, name),
+        HirStmt::Match { cases, .. } => cases
+            .iter()
+            .any(|case| body_returns_slice_of(&case.body, name)),
+        HirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | HirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            body_returns_slice_of(body, name)
+                || handlers
+                    .iter()
+                    .any(|handler| body_returns_slice_of(&handler.body, name))
+                || body_returns_slice_of(orelse, name)
+                || body_returns_slice_of(finalbody, name)
+        }
+        // Every remaining statement either carries no nested block or is a
+        // `return` of some other shape; a slice egress is only ever the
+        // whole operand of a `return`, never a sub-expression, because
+        // `pycc_types` refuses a buffer slice in every other position.
+        HirStmt::Return(_)
+        | HirStmt::ExprStmt(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::DictCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::DictSet { .. }
         | HirStmt::AttrSet { .. }
         | HirStmt::Raise { .. } => false,
     }
@@ -579,6 +651,177 @@ mod tests {
             handlers,
             orelse,
             finalbody,
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Part 2 of #1175 (#1179): `body_returns_slice_of`.
+    // -----------------------------------------------------------------
+
+    /// `return <name>[1:]`, the only statement shape that can answer
+    /// `true`.
+    fn slice_return(name: &str) -> HirStmt {
+        HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::Name(name.to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: None,
+            step: None,
+        }))
+    }
+
+    /// Every shape that must answer `false`, at the top level where the
+    /// leaf arm sees it directly. Answering `true` for any of these would
+    /// widen the compiled function's signature by three out-pointers the
+    /// `Return` site never writes, leaving them indeterminate.
+    #[test]
+    fn only_a_slice_return_of_the_named_buffer_is_reported() {
+        assert!(body_returns_slice_of(&[slice_return("b")], "b"));
+        assert!(!body_returns_slice_of(&[slice_return("other")], "b"));
+        assert!(!body_returns_slice_of(&[], "b"));
+        let no: Vec<HirStmt> = vec![
+            leaf(),
+            store("b"),
+            // A bare `return b` is Part 1's whole-view egress, which
+            // carries no bounds.
+            HirStmt::Return(Some(HirExpr::Name("b".to_string()))),
+            // A `step` is refused by `pycc_types`, and the two walks must
+            // agree that it is not this shape.
+            HirStmt::Return(Some(HirExpr::Slice {
+                base: Box::new(HirExpr::Name("b".to_string())),
+                start: None,
+                stop: None,
+                step: Some(Box::new(HirExpr::IntLiteral(2))),
+            })),
+            // A slice whose base is not a bare name.
+            HirStmt::Return(Some(HirExpr::Slice {
+                base: Box::new(HirExpr::IntLiteral(0)),
+                start: None,
+                stop: None,
+                step: None,
+            })),
+            // A slice that is not the whole operand of the `return`.
+            HirStmt::Return(Some(HirExpr::Subscript {
+                base: Box::new(HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("b".to_string())),
+                    start: None,
+                    stop: None,
+                    step: None,
+                }),
+                index: Box::new(HirExpr::IntLiteral(0)),
+            })),
+        ];
+        for stmt in no {
+            assert!(
+                !body_returns_slice_of(std::slice::from_ref(&stmt), "b"),
+                "{stmt:?}"
+            );
+        }
+    }
+
+    /// Every block-carrying variant, each with the slice `return` in one
+    /// nested position. This walk is one of the two independent
+    /// computations of the out-slot fact, so a variant it fails to recurse
+    /// into is an ABI mismatch between the generated wrapper's call and the
+    /// compiled function's real arity.
+    #[test]
+    fn a_slice_return_is_found_inside_every_nested_block() {
+        let nested: Vec<Vec<HirStmt>> = vec![
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![slice_return("b")],
+                orelse: vec![],
+            }],
+            vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![],
+                orelse: vec![slice_return("b")],
+            }],
+            vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![slice_return("b")],
+            }],
+            vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![slice_return("b")],
+            }],
+            vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![slice_return("b")],
+            }],
+            vec![HirStmt::ForObject {
+                var: "i".to_string(),
+                iter: Box::new(HirExpr::IntLiteral(0)),
+                body: vec![slice_return("b")],
+            }],
+            vec![HirStmt::Match {
+                subject: HirExpr::IntLiteral(0),
+                cases: vec![HirMatchCase {
+                    pattern: HirPattern::Wildcard,
+                    guard: None,
+                    body: vec![slice_return("b")],
+                }],
+            }],
+            vec![try_stmt(vec![slice_return("b")], vec![], vec![], vec![])],
+            vec![try_stmt(
+                vec![],
+                vec![HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![slice_return("b")],
+                }],
+                vec![],
+                vec![],
+            )],
+            vec![try_stmt(vec![], vec![], vec![slice_return("b")], vec![])],
+            vec![try_stmt(vec![], vec![], vec![], vec![slice_return("b")])],
+            vec![HirStmt::TryStar {
+                body: vec![slice_return("b")],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::TryStar {
+                body: vec![],
+                handlers: vec![HirExceptHandler {
+                    exc_type: None,
+                    name: None,
+                    body: vec![slice_return("b")],
+                }],
+                orelse: vec![],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::TryStar {
+                body: vec![],
+                handlers: vec![],
+                orelse: vec![slice_return("b")],
+                finalbody: vec![],
+            }],
+            vec![HirStmt::TryStar {
+                body: vec![],
+                handlers: vec![],
+                orelse: vec![],
+                finalbody: vec![slice_return("b")],
+            }],
+            // Two levels deep, so the recursion is not merely one-deep.
+            vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::If {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![slice_return("b")],
+                    orelse: vec![],
+                }],
+            }],
+        ];
+        for (index, body) in nested.iter().enumerate() {
+            assert!(body_returns_slice_of(body, "b"), "shape {index}: {body:?}");
+            assert!(
+                !body_returns_slice_of(body, "other"),
+                "shape {index}: {body:?}"
+            );
         }
     }
 }

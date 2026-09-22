@@ -55,8 +55,9 @@ type ObjectConversionEmitter = for<'a> fn(
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
-    ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
-    ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name,
+    body_returns_buffer_slice, buffer_slice_out_names, ext_boundary_slots, ext_thunk_out_tys,
+    ext_thunk_param_tys, ext_thunk_required, ext_thunk_symbol, is_ext_exportable_name,
+    mangle_ext_name,
 };
 use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
@@ -359,6 +360,31 @@ const PENDING_RETURN_BUFFER_KEY: &str = "0pending_return_buffer";
 /// rebound away and nothing else names it". Freeing unconditionally would
 /// double-free the first; never freeing leaks the second.
 const PENDING_RETURN_ORPHANED_KEY: &str = "0pending_return_orphaned";
+
+/// Part 2 of #1175 (#1179), review round 2: the three trailing
+/// out-pointers a buffer-sub-range-returning frame was widened by,
+/// `has_slice`/`start`/`stop` in [`crate::ext::ext_thunk_out_tys`]' own
+/// order, seeded into the frame's `locals` at entry.
+///
+/// A reserved key rather than a threaded parameter for the same reason
+/// [`PENDING_RETURN_BUFFER_KEY`] is one, and the rationale documented there
+/// transfers verbatim: the sites that need them -- `MirStmt::Return` and
+/// `MirStmt::ReturnBufferSlice` -- already both receive `locals`, `emit_stmt`
+/// is recursive and also called from `exception.rs`, and no Python
+/// identifier can spell a leading digit.
+///
+/// Presence *is* the "this frame was widened" predicate: every return in a
+/// widened frame must describe itself, because the wrapper reads one pair of
+/// out-slots for whichever return actually reached it and a frame can execute
+/// more than one `return` (an abandoned one whose `finally` raised, then a
+/// later one after an enclosing handler swallowed it).
+const BUFFER_SLICE_HAS_SLICE_KEY: &str = "0buffer_slice_has_slice";
+
+/// The `start` out-pointer companion to [`BUFFER_SLICE_HAS_SLICE_KEY`].
+const BUFFER_SLICE_START_KEY: &str = "0buffer_slice_start";
+
+/// The `stop` out-pointer companion to [`BUFFER_SLICE_HAS_SLICE_KEY`].
+const BUFFER_SLICE_STOP_KEY: &str = "0buffer_slice_stop";
 
 /// #382 (PR-22 Part 2): A pending `finally` target that `return`
 /// statements inside a `try` body must route through before completing.
@@ -5766,7 +5792,14 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // handles (`ExprStmt` here, `If`/`While`'s own `test` above), so a
         // `MirStmt::Return` can never carry a `NamedExpr` to begin with.
         MirStmt::ExprStmt(expr) => collect_expr_bindings(expr, bindings),
-        MirStmt::Return(_) | MirStmt::NoOp | MirStmt::Unreachable => {}
+        // Part 2 of #1175 (#1179) joins `Return` here for the same reason
+        // and by the same argument: `MirStmt::ReturnBufferSlice` is lowered
+        // from an `HirStmt::Return`, which `contains_named_expr` already
+        // forbids a walrus in, and it binds no name of its own.
+        MirStmt::Return(_)
+        | MirStmt::ReturnBufferSlice { .. }
+        | MirStmt::NoOp
+        | MirStmt::Unreachable => {}
         MirStmt::Seq(stmts) => {
             for stmt in stmts {
                 collect_stmt_bindings(stmt, bindings);
@@ -6283,6 +6316,16 @@ fn compile_to_object_with_observer(
     // List of (function name, LLVM function value) in source order, for
     // the top-level binding pass.
     let mut function_defs_in_order: Vec<(&str, FunctionValue)> = Vec::new();
+    // Part 2 of #1175 (#1179), review round 2: the buffer-sub-range
+    // out-slot fact is resolved **per name, over every definition of it**,
+    // not per `def`. Two `def f`s share one `fnptr_f` slot and one
+    // `UserFunction::fn_type`, so giving them two arities makes the
+    // indirect call ill-typed for whichever definition the slot does not
+    // describe -- which is the `verify()` abort a redefinition used to hit
+    // when only the slicing definition was widened. See
+    // `crate::ext::buffer_slice_out_names` for why the union is the safe
+    // direction and for the driver-side half that unions with it.
+    let slice_widened = crate::ext::buffer_slice_out_names(&mir.items);
     for item in &mir.items {
         if let MirItem::Function {
             name,
@@ -6291,10 +6334,30 @@ fn compile_to_object_with_observer(
             ..
         } = item
         {
-            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
+            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
                 .iter()
                 .map(|(_, ty)| ty_to_basic_type(&context, ty.clone()).into())
                 .collect();
+            // Part 2 of #1175 (#1179): a function whose body returns a
+            // sub-range of a buffer parameter hands the sub-range's
+            // `has_slice`/`start`/`stop` back through three trailing
+            // out-pointers, because the bounds are produced inside this
+            // frame while the returned value stays the parameter's own view
+            // pointer -- which is what keeps the generated wrapper's
+            // `result == &a{index}` identity test exact.
+            //
+            // The predicate is the body fact alone, deliberately not gated
+            // on `options.ext` or on `ext_thunk_required`'s own
+            // exportability test: this declaration and `emit_stmt`'s own
+            // `MirStmt::ReturnBufferSlice` arm must never disagree about
+            // the arity, and `pycc_types` already refuses the shape
+            // everywhere a wrapper cannot exist.
+            if slice_widened.contains(name.as_str()) {
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+                for _ in crate::ext::ext_thunk_out_tys(return_ty, true) {
+                    param_types.push(ptr_type.into());
+                }
+            }
             let fn_type = match return_ty {
                 pycc_mir::Ty::None => context.void_type().fn_type(&param_types, false),
                 other => ty_to_basic_type(&context, other.clone()).fn_type(&param_types, false),
@@ -6683,6 +6746,36 @@ fn compile_to_object_with_observer(
                     owned_str_slots.push(slot.ptr);
                 }
                 fn_locals.insert(param_name.clone(), slot);
+            }
+            // Part 2 of #1175 (#1179), review round 2: bind this frame's
+            // three out-pointers -- present exactly when the declaration
+            // pass above widened this *name* -- so both `MirStmt::Return`
+            // and `MirStmt::ReturnBufferSlice` reach them by name instead
+            // of by `count_params()` arithmetic, and so a bare `return`
+            // can tell that it owes the wrapper a `has_slice = 0`.
+            if slice_widened.contains(name.as_str()) {
+                let out_base = f.count_params() - 3;
+                for (offset, key) in [
+                    BUFFER_SLICE_HAS_SLICE_KEY,
+                    BUFFER_SLICE_START_KEY,
+                    BUFFER_SLICE_STOP_KEY,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let ptr = f
+                        .get_nth_param(out_base + offset as u32)
+                        .expect("the declaration pass widened this signature by three out-pointers")
+                        .into_pointer_value();
+                    fn_locals.insert(
+                        key.to_string(),
+                        StorageSlot {
+                            ptr,
+                            ty: pycc_mir::Ty::Int,
+                            initialized: None,
+                        },
+                    );
+                }
             }
             let mut local_bindings = BTreeMap::new();
             for stmt in body {
@@ -7947,6 +8040,94 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(loop_blocks.after_bb);
             Ok(())
         }
+        // Part 2 of #1175 (#1179): `return b[start:stop]` for a
+        // `memoryview` **parameter** `b`.
+        //
+        // The two bounds are evaluated here, in the compiled frame, and
+        // written to the three trailing out-pointers the declaration pass
+        // gave this function. The returned *value* is the parameter's own
+        // whole view, byte-identical to what a bare `return b` returns, so
+        // the generated wrapper's `result == &a{index}` identity chain
+        // stays exact and Part 1's PEP 688 `held`-vs-probe check still runs
+        // against the whole window before the host derives the sub-range.
+        //
+        // `has_slice` is stored **last**, after both bounds, so a bound
+        // whose evaluation raises can never leave the flag set; on that
+        // path the frame leaves through its exception target and the
+        // wrapper's pending-exception bail returns before any acquire.
+        //
+        // An absent `start` is `0` and an absent `stop` is `i64::MAX`, both
+        // of which CPython's own `PySlice_New`/`PyObject_GetItem` clamp
+        // exactly as Python does; no slice arithmetic exists on this side.
+        // A bigint bound aborts in `build_untag_checked`, the same
+        // pre-existing D-141 boundary `MirStmt::BufferSet`'s index has.
+        MirStmt::ReturnBufferSlice { name, start, stop } => {
+            let bound_or = |builder: &inkwell::builder::Builder<'ctx>,
+                            locals: &mut HashMap<String, StorageSlot<'ctx>>,
+                            bound: &Option<MirExpr>,
+                            default: u64,
+                            label: &str| match bound {
+                Some(expr) => {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let encoded = to_numeric_encoded_int(context, builder, scalar);
+                    build_untag_checked(builder, rt, encoded, label)
+                }
+                None => context.i64_type().const_int(default, false),
+            };
+            let start_i64 = bound_or(builder, locals, start, 0, "buffer_slice_untag_start");
+            let stop_i64 = bound_or(
+                builder,
+                locals,
+                stop,
+                i64::MAX as u64,
+                "buffer_slice_untag_stop",
+            );
+            // The three out-pointers were bound at function entry, under
+            // the reserved keys, exactly when the declaration pass widened
+            // this name -- which it did, or this statement could not be
+            // here.
+            //
+            // `has_slice` is **taken** out of `locals` rather than read
+            // through it, for the duration of the delegated bare `return`
+            // below: that arm reads the key's presence as "this frame owes
+            // the wrapper a `has_slice = 0`", and this return's own answer
+            // is 1. Restored immediately afterwards, so a later return in
+            // the same frame still describes itself.
+            let has_slice = locals.remove(BUFFER_SLICE_HAS_SLICE_KEY).expect(
+                "a frame containing a buffer sub-range return was widened by the declaration pass",
+            );
+            builder
+                .build_store(locals[BUFFER_SLICE_START_KEY].ptr, start_i64)
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            builder
+                .build_store(locals[BUFFER_SLICE_STOP_KEY].ptr, stop_i64)
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            builder
+                .build_store(has_slice.ptr, context.i64_type().const_int(1, false))
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            // Delegated rather than duplicated: the value half of this
+            // statement *is* a bare `return b`, including its `finally`
+            // routing and its interaction with the frame's owned-slot
+            // epilogue, and a second copy of that arm is exactly the drift
+            // this node exists to avoid.
+            let emitted = emit_stmt(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                &MirStmt::Return(Some(MirExpr::Name {
+                    name: name.clone(),
+                    ty: pycc_mir::Ty::MemoryView,
+                })),
+                expected_return_ty,
+                finally_stack,
+            );
+            locals.insert(BUFFER_SLICE_HAS_SLICE_KEY.to_string(), has_slice);
+            emitted
+        }
         MirStmt::Return(value) => {
             if is_module_entry_symbol(
                 builder
@@ -7962,6 +8143,32 @@ fn emit_stmt<'ctx>(
                      entry block -- pycc_types::check (T0024) should have rejected a module-level \
                      `return` before it reached codegen"
                 );
+            }
+            // Part 2 of #1175 (#1179), review round 2: in a frame the
+            // declaration pass widened, **every** return describes itself.
+            // This one hands the whole view back, so its answer is
+            // `has_slice = 0`.
+            //
+            // Without this store the out-slots would describe "the last
+            // return that executed a store" rather than "the return that
+            // reached the wrapper", and the wrapper's own zero-init of the
+            // flag would be load-bearing in a way it cannot be: a frame can
+            // execute more than one `return`. `try: return b[1:3]` /
+            // `finally: raise` / an enclosing `except` that swallows it /
+            // `return b` left the abandoned sub-range's bounds in the slots
+            // and applied them to the whole-buffer return.
+            //
+            // Stored before the value is evaluated, so a returned
+            // expression that raises cannot leave a stale 1 behind either;
+            // the wrapper bails on the pending exception before reading
+            // either way, and 0 is the safe answer regardless.
+            //
+            // Absent for every frame that was not widened, which is every
+            // frame in a build that has no buffer sub-range return at all.
+            if let Some(has_slice) = locals.get(BUFFER_SLICE_HAS_SLICE_KEY) {
+                builder
+                    .build_store(has_slice.ptr, context.i64_type().const_zero())
+                    .expect("build_store should not fail through a buffer-slice out-pointer");
             }
             // #382 (PR-22 Part 2): If inside a try-with-finally, route the
             // return through the finally block instead of emitting `ret`
