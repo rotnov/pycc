@@ -566,7 +566,10 @@ counts, because that body runs in module scope. A binding inside a `def` or
 `class` body does not count, and neither does a comprehension's own target
 or an annotation without a value. That exclusion is sound only while pycc
 rejects a `global` declaration (`C0001`): once `global` is supported, a
-binding it routes to module scope from a function body must count too.
+binding it routes to module scope from a function body must count too. The
+scan likewise counts a `from ... import *` as binding no named symbol, which
+is sound only while pycc rejects a wildcard import (`C0001`); accepting one
+must expand it into the names it binds.
 
 The reason is dispatch order. pycc calls a redefined `def` in source order
 ([#22](https://github.com/rotnov/pycc/issues/22)): a call made before the
@@ -578,9 +581,11 @@ or fill the wrong default. Such a name is therefore left out of the table:
 
 - a keyword call to it keeps `C0001` "keyword call arguments are not
   supported yet";
-- a call that omits a defaulted argument is left exactly as written and
-  fails the ordinary positional arity check, `T0021` "`f` expects N
-  argument(s), got M";
+- a call that omits a defaulted argument is left exactly as written and is
+  rejected by `pycc_types`' ordinary call checks. For two `def`s of the name
+  that is the positional arity check, `T0021` "`f` expects N argument(s),
+  got M"; another rebinding shape may be rejected by a different check first,
+  but never compiles;
 - a call that supplies every argument positionally is unaffected and still
   dispatches in source order.
 

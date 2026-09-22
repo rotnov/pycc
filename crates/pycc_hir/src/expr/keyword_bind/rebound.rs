@@ -17,7 +17,11 @@
 //! would not (a walrus inside a `lambda` body), which only costs a keyword
 //! call or a default fill its binding; it must never miss one. It does not
 //! scan function bodies, which is complete only while pycc rejects a
-//! `global` declaration: supporting `global` must add its targets here.
+//! `global` declaration: supporting `global` must add its targets here. It
+//! also counts `from ... import *` as binding the literal `*` rather than
+//! the names it imports, which is complete only while pycc rejects a
+//! wildcard import (`import.rs`'s `check_from_import_shape`): accepting one
+//! must expand it here.
 
 use std::collections::HashMap;
 
