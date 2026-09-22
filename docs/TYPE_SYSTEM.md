@@ -495,6 +495,45 @@ instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
 because pycc has no signature to bind against there yet.
 
+Default parameter values (`def f(a: int, b: int = 2)`, Part 2 of
+[#884](https://github.com/rotnov/pycc/issues/884) /
+[#1189](https://github.com/rotnov/pycc/issues/1189)) are filled *during
+lowering* through that same binder, so a call that omits a defaulted argument
+produces exactly the argument vector the same literal written at the call site
+produces, and nothing downstream of HIR observes the difference. A default is
+therefore never checked more strictly, or more loosely, than its explicit
+twin. Four rules follow from that model:
+
+- **The admitted subset is syntactic.** A default may be a literal `int`,
+  `float`, `bool`, `str`, or `None`, optionally with a source-level unary `-`
+  or `+` applied to a numeric literal (`= -1`, `= +1.5`), folded exactly as
+  the same text is folded at a call site — so `= -9223372036854775808` is
+  admitted and `= 99999999999999999999` is not. Anything else — a name, a
+  call, a container or f-string literal, a complex literal, a walrus, an
+  arithmetic expression — is `C0001` at the default's own span, reported once
+  at the `def` however many times the function is called.
+- **The scope is a module-level `def`.** A default on a method, a
+  `@classmethod`, a `@staticmethod`, or a `Protocol` member keeps the
+  unchanged `C0001` "default parameter values are not supported yet", for the
+  same reason keyword arguments do there: pycc has no signature to fill from.
+  A `@dataclass` field default is its own deferred feature (above), and the
+  receiver's own `self`/`cls` default keeps its own message. The binder is
+  per module, so an **imported** `def`'s default is not filled either — a
+  short call to it is the ordinary `T0021` arity error at the import,
+  exactly as an imported `def`'s keyword call is. Part 3 of #884 widens both
+  to the module boundary.
+- **No type is inferred from a default.** An unannotated parameter of a
+  private helper keeps its inferred type; the default does not seed it. A
+  public function's parameter still needs its annotation (`T0001`).
+- **A mismatch is `T0021`, not `T0025`.** The def-site syntax resembles an
+  annotated assignment, but by this model the default *is* a call-site
+  argument, so it is checked with the call-argument rule and reported with
+  the call-argument code. Assignability is the ordinary one: rule 4's `bool`
+  as an `int` subtype holds, and D-086 grants no implicit widening, so
+  `def f(x: float = 1)` is refused exactly as `f(1)` at a `float` parameter
+  is. A PEP 695 type-parameter-annotated parameter (`def f[T](a: T = 1)`) is
+  `C0001`: a default is materialized before monomorphization picks `T`.
+
 Positional-only parameters (PEP 570, `def f(a, /, b)`) fill positionally
 like any other parameter but can never be named by a keyword, matching
 CPython.

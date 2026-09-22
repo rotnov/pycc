@@ -387,12 +387,16 @@ fn a_walrus_in_a_parameter_default_binds_the_module_frame() {
     // Default values are evaluated at definition time in the enclosing
     // scope: `Color` is rebound to an `int` at module level, so the later
     // `Color()` is left to the type checker. The `def` itself is the one
-    // diagnostic (a default value is not supported yet).
+    // diagnostic: a walrus is outside the default subset Part 2 of #884
+    // (#1189) admits.
     let source = format!("{COLOR}def f(x: int = (Color := 1)) -> None:\n    pass\nColor()\n");
     let diagnostics = lower_err(&source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
     assert!(
-        !diagnostics[0].message.contains("enum class"),
+        diagnostics[0]
+            .message
+            .starts_with("only a literal `int`, `float`, `bool`, `str`, or `None` default"),
         "{diagnostics:?}"
     );
 }
@@ -404,8 +408,11 @@ fn a_walrus_in_a_default_of_an_unannotated_def_binds_the_module_frame() {
     let source = format!("{COLOR}def f(x: int = (Color := 1)):\n    pass\nColor()\n");
     let diagnostics = lower_err(&source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
     assert!(
-        !diagnostics[0].message.contains("enum class"),
+        diagnostics[0]
+            .message
+            .starts_with("only a literal `int`, `float`, `bool`, `str`, or `None` default"),
         "{diagnostics:?}"
     );
 }

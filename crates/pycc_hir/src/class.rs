@@ -1435,27 +1435,13 @@ fn lower_method(
     // `/` marker) are now lowered. For `@staticmethod`, posonlyargs come
     // first (no implicit `self`/`cls`). For regular/classmethod methods,
     // `self`/`cls` is always the first parameter, so posonlyargs follow it.
-    // Since keyword call arguments are already globally unsupported, every
-    // parameter is already effectively positional-only — accepting
-    // posonlyargs changes nothing about call-site checking.
-    if parameters.vararg.is_some() {
-        return Err(unsupported(
-            "`*args` is not supported yet",
-            parameters.range,
-        ));
-    }
-    if !parameters.kwonlyargs.is_empty() {
-        return Err(unsupported(
-            "keyword-only parameters are not supported yet",
-            parameters.range,
-        ));
-    }
-    if parameters.kwarg.is_some() {
-        return Err(unsupported(
-            "`**kwargs` is not supported yet",
-            parameters.range,
-        ));
-    }
+    // A method's parameters stay effectively positional-only: Part 1 of
+    // #884 (#1125) made keyword call arguments bindable for a module-level
+    // `def` only, and a method call keeps the unchanged `C0001` — so
+    // accepting posonlyargs still changes nothing about call-site checking
+    // here. The three shape checks below are shared with
+    // `func::lower_params` (Part 2 of #884, #1189).
+    crate::func::params::reject_unsupported_parameter_shapes(parameters)?;
     let method_name = def.name.as_str();
     let is_public = crate::is_public_name(method_name); // D-038
     let params_is_public = is_public || method_name == "__init__";
@@ -1482,6 +1468,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?;
             p.extend(lower_arg_list(
                 &parameters.args,
@@ -1491,6 +1478,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }
@@ -1541,6 +1529,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1550,6 +1539,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }
@@ -1580,6 +1570,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?);
             p.extend(lower_arg_list(
                 args_rest,
@@ -1589,6 +1580,7 @@ fn lower_method(
                 Some(class_name),
                 aliases,
                 class_defs,
+            crate::func::params::DefaultPolicy::Reject,
             )?);
             p
         }

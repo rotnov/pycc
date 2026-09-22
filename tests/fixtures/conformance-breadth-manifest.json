@@ -106,13 +106,13 @@
         {
           "category": "`sep=` and `end=` keyword arguments",
           "kind": "core",
-          "reason": "Keyword call arguments are rejected with C0001 at crates/pycc_hir/src/expr.rs:397, so PEP 3105's function signature -- the substance of turning `print` into a function -- is unreachable.",
+          "reason": "Keyword call arguments are rejected with C0001 at crates/pycc_hir/src/expr.rs:399: Parts 1 and 2 of #884 bind keywords and fill defaults only for a call to a module-level `def`, and `print` is a builtin, so PEP 3105's function signature -- the substance of turning `print` into a function -- is unreachable.",
           "issue": 248
         },
         {
           "category": "`file=` and `flush=` keyword arguments",
           "kind": "core",
-          "reason": "Same C0001 rejection of keyword call arguments at crates/pycc_hir/src/expr.rs:397.",
+          "reason": "Same C0001 rejection of keyword call arguments at crates/pycc_hir/src/expr.rs:399.",
           "issue": 248
         }
       ]
@@ -645,7 +645,7 @@
         {
           "category": "`frozen=`, `order=`, `eq=`, and the other `@dataclass` parameters",
           "kind": "core",
-          "reason": "Keyword arguments to the decorator are not exercised, and keyword call arguments are rejected generally.",
+          "reason": "Keyword arguments to the decorator are not exercised, and a decorator call is not one of the shapes Parts 1 and 2 of #884 bind keywords or defaults for.",
           "issue": 248
         },
         {
