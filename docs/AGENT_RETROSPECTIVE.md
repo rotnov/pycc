@@ -33,6 +33,37 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — HIR-level tests written against an arity diagnostic `pycc_hir` never emits
+
+Implementing issue #1189 (default parameter values, Part 2 of #884), five
+new unit tests in `crates/pycc_hir/src/expr/keyword_bind.rs` asserted that
+`crate::lower_checked` rejects a call whose argument count disagrees with
+its callee's arity — a short call to a `def` with no default, an over-long
+call to a defaulted `def`, a short call to a callee outside the signature
+table. All five failed: `lower_checked` returned `Ok`. `pycc_hir` performs
+no arity checking at all; arity is `pycc_types`' job, and the only arity
+diagnostics `pycc_hir` produces are the ones `keyword_bind`'s own binder
+raises for a call it was asked to bind.
+
+Root cause: the tests were written from the *user-visible* behaviour of
+`pycc check` rather than from the contract of the layer under test. Because
+this part deliberately keeps all of its work inside `pycc_hir`, the layer's
+observable output for an unbindable call is the shape of the lowered
+argument vector, not a diagnostic.
+
+Fixed by re-aiming each arm at the argument vector it actually owns
+(`assert_eq!(args, vec![HirExpr::IntLiteral(1)])` where the binder must
+leave a short call untouched), and by moving the end-to-end diagnostic
+assertions to `tests/issue_1189_default_params.rs`, which drives the public
+CLI and therefore does see `pycc_types`' output.
+
+Lesson: before asserting a diagnostic in a crate-internal unit test, check
+which crate emits that diagnostic. A diagnostic produced by a later pass is
+only observable from an integration test that runs the whole pipeline; in a
+single-crate test, assert the data structure that crate produces.
+
+---
+
 ## 2026-09-22 — A `--ext` test that asserted a successful build instead of an empty diagnostic set
 
 Issue #1181's new suite added `a_renamed_receiver_builds_as_an_ext_export`
