@@ -111,6 +111,14 @@ def mixed(b: memoryview, which: int) -> memoryview:
     return a
 
 
+def deferred(b: memoryview) -> memoryview:
+    try:
+        return b
+    finally:
+        a = ndarray(2)
+        a[0] = 3.0
+
+
 def peek(b: memoryview) -> float:
     return b[0]
 
@@ -566,6 +574,17 @@ w = m.mixed(a, 1)
 assert list(w) == [5.0, 0.0], list(w)
 assert live() == 1, live()
 del w
+assert live() == 0, live()
+
+# A caller-owned return that is already pending while an *owned* buffer
+# slot is allocated and then freed by the function's own epilogue. The
+# epilogue must free the owned slot and leave the parameter alone, so the
+# host's counter is zero throughout and the returned window still reads
+# the caller's storage.
+v = m.deferred(a)
+assert list(v) == [1.0, 2.0, 3.0], list(v)
+assert live() == 0, live()
+v.release()
 assert live() == 0, live()
 
 # A public method, which shares the same generated wrapper.

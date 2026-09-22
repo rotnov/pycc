@@ -8240,13 +8240,29 @@ fn emit_stmt<'ctx>(
                         // type, and the value is the `PyccExtBufferView *`
                         // `pycc_rt_buffer_f64_alloc` produced.
                         //
-                        // Only *artifact-owned* storage reaches here. A
-                        // `memoryview` **parameter** is still refused at a
-                        // return position by `reject_memoryview_read`
-                        // (`C0001`): its storage belongs to the host's
-                        // exporter, which the wrapper releases on the way
-                        // out, so handing it back would hand back a
-                        // dangling view. This arm stores nothing into the
+                        // Two provenances reach here. *Artifact-owned*
+                        // storage is the original one. Part 1 of #1175
+                        // (#1178) adds the *caller-owned* one: a
+                        // `memoryview` **parameter** returned by name,
+                        // whose value is the address of the wrapper's own
+                        // `PyccExtBufferView` local. The earlier refusal of
+                        // that shape was justified here as a dangling view
+                        // -- the host's exporter being released on the way
+                        // out -- and that justification was wrong: the
+                        // wrapper acquires a second, independent buffer
+                        // export on the argument object before releasing
+                        // its own, and an export is what pins the storage.
+                        // See `pycc_types::buffer::admits_buffer_egress`.
+                        //
+                        // Nothing below has to distinguish the two. A
+                        // parameter never enters `owned_buffer_slots` (see
+                        // the comment at the slot-collection site), and a
+                        // local buffer slot only ever holds null or a
+                        // `pycc_rt_buffer_f64_alloc` heap pointer, never a
+                        // parameter's address -- so the orphan flag cannot
+                        // fire against a caller-owned pending return and
+                        // the epilogue cannot free one. This arm stores
+                        // nothing into the
                         // slot: the ownership transfer happens later, in
                         // the frame's owned-slot epilogue, where the
                         // `buffer_epilogue_returned` identity test skips

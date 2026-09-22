@@ -156,11 +156,18 @@ pub(crate) fn producer_length_not_an_int(callee: &str, len_ty: &Ty) -> Diagnosti
 /// The owned counterpart of [`crate::expr::reject_memoryview_read`]'s
 /// parameter arm, whose message is pinned verbatim by eight assertions and
 /// stays exactly as it was. The distinction is load-bearing rather than
-/// cosmetic: `return a` on an owned name is refused because egress does not
-/// exist yet (Part 2b), while `return b` on a parameter-bound name is
-/// refused because handing back a view the host lent for one call is a
-/// use-after-free. Reporting the parameter message for the owned case would
-/// leave Part 2b inheriting a refusal that lies about why it exists.
+/// cosmetic: the two arms name different storage and different reasons, and
+/// reporting the parameter message for the owned case would have left Part
+/// 2b inheriting a refusal that lies about why it exists.
+///
+/// Both refusals have since been lifted at the *return* position only --
+/// `return a` by Part 2b of #1142 (#1164), `return b` by Part 1 of #1175
+/// (#1178) -- and the parameter arm's original ground, that handing back a
+/// view the host lent for one call is a use-after-free, was never true of
+/// the shape. [`admits_buffer_egress`] carries the corrected account and the
+/// measurement behind it. Every *other* use of either name is still refused
+/// here and by [`crate::expr::reject_memoryview_read`], which is what keeps
+/// a buffer name from being aliased.
 pub(crate) fn owned_buffer_use_unsupported(name: &str) -> Diagnostic {
     Diagnostic::error(
         "C0001",

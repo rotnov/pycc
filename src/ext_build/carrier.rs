@@ -245,10 +245,15 @@ pub(crate) fn return_c_type(ty: &Ty) -> Option<&'static str> {
         // `C0003` capability gap. Egress is a property of the *top-level*
         // return position alone, so it is stated at exactly that position.
         //
-        // The value handed back is artifact-owned storage, which the
-        // wrapper turns into a real `memoryview` over a refcounted exporter
-        // (`pycc_ext_pack_memoryview`). Unlike a *parameter*'s buffer, it
-        // owes no `PyBuffer_Release`: nothing was borrowed from the host.
+        // One C return type, two provenances -- the distinction lives in
+        // `wrapper_for`'s own `Ty::MemoryView` arm, not here. Artifact-owned
+        // storage becomes a real `memoryview` over a refcounted exporter
+        // (`pycc_ext_pack_memoryview`) and owes no `PyBuffer_Release`,
+        // nothing having been borrowed from the host. Since Part 1 of #1175
+        // the same pointer may instead be a *parameter*'s, handed back by
+        // `pycc_ext_pack_memoryview_borrowed` over a second export on the
+        // host's own argument object; the wrapper still releases its own
+        // `Py_buffer` for that parameter, after acquiring that export.
         Ty::MemoryView => Some(BUFFER_VIEW_RETURN_C_TYPE),
         // Still asked of `boundary_carrier`: `tuple[list[int]]` is a tuple
         // whose element the boundary cannot carry, and answering `void`
