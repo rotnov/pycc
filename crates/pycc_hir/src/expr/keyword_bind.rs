@@ -841,4 +841,23 @@ mod tests {
             "`f` is missing required argument(s): `a`"
         );
     }
+
+    /// The zero-keyword default-fill route in `expr.rs` can still fail: a
+    /// call short of the callee's arity reaches the binder, the defaulted
+    /// parameters are filled, and a *required* parameter that is still
+    /// unsupplied is reported from there. This pins the error-propagation
+    /// arm of that route, which the keyword route above does not exercise.
+    #[test]
+    fn a_zero_keyword_call_missing_a_required_argument_is_reported_from_the_binder() {
+        let diagnostic = lower_err(&format!("{DEF_A_B2}f()\n"));
+        assert_eq!(diagnostic.code, "T0021");
+        assert_eq!(
+            diagnostic.message,
+            "`f` is missing required argument(s): `a`"
+        );
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some("pass exactly 2 argument(s)")
+        );
+    }
 }
