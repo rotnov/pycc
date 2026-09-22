@@ -1113,8 +1113,8 @@ names, and returned `count=133` with a digest byte-identical to the committed
 `compile_unchanged_set_sha256`. There is no drift in the "compiles unchanged"
 denominator.
 
-The operative blocker is therefore prerequisite 2, for both readings, now
-joined by prerequisite 3. Neither has an issue tracking it, because neither
+The operative blocker was therefore prerequisite 2, for both readings, joined
+by prerequisite 3. **Annotated 2026-09-22 ([D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)):** neither is operative any longer, because this workload is refused and has no run to prepare. Neither has an issue tracking it, because neither
 is straightforwardly a compiler gap: the **Subject** bullet requires a
 byte-identical function that both compiles *and* consumes the committed
 input, from a codebase that currently offers none, so closing it could

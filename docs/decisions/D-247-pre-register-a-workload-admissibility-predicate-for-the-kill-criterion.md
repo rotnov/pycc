@@ -36,8 +36,9 @@ status: accepted
   statement loops -- a comprehension alone does not qualify -- and (iv) responsible for at
   least **20%** of summed self time. The share is fixed here, before any candidate
   workload is profiled, and is derived from arithmetic rather than from an observation:
-  below one fifth, at least four disjoint own-code functions could each equally claim to
-  be "the hot loop", so the phrase stops designating anything. Whether the chosen
+  at one fifth exactly five disjoint own-code functions can clear the bar at once, and
+  every lower bar admits more simultaneous claimants, so "the hot loop" stops
+  designating anything well before the share reaches zero. Whether the chosen
   function is *exported* is deliberately **not** part of this predicate -- that is a
   property of the subject, already governed by
   [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1 and by
@@ -74,8 +75,9 @@ status: accepted
   decision. `docs/TESTING.md`'s protocol section and
   [#1039](https://github.com/rotnov/pycc/issues/1039) carry the predicate's operational
   form; `subject_sha256` in `scripts/bench_hosted_ext_precommit.json` stays `null` until
-  a run on an admissible workload registers it, and because a replacement workload
-  brings its own input, that record's `input_sha256`, `seed`, `generator_path` and
-  `compile_unchanged_*` fields are re-registered in the same stage commit rather than
-  carried over. Finding a replacement workload is new
+  a run on an admissible workload registers it, as that run's own first action. Because
+  a replacement workload brings its own input, that record's `input_sha256`, `seed`,
+  `generator_path` and `compile_unchanged_*` fields are re-registered rather than carried
+  over, in their own pre-registration commit ahead of any run — a separate event from
+  `subject_sha256`'s, which keeps the Subject bullet's rule unchanged. Finding a replacement workload is new
   work this entry does not do and does not schedule.
