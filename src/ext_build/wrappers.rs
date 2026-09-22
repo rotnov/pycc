@@ -294,7 +294,11 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
          return NULL;\n    }}\n",
         buffer_releases(&slots, "        ")
     ));
-    out.push_str(&caller_owned_buffer_acquire(&export.return_ty, &slots));
+    out.push_str(&caller_owned_buffer_acquire(
+        &export.return_ty,
+        &slots,
+        source_name,
+    ));
     out.push_str(&release);
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
@@ -547,7 +551,11 @@ fn caller_owned_buffer_slots(return_ty: &Ty, slots: &[BoundaryCarrier]) -> Vec<u
 /// Nothing here frees or releases anything: `args[index]` is a borrowed
 /// reference the caller holds for the call's duration, and the view carries
 /// its own export.
-fn caller_owned_buffer_acquire(return_ty: &Ty, slots: &[BoundaryCarrier]) -> String {
+fn caller_owned_buffer_acquire(
+    return_ty: &Ty,
+    slots: &[BoundaryCarrier],
+    source_name: &str,
+) -> String {
     let indices = caller_owned_buffer_slots(return_ty, slots);
     if indices.is_empty() {
         return String::new();
@@ -560,9 +568,18 @@ fn caller_owned_buffer_acquire(return_ty: &Ty, slots: &[BoundaryCarrier]) -> Str
     );
     for (position, index) in indices.iter().enumerate() {
         let lead = if position == 0 { "if" } else { "} else if" };
+        // The packer re-reads the exporter, so it is handed the window this
+        // call actually operated on and the writability the unpack demanded:
+        // a PEP 688 exporter may legally answer the second `__buffer__` with
+        // a different window, and only `b{index}` says which one is right.
+        let writable = i32::from(matches!(
+            slots[*index],
+            BoundaryCarrier::Buffer { writable: true }
+        ));
         out.push_str(&format!(
             "    {lead} (result == &a{index}) {{\n        caller_owned = 1;\n        \
-             borrowed = pycc_ext_pack_memoryview_borrowed(args[{index}]);\n"
+             borrowed = pycc_ext_pack_memoryview_borrowed(args[{index}], &b{index}, \
+             \"{source_name}\", {index}, {writable});\n"
         ));
     }
     out.push_str("    }\n");

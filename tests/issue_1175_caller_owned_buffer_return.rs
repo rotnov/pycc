@@ -632,6 +632,35 @@ assert live() == 0, live()
 # exception set, and the wrapper must propagate that exception rather than
 # fall through to the artifact-owned packer, which would free the host's
 # own storage.
+class MovesSecond:
+    """A conforming PEP 688 exporter whose second export is a *different*
+    window. The wrapper must refuse rather than hand the host storage the
+    compiled body never operated on."""
+
+    def __init__(self):
+        self.first = array.array('d', [4.5, 5.5])
+        self.second = array.array('d', [9.5, 8.5])
+        self.calls = 0
+
+    def __buffer__(self, flags):
+        self.calls += 1
+        return memoryview(self.first if self.calls == 1 else self.second)
+
+    def __release_buffer__(self, view):
+        view.release()
+
+
+moving = MovesSecond()
+try:
+    m.first(moving)
+except BufferError as exc:
+    assert 'second export' in str(exc), str(exc)
+else:
+    raise AssertionError('a relocated second export should have been refused')
+assert moving.calls == 2, moving.calls
+assert live() == 0, live()
+
+
 class FailsSecond:
     def __init__(self):
         self.store = array.array('d', [4.5, 5.5])

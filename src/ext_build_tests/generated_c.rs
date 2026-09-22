@@ -2273,7 +2273,8 @@ fn a_caller_owned_buffer_return_acquires_before_it_releases() {
     assert!(
         inc.contains(
             "    if (result == &a0) {\n        caller_owned = 1;\n        borrowed = \
-             pycc_ext_pack_memoryview_borrowed(args[0]);\n    }\n    PyBuffer_Release(&b0);\n"
+             pycc_ext_pack_memoryview_borrowed(args[0], &b0, \"make\", 0, 0);\n    }\n    \
+             PyBuffer_Release(&b0);\n"
         ),
         "{inc}"
     );
@@ -2309,9 +2310,9 @@ fn a_caller_owned_buffer_return_tests_every_buffer_parameter_in_turn() {
     assert!(
         inc.contains(concat!(
             "    if (result == &a0) {\n        caller_owned = 1;\n",
-            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[0]);\n",
+            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[0], &b0, \"pick\", 0, 0);\n",
             "    } else if (result == &a1) {\n        caller_owned = 1;\n",
-            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[1]);\n    }\n",
+            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[1], &b1, \"pick\", 1, 0);\n    }\n",
             "    PyBuffer_Release(&b0);\n    PyBuffer_Release(&b1);\n",
         )),
         "{inc}"
@@ -2380,7 +2381,8 @@ fn a_caller_owned_buffer_returning_method_uses_the_declared_parameter_index() {
     assert!(
         inc.contains(
             "    if (result == &a0) {\n        caller_owned = 1;\n        borrowed = \
-             pycc_ext_pack_memoryview_borrowed(args[0]);\n    }\n    PyBuffer_Release(&b0);\n"
+             pycc_ext_pack_memoryview_borrowed(args[0], &b0, \"Grid.row\", 0, 0);\n    \
+             }\n    PyBuffer_Release(&b0);\n"
         ),
         "{inc}"
     );

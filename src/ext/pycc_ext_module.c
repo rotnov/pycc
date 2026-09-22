@@ -1549,7 +1549,9 @@ static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view);
  * no dependency on the exporter type, so only the symmetry keeps the two
  * definitions together.
  */
-static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner);
+static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner, const Py_buffer *held,
+                                                   const char *fn_name, Py_ssize_t index,
+                                                   int writable);
 
 #include "pycc_ext_exports.inc"
 
@@ -1803,9 +1805,66 @@ static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view)
  * as-is: it must never fall through to `pycc_ext_pack_memoryview`, whose
  * exporter would free the host's storage in `tp_dealloc`.
  */
-static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner)
+static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner, const Py_buffer *held,
+                                                   const char *fn_name, Py_ssize_t index,
+                                                   int writable)
 {
-    return PyMemoryView_FromObject(owner);
+    PyObject *view;
+    Py_buffer probe;
+    const char *held_format;
+    const char *probe_format;
+    int differs;
+
+    /*
+     * The second export, and the reason it must be checked. PEP 688 lets an
+     * exporter answer a later `__buffer__` with a *different* window, and
+     * `PyMemoryView_FromObject` performs exactly such a later call. Nothing
+     * routes that window through `pycc_ext_unpack_memoryview`, so without the
+     * comparison below the host could receive storage the compiled body never
+     * saw -- or a shape and format D-244 statement (e) refuses outright.
+     *
+     * Transferring the *first* export into the returned object instead is not
+     * available under `Py_LIMITED_API`: `PyMemoryView_FromBuffer` copies the
+     * `Py_buffer` without taking ownership of it (measured: the exporter's
+     * `__release_buffer__` never runs), so that route leaks the export
+     * permanently rather than moving it.
+     *
+     * Refusing an exotic-but-legal exporter is this boundary's existing idiom
+     * -- `pycc_ext_unpack_memoryview` already refuses a conforming 2-D or
+     * non-'d' one. A returned view whose window is not the one the call
+     * operated on is refused the same way.
+     */
+    view = PyMemoryView_FromObject(owner);
+    if (view == NULL) {
+        return NULL;
+    }
+    /*
+     * Probing the `memoryview` rather than `owner` deliberately: a
+     * `memoryview`'s own `bf_getbuffer` re-describes the buffer it already
+     * holds, so this reads back export #2 without asking the exporter for a
+     * third one.
+     */
+    if (PyObject_GetBuffer(view, &probe,
+                           PyBUF_C_CONTIGUOUS | PyBUF_FORMAT |
+                               (writable ? PyBUF_WRITABLE : 0)) != 0) {
+        Py_DECREF(view);
+        return NULL;
+    }
+    held_format = (held->format == NULL) ? "" : held->format;
+    probe_format = (probe.format == NULL) ? "" : probe.format;
+    differs = probe.buf != held->buf || probe.len != held->len ||
+              probe.itemsize != held->itemsize || probe.ndim != held->ndim ||
+              probe.readonly != held->readonly || strcmp(probe_format, held_format) != 0;
+    PyBuffer_Release(&probe);
+    if (differs) {
+        Py_DECREF(view);
+        PyErr_Format(PyExc_BufferError,
+                     "%s() argument %zd: the exporter described a different buffer on its "
+                     "second export, so the window this call operated on cannot be returned",
+                     fn_name, index + 1);
+        return NULL;
+    }
+    return view;
 }
 
 
