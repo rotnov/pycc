@@ -603,6 +603,36 @@ v.release()
 assert owner.log == ['acquire', 'acquire', 'release', 'release'], owner.log
 assert live() == 0, live()
 
+# The acquire can fail, and the flag rather than a `borrowed != NULL` test
+# is what makes that case answerable: an exporter whose *second*
+# `__buffer__` raises drives `PyMemoryView_FromObject` to NULL with the
+# exception set, and the wrapper must propagate that exception rather than
+# fall through to the artifact-owned packer, which would free the host's
+# own storage.
+class FailsSecond:
+    def __init__(self):
+        self.store = array.array('d', [4.5, 5.5])
+        self.calls = 0
+
+    def __buffer__(self, flags):
+        self.calls += 1
+        if self.calls > 1:
+            raise ValueError('no second export')
+        return memoryview(self.store)
+
+    def __release_buffer__(self, view):
+        view.release()
+
+failing = FailsSecond()
+try:
+    m.first(failing)
+except ValueError:
+    pass
+else:
+    raise AssertionError('the failed second acquire should have propagated')
+assert failing.calls == 2, failing.calls
+assert live() == 0, live()
+
 # The window the returned view spans is the window the compiled body saw.
 # The argument is a *slice* of the host's own buffer, so an implementation
 # that re-derived the view from the underlying object instead of from the
