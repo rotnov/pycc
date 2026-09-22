@@ -525,7 +525,9 @@ rule 6); only numbers are published.
   and it accounts for at least
   **20%** of the profile's summed self time. Exportability is deliberately not
   part of the predicate — whether the subject can be reached from a host is
-  already governed by the Subject bullet above and by
+  already governed by
+  [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)
+  rule 1 and by
   [D-038](./decisions/D-038-a-leading-underscore-marks-a-top-level-function.md).
   A workload that fails any clause is refused, and the refusal is a statement
   about that workload, never a result for the compiler.
@@ -740,9 +742,13 @@ rule 6); only numbers are published.
 
 ### Status: the protocol has no admissible subject
 
-Nothing above is amended by this subsection, and nothing above has been
-amended since it was committed. The protocol is unchanged, the
-pre-registration record is unchanged, and `subject_sha256` is still `null`.
+Nothing above is amended by this subsection. The protocol above has been
+amended exactly once since it was committed: the **Workload admissibility**
+bullet, added on 2026-09-22 by
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
+which supplies a predicate the protocol presumed rather than revising how a
+chosen subject is measured. The pre-registration record is unchanged and
+`subject_sha256` is still `null`.
 This records why no run has been scored against it, so that a later session
 does not re-derive the same findings. It was corrected on 2026-09-17, when the
 count prerequisite 2 reports was measured rather than asserted, and again on
@@ -1124,10 +1130,17 @@ tracked chiefly by [#882](https://github.com/rotnov/pycc/issues/882), sized
 against a real codebase — but read them with prerequisite 2's cascade-suppression
 caveat, which is why their count is not a remaining total.
 
-The protocol's **Input** bullet forbids choosing a different workload after
-meeting any of these obstacles, so the committed generator, seed and digest
-stand as they are and the run waits rather than the obstacles reshaping the
-run.
+The protocol's **Input** bullet still forbids choosing a different workload
+*because* of these obstacles, and the **Workload admissibility** bullet does
+not relax that: a replacement is admissible only through the predicate
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
+fixed in advance, never because an obstacle was met. What that bullet does
+change is which obstacle is operative. This workload yields no subject at
+all, so the committed generator, seed, `input_sha256` and denominator describe
+a run that cannot be scored: a replacement workload replaces its input too, so
+those fields are re-registered together with `subject_sha256` when an
+admissible workload is adopted, and until then nothing here is reshaped by an
+obstacle.
 
 #### What the boundary costs, measured (not part of the protocol)
 

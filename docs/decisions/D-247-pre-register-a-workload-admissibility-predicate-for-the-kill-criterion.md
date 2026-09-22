@@ -39,7 +39,8 @@ status: accepted
   below one fifth, at least four disjoint own-code functions could each equally claim to
   be "the hot loop", so the phrase stops designating anything. Whether the chosen
   function is *exported* is deliberately **not** part of this predicate -- that is a
-  property of the subject, already governed by the Subject bullet and by
+  property of the subject, already governed by
+  [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 1 and by
   [D-038](./D-038-a-leading-underscore-marks-a-top-level-function.md), and refusing a
   whole workload over how its author packaged one helper would reject on a fixable
   detail while calling it a workload property. A workload that fails this predicate
@@ -73,5 +74,8 @@ status: accepted
   decision. `docs/TESTING.md`'s protocol section and
   [#1039](https://github.com/rotnov/pycc/issues/1039) carry the predicate's operational
   form; `subject_sha256` in `scripts/bench_hosted_ext_precommit.json` stays `null` until
-  a run on an admissible workload registers it. Finding a replacement workload is new
+  a run on an admissible workload registers it, and because a replacement workload
+  brings its own input, that record's `input_sha256`, `seed`, `generator_path` and
+  `compile_unchanged_*` fields are re-registered in the same stage commit rather than
+  carried over. Finding a replacement workload is new
   work this entry does not do and does not schedule.
