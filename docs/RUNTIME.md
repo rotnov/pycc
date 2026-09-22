@@ -507,8 +507,8 @@ A default parameter value is filled at compile time, spliced into the call's
 positional argument vector while the calling module is lowered (Part 2 of #884,
 [#1189](https://github.com/rotnov/pycc/issues/1189)), so it never reaches the
 generated wrapper and D-244 rule 7 is unchanged by it: the wrapper's arity check
-still counts every declared parameter, and a host that omits a defaulted
-argument gets the same arity-mismatch `TypeError` it raised before.
+counts every declared parameter, a defaulted one included, so a host call that
+omits a defaulted argument raises the wrapper's arity-mismatch `TypeError`.
 [#1194](https://github.com/rotnov/pycc/issues/1194) tracks widening the host
 boundary to serve defaults.
 

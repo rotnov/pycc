@@ -489,8 +489,10 @@ Keyword arguments (`f(b=2, a=1)`, Part 1 of
 argument vector, so `HirExpr::Call` stays positional and nothing downstream
 of HIR observes the difference. Binding applies to exactly one call shape:
 a call whose callee is a bare name that refers to a module-level `def` in
-the *same module*, whose parameters are all positional and whose defaults,
-if any, are all in the admitted literal subset described below. Every other
+the *same module*, whose parameters are all positional, whose defaults,
+if any, are all in the admitted literal subset described below, and whose
+name is bound only once in module scope (see "Keyword arguments and default
+parameter values on a redefined name" below). Every other
 shape — a method call, `super().m()`, a container or stdlib-intrinsic call,
 a class instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
@@ -520,9 +522,11 @@ twin. Four rules follow from that model:
   A `@dataclass` field default is its own deferred feature (above), and the
   receiver's own `self`/`cls` default keeps its own message. The binder is
   per module, so an **imported** `def`'s default is not filled either — a
-  short call to it is the ordinary `T0021` arity error at the import,
-  exactly as an imported `def`'s keyword call is. Part 3 of #884 widens both
-  to the module boundary.
+  short call to it is the ordinary `T0021` arity error at the import, while
+  a keyword call to it keeps `C0001` like every other unbindable shape.
+  Part 3 of #884 widens both to the module boundary. A `def` whose name is
+  bound more than once in module scope fills no default either (see "Keyword
+  arguments and default parameter values on a redefined name" below).
 - **No type is inferred from a default.** An unannotated parameter of a
   private helper keeps its inferred type; the default does not seed it. A
   public function's parameter still needs its annotation (`T0001`).
@@ -546,6 +550,37 @@ keyword name, a positional-only parameter passed as a keyword, a parameter
 supplied both positionally and by keyword, and a parameter left
 unsupplied. Each is reported at the offending keyword's own
 source span where one exists, and at the call's span otherwise.
+
+### Keyword arguments and default parameter values on a redefined name
+
+This is the canonical statement of the rule; other documents cross-reference
+it. A name bound more than once in module scope is outside the bindable shape
+for both keyword binding and default filling, whichever of its bindings a
+call would reach. "More than once" counts two top-level `def`s of the name,
+or one `def` plus any other module-scope binding of it: an assignment, an
+annotated assignment with a value, an augmented assignment, an `import` or
+`from ... import` alias, a `type` alias, a `class`, a walrus, a `match`
+capture, a `for`, `with` or `except ... as` target, or a `del`. A binding in
+the body of a module-level `if`, `while`, `for`, `try`, `with` or `match`
+counts, because that body runs in module scope. A binding inside a `def` or
+`class` body does not count, and neither does a comprehension's own target
+or an annotation without a value.
+
+The reason is dispatch order. pycc calls a redefined `def` in source order
+([#22](https://github.com/rotnov/pycc/issues/22)): a call made before the
+second `def` runs the first. Binding, by contrast, happens once per module
+against one static table, and a call inside a function body runs at a time
+its source position does not fix. So no call site can be tied to one of the
+signatures, and binding against either could silently pass the wrong value
+or fill the wrong default. Such a name is therefore left out of the table:
+
+- a keyword call to it keeps `C0001` "keyword call arguments are not
+  supported yet";
+- a call that omits a defaulted argument is left exactly as written and
+  fails the ordinary positional arity check, `T0021` "`f` expects N
+  argument(s), got M";
+- a call that supplies every argument positionally is unaffected and still
+  dispatches in source order.
 
 
 ## Error philosophy

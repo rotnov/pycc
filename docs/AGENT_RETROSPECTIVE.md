@@ -33,6 +33,38 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — A static, module-wide signature table bound calls to a name the runtime dispatches in source order
+
+Part 1 of #884 (issue #1125, commit `a600ec3f` on `main`) bound keyword call
+arguments against `SignatureTable`, collected once per module from its
+top-level `def`s, with a later `def` of the same name replacing an earlier
+one. pycc's runtime dispatch of a redefined module-level name is source-order
+sensitive, though (issue #22's function-pointer slot): a call made before the
+second `def` runs the first one. For `def foo(a, b)`, `foo(a=10, b=1)`, then
+`def foo(b, a)` and the same call again, pycc printed `-9 9` where CPython
+prints `9 9` -- silent wrong output, shipped to `main`. Part 2 (#1189) reused
+the table for default filling and inherited the defect (`2 2` for `1 2`).
+The Part 2 review round found it; neither Part 1's plan nor its review did.
+
+Root cause: the table's "last `def` wins" rule was justified by analogy to
+Python's rebinding of a module-level name, without checking that analogy
+against how pycc actually dispatches a rebound name, or against the fact
+that a static per-call-site resolution cannot know which binding a call will
+observe at run time.
+
+What fixed it: the table now admits only a name bound exactly once in module
+scope (`crates/pycc_hir/src/expr/keyword_bind/rebound.rs`), so a keyword call
+to a redefined name keeps `C0001` and a short call gets the ordinary `T0021`
+arity error; `docs/TYPE_SYSTEM.md`, "Keyword arguments and default parameter
+values on a redefined name", states the rule.
+
+Lesson: any static call-site resolution -- a signature table, a devirtualized
+target, a folded constant keyed on a name -- must be checked against the
+language's rebinding semantics and against pycc's own dispatch model before
+it lands. Write the redefinition test (a call before and after a second
+binding of the same name, compared against CPython) as part of the first
+pull request that introduces the table, not the second one that reuses it.
+
 ## 2026-09-22 — HIR-level tests written against an arity diagnostic `pycc_hir` never emits
 
 Implementing issue #1189 (default parameter values, Part 2 of #884), five

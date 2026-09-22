@@ -73,8 +73,8 @@ impl<'a> Visitor<'a> for BindingScan {
                     self.visit_arguments(arguments);
                 }
             }
-            // An annotation without a value (`foo: int`) declares but does
-            // not bind, so only the value side is scanned for it.
+            // An annotation without a value (`foo: int`) declares the name
+            // but does not bind it.
             Stmt::AnnAssign(ann) if ann.value.is_none() => {}
             Stmt::Import(import) => import.names.iter().for_each(|a| self.bind_alias(a)),
             Stmt::ImportFrom(import) => import.names.iter().for_each(|a| self.bind_alias(a)),
