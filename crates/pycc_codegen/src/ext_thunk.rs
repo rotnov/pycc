@@ -117,25 +117,27 @@ pub(super) fn emit_export_thunks<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
 ) {
     let mut emitted: HashSet<&str> = HashSet::new();
+    // The codegen-side half of the driver's own per-export fact; see
+    // `crate::ext::buffer_slice_out_names` for why it is computed here from
+    // MIR rather than threaded in (`ExtExport` never reaches this crate),
+    // why it is resolved per *name* rather than per definition, and for the
+    // parity test that pins the two answers together. Computed once, outside
+    // the loop, precisely so two definitions of one name cannot get two
+    // answers -- the defect that made a redefinition forward four arguments
+    // through a one-argument `fn_type`.
+    let slice_widened = crate::ext::buffer_slice_out_names(&mir.items);
     for item in &mir.items {
         let MirItem::Function {
             name,
             params,
             return_ty,
-            body,
+            ..
         } = item
         else {
             continue;
         };
         let param_tys: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();
-        // The codegen-side half of the driver's own per-export fact; see
-        // `crate::ext::body_returns_buffer_slice` for why it is computed
-        // here from MIR rather than threaded in (`ExtExport` never reaches
-        // this crate) and for the parity test that pins the two answers
-        // together. It is read off the same binding the rest of this arm
-        // uses, so no second refutable pattern -- and no unreachable `else`
-        // arm -- stands between the two.
-        let returns_buffer_slice = crate::ext::body_returns_buffer_slice(body);
+        let returns_buffer_slice = slice_widened.contains(name.as_str());
         if !ext_thunk_required(name, &param_tys, return_ty, returns_buffer_slice) {
             continue;
         }

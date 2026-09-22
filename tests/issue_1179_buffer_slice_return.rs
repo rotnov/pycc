@@ -735,3 +735,180 @@ fn a_returned_buffer_sub_range_reaches_the_host_over_storage_the_caller_owns() {
     assert!(run.status.success(), "{}", stderr_of(&run));
     assert_eq!(stdout_of(&run), "ok\n");
 }
+
+/// Review round 2's subject: the orderings in which one frame executes more
+/// than one `return`, and the two redefinition orderings.
+///
+/// Both classes attack the same assumption -- that the wrapper's zero-init
+/// of `has_slice` is enough because at most one return ever stores.
+///
+/// *Within one frame*, `pycc_types::buffer::buffer_return_inside_finally`
+/// removes only the case of two returns in flight *simultaneously*. The
+/// sequential case survives: a return abandoned by a raising finalizer that
+/// an enclosing handler then swallows, followed by a second return. The
+/// out-slots must describe the return that actually reached the wrapper,
+/// not the last one that executed a store, so every return in a widened
+/// frame writes `has_slice` itself.
+///
+/// *Across definitions*, the two `def`s of one name share one `fnptr_`
+/// slot and one signature, so the out-slot fact is resolved per name over
+/// every definition rather than per definition. The last definition is
+/// still the one bound -- `redefined` slices and `redefined_to_whole` does
+/// not -- but both are widened, which is why the whole-view definition's
+/// own `has_slice = 0` store is what makes last-wins come out right.
+///
+/// Consumed by the admission arm below on every target, so no `cfg` gate.
+const RESEQUENCED: &str = "\
+def abandoned_then_whole(b: memoryview) -> memoryview:
+    try:
+        try:
+            return b[1:3]
+        finally:
+            raise ValueError('x')
+    except ValueError:
+        pass
+    return b
+
+
+def abandoned_then_sliced(b: memoryview) -> memoryview:
+    try:
+        try:
+            return b
+        finally:
+            raise ValueError('x')
+    except ValueError:
+        pass
+    return b[1:3]
+
+
+def abandoned_slice_then_slice(b: memoryview) -> memoryview:
+    try:
+        try:
+            return b[1:3]
+        finally:
+            raise ValueError('x')
+    except ValueError:
+        pass
+    return b[2:5]
+
+
+def redefined(b: memoryview) -> memoryview:
+    return b
+
+
+def redefined(b: memoryview) -> memoryview:
+    return b[1:3]
+
+
+def redefined_to_whole(b: memoryview) -> memoryview:
+    return b[1:3]
+
+
+def redefined_to_whole(b: memoryview) -> memoryview:
+    return b
+";
+
+/// The compile-time half, in the same "absence of a diagnostic" form the
+/// admission arm above uses and for its reason.
+///
+/// `redefined` is the regression that matters here: widening only the
+/// slicing definition left `UserFunction::fn_type` describing the *first*
+/// definition, so the thunk forwarded four arguments through a
+/// one-argument function type and `verify()` aborted the compiler on input
+/// the front end had accepted.
+#[test]
+fn a_redefined_or_resequenced_buffer_slice_export_compiles() {
+    let dir = fixture("1179_resequenced", RESEQUENCED);
+    let build = build_ext(&dir);
+    let err = stderr_of(&build);
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(!err.contains("Incorrect number of arguments"), "{err}");
+    assert!(!err.contains("error[C0001]"), "{err}");
+    assert!(!err.contains("error[T0"), "{err}");
+
+    let checked = check(&fixture("1179_resequenced_check", RESEQUENCED));
+    assert!(checked.status.success(), "{}", stdout_of(&checked));
+}
+
+/// The host-side driver for [`RESEQUENCED`]. Only the Unix-only hosted arm
+/// below consumes it, so Windows would otherwise see an unused constant and
+/// fail `-D warnings`.
+#[cfg(not(target_os = "windows"))]
+const RESEQUENCED_DRIVER: &str = r#"
+import array
+import ctypes
+import slice_probe as m
+
+live = ctypes.CDLL(m.__file__).pycc_rt_buffer_live_views
+live.restype = ctypes.c_longlong
+live.argtypes = []
+
+a = array.array('d', [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+
+# Each expectation is CPython's own answer for the bounds the *surviving*
+# return names, so the abandoned return's bounds cannot pass for them.
+def expect(sl):
+    ref = memoryview(a)[sl]
+    answer = list(ref)
+    ref.release()
+    return answer
+
+whole = list(a)
+cases = [
+    # The abandoned sub-range must not colour the bare return that
+    # superseded it: this is the whole buffer, not `b[1:3]`.
+    (m.abandoned_then_whole, whole),
+    # ...and the reverse ordering still derives the sub-range.
+    (m.abandoned_then_sliced, expect(slice(1, 3))),
+    # Two sub-ranges in one frame: the surviving one's bounds win.
+    (m.abandoned_slice_then_slice, expect(slice(2, 5))),
+    # Last definition wins, in both directions.
+    (m.redefined, expect(slice(1, 3))),
+    (m.redefined_to_whole, whole),
+]
+for fn, values in cases:
+    # Repeated, because a stale out-slot from a previous call is exactly the
+    # failure shape here and a single round trip can hide it.
+    for _ in range(3):
+        v = fn(a)
+        assert isinstance(v, memoryview), (fn.__name__, type(v))
+        assert list(v) == values, (fn.__name__, list(v), values)
+        assert len(v) == len(values), (fn.__name__, len(v), len(values))
+        v.release()
+        assert live() == 0, (fn.__name__, live())
+
+# Interleaved, so one export's out-slots cannot be read as another's.
+for _ in range(8):
+    for fn, values in cases:
+        v = fn(a)
+        assert list(v) == values, (fn.__name__, list(v), values)
+        v.release()
+assert live() == 0, live()
+
+print('ok')
+"#;
+
+/// The hosted arm for [`RESEQUENCED`]. Only a real CPython can say what the
+/// wrapper actually handed back, which is the whole substance of both
+/// findings.
+///
+/// Not compiled on Windows, for the same reason the arm above is not: the
+/// live-view counter is linked into the `.pyd` but absent from its export
+/// table.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_superseded_sub_range_never_colours_the_return_that_reached_the_host() {
+    let dir = fixture("1179_resequenced_hosted", RESEQUENCED);
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    std::fs::write(dir.join("driver.py"), RESEQUENCED_DRIVER).expect("write the driver");
+
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("driver.py")
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}

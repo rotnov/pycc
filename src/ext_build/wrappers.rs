@@ -122,8 +122,9 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // sub-range egress. That second half is no longer a function of the
     // declared signature at all: the driver computes it here from HIR
     // (`ExtExport::returns_buffer_slice`) and codegen computes it from MIR
-    // (`pycc_codegen::body_returns_buffer_slice`), two independent walks
-    // over two IRs. Their agreement is what keeps this wrapper's call form
+    // (`pycc_codegen::buffer_slice_out_names`), two independent walks over
+    // two IRs -- each resolving the fact per export *name* over every
+    // definition of it, because two `def`s share one signature. Their agreement is what keeps this wrapper's call form
     // matching the compiled function's real arity, and it is pinned by a
     // parity test rather than by this comment.
     let use_thunk =
@@ -238,10 +239,18 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // sub-range egress -- so every wrapper generated before #1179 stays
     // byte-identical.
     //
-    // `slice_present` is initialized to `0` and only a sub-range `return`
-    // writes `1`, because no pair of `long long` bounds is available as an
-    // in-band whole-view sentinel: `b[0:-1]` is a legal slice, and
-    // `LLONG_MIN`/`LLONG_MAX` are legal bounds that clamp correctly. The
+    // `slice_present` carries `1` only for a sub-range `return`, because no
+    // pair of `long long` bounds is available as an in-band whole-view
+    // sentinel: `b[0:-1]` is a legal slice, and `LLONG_MIN`/`LLONG_MAX` are
+    // legal bounds that clamp correctly.
+    //
+    // Its `0` initializer is a belt-and-braces default and **not** the
+    // protocol: every `return` in a widened body writes the slot itself,
+    // `1` with its bounds or `0` for a whole-window return, so a frame that
+    // executes more than one `return` describes the one that actually
+    // reached here. Relying on the initializer instead made a sub-range
+    // abandoned by a raising finalizer, and swallowed by an enclosing
+    // handler, colour the later bare `return b` with its bounds. The
     // two bound locals are initialized too: a call that raises leaves them
     // exactly as it found them, and an indeterminate read is undefined
     // behaviour even on a path that discards the value.
@@ -624,9 +633,9 @@ fn caller_owned_buffer_acquire(
         // Part 2 of #1175 (#1179): the sub-range is derived host-side,
         // *after* Part 1's whole-window PEP 688 `held`-vs-probe check,
         // which therefore still runs against the window this call actually
-        // operated on. `slice_present` is `0` unless a sub-range `return`
-        // executed, so an export that also contains a bare `return b` takes
-        // Part 1's path on that branch unchanged.
+        // operated on. `slice_present` is `0` unless the `return` that
+        // reached here was a sub-range one, so an export that also contains
+        // a bare `return b` takes Part 1's path on that branch unchanged.
         let borrowed = if buffer_slice_out {
             format!(
                 "slice_present\n            ? pycc_ext_pack_memoryview_borrowed_slice(\

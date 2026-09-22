@@ -34,22 +34,24 @@ fn name_return(name: &str) -> pycc_hir::HirStmt {
 
 /// Codegen's own answer for the function named `name`, reached the way the
 /// real build reaches it: lower the same HIR to MIR, then ask
-/// `pycc_codegen::body_returns_buffer_slice` about that function's body.
+/// `pycc_codegen::buffer_slice_out_names` which *names* carry out-slots.
+///
+/// The name, not one definition of it. Every `def` of a name shares one
+/// `fnptr_<name>` slot and one LLVM signature, so codegen resolves the fact
+/// per name over every definition and the driver unions the same way at its
+/// dedup site. A probe that asked the first -- or the last -- definition
+/// would answer a question neither side asks, and would have passed while
+/// the artifact mismatched.
 fn codegen_answer(hir: &pycc_hir::HirModule, name: &str) -> bool {
     let mir = pycc_mir::build(hir);
-    let body = mir
-        .items
-        .iter()
-        .find_map(|item| match item {
-            pycc_mir::MirItem::Function {
-                name: item_name,
-                body,
-                ..
-            } if item_name == name => Some(body),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("`{name}` should be lowered"));
-    pycc_codegen::body_returns_buffer_slice(body)
+    assert!(
+        mir.items.iter().any(|item| matches!(
+            item,
+            pycc_mir::MirItem::Function { name: item_name, .. } if item_name == name
+        )),
+        "`{name}` should be lowered"
+    );
+    pycc_codegen::buffer_slice_out_names(&mir.items).contains(name)
 }
 
 /// The corpus: every buffer-return provenance, plus a non-buffer export, in
@@ -176,4 +178,62 @@ fn either_buffer_parameter_may_be_the_sliced_one() {
         assert!(exports[0].returns_buffer_slice, "{sliced}");
         assert!(codegen_answer(&hir, "f"), "{sliced}");
     }
+}
+
+/// Two `def`s of one name, in both orderings.
+///
+/// The arity is a property of the shared `fnptr_<name>` slot, so both
+/// definitions are widened and both sides must say so -- including when the
+/// *last* definition, the one actually bound, only does a bare `return b`.
+/// Resolving this last-wins instead is what made the generated C declare
+/// one arity while the compiled function carried another: an ill-typed call
+/// across the object boundary that neither compiler can see, and, in the
+/// other ordering, a thunk that forwarded four arguments through a
+/// one-argument `fn_type` and aborted the compiler in `verify()`.
+#[test]
+fn a_redefined_name_carries_out_slots_in_both_orderings() {
+    for (label, first, second) in [
+        ("bare_then_sliced", name_return("b"), slice_return("b")),
+        ("sliced_then_bare", slice_return("b"), name_return("b")),
+    ] {
+        let hir = module(vec![
+            func_with_body("f", &[("b", Ty::MemoryView)], Ty::MemoryView, vec![first]),
+            func_with_body("f", &[("b", Ty::MemoryView)], Ty::MemoryView, vec![second]),
+        ]);
+        let exports = collect_exports(&hir).expect("the redefinition exports cleanly");
+        assert_eq!(exports.len(), 1, "{label}: one wrapper per C function");
+        assert!(
+            exports[0].returns_buffer_slice,
+            "{label}: the driver must widen the shared signature"
+        );
+        assert!(
+            codegen_answer(&hir, "f"),
+            "{label}: codegen must widen the same name"
+        );
+    }
+}
+
+/// ...and a name redefined without any definition slicing stays un-widened,
+/// so the union does not simply answer "true" whenever two `def`s share a
+/// name.
+#[test]
+fn a_redefined_name_with_no_slice_carries_no_out_slots() {
+    let hir = module(vec![
+        func_with_body(
+            "f",
+            &[("b", Ty::MemoryView)],
+            Ty::MemoryView,
+            vec![name_return("b")],
+        ),
+        func_with_body(
+            "f",
+            &[("b", Ty::MemoryView)],
+            Ty::MemoryView,
+            vec![name_return("b")],
+        ),
+    ]);
+    let exports = collect_exports(&hir).expect("the redefinition exports cleanly");
+    assert_eq!(exports.len(), 1);
+    assert!(!exports[0].returns_buffer_slice);
+    assert!(!codegen_answer(&hir, "f"));
 }

@@ -608,6 +608,38 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
     })
 }
 
+/// Every function *name* whose LLVM signature must carry the three
+/// buffer-sub-range out-pointers (Part 2 of #1175, #1179).
+///
+/// The fact is a property of the **name**, not of one `def`: every
+/// definition of a name shares one `fnptr_<name>` slot and one
+/// `UserFunction::fn_type`, so a redefinition cannot give two definitions
+/// two different arities without making some indirect call ill-typed. This
+/// therefore unions over every definition -- if *any* `def f` returns a
+/// sub-range, every `def f` is widened, and the driver's own half of the
+/// fact unions the same way at its dedup site (`ExtExport` in
+/// `src/ext_build.rs`).
+///
+/// "Union" rather than "the last definition wins" is what keeps a
+/// definition that slices from ever being the un-widened one: its
+/// `MirStmt::ReturnBufferSlice` would then store through parameters that
+/// do not exist. The cost is a widened definition whose own body only ever
+/// does a bare `return b`, and that is exactly the case
+/// `MirStmt::Return`'s own `has_slice = 0` store exists to describe -- the
+/// two halves are load-bearing for each other.
+#[must_use]
+pub fn buffer_slice_out_names(items: &[pycc_mir::MirItem]) -> std::collections::BTreeSet<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            pycc_mir::MirItem::Function { name, body, .. } if body_returns_buffer_slice(body) => {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether a function needs a scalar-only export thunk emitted for it.
 ///
 /// Only a signature that actually carries an aggregate does: a scalar-only

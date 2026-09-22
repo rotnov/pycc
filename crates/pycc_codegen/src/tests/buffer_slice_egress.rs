@@ -243,9 +243,9 @@ fn a_body_without_a_buffer_slice_return_is_not_reported() {
 /// The emitted signature and the emitted stores, end to end in LLVM IR and
 /// without CPython headers.
 ///
-/// The declaration pass widens on the body fact *alone* -- not on `ext`, not
-/// on exportability -- so the declaration and the `ReturnBufferSlice` site
-/// can never disagree about the parameter list. A private function that
+/// The declaration pass widens on the per-name body fact *alone* -- not on
+/// `ext`, not on exportability -- so the declaration and the
+/// `ReturnBufferSlice` site can never disagree about the parameter list. A private function that
 /// returns a slice therefore also carries the three trailing pointers, unused
 /// by any caller; this asserts that rather than leaving it to be discovered
 /// as a crash.
@@ -351,4 +351,133 @@ fn the_declaration_pass_widens_a_buffer_slice_body_by_three_out_pointers() {
             ("out-slot stores", 1),
         ]
     );
+}
+
+/// The out-slot fact is resolved per *name*, unioned over every definition
+/// of it, because every definition shares one `fnptr_<name>` slot and one
+/// `UserFunction::fn_type`.
+#[test]
+fn the_out_slot_fact_unions_over_every_definition_of_a_name() {
+    let bare = |name: &str| MirItem::Function {
+        name: name.to_string(),
+        params: vec![("b".to_string(), Ty::MemoryView)],
+        return_ty: Ty::MemoryView,
+        body: vec![MirStmt::Return(Some(MirExpr::Name {
+            name: "b".to_string(),
+            ty: Ty::MemoryView,
+        }))],
+    };
+    let sliced = |name: &str| MirItem::Function {
+        name: name.to_string(),
+        params: vec![("b".to_string(), Ty::MemoryView)],
+        return_ty: Ty::MemoryView,
+        body: vec![return_slice_of_b()],
+    };
+
+    // A non-`Function` item is skipped rather than answered, and a name with
+    // no slicing definition anywhere stays absent.
+    let items = vec![
+        MirItem::TopLevelStmt(MirStmt::NoOp),
+        bare("never"),
+        bare("never"),
+        bare("bare_then_sliced"),
+        sliced("bare_then_sliced"),
+        sliced("sliced_then_bare"),
+        bare("sliced_then_bare"),
+    ];
+    let names = crate::ext::buffer_slice_out_names(&items);
+    assert_eq!(
+        names.into_iter().collect::<Vec<_>>(),
+        vec![
+            "bare_then_sliced".to_string(),
+            "sliced_then_bare".to_string()
+        ]
+    );
+}
+
+/// ...and the widening that fact drives reaches every definition's LLVM
+/// signature, in both orderings.
+///
+/// The regression: widening only the slicing definition left the shared
+/// `fn_type` describing the other one, so the export thunk forwarded four
+/// arguments through a one-argument function type and `verify()` aborted the
+/// compiler on input the front end had accepted.
+#[test]
+fn every_definition_of_a_redefined_sliced_name_is_widened() {
+    for (label, first, second) in [
+        (
+            "bare_then_sliced",
+            MirStmt::Return(Some(MirExpr::Name {
+                name: "b".to_string(),
+                ty: Ty::MemoryView,
+            })),
+            return_slice_of_b(),
+        ),
+        (
+            "sliced_then_bare",
+            return_slice_of_b(),
+            MirStmt::Return(Some(MirExpr::Name {
+                name: "b".to_string(),
+                ty: Ty::MemoryView,
+            })),
+        ),
+    ] {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "redefined".to_string(),
+                    params: vec![("b".to_string(), Ty::MemoryView)],
+                    return_ty: Ty::MemoryView,
+                    body: vec![first],
+                },
+                MirItem::Function {
+                    name: "redefined".to_string(),
+                    params: vec![("b".to_string(), Ty::MemoryView)],
+                    return_ty: Ty::MemoryView,
+                    body: vec![second],
+                },
+            ],
+            class_defs: Vec::new(),
+        };
+        let dir = pycc_scratch::ScratchDir::new("codegen_1179_redef").expect("scratch");
+        let obj_path = dir.join("redef.o");
+        let mut observed: Vec<(&str, u32)> = Vec::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _applied| {
+            for symbol in [
+                "pyfn_redefined",
+                "pyfn_redefined__redef_1",
+                "pycc_ext_thunk_redefined",
+            ] {
+                observed.push((
+                    symbol,
+                    module
+                        .get_function(symbol)
+                        .unwrap_or_else(|| panic!("`{symbol}` should be declared"))
+                        .count_params(),
+                ));
+            }
+        };
+        compile_to_object_with_observer(
+            &mir,
+            &obj_path,
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            Some(&mut observer),
+        )
+        .expect("codegen should succeed");
+
+        // One declared buffer parameter plus `has_slice`, `start` and `stop`,
+        // for both definitions and for the thunk that forwards them.
+        assert_eq!(
+            observed,
+            vec![
+                ("pyfn_redefined", 4),
+                ("pyfn_redefined__redef_1", 4),
+                ("pycc_ext_thunk_redefined", 4),
+            ],
+            "{label}"
+        );
+    }
 }
