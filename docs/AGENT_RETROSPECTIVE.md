@@ -33,6 +33,46 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — A review brief that never named the shapes an out-of-band side channel fails in
+
+Issue #1179 added an out-of-band side channel: a compiled export returns the
+unnarrowed buffer pointer and reports the sub-range through three trailing
+out-pointers written by the `ReturnBufferSlice` codegen arm. The pinned local
+reviewer passed the first round clean. The pull request's own automated
+reviewer then found two P1 defects, both of the same family — a fact written
+by one execution and read by a different one:
+
+1. A `return b[1:3]` abandoned by a `finally: raise` that an enclosing
+   `except` swallowed left `has_slice` set, so the later plain `return b`
+   handed the host a two-element view of a six-element buffer. Silently wrong
+   answer, no diagnostic.
+2. Two definitions of one export name, only the second of which sliced,
+   resolved the out-slot fact per definition on one side of the driver /
+   codegen seam and per name on the other, so the compiler panicked with an
+   LLVM arity mismatch.
+
+Root cause: the reviewer brief described *what the change does* and asked for
+correctness, contracts, and tests, but never named the shapes in which a
+newly-introduced side channel characteristically fails. A reviewer given a
+mechanism and no failure taxonomy checks the mechanism against its own
+description, which both defects satisfied. The dedicated parity test missed
+the second defect for the same reason: its shared probe resolved the fact from
+the first matching item, so both walks agreed on the *fact* while disagreeing
+about *which definition* it applied to.
+
+Fixed by making every `return` in a widened frame write `has_slice` itself
+(retiring the abandoned-value window) and by unioning the out-slot fact over
+every definition of a name on both sides of the seam, then re-briefing the
+second review round on exactly this family; it returned zero findings.
+
+Lesson: when a change introduces an out-of-band side channel, or any fact
+carried per frame or per name rather than per value, the reviewer brief must
+enumerate the failure shapes by name — a value written then abandoned, several
+writes in one frame read once, a name with more than one definition, a write
+in a loop or an exception handler — rather than asking for correctness in
+general. A parity test between two independent derivations must also assert
+*which* item each side resolved, not only that the derived facts match.
+
 ## 2026-09-22 — A local gate and its CI counterpart are different gates, and the difference is invisible locally
 
 Two separate rounds on one pull request (#1180) were spent on failures the
