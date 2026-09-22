@@ -1552,6 +1552,17 @@ static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view);
 static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner, const Py_buffer *held,
                                                    const char *fn_name, Py_ssize_t index,
                                                    int writable);
+/*
+ * Part 2 of #1175 (#1179): the sub-range form of the same egress, declared
+ * here for the same reason. A separate entry point rather than three more
+ * parameters on the whole-view one, so that every wrapper Part 1 generates
+ * keeps generating byte-for-byte what it generated before -- only an export
+ * that really can return `b[start:stop]` calls this.
+ */
+static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const Py_buffer *held,
+                                                         const char *fn_name, Py_ssize_t index,
+                                                         int writable, long long start,
+                                                         long long stop);
 
 #include "pycc_ext_exports.inc"
 
@@ -1865,6 +1876,77 @@ static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner, const Py_buf
         return NULL;
     }
     return view;
+}
+
+/*
+ * Part 2 of #1175 (#1179): `return b[start:stop]` over a caller-owned buffer
+ * parameter.
+ *
+ * The bounds arrive out of band, through the three trailing `long long *`
+ * out-slots the compiled function writes (`has_slice`, `start`, `stop`) --
+ * `src/ext_build/wrappers.rs` carries why they cannot be in band. The
+ * compiled body still returns the *whole* view's `PyccExtBufferView *`, so
+ * the wrapper's `result == &a{index}` provenance test stays an exact pointer
+ * identity and this function sees the same `owner`/`held` pair the
+ * whole-view path does.
+ *
+ * Deriving the sub-range host-side, from a `memoryview` CPython itself
+ * sliced, is what keeps the semantics Python's rather than this boundary's:
+ * negative bounds, a `stop` past the end, and a crossed pair (`b[3:1]`, an
+ * empty view) are all CPython's own, already-tested behaviour. An absent
+ * bound is encoded by the compiled body as `0` for `start` and `LLONG_MAX`
+ * for `stop`, both of which `slice` clamps exactly as `b[:]` does.
+ *
+ * The whole-window PEP 688 check runs first, unchanged, via the sibling
+ * above: the window whose identity must be proven is the one the compiled
+ * call operated on, not the sub-range derived from it afterwards. The
+ * resulting `memoryview` holds the second export exactly as the whole-view
+ * path's does -- `PyObject_GetItem` on a `memoryview` returns a new
+ * `memoryview` that holds its own reference to the sliced one -- so the
+ * `pycc_rt_buffer_live_views` accounting and the `array.array` resize
+ * `BufferError` behave identically for both.
+ *
+ * NULL with the exception set on failure, which the generated wrapper
+ * returns as-is.
+ */
+static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const Py_buffer *held,
+                                                         const char *fn_name, Py_ssize_t index,
+                                                         int writable, long long start,
+                                                         long long stop)
+{
+    PyObject *whole;
+    PyObject *start_obj;
+    PyObject *stop_obj;
+    PyObject *slice;
+    PyObject *sub;
+
+    whole = pycc_ext_pack_memoryview_borrowed(owner, held, fn_name, index, writable);
+    if (whole == NULL) {
+        return NULL;
+    }
+    start_obj = PyLong_FromLongLong(start);
+    if (start_obj == NULL) {
+        Py_DECREF(whole);
+        return NULL;
+    }
+    stop_obj = PyLong_FromLongLong(stop);
+    if (stop_obj == NULL) {
+        Py_DECREF(start_obj);
+        Py_DECREF(whole);
+        return NULL;
+    }
+    /* `PySlice_New` borrows nothing: it takes its own references. */
+    slice = PySlice_New(start_obj, stop_obj, NULL);
+    Py_DECREF(start_obj);
+    Py_DECREF(stop_obj);
+    if (slice == NULL) {
+        Py_DECREF(whole);
+        return NULL;
+    }
+    sub = PyObject_GetItem(whole, slice);
+    Py_DECREF(slice);
+    Py_DECREF(whole);
+    return sub;
 }
 
 

@@ -390,3 +390,131 @@ fn a_program_that_defines_the_spelling_itself_still_lowers_to_a_call() {
         "{value:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Part 2 of #1175 (#1179): `return b[start:stop]` lowers to
+// `MirStmt::ReturnBufferSlice`, never to a `MirStmt::Return` of a
+// `MirExpr::Slice`.
+// ---------------------------------------------------------------------------
+
+/// `def total(b: memoryview, i: int) -> memoryview: return b[<start>:<stop>]`.
+fn returning_slice_of_b(start: Option<HirExpr>, stop: Option<HirExpr>) -> MirModule {
+    build(&module_with_buffer_fn(
+        Ty::MemoryView,
+        vec![HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            start: start.map(Box::new),
+            stop: stop.map(Box::new),
+            step: None,
+        }))],
+    ))
+}
+
+/// The dedicated node, with both bounds lowered in place.
+#[test]
+fn returning_a_slice_of_a_buffer_lowers_to_the_dedicated_node() {
+    let mir = returning_slice_of_b(
+        Some(HirExpr::IntLiteral(1)),
+        Some(HirExpr::Name("i".to_string())),
+    );
+    let [MirStmt::ReturnBufferSlice { name, start, stop }] = function_body(&mir) else {
+        panic!(
+            "expected a single `ReturnBufferSlice`, got {:?}",
+            function_body(&mir)
+        );
+    };
+    assert_eq!(name, "b");
+    assert!(matches!(start, Some(MirExpr::IntLiteral(1))), "{start:?}");
+    assert!(
+        matches!(stop, Some(MirExpr::Name { name, ty: Ty::Int }) if name == "i"),
+        "{stop:?}"
+    );
+}
+
+/// An absent bound stays absent in the MIR. Codegen, not lowering, is what
+/// substitutes `0` and `i64::MAX` for it -- the node must not pretend the
+/// source wrote a bound it did not.
+#[test]
+fn an_absent_slice_bound_stays_absent_in_the_lowered_node() {
+    let mir = returning_slice_of_b(None, None);
+    let [
+        MirStmt::ReturnBufferSlice {
+            start: None,
+            stop: None,
+            ..
+        },
+    ] = function_body(&mir)
+    else {
+        panic!("expected both bounds absent, got {:?}", function_body(&mir));
+    };
+}
+
+/// The guarantee the dedicated node exists for. `MirExpr::Slice::ty()`
+/// answers from its *base*, and codegen's `Slice` arm lowers to
+/// `pycc_rt_int_list_slice` -- a list-only runtime call. A buffer base
+/// reaching that arm would be a silent miscompile rather than a diagnostic,
+/// so this asserts the absence rather than documenting it in a comment.
+#[test]
+fn a_buffer_base_never_reaches_a_mir_slice_node() {
+    for (start, stop) in [
+        (Some(HirExpr::IntLiteral(1)), Some(HirExpr::IntLiteral(3))),
+        (None, None),
+    ] {
+        let mir = returning_slice_of_b(start, stop);
+        for stmt in function_body(&mir) {
+            assert!(
+                !matches!(stmt, MirStmt::Return(Some(MirExpr::Slice { .. }))),
+                "{stmt:?}"
+            );
+        }
+    }
+}
+
+/// A `step` never reaches lowering at all -- `pycc_types` refuses it -- so
+/// the lowering guard keys on `step: None` and leaves any other shape on the
+/// ordinary `Return` path, where `MirExpr::Slice`'s own arm would report it.
+/// Lowering must not silently discard a `step` it was handed.
+#[test]
+fn a_slice_with_a_step_is_not_lowered_to_the_dedicated_node() {
+    let mir = build(&module_with_buffer_fn(
+        Ty::MemoryView,
+        vec![HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: Some(Box::new(HirExpr::IntLiteral(2))),
+        }))],
+    ));
+    assert!(
+        !matches!(function_body(&mir), [MirStmt::ReturnBufferSlice { .. }]),
+        "{:?}",
+        function_body(&mir)
+    );
+}
+
+/// A slice of a *list* is untouched by the new guard: it keeps lowering to
+/// `MirExpr::Slice` on the ordinary `Return` path.
+#[test]
+fn a_slice_of_a_list_still_lowers_to_a_mir_slice() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![HirItem::Function {
+            name: "total".to_string(),
+            params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+            return_ty: Ty::List(Box::new(Ty::Int)),
+            body: vec![HirStmt::Return(Some(HirExpr::Slice {
+                base: Box::new(HirExpr::Name("xs".to_string())),
+                start: Some(Box::new(HirExpr::IntLiteral(1))),
+                stop: None,
+                step: None,
+            }))],
+        }],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let [MirStmt::Return(Some(MirExpr::Slice { .. }))] = function_body(&mir) else {
+        panic!("expected a `Slice`, got {:?}", function_body(&mir));
+    };
+}

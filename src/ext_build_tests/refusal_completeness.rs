@@ -92,7 +92,9 @@ fn call_site(name: &str, params: &[(&str, Ty)], return_ty: &Ty) -> String {
         BoundaryCarrier::Tuple(_) => "a0_0".to_string(),
         BoundaryCarrier::Buffer { .. } => "&a0".to_string(),
     };
-    if pycc_codegen::ext_thunk_required(name, &types, return_ty) {
+    // `false`: this walk enumerates *declared* signatures, and the buffer
+    // sub-range fact (#1179) is a property of a body, not of a signature.
+    if pycc_codegen::ext_thunk_required(name, &types, return_ty, false) {
         format!("{}({first}", pycc_codegen::ext_thunk_symbol(name))
     } else {
         format!(")fnptr_{name})({first}")

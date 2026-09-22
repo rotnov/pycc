@@ -415,6 +415,19 @@ pub(crate) struct ExtExport {
     /// method. `None` exactly when [`ExtExport::class`] is `None`, in which
     /// case [`ExtExport::name`] is itself the `ml_name`.
     pub(crate) method: Option<String>,
+    /// Whether this export's body returns a **sub-range** of one of its
+    /// `memoryview` parameters (Part 2 of #1175, #1179).
+    ///
+    /// Not a function of [`ExtExport::return_ty`]: a declared
+    /// `-> memoryview` is the same signature for a bare `return b`
+    /// (Part 1 of #1175), an artifact-owned `return a` (Part 2b of #1142)
+    /// and `return b[i:j]`, and only the last of the three carries the
+    /// three trailing `long long *` out-pointers
+    /// `pycc_codegen::ext_thunk_out_tys` describes. Keying the wrapper on
+    /// the declared type instead would move every existing
+    /// buffer-returning export onto the thunk path and change generated C
+    /// this task does not touch.
+    pub(crate) returns_buffer_slice: bool,
     /// Which leading receiver pointer the compiled function takes, and what
     /// the wrapper must supply for it.
     ///
@@ -669,6 +682,23 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
                     *ty == Ty::MemoryView && pycc_hir::body_stores_into(body, param_name)
                 })
                 .collect(),
+            // Part 2 of #1175 (#1179). The driver's half of the per-export
+            // "this body carries a buffer sub-range egress" fact; codegen
+            // recomputes the same fact from MIR
+            // (`pycc_codegen::body_returns_buffer_slice`) because
+            // `ExtExport` never crosses the crate boundary, and a parity
+            // test pins the two answers together. A divergence is not a
+            // wrong diagnostic: it is a generated C call form that does not
+            // match the compiled function's own signature.
+            //
+            // Keyed on the carried parameter's own source name, exactly as
+            // `param_writable` above is, and asked only of `memoryview`
+            // parameters -- which is the provenance half
+            // `pycc_hir::body_returns_slice_of` deliberately leaves to its
+            // caller.
+            returns_buffer_slice: carried_params.iter().any(|(param_name, ty)| {
+                *ty == Ty::MemoryView && pycc_hir::body_returns_slice_of(body, param_name)
+            }),
             return_ty: return_ty.clone(),
         };
         // A module may rebind a public name -- two `def`s, a `def` over an

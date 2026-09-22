@@ -1036,6 +1036,35 @@ pub enum MirStmt {
         elt: Box<MirExpr>,
     },
     Return(Option<MirExpr>),
+    /// `return b[start:stop]` where `b` is a `memoryview` **parameter**
+    /// (Part 2 of #1175, #1179) -- the one buffer sub-range egress
+    /// `pycc_types::buffer::admitted_buffer_return` admits.
+    ///
+    /// A node of its own rather than `Return(Some(MirExpr::Slice { .. }))`,
+    /// and the reason is a miscompile rather than taste:
+    /// `MirExpr::Slice::ty()` passes its base's type straight through, so a
+    /// buffer base would answer `Ty::MemoryView` and reach
+    /// `pycc_codegen`'s list-only `MirExpr::Slice` emit arm, which calls
+    /// `pycc_rt_int_list_slice` -- a buffer compiled as a list. Keeping the
+    /// admitted shape out of `MirExpr::Slice` entirely makes that
+    /// unreachable by construction instead of by a comment, and leaves
+    /// every grouped `MirExpr` catch-all that lists `MirExpr::Slice { .. }`
+    /// wholesale (`bigint_rc.rs`, `exception.rs`) answering for the list
+    /// slice only, which is the answer they were written for.
+    ///
+    /// `name` is the parameter, which the compiled body still returns *as a
+    /// whole view*: the wrapper's `result == &a{index}` identity test is
+    /// exact and stays exact. The bounds travel out of band through the
+    /// export thunk's trailing out-pointers. An absent `start` means `0`
+    /// and an absent `stop` means `i64::MAX`; both defaults are CPython's
+    /// own clamping, measured through `PySlice_New`/`PyObject_GetItem`.
+    /// A `step` never reaches here -- `buffer_slice_step_unsupported`
+    /// refuses it in both type walkers.
+    ReturnBufferSlice {
+        name: String,
+        start: Option<MirExpr>,
+        stop: Option<MirExpr>,
+    },
     /// `base.attr = value` (D-154, Part 1 of #375), resolved to a
     /// compile-time slot index by `lower_stmt` against the class's
     /// `HirClassDef` -- mirrors `MirExpr::AttrGet`'s own resolution
@@ -1489,6 +1518,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::DictCompAssign { .. }
             | MirStmt::SetCompAssign { .. }
             | MirStmt::Return(_)
+            | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
             | MirStmt::Reraise => {}
         }

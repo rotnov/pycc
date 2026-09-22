@@ -55,8 +55,8 @@ type ObjectConversionEmitter = for<'a> fn(
 mod target_machine;
 pub use ext::{
     CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
-    ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required,
-    ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name,
+    body_returns_buffer_slice, ext_boundary_slots, ext_thunk_out_tys, ext_thunk_param_tys,
+    ext_thunk_required, ext_thunk_symbol, is_ext_exportable_name, mangle_ext_name,
 };
 use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
@@ -5766,7 +5766,14 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // handles (`ExprStmt` here, `If`/`While`'s own `test` above), so a
         // `MirStmt::Return` can never carry a `NamedExpr` to begin with.
         MirStmt::ExprStmt(expr) => collect_expr_bindings(expr, bindings),
-        MirStmt::Return(_) | MirStmt::NoOp | MirStmt::Unreachable => {}
+        // Part 2 of #1175 (#1179) joins `Return` here for the same reason
+        // and by the same argument: `MirStmt::ReturnBufferSlice` is lowered
+        // from an `HirStmt::Return`, which `contains_named_expr` already
+        // forbids a walrus in, and it binds no name of its own.
+        MirStmt::Return(_)
+        | MirStmt::ReturnBufferSlice { .. }
+        | MirStmt::NoOp
+        | MirStmt::Unreachable => {}
         MirStmt::Seq(stmts) => {
             for stmt in stmts {
                 collect_stmt_bindings(stmt, bindings);
@@ -6288,13 +6295,34 @@ fn compile_to_object_with_observer(
             name,
             params,
             return_ty,
+            body,
             ..
         } = item
         {
-            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
+            let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
                 .iter()
                 .map(|(_, ty)| ty_to_basic_type(&context, ty.clone()).into())
                 .collect();
+            // Part 2 of #1175 (#1179): a function whose body returns a
+            // sub-range of a buffer parameter hands the sub-range's
+            // `has_slice`/`start`/`stop` back through three trailing
+            // out-pointers, because the bounds are produced inside this
+            // frame while the returned value stays the parameter's own view
+            // pointer -- which is what keeps the generated wrapper's
+            // `result == &a{index}` identity test exact.
+            //
+            // The predicate is the body fact alone, deliberately not gated
+            // on `options.ext` or on `ext_thunk_required`'s own
+            // exportability test: this declaration and `emit_stmt`'s own
+            // `MirStmt::ReturnBufferSlice` arm must never disagree about
+            // the arity, and `pycc_types` already refuses the shape
+            // everywhere a wrapper cannot exist.
+            if crate::ext::body_returns_buffer_slice(body) {
+                let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+                for _ in crate::ext::ext_thunk_out_tys(return_ty, true) {
+                    param_types.push(ptr_type.into());
+                }
+            }
             let fn_type = match return_ty {
                 pycc_mir::Ty::None => context.void_type().fn_type(&param_types, false),
                 other => ty_to_basic_type(&context, other.clone()).fn_type(&param_types, false),
@@ -7946,6 +7974,93 @@ fn emit_stmt<'ctx>(
             }
             builder.position_at_end(loop_blocks.after_bb);
             Ok(())
+        }
+        // Part 2 of #1175 (#1179): `return b[start:stop]` for a
+        // `memoryview` **parameter** `b`.
+        //
+        // The two bounds are evaluated here, in the compiled frame, and
+        // written to the three trailing out-pointers the declaration pass
+        // gave this function. The returned *value* is the parameter's own
+        // whole view, byte-identical to what a bare `return b` returns, so
+        // the generated wrapper's `result == &a{index}` identity chain
+        // stays exact and Part 1's PEP 688 `held`-vs-probe check still runs
+        // against the whole window before the host derives the sub-range.
+        //
+        // `has_slice` is stored **last**, after both bounds, so a bound
+        // whose evaluation raises can never leave the flag set; on that
+        // path the frame leaves through its exception target and the
+        // wrapper's pending-exception bail returns before any acquire.
+        //
+        // An absent `start` is `0` and an absent `stop` is `i64::MAX`, both
+        // of which CPython's own `PySlice_New`/`PyObject_GetItem` clamp
+        // exactly as Python does; no slice arithmetic exists on this side.
+        // A bigint bound aborts in `build_untag_checked`, the same
+        // pre-existing D-141 boundary `MirStmt::BufferSet`'s index has.
+        MirStmt::ReturnBufferSlice { name, start, stop } => {
+            let function = builder
+                .get_insert_block()
+                .expect("statement emission always has an insertion block")
+                .get_parent()
+                .expect("statement emission always happens inside a function");
+            let bound_or = |builder: &inkwell::builder::Builder<'ctx>,
+                            locals: &mut HashMap<String, StorageSlot<'ctx>>,
+                            bound: &Option<MirExpr>,
+                            default: u64,
+                            label: &str| match bound {
+                Some(expr) => {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let encoded = to_numeric_encoded_int(context, builder, scalar);
+                    build_untag_checked(builder, rt, encoded, label)
+                }
+                None => context.i64_type().const_int(default, false),
+            };
+            let start_i64 = bound_or(builder, locals, start, 0, "buffer_slice_untag_start");
+            let stop_i64 = bound_or(
+                builder,
+                locals,
+                stop,
+                i64::MAX as u64,
+                "buffer_slice_untag_stop",
+            );
+            // The three out-pointers are this function's last three
+            // parameters, in `ext_thunk_out_tys`' own order:
+            // `has_slice`, `start`, `stop`.
+            let out_base = function.count_params() - 3;
+            let out_param = |offset: u32| {
+                function
+                    .get_nth_param(out_base + offset)
+                    .expect("the declaration pass widened this signature by three out-pointers")
+                    .into_pointer_value()
+            };
+            builder
+                .build_store(out_param(1), start_i64)
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            builder
+                .build_store(out_param(2), stop_i64)
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            builder
+                .build_store(out_param(0), context.i64_type().const_int(1, false))
+                .expect("build_store should not fail through a buffer-slice out-pointer");
+            // Delegated rather than duplicated: the value half of this
+            // statement *is* a bare `return b`, including its `finally`
+            // routing and its interaction with the frame's owned-slot
+            // epilogue, and a second copy of that arm is exactly the drift
+            // this node exists to avoid.
+            emit_stmt(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                &MirStmt::Return(Some(MirExpr::Name {
+                    name: name.clone(),
+                    ty: pycc_mir::Ty::MemoryView,
+                })),
+                expected_return_ty,
+                finally_stack,
+            )
         }
         MirStmt::Return(value) => {
             if is_module_entry_symbol(

@@ -105,12 +105,29 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // `a{index}` to follow the flattened list would make
     // `def f(t: tuple[int, int])` report "takes exactly 2 arguments" for a
     // one-argument function.
-    // `ext_thunk_required` asks only whether a *declared* type is a tuple,
-    // and a receiver is never one, so the receiver-free tail gives the same
+    // Part 2 of #1175 (#1179): the three trailing `long long *` out-slots a
+    // buffer sub-range egress carries -- `has_slice`, `start`, `stop`.
+    // Deliberately *not* folded into `out_slots` above, which stays
+    // tuple-only: `out_slots` also drives the `r{index}`/`e{index}` locals,
+    // the `packed` local, the suppressed `result` declaration and the
+    // suppressed `result = ` assignment, every one of which is a `tuple`
+    // property. A buffer return needs `result` bound, because the
+    // `result == &a{index}` identity chain is what discriminates its
+    // provenance.
+    let slice_out = export.returns_buffer_slice;
+    // `ext_thunk_required` asks whether a *declared* type is a tuple -- and
+    // a receiver is never one, so the receiver-free tail gives the same
     // verdict the codegen side reaches from the MIR function's full
-    // parameter list. The two therefore stay in agreement about whether a
-    // thunk exists at all.
-    let use_thunk = pycc_codegen::ext_thunk_required(name, &export.params, &export.return_ty);
+    // parameter list -- and, since #1179, whether the body carries a buffer
+    // sub-range egress. That second half is no longer a function of the
+    // declared signature at all: the driver computes it here from HIR
+    // (`ExtExport::returns_buffer_slice`) and codegen computes it from MIR
+    // (`pycc_codegen::body_returns_buffer_slice`), two independent walks
+    // over two IRs. Their agreement is what keeps this wrapper's call form
+    // matching the compiled function's real arity, and it is pinned by a
+    // parity test rather than by this comment.
+    let use_thunk =
+        pycc_codegen::ext_thunk_required(name, &export.params, &export.return_ty, slice_out);
     let thunk = pycc_codegen::ext_thunk_symbol(name);
     // A method's `name` is dotted, and these four sites paste it into C
     // identifiers: the thunk `extern` (through `ext_thunk_symbol`, which
@@ -135,7 +152,7 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // the same symbol. Only the *call* argument differs between the two:
     // `NULL` for `cls`, the unwrapped instance pointer for `self`.
     let params = {
-        let carried = c_param_list(&slots, &out_slots);
+        let carried = c_param_list(&slots, &out_slots, slice_out);
         if export.receiver == ExtReceiver::None {
             carried
         } else if carried == "void" {
@@ -215,6 +232,25 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     if !caller_owned_buffer_slots(&export.return_ty, &slots).is_empty() {
         out.push_str("    int caller_owned = 0;\n    PyObject *borrowed = NULL;\n");
     }
+    // Part 2 of #1175's three out-slot locals, on their own declaration
+    // path beside Part 1's `caller_owned`/`borrowed` rather than through
+    // `out_slots`, and emitted only for an export that actually carries a
+    // sub-range egress -- so every wrapper generated before #1179 stays
+    // byte-identical.
+    //
+    // `slice_present` is initialized to `0` and only a sub-range `return`
+    // writes `1`, because no pair of `long long` bounds is available as an
+    // in-band whole-view sentinel: `b[0:-1]` is a legal slice, and
+    // `LLONG_MIN`/`LLONG_MAX` are legal bounds that clamp correctly. The
+    // two bound locals are initialized too: a call that raises leaves them
+    // exactly as it found them, and an indeterminate read is undefined
+    // behaviour even on a path that discards the value.
+    if slice_out {
+        out.push_str(
+            "    long long slice_present = 0;\n    long long slice_start = 0;\n    \
+             long long slice_stop = 0;\n",
+        );
+    }
     out.push_str(&arg_slot_locals(&slots));
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
@@ -244,6 +280,13 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         }
     }
     call_args.extend((0..out_slots.len()).map(|index| format!("&r{index}")));
+    if slice_out {
+        call_args.extend(
+            ["&slice_present", "&slice_start", "&slice_stop"]
+                .into_iter()
+                .map(str::to_string),
+        );
+    }
     let call_args = call_args.join(", ");
     // Nothing is assigned on the `-> None` arm (a `void` call has no value)
     // nor on the `tuple` arm (its elements arrive through the out-pointers).
@@ -298,6 +341,7 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         &export.return_ty,
         &slots,
         source_name,
+        slice_out,
     ));
     out.push_str(&release);
     match &export.return_ty {
@@ -555,6 +599,7 @@ fn caller_owned_buffer_acquire(
     return_ty: &Ty,
     slots: &[BoundaryCarrier],
     source_name: &str,
+    buffer_slice_out: bool,
 ) -> String {
     let indices = caller_owned_buffer_slots(return_ty, slots);
     if indices.is_empty() {
@@ -576,10 +621,29 @@ fn caller_owned_buffer_acquire(
             slots[*index],
             BoundaryCarrier::Buffer { writable: true }
         ));
+        // Part 2 of #1175 (#1179): the sub-range is derived host-side,
+        // *after* Part 1's whole-window PEP 688 `held`-vs-probe check,
+        // which therefore still runs against the window this call actually
+        // operated on. `slice_present` is `0` unless a sub-range `return`
+        // executed, so an export that also contains a bare `return b` takes
+        // Part 1's path on that branch unchanged.
+        let borrowed = if buffer_slice_out {
+            format!(
+                "slice_present\n            ? pycc_ext_pack_memoryview_borrowed_slice(\
+                 args[{index}], &b{index}, \"{source_name}\", {index}, {writable}, \
+                 slice_start, slice_stop)\n            : \
+                 pycc_ext_pack_memoryview_borrowed(args[{index}], &b{index}, \
+                 \"{source_name}\", {index}, {writable})"
+            )
+        } else {
+            format!(
+                "pycc_ext_pack_memoryview_borrowed(args[{index}], &b{index}, \
+                 \"{source_name}\", {index}, {writable})"
+            )
+        };
         out.push_str(&format!(
             "    {lead} (result == &a{index}) {{\n        caller_owned = 1;\n        \
-             borrowed = pycc_ext_pack_memoryview_borrowed(args[{index}], &b{index}, \
-             \"{source_name}\", {index}, {writable});\n"
+             borrowed = {borrowed};\n"
         ));
     }
     out.push_str("    }\n");
@@ -605,6 +669,7 @@ pub(crate) fn buffer_releases(slots: &[BoundaryCarrier], indent: &str) -> String
 pub(crate) fn c_param_list(
     slots: &[BoundaryCarrier],
     out_slots: &[(&'static str, &'static str)],
+    buffer_slice_out: bool,
 ) -> String {
     let mut types: Vec<String> = Vec::new();
     for slot in slots {
@@ -617,6 +682,14 @@ pub(crate) fn c_param_list(
         }
     }
     types.extend(out_slots.iter().map(|(c_type, _)| format!("{c_type} *")));
+    // Part 2 of #1175 (#1179): extended, never narrowed. A sub-range
+    // egress's compiled function really does take these three trailing
+    // pointers, so omitting them from the `extern` declaration and the cast
+    // would be exactly the silent ABI mismatch `pycc_codegen::ext`'s own
+    // SIGBUS note records -- undiagnosable by either compiler.
+    if buffer_slice_out {
+        types.extend(std::iter::repeat_n("long long *".to_string(), 3));
+    }
     if types.is_empty() {
         "void".to_string()
     } else {

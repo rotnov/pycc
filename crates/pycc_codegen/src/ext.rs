@@ -516,12 +516,96 @@ pub fn ext_thunk_param_tys(param_tys: &[Ty]) -> Vec<Ty> {
 /// would pass a hidden `sret` pointer -- so a C declaration of the compiled
 /// function would disagree with it silently. The thunk exists precisely to
 /// keep every aggregate on the LLVM side of the seam.
+///
+/// Part 2 of #1175 (#1179) adds the second producer of out-pointers, and it
+/// is **not** a function of the declared return type: an export declared
+/// `-> memoryview` carries three trailing `i64` out-slots only when its own
+/// body returns a sub-range of a buffer parameter. `has_slice`, `start` and
+/// `stop`, in that order. Keying this on `Ty::MemoryView` alone would flip
+/// every existing buffer-returning export off the direct `fnptr_<name>`
+/// cast path and onto the thunk path, changing generated C for exports this
+/// change does not touch; hence the explicit per-body argument.
+///
+/// The third slot is load-bearing. `stop = -1` is not "absent", it is the
+/// legal `b[0:-1]`, and `i64::MIN`/`i64::MAX` are legal and clamp
+/// correctly, so no pair of `i64`s is available as an in-band
+/// whole-view sentinel.
 #[must_use]
-pub fn ext_thunk_out_tys(return_ty: &Ty) -> &[Ty] {
+pub fn ext_thunk_out_tys(return_ty: &Ty, returns_buffer_slice: bool) -> Vec<Ty> {
     match return_ty {
-        Ty::Tuple(elems) => elems.as_slice(),
-        _ => &[],
+        Ty::Tuple(elems) => (**elems).clone(),
+        _ if returns_buffer_slice => vec![Ty::Int, Ty::Int, Ty::Int],
+        _ => Vec::new(),
     }
+}
+
+/// Whether `body` contains the admitted buffer sub-range `return`
+/// (Part 2 of #1175, #1179).
+///
+/// The codegen-side half of a fact the driver computes independently from
+/// HIR (`src/ext_build.rs`'s `ExtExport::returns_buffer_slice`). `ExtExport`
+/// is a driver-only type that never reaches this crate, and the fact governs
+/// both the compiled function's own LLVM signature and the generated C call
+/// form, so each side must answer it from the IR it has. Because
+/// `MirStmt::ReturnBufferSlice` exists precisely so the admitted shape has a
+/// node of its own, this walk is an exact presence test rather than a second
+/// copy of the admission rule -- the same mirror relationship
+/// [`is_ext_exportable_name`] already has with the driver's own export
+/// predicate, and pinned by the cross-crate parity test.
+///
+/// Exhaustive over every nested-body statement form, modelled on
+/// `pycc_mir`'s own `set_frame_function`, so a `return b[i:j]` inside an
+/// `if`, a loop or a `try` is found -- branching provenance is admitted and
+/// must be.
+#[must_use]
+pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
+    use pycc_mir::MirStmt;
+    body.iter().any(|stmt| match stmt {
+        MirStmt::ReturnBufferSlice { .. } => true,
+        MirStmt::If { body, orelse, .. } => {
+            body_returns_buffer_slice(body) || body_returns_buffer_slice(orelse)
+        }
+        MirStmt::While { body, .. }
+        | MirStmt::ForRange { body, .. }
+        | MirStmt::ForList { body, .. }
+        | MirStmt::ForObject { body, .. }
+        | MirStmt::ForDict { body, .. }
+        | MirStmt::ForSet { body, .. } => body_returns_buffer_slice(body),
+        MirStmt::Seq(stmts) => body_returns_buffer_slice(stmts),
+        MirStmt::Try {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        }
+        | MirStmt::TryStar {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+        } => {
+            body_returns_buffer_slice(body)
+                || handlers
+                    .iter()
+                    .any(|handler| body_returns_buffer_slice(&handler.body))
+                || body_returns_buffer_slice(orelse)
+                || body_returns_buffer_slice(finalbody)
+        }
+        MirStmt::ExprStmt(_)
+        | MirStmt::Assign { .. }
+        | MirStmt::NoOp
+        | MirStmt::Unreachable
+        | MirStmt::DictSet { .. }
+        | MirStmt::BufferSet { .. }
+        | MirStmt::ListCompAssign { .. }
+        | MirStmt::DictCompAssign { .. }
+        | MirStmt::SetCompAssign { .. }
+        | MirStmt::Return(_)
+        | MirStmt::AttrSet { .. }
+        | MirStmt::Raise { .. }
+        | MirStmt::RaiseFrom { .. }
+        | MirStmt::Reraise => false,
+    })
 }
 
 /// Whether a function needs a scalar-only export thunk emitted for it.
@@ -530,9 +614,24 @@ pub fn ext_thunk_out_tys(return_ty: &Ty) -> &[Ty] {
 /// export's generated wrapper still reaches the compiled function through
 /// the `fnptr_<name>` global directly, and emitting a thunk it would never
 /// call would be dead weight in every artifact.
+///
+/// Part 2 of #1175 (#1179) adds one non-signature reason: an export whose
+/// body returns a sub-range of a buffer parameter needs the three trailing
+/// out-pointers [`ext_thunk_out_tys`] describes, so it can no longer be a
+/// pure function of the declared signature. Every other `-> memoryview`
+/// export keeps the direct cast path byte-for-byte, which is what the
+/// `returns_buffer_slice` argument buys -- it is passed in rather than
+/// inferred so the driver and codegen halves of the fact stay two
+/// deliberately mirrored computations rather than three.
 #[must_use]
-pub fn ext_thunk_required(name: &str, param_tys: &[Ty], return_ty: &Ty) -> bool {
+pub fn ext_thunk_required(
+    name: &str,
+    param_tys: &[Ty],
+    return_ty: &Ty,
+    returns_buffer_slice: bool,
+) -> bool {
     is_ext_exportable_name(name)
         && (param_tys.iter().any(|ty| matches!(ty, Ty::Tuple(_)))
-            || matches!(return_ty, Ty::Tuple(_)))
+            || matches!(return_ty, Ty::Tuple(_))
+            || returns_buffer_slice)
 }

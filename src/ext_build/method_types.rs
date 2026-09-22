@@ -211,7 +211,9 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     let slots: Vec<_> = super::slot_carriers(&ctor.params, &ctor.param_writable);
     let symbol = pycc_codegen::mangle_ext_name(&ctor.name);
     let source_name = source_level_name(&ctor.name);
-    let carried = c_param_list(&slots, &[]);
+    // A constructor never returns a value at all, so it can carry neither a
+    // tuple out-slot nor #1179's buffer sub-range out-slots.
+    let carried = c_param_list(&slots, &[], false);
     let params = if carried == "void" {
         "void *".to_string()
     } else {

@@ -122,13 +122,21 @@ pub(super) fn emit_export_thunks<'ctx>(
             name,
             params,
             return_ty,
-            ..
+            body,
         } = item
         else {
             continue;
         };
         let param_tys: Vec<Ty> = params.iter().map(|(_, ty)| ty.clone()).collect();
-        if !ext_thunk_required(name, &param_tys, return_ty) {
+        // The codegen-side half of the driver's own per-export fact; see
+        // `crate::ext::body_returns_buffer_slice` for why it is computed
+        // here from MIR rather than threaded in (`ExtExport` never reaches
+        // this crate) and for the parity test that pins the two answers
+        // together. It is read off the same binding the rest of this arm
+        // uses, so no second refutable pattern -- and no unreachable `else`
+        // arm -- stands between the two.
+        let returns_buffer_slice = crate::ext::body_returns_buffer_slice(body);
+        if !ext_thunk_required(name, &param_tys, return_ty, returns_buffer_slice) {
             continue;
         }
         if !emitted.insert(name.as_str()) {
@@ -142,6 +150,7 @@ pub(super) fn emit_export_thunks<'ctx>(
             name,
             &param_tys,
             return_ty,
+            returns_buffer_slice,
             &user_functions[name.as_str()],
         );
     }
@@ -163,16 +172,17 @@ fn emit_one_thunk<'ctx>(
     name: &str,
     param_tys: &[Ty],
     return_ty: &Ty,
+    returns_buffer_slice: bool,
     user_function: &UserFunction<'ctx>,
 ) {
-    let out_tys = ext_thunk_out_tys(return_ty);
+    let out_tys = ext_thunk_out_tys(return_ty, returns_buffer_slice);
     let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
     let mut thunk_params: Vec<inkwell::types::BasicMetadataTypeEnum> =
         ext_thunk_param_tys(param_tys)
             .into_iter()
             .map(|ty| ty_to_basic_type(context, ty).into())
             .collect();
-    for _ in out_tys {
+    for _ in &out_tys {
         thunk_params.push(ptr_type.into());
     }
     // A tuple return leaves through the out-pointers, so the thunk itself
@@ -213,11 +223,37 @@ fn emit_one_thunk<'ctx>(
             next_param += 1;
         }
     }
+    // Part 2 of #1175 (#1179): a buffer sub-range export's out-pointers are
+    // **forwarded**, not consumed. The bounds are produced inside the
+    // callee's own frame, by the `return` statement that evaluates them, so
+    // the callee's LLVM signature carries the three trailing pointers (the
+    // declaration pass widens it from the same per-body fact) and the thunk
+    // simply hands its own along. That is the opposite direction from a
+    // tuple return, whose out-pointers the thunk writes itself after
+    // `extractvalue`.
+    if returns_buffer_slice {
+        for _ in &out_tys {
+            arg_values.push(
+                thunk
+                    .get_nth_param(next_param)
+                    .expect("the thunk declares one out-pointer per buffer-slice out-slot")
+                    .into(),
+            );
+            next_param += 1;
+        }
+    }
     let fn_ptr = emit_fnptr_dispatch_guard(context, builder, rt, user_function);
     let call = builder
         .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_export")
         .expect("build_indirect_call should not fail for a well-formed indirect call");
-    if !out_tys.is_empty() {
+    if returns_buffer_slice {
+        let value = call
+            .try_as_basic_value()
+            .expect_basic("a buffer-returning export returns its view pointer");
+        builder
+            .build_return(Some(&value))
+            .expect("build_return should not fail for a buffer-slice thunk");
+    } else if !out_tys.is_empty() {
         let aggregate = call
             .try_as_basic_value()
             .expect_basic("a tuple-returning export returns an LLVM struct value")

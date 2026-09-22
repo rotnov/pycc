@@ -598,11 +598,41 @@ pub(super) fn lower_stmt(
                 value: Box::new(value),
             }
         }
-        HirStmt::Return(value) => MirStmt::Return(
-            value
-                .as_ref()
-                .map(|v| lower_expr(v, scopes, classes, current_class)),
-        ),
+        // Part 2 of #1175 (#1179) splits this one HIR node on the sliced
+        // base's recorded type, exactly as `HirStmt::DictSet` below splits
+        // a store on `lookup`'s answer. `pycc_types` has already refused
+        // every buffer slice this split must not see -- any `step`, an
+        // artifact-owned base, a non-`int` bound, and the shape in every
+        // position other than the whole `return` operand -- so reaching
+        // `Ty::MemoryView` here means the admitted sub-range egress and
+        // nothing else.
+        HirStmt::Return(value) => {
+            if let Some(pycc_hir::HirExpr::Slice {
+                base,
+                start,
+                stop,
+                step: None,
+            }) = value.as_ref()
+                && let pycc_hir::HirExpr::Name(name) = base.as_ref()
+                && lookup(scopes, name) == Ty::MemoryView
+            {
+                MirStmt::ReturnBufferSlice {
+                    name: name.clone(),
+                    start: start
+                        .as_ref()
+                        .map(|bound| lower_expr(bound, scopes, classes, current_class)),
+                    stop: stop
+                        .as_ref()
+                        .map(|bound| lower_expr(bound, scopes, classes, current_class)),
+                }
+            } else {
+                MirStmt::Return(
+                    value
+                        .as_ref()
+                        .map(|v| lower_expr(v, scopes, classes, current_class)),
+                )
+            }
+        }
         // `<name>[k] = v`. Part 1 of #1142 splits this one HIR node on the
         // base's recorded type, exactly as `lower_expr`'s own `Subscript`
         // arm splits the *load* on `base.ty()` -- `b[i]` there, `b[i] = v`

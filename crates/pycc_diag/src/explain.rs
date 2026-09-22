@@ -1359,14 +1359,18 @@ buffer from and no way such a function could ever be called. Rebuild with \
 can carry. Under `--ext` both signature positions are admitted, but not \
 symmetrically. A parameter is admitted anywhere in the export set. A return \
 is admitted from any *public export* -- a module-level `def` and, since \
-#1174, a public method of a public class -- in either of two \
+#1174, a public method of a public class -- in any of three \
 provenances. The generated wrapper turns storage the artifact allocated \
 with `a = ndarray(n)` into a real `memoryview` the host owns (Part 2b of \
 #1142, #1164), and, since Part 1 of #1175 (#1178), returns the bare name a \
 buffer *parameter* binds by acquiring a second, independent export on the \
 host's own argument object before releasing its own -- so that view spans \
-storage the caller owns and the artifact allocates and frees nothing. A \
-*slice* of a parameter is Part 2 of #1175 and stays refused; the same return type \
+storage the caller owns and the artifact allocates and frees nothing. \
+Part 2 of #1175 (#1179) adds the third: a step-free *sub-range* of a \
+parameter, `return b[start:stop]`, whose bounds leave the callee frame in \
+three out-slots so the wrapper still checks the whole window and CPython \
+itself derives the sub-view. A `step` on that slice stays refused, because \
+the artifact's view type carries no stride. The same return type \
 outside the export set -- a private function, a private method, a method \
 of a private or exception class, an instance method no published \
 constructible class reaches, a `@property` getter, a specialization -- is \
