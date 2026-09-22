@@ -176,3 +176,41 @@ fn an_imported_defs_default_is_not_filled_across_the_module_boundary() {
         "unexpected diagnostic: {rendered}"
     );
 }
+
+/// A call textually above its callee is still `pycc_types`' ordering error,
+/// unchanged by Part 2: the HIR binder fills the default from the signature
+/// table, which is collected before any item is lowered and therefore knows
+/// the `def` already, but the definition-order rule is a separate later
+/// check and this part does not touch it.
+#[test]
+fn a_forward_call_to_a_defaulted_def_keeps_its_own_ordering_error() {
+    let dir = ScratchDir::new("e2e_issue_1189_forward").expect("failed to create scratch dir");
+    let rendered = check_err(
+        &dir,
+        "forward",
+        "f(1)\ndef f(a: int, b: int = 2) -> None:\n    print(a)\n    print(b)\n",
+    );
+    assert!(rendered.contains("error[T0021]"), "{rendered}");
+    assert!(
+        rendered.contains("cannot call function `f` before its definition"),
+        "{rendered}"
+    );
+}
+
+/// Two `def`s of one name that differ only in their defaults are not an
+/// incompatible redefinition: a parameter list is `Vec<(String, Ty)>` and a
+/// default changes no `Ty`, so `pycc_types`' redeclaration check sees two
+/// identical signatures. The later `def`'s default is the one a short call
+/// gets.
+#[test]
+fn two_defs_differing_only_in_defaults_are_not_an_incompatible_redefinition() {
+    let dir = ScratchDir::new("e2e_issue_1189_redef").expect("failed to create scratch dir");
+    let stdout = build_and_run(
+        &dir,
+        "redef",
+        "def f(a: int = 1) -> None:\n    print(a)\n\n\
+         def f(a: int = 2) -> None:\n    print(a)\n\n\
+         f()\n",
+    );
+    assert_eq!(stdout, "2\n");
+}

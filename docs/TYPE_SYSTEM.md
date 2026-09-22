@@ -488,10 +488,11 @@ Keyword arguments (`f(b=2, a=1)`, Part 1 of
 *by name during lowering* and replaced by the equivalent complete positional
 argument vector, so `HirExpr::Call` stays positional and nothing downstream
 of HIR observes the difference. Binding applies to exactly one call shape:
-a call whose callee is a bare name that refers to a module-level `def`
-whose parameters are all required and positional. Every other shape — a
-method call, `super().m()`, a container or stdlib-intrinsic call, a class
-instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
+a call whose callee is a bare name that refers to a module-level `def` in
+the *same module*, whose parameters are all positional and whose defaults,
+if any, are all in the admitted literal subset described below. Every other
+shape — a method call, `super().m()`, a container or stdlib-intrinsic call,
+a class instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
 because pycc has no signature to bind against there yet.
 

@@ -260,10 +260,20 @@ fn a_default_of_the_wrong_type_is_a_call_argument_mismatch() {
 fn a_wider_optional_annotation_keeps_its_own_unsupported_annotation_error() {
     // `str | None` is not an annotation this compiler supports; the
     // annotation is resolved first, so its own diagnostic wins over
-    // anything the default could say.
-    let diagnostic = lower_err("def f(a: str | None = None) -> None:\n    return\n");
-    assert_ne!(diagnostic.code, "T0021", "{diagnostic:?}");
-    assert_ne!(diagnostic.code, "C0001", "{diagnostic:?}");
+    // anything the default could say. This is a deliberate change: before
+    // this part the same source reported `C0001 default parameter values
+    // are not supported yet` at the parameter, because the default check
+    // ran before `annotation_to_ty`.
+    let source = "def f(a: str | None = None) -> None:\n    return\n";
+    let diagnostic = lower_err(source);
+    assert_eq!(diagnostic.code, "T0049", "{diagnostic:?}");
+    assert_eq!(
+        diagnostic.message,
+        "`Optional[str]` is not supported yet -- only `Optional[int]`, \
+         `Optional[float]`, and `Optional[bool]` (`int | None`, `float | None`, \
+         `bool | None`) are"
+    );
+    assert_eq!(diagnostic.span, Some(span_of(source, "str | None")));
 }
 
 #[test]
@@ -279,9 +289,18 @@ fn an_optional_annotation_still_rejects_an_unassignable_default() {
 #[test]
 fn an_unsupported_annotation_is_reported_before_its_default() {
     // Under `DefaultPolicy::Admit` the annotation is resolved first, so an
-    // annotation pycc does not support keeps reporting its own diagnostic.
-    let diagnostic = lower_err("def f(a: list[int] | None = None) -> None:\n    return\n");
-    assert_ne!(diagnostic.code, "T0021", "{diagnostic:?}");
+    // annotation pycc does not support keeps reporting its own diagnostic,
+    // at the annotation's own span rather than the default's.
+    let source = "def f(a: list[int] | None = None) -> None:\n    return\n";
+    let diagnostic = lower_err(source);
+    assert_eq!(diagnostic.code, "T0049", "{diagnostic:?}");
+    assert_eq!(
+        diagnostic.message,
+        "`Optional[list[int]]` is not supported yet -- only `Optional[int]`, \
+         `Optional[float]`, and `Optional[bool]` (`int | None`, `float | None`, \
+         `bool | None`) are"
+    );
+    assert_eq!(diagnostic.span, Some(span_of(source, "list[int] | None")));
 }
 
 // --- `DefaultPolicy::Reject` ------------------------------------------
@@ -381,12 +400,20 @@ fn one_bad_default_with_several_call_sites_is_reported_once() {
 
 #[test]
 fn a_public_functions_unannotated_parameter_still_needs_an_annotation() {
-    let diagnostic = lower_err("def f(a) -> None:\n    return\n");
-    assert_eq!(diagnostic.code, "T0001");
-    assert_eq!(
-        diagnostic.message,
-        "parameter `a` of public function `f` needs a type annotation"
-    );
+    for source in [
+        "def f(a) -> None:\n    return\n",
+        // A default never supplies the annotation a public function's
+        // parameter needs: `T0001` wins over both inference and the
+        // default's own rules.
+        "def f(a = 1) -> None:\n    return\n",
+    ] {
+        let diagnostic = lower_err(source);
+        assert_eq!(diagnostic.code, "T0001", "{source}");
+        assert_eq!(
+            diagnostic.message, "parameter `a` of public function `f` needs a type annotation",
+            "{source}"
+        );
+    }
 }
 
 #[test]

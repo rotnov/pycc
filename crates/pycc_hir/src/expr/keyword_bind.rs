@@ -742,6 +742,23 @@ mod tests {
         );
     }
 
+    /// A parameter after the `/` marker stays bindable by name, so one call
+    /// can drive the keyword loop and the default-fill loop together: `b` is
+    /// named, `a` is filled from its default. This is the only shape where
+    /// both loops act on the same call.
+    #[test]
+    fn a_keyword_after_the_slash_marker_binds_while_the_default_before_it_fills() {
+        const DEF: &str = "def f(a: int = 1, /, b: int = 2) -> None:\n    return\n\n";
+        assert_eq!(
+            first_call_args(&format!("{DEF}f(b=3)\n")),
+            vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(3)]
+        );
+        assert_eq!(
+            first_call_args(&format!("{DEF}f(9, b=3)\n")),
+            vec![HirExpr::IntLiteral(9), HirExpr::IntLiteral(3)]
+        );
+    }
+
     #[test]
     fn a_later_def_of_the_same_name_replaces_an_earlier_ones_defaults() {
         assert_eq!(
