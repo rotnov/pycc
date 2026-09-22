@@ -209,9 +209,11 @@ pub(super) fn lower_protocol_class(
                              CPython host only through the statically generated \
                              wrapper of a `pycc build --ext` export (#1174), which a \
                              protocol member has none of: #1027 and #1129 admit a \
-                             buffer as a parameter of such an export, and Part 2a of \
+                             buffer as a parameter of such an export, Part 2a of \
                              #1142 produces one as storage the allocating frame frees \
-                             on exit"
+                             on exit, and Part 1 of #1175 returns a parameter-bound \
+                             name over a second export taken on the host's own \
+                             argument object"
                         ),
                         method_def.range,
                     ));

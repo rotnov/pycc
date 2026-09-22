@@ -33,6 +33,31 @@ never a merge gate.
 
 ---
 
+## 2026-09-22 — A local gate and its CI counterpart are different gates, and the difference is invisible locally
+
+Two separate rounds on one pull request (#1180) were spent on failures the
+local gate set structurally cannot produce. First, a local `cargo test` run
+without `--no-fail-fast` stopped at the first failure, so its failure set was
+not comparable with the documented baseline, while CI runs the suite with
+`-- --include-ignored` and therefore executes environment-gated tests the
+local default skips entirely. Second, a test constant consumed only by a
+`#[cfg(not(target_os = "windows"))]` arm compiled clean on macOS and failed
+the Windows job with `constant is never used` under `-D warnings`: local
+clippy evaluates exactly one target's `cfg` arms, so a dead item on another
+target is not merely unlikely to be noticed — it is unobservable.
+
+Root cause: treating "the local command with the same name" as the same gate
+as the CI one. The two differ in flags (`--include-ignored`, `--no-fail-fast`)
+and in the set of `cfg` arms they compile, and both differences are silent.
+What fixed it: re-running the suite with both flags and attributing each
+failure by name rather than by count, and gating the constant on the same
+predicate as its only consumer.
+
+Lesson: before pushing, read the CI job's actual invocation and reproduce its
+flags, not just its command name. When a change introduces a `cfg`-gated arm,
+check by inspection that every item it adds is consumed under *every* target
+predicate — no local build can check this for you.
+
 ## 2026-09-21 — Four fix rounds on one mechanism, none of which questioned how many things it assumed were in flight
 
 Part 2b of #1142 (#1164) tracks a returned buffer's ownership in a single

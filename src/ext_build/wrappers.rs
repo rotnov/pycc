@@ -199,6 +199,22 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     if !out_slots.is_empty() {
         out.push_str("    PyObject *packed;\n");
     }
+    // Part 1 of #1175's two locals, declared with the rest rather than at
+    // the acquire point so the generated function keeps one declaration
+    // block, and emitted only under the same conjunction the acquire uses --
+    // so every wrapper that cannot have a caller-owned buffer return stays
+    // byte-identical to what it was.
+    //
+    // `caller_owned` is a separate flag rather than a `borrowed != NULL`
+    // test, and that is load-bearing: `PyMemoryView_FromObject` answers NULL
+    // with the exception set on failure, so `borrowed == NULL` cannot tell
+    // "no parameter matched" (fall through to the owning packer, which is
+    // correct) from "the match failed" (return NULL, which is the only
+    // correct answer -- handing a parameter pointer to the owning packer
+    // would free the host's storage).
+    if !caller_owned_buffer_slots(&export.return_ty, &slots).is_empty() {
+        out.push_str("    int caller_owned = 0;\n    PyObject *borrowed = NULL;\n");
+    }
     out.push_str(&arg_slot_locals(&slots));
     out.push_str(&format!(
         "    if (nargs != {arity}) {{\n        PyErr_Format(PyExc_TypeError, \
@@ -262,17 +278,28 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // single point every remaining exit passes through -- the pending-
     // exception bail and the pack below both sit after it -- rather than
     // duplicated at each `return`. Releasing before the pack is safe and
-    // deliberate: the pack reads only `result`/`r{index}`, machine words the
-    // compiled function already produced, never the buffer's storage.
+    // deliberate *for every packer that existed before Part 1 of #1175*:
+    // those packs read only `result`/`r{index}`, machine words the compiled
+    // function already produced, never the buffer's storage.
+    //
+    // Part 1 of #1175 adds the one pack that breaks that premise, and
+    // `caller_owned_buffer_acquire` below is emitted *before* these releases
+    // for exactly that reason -- see its own comment.
     //
     // Empty for an export with no `memoryview` parameter, so every wrapper
     // generated before Part 1 of #1027 is byte-identical to what it was.
     let release: String = buffer_releases(&slots, "    ");
     out.push_str(&format!(
         "    if (pycc_rt_ext_pending_type() >= 0) {{\n{}        pycc_ext_raise_pending();\n        \
-         return NULL;\n    }}\n{release}",
+         return NULL;\n    }}\n",
         buffer_releases(&slots, "        ")
     ));
+    out.push_str(&caller_owned_buffer_acquire(
+        &export.return_ty,
+        &slots,
+        source_name,
+    ));
+    out.push_str(&release);
     match &export.return_ty {
         Ty::None => out.push_str("    Py_RETURN_NONE;\n}\n\n"),
         Ty::Tuple(_) => out.push_str(&pack_tuple_return(source_name, &out_slots)),
@@ -308,7 +335,19 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
         // so an export that both takes a `memoryview` and returns one
         // releases the first and hands back the second with no interaction
         // between them.
-        Ty::MemoryView => out.push_str("    return pycc_ext_pack_memoryview(result);\n}\n\n"),
+        //
+        // Part 1 of #1175 puts a second provenance in front of it. The
+        // `caller_owned` branch is the one case where `result` is *not*
+        // artifact-owned storage, and taking this packer on it would free
+        // the host's own block. The acquire that sets the flag ran before
+        // the releases; only the hand-back is here, because it is a
+        // `return` and every release owes its position before one.
+        Ty::MemoryView => {
+            if !caller_owned_buffer_slots(&export.return_ty, &slots).is_empty() {
+                out.push_str("    if (caller_owned) {\n        return borrowed;\n    }\n");
+            }
+            out.push_str("    return pycc_ext_pack_memoryview(result);\n}\n\n");
+        }
         ty => {
             let (_, helper) = boundary_carrier(ty)
                 .and_then(BoundaryCarrier::into_scalar)
@@ -454,6 +493,99 @@ pub(crate) fn unpack_args(
 /// Shared by the two success-path emission points (inside the pending-
 /// exception block, and just before the egress) so the two can never
 /// release different sets.
+/// The declared-parameter indices a **caller-owned** buffer return could
+/// name, or empty when this export cannot have one.
+///
+/// Part 1 of #1175. Empty unless the export both returns the buffer type and
+/// takes at least one `memoryview` parameter, which is the conjunction that
+/// keeps every wrapper generated before this change byte-identical: an
+/// export with no buffer parameter has no `&a{index}` for `result` to equal,
+/// and one that does not return a buffer never reaches the egress arm.
+///
+/// The index is the *declared* parameter index and therefore also the
+/// `args[index]` index: a receiver is pushed into `call_args` separately
+/// (see [`wrapper_for`]) and never occupies a slot, so an instance method's
+/// first declared parameter is `args[0]` here exactly as a module-level
+/// function's is.
+fn caller_owned_buffer_slots(return_ty: &Ty, slots: &[BoundaryCarrier]) -> Vec<usize> {
+    if !matches!(return_ty, Ty::MemoryView) {
+        return Vec::new();
+    }
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(_, carrier)| matches!(carrier, BoundaryCarrier::Buffer { .. }))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Part 1 of #1175: the provenance test that decides whether a returned
+/// `PyccExtBufferView *` is the host's own buffer rather than artifact-owned
+/// storage, and, when it is, acquires the view the host will receive.
+///
+/// **Why a runtime pointer identity test.** `&a{index}` are distinct locals
+/// in this generated function's own live stack frame, while artifact-owned
+/// storage is a heap block from `pycc_rt_buffer_f64_alloc`, which cannot
+/// alias a live stack frame. The test is therefore exact rather than
+/// heuristic: no match means artifact-owned and the existing packer runs.
+/// Two parameters bound to the *same* host object still have distinct
+/// `&a{index}`, so the chain picks the index the body actually returned; and
+/// a function that branches -- `return b0` on one path, `return b1` on
+/// another -- is admitted for free, where a checker-computed "returns
+/// parameter i" tag would have had to refuse it with no memory-safety
+/// ground.
+///
+/// **Why it is emitted here, before the releases.** This is the only pack on
+/// the buffer path that re-enters the argument *object*:
+/// `PyMemoryView_FromObject` acquires a second, independent buffer export on
+/// it. `pycc_ext_unpack_memoryview` admits any `PyObject_CheckBuffer` object
+/// with no type allowlist, including a PEP 688 Python-level exporter, which
+/// the shim's `Py_LIMITED_API 0x030D0000` floor permits. For such an
+/// argument `PyBuffer_Release(&b{index})` runs `__release_buffer__`, and at
+/// that instant the host object has **zero** outstanding exports and may
+/// legally reallocate its storage -- so a release-then-acquire ordering can
+/// hand the host a view over storage the compiled body never touched.
+/// Acquiring first keeps at least one export outstanding across the whole
+/// boundary, which is the configuration the mechanism was measured in.
+///
+/// Nothing here frees or releases anything: `args[index]` is a borrowed
+/// reference the caller holds for the call's duration, and the view carries
+/// its own export.
+fn caller_owned_buffer_acquire(
+    return_ty: &Ty,
+    slots: &[BoundaryCarrier],
+    source_name: &str,
+) -> String {
+    let indices = caller_owned_buffer_slots(return_ty, slots);
+    if indices.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "    /*\n     * Part 1 of #1175: `result` is the host's own buffer when it is one of\n     \
+         * this frame's own `a{i}` locals -- artifact-owned storage is a heap block\n     * and \
+         cannot alias a live stack frame. Acquired before the releases below so\n     * the host \
+         object is never at zero outstanding exports across the boundary.\n     */\n",
+    );
+    for (position, index) in indices.iter().enumerate() {
+        let lead = if position == 0 { "if" } else { "} else if" };
+        // The packer re-reads the exporter, so it is handed the window this
+        // call actually operated on and the writability the unpack demanded:
+        // a PEP 688 exporter may legally answer the second `__buffer__` with
+        // a different window, and only `b{index}` says which one is right.
+        let writable = i32::from(matches!(
+            slots[*index],
+            BoundaryCarrier::Buffer { writable: true }
+        ));
+        out.push_str(&format!(
+            "    {lead} (result == &a{index}) {{\n        caller_owned = 1;\n        \
+             borrowed = pycc_ext_pack_memoryview_borrowed(args[{index}], &b{index}, \
+             \"{source_name}\", {index}, {writable});\n"
+        ));
+    }
+    out.push_str("    }\n");
+    out
+}
+
 pub(crate) fn buffer_releases(slots: &[BoundaryCarrier], indent: &str) -> String {
     slots
         .iter()

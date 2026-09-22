@@ -2905,11 +2905,14 @@ fn check_stmt_in_function(
             // comment records for `b[i]` and `len(b)` -- the refusal is not
             // weakened, the set of expressions that reach it narrows by one.
             //
-            // The provenance test is this environment's own `owned_buffers`,
-            // so `return b` on a buffer *parameter* falls through to the
-            // parameter refusal unchanged: handing the host back a view over
-            // storage the wrapper releases at call exit is the use-after-free
-            // #1142 exists to forbid, and is not what this admits.
+            // Part 1 of #1175 adds the **second** provenance: the name a
+            // `memoryview` parameter binds. The provenance split itself now
+            // lives in `crate::buffer::admits_buffer_egress`, which both
+            // walkers call with their own spelling of the same three facts,
+            // so the solver's admission cannot drift wider than this one.
+            // `owned_buffers` membership is this environment's answer to
+            // "artifact-owned"; a `Ty::MemoryView` binding outside that set
+            // is a parameter and nothing else.
             //
             // An early-return admission owes an account of *every* check the
             // ordinary path would have run, not only the one it was designed
@@ -2917,8 +2920,10 @@ fn check_stmt_in_function(
             //
             // The **assignability** check is bypassed deliberately: the
             // operand's type is `Ty::MemoryView` by construction of
-            // `owned_buffers`, and the declared type is `Ty::MemoryView` by
-            // `admitted_buffer_return`'s own test, so the two agree.
+            // `owned_buffers` on the owned arm and by the `buffer_bound`
+            // conjunct itself on the caller-owned one, and the declared type
+            // is `Ty::MemoryView` by `admitted_buffer_return`'s own test, so
+            // the two agree on both arms.
             //
             // The **definite-assignment** check is *not* bypassed, and the
             // third conjunct below is what keeps it. `owned_buffers` joins as
@@ -2940,21 +2945,36 @@ fn check_stmt_in_function(
             // `None`: a name that is not bound at all falls through to the
             // ordinary `T0021`.
             //
-            // The fourth conjunct is review round 5's, and unlike the third
-            // it is a *refusal* rather than a decline: see
-            // `crate::buffer::buffer_return_inside_finally` for the host
-            // crash it closes and why the mechanism's cardinality
+            // The `returns_inside_finally` test is review round 5's, and
+            // unlike the conjuncts above it is a *refusal* rather than a
+            // decline: see `crate::buffer::buffer_return_inside_finally` for
+            // the host crash it closes and why the mechanism's cardinality
             // assumption, not the set of paths reaching it, is what had to
             // change. It is a whole-function property, so it is computed
             // once in `check_function_in` rather than re-walked here.
-            if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty))
-                && env.owned_buffers.contains(name)
-                && matches!(env.binding_state(name), Some(BindingState::Definitely(_)))
-            {
-                if env.returns_inside_finally {
-                    return Err(crate::buffer::buffer_return_inside_finally(name));
+            //
+            // Part 1 of #1175 keeps it for the caller-owned provenance too,
+            // and runs it **once**, after the provenance verdict rather than
+            // inside either arm -- a duplicated check is a check that drifts.
+            // A caller-owned return transfers no ownership and so needs no
+            // pending-return record of its own, but a function that also
+            // allocates owned storage still has one, and Part 1 does not
+            // carry the argument about that record's state on the parameter
+            // path. The narrowing is deliberate and conservative, not a
+            // necessity; the D-244 amendment records it as revisitable with
+            // #1173.
+            if let Some(name) = crate::buffer::admitted_buffer_return(expr, Some(&return_ty)) {
+                let state = env.binding_state(name);
+                if crate::buffer::admits_buffer_egress(
+                    env.owned_buffers.contains(name),
+                    matches!(state, Some(BindingState::Definitely(_))),
+                    state.is_some_and(|state| matches!(state.ty(), Ty::MemoryView)),
+                ) {
+                    if env.returns_inside_finally {
+                        return Err(crate::buffer::buffer_return_inside_finally(name));
+                    }
+                    return Ok(());
                 }
-                return Ok(());
             }
             let actual = infer_expr_in(env, local_names, expr)?;
             if !class::is_assignable_env(env, &actual, &return_ty) {

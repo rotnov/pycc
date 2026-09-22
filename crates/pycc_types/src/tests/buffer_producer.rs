@@ -309,26 +309,22 @@ fn returning_owned_storage_is_admitted_by_egress() {
     }
 }
 
-/// Egress admits the *owned* name only. A buffer parameter returned from the
-/// same signature keeps its own pre-existing refusal, because handing back a
-/// view the host lent for one call is a use-after-free rather than a missing
-/// capability.
+/// Part 1 of #1175 admits the second provenance through the same egress:
+/// returning the name a buffer *parameter* binds. The refusal this replaces
+/// reasoned that handing back a view the host lent for one call is a
+/// use-after-free; that reason was falsified. The wrapper acquires an
+/// independent `PyMemoryView_FromObject` export on the host object before it
+/// releases its own `Py_buffer`, so the storage the returned view spans stays
+/// pinned by an export the caller owns -- pycc frees nothing and the host
+/// object outlives the call.
 #[test]
-fn returning_a_buffer_parameter_is_still_refused_by_its_own_arm() {
+fn returning_a_buffer_parameter_is_admitted_as_the_caller_owned_egress() {
     let hir = func(
         vec![("b".to_string(), Ty::MemoryView)],
         Ty::MemoryView,
         vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
     );
-    let err = check(&hir).unwrap_err();
-    assert_eq!(err.code, "C0001");
-    assert!(err.message.contains("buffer parameter"), "{}", err.message);
-    assert!(
-        !err.message
-            .contains("this `pycc build --ext` artifact allocated"),
-        "{}",
-        err.message
-    );
+    assert!(check(&hir).is_ok());
 }
 
 /// Egress keys on the declared return type, not on the operand alone: an
@@ -348,18 +344,20 @@ fn returning_owned_storage_from_a_non_buffer_signature_is_a_type_error() {
     assert_ne!(err.code, "C0003", "{}", err.message);
 }
 
-/// ...and a buffer *parameter* keeps its own message verbatim, so the two
-/// provenances never report each other's reason.
+/// ...and the symmetric statement for the caller-owned provenance: a buffer
+/// parameter returned from a signature declared to return something else is
+/// the ordinary mismatch, not the admission. Egress keys on the *pair*
+/// (operand, declared return type) for both provenances, so neither one can
+/// be admitted by the operand alone.
 #[test]
-fn a_buffer_parameter_keeps_its_own_refusal() {
+fn returning_a_buffer_parameter_from_a_non_buffer_signature_is_a_type_error() {
     let hir = func(
         vec![("b".to_string(), Ty::MemoryView)],
-        Ty::MemoryView,
+        Ty::Float,
         vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
     );
     let err = check(&hir).unwrap_err();
-    assert_eq!(err.code, "C0001");
-    assert!(err.message.contains("buffer parameter"), "{}", err.message);
+    assert_ne!(err.code, "C0003", "{}", err.message);
 }
 
 /// Rebinding a buffer parameter is refused, which is what keeps the flat
@@ -2079,4 +2077,253 @@ fn a_finally_without_a_return_still_admits_the_buffer_egress() {
         ],
     );
     assert!(check(&hir).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Part 1 of #1175: the caller-owned buffer egress.
+//
+// The pre-existing egress admitted exactly one provenance -- storage this
+// artifact allocated and its exporter's `tp_dealloc` frees. Part 1 admits a
+// second: the name a `memoryview` *parameter* binds, returned bare. The two
+// share `crate::buffer::admits_buffer_egress` and every narrowing around it,
+// so each test below has an artifact-owned twin earlier in this file; what
+// is new here is that the caller-owned name reaches the same verdict.
+//
+// #1178's scope boundary is the *bare* name only. `return b[1:3]` (#1179)
+// and returning the result of a call that itself returns a buffer both stay
+// refused, and the last two tests pin that so a later widening has to be a
+// deliberate edit rather than a side effect.
+// ---------------------------------------------------------------------------
+
+/// `def f(b: memoryview, c: memoryview) -> memoryview: ...`.
+fn two_buffer_params(body: Vec<HirStmt>) -> HirModule {
+    func(
+        vec![
+            ("b".to_string(), Ty::MemoryView),
+            ("c".to_string(), Ty::MemoryView),
+        ],
+        Ty::MemoryView,
+        body,
+    )
+}
+
+/// Either buffer parameter is admissible, not merely the first. The wrapper
+/// decides which one a given call actually returned by pointer identity
+/// against each declared buffer slot in turn
+/// (`src/ext_build/wrappers.rs::caller_owned_buffer_acquire`), so the type
+/// checker must not privilege a position either.
+#[test]
+fn either_buffer_parameter_is_an_admitted_caller_owned_egress() {
+    for name in ["b", "c"] {
+        let hir = two_buffer_params(vec![HirStmt::Return(Some(HirExpr::Name(name.to_string())))]);
+        assert!(check(&hir).is_ok(), "{name}");
+    }
+}
+
+/// A branch that returns a different parameter on each arm. Both returns are
+/// admitted independently -- the admission is per-`return`, with no
+/// whole-function "which buffer does this export hand back" analysis, which
+/// is what lets the wrapper's runtime identity chain stay the only place
+/// that answers the question.
+#[test]
+fn a_branch_returning_either_buffer_parameter_is_admitted() {
+    let hir = two_buffer_params(vec![HirStmt::If {
+        test: HirExpr::BoolLiteral(true),
+        body: vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+        orelse: vec![HirStmt::Return(Some(HirExpr::Name("c".to_string())))],
+    }]);
+    assert!(check(&hir).is_ok());
+}
+
+/// The two provenances mix inside one function: a parameter is returned on
+/// one arm and artifact-owned storage on the other. Nothing in the admission
+/// couples them, and codegen keeps them disjoint at the source -- a
+/// parameter never enters `owned_buffers` because
+/// `reject_buffer_parameter_rebinding` refuses the only statement that could
+/// put it there.
+#[test]
+fn one_function_may_return_either_provenance_on_its_own_branch() {
+    let hir = func(
+        vec![("b".to_string(), Ty::MemoryView)],
+        Ty::MemoryView,
+        vec![HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+            orelse: vec![
+                alloc_four("ndarray"),
+                HirStmt::Return(Some(HirExpr::Name("a".to_string()))),
+            ],
+        }],
+    );
+    assert!(check(&hir).is_ok());
+}
+
+/// The solver's half of the admission, on
+/// [`the_solver_admits_an_owned_buffer_return`]'s model: an unannotated
+/// helper in the same module forces the constraint solver to walk the
+/// annotated body too. The solver runs first, so without its own copy of the
+/// interception `reject_memoryview_read`'s `C0001` would displace the
+/// admission before the check phase ever looked at the `return`.
+///
+/// This is the subset property `docs/TYPE_SYSTEM.md` states for the two
+/// walkers, spelled for the caller-owned provenance.
+#[test]
+fn the_solver_admits_a_caller_owned_buffer_return() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+            },
+            HirItem::Function {
+                name: "g".to_string(),
+                params: vec![("b".to_string(), Ty::MemoryView)],
+                return_ty: Ty::MemoryView,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(call(
+                    "_h",
+                    vec![HirExpr::IntLiteral(4)],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_ok());
+}
+
+/// Review round 5 of #1164's `return`-inside-`finally` narrowing covers the
+/// caller-owned provenance too. Part 1 deliberately keeps it there rather
+/// than reasoning that a caller-owned view needs no release: the codegen's
+/// single per-frame pending-return record is what the narrowing protects,
+/// and that record's cardinality does not depend on which provenance the
+/// suspended buffer has. Widening it is #1173's question, not Part 1's.
+#[test]
+fn a_return_inside_a_finally_refuses_the_caller_owned_egress() {
+    let hir = func(
+        vec![("b".to_string(), Ty::MemoryView)],
+        Ty::MemoryView,
+        vec![try_returning_from_a_loop_in_finally(
+            vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+            HirExpr::Name("b".to_string()),
+        )],
+    );
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001", "{}", err.message);
+    assert!(
+        err.message.contains(RETURN_IN_FINALLY_REFUSAL),
+        "{}",
+        err.message
+    );
+}
+
+/// ...and the solver's copy of it, for the same reason the owned twin has
+/// one: the solver runs first, so an interception that admitted the egress
+/// without re-checking the narrowing would let the program through.
+#[test]
+fn the_solver_refuses_a_caller_owned_egress_with_a_return_inside_a_finally() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("n".to_string())))],
+            },
+            HirItem::Function {
+                name: "g".to_string(),
+                params: vec![("b".to_string(), Ty::MemoryView)],
+                return_ty: Ty::MemoryView,
+                body: vec![try_returning_from_a_loop_in_finally(
+                    vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+                    HirExpr::Name("b".to_string()),
+                )],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(call(
+                    "_h",
+                    vec![HirExpr::IntLiteral(4)],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let err = check(&hir).unwrap_err();
+    assert_eq!(err.code, "C0001", "{}", err.message);
+    assert!(
+        err.message.contains(RETURN_IN_FINALLY_REFUSAL),
+        "{}",
+        err.message
+    );
+}
+
+/// #1175's scope boundary, first arm: returning the *result of a call* that
+/// itself returns a buffer stays refused. The admission matches an
+/// `HirExpr::Name` operand only, so an intra-artifact call result never
+/// reaches it -- and it must not, because the wrapper's runtime provenance
+/// test compares the returned pointer against its own `args[i]` buffer
+/// slots, which a value produced inside a callee frame need not match.
+/// Admitting it would hand the host a view over storage nothing pins.
+#[test]
+fn returning_an_intra_artifact_call_result_stays_refused() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: vec![
+            HirItem::Function {
+                name: "g".to_string(),
+                params: vec![("b".to_string(), Ty::MemoryView)],
+                return_ty: Ty::MemoryView,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("b".to_string())))],
+            },
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("b".to_string(), Ty::MemoryView)],
+                return_ty: Ty::MemoryView,
+                body: vec![HirStmt::Return(Some(call(
+                    "g",
+                    vec![HirExpr::Name("b".to_string())],
+                )))],
+            },
+        ],
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    assert!(check(&hir).is_err());
+}
+
+/// #1175's scope boundary, second arm: a *slice* of a buffer parameter stays
+/// refused. That is #1179's own part, and it is a strictly harder problem --
+/// the returned view would span a sub-range of the host's storage, so the
+/// wrapper's pointer-identity test against `args[i]` no longer identifies
+/// the owner and the offset/length would have to be carried out of the
+/// callee frame.
+#[test]
+fn returning_a_slice_of_a_buffer_parameter_stays_refused() {
+    let hir = func(
+        vec![("b".to_string(), Ty::MemoryView)],
+        Ty::MemoryView,
+        vec![HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: None,
+        }))],
+    );
+    assert!(check(&hir).is_err());
 }

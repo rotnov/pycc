@@ -2564,14 +2564,35 @@ pub(crate) fn collect_block_constraints(
                 // `docs/TYPE_SYSTEM.md`'s `memoryview` row requires of this
                 // mirror -- if either arm's `Name` ordering later changes.
                 //
-                // Review round 5's fourth conjunct is a refusal rather than
-                // a decline, exactly as in the check phase: see
-                // `crate::buffer::buffer_return_inside_finally`.
+                // Review round 5's `returns_inside_finally` test is a refusal
+                // rather than a decline, exactly as in the check phase: see
+                // `crate::buffer::buffer_return_inside_finally`. Part 1 of
+                // #1175 runs it once, after the provenance verdict, for both
+                // provenances -- the same restructure the check phase made,
+                // for the same reason.
+                //
+                // Part 1 of #1175's caller-owned provenance is spelled here
+                // as `Some(Ok(Ty::MemoryView))`, which is
+                // `reject_buffer_parameter_rebinding`'s own spelling and
+                // exact for the same reason its doc comment gives: an
+                // `Err(var)` term is only ever resolved by
+                // `apply_annotation_defaults`, whose `is_private_solver_
+                // scalar` guard admits `Int | Float | Bool | Str | None`
+                // only, so no inferred term can become `MemoryView`. A
+                // `memoryview` parameter's term is therefore always this
+                // concrete one, and the solver's admission stays a subset of
+                // the check phase's -- the property `docs/TYPE_SYSTEM.md`'s
+                // `memoryview` row requires of this mirror. The shared
+                // `admits_buffer_egress` is what makes that subset hold by
+                // construction rather than by two parallel edits.
                 if let Some(expr) = value
                     && let Some(name) =
                         crate::buffer::admitted_buffer_return(expr, return_term.as_ref().ok())
-                    && env.owned_buffers.contains(name)
-                    && !env.maybe_bindings.contains(name)
+                    && crate::buffer::admits_buffer_egress(
+                        env.owned_buffers.contains(name),
+                        !env.maybe_bindings.contains(name),
+                        matches!(env.bindings.get(name), Some(Ok(Ty::MemoryView))),
+                    )
                 {
                     if env.returns_inside_finally {
                         return Err(crate::buffer::buffer_return_inside_finally(name));

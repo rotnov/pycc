@@ -296,6 +296,22 @@ fn offending_position(params: &[(String, Ty)], return_ty: &Ty) -> Option<String>
 /// *intra-artifact* route to the return value is refused, not because the
 /// method cannot be written.
 ///
+/// Part 1 of #1175 (#1178) adds a *second provenance* to the value such an
+/// export may return -- the bare name a `memoryview` **parameter** binds,
+/// handed back over a second, independent buffer export the wrapper takes on
+/// the host's own argument object -- and deliberately does **not** widen
+/// this predicate, which is export-set membership and asks nothing about
+/// provenance. The D-141 argument above is therefore unchanged in structure
+/// but now covers two provenances: every *intra-artifact* route to a
+/// buffer-returning callee is still refused, whichever provenance its body
+/// returns, because each of those interceptions keys on the callee's
+/// declared return type and never on what its body does. That is what keeps
+/// `call_result.rs`'s `Ty::MemoryView` panic unreachable for the shapes
+/// #1175 newly admits -- a callee whose whole body is `return b` could not
+/// type-check at all before it, so the routes are re-asserted against one in
+/// `tests/issue_1175_caller_owned_buffer_return.rs` rather than assumed to
+/// carry over.
+///
 /// What still refuses a declaration is therefore exactly non-membership in
 /// the export set, and `collect_exports` owns every reason for that: a
 /// private name (leading underscore, on the method or on its class), a
