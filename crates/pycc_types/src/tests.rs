@@ -82,6 +82,13 @@ fn bare_super_in_check_returns_c0001() {
 // `memoryview` at all -- there is no literal and no producing call. Without
 // it `pycc_codegen` reaches a local load it has no lowering for and panics
 // instead of diagnosing.
+//
+// The subject's declared return type is `int` rather than `memoryview`, and
+// that is the whole of what Part 1 of #1175 changed here. `-> memoryview`
+// with `return v` is now the *admitted* caller-owned egress
+// (`crate::tests::buffer_producer`), so it no longer reaches this refusal;
+// every other read of the name still does, and a mismatched declared return
+// type is the shortest one to write. The message this pins is unchanged.
 #[test]
 fn reading_a_memoryview_parameter_is_a_capability_gap_rather_than_an_ice() {
     let hir = HirModule {
@@ -89,7 +96,7 @@ fn reading_a_memoryview_parameter_is_a_capability_gap_rather_than_an_ice() {
         items: vec![HirItem::Function {
             name: "f".to_string(),
             params: vec![("v".to_string(), Ty::MemoryView)],
-            return_ty: Ty::MemoryView,
+            return_ty: Ty::Int,
             body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
         }],
         type_aliases: Vec::new(),

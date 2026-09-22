@@ -395,10 +395,23 @@ pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&
 /// Membership in the caller's own `owned_buffers` set is the caller's half
 /// of the test and is deliberately *not* asked here: that set lives on two
 /// different environments (the check phase's [`crate::Environment`] and the
-/// solver's `ConstraintEnvironment`), and leaving the provenance question
-/// with each walker is what keeps a *parameter*-bound name -- `return b` --
-/// falling through to the parameter refusal, which is the use-after-free
-/// #1142 exists to forbid.
+/// solver's `ConstraintEnvironment`), so the provenance question is left
+/// with each walker, which answers it in its own spelling and hands the
+/// answer to [`admits_buffer_egress`].
+///
+/// Part 1 of #1175 corrected what that split is *for*. It used to read "and
+/// that is what keeps a *parameter*-bound name -- `return b` -- falling
+/// through to the parameter refusal, which is the use-after-free #1142
+/// exists to forbid". Both halves of that sentence are now false. A
+/// parameter-bound name at this position is **admitted**, and the
+/// use-after-free it named was never a property of the shape: the wrapper's
+/// `PyBuffer_Release` releases the wrapper's *own* `Py_buffer`, while the
+/// returned view is built with `PyMemoryView_FromObject` on the host's own
+/// argument object and therefore holds a **second, independent** buffer
+/// export that the wrapper's release does not touch. Holding that export --
+/// not holding a reference -- is what pins the storage; a bare `Py_INCREF`
+/// really would ship a use-after-free against a resizable exporter such as
+/// `array.array('d')`. See the D-244 amendment for the measurement.
 ///
 /// A declared return type other than the buffer type declines here, so
 /// `def f(n: int) -> float: a = ndarray(n); return a` keeps exactly the
@@ -411,6 +424,49 @@ pub(crate) fn admitted_buffer_return<'a>(
         (pycc_hir::HirExpr::Name(name), Some(Ty::MemoryView)) => Some(name.as_str()),
         _ => None,
     }
+}
+
+/// Whether a name [`admitted_buffer_return`] picked out is an admitted
+/// buffer **egress**, given the provenance facts only the calling walker can
+/// answer.
+///
+/// Two provenances are admitted, and the walkers treat them identically --
+/// which is why this answers a `bool` rather than naming the provenance it
+/// found. A third case, an intra-artifact call result, stays refused by
+/// [`buffer_returning_call_unsupported`] and never reaches here.
+///
+/// * **Artifact-owned** (Part 2b of #1142, #1164) -- `a = ndarray(n)`
+///   storage, handed to the host through the generated wrapper's exporter
+///   type, which frees it in `tp_dealloc`. `owned` is the walker's
+///   `owned_buffers` membership.
+/// * **Caller-owned** (Part 1 of #1175) -- the name a `memoryview`
+///   *parameter* binds. The wrapper hands the host a `memoryview` built
+///   directly over the host's own argument object, so the artifact allocates
+///   and frees nothing on this path.
+///
+/// The two are disjoint by construction: `pycc_codegen` never pushes a
+/// parameter into `owned_buffer_slots`, and `buffer_parameter_rebinding`
+/// keeps a parameter name from ever acquiring owned storage, so a
+/// `Ty::MemoryView` name outside `owned_buffers` is a parameter and nothing
+/// else. That is exactly why `buffer_bound` is asked only after `owned`.
+///
+/// `definitely_bound` is **not** a formality and is the one conjunct both
+/// walkers share for a reason review round 3 of #1164 recorded: `owned_
+/// buffers` joins as a union across control flow while a binding joins on
+/// the `Definitely`/`Maybe`/unbound lattice, so `if c: a = ndarray(4)` /
+/// `return a` is owned-on-some-path and unbound on another, and admitting it
+/// would load a null-initialized slot. A *parameter* is always `Definitely`
+/// bound, so the conjunct is free on the caller-owned arm -- but it is
+/// spelled rather than assumed, because the two arms share one call site.
+///
+/// The caller then owes exactly one further test, once, for both
+/// provenances: [`buffer_return_inside_finally`].
+pub(crate) fn admits_buffer_egress(
+    owned: bool,
+    definitely_bound: bool,
+    buffer_bound: bool,
+) -> bool {
+    definitely_bound && (owned || buffer_bound)
 }
 
 /// `Err(C0001)` for a call whose callee returns the buffer type.

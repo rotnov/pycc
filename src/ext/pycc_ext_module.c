@@ -1542,6 +1542,14 @@ static void pycc_ext_instance_dealloc(PyObject *self)
  * defines.
  */
 static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view);
+/*
+ * Part 1 of #1175: the caller-owned half of the buffer egress, declared here
+ * for the same reason its sibling above is -- the generated wrappers in the
+ * companion `#include`d next are its only callers. Unlike its sibling it has
+ * no dependency on the exporter type, so only the symmetry keeps the two
+ * definitions together.
+ */
+static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner);
 
 #include "pycc_ext_exports.inc"
 
@@ -1765,6 +1773,39 @@ static PyObject *pycc_ext_pack_memoryview(PyccExtBufferView *view)
     result = PyMemoryView_FromObject(exporter);
     Py_DECREF(exporter);
     return result;
+}
+
+/*
+ * Part 1 of #1175: the buffer egress when the returned view is the *host's*
+ * own buffer -- the name a `memoryview` parameter binds, returned by name.
+ *
+ * This is the one packer on the buffer path that allocates nothing and frees
+ * nothing. `owner` is the argument object, a borrowed reference the caller
+ * holds for the whole call; this function takes no reference of its own and
+ * releases none, and there is no artifact-owned block anywhere in the path,
+ * so `pycc_rt_buffer_live_views` is untouched by it.
+ *
+ * What keeps the returned view valid is not a reference to `owner` but a
+ * buffer **export** on it: `PyMemoryView_FromObject` acquires its own, held
+ * for exactly as long as the `memoryview` lives, and independent of the
+ * `Py_buffer` the generated wrapper acquired and releases on its way out. A
+ * bare `Py_INCREF(owner)` plus a `{ptr, len}` pair would *not* do -- a strong
+ * reference does not pin storage, and a resizable exporter such as
+ * `array.array('d')` relocates its block under `extend`. Holding an export is
+ * what makes that same `extend` raise `BufferError` instead.
+ *
+ * The wrapper acquires this view *before* releasing its own buffer, so the
+ * host object never reaches zero outstanding exports across the boundary;
+ * `src/ext_build/wrappers.rs`'s `caller_owned_buffer_acquire` carries the
+ * PEP 688 argument for why that ordering is required rather than tidy.
+ *
+ * NULL with the exception set on failure, which the generated wrapper returns
+ * as-is: it must never fall through to `pycc_ext_pack_memoryview`, whose
+ * exporter would free the host's storage in `tp_dealloc`.
+ */
+static PyObject *pycc_ext_pack_memoryview_borrowed(PyObject *owner)
+{
+    return PyMemoryView_FromObject(owner);
 }
 
 

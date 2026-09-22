@@ -2231,21 +2231,159 @@ fn a_buffer_returning_export_declares_the_carrier_pointer_and_packs_it() {
 
 #[test]
 fn a_buffer_returning_export_releases_its_parameters_before_packing() {
-    // The ordering the egress arm shares with every other packer: a
-    // `memoryview` **parameter** is the host's, borrowed for exactly one
+    // A `memoryview` **parameter** is the host's, borrowed for exactly one
     // call, so it is released on the way out -- and the release has to
     // precede the pack, which is a `return`. Asserted as adjacency rather
     // than as presence, because a release emitted after the pack is dead
     // code that a presence-only assertion accepts.
+    //
+    // Part 1 of #1175 put one thing between them, and only one: the
+    // caller-owned hand-back, which is itself a `return` and so owes the
+    // same precedence. What it did *not* move is the acquire -- see
+    // `a_caller_owned_buffer_return_acquires_before_it_releases`, which pins
+    // the half of this ordering that a `contains` on the tail cannot see.
     let inc = memoryview_inc("make", 1, Ty::MemoryView);
     assert!(
         inc.contains(
-            "    PyBuffer_Release(&b0);\n    return pycc_ext_pack_memoryview(result);\n}\n\n"
+            "    PyBuffer_Release(&b0);\n    if (caller_owned) {\n        return borrowed;\n    \
+             }\n    return pycc_ext_pack_memoryview(result);\n}\n\n"
         ),
         "{inc}"
     );
     // Exactly two releases: the two exits reachable with the buffer held.
     assert_eq!(inc.matches("PyBuffer_Release(&b0);").count(), 2, "{inc}");
+}
+
+/// Part 1 of #1175's substantive ordering property, and the renderer-level
+/// half of the PEP 688 host-side test in
+/// `tests/issue_1175_caller_owned_buffer_return.rs`.
+///
+/// The acquire must be emitted **before** the release, not merely somewhere
+/// before the pack. `pycc_ext_unpack_memoryview` admits any
+/// `PyObject_CheckBuffer` object, so the argument can be a PEP 688
+/// Python-level exporter whose `__release_buffer__` runs arbitrary code;
+/// with the release first, the host object is at zero outstanding exports at
+/// that instant and may legally reallocate, and the view the wrapper then
+/// acquires can describe storage the compiled body never touched. Asserted
+/// as one contiguous block, because two `contains` on the two halves pass
+/// under either order.
+#[test]
+fn a_caller_owned_buffer_return_acquires_before_it_releases() {
+    let inc = memoryview_inc("make", 1, Ty::MemoryView);
+    assert!(
+        inc.contains(
+            "    if (result == &a0) {\n        caller_owned = 1;\n        borrowed = \
+             pycc_ext_pack_memoryview_borrowed(args[0]);\n    }\n    PyBuffer_Release(&b0);\n"
+        ),
+        "{inc}"
+    );
+    // The two locals, and the flag rather than a `borrowed != NULL` test:
+    // `PyMemoryView_FromObject` answers NULL with the exception set, so
+    // `borrowed == NULL` cannot discriminate "no parameter matched" from
+    // "the match failed", and only the second of those must return NULL.
+    assert!(
+        inc.contains("    int caller_owned = 0;\n    PyObject *borrowed = NULL;\n"),
+        "{inc}"
+    );
+    assert!(!inc.contains("borrowed != NULL"), "{inc}");
+    // The acquire is emitted once, on the success path only. The pending-
+    // exception bail above it returns NULL without packing anything.
+    assert_eq!(
+        inc.matches("pycc_ext_pack_memoryview_borrowed").count(),
+        1,
+        "{inc}"
+    );
+}
+
+/// The identity chain names each parameter exactly once, so a body that
+/// returns the *second* of two buffer parameters -- or either of them on
+/// different paths -- hands back the right one.
+///
+/// `&a0` and `&a1` are distinct locals in the wrapper's own live stack
+/// frame even when the same host object was passed twice, which is what
+/// makes the test exact rather than heuristic; artifact-owned storage is a
+/// heap block from `pycc_rt_buffer_f64_alloc` and cannot alias either.
+#[test]
+fn a_caller_owned_buffer_return_tests_every_buffer_parameter_in_turn() {
+    let inc = memoryview_inc("pick", 2, Ty::MemoryView);
+    assert!(
+        inc.contains(concat!(
+            "    if (result == &a0) {\n        caller_owned = 1;\n",
+            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[0]);\n",
+            "    } else if (result == &a1) {\n        caller_owned = 1;\n",
+            "        borrowed = pycc_ext_pack_memoryview_borrowed(args[1]);\n    }\n",
+            "    PyBuffer_Release(&b0);\n    PyBuffer_Release(&b1);\n",
+        )),
+        "{inc}"
+    );
+}
+
+/// A `memoryview` parameter on an export that does **not** return a buffer
+/// stays byte-identical to what it was: no flag, no acquire, no hand-back.
+///
+/// The conjunction is "returns a buffer **and** takes one". Guarding on the
+/// parameter alone would emit dead code into every `-> float` reduction over
+/// a buffer, which is the common shape.
+#[test]
+fn a_buffer_parameter_on_a_scalar_returning_export_emits_no_caller_owned_test() {
+    let inc = memoryview_inc("total", 1, Ty::Float);
+    assert!(!inc.contains("caller_owned"), "{inc}");
+    assert!(!inc.contains("borrowed"), "{inc}");
+    assert!(
+        inc.contains("    PyBuffer_Release(&b0);\n    return pycc_ext_pack_float(result);\n"),
+        "{inc}"
+    );
+}
+
+/// The other half of the byte-identity guard: a buffer-returning export with
+/// **no** buffer parameter has no `&a{i}` for `result` to equal, so the
+/// artifact-owned pack is reached with nothing in front of it, exactly as
+/// before Part 1 of #1175.
+#[test]
+fn a_buffer_returning_export_with_no_buffer_parameter_packs_as_it_always_did() {
+    let inc = memoryview_inc("make", 0, Ty::MemoryView);
+    assert!(!inc.contains("caller_owned"), "{inc}");
+    assert!(!inc.contains("pycc_ext_pack_memoryview_borrowed"), "{inc}");
+    assert!(
+        inc.contains(concat!(
+            "    if (pycc_rt_ext_pending_type() >= 0) {\n",
+            "        pycc_ext_raise_pending();\n        return NULL;\n    }\n",
+            "    return pycc_ext_pack_memoryview(result);\n",
+        )),
+        "{inc}"
+    );
+}
+
+/// A public **method** reaches the same emission, because `wrapper_for` has
+/// exactly one call site (`src/ext_build.rs`) and handles all three
+/// receivers; `method_types.rs` only tables the resulting wrapper names.
+///
+/// The index worth pinning is `args[0]`: an instance receiver is pushed into
+/// the call arguments separately and never occupies a slot, so the first
+/// *declared* parameter is `args[0]` here exactly as it is for a
+/// module-level function. An off-by-one would hand the host a view over
+/// whichever object happened to follow.
+#[test]
+fn a_caller_owned_buffer_returning_method_uses_the_declared_parameter_index() {
+    let inc = inc_no_classes(
+        "m",
+        &[ExtExport {
+            name: "Grid.row".to_string(),
+            class: Some("Grid".to_string()),
+            method: Some("row".to_string()),
+            receiver: ExtReceiver::SelfInstance,
+            params: vec![Ty::MemoryView],
+            param_writable: vec![false],
+            return_ty: Ty::MemoryView,
+        }],
+    );
+    assert!(
+        inc.contains(
+            "    if (result == &a0) {\n        caller_owned = 1;\n        borrowed = \
+             pycc_ext_pack_memoryview_borrowed(args[0]);\n    }\n    PyBuffer_Release(&b0);\n"
+        ),
+        "{inc}"
+    );
 }
 
 #[test]
