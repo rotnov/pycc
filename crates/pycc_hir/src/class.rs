@@ -1439,8 +1439,8 @@ fn lower_method(
     // #884 (#1125) made keyword call arguments bindable for a module-level
     // `def` only, and a method call keeps the unchanged `C0001` — so
     // accepting posonlyargs still changes nothing about call-site checking
-    // here. The three shape checks below are shared with
-    // `func::lower_params` (Part 2 of #884, #1189).
+    // here. `reject_unsupported_parameter_shapes` holds the shape checks
+    // this shares with `func::lower_params` (Part 2 of #884, #1189).
     crate::func::params::reject_unsupported_parameter_shapes(parameters)?;
     let method_name = def.name.as_str();
     let is_public = crate::is_public_name(method_name); // D-038
