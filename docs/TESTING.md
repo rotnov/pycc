@@ -519,9 +519,10 @@ rule 6); only numbers are published.
   supplies the missing predicate, and it is checked against a profile of the
   candidate workload *before* that workload is adopted. A workload is an
   admissible subject source only when one function in that profile satisfies all
-  four clauses: it is the workload's **own** source rather than a dependency; it
-  is Python rather than a C or C++ extension; it is loop-bearing by **statement**
-  loops, a comprehension alone not qualifying; and it accounts for at least
+  four clauses: it is the workload's **own** source rather than a dependency's
+  or the interpreter's; it is Python rather than a C extension; it is
+  loop-bearing by **statement** loops, a comprehension alone not qualifying;
+  and it accounts for at least
   **20%** of the profile's summed self time. Exportability is deliberately not
   part of the predicate — whether the subject can be reached from a host is
   already governed by the Subject bullet above and by
@@ -760,6 +761,15 @@ predicate the export rule uses — so it could not see methods. Re-run over the
 bodies of public classes, exactly one public method takes a numpy-array
 parameter and contains loops, and it is unreachable only because of where it
 is defined. That is a fifth boundary gap (#1131), not a workload property.
+A fifth correction, on 2026-09-22, settles the question the closing
+paragraph below left open — what the protocol takes as its subject — by
+pre-registering an admissibility predicate for the *workload* rather than
+revising the Subject bullet:
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
+whose operational form is the **Workload admissibility** bullet above. Under
+it the reference workload is refused, so prerequisite 2 is no longer a
+prerequisite of this workload's run at all: there is no run to prepare here,
+and an admissible replacement workload is what #1039 now waits on.
 Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
@@ -1102,9 +1112,13 @@ byte-identical function that both compiles *and* consumes the committed
 input, from a codebase that currently offers none, so closing it could
 equally mean revising what the protocol takes as its subject — and a subject
 revised now, with the 3.41x figure from #1114 already in hand, decides the
-bet instead of measuring it. That is left open here rather than settled, but
-it must be settled before #1039 can resume — and landing #1027 alone does
-not settle it. The compilation diagnostics are the actionable residue: they
+bet instead of measuring it. That was left open here on 2026-09-18 and is
+settled as of 2026-09-22 by
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md):
+the protocol keeps the Subject bullet as written and gains a predicate on the
+*workload* instead, under which this reference workload yields no subject and
+is refused. #1039 therefore resumes on an admissible replacement workload, not
+on landing #1027. The compilation diagnostics are the actionable residue: they
 are ordinary capability gaps, dominated by dependency-level import families and
 tracked chiefly by [#882](https://github.com/rotnov/pycc/issues/882), sized
 against a real codebase — but read them with prerequisite 2's cascade-suppression
