@@ -564,7 +564,9 @@ capture, a `for`, `with` or `except ... as` target, or a `del`. A binding in
 the body of a module-level `if`, `while`, `for`, `try`, `with` or `match`
 counts, because that body runs in module scope. A binding inside a `def` or
 `class` body does not count, and neither does a comprehension's own target
-or an annotation without a value.
+or an annotation without a value. That exclusion is sound only while pycc
+rejects a `global` declaration (`C0001`): once `global` is supported, a
+binding it routes to module scope from a function body must count too.
 
 The reason is dispatch order. pycc calls a redefined `def` in source order
 ([#22](https://github.com/rotnov/pycc/issues/22)): a call made before the

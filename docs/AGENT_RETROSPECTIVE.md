@@ -44,7 +44,7 @@ second `def` runs the first one. For `def foo(a, b)`, `foo(a=10, b=1)`, then
 `def foo(b, a)` and the same call again, pycc printed `-9 9` where CPython
 prints `9 9` -- silent wrong output, shipped to `main`. Part 2 (#1189) reused
 the table for default filling and inherited the defect (`2 2` for `1 2`).
-The Part 2 review round found it; neither Part 1's plan nor its review did.
+The Part 2 review round found it; it was not caught before Part 1 merged.
 
 Root cause: the table's "last `def` wins" rule was justified by analogy to
 Python's rebinding of a module-level name, without checking that analogy

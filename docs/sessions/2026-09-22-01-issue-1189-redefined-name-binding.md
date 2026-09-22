@@ -57,9 +57,12 @@ positional calls, and neither is fixed here:
 - `def sqrt(a: float = 4.0) -> float`, then `from math import sqrt`, then
   `print(sqrt(9.0))` prints `9.0`. The later import does not rebind the name
   in pycc; CPython prints `3.0`.
-- A module-level `match 1:` with `case foo:` does not rebind a `def foo`, so
-  a later `foo()` still calls the function. CPython raises `TypeError`
-  because `foo` is then the integer `1`.
+- A module-level `match 1:` with `case foo:` does not rebind a
+  zero-parameter `def foo() -> None`, so a later `foo()` still calls the
+  function. CPython raises `TypeError` because `foo` is then the integer
+  `1`.
+
+Both reproduce on this branch's rebuilt binary exactly as written.
 
 ## Where to resume
 

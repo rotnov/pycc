@@ -15,7 +15,9 @@
 //!
 //! The scan is deliberately conservative: it may count a binding CPython
 //! would not (a walrus inside a `lambda` body), which only costs a keyword
-//! call or a default fill its binding; it must never miss one.
+//! call or a default fill its binding; it must never miss one. It does not
+//! scan function bodies, which is complete only while pycc rejects a
+//! `global` declaration: supporting `global` must add its targets here.
 
 use std::collections::HashMap;
 
