@@ -256,3 +256,4 @@ current.
 | [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) | Add a hosted CPython extension-module artifact mode and pull the C-API interop core ahead of v0.5/v0.6 | accepted |
 | [D-245](./D-245-resolve-empty-container-element-types-in-a-pre-check-hir-pass.md) | Resolve empty-container element types in a pre-check HIR pass | accepted |
 | [D-246](./D-246-seed-dunder-name-all-or-nothing-per-program.md) | Seed `__name__` all-or-nothing per program, deviating from CPython | accepted |
+| [D-247](./D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md) | Pre-register a workload-admissibility predicate for the D-244 rule 6 kill criterion | accepted |

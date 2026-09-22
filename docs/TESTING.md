@@ -513,6 +513,21 @@ rule 6); only numbers are published.
   `scripts/check_roadmap_evidence.rb` refuse a `null`, so registering it is that
   run's first action, in a stage commit of its own, and no roadmap box can cite
   this protocol's evidence before then.
+- **Workload admissibility.** The Subject bullet fixes *which* function is the
+  subject once a workload is chosen, but it presumes such a function exists.
+  [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
+  supplies the missing predicate, and it is checked against a profile of the
+  candidate workload *before* that workload is adopted. A workload is an
+  admissible subject source only when one function in that profile satisfies all
+  four clauses: it is the workload's **own** source rather than a dependency; it
+  is Python rather than a C or C++ extension; it is loop-bearing by **statement**
+  loops, a comprehension alone not qualifying; and it accounts for at least
+  **20%** of the profile's summed self time. Exportability is deliberately not
+  part of the predicate — whether the subject can be reached from a host is
+  already governed by the Subject bullet above and by
+  [D-038](./decisions/D-038-a-leading-underscore-marks-a-top-level-function.md).
+  A workload that fails any clause is refused, and the refusal is a statement
+  about that workload, never a result for the compiler.
 - **Arms.** Three: the pinned CPython interpreter, Cython, and pycc's `ext`
   artifact. All three run back to back in one session on one machine, on the
   same OS and power profile, with no other timed work on the box. Which machine
