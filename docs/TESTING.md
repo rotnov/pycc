@@ -1141,10 +1141,11 @@ change is which obstacle is operative. This workload yields no subject at
 all, so the committed generator, seed, `input_sha256` and denominator describe
 a run that cannot be scored: a replacement workload replaces its input too, so
 those fields — `generator_path`, `seed`, `input_sha256` and every
-`compile_unchanged_*` field, the set digest included — are re-registered
-together with `subject_sha256` when an
-admissible workload is adopted, and until then nothing here is reshaped by an
-obstacle.
+`compile_unchanged_*` field, the set digest included — are re-registered in
+their own pre-registration commit when an admissible workload is adopted, ahead
+of any run. `subject_sha256` is not part of that commit: it keeps the **Subject**
+bullet's own rule, registered as the scoring run's first action in a stage
+commit of its own. Until then nothing here is reshaped by an obstacle.
 
 #### What the boundary costs, measured (not part of the protocol)
 
