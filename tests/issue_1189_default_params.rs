@@ -197,20 +197,61 @@ fn a_forward_call_to_a_defaulted_def_keeps_its_own_ordering_error() {
     );
 }
 
-/// Two `def`s of one name that differ only in their defaults are not an
-/// incompatible redefinition: a parameter list is `Vec<(String, Ty)>` and a
-/// default changes no `Ty`, so `pycc_types`' redeclaration check sees two
-/// identical signatures. The later `def`'s default is the one a short call
-/// gets.
+/// A name bound more than once at module level is left out of the signature
+/// table (`docs/TYPE_SYSTEM.md`, "Keyword arguments and default parameter
+/// values on a redefined name"): pycc dispatches a redefined `def` in source
+/// order, while the table is static, so filling either `def`'s default could
+/// silently call the other with the wrong value (CPython prints `1` then `2`
+/// here). The short call is left exactly as written and `pycc_types`' arity
+/// check rejects it.
 #[test]
-fn two_defs_differing_only_in_defaults_are_not_an_incompatible_redefinition() {
-    let dir = ScratchDir::new("e2e_issue_1189_redef").expect("failed to create scratch dir");
+fn a_short_call_to_a_redefined_def_fails_check_with_the_arity_error() {
+    let dir = ScratchDir::new("e2e_issue_1189_redef_short").expect("failed to create scratch dir");
+    let rendered = check_err(
+        &dir,
+        "redef_short",
+        "def foo(a: int = 1) -> None:\n    print(a)\n\nfoo()\n\n\
+         def foo(a: int = 2) -> None:\n    print(a)\n\nfoo()\n",
+    );
+    assert!(
+        rendered.contains("error[T0021]")
+            && rendered.contains("`foo` expects 1 argument(s), got 0"),
+        "unexpected diagnostic: {rendered}"
+    );
+}
+
+/// The same exclusion covers Part 1's keyword binding: with the two `def`s'
+/// parameters in opposite orders, binding against either one would compute
+/// the wrong difference at one of the two calls (CPython prints `9` twice).
+#[test]
+fn a_keyword_call_to_a_redefined_def_keeps_the_capability_rejection() {
+    let dir = ScratchDir::new("e2e_issue_1189_redef_kw").expect("failed to create scratch dir");
+    let rendered = check_err(
+        &dir,
+        "redef_kw",
+        "def foo(a: int, b: int) -> None:\n    print(a - b)\n\nfoo(a=10, b=1)\n\n\
+         def foo(b: int, a: int) -> None:\n    print(a - b)\n\nfoo(a=10, b=1)\n",
+    );
+    assert!(
+        rendered.contains("error[C0001]")
+            && rendered.contains("keyword call arguments are not supported yet"),
+        "unexpected diagnostic: {rendered}"
+    );
+}
+
+/// Only keyword binding and default filling are withdrawn from a redefined
+/// name: a call that supplies every argument positionally still builds and
+/// still reaches whichever `def` is bound at that point in source order.
+/// Issue #22's `redefinition_affects_only_subsequent_calls` pins the same
+/// dispatch for a zero-parameter `def`; this pins it for defaulted ones.
+#[test]
+fn full_positional_calls_to_a_redefined_defaulted_def_run_in_source_order() {
+    let dir = ScratchDir::new("e2e_issue_1189_redef_full").expect("failed to create scratch dir");
     let stdout = build_and_run(
         &dir,
-        "redef",
-        "def f(a: int = 1) -> None:\n    print(a)\n\n\
-         def f(a: int = 2) -> None:\n    print(a)\n\n\
-         f()\n",
+        "redef_full",
+        "def foo(a: int = 1) -> None:\n    print(a)\n\nfoo(5)\n\n\
+         def foo(a: int = 2) -> None:\n    print(a + 100)\n\nfoo(5)\n",
     );
-    assert_eq!(stdout, "2\n");
+    assert_eq!(stdout, "5\n105\n");
 }

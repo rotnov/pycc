@@ -29,8 +29,9 @@
 //! rejected exactly as before Part 1 (`C0001`, "keyword call arguments
 //! are not supported yet") rather than being bound wrongly: only a call whose
 //! callee is a bare name naming a module-level `def` whose parameters are all
-//! positional, and whose defaults (if any) are all in the admitted literal
-//! subset, is bindable. A method call, a `super().m()` call, a
+//! positional, whose defaults (if any) are all in the admitted literal
+//! subset, and whose name is bound nowhere else in module scope, is
+//! bindable. A method call, a `super().m()` call, a
 //! container or stdlib-intrinsic call, a class instantiation and a `**kwargs`
 //! unpacking all keep the old rejection — see [`is_bindable_call`].
 //!
@@ -52,6 +53,8 @@ use pycc_ast::{Expr, ExprCall, Parameters, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
 use crate::HirExpr;
+
+mod rebound;
 
 /// One module-level `def`'s keyword-bindable signature.
 struct Signature {
@@ -75,7 +78,8 @@ struct Signature {
 }
 
 /// Every top-level `def` in one module whose parameters this part can bind
-/// keyword arguments against.
+/// keyword arguments against, and whose name that `def` alone binds in
+/// module scope.
 ///
 /// Absence from the table is not an error: it means "keep the pre-#1125
 /// behaviour for this callee", i.e. reject a keyword call against it with
@@ -89,12 +93,22 @@ pub(crate) struct SignatureTable {
 impl SignatureTable {
     /// Collects the table from a module's top-level statements.
     ///
-    /// A later `def` of the same name replaces an earlier one, matching
-    /// Python's own rebinding of the module-level name.
+    /// Only a name bound exactly once in module scope -- by its one
+    /// top-level `def` and nothing else -- is entered. A name bound more
+    /// than once (two `def`s, or a `def` plus an assignment, an import, a
+    /// `type` alias, a walrus, a `match` capture or any other module-scope
+    /// binding, see [`rebound::binding_counts`]) is left out, because the
+    /// runtime dispatches such a name in source order while this table is
+    /// static and module-wide: no call site can be tied to one of its
+    /// signatures. A keyword call to it keeps `C0001` and a short call gets
+    /// the ordinary arity error (`docs/TYPE_SYSTEM.md`, "Keyword arguments
+    /// and default parameter values on a redefined name").
     pub(crate) fn collect(body: &[Stmt]) -> Self {
+        let counts = rebound::binding_counts(body);
         let mut by_name = HashMap::new();
         for stmt in body {
             if let Stmt::FunctionDef(def) = stmt
+                && counts.get(def.name.as_str()) == Some(&1)
                 && let Some(signature) = signature_of(&def.parameters)
             {
                 by_name.insert(def.name.as_str().to_string(), signature);
@@ -530,17 +544,23 @@ mod tests {
     }
 
     #[test]
-    fn a_later_def_of_the_same_name_replaces_an_earlier_one_in_the_table() {
-        let diagnostic = lower_err(
-            "def f(a: int) -> None:\n    print(a)\n\ndef f(b: int) -> None:\n    print(b)\n\nf(a=1)\n",
-        );
-        // Whatever the module-level rebinding rule decides about the two
-        // `def`s themselves, the table never answers with the first one's
-        // parameter list.
-        assert_ne!(
-            diagnostic.message,
-            "`f` is missing required argument(s): `a`"
-        );
+    fn a_keyword_call_to_a_name_bound_twice_keeps_the_capability_rejection() {
+        // Runtime dispatch of a redefined name is source-order sensitive,
+        // while the table is static: neither `def`'s parameter order may
+        // bind the keywords, so the name is left out of the table entirely.
+        for source in [
+            "def f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n\n\
+             def f(b: int, a: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
+            "f = 3\ndef f(a: int, b: int) -> None:\n    print(a - b)\n\nf(a=10, b=1)\n",
+            "from math import sqrt\ndef sqrt(a: float, b: float) -> float:\n    return a - b\n\nprint(sqrt(b=1.0, a=10.0))\n",
+        ] {
+            let diagnostic = lower_err(source);
+            assert_eq!(diagnostic.code, "C0001", "source: {source}");
+            assert_eq!(
+                diagnostic.message, "keyword call arguments are not supported yet",
+                "source: {source}"
+            );
+        }
     }
 
     #[test]
@@ -760,12 +780,14 @@ mod tests {
     }
 
     #[test]
-    fn a_later_def_of_the_same_name_replaces_an_earlier_ones_defaults() {
+    fn a_short_call_to_a_name_bound_twice_is_left_unfilled() {
+        // Neither `def`'s default is spliced: the call reaches `pycc_types`
+        // exactly as written, and its arity check rejects it there.
         assert_eq!(
             first_call_args(
-                "def f(a: int = 1) -> None:\n    return\n\ndef f(a: int = 2) -> None:\n    return\n\nf()\n"
+                "def f(a: int = 1) -> None:\n    return\n\nf()\n\ndef f(a: int = 2) -> None:\n    return\n\nf()\n"
             ),
-            vec![HirExpr::IntLiteral(2)]
+            vec![]
         );
     }
 
