@@ -747,8 +747,10 @@ amended exactly once since it was committed: the **Workload admissibility**
 bullet, added on 2026-09-22 by
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
 which supplies a predicate the protocol presumed rather than revising how a
-chosen subject is measured. The pre-registration record is unchanged and
-`subject_sha256` is still `null`.
+chosen subject is measured. `subject_sha256` is still `null`; the record's
+only amended field is `machine.os`, re-pinned on 2026-09-21 and recorded there
+as `machine_os_amendment` (prerequisite 3 below), and no other field has
+changed.
 This records why no run has been scored against it, so that a later session
 does not re-derive the same findings. It was corrected on 2026-09-17, when the
 count prerequisite 2 reports was measured rather than asserted, and again on
@@ -1138,7 +1140,9 @@ fixed in advance, never because an obstacle was met. What that bullet does
 change is which obstacle is operative. This workload yields no subject at
 all, so the committed generator, seed, `input_sha256` and denominator describe
 a run that cannot be scored: a replacement workload replaces its input too, so
-those fields are re-registered together with `subject_sha256` when an
+those fields — `generator_path`, `seed`, `input_sha256` and every
+`compile_unchanged_*` field, the set digest included — are re-registered
+together with `subject_sha256` when an
 admissible workload is adopted, and until then nothing here is reshaped by an
 obstacle.
 
