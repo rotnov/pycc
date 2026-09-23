@@ -5,6 +5,7 @@ mod ext_build;
 mod ext_output;
 mod foreign_import;
 mod frontend;
+mod interop_policy;
 mod memoryview_mode;
 mod modules;
 mod project_config;
@@ -40,6 +41,7 @@ fn main() -> ExitCode {
             target,
             release,
             ext,
+            interop,
         } => {
             // Resolved here, not inside `try_build`: this consumption point
             // (a neighboring `pycc.toml`'s `[build] opt = "release"` as a
@@ -76,12 +78,17 @@ fn main() -> ExitCode {
                 &scratch.join("main.o"),
                 toolchain.as_ref(),
                 &embed::EmbedToolchain::from_env(),
+                interop.into_cli(),
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
             }
         }
-        Command::Run { path, args } => run(&path, &args),
+        Command::Run {
+            path,
+            args,
+            interop,
+        } => run(&path, &args, interop.into_cli()),
         Command::Version { verbose } => {
             // `pycc {version}` comes from the manifest (`CARGO_PKG_VERSION`),
             // so it can't silently rot when the crate bumps. `rustc
@@ -116,7 +123,8 @@ fn main() -> ExitCode {
         Command::Check {
             paths,
             error_format,
-        } => check_paths(&paths, error_format),
+            interop,
+        } => check_paths(&paths, error_format, interop.into_cli()),
         Command::Init { name } => {
             // `std::env::current_dir()` is fallible: the process's cwd may
             // have been deleted, unmounted, or become otherwise inaccessible
@@ -196,7 +204,11 @@ fn init(name: Option<&str>, dir: &Path) -> Result<(), String> {
 /// `--error-format` flag. Compile diagnostics are printed to stdout; input
 /// errors are printed to stderr. Every supplied file is checked before the
 /// highest-precedence exit code is returned.
-fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitCode {
+fn check_paths(
+    paths: &[std::path::PathBuf],
+    error_format: ErrorFormat,
+    interop: interop_policy::InteropCli,
+) -> ExitCode {
     if paths.is_empty() {
         eprintln!("error: `pycc check` requires at least one Python file in v0.1");
         return ExitCode::from(2);
@@ -204,7 +216,7 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 
     let mut exit_code = 0;
     for path in paths {
-        if let Err(failure) = check_frontend(path) {
+        if let Err(failure) = check_frontend(path, interop) {
             exit_code = exit_code.max(report_check_failure(failure, error_format));
         }
     }
@@ -305,7 +317,7 @@ fn run_command(binary: &std::path::Path, args: &[std::ffi::OsString]) -> std::pr
 /// (the child executes from inside the scratch directory; `status()` waits
 /// for it to exit), so `Drop` removes the directory only after the child
 /// has terminated -- do not restructure this to return before that wait.
-fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
+fn run(path: &Path, args: &[std::ffi::OsString], interop: interop_policy::InteropCli) -> ExitCode {
     let scratch = match create_scratch("run") {
         Ok(scratch) => scratch,
         Err(code) => return code,
@@ -322,6 +334,7 @@ fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
         &scratch.join("main.o"),
         None,
         &embed,
+        interop,
     ) {
         return code;
     }

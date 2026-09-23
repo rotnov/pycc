@@ -74,6 +74,43 @@ fn assert_json_diagnostic_matches_fixture(fixture_stem: &str) {
     );
 }
 
+/// #1224: run `pycc check tests/diagnostics/<source>.py <extra_args>` and
+/// compare its human and JSON output with `<expected_stem>.expected.txt`
+/// and `<expected_stem>.expected.json`. Unlike the one-stem helpers above,
+/// one source can carry several snapshots (one per flag set), and a source
+/// may sit in a subdirectory that holds its own `pycc.toml`.
+fn assert_check_snapshots(source: &str, expected_stem: &str, extra_args: &[&str]) {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let relative_py_path = format!("tests/diagnostics/{source}.py");
+    for (json, extension) in [(false, "txt"), (true, "json")] {
+        let expected_path = repo_root
+            .join("tests/diagnostics")
+            .join(format!("{expected_stem}.expected.{extension}"));
+        let expected = std::fs::read_to_string(&expected_path)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", expected_path.display()))
+            .replace("\r\n", "\n");
+        let mut command = Command::new(pycc_bin());
+        command
+            .args(["check", &relative_py_path])
+            .args(extra_args)
+            .current_dir(repo_root);
+        if json {
+            command.args(["--error-format", "json"]);
+        }
+        let output = command.output().unwrap();
+        let actual = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            actual, expected,
+            "{extension} output for {source} {extra_args:?} did not match {expected_stem}"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{source} {extra_args:?} should be a compile error"
+        );
+    }
+}
+
 #[test]
 fn c0001_unsupported_valid_python() {
     assert_diagnostic_matches_fixture("c0001_unsupported_valid_python");
@@ -963,16 +1000,23 @@ fn t0021_relative_import_outside_package() {
 fn no_diagnostic_fixture_renders_an_ast_debug_dump() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/diagnostics");
     let mut scanned = 0;
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|ext| ext == "txt") {
-            let text = std::fs::read_to_string(&path).unwrap();
-            assert!(
-                !text.contains("NodeIndex("),
-                "{} renders an AST node's Debug form",
-                path.display()
-            );
-            scanned += 1;
+    // #1224: fixtures that need their own `pycc.toml` live in a
+    // subdirectory, so the scan recurses.
+    let mut pending = vec![dir.clone()];
+    while let Some(current) = pending.pop() {
+        for entry in std::fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "txt") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    !text.contains("NodeIndex("),
+                    "{} renders an AST node's Debug form",
+                    path.display()
+                );
+                scanned += 1;
+            }
         }
     }
     assert!(
@@ -1410,4 +1454,58 @@ fn c0001_aug_assign_slice() {
 #[test]
 fn c0001_aug_assign_computed_index() {
     assert_diagnostic_matches_fixture("c0001_aug_assign_computed_index");
+}
+
+// #1224 (D-128): `I0402`, the interop policy's rejection of a CPython-backed
+// import. The same source is rejected by `--pure` and by `--interop-policy
+// deny`; the message differs only in the policy's source.
+#[test]
+fn i0402_pure_rejects_foreign_import() {
+    assert_check_snapshots(
+        "i0402_pure_rejects_foreign_import",
+        "i0402_pure_rejects_foreign_import",
+        &["--pure"],
+    );
+}
+
+#[test]
+fn i0402_deny_rejects_foreign_import() {
+    assert_check_snapshots(
+        "i0402_deny_rejects_foreign_import",
+        "i0402_deny_rejects_foreign_import",
+        &["--interop-policy", "deny"],
+    );
+}
+
+/// `--interop-policy allowlist` with no manifest has an empty allow set.
+#[test]
+fn i0402_allowlist_without_roots() {
+    assert_check_snapshots(
+        "i0402_allowlist_without_roots",
+        "i0402_allowlist_without_roots",
+        &["--interop-policy", "allowlist"],
+    );
+}
+
+/// `interop_allowlist/pycc.toml` configures `allowlist` with `allow =
+/// ["json"]`, so `import pprint` is rejected and the message names the
+/// manifest. The subdirectory keeps the manifest away from every other
+/// fixture in `tests/diagnostics/`.
+#[test]
+fn i0402_allowlist_unlisted_root() {
+    assert_check_snapshots(
+        "interop_allowlist/i0402_allowlist_unlisted_root",
+        "interop_allowlist/i0402_allowlist_unlisted_root",
+        &[],
+    );
+}
+
+/// An explicit CLI policy wins over the configured one (D-128 rule 2).
+#[test]
+fn i0402_cli_deny_overrides_manifest_allowlist() {
+    assert_check_snapshots(
+        "interop_allowlist/i0402_allowlist_unlisted_root",
+        "interop_allowlist/i0402_cli_deny_overrides_manifest_allowlist",
+        &["--interop-policy", "deny"],
+    );
 }

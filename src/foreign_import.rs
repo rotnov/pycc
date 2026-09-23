@@ -13,12 +13,17 @@
 //! here with `I0403` rather than compiled into a call that could only fail
 //! at run time.
 //!
+//! The interop policy (D-128, #1224) is evaluated first, per import: an
+//! import the effective policy rejects is `I0402` on every host and
+//! `--target`, and `I0403` applies only to a root the policy admits.
+//!
 //! This is the reason `crates/pycc_codegen/src/foreign_import.rs` may
 //! silently ignore a `MirItem::ForeignImport` under `!options.ext` instead
 //! of asserting: an embedded build compiles with `options.ext` set, and this
 //! gate has refused every other program that could reach it.
 
 use crate::embed::stdlib_roots::{is_embeddable_stdlib_root, is_excluded_stdlib_root};
+use crate::interop_policy::{self, EffectivePolicy};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, ImportBinding};
 
@@ -122,7 +127,9 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
 /// Classifies a program for a build without `--ext`: `Ok(NeedsInterpreter(
 /// false))` when it has no foreign import (a plain native executable),
 /// `Ok(NeedsInterpreter(true))` when every foreign import is embeddable,
-/// and otherwise one `I0403` per non-embeddable import, in source order.
+/// and otherwise one gap per refused import, in source order: `I0402` when
+/// `policy` rejects it (#1224), else `I0403` when it cannot be embedded. An
+/// import is classified once, so it is never reported under both codes.
 ///
 /// Shaped like `src/ext_build.rs`'s `collect_exports`: a driver-side
 /// refusal against typed HIR that returns every gap at once rather than
@@ -145,6 +152,7 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
 pub(crate) fn classify_for_native_build(
     hir: &HirModule,
     host: EmbedHost,
+    policy: &EffectivePolicy,
 ) -> Result<NeedsInterpreter, Vec<(usize, Diagnostic)>> {
     let mut any_foreign = false;
     let gaps: Vec<(usize, Diagnostic)> = hir
@@ -156,6 +164,9 @@ pub(crate) fn classify_for_native_build(
                 module_path, span, ..
             } => {
                 any_foreign = true;
+                if let Some(rejected) = interop_policy::rejection(policy, module_path, *span) {
+                    return Some((position, rejected));
+                }
                 refusal_reason(module_path, host).map(|reason| {
                     (
                         position,
@@ -222,6 +233,8 @@ mod tests {
         }
     }
 
+    const AUTO: EffectivePolicy = EffectivePolicy::Auto;
+
     const ALL_HOSTS: [EmbedHost; 3] = [
         EmbedHost::Available,
         EmbedHost::CrossTarget,
@@ -246,12 +259,12 @@ mod tests {
     fn a_program_without_a_foreign_import_needs_no_interpreter_on_any_host() {
         for host in ALL_HOSTS {
             assert_eq!(
-                classify_for_native_build(&hir(vec![project()]), host),
+                classify_for_native_build(&hir(vec![project()]), host, &AUTO),
                 Ok(NeedsInterpreter(false)),
                 "{host:?}"
             );
             assert_eq!(
-                classify_for_native_build(&hir(Vec::new()), host),
+                classify_for_native_build(&hir(Vec::new()), host, &AUTO),
                 Ok(NeedsInterpreter(false)),
                 "{host:?}"
             );
@@ -262,13 +275,13 @@ mod tests {
     fn a_standard_library_program_embeds_on_an_available_host() {
         let program = hir(vec![foreign("json"), project(), foreign("gc")]);
         assert_eq!(
-            classify_for_native_build(&program, EmbedHost::Available),
+            classify_for_native_build(&program, EmbedHost::Available, &AUTO),
             Ok(NeedsInterpreter(true))
         );
     }
 
     fn messages(host: EmbedHost, imports: Vec<ImportBinding>) -> Vec<(usize, String)> {
-        classify_for_native_build(&hir(imports), host)
+        classify_for_native_build(&hir(imports), host, &AUTO)
             .expect_err("refused")
             .into_iter()
             .map(|(position, gap)| {
@@ -326,7 +339,11 @@ mod tests {
     #[test]
     fn a_dotted_path_is_admitted_by_its_root() {
         assert_eq!(
-            classify_for_native_build(&hir(vec![foreign("xml.etree")]), EmbedHost::Available),
+            classify_for_native_build(
+                &hir(vec![foreign("xml.etree")]),
+                EmbedHost::Available,
+                &AUTO
+            ),
             Ok(NeedsInterpreter(true))
         );
         assert_eq!(
@@ -351,5 +368,42 @@ mod tests {
             assert!(message.contains("requires `pycc build --ext`"), "{message}");
             assert!(message.contains(detail), "{message}");
         }
+    }
+
+    /// #1224: the policy is evaluated first and per import. A rejected root
+    /// is `I0402` on every host -- never `I0403`, even where the host alone
+    /// would refuse it -- and an admitted root still meets the embedding
+    /// gate, so one program can carry one of each.
+    #[test]
+    fn a_policy_rejection_wins_over_the_embedding_refusal_per_import() {
+        use crate::interop_policy::PolicySource;
+        let policy = EffectivePolicy::Allowlist {
+            allow: vec!["json".to_string(), "numpy".to_string()],
+            source: PolicySource::CliFlag,
+        };
+        let classified = classify_for_native_build(
+            &hir(vec![foreign("pprint"), foreign("numpy"), foreign("json")]),
+            EmbedHost::Available,
+            &policy,
+        )
+        .expect_err("refused");
+        let codes: Vec<(usize, &str)> = classified
+            .iter()
+            .map(|(position, gap)| (*position, gap.code))
+            .collect();
+        assert_eq!(codes, vec![(0, "I0402"), (1, "I0403")]);
+        for host in ALL_HOSTS {
+            let deny = EffectivePolicy::Deny {
+                source: PolicySource::Pure,
+            };
+            let gaps = classify_for_native_build(&hir(vec![foreign("json")]), host, &deny)
+                .expect_err("refused");
+            assert_eq!(gaps.len(), 1);
+            assert_eq!(gaps[0].1.code, "I0402", "{host:?}");
+        }
+        assert_eq!(
+            classify_for_native_build(&hir(vec![foreign("json")]), EmbedHost::Available, &policy),
+            Ok(NeedsInterpreter(true))
+        );
     }
 }

@@ -706,6 +706,7 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         entry_dir: PathBuf::new(),
         entry_display_dir: PathBuf::new(),
         root: None,
+        manifest: None,
         entry_module_name: None,
     };
     let request = ProjectImportRequest {

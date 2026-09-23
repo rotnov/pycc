@@ -58,7 +58,8 @@ CPython-backed and keeps values typed at the generated boundary according to
 [RUNTIME.md](./RUNTIME.md). In embedded mode it also bundles their pinned
 runtime/package closure (D-128): runtime inclusion is automatic under the
 default `auto` policy but never invisible in build metadata or `pycc.lock`,
-while `allowlist` and `deny`/`--pure` provide stricter deployment policies.
+while `allowlist` and `deny`/`--pure` provide stricter deployment policies
+(implemented by #1224; a rejected root is `I0402`).
 The planned hosted `ext` mode is the exception to that bundling and to those
 policies (D-244).
 
