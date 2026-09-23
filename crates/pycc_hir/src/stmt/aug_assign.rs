@@ -124,24 +124,19 @@ mod tests {
         desugar_aug_assign(&aug(source)).expect_err(source)
     }
 
-    /// Every operator without a `BinOpKind` is refused in Python spelling,
-    /// spanned on the whole statement.
+    /// The one operator without a `BinOpKind` (`@`, since #1210 mapped the
+    /// bitwise and shift operators) is refused in Python spelling, spanned on
+    /// the whole statement.
     #[test]
     fn an_operator_with_no_binary_kind_is_refused_in_python_spelling() {
-        for op in ["<<", ">>", "&", "|", "^", "@"] {
-            let source = format!("x {op}= y");
-            let diagnostic = refusal(&source);
-            assert_eq!(diagnostic.code, "C0001");
-            assert_eq!(
-                diagnostic.message,
-                format!("augmented assignment operator `{op}=` is not supported yet")
-            );
-            assert_eq!(
-                diagnostic.span,
-                Some(Span::new(0, source.len() as u32)),
-                "{source}"
-            );
-        }
+        let source = "x @= y";
+        let diagnostic = refusal(source);
+        assert_eq!(diagnostic.code, "C0001");
+        assert_eq!(
+            diagnostic.message,
+            "augmented assignment operator `@=` is not supported yet"
+        );
+        assert_eq!(diagnostic.span, Some(Span::new(0, source.len() as u32)));
     }
 
     #[test]
@@ -219,6 +214,11 @@ mod tests {
             ("v[0] //= 3", Operator::FloorDiv),
             ("v[-1] %= 3", Operator::Mod),
             ("t **= 2", Operator::Pow),
+            ("x <<= 1", Operator::LShift),
+            ("self.n >>= k", Operator::RShift),
+            ("d[k] &= 3", Operator::BitAnd),
+            ("x |= y", Operator::BitOr),
+            ("v[0] ^= 1", Operator::BitXor),
         ] {
             let node = aug(source);
             let desugared = desugar_aug_assign(&node).expect(source);

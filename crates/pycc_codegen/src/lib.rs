@@ -18,6 +18,8 @@ use exception::{
     expression_can_set_exception, guard_statement_effects,
 };
 mod bigint_rc;
+/// `<< >> & | ^` operand encoding and the `bool`-result arm (#1210).
+mod binop;
 mod call_result;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, pop_pending_int_release,
@@ -2487,8 +2489,10 @@ fn emit_expr_unchecked<'ctx>(
                     // "internal error" -- see this task's own
                     // `adding_a_bool_left_operand_to_an_int_promotes_
                     // bool_to_int` test).
-                    let l = to_numeric_encoded_int(context, builder, l);
-                    let r = to_numeric_encoded_int(context, builder, r);
+                    // `&`, `|` and `^` keep D-141's bool markers instead
+                    // (#1210), which `binop::encode_int_operand` decides.
+                    let l = binop::encode_int_operand(context, builder, *op, l);
+                    let r = binop::encode_int_operand(context, builder, *op, r);
                     let rt_fn = match op {
                         pycc_mir::BinOpKind::Add => rt.int_add,
                         pycc_mir::BinOpKind::Sub => rt.int_sub,
@@ -2496,6 +2500,11 @@ fn emit_expr_unchecked<'ctx>(
                         pycc_mir::BinOpKind::FloorDiv => rt.int_floordiv,
                         pycc_mir::BinOpKind::Mod => rt.int_floormod,
                         pycc_mir::BinOpKind::Pow => rt.int_pow,
+                        pycc_mir::BinOpKind::LShift => rt.int_lshift,
+                        pycc_mir::BinOpKind::RShift => rt.int_rshift,
+                        pycc_mir::BinOpKind::BitAnd => rt.int_and,
+                        pycc_mir::BinOpKind::BitOr => rt.int_or,
+                        pycc_mir::BinOpKind::BitXor => rt.int_xor,
                         pycc_mir::BinOpKind::Div => unreachable!(
                             "pycc_types/pycc_mir always type true division as Ty::Float"
                         ),
@@ -2558,8 +2567,11 @@ fn emit_expr_unchecked<'ctx>(
                         pycc_mir::BinOpKind::Pow => {
                             Scalar::Float(build_float_rt_binop(builder, rt.float_pow, l, r))
                         }
+                        other => unreachable!("pycc_types rejects a float `{other:?}` (T0021)"),
                     }
                 }
+                // #1210: `&`, `|` and `^` over two `bool` operands.
+                Ty::Bool => binop::emit_bool_bitwise(builder, *op, l, r),
                 Ty::Str => {
                     // #575 (Part 2 of #123): string repetition. `pycc_types`
                     // accepts `str * int` / `int * str` (with `bool` as the

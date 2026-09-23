@@ -18,6 +18,14 @@ pub(super) struct RtFns<'ctx> {
     pub(super) int_floordiv: FunctionValue<'ctx>,
     pub(super) int_floormod: FunctionValue<'ctx>,
     pub(super) int_pow: FunctionValue<'ctx>,
+    /// #1210: `pycc_rt_int_lshift`/`_rshift`/`_and`/`_or`/`_xor`, the
+    /// encoded-word shift and bitwise operators. The shifts may raise
+    /// (D-173); `&`, `|` and `^` never do.
+    pub(super) int_lshift: FunctionValue<'ctx>,
+    pub(super) int_rshift: FunctionValue<'ctx>,
+    pub(super) int_and: FunctionValue<'ctx>,
+    pub(super) int_or: FunctionValue<'ctx>,
+    pub(super) int_xor: FunctionValue<'ctx>,
     pub(super) int_cmp: FunctionValue<'ctx>,
     pub(super) int_truthy: FunctionValue<'ctx>,
     pub(super) range_continue: FunctionValue<'ctx>,
@@ -292,6 +300,26 @@ pub(super) fn declare_rt_functions<'ctx>(
         ),
         int_pow: declare(
             "pycc_rt_int_pow",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        int_lshift: declare(
+            "pycc_rt_int_lshift",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        int_rshift: declare(
+            "pycc_rt_int_rshift",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        int_and: declare(
+            "pycc_rt_int_and",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        int_or: declare(
+            "pycc_rt_int_or",
+            i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        int_xor: declare(
+            "pycc_rt_int_xor",
             i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
         ),
         int_cmp: declare(

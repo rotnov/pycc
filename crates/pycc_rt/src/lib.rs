@@ -49,6 +49,8 @@ mod exception;
 /// D-244 rule 2's `PyObject*` boundary, runtime half (#1025/#1028).
 pub mod ext_bridge;
 mod instance;
+/// `<< >> & | ^` over encoded ints (#1210).
+mod int_bitwise;
 mod int_encoding;
 
 #[cfg(not(test))]
