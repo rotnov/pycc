@@ -554,6 +554,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // expression `int_temporary_word` passes in; it joins the combined
         // "owning" answer for the same reason.
         | MirExpr::Not(_)
+        // #1211 (Part 3 of #1018): an `int`-typed `and`/`or` result is
+        // always owned. Each value arm retains a duplicate operand inside
+        // that arm (`boolop.rs`), so the joined word is a fresh reference
+        // whichever operand was selected.
+        | MirExpr::BoolOp { .. }
         // D-244, Part 2 of #1026: `ObjAttrGet`'s own `.ty()` is always
         // `Ty::Object`, never `Ty::Int`, so like `OptionalWrap`/`Not` above
         // it can never reach this function as the `Ty::Int`-classified

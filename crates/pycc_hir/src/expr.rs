@@ -44,12 +44,13 @@ pub(crate) mod unobservable;
 pub(crate) use bin_op_kind::bin_op_kind;
 use keyword_bind::SignatureTable;
 
+use crate::boolop::{fold_bool_op, mark_truth_context};
 use crate::int_boundary::check_boundary_literal;
 use crate::{
-    BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty, UnaryOpKind,
-    context_invalid, unsupported,
+    BinOpKind, BoolOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty,
+    UnaryOpKind, context_invalid, unsupported,
 };
-use pycc_ast::{CmpOp, Expr, Int, Number, UnaryOp};
+use pycc_ast::{BoolOp, CmpOp, Expr, Int, Number, UnaryOp};
 use pycc_diag::Diagnostic;
 pub use receiver_dispatch::receiver_takes_method_path;
 use std_receiver::describe_module;
@@ -132,6 +133,23 @@ pub(crate) fn fold_int_literal_sign(
             range,
         )
     })
+}
+
+/// Lowers an expression whose value is consumed only for its truth: an
+/// `if`/`elif`/`while` test, a comprehension `if` filter, or the operand of
+/// `not` (#1211). Identical to [`lower_expr`] except that an `and`/`or` at
+/// the top, or under further `and`/`or`/`not` nodes, is marked truth-only
+/// (see [`crate::boolop`]).
+pub(crate) fn lower_condition(
+    expr: &Expr,
+    in_function: bool,
+    class_name: Option<&str>,
+    imports: &[ImportBinding],
+    signatures: &SignatureTable,
+) -> Result<HirExpr, Diagnostic> {
+    let mut lowered = lower_expr(expr, in_function, class_name, imports, signatures)?;
+    mark_truth_context(&mut lowered);
+    Ok(lowered)
 }
 
 /// Lowers one expression.
@@ -233,9 +251,13 @@ pub(crate) fn lower_expr(
             // grammar the way a source-level `-5` is, so every operand
             // (literal or not) lowers into the same `HirExpr::UnaryOp` node
             // and is typed/rewritten downstream.
+            //
+            // The operand of `not` is a truth position (#1211): lowering it
+            // through `lower_condition` marks an `and`/`or` operand
+            // truth-only, so `not (n and s)` needs no common type.
             (UnaryOp::Not, operand) => HirExpr::UnaryOp {
                 op: UnaryOpKind::Not,
-                operand: Box::new(lower_expr(
+                operand: Box::new(lower_condition(
                     operand,
                     in_function,
                     class_name,
@@ -254,6 +276,31 @@ pub(crate) fn lower_expr(
                 )?),
             },
         },
+        // #1211 (Part 3 of #1018): `and`/`or`, right-folded by
+        // `crate::boolop::fold_bool_op`. A walrus is admitted only in the
+        // first operand, which always executes: every binding walker
+        // (`pycc_types`' and `pycc_mir`'s `collect_named_expr_bindings`,
+        // `pre_bind_named_expr_targets`) binds unconditionally on the premise
+        // that the enclosing test runs, and a later operand may be
+        // short-circuited away.
+        Expr::BoolOp(bool_op) => {
+            let op = match bool_op.op {
+                BoolOp::And => BoolOpKind::And,
+                BoolOp::Or => BoolOpKind::Or,
+            };
+            let mut operands = Vec::with_capacity(bool_op.values.len());
+            for (index, value) in bool_op.values.iter().enumerate() {
+                let lowered = lower_expr(value, in_function, class_name, imports, signatures)?;
+                if index > 0 && contains_named_expr(&lowered) {
+                    return Err(unsupported(
+                        "a walrus assignment (`:=`) in a short-circuited `and`/`or` operand is not supported",
+                        pycc_ast::expr_range(value),
+                    ));
+                }
+                operands.push(lowered);
+            }
+            fold_bool_op(op, operands)
+        }
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::List(list) => HirExpr::ListLiteral(
             list.elts
@@ -945,6 +992,19 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             op,
             operand: Box::new(recurse(*operand)),
         },
+        // `truth_only` is carried through: a renamed comprehension filter
+        // stays a truth position.
+        HirExpr::BoolOp {
+            op,
+            left,
+            right,
+            truth_only,
+        } => HirExpr::BoolOp {
+            op,
+            left: Box::new(recurse(*left)),
+            right: Box::new(recurse(*right)),
+            truth_only,
+        },
         HirExpr::BinOp { op, left, right } => HirExpr::BinOp {
             op,
             left: Box::new(recurse(*left)),
@@ -1082,7 +1142,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         | HirExpr::Name(_)
         | HirExpr::Super => false,
         HirExpr::Call { args, .. } => args.iter().any(contains_named_expr),
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             contains_named_expr(left) || contains_named_expr(right)
         }
         HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
@@ -1321,7 +1383,9 @@ pub(crate) fn lower_comprehension_header(
         // implement -- hardcoding `true` here preserves today's exact
         // `C0001`-in-both-scopes behavior byte-for-byte instead of emitting
         // the wrong classification.
-        [single] => Some(lower_expr(single, true, class_name, imports, signatures)?),
+        [single] => Some(lower_condition(
+            single, true, class_name, imports, signatures,
+        )?),
         _ => {
             return Err(unsupported(
                 "a comprehension with more than one `if` filter is not supported yet",

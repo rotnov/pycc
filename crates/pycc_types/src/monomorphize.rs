@@ -661,7 +661,9 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             let _ = rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen);
             infer_expr_in(env, local_names, expr)
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             for sub in [left.as_mut(), right.as_mut()] {
                 rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
             }
@@ -1253,7 +1255,9 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         HirExpr::UnaryOp { operand, .. } => {
             collect_generic_class_instantiations_from_expr(operand, out);
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             collect_generic_class_instantiations_from_expr(left, out);
             collect_generic_class_instantiations_from_expr(right, out);
         }
@@ -2728,7 +2732,10 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
-        HirExpr::BinOp { left, right, .. } => {
+        // #1211: `BoolOp` shares `BinOp`'s arm. Without it the `_ => {}`
+        // catch-all below would skip a protocol-typed call inside `and`/`or`
+        // and leave it unspecialized.
+        HirExpr::BinOp { left, right, .. } | HirExpr::BoolOp { left, right, .. } => {
             rewrite_protocol_calls_in_expr(
                 left,
                 protocol_funcs,

@@ -21,6 +21,7 @@ use crate::binop::numeric_result_type;
 // generic-monomorphization-arms, import-alias, `__init__`-rank,
 // `Optional[T]`-narrowing, pattern-matching, protocol-argument,
 // `typing.TYPE_CHECKING`-marker and `typing.cast` clusters.
+mod boolop;
 mod buffer_producer;
 mod constraints;
 mod empty_container_registry;
