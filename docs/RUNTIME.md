@@ -1,11 +1,13 @@
 # pycc Runtime Specification
 
-`pycc_rt` — the static library linked into every binary. The current runtime
-and every future `deny`/`--pure` artifact are pure Rust with no libpython and
+`pycc_rt` — the static library linked into every binary. The native runtime,
+and so every `deny`/`--pure` artifact, is pure Rust with no libpython and
 no platform-visible behavior differences (cross-platform is a hard
-requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
-conditional companion runtime bundled only when a source import resolves to a
-CPython-backed dependency under the selected interop policy (D-128). The
+requirement — see ARCHITECTURE.md). v0.7 CPython interop is a conditional
+companion runtime bundled only when a source import resolves to a
+CPython-backed dependency that the effective interop policy admits (D-128,
+#1224); today that bundle is D-248's embedded executable for
+standard-library roots. The
 no-libpython guarantee is a property of the `native` executable mode; the
 hosted `ext` mode (a CPython extension module loaded by an external
 interpreter, `pycc build --ext`) explicitly resolves its CPython symbols from
@@ -1140,7 +1142,9 @@ Supporting either order is later work under #1026.
 **Native and embedded mode.** A plain `pycc build` of a program whose foreign
 imports are all standard-library roots produces an embedded executable (see
 "Embedded executables" below), which compiles the module exactly as `--ext`
-does. Any other foreign import leaves a plain build with no interpreter to
+does. The effective interop policy is decided first, per import: a root it
+rejects is `I0402` on every host (see "Interop policy" below). Any other
+foreign import leaves a plain build with no interpreter to
 import into, so the driver refuses the program with `I0403` before codegen —
 one diagnostic per such import, each at its own `import` statement in the file
 that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
@@ -1202,13 +1206,21 @@ installed Python or ambient `site-packages`. The exact resolver, `pycc.lock`
 schema, and bundle layout must be specified during v0.7 planning before implementation;
 the embedded interpreter must never search an unpinned ambient environment.
 
-The build policy controls whether that automatic bridge is permitted:
+#### Interop policy
 
-| Policy | Planned behavior |
+The build policy controls whether that automatic bridge is permitted. The
+policy itself is implemented (#1224): `--interop-policy`, `--pure` and the
+`[interop]` table select it, `check`, `build` and `run` enforce it, and a
+rejected root is `I0402`. `docs/CLI_SPEC.md`'s `pycc.toml` section owns the
+resolution and validation rules. What an admitted root then builds is
+D-248's embedding: standard-library roots only, until the lock and closure
+(#1225).
+
+| Policy | Behavior |
 |---|---|
-| `auto` | Default. Permit every CPython-backed import root present in the source and bundle its pinned dependency closure. |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`; their submodules and pinned transitive closure are covered by the root. Reject another direct root with `I0402`. |
-| `deny` | Reject every CPython-backed import. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
+| `auto` | Default. Permit every CPython-backed import root present in the source. Bundling its pinned dependency closure is #1225; today only standard-library roots embed. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. Covering an allowed root's submodules and pinned transitive closure is #1225 (a dotted CPython-backed import is `C0001` today). |
+| `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask
   for a redundant per-package permission.

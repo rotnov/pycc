@@ -24,3 +24,4 @@ status: accepted
   - **NEG-001:** an embedded artifact is roughly 26-32 MB and `pycc run` copies the standard library on every run; pruning or zipping is a later optimization.
   - **NEG-002:** Linux relocatability is not checked; an interpreter whose `lib-dynload` links a non-system library builds a Linux artifact that works only where that library exists, until #1225.
   - **NEG-003:** the embedded mode inherits exactly #1026's foreign-object surface (module-body only, scalar arguments, `print(str(o))` but not `print(o)`); Part 1 widens none of it.
+- Amendment (2026-09-23): under #1224, rule 1's `I0403` applies only to a foreign root the effective interop policy (D-128) admits; a root the policy rejects is `I0402` instead, on every host and under `--target`, because the policy is decided per import before any embedding reason.
