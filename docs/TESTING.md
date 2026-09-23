@@ -743,7 +743,7 @@ rule 6); only numbers are published.
 ### Status: the replacement workload is selected and the criterion is recorded as not met
 
 This subsection was titled "the protocol has no admissible subject" until
-2026-09-23; D-244's 2026-09-17 amendment cites it by that title.
+2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
 
 **Current state (2026-09-23).** The replacement-workload selection that
 [#1207](https://github.com/rotnov/pycc/issues/1207) pre-registered under
@@ -769,8 +769,8 @@ instruments are committed as they ran under `scripts/workload_selection/`,
 whose README lists the two harness deviations the result comment discloses.
 
 The selection made one correction that applies to this protocol's own text.
-The **Versions** bullet, and `scripts/bench_hosted_ext.py`, read
-`sysconfig.get_config_var('CONFIGURE_ARGS')`. No CPython build defines that
+The **Versions** bullet, `scripts/bench_hosted_ext.py` and #1207's section 5
+all read `sysconfig.get_config_var('CONFIGURE_ARGS')`. No CPython build defines that
 variable: it is `None` on 3.14.6, 3.13.9, 3.9.6 and 3.14.7, so the runner as
 written refuses every interpreter. The variable CPython defines is
 `CONFIG_ARGS`. The selection checked that variable instead, and the uv 3.14.7
