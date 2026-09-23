@@ -287,8 +287,12 @@ fn lower_comprehension_iter(
 /// the caller is building.
 ///
 /// `iter` (the resolved `CompIter` returned above) is deliberately **never**
-/// passed through `rename_name_in_expr` -- neither here nor by any caller --
-/// unlike `cond`/`elt`/`key`/`value`, which all are. This is not an
+/// renamed to this comprehension's *own* synthesized variable -- neither here
+/// nor by `lower_list_comp`/`lower_set_comp`/`lower_dict_comp` -- unlike
+/// `cond`/`elt`/`key`/`value`, which all are. (A comprehension nested in an
+/// *enclosing* comprehension's `cond`/`elt` does get its `iter` renamed to the
+/// enclosing variable, by `rename_in_comprehension`; that is a different
+/// rename.) This is not an
 /// oversight: it matches real CPython scoping. A comprehension's outermost
 /// iterable expression evaluates in the *enclosing* scope, before the
 /// comprehension's own scope exists at all -- `[i for i in range(i)]`'s

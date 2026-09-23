@@ -74,14 +74,17 @@ fn a_zero_range_step_in_a_comprehension_argument_exits_with_value_error() {
     );
 }
 
-/// A raising element stops the loop and the program at that element.
+/// A raising element stops the loop at that element: the element raises on
+/// the second of three iterations, and the third element's side effect never
+/// runs.
 #[test]
 fn a_raising_element_in_a_comprehension_argument_exits_with_zero_division_error() {
     let run = build_and_run(
         "e2e_1254_elt_raises",
-        "print(\"before\")\nprint(len([1 // (x - 2) for x in range(3)]))\nprint(\"after\")\n",
+        "def f(x: int) -> int:\n    print(x)\n    return 1 // (x - 1)\n\n\
+         print(\"before\")\nprint(len([f(x) for x in range(3)]))\nprint(\"after\")\n",
     );
-    assert_uncaught(&run, "before\n", "ZeroDivisionError");
+    assert_uncaught(&run, "before\n0\n1\n", "ZeroDivisionError");
 }
 
 /// The same comprehension, run many times from one call and from many

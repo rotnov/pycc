@@ -3126,7 +3126,7 @@ fn lowers_a_set_comprehension_with_an_if_filter() {
     // `SetCompAssign`'s own `cond` field needs a dedicated if-filter
     // test distinct from the plain set-comprehension test above: the
     // `cond.map(|c| rename_name_in_expr(...))` closure inside
-    // `lower_set_comp_assign` is only reached when `cond.is_some()`.
+    // `lower_set_comp` is only reached when `cond.is_some()`.
     let module = pycc_parser_test_helper::parse("y = {i for i in range(5) if i}\n");
     let hir = lower_checked(&module).unwrap();
     assert_eq!(
@@ -3148,7 +3148,7 @@ fn lowers_a_set_comprehension_with_an_if_filter() {
 #[test]
 fn lowers_a_dict_comprehension_with_an_if_filter() {
     // Same reasoning as `lowers_a_set_comprehension_with_an_if_filter`
-    // above, for `lower_dict_comp_assign`'s own `cond.map(...)` closure.
+    // above, for `lower_dict_comp`'s own `cond.map(...)` closure.
     let module = pycc_parser_test_helper::parse("y = {i: i for i in range(5) if i}\n");
     let hir = lower_checked(&module).unwrap();
     assert_eq!(
@@ -3324,17 +3324,17 @@ fn a_comprehension_range_call_with_keyword_arguments_is_unsupported() {
 // The eight tests below each exercise one `?`-propagation region on its
 // own `?` operator's specific call site (mirroring this file's existing
 // "the five tests below exercise each new arm's own `?`-propagation
-// path specifically" precedent above): `lower_set_comp_assign` and
-// `lower_dict_comp_assign` are structurally near-identical to
-// `lower_list_comp_assign`, but each function's own `?` is a distinct
+// path specifically" precedent above): `lower_set_comp` and
+// `lower_dict_comp` are structurally near-identical to
+// `lower_list_comp`, but each function's own `?` is a distinct
 // coverage region, so an error test against one function's call site
 // does not also cover its sibling's.
 
 #[test]
 fn a_set_comprehension_with_an_unsupported_header_propagates_the_header_error() {
     // Exercises both `Stmt::Assign`'s own `Expr::SetComp(comp) =>
-    // lower_set_comp_assign(...)?` call site and
-    // `lower_set_comp_assign`'s own internal
+    // lower_set_comp(...)?` call site and
+    // `lower_set_comp`'s own internal
     // `lower_comprehension_header(&comp.generators)?` call site in one
     // test, since the header error propagates through both in the same
     // nested call.
@@ -3414,7 +3414,7 @@ fn dict_comp_key_unpacking_parses_successfully_and_is_rejected_at_lowering() {
     // `ruff_python_parser`: it parses this successfully as
     // `ExprDictComp { key: None, value: Name("x"), .. }`, silently
     // dropping the `**` rather than erroring -- so `pycc_parser::parse`
-    // itself succeeds here, and `lower_dict_comp_assign` is the one
+    // itself succeeds here, and `lower_dict_comp` is the one
     // that must reject it, with an ordinary `C0001` capability
     // diagnostic instead of a panic.
     assert!(pycc_parser::parse("y = {**x for k in z}\n").is_ok());

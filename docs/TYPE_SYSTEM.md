@@ -1009,9 +1009,10 @@ its container type is inferred.
 - a walrus (`:=`) anywhere inside a comprehension, in either form: "a walrus
   assignment (`:=`) inside a comprehension is not supported yet", spanning the
   comprehension;
-- more than one `for` clause, more than one `if` filter, a target that is not
-  a bare name, and `async` comprehensions. Parts 2 and 3 of #1214 own these
-  limits and the iterable limit above.
+- more than one `for` clause (tracked by #1257), more than one `if` filter
+  (Part 3 of #1214, #1256), a target that is not a bare name, and `async`
+  comprehensions (neither of the last two is tracked yet). Part 2 of #1214
+  (#1255) owns the iterable limit above.
 
 **Across modules.** A synthesized name is not a definition, so it never
 collides in the link step ([#1237](https://github.com/rotnov/pycc/issues/1237)).

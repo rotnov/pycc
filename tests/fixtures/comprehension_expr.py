@@ -108,6 +108,14 @@ while len([y for y in range(n)]) < 3:
     n = n + 1
 print(n)
 
+# An `if` test.
+if len([y for y in range(n) if y > 0]) == 2:
+    print("if-test taken")
+if len({y for y in range(n) if y > 5}):
+    print("not printed")
+else:
+    print("if-test else")
+
 # Short-circuited operands: the comprehension on the right runs only when
 # the left operand does not decide the result.
 print(n > 5 and len([trace("ran", w) for w in range(2)]) > 0)
