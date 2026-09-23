@@ -395,8 +395,7 @@ fn the_probe_runs_the_interpreter_in_isolated_mode() {
 fn a_shadow_sysconfig_in_the_build_directory_never_runs_during_the_probe() {
     // A project directory that plants `sysconfig.py` must not get it
     // executed by `pycc build` run from inside it.
-    let dir = std::env::temp_dir().join(format!("probe-shadow-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the build directory");
+    let dir = pycc_scratch::ScratchDir::new("probe_shadow").expect("create the build directory");
     std::fs::write(
         dir.join("sysconfig.py"),
         "open(__file__ + '.ran', 'w').close()\n",
@@ -404,13 +403,12 @@ fn a_shadow_sysconfig_in_the_build_directory_never_runs_during_the_probe() {
     .expect("write the shadow module");
     let python = std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into());
     let output = probe_command(&python, "import sysconfig; print(sysconfig.__file__)")
-        .current_dir(&dir)
+        .current_dir(&*dir)
         .output()
         .expect("run the host interpreter");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let ran = dir.join("sysconfig.py.ran").exists();
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(output.status.success(), "{output:?}");
     assert!(!ran, "the planted sysconfig.py executed");
-    assert!(!stdout.contains("probe-shadow-"), "{stdout}");
+    assert!(!stdout.contains("probe_shadow"), "{stdout}");
 }
