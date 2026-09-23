@@ -767,6 +767,22 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        // Issue #1188: rewrite inside the wrapped method call exactly as the
+        // `MethodCall` arm does, but infer the *whole* node, so the result
+        // follows the receiver's reading -- inferring `call` alone would
+        // report a method error on a list receiver.
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            let (base, args) = call
+                .method_call_parts_mut()
+                .expect("a receiver-dispatched call always wraps a MethodCall");
+            if !is_class_name_base(env, local_names, base) {
+                rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            }
+            for arg in args.iter_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         // PEP 695 (#387): `C[type_arg](args)` — the monomorphized class
         // methods were pre-registered in `env` by `monomorphize`'s own
         // pre-scan (see `instantiate_generic_class_methods`), so this arm
@@ -1289,6 +1305,9 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
+        }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            collect_generic_class_instantiations_from_expr(call, out);
         }
         // PEP 572 (#774): `target := value` — recurse into `value` only,
         // mirroring `AttrGet`'s own single-sub-expression shape just above.
@@ -2755,6 +2774,23 @@ fn rewrite_protocol_calls_in_expr(
                     specializations,
                     seen,
                 );
+            }
+        }
+        // Issue #1188: rewrite inside the wrapped method call. A
+        // specialization replaces `call` with a plain `Call`, and that only
+        // happens for an `Instance` receiver -- the method reading -- so the
+        // specialized call then stands for the whole node.
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            rewrite_protocol_calls_in_expr(
+                call,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            if !matches!(call.as_ref(), HirExpr::MethodCall { .. }) {
+                *expr = (**call).clone();
             }
         }
         // PEP 572 (#774), deep-review follow-up: unlike its exhaustive

@@ -44,6 +44,7 @@ use crate::{
 };
 use pycc_ast::{Expr, ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
+use std::collections::BTreeSet;
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
 /// version. Syntactically valid Python outside that subset returns `C0001`
@@ -134,6 +135,12 @@ pub struct LoweredModule {
     /// records neither import bindings nor anything nested inside a top-level
     /// compound statement, and so answered "no" for both.
     pub mentions_dunder_name: bool,
+    /// Issue #1188: which of `append`, `pop`, `get` and `add` a class
+    /// reachable from this module defines as a method -- its own top-level
+    /// classes plus everything its dependencies reach. The driver hands it to
+    /// every module that imports this one, so the set follows the import
+    /// closure rather than the set of modules loaded so far.
+    pub container_method_names: BTreeSet<&'static str>,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -211,6 +218,10 @@ pub fn lower_module(
         definition_spans: Vec::new(),
         signatures: SignatureTable::collect(&module.body),
     };
+    state
+        .signatures
+        .inherit_container_method_names(resolved.container_method_names().iter().copied());
+    let container_method_names = state.signatures.container_method_names().clone();
     // Part 1 of #541 (extending D-173): give the builtin exception
     // hierarchy a real presence in the class table, seeded *before* any
     // user statement is lowered so a user class can inherit from one
@@ -426,6 +437,7 @@ pub fn lower_module(
         shadowed_builtin_exception_name,
         mentions_dunder_name,
         definition_spans,
+        container_method_names,
     })
 }
 

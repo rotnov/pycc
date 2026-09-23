@@ -16,6 +16,8 @@ use pycc_hir::{
 };
 use std::collections::HashMap;
 
+mod receiver_dispatch;
+
 pub(super) fn lower_expr(
     expr: &HirExpr,
     scopes: &[HashMap<String, Ty>],
@@ -964,6 +966,18 @@ pub(super) fn lower_expr(
         // base class is found when called on a derived class instance. A
         // subclass method shadows a base class method of the same name (the
         // subclass appears first in the MRO).
+        // Issue #1188: one of the four container method names in a module
+        // that can see a user class defining it; lowered under the reading
+        // `pycc_types` chose.
+        HirExpr::ReceiverDispatchedCall { call, container } => {
+            receiver_dispatch::lower_receiver_dispatched_call(
+                call,
+                container,
+                scopes,
+                classes,
+                current_class,
+            )
+        }
         HirExpr::MethodCall { base, method, args } => {
             // #433: `super().method(args)` — resolve the method starting
             // from the next class in the current class's MRO, using `self`
@@ -1046,8 +1060,7 @@ pub(super) fn lower_expr(
             // spelling of it, the same one the class-attribute fold and the
             // enum-member interception already use.
             if let HirExpr::Name(class_name) = base.as_ref()
-                && !scopes.iter().any(|scope| scope.contains_key(class_name))
-                && classes.contains_key(class_name.as_str())
+                && receiver_dispatch::is_unshadowed_class_name(class_name, scopes, classes)
             {
                 let class_def = &classes[class_name.as_str()];
                 let static_mangled = class_def.mro.iter().find_map(|mro_class| {
@@ -1383,6 +1396,9 @@ pub(super) fn pre_bind_named_expr_targets(
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
             }
+        }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            pre_bind_named_expr_targets(call, scopes, classes, current_class)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {

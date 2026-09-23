@@ -1738,6 +1738,24 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(None)
         }
+        // Issue #1188: this solver never picks a reading and never rejects.
+        // An admitted container reading is collected exactly as the
+        // container node it would have been (so a `ListPop` still yields its
+        // element type); a refused one is collected as the method call.
+        HirExpr::ReceiverDispatchedCall { call, container } => {
+            let reading = match container {
+                pycc_hir::ContainerFallback::Admitted => call.container_form(),
+                pycc_hir::ContainerFallback::Refused(_) => None,
+            };
+            collect_expr_constraints(
+                signatures,
+                parents,
+                concrete,
+                binops,
+                env,
+                reading.as_ref().unwrap_or(call),
+            )
+        }
         // PEP 695 (#387): `C[type_arg](args)` — a generic class
         // instantiation. The args are recursed into for constraint
         // collection. The expression itself produces a concrete
@@ -1922,6 +1940,9 @@ fn bind_named_expr_targets(
                 bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
             }
             Ok(())
+        }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            bind_named_expr_targets(signatures, parents, concrete, binops, env, call)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {

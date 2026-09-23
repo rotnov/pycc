@@ -8,9 +8,11 @@
 //! These run with no type information available (HIR lowering precedes
 //! `pycc_types`): they recognize the *syntactic* shape `name.method(...)`
 //! and cannot tell a real `list`/`dict`/`set` receiver from a class
-//! instance whose own method shares one of the four names -- which is why
-//! `class.rs`'s `CONTAINER_METHOD_NAMES` rejects such a method at
-//! class-definition time.
+//! instance whose own method shares one of the four names. In a module from
+//! which such a class is reachable, `receiver_dispatch` therefore keeps both
+//! readings in a `HirExpr::ReceiverDispatchedCall` and lets the receiver's
+//! static type choose (issue #1188); everywhere else these fast paths run
+//! exactly as they always have.
 
 use super::lower_expr;
 use crate::expr::keyword_bind::SignatureTable;

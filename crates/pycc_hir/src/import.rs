@@ -23,7 +23,7 @@ use crate::{
 };
 use pycc_ast::{Expr, ModModule, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// One module-level import statement that `pycc_std`'s registry does not
 /// answer, so the driver must resolve it on the filesystem before
@@ -286,9 +286,29 @@ pub enum ResolvedImport<'a> {
 pub struct ResolvedImports<'a> {
     by_span: HashMap<Span, ResolvedImport<'a>>,
     modules: HashMap<String, &'a HirModule>,
+    /// Issue #1188: the container method names (`append`, `pop`, `get`,
+    /// `add`) that a class in the module's transitive import closure defines
+    /// as a method. The driver unions its direct dependencies'
+    /// [`crate::LoweredModule::container_method_names`] in here; it is not
+    /// every loaded module, since a sibling this module never imports cannot
+    /// hand it an instance of that class.
+    container_method_names: BTreeSet<&'static str>,
 }
 
 impl<'a> ResolvedImports<'a> {
+    /// Adds container method names that one of this module's dependencies
+    /// can reach (issue #1188).
+    pub fn inherit_container_method_names(
+        &mut self,
+        names: impl IntoIterator<Item = &'static str>,
+    ) {
+        self.container_method_names.extend(names);
+    }
+
+    pub(crate) fn container_method_names(&self) -> &BTreeSet<&'static str> {
+        &self.container_method_names
+    }
+
     /// Records the answer for the request at `span`.
     pub fn insert(&mut self, span: Span, resolved: ResolvedImport<'a>) {
         self.by_span.insert(span, resolved);

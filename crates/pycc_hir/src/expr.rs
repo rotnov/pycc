@@ -36,6 +36,7 @@
 
 mod container_call;
 pub(crate) mod keyword_bind;
+pub(crate) mod receiver_dispatch;
 mod std_receiver;
 
 use keyword_bind::SignatureTable;
@@ -47,6 +48,7 @@ use crate::{
 };
 use pycc_ast::{CmpOp, Expr, Int, Number, Operator, UnaryOp};
 use pycc_diag::Diagnostic;
+pub use receiver_dispatch::receiver_takes_method_path;
 use std_receiver::describe_module;
 pub(crate) use std_receiver::std_receiver;
 
@@ -430,6 +432,19 @@ pub(crate) fn lower_expr(
                         args,
                     });
                 }
+                // Issue #1188: in a module from which a user class defining
+                // a method of this name is reachable, keep both readings and
+                // let the receiver's static type choose between them.
+                if signatures.dispatches_on_receiver(attr.attr.as_str()) {
+                    return receiver_dispatch::lower_receiver_dispatched_call(
+                        call,
+                        attr,
+                        in_function,
+                        class_name,
+                        imports,
+                        signatures,
+                    );
+                }
                 if let Some(lowered) = container_call::lower_container_method_call(
                     call,
                     attr,
@@ -505,23 +520,14 @@ pub(crate) fn lower_expr(
                 // narrow it further, so `pycc_types` is the one that
                 // rejects a method call on a non-instance-typed receiver or
                 // an unknown method name.
-                let args = call
-                    .arguments
-                    .args
-                    .iter()
-                    .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
-                    .collect::<Result<Vec<_>, _>>()?;
-                return Ok(HirExpr::MethodCall {
-                    base: Box::new(lower_expr(
-                        &attr.value,
-                        in_function,
-                        class_name,
-                        imports,
-                        signatures,
-                    )?),
-                    method: attr.attr.to_string(),
-                    args,
-                });
+                return receiver_dispatch::lower_method_call(
+                    call,
+                    attr,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                );
             }
             // PEP 695 (#387): `C[int](args)` — a generic class instantiation.
             // The call's func is a `Subscript` with a bare-name base (the
@@ -1013,6 +1019,12 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             base: Box::new(recurse(*base)),
             attr,
         },
+        // Issue #1188: only `call` holds sub-expressions; the container
+        // reading is derived from it, so renaming `call` renames both.
+        HirExpr::ReceiverDispatchedCall { call, container } => HirExpr::ReceiverDispatchedCall {
+            call: Box::new(recurse(*call)),
+            container,
+        },
         HirExpr::MethodCall { base, method, args } => HirExpr::MethodCall {
             base: Box::new(recurse(*base)),
             method,
@@ -1113,6 +1125,7 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         HirExpr::MethodCall { base, args, .. } => {
             contains_named_expr(base) || args.iter().any(contains_named_expr)
         }
+        HirExpr::ReceiverDispatchedCall { call, .. } => contains_named_expr(call),
         HirExpr::GenericClassInstantiate { args, .. } => args.iter().any(contains_named_expr),
     }
 }

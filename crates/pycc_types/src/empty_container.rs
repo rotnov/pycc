@@ -839,6 +839,24 @@ fn scan_for_producer<'a>(
     sites: &[&'a str],
 ) -> ProducerScan {
     for stmt in body {
+        // Issue #1188: an admitted container reading of a receiver-dispatched
+        // `target.append(v)` is a producer too. `target` is bound to an empty
+        // list literal, so the container reading is the only one it can take.
+        let dispatched = match stmt {
+            HirStmt::ExprStmt(HirExpr::ReceiverDispatchedCall {
+                call,
+                container: pycc_hir::ContainerFallback::Admitted,
+            }) => call.container_form(),
+            _ => None,
+        };
+        if let Some(HirExpr::ListAppend { list, value }) = &dispatched
+            && list == target
+        {
+            return match crate::infer_expr_in(env, local_names, value) {
+                Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
+                Err(_) => ProducerScan::Matched,
+            };
+        }
         match stmt {
             HirStmt::ExprStmt(HirExpr::ListAppend { list, value }) if list == target => {
                 return match crate::infer_expr_in(env, local_names, value) {

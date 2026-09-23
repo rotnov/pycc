@@ -47,7 +47,7 @@
 //! (D-222); `pycc_types`' positional-arity twin cannot, because HIR carries no
 //! spans by the time it runs.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use pycc_ast::{Expr, ExprCall, Parameters, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -88,6 +88,16 @@ struct Signature {
 #[derive(Default)]
 pub(crate) struct SignatureTable {
     by_name: HashMap<String, Signature>,
+    /// Issue #1188: which of `append`, `pop`, `get` and `add` some class
+    /// reachable from this module defines as a method -- this module's own
+    /// top-level classes, plus every class in its transitive import closure
+    /// (see `ResolvedImports::inherit_container_method_names`). A call to a
+    /// name in this set lowers to `HirExpr::ReceiverDispatchedCall`; every
+    /// other call lowers exactly as before.
+    ///
+    /// It lives here because this table is already threaded to every
+    /// expression-lowering site of the module.
+    container_method_names: BTreeSet<&'static str>,
 }
 
 impl SignatureTable {
@@ -114,7 +124,36 @@ impl SignatureTable {
                 by_name.insert(def.name.as_str().to_string(), signature);
             }
         }
-        Self { by_name }
+        Self {
+            by_name,
+            container_method_names: crate::expr::receiver_dispatch::defined_container_method_names(
+                body,
+            )
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    /// Adds the container method names that the module's dependencies can
+    /// reach (issue #1188).
+    pub(crate) fn inherit_container_method_names(
+        &mut self,
+        names: impl IntoIterator<Item = &'static str>,
+    ) {
+        self.container_method_names.extend(names);
+    }
+
+    /// Issue #1188: every container method name some class reachable from
+    /// this module defines as a method.
+    pub(crate) fn container_method_names(&self) -> &BTreeSet<&'static str> {
+        &self.container_method_names
+    }
+
+    /// Whether a call to `method` must be lowered with both readings, because
+    /// a user class reachable from this module defines a method of that name
+    /// (issue #1188).
+    pub(crate) fn dispatches_on_receiver(&self, method: &str) -> bool {
+        self.container_method_names.contains(method)
     }
 
     fn get(&self, callee: &str) -> Option<&Signature> {

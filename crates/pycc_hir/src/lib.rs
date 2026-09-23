@@ -29,6 +29,7 @@ pub use exception::{
     builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
     except_handler_binding_type_name, is_builtin_exception_class, is_flat_builtin_exception_class,
 };
+pub use expr::receiver_takes_method_path;
 pub(crate) use func::{
     annotation_to_ty, lower_arg_list, lower_function, lower_return_annotation, type_param_name,
     with_bare_container_advice,
@@ -562,6 +563,18 @@ pub enum HirExpr {
         method: String,
         args: Vec<HirExpr>,
     },
+    /// Issue #1188: `recv.<append|pop|get|add>(args)` in a module from which
+    /// a user class defining a method of that name is reachable (see
+    /// `SignatureTable`'s container-method gate). Both readings of the call
+    /// are carried because only the receiver's static type, known from
+    /// `pycc_types` on, decides between them ([`receiver_takes_method_path`]).
+    /// `call` is always a [`HirExpr::MethodCall`]; `container` records what
+    /// the container reading of the same call is. Never built in a module
+    /// whose gate is off, so every such module lowers exactly as before.
+    ReceiverDispatchedCall {
+        call: Box<HirExpr>,
+        container: ContainerFallback,
+    },
     /// `C[type_arg](args)` (PEP 695, #387): instantiation of a generic class
     /// with an explicit type argument. `class` is the generic class's name,
     /// `type_arg` is the resolved concrete type (a scalar `Ty` — int/float/
@@ -613,6 +626,19 @@ pub enum HirExpr {
         name: String,
         value: Box<HirExpr>,
     },
+}
+
+/// What the container reading of a [`HirExpr::ReceiverDispatchedCall`] is
+/// (issue #1188).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContainerFallback {
+    /// The container lowering succeeded. Its node is derived from `call` on
+    /// demand by [`HirExpr::container_form`] and never stored, so no HIR
+    /// rewriting pass can leave a stale copy behind.
+    Admitted,
+    /// The container lowering failed with exactly this diagnostic (a
+    /// non-bare-name receiver, a wrong arity, or a boundary literal).
+    Refused(Box<Diagnostic>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

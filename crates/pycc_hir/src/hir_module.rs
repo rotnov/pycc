@@ -317,6 +317,9 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(arg, killed);
             }
         }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            collect_named_expr_targets_in_expr(call, killed);
+        }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
                 collect_named_expr_targets_in_expr(arg, killed);
