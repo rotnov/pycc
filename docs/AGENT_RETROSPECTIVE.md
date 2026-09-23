@@ -33,6 +33,62 @@ never a merge gate.
 
 ---
 
+## 2026-09-23 — Keyword binding moved side-effecting argument values without an evaluation-order rule
+
+Part 1 of #884 (issue #1125) and Part 2 (#1189, PR #1196) lower a keyword
+call to one positional vector in *parameter* order, which `HirExpr::Call`
+evaluates left to right. CPython evaluates argument values in *source*
+order, so `f(b=g(2), a=g(1))` printed `1 2 3` under pycc where CPython
+prints `2 1 3`. That is silent wrong output, and it shipped to `main`. No review round
+caught it. It was found while planning #1191 (Part 4 of #884), which would
+have carried the same binder to constructor calls. Filed as #1204.
+
+Root cause: the design's invariant was that a keyword call "binds to the same
+arguments as its positional twin", and the tests compared the bound vector
+against that twin written in *parameter* order. The twin shares the
+reordering, so the comparison checked what the call computes but could not see
+the order in which its values are evaluated. Neither `keyword_bind.rs` nor
+`docs/TYPE_SYSTEM.md` stated an evaluation-order rule at all.
+
+What fixed it: the #1204 pull request binds a keyword call only when its
+values already land in parameter order or are all literals and bare names,
+and otherwise keeps the unchanged `C0001`
+(`crates/pycc_hir/src/expr/keyword_bind/eval_order.rs`; canonical statement
+in `docs/TYPE_SYSTEM.md`, "Keyword argument evaluation order").
+
+Lesson: a transformation invariant stated as "behaves like its rewritten
+twin" must also fix the twin's evaluation order to the source's, or the twin
+inherits exactly the defect the invariant was meant to exclude. When a
+rewrite moves sub-expressions, check what it *moves* as well as what it
+computes: write one test with a side-effecting value per moved position and
+compare it against CPython's output, not against another pycc rewrite.
+
+## 2026-09-23 — Planning was dispatched twice before the behavioural promise was settled
+
+`issue-to-plan` was dispatched on two semantic-extension issues before the
+invariant the plan had to preserve was written down. #1190 (Part 3 of #884,
+keyword arguments and defaults for an imported `def`) reached three
+impasses; its plan v3 is parked. #1188 (a user class defining `append`,
+`pop`, `get` or `add`) reached an impasse after four review rounds. It was
+resolved only once the renamed-twin invariant it had to preserve was fixed in
+the planning brief before re-dispatch; that plan was published and merged as
+PR #1203. In each impasse the reviewers were arguing about which behaviour
+to promise rather than about the plan. No loop can converge on that.
+
+Root cause: the planning brief named the issue and its completion criteria
+but not the governing semantic invariant. Each review round therefore
+re-derived a different invariant and found the plan inconsistent with it.
+
+What fixed it: for #1188, stating the invariant in the brief before
+re-dispatch; the loop then converged.
+
+Lesson: before dispatching `issue-to-plan` for an issue that extends
+language semantics, write the governing invariant into the planning brief
+-- the behavioural promise the change makes, including evaluation order and
+what stays rejected. Settle it through the D-127 advisor route first
+if it is not obvious. A second impasse on the same issue is the signal to
+stop re-dispatching and settle the invariant instead.
+
 ## 2026-09-22 — A static, module-wide signature table bound calls to a name the runtime dispatches in source order
 
 Part 1 of #884 (issue #1125, commit `a600ec3f` on `main`) bound keyword call

@@ -31,7 +31,8 @@
 //! callee is a bare name naming a module-level `def` whose parameters are all
 //! positional, whose defaults (if any) are all in the admitted literal
 //! subset, and whose name is bound nowhere else in module scope, is
-//! bindable. A method call, a `super().m()` call, a
+//! bindable, provided binding would not observably reorder its argument
+//! values (issue #1204, the `eval_order` submodule). A method call, a `super().m()` call, a
 //! container or stdlib-intrinsic call, a class instantiation and a `**kwargs`
 //! unpacking all keep the old rejection — see [`is_bindable_call`].
 //!
@@ -54,6 +55,7 @@ use pycc_diag::{Diagnostic, Span};
 
 use crate::HirExpr;
 
+mod eval_order;
 mod rebound;
 
 /// One module-level `def`'s keyword-bindable signature.
@@ -241,6 +243,11 @@ pub(crate) fn needs_default_fill(
 /// rejection. It is deliberately evaluated *before* the call-shape arms that
 /// follow it there, and it answers `false` for every shape those arms handle,
 /// so none of them can silently erase a keyword it never inspects.
+///
+/// It also answers `false` for a call whose binding would observably change
+/// the order its argument values are evaluated in (issue #1204,
+/// `docs/TYPE_SYSTEM.md`, "Keyword argument evaluation order"), so such a
+/// call keeps the same `C0001` every other unbindable keyword call reports.
 pub(crate) fn is_bindable_call(signatures: &SignatureTable, call: &ExprCall) -> bool {
     let Expr::Name(callee) = call.func.as_ref() else {
         return false;
@@ -248,7 +255,9 @@ pub(crate) fn is_bindable_call(signatures: &SignatureTable, call: &ExprCall) -> 
     // `arg: None` is a `**kwargs` unpacking, which has no parameter name to
     // bind and stays rejected.
     call.arguments.keywords.iter().all(|kw| kw.arg.is_some())
-        && signatures.get(callee.id.as_str()).is_some()
+        && signatures
+            .get(callee.id.as_str())
+            .is_some_and(|signature| !eval_order::observably_reorders(signature, call))
 }
 
 /// Binds `positional` and `keywords` to `callee`'s parameters, returning the

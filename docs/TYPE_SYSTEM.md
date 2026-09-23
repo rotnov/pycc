@@ -492,7 +492,9 @@ a call whose callee is a bare name that refers to a module-level `def` in
 the *same module*, whose parameters are all positional, whose defaults,
 if any, are all in the admitted literal subset described below, and whose
 name is bound only once in module scope (see "Keyword arguments and default
-parameter values on a redefined name" below). Every other
+parameter values on a redefined name" below), and whose binding would
+not observably reorder its argument values (see "Keyword argument
+evaluation order" below). Every other
 shape — a method call, `super().m()`, a container or stdlib-intrinsic call,
 a class instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
@@ -550,6 +552,32 @@ keyword name, a positional-only parameter passed as a keyword, a parameter
 supplied both positionally and by keyword, and a parameter left
 unsupplied. Each is reported at the offending keyword's own
 source span where one exists, and at the call's span otherwise.
+
+### Keyword argument evaluation order
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1204](https://github.com/rotnov/pycc/issues/1204)). CPython evaluates
+a call's argument values in source order, while the bound positional vector
+is evaluated in parameter order. A keyword call in the bindable shape above
+is therefore bound only if at least one of these holds:
+
+1. its argument values, taken in source order, already land in
+   non-decreasing parameter order, so binding moves nothing; or
+2. every argument value of the call, positional and keyword, is a literal in
+   the subset a parameter default admits ("The admitted subset is
+   syntactic" above) or a bare name, so moving
+   one cannot be observed.
+
+Otherwise the call keeps the unchanged `C0001` rejection "keyword call
+arguments are not supported yet", byte-identical to every other unbindable
+keyword call. So `f(b=g(2), a=g(1))` is `C0001`, while `f(a=g(1), b=g(2))`,
+`f(g(1), b=g(2))` and `f(b=2, a=x)` all bind and print CPython's output. A
+default filled for an omitted parameter does not count as reordering: it is
+a literal, which CPython evaluates once at `def` time. A keyword call the
+binder rejects as a `TypeError` (an unexpected, positional-only or
+already-supplied name) keeps that `T0021` whatever its order. The rule is
+`crates/pycc_hir/src/expr/keyword_bind/eval_order.rs`; end-to-end tests:
+`tests/issue_1204_keyword_eval_order.rs`.
 
 ### Keyword arguments and default parameter values on a redefined name
 
