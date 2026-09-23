@@ -23,7 +23,7 @@ pub(crate) fn compare_link_ty(
     right_ty: &Ty,
 ) -> Result<Ty, Diagnostic> {
     // `is`/`is not` (D-197, #763, Part 1 of #747): HIR lowering
-    // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm) already
+    // (`pycc_hir::compare_chain::lower_cmp_op`) already
     // guarantees one operand is syntactically `HirExpr::NoneLiteral`
     // whenever `op` is `Is`/`IsNot` -- this is the type-level half
     // of that scoping: the *other* operand's static type must be

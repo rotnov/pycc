@@ -30,10 +30,10 @@ pub(super) fn emit_compare_values<'ctx>(
     let left_ty = left.ty();
     let right_ty = right.ty();
     // `is`/`is not` (D-197, #763, Part 1 of #747). HIR lowering
-    // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm)
+    // (`pycc_hir::compare_chain::lower_cmp_op`)
     // guarantees one operand is syntactically `Expr::NoneLiteral`
     // whenever `op` is `Is`/`IsNot`, and `pycc_types`' own
-    // `Is`/`IsNot` typing arm (`crates/pycc_types/src/expr.rs`)
+    // `Is`/`IsNot` typing arm (`pycc_types::compare_chain::compare_link_ty`)
     // guarantees the *other* operand's type is `Ty::Optional(_)` or
     // `Ty::None` -- never anything else. Handled as its own
     // early-computed branch, before the float/str/numeric branches

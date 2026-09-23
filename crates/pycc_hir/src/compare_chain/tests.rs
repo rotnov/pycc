@@ -228,13 +228,34 @@ fn contains_named_expr_sees_the_first_operand_and_every_link() {
 }
 
 #[test]
-fn a_walrus_in_the_first_operand_is_killed_for_module_constant_folding() {
+fn a_walrus_in_a_chain_operand_is_killed_for_module_constant_folding() {
     // A module-level walrus inside a chain rebinds its target, so the
-    // module's constant table must not fold the earlier value; lowering
-    // succeeds and keeps the chain.
-    let module = lower_checked(&pycc_parser_test_helper::parse(
-        "N = 1\nif (N := 2) < 3 < 4:\n    pass\nprint(N)\n",
-    ))
-    .unwrap();
-    assert!(!module.items.is_empty());
+    // `killed_names` prescan must see it in the first operand and in a
+    // later one.
+    for (first, later) in [
+        (
+            HirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            },
+            name("b"),
+        ),
+        (
+            name("a"),
+            HirExpr::NamedExpr {
+                name: "n".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            },
+        ),
+    ] {
+        let body = [HirStmt::If {
+            test: chain(first, vec![link(CmpOpKind::Lt, later)]),
+            body: vec![],
+            orelse: vec![],
+        }];
+        assert_eq!(
+            crate::killed_names(&body),
+            std::collections::HashSet::from(["n".to_string()])
+        );
+    }
 }
