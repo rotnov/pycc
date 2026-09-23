@@ -1090,8 +1090,7 @@ E0100 is reserved for a call to `eval`, `exec`, or `compile` -- constructs \
 that execute Python source discovered at runtime, which is fundamentally \
 incompatible with pycc's ahead-of-time compilation model (there is no \
 running interpreter to hand dynamically-constructed code to). It is not \
-currently emitted: this is part of the planned v0.7 dynamic-Python \
-rejection surface (`--interop-policy`), not yet implemented, so calls to \
+currently emitted: pycc has no dynamic-code rejection yet, so calls to \
 these names fall through to the generic `C0001` \"not implemented yet\" \
 path today instead.",
         example: "\
@@ -1261,8 +1260,7 @@ I0401 is reserved for a value crossing the planned CPython interop \
 boundary (v0.7) without a type pycc's static checker can verify on the \
 other side -- e.g. a value returned from an embedded-CPython call whose \
 runtime type is not pinned down by any annotation. It is not currently \
-emitted: the interop boundary itself (`--interop-policy`, D-128) is planned \
-v0.7 work and does not exist in this pycc version yet.",
+emitted: no check in this pycc version produces it.",
         example: "\
 # I0401 is reserved for pycc's not-yet-implemented CPython interop
 # boundary (v0.7); no current pycc source can reach this check.
@@ -1273,16 +1271,20 @@ v0.7 work and does not exist in this pycc version yet.",
         severity: Severity::Error,
         summary: "CPython-backed direct import root rejected by the effective interop policy",
         explanation: "\
-I0402 is reserved for an `import` whose resolved root package is only \
-available as a CPython-backed (not pycc-native) module, and is rejected by \
-the effective v0.7 `[interop]` policy (`auto`/`allowlist`/`deny`, D-128) in \
-force for the project. It is not currently emitted: the `[interop]` table \
-and both interop CLI flags (`--interop-policy`, `--pure`) are themselves \
-planned v0.7 features and are not implemented or enforced by the current \
-compiler.",
+I0402 reports an `import` of a CPython-backed module (one pycc does not \
+implement natively and does not resolve inside the project) whose root \
+package the effective interop policy rejects (D-128). The policy is \
+`--pure` or `--interop-policy auto|allowlist|deny` when given, else the \
+`[interop]` table of the project's `pycc.toml`, else `auto`. `auto` admits \
+every root, `deny` (also spelled `--pure`) admits none, and `allowlist` \
+admits only the roots listed in `[interop] allow`. The message names the \
+policy and where it was set. `pycc check`, `pycc build` and `pycc run` \
+report it alike, on every host, and before any embedding refusal \
+(`I0403`). `pycc build --ext` ignores the policy. Drop the import, list its \
+root in `[interop] allow`, or choose a policy that admits it.",
         example: "\
-# I0402 is reserved for pycc's not-yet-implemented CPython interop
-# policy enforcement (v0.7); no current pycc source can reach this check.
+# pycc check --pure app.py
+import numpy  # error[I0402]: the `deny` interop policy (set by `--pure`) rejects it
 ",
     },
     DiagnosticExplanation {
@@ -1292,7 +1294,9 @@ compiler.",
         explanation: "\
 I0403 reports an `import` of a module pycc does not implement natively and \
 does not resolve inside the project, in a plain `pycc build` or `pycc run` \
-that cannot give it a CPython interpreter. Since Part 1 of #1026 such an \
+that cannot give it a CPython interpreter. It applies only to an import \
+whose root the effective interop policy admits; a rejected one is `I0402` \
+instead. Since Part 1 of #1026 such an \
 import is compiled as a CPython import: the module object is acquired from \
 the running interpreter at module-execution time. A `pycc build --ext` \
 artifact always has one -- it is an extension module CPython itself loads. \
