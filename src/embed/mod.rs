@@ -175,9 +175,7 @@ impl EmbedToolchain {
 
     fn run_probe(&self) -> Result<EmbedProbe, String> {
         let name = self.interpreter.to_string_lossy();
-        let output = std::process::Command::new(&self.interpreter)
-            .arg("-c")
-            .arg(EMBED_PROBE_SCRIPT)
+        let output = ext_build::probe_command(&self.interpreter, EMBED_PROBE_SCRIPT)
             .output()
             .map_err(|e| {
                 format!(

@@ -34,9 +34,7 @@ use pycc_hir::{
     ProtocolMember, Ty, flat_attr_layout, is_builtin_exception_class, is_public_name,
 };
 use std::collections::HashMap;
-#[cfg(test)]
-use std::ffi::OsStr;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// The fixed, hand-written half of every `ext` artifact, embedded at compile
@@ -200,9 +198,7 @@ impl ExtToolchain {
     }
 
     fn run_probe(&self) -> Result<ExtProbe, String> {
-        let output = std::process::Command::new(&self.interpreter)
-            .arg("-c")
-            .arg(PROBE_SCRIPT)
+        let output = probe_command(&self.interpreter, PROBE_SCRIPT)
             .output()
             .map_err(|e| {
                 format!(
@@ -228,6 +224,17 @@ impl ExtToolchain {
             )
         })
     }
+}
+
+/// The `<interpreter> -I -c <script>` command both CPython probes (this
+/// one and the embedded mode's) run. `-I` is isolated mode: the current
+/// directory, the user site directory and every `PYTHON*` variable stay off
+/// the probe's module search path, so a `sysconfig.py` planted in the
+/// project being built cannot execute when the probe imports `sysconfig`.
+pub(crate) fn probe_command(interpreter: &OsStr, script: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(interpreter);
+    command.arg("-I").arg("-c").arg(script);
+    command
 }
 
 /// Parses [`PROBE_SCRIPT`]'s three lines. Pure, so every malformed shape is
