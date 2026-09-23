@@ -226,4 +226,18 @@ fn the_first_difference_covers_roots_packages_and_natives() {
         required_by: vec!["tinypkg".to_string()],
     });
     assert!(first_difference(&native, &old).contains("[[target.native]]"));
+    let mut other = native.clone();
+    other.native.insert(
+        0,
+        LockedNative {
+            name: "libbar.dylib".to_string(),
+            ..native.native[0].clone()
+        },
+    );
+    let mut swapped = other.clone();
+    swapped.native.reverse();
+    assert_eq!(
+        first_difference(&other, &swapped),
+        "its entries are in a different order"
+    );
 }

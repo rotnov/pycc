@@ -371,8 +371,10 @@ fn first_difference(old: &LockTarget, new: &LockTarget) -> String {
             _ => {}
         }
     }
+    // The same packages and natives in another order, as a hand-edited
+    // lock can hold them.
     native_difference(&old.native, &new.native)
-        .unwrap_or_else(|| "its `[[target.native]]` entries are in a different order".to_string())
+        .unwrap_or_else(|| "its entries are in a different order".to_string())
 }
 
 /// The first native library in which the locked `[[target.native]]`
