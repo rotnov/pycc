@@ -68,7 +68,8 @@ pub(crate) fn assemble(
 
 /// Moves `staging` to `sidecar`. With `replace_existing`, the old sidecar
 /// is first moved aside and restored when the final move fails, so a
-/// failed rebuild leaves the previous artifact runnable; removing the
+/// failed rebuild leaves the previous artifact runnable (or, if even the
+/// restore fails, names where it was left); removing the
 /// moved-aside copy afterwards is best-effort, because the build already
 /// succeeded by then.
 pub(crate) fn swap_into_place(
@@ -83,13 +84,23 @@ pub(crate) fn swap_into_place(
         std::fs::rename(sidecar, &old).map_err(|e| io_error("move aside", sidecar, &e))?;
     }
     if let Err(e) = std::fs::rename(staging, sidecar) {
-        if replace_existing {
-            let _ = std::fs::rename(&old, sidecar);
-        }
-        return Err(io_error("move into place", staging, &e));
+        let restored = !replace_existing || std::fs::rename(&old, sidecar).is_ok();
+        let note = stranded_note(restored, &old);
+        return Err(format!(
+            "{}{note}",
+            io_error("move into place", staging, &e)
+        ));
     }
     let _ = std::fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// The suffix a failed swap's error carries: empty when the previous
+/// sidecar is back in place (or there was none), otherwise where it was
+/// left, so the user can move it back by hand.
+pub(crate) fn stranded_note(restored: bool, old: &Path) -> String {
+    let stranded = format!("; the previous sidecar is left at `{}`", old.display());
+    (!restored).then_some(stranded).unwrap_or_default()
 }
 
 fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String {

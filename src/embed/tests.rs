@@ -413,6 +413,16 @@ fn a_failed_final_move_restores_the_previous_sidecar() {
     assert_eq!(names, ["app.pycc"]);
 }
 
+#[test]
+fn a_failed_restore_names_where_the_previous_sidecar_was_left() {
+    let old = Path::new("/out/app.pycc.old-7");
+    assert_eq!(bundle::stranded_note(true, old), "");
+    assert_eq!(
+        bundle::stranded_note(false, old),
+        "; the previous sidecar is left at `/out/app.pycc.old-7`"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_tool_that_fails_or_cannot_start_is_an_environment_failure() {

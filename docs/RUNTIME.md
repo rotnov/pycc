@@ -1171,7 +1171,7 @@ owns the contract; this is the runtime view of it.
 - **Exit status.** An uncaught exception prints through `PyErr_Print` and
   exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120.
 - **Deviations from CPython.** `sys.flags.isolated` and `sys.flags.no_site`
-  are 1, `sys.executable` and `sys.argv[0]` are the executable, and an
+  are 1, `sys.platlibdir` is `lib`, `sys.executable` and `sys.argv[0]` are the executable, and an
   uncaught pycc exception prints only its final `Type: message` line where a
   native build prints the whole chain.
 - **Output ordering.** `buffered_stdio = 0` and `pycc_rt`'s flush at every
