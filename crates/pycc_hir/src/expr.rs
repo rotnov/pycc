@@ -43,11 +43,11 @@ mod std_receiver;
 pub(crate) mod unobservable;
 
 pub(crate) use bin_op_kind::bin_op_kind;
+pub(crate) use comprehension::{
+    comp_assign_stmt, lower_dict_comp, lower_list_comp, lower_set_comp,
+};
 #[cfg(test)]
 pub(crate) use comprehension::{lower_comprehension_header, rename_name_in_expr};
-pub(crate) use comprehension::{
-    lower_dict_comp_assign, lower_list_comp_assign, lower_set_comp_assign,
-};
 use keyword_bind::SignatureTable;
 
 use crate::boolop::{fold_bool_op, mark_truth_context};
@@ -899,6 +899,18 @@ pub(crate) fn lower_expr(
         // unchecked `Expr::Name` pattern) so a future `ruff_python_parser`
         // upgrade that somehow relaxed the grammar would still surface a
         // clean diagnostic instead of an `unreachable!()`/panic.
+        // #1254 (D-250): a comprehension in any expression position. The
+        // `name = <comp>` statement form is recognized earlier, in
+        // `stmt::assign`, and builds its statement from the same node.
+        Expr::ListComp(comp) => HirExpr::Comprehension(Box::new(lower_list_comp(
+            comp, class_name, imports, signatures,
+        )?)),
+        Expr::SetComp(comp) => HirExpr::Comprehension(Box::new(lower_set_comp(
+            comp, class_name, imports, signatures,
+        )?)),
+        Expr::DictComp(comp) => HirExpr::Comprehension(Box::new(lower_dict_comp(
+            comp, class_name, imports, signatures,
+        )?)),
         Expr::Named(named) => {
             let Expr::Name(target) = named.target.as_ref() else {
                 return Err(unsupported(
@@ -1001,6 +1013,7 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => contains_named_expr(call),
         HirExpr::GenericClassInstantiate { args, .. } => args.iter().any(contains_named_expr),
+        HirExpr::Comprehension(comp) => comprehension::comprehension_contains_named_expr(comp),
     }
 }
 

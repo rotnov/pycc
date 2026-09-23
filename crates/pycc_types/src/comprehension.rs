@@ -1,6 +1,8 @@
-//! Comprehension checking (PR-12, D-117): the iterable's element type, the
-//! produced container type and its element gate, and the `name = <comp>`
-//! statement forms at module and function scope.
+//! Comprehension checking (PR-12, D-117; #1254, D-250): the iterable's
+//! element type, the produced container type and its element gate, the
+//! `name = <comp>` statement forms at module and function scope, and the
+//! expression form, whose loop variable is bound only in a scoped clone of
+//! the environment.
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (D-185
 //! tracking issue #544). The statement arms in `check_stmt` (module scope,
@@ -13,7 +15,7 @@ use crate::{
     Environment, check_assignment, check_range_operand_in, infer_expr_in, lookup_bound_name,
 };
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{CompIter, HirExpr, Ty};
+use pycc_hir::{CompElt, CompIter, HirComprehension, HirExpr, Ty};
 
 /// The element expressions of one comprehension, by kind.
 pub(crate) enum CompElts<'a> {
@@ -148,4 +150,45 @@ pub(crate) fn check_comp_assign(
     check_assignment(env, comp.var, var_ty)?;
     let container_ty = comp_container_ty(env, local_names, comp.cond, &comp.elts)?;
     check_assignment(env, target, container_ty)
+}
+
+impl<'a> From<&'a CompElt> for CompElts<'a> {
+    fn from(elt: &'a CompElt) -> Self {
+        match elt {
+            CompElt::List(e) => CompElts::List(e),
+            CompElt::Set(e) => CompElts::Set(e),
+            CompElt::Dict { key, value } => CompElts::Dict(key, value),
+        }
+    }
+}
+
+/// `infer_expr_in`'s `HirExpr::Comprehension` arm (#1254, D-250). The
+/// iterable resolves in the enclosing environment; `cond` and the element
+/// expressions are checked in a clone with the synthesized loop variable
+/// bound, so the variable never becomes a binding of the enclosing scope.
+/// Narrowing and module globals carry over through the clone.
+pub(crate) fn infer_comprehension(
+    env: &Environment,
+    local_names: &[&str],
+    comp: &HirComprehension,
+) -> Result<Ty, Diagnostic> {
+    let var_ty = resolve_comp_iter(env, local_names, &comp.iter)?;
+    let mut scoped = env.clone();
+    scoped.bind(comp.var.clone(), var_ty);
+    comp_container_ty(
+        &scoped,
+        local_names,
+        comp.cond.as_ref(),
+        &CompElts::from(&comp.elt),
+    )
+}
+
+/// The container type a comprehension of this kind produces once its element
+/// gate has passed: `list[int]`, `set[int]` or `dict[str, int]` (D-119).
+pub(crate) fn comp_container_of(elt: &CompElt) -> Ty {
+    match elt {
+        CompElt::List(_) => Ty::List(Box::new(Ty::Int)),
+        CompElt::Set(_) => Ty::Set(Box::new(Ty::Int)),
+        CompElt::Dict { .. } => Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+    }
 }

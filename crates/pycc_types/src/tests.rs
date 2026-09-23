@@ -24,6 +24,7 @@ use crate::binop::numeric_result_type;
 mod boolop;
 mod buffer_producer;
 mod compare_chain;
+mod comprehension_expr;
 mod constraints;
 mod empty_container_registry;
 mod enum_unrolling;
@@ -4155,17 +4156,13 @@ fn a_comprehension_over_a_maybe_bound_iterable_is_t0041() {
 }
 
 #[test]
-fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_t0021() {
-    // Per D-116's own correction note: a container-literal assignment's
-    // target never receives a solver binding at all (the solver only
-    // unifies scalar `Ty::Infer` parameters/returns) -- a comprehension's
-    // own `target` gets the identical treatment (Step 5's deliberate
-    // no-op in `collect_block_constraints`). `def _h(): xs = (10, 20);
-    // return xs` already fails T0021 "local name `t` is not bound before
-    // this use" for a bare tuple/list assignment reaching a `Return` --
-    // this reproduces the same shape with a comprehension in place of a
-    // literal, confirming it is the same pre-existing gap, not a new one
-    // introduced by this statement.
+fn an_entirely_unannotated_private_helper_returning_a_comprehension_target_infers_list_int() {
+    // #1254: the solver now binds a comprehension statement's `target` to
+    // its container type (`bind_comp_target`), exactly as a plain
+    // assignment of a `list[int]` literal already was (`def _h(): xs =
+    // [1, 2]; return xs` resolves on the baseline). This test used to pin
+    // the gap as a `T0021` "local name `xs` is not bound before this use";
+    // CPython runs the program, so the return type is now inferred.
     let hir = HirModule {
         seeded_builtin_exception_classes: false,
         items: vec![HirItem::Function {
@@ -4191,9 +4188,11 @@ fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_
         imports: Vec::new(),
         class_defs: Vec::new(),
     };
-    let err = check_and_resolve(&hir).unwrap_err();
-    assert_eq!(err.code, "T0021");
-    assert!(err.message.contains("not bound before this use"));
+    let resolved = check_and_resolve(&hir).unwrap();
+    assert!(matches!(
+        &resolved.items[0],
+        HirItem::Function { return_ty, .. } if *return_ty == Ty::List(Box::new(Ty::Int))
+    ));
 }
 
 // `resolve_comp_iter`'s own `CompIter::Range` operand checks (shared by

@@ -7,11 +7,11 @@ use super::class::{
     rewrite_exception_to_message, rewrite_instance_to_repr, self_expr,
 };
 use super::{
-    HirClassDef, InstantiateExpr, MirExpr, MirFStringPart, binop_result_ty, lookup, mro_class_def,
-    try_lower_enum_member_attr,
+    HirClassDef, InstantiateExpr, MirCompElt, MirComprehension, MirExpr, MirFStringPart,
+    binop_result_ty, lookup, mro_class_def, try_lower_enum_member_attr,
 };
 use pycc_hir::{
-    BinOpKind, ClassAttrValue, FStringPart, HirExpr, Ty, UnaryOpKind,
+    BinOpKind, ClassAttrValue, CompElt, FStringPart, HirExpr, Ty, UnaryOpKind,
     declares_name_outside_class_attrs,
 };
 use std::collections::HashMap;
@@ -1262,6 +1262,42 @@ pub(super) fn lower_expr(
                 ty,
             }
         }
+        // #1254 (D-250): `cond` and the elements are lowered against a copy
+        // of `scopes` with one pushed frame holding the synthesized loop
+        // variable, so it never becomes a binding of the enclosing scope.
+        // `resolve_comp_source` lowers the range operands before it binds
+        // `var`, so they still read only the enclosing bindings.
+        // `narrowed_ty` searches every frame, so narrowing carries over.
+        HirExpr::Comprehension(comp) => {
+            let mut inner = scopes.to_vec();
+            inner.push(HashMap::new());
+            let (source, var_ty) = super::resolve_comp_source(
+                &comp.iter,
+                &comp.var,
+                &mut inner,
+                classes,
+                current_class,
+            );
+            let cond = comp
+                .cond
+                .as_ref()
+                .map(|c| lower_expr(c, &inner, classes, current_class));
+            let elt = match &comp.elt {
+                CompElt::List(e) => MirCompElt::List(lower_expr(e, &inner, classes, current_class)),
+                CompElt::Set(e) => MirCompElt::Set(lower_expr(e, &inner, classes, current_class)),
+                CompElt::Dict { key, value } => MirCompElt::Dict {
+                    key: lower_expr(key, &inner, classes, current_class),
+                    value: lower_expr(value, &inner, classes, current_class),
+                },
+            };
+            MirExpr::Comprehension(Box::new(MirComprehension {
+                var: comp.var.clone(),
+                var_ty,
+                source,
+                cond,
+                elt,
+            }))
+        }
         // #433: a bare `HirExpr::Super` should never reach MIR lowering —
         // HIR lowering rejects a standalone `super()` with C0001, and
         // `super().method()`/`super().attr` are handled by the special-case
@@ -1338,6 +1374,8 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
+        // #1254 (D-250): `pycc_hir` refuses a walrus inside a comprehension.
+        HirExpr::Comprehension(_) => {}
         HirExpr::Call { args, .. } => {
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);

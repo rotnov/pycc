@@ -456,7 +456,7 @@ fn lookup_bound_name_inner(
         Some(BindingState::Definitely(ty)) => {
             // Part 1 of #1026, choke point 2: `for x in numpy:` and
             // `[e for x in numpy]` lower to `HirStmt::ForList` /
-            // `HirExpr::ListComp`, whose list field is a plain `String`
+            // `HirExpr::Comprehension`, whose iterable is a plain `String`
             // (D-105), so they reach the binding through this helper
             // rather than through `infer_expr_in`'s `Name` arm.
             crate::foreign::reject_object_read(name, ty)?;
@@ -566,6 +566,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
+        // #1254 (D-250): lowering refuses a walrus inside a comprehension,
+        // and its loop variable is node-scoped, not a local of the function.
+        HirExpr::Comprehension(_) => {}
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_named_expr_names_in_expr(arg, names);
@@ -1258,6 +1261,9 @@ fn collect_named_expr_bindings(
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),
+        // #1254 (D-250): no walrus can sit inside a comprehension (lowering
+        // refuses it), so there is nothing to bind in the enclosing scope.
+        HirExpr::Comprehension(_) => Ok(()),
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_named_expr_bindings(env, local_names, arg)?;
@@ -3846,6 +3852,13 @@ fn reject_generic_calls_in_expr(
         // mirroring `AttrGet`'s own single-sub-expression shape just above.
         HirExpr::NamedExpr { name: _, value } => {
             reject_generic_calls_in_expr(module_env, own_name, value)
+        }
+        // #1254: every sub-expression, as the statement form's arm does.
+        HirExpr::Comprehension(comp) => {
+            for sub in comp.sub_exprs() {
+                reject_generic_calls_in_expr(module_env, own_name, sub)?;
+            }
+            Ok(())
         }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)

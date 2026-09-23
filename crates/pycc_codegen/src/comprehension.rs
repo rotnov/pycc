@@ -47,11 +47,11 @@ use super::bigint_rc::{
 };
 use super::rt_fns::RtFns;
 use super::{
-    Scalar, StorageSlot, UserFunction, build_dict_len, build_dict_set, build_int_list_append,
-    build_int_list_get, build_int_list_len, build_int_set_add, build_int_set_get,
-    build_int_set_len, build_untag_checked, emit_assign, emit_dict_name_read, emit_expr,
-    emit_list_name_read, emit_range_operands_with_exception_safety, emit_set_name_read,
-    incref_if_str_duplicate, to_encoded_int, truthy,
+    Scalar, StorageSlot, UserFunction, build_at_entry_block, build_dict_len, build_dict_set,
+    build_int_list_append, build_int_list_get, build_int_list_len, build_int_set_add,
+    build_int_set_get, build_int_set_len, build_untag_checked, emit_assign, emit_dict_name_read,
+    emit_expr, emit_list_name_read, emit_range_operands_with_exception_safety, emit_set_name_read,
+    incref_if_str_duplicate, to_encoded_int, truthy, ty_to_basic_type,
 };
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -59,7 +59,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::values::{FunctionValue, IntValue, PhiValue, PointerValue};
-use pycc_mir::{CompSource, MirExpr};
+use pycc_mir::{CompSource, MirCompElt, MirComprehension, MirExpr, Ty};
 use std::collections::HashMap;
 
 /// The element expressions of one comprehension, by produced container.
@@ -191,6 +191,75 @@ pub(super) fn emit_comprehension<'ctx>(
         CompElts::Set(_) => Scalar::Set(container),
         CompElts::Dict(..) => Scalar::Dict(container),
     }
+}
+
+/// `emit_expr`'s `MirExpr::Comprehension` arm (#1254, D-250): a
+/// comprehension in any expression position.
+///
+/// The loop variable gets a slot of its own, hoisted to the top of the
+/// function's entry block by [`build_at_entry_block`] so a comprehension
+/// inside a loop does not grow the stack, and visible only through a clone
+/// of `locals` -- the enclosing scope never gains a binding for it, which is
+/// also why it can never become a module global (#1237). The zero word
+/// stored beside the `alloca` runs once per call; for an `int` variable it
+/// is what makes `emit_assign`'s release-before-store a no-op on the first
+/// iteration.
+///
+/// After the loop the `int` variable's last value is released and the slot
+/// zeroed again, so the next run of the same comprehension (inside a loop,
+/// or after a caught exception) starts from the same invariant: the slot
+/// holds `0` or one word it owns. A `str` variable (a dict source's keys)
+/// keeps `MirStmt::ForDict`'s own leak-only binding, like the statement
+/// form.
+pub(super) fn emit_comprehension_expr<'ctx>(
+    cx: &CompCx<'_, 'ctx>,
+    comp: &MirComprehension,
+) -> Scalar<'ctx> {
+    let function = cx
+        .builder
+        .get_insert_block()
+        .and_then(|block| block.get_parent())
+        .expect("a comprehension is always emitted inside a function body");
+    let slot_ty = ty_to_basic_type(cx.context, comp.var_ty.clone());
+    let ptr = build_at_entry_block(cx.builder, function, |b| {
+        let ptr = b
+            .build_alloca(slot_ty, &comp.var)
+            .expect("build_alloca should not fail for a supported loop-variable type");
+        b.build_store(ptr, slot_ty.const_zero())
+            .expect("build_store should not fail immediately after its own alloca");
+        ptr
+    });
+    let mut scoped = cx.locals.clone();
+    scoped.insert(
+        comp.var.clone(),
+        StorageSlot {
+            ptr,
+            ty: comp.var_ty.clone(),
+            initialized: None,
+        },
+    );
+    let inner = CompCx {
+        locals: &scoped,
+        ..*cx
+    };
+    let elts = match &comp.elt {
+        MirCompElt::List(elt) => CompElts::List(elt),
+        MirCompElt::Set(elt) => CompElts::Set(elt),
+        MirCompElt::Dict { key, value } => CompElts::Dict(key, value),
+    };
+    let container = emit_comprehension(&inner, &comp.var, &comp.source, comp.cond.as_ref(), elts);
+    if comp.var_ty == Ty::Int {
+        let last = cx
+            .builder
+            .build_load(cx.context.i64_type(), ptr, "comp_var_last")
+            .expect("build_load should not fail for this function's own alloca")
+            .into_int_value();
+        emit_bigint_refcount_call(cx.context, cx.builder, cx.rt, last, BigIntRefcount::Release);
+        cx.builder
+            .build_store(ptr, cx.context.i64_type().const_zero())
+            .expect("build_store should not fail for this function's own alloca");
+    }
+    container
 }
 
 /// Evaluates the element expressions, runs the same validation and

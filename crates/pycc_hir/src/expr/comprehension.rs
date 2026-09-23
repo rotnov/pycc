@@ -1,15 +1,18 @@
-//! Comprehension lowering (PR-12, D-117): the shared header, the loop
-//! variable's synthesized name, the name rename, and the three
-//! `name = <comp>` statement forms.
+//! Comprehension lowering (PR-12, D-117; #1254, D-250): the shared header,
+//! the loop variable's synthesized name, the name rename, the walrus
+//! refusal, and the one [`HirComprehension`] node that both the expression
+//! form and the `name = <comp>` statement form are built from.
 //!
 //! Extracted from `expr.rs` per AGENTS.md's file-decomposition rule (D-185
 //! tracking issue #552). `lower_range_call` stays in `expr.rs` because
 //! `Stmt::For` shares it.
 
 use super::keyword_bind::SignatureTable;
-use super::{lower_condition, lower_expr, lower_range_call};
+use super::{contains_named_expr, lower_condition, lower_expr, lower_range_call};
 use crate::int_boundary::check_boundary_literal;
-use crate::{CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, unsupported};
+use crate::{
+    CompElt, CompIter, FStringPart, HirComprehension, HirExpr, HirStmt, ImportBinding, unsupported,
+};
 use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
 
@@ -21,10 +24,11 @@ use pycc_diag::Diagnostic;
 /// too, the same "let the compiler enumerate every site" discipline this
 /// project's own `Scalar::List` precedent (D-107) already established for
 /// `pycc_codegen`. Safe to apply blindly (no risk of renaming an unrelated
-/// same-named binding from some other nested scope) because v0.2's
-/// comprehension grammar has no nested comprehensions, no lambda, and no
-/// nested function defs inside a comprehension's own `elt`/`cond`/`key`/
-/// `value` -- none of those are expressible here at all yet.
+/// same-named binding from some other nested scope): a comprehension's
+/// `elt`/`cond`/`key`/`value` can hold no lambda and no nested function def,
+/// and a nested comprehension (#1254) renames its own loop variable to a
+/// digit-led name before this runs, so the only occurrences of `from` left
+/// inside it are reads of the enclosing loop variable.
 pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
     let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
     match expr {
@@ -182,6 +186,9 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             name: if name == from { to.to_string() } else { name },
             value: Box::new(recurse(*value)),
         },
+        HirExpr::Comprehension(comp) => {
+            HirExpr::Comprehension(Box::new(rename_in_comprehension(*comp, from, to)))
+        }
     }
 }
 
@@ -275,8 +282,7 @@ fn lower_comprehension_iter(
 /// `if` filter. Returns the loop target's *source* name, its synthesized
 /// internal replacement, the resolved `CompIter`, and the (not-yet-renamed)
 /// lowered `if`-filter expression, if present -- renaming is the caller's
-/// job (`lower_list_comp_assign`/`lower_set_comp_assign`/
-/// `lower_dict_comp_assign` below), since `elt`/`key`/`value` also need the
+/// job (`lower_list_comp`/`lower_set_comp`/`lower_dict_comp` below), since `elt`/`key`/`value` also need the
 /// identical rename and this helper has no visibility into which of those
 /// the caller is building.
 ///
@@ -354,13 +360,81 @@ pub(crate) fn lower_comprehension_header(
     Ok((source_name, synth_var, iter, cond))
 }
 
-pub(crate) fn lower_list_comp_assign(
-    target: &str,
+/// Refuses a walrus anywhere inside a lowered comprehension (#1254, D-250).
+/// CPython binds a comprehension-embedded walrus in the *enclosing* scope,
+/// which the node-scoped loop variable does not model. Checked once here,
+/// on the finished node, so the statement and expression forms share it.
+fn refuse_walrus<R>(comp: HirComprehension, range: R) -> Result<HirComprehension, Diagnostic>
+where
+    std::ops::Range<u32>: From<R>,
+{
+    if comprehension_contains_named_expr(&comp) {
+        return Err(unsupported(
+            "a walrus assignment (`:=`) inside a comprehension is not supported yet",
+            range,
+        ));
+    }
+    Ok(comp)
+}
+
+/// Whether any part of `comp` -- the range operands, `cond`, or the element
+/// expressions -- contains a walrus. `contains_named_expr`'s comprehension
+/// arm delegates here.
+pub(crate) fn comprehension_contains_named_expr(comp: &HirComprehension) -> bool {
+    let iter_has = match &comp.iter {
+        CompIter::Range { start, stop, step } => {
+            contains_named_expr(start) || contains_named_expr(stop) || contains_named_expr(step)
+        }
+        CompIter::Name(_) => false,
+    };
+    iter_has
+        || comp.cond.as_ref().is_some_and(contains_named_expr)
+        || match &comp.elt {
+            CompElt::List(e) | CompElt::Set(e) => contains_named_expr(e),
+            CompElt::Dict { key, value } => contains_named_expr(key) || contains_named_expr(value),
+        }
+}
+
+/// Renames `from` to `to` throughout a nested comprehension (#1254): its
+/// range operands, a bare-name iterable, `cond` and the element expressions.
+/// A nested comprehension's own `var` is digit-led, so it never equals
+/// `from`, and its source-name occurrences were already renamed when it was
+/// lowered. The iterable *is* renamed here, unlike the outermost iterable
+/// of the comprehension being renamed: a nested comprehension's iterable is
+/// evaluated inside the enclosing comprehension's scope (PEP 709), so
+/// `[len([y for y in x]) for x in range(3)]` reads the outer loop variable.
+fn rename_in_comprehension(comp: HirComprehension, from: &str, to: &str) -> HirComprehension {
+    let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
+    let iter = match comp.iter {
+        CompIter::Range { start, stop, step } => CompIter::Range {
+            start: recurse(start),
+            stop: recurse(stop),
+            step: recurse(step),
+        },
+        CompIter::Name(n) => CompIter::Name(if n == from { to.to_string() } else { n }),
+    };
+    HirComprehension {
+        var: comp.var,
+        iter,
+        cond: comp.cond.map(recurse),
+        elt: match comp.elt {
+            CompElt::List(e) => CompElt::List(recurse(e)),
+            CompElt::Set(e) => CompElt::Set(recurse(e)),
+            CompElt::Dict { key, value } => CompElt::Dict {
+                key: recurse(key),
+                value: recurse(value),
+            },
+        },
+    }
+}
+
+/// Lowers `[elt for ...]` into a [`HirComprehension`], in either position.
+pub(crate) fn lower_list_comp(
     comp: &pycc_ast::ExprListComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
     signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
+) -> Result<HirComprehension, Diagnostic> {
     let (source_name, synth_var, iter, cond) =
         lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
     // Literal `true`: `elt` is lexically inside the comprehension's own
@@ -376,46 +450,51 @@ pub(crate) fn lower_list_comp_assign(
     )?;
     let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::ListCompAssign {
-        target: target.to_string(),
-        var: synth_var,
-        iter,
-        cond: cond.map(Box::new),
-        elt: Box::new(elt),
-    })
+    refuse_walrus(
+        HirComprehension {
+            var: synth_var,
+            iter,
+            cond,
+            elt: CompElt::List(elt),
+        },
+        comp.range,
+    )
 }
 
-pub(crate) fn lower_set_comp_assign(
-    target: &str,
+/// Lowers `{elt for ...}` into a [`HirComprehension`], in either position.
+pub(crate) fn lower_set_comp(
     comp: &pycc_ast::ExprSetComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
     signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
+) -> Result<HirComprehension, Diagnostic> {
     let (source_name, synth_var, iter, cond) =
         lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
-    // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
-    // above (D-149 correction 5).
+    // Literal `true`: same reasoning as `lower_list_comp`'s `elt` above
+    // (D-149 correction 5).
     let elt_hir = lower_expr(&comp.elt, true, class_name, imports, signatures)?;
     check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "setcomp element")?;
     let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::SetCompAssign {
-        target: target.to_string(),
-        var: synth_var,
-        iter,
-        cond: cond.map(Box::new),
-        elt: Box::new(elt),
-    })
+    refuse_walrus(
+        HirComprehension {
+            var: synth_var,
+            iter,
+            cond,
+            elt: CompElt::Set(elt),
+        },
+        comp.range,
+    )
 }
 
-pub(crate) fn lower_dict_comp_assign(
-    target: &str,
+/// Lowers `{key: value for ...}` into a [`HirComprehension`], in either
+/// position.
+pub(crate) fn lower_dict_comp(
     comp: &pycc_ast::ExprDictComp,
     class_name: Option<&str>,
     imports: &[ImportBinding],
     signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
+) -> Result<HirComprehension, Diagnostic> {
     // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
     // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
     // unlike that literal case, the parser does *not* reject
@@ -437,8 +516,8 @@ pub(crate) fn lower_dict_comp_assign(
     let (source_name, synth_var, iter, cond) =
         lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
     // Literal `true` for both `key` and `value`: same reasoning as
-    // `lower_list_comp_assign`'s `elt` above (D-149 correction 5) -- `key`
-    // and `value` are both lexically inside the comprehension's own scope.
+    // `lower_list_comp`'s `elt` above (D-149 correction 5) -- `key` and
+    // `value` are both lexically inside the comprehension's own scope.
     let key = rename_name_in_expr(
         lower_expr(key_expr, true, class_name, imports, signatures)?,
         &source_name,
@@ -452,12 +531,51 @@ pub(crate) fn lower_dict_comp_assign(
     )?;
     let value = rename_name_in_expr(value_hir, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::DictCompAssign {
-        target: target.to_string(),
-        var: synth_var,
+    refuse_walrus(
+        HirComprehension {
+            var: synth_var,
+            iter,
+            cond,
+            elt: CompElt::Dict { key, value },
+        },
+        comp.range,
+    )
+}
+
+/// `target = <comp>` (PR-12, D-117): the statement form keeps its own
+/// `HirStmt` variants -- about twenty statement passes dispatch on them --
+/// and is built from the same lowered node as the expression form.
+pub(crate) fn comp_assign_stmt(target: &str, comp: HirComprehension) -> HirStmt {
+    let HirComprehension {
+        var,
         iter,
-        cond: cond.map(Box::new),
-        key: Box::new(key),
-        value: Box::new(value),
-    })
+        cond,
+        elt,
+    } = comp;
+    let target = target.to_string();
+    let cond = cond.map(Box::new);
+    match elt {
+        CompElt::List(elt) => HirStmt::ListCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt: Box::new(elt),
+        },
+        CompElt::Set(elt) => HirStmt::SetCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt: Box::new(elt),
+        },
+        CompElt::Dict { key, value } => HirStmt::DictCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            key: Box::new(key),
+            value: Box::new(value),
+        },
+    }
 }

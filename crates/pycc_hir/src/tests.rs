@@ -22,6 +22,9 @@ use crate::expr::{lower_comprehension_header, rename_name_in_expr};
 // private helpers through `use super::*`.
 mod subscript_annotations;
 
+// Comprehensions in expression position (#1254, D-250).
+mod comprehension_expr;
+
 // `ClassVar` in a `@dataclass` body (#913, D-235) likewise lives in its own
 // child module for the same reason.
 mod dataclass_class_vars;
@@ -3198,14 +3201,13 @@ fn an_async_for_comprehension_is_unsupported() {
 }
 
 #[test]
-fn a_comprehension_used_as_a_call_argument_is_not_specially_recognized() {
-    // Pins the "only `Stmt::Assign`-RHS position" restriction (D-117): a
-    // comprehension anywhere else still falls through to `lower_expr`'s
-    // existing generic catch-all, not a new comprehension-specific
-    // error path.
+fn an_async_comprehension_in_expression_position_is_unsupported() {
+    // #1254 (D-250) lifted D-117's "only `Stmt::Assign`-RHS position"
+    // restriction; the expression form shares the header checks, so its
+    // refusals match the statement form's.
     assert_capability_error_message(
-        "print([i for i in range(3)])\n",
-        "expression kind not supported yet",
+        "print([i async for i in xs])\n",
+        "async comprehensions are not supported yet",
     );
 }
 

@@ -31,7 +31,7 @@ use bigint_rc::{
     release_optional_int_slot_before_store, release_scalar_if_int_temporary,
     retain_if_int_duplicate, retain_if_int_duplicate_and_track_for_exception_edge,
 };
-use comprehension::{CompCx, CompElts, emit_comprehension};
+use comprehension::{CompCx, CompElts, emit_comprehension, emit_comprehension_expr};
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
 mod exception_render;
@@ -1990,6 +1990,18 @@ fn emit_expr_unchecked<'ctx>(
     use pycc_mir::Ty;
     match expr {
         MirExpr::IntLiteral(n) => Scalar::Int(emit_int_constant(context, builder, rt, *n)),
+        // #1254 (D-250): a comprehension in any expression position.
+        MirExpr::Comprehension(comp) => emit_comprehension_expr(
+            &CompCx {
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+            },
+            comp,
+        ),
         MirExpr::FloatLiteral(f) => Scalar::Float(context.f64_type().const_float(*f)),
         MirExpr::IntBoundary(value) => {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
@@ -4686,6 +4698,44 @@ fn erase_unreachable_if_present<'ctx>(builder: &inkwell::builder::Builder<'ctx>)
         return true;
     }
     false
+}
+
+/// Runs `build` with the builder positioned at the *top* of `function`'s
+/// entry block, then puts the builder back at the end of the block it was
+/// emitting into, and returns whatever `build` produced.
+///
+/// This is the one place an expression that needs its own stack slot hoists
+/// the `alloca`: an `alloca` is reclaimed only when its function returns, so
+/// one emitted inside a loop grows the stack without bound, and LLVM's own
+/// convention is that every `alloca` belongs in the entry block. The top of
+/// the block, not its end, because by the time an expression is emitted the
+/// entry block may already have been terminated -- a comprehension after an
+/// `if`, a `while` or a `try` (#1254) is emitted into a later block, and
+/// appending after the entry block's branch would be invalid IR. An entry
+/// block with no instructions yet is appended to instead.
+///
+/// `foreign_call.rs`'s `alloca_in_entry_block` and `foreign_len.rs`'s
+/// `out_slot_in_entry_block` build on this for their argument arrays and
+/// out-slots; `comprehension.rs` uses it for an expression comprehension's
+/// loop-variable slot.
+fn build_at_entry_block<'ctx, T>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    function: inkwell::values::FunctionValue<'ctx>,
+    build: impl FnOnce(&inkwell::builder::Builder<'ctx>) -> T,
+) -> T {
+    let resume_at = builder
+        .get_insert_block()
+        .expect("the builder is positioned inside a block");
+    let entry_block = function
+        .get_first_basic_block()
+        .expect("a function being emitted into has an entry block");
+    match entry_block.get_first_instruction() {
+        Some(first) => builder.position_before(&first),
+        None => builder.position_at_end(entry_block),
+    }
+    let value = build(builder);
+    builder.position_at_end(resume_at);
+    value
 }
 
 /// Allocates a local slot in the current function's entry block, which
