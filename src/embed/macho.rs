@@ -26,21 +26,28 @@ pub(crate) enum MachoDep {
 }
 
 /// The install names in `otool -L`'s output, in order. The first line is
-/// the image's own path and is skipped; for a dylib the first entry is its
-/// own id.
+/// the image's own path and is skipped, as is every per-architecture header
+/// of a universal image; for a dylib the first entry is its own id. A
+/// universal image lists its names once per slice, and each name is kept
+/// once, so a later `install_name_tool -change` never runs twice.
 pub(crate) fn parse_otool_l(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let line = line.trim();
-            let name = line
-                .rsplit_once(" (compatibility version")
-                .map_or(line, |(name, _)| name)
-                .trim();
-            (!name.is_empty()).then(|| name.to_string())
-        })
-        .collect()
+    let mut names: Vec<String> = Vec::new();
+    let all = stdout.lines().skip(1).filter_map(|line| {
+        let line = line.trim();
+        // A universal image repeats a `<path> (architecture <arch>):`
+        // header per slice; it names the image, not a dependency.
+        let name = line
+            .rsplit_once(" (compatibility version")
+            .map_or(line, |(name, _)| name)
+            .trim();
+        (!name.is_empty() && !line.ends_with("):")).then(|| name.to_string())
+    });
+    for name in all {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// Classifies one dependency `dep` of an image whose own id is `own_id`.

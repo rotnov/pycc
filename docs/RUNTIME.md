@@ -1160,8 +1160,8 @@ owns the contract; this is the runtime view of it.
   `PYCC-BUNDLE` marker. The executable finds the library through an rpath
   relative to itself, so the pair is relocatable together.
 - **Execution.** `src/embed/pycc_embed_launcher.c` starts an isolated
-  interpreter (`home` is the sidecar, no `site`, no bytecode writes,
-  unbuffered stdio), creates `__main__` from the compiled module's
+  interpreter (`home` is the sidecar, `platlibdir` is `lib` whatever the
+  build host's was, no `site`, no bytecode writes, unbuffered stdio), creates `__main__` from the compiled module's
   `PyModuleDef` and runs it with `PyModule_ExecDef`; the module body runs
   with the GIL held. The compiled module is the one `--ext` would build,
   through the same unchanged C shim, with export thunks suppressed; no

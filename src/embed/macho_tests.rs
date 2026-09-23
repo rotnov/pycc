@@ -41,6 +41,24 @@ fn otool_output_parses_into_install_names() {
     assert!(parse_otool_l("").is_empty());
 }
 
+/// The shape of `otool -L` on a universal image: a header per slice, each
+/// slice repeating the same names.
+const UNIVERSAL_DYLIB: &str = "/u/lib/libpython3.14.dylib (architecture x86_64):
+	/u/lib/libpython3.14.dylib (compatibility version 3.14.0, current version 3.14.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+/u/lib/libpython3.14.dylib (architecture arm64):
+	/u/lib/libpython3.14.dylib (compatibility version 3.14.0, current version 3.14.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+";
+
+#[test]
+fn universal_otool_output_skips_slice_headers_and_repeats() {
+    assert_eq!(
+        parse_otool_l(UNIVERSAL_DYLIB),
+        ["/u/lib/libpython3.14.dylib", "/usr/lib/libSystem.B.dylib"]
+    );
+}
+
 fn classify(dep: &str, own_id: Option<&str>) -> MachoDep {
     let bundle_lib = [
         PathBuf::from("/prefix/Python.framework/Versions/3.14/Python"),

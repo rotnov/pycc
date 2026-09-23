@@ -81,6 +81,13 @@ int main(int argc, char **argv) {
      * the #1028 plan). */
     config.buffered_stdio = 0;
     PyStatus status = PyConfig_SetBytesString(&config, &config.home, home);
+    /* The sidecar always holds the standard library (with its lib-dynload)
+     * under `lib/`, whatever the build host's `sys.platlibdir` was (a
+     * distribution build may say `lib64`), so the search path must not
+     * inherit the compiled-in value. */
+    if (!PyStatus_Exception(status)) {
+        status = PyConfig_SetBytesString(&config, &config.platlibdir, "lib");
+    }
     if (!PyStatus_Exception(status)) {
         status = PyConfig_SetBytesArgv(&config, argc, argv);
     }

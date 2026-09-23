@@ -28,7 +28,7 @@ use std::process::ExitCode;
 /// `release`: the final, already-resolved profile -- `true` runs LLVM's
 /// `"default<O3>"` pipeline, `false` skips it. This function does *not*
 /// consult a neighboring `pycc.toml` itself: that consumption point
-/// (`resolve_release_flag` below) is scoped to `Command::Build`'s own match
+/// (`resolve_release_flag` in `src/main.rs`) is scoped to `Command::Build`'s own match
 /// arm in `main()`, resolved *before* `try_build` is ever called, precisely
 /// so that `run`'s hardcoded `false` here stays final and unconditional --
 /// `run` has no `--release` flag yet (CLI_SPEC.md doesn't document one for

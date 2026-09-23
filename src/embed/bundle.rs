@@ -57,19 +57,39 @@ pub(crate) fn assemble(
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e);
     }
-    if replace_existing {
-        let old = parent.join(format!("{sidecar_name}.old-{pid}"));
-        std::fs::rename(&sidecar, &old).map_err(|e| io_error("move aside", &sidecar, &e))?;
-        std::fs::rename(&staging, &sidecar)
-            .map_err(|e| io_error("move into place", &staging, &e))?;
-        std::fs::remove_dir_all(&old).map_err(|e| io_error("remove", &old, &e))?;
-    } else {
-        std::fs::rename(&staging, &sidecar)
-            .map_err(|e| io_error("move into place", &staging, &e))?;
+    if let Err(e) = swap_into_place(&staging, &sidecar, parent, sidecar_name, replace_existing) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
     }
     Ok(sidecar
         .join("lib")
         .join(layout::bundled_library_name(platform, probe)))
+}
+
+/// Moves `staging` to `sidecar`. With `replace_existing`, the old sidecar
+/// is first moved aside and restored when the final move fails, so a
+/// failed rebuild leaves the previous artifact runnable; removing the
+/// moved-aside copy afterwards is best-effort, because the build already
+/// succeeded by then.
+pub(crate) fn swap_into_place(
+    staging: &Path,
+    sidecar: &Path,
+    parent: &Path,
+    sidecar_name: &str,
+    replace_existing: bool,
+) -> Result<(), String> {
+    let old = parent.join(format!("{sidecar_name}.old-{}", std::process::id()));
+    if replace_existing {
+        std::fs::rename(sidecar, &old).map_err(|e| io_error("move aside", sidecar, &e))?;
+    }
+    if let Err(e) = std::fs::rename(staging, sidecar) {
+        if replace_existing {
+            let _ = std::fs::rename(&old, sidecar);
+        }
+        return Err(io_error("move into place", staging, &e));
+    }
+    let _ = std::fs::remove_dir_all(&old);
+    Ok(())
 }
 
 fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String {

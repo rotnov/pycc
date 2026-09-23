@@ -374,6 +374,45 @@ fn a_failed_assembly_removes_its_staging_directory() {
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
+#[test]
+fn a_failed_replacement_removes_its_staging_directory() {
+    let dir = ScratchDir::new("embed_replace_staging").expect("scratch");
+    let layout = fake_layout(&dir);
+    // Asked to replace a sidecar that is not there: moving it aside fails
+    // after the staging directory was fully populated.
+    let message = bundle::assemble(&layout.probe, EmbedPlatform::Linux, &dir, "app.pycc", true)
+        .expect_err("nothing to move aside");
+    assert!(message.contains("could not move aside"), "{message}");
+    let leftovers: Vec<_> = std::fs::read_dir(&*dir)
+        .expect("read_dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .filter(|name| name.to_string_lossy().starts_with("app.pycc"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_failed_final_move_restores_the_previous_sidecar() {
+    let dir = ScratchDir::new("embed_restore").expect("scratch");
+    let sidecar = dir.join("app.pycc");
+    std::fs::create_dir(&sidecar).expect("sidecar");
+    std::fs::write(sidecar.join("PYCC-BUNDLE"), "previous").expect("marker");
+    let missing_staging = dir.join("app.pycc.tmp-missing");
+    let message = bundle::swap_into_place(&missing_staging, &sidecar, &dir, "app.pycc", true)
+        .expect_err("no staging directory");
+    assert!(message.contains("could not move into place"), "{message}");
+    assert_eq!(
+        std::fs::read_to_string(sidecar.join("PYCC-BUNDLE")).expect("restored"),
+        "previous"
+    );
+    let names: Vec<_> = std::fs::read_dir(&*dir)
+        .expect("read_dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .filter(|name| name.to_string_lossy().starts_with("app.pycc"))
+        .collect();
+    assert_eq!(names, ["app.pycc"]);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_tool_that_fails_or_cannot_start_is_an_environment_failure() {

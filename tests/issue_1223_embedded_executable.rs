@@ -182,8 +182,9 @@ fn a_program_without_a_cpython_import_stays_native_with_no_sidecar() {
 // ---------------------------------------------------------------------
 
 /// The synthetic oracle program: it interleaves Python-side writes
-/// (`pprint`) with `pycc_rt` writes, reads `__name__`, and pulls a C
-/// accelerator (`_json`) from `lib-dynload`.
+/// (`pprint`) with `pycc_rt` writes and reads `__name__`. Whether `json`
+/// finds its `_json` accelerator varies by build (uv links it in), so
+/// `lib-dynload` has its own test below.
 #[cfg(not(windows))]
 const ORACLE: &str = "\
 import json
@@ -261,6 +262,66 @@ fn the_oracle_program_matches_cpython_3_14_7_byte_for_byte() {
         .expect("the embedded binary runs");
     assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
     assert_same(&embedded, &cpython(&python, &dir.join("m.py"), &[]));
+}
+
+/// Standard-library extensions some `lib-dynload` directory commonly
+/// holds, in preference order. uv's CPython links most accelerators in and
+/// keeps only `_dbm` and `_tkinter` (excluded) there.
+#[cfg(not(windows))]
+const DYNLOAD_CANDIDATES: [&str; 6] = ["_json", "_bisect", "_heapq", "_random", "_struct", "_dbm"];
+
+/// A `lib-dynload` extension loads from the sidecar: the import succeeds
+/// and matches CPython, and fails once the bundled file is removed, so the
+/// isolated interpreter found it nowhere else.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
+fn a_lib_dynload_extension_loads_from_the_sidecar_and_matches_cpython_3_14_7_byte_for_byte() {
+    let dir = ScratchDir::new("embed_dynload").expect("scratch");
+    let dynload = dir
+        .join("app.pycc")
+        .join("lib")
+        .join("python3.14")
+        .join("lib-dynload");
+    // A first build populates the sidecar so the test can see which
+    // candidate this interpreter ships as a separate file.
+    build_embedded(&dir, "import json\n\nprint(\"probe\")\n");
+    let files: Vec<String> = std::fs::read_dir(&dynload)
+        .expect("the sidecar has a lib-dynload directory")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let (root, file) = DYNLOAD_CANDIDATES
+        .iter()
+        .find_map(|root| {
+            let prefix = format!("{root}.");
+            files
+                .iter()
+                .find(|file| file.starts_with(&prefix))
+                .map(|file| (*root, file.clone()))
+        })
+        .unwrap_or_else(|| panic!("no candidate extension in lib-dynload: {files:?}"));
+    let python = build_embedded(&dir, &format!("import {root}\n\nprint(\"loaded\")\n"));
+    let embedded = Command::new(dir.join("app"))
+        .output()
+        .expect("the embedded binary runs");
+    assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
+    assert_same(&embedded, &cpython(&python, &dir.join("m.py"), &[]));
+    std::fs::remove_file(dynload.join(&file)).expect("remove the bundled extension");
+    let missing = Command::new(dir.join("app"))
+        .output()
+        .expect("the embedded binary runs");
+    assert_eq!(missing.status.code(), Some(1), "{}", stderr_of(&missing));
+    assert!(
+        stderr_of(&missing).contains("ModuleNotFoundError"),
+        "{}",
+        stderr_of(&missing)
+    );
 }
 
 /// The executable and its sidecar move together; nothing points back at

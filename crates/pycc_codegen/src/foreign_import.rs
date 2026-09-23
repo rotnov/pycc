@@ -30,8 +30,10 @@
 //! introduces is trip-count-linear, and `docs/RUNTIME.md` carries the
 //! consequence for D-244 rule 6 benchmarking.
 //!
-//! **Native mode.** A foreign import cannot reach codegen outside `--ext`:
-//! `src/main.rs` refuses it with `I0403` after typed HIR. This file
+//! **Native mode.** A foreign import reaches codegen only with `ext` set:
+//! either `--ext`, or an embedded build (D-248), which compiles its module
+//! with `ext` set. Every other build has no interpreter to import into, and
+//! the driver refuses it with `I0403` after typed HIR. This file
 //! therefore *ignores* a `ForeignImport` item when `options.ext` is false
 //! rather than asserting -- an assertion here would be an unreachable line
 //! under the 100%-changed-line coverage gate, and the driver gate is where

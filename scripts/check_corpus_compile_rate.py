@@ -381,7 +381,8 @@ def is_embedded(binary: Path) -> bool:
     """Whether ``binary`` is an embedded executable (D-248).
 
     ``pycc build`` writes the ``PYCC-BUNDLE`` marker into the ``<binary>.pycc``
-    sidecar first for every embedded build, and never for a native one.
+    sidecar last, once the sidecar is complete, for every embedded build, and
+    never for a native one.
     """
     return (binary.parent / (binary.name + ".pycc") / "PYCC-BUNDLE").is_file()
 
