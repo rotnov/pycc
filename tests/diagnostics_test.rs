@@ -738,9 +738,11 @@ fn c0001_dict_comprehension_unpacking() {
 // Part 1 of #1026 narrowed which shapes reach that catch-all: a plain
 // `import cgi` binds a CPython module object now, so what is pinned here
 // is the aliased `import cgi as c`, which still falls through. The plain
-// form's own behavior is pinned in `tests/issue_1080_foreign_object.rs`:
-// accepted by `pycc check`, refused by a native `pycc build` with
-// `I0403`.
+// form is accepted by `pycc check` and, since `cgi` left the standard
+// library in 3.13, refused by a plain `pycc build` with `I0403` like any
+// non-standard-library root -- pinned with `numpy` in
+// `tests/issue_1080_foreign_object.rs`'s
+// `a_native_build_refuses_a_foreign_import_with_i0403`.
 #[test]
 fn c0001_import_unrecognized_module() {
     assert_diagnostic_matches_fixture("c0001_import_unrecognized_module");

@@ -7,8 +7,10 @@
 //! * `pycc check` *accepts* a plain foreign import -- it is a frontend-only
 //!   pass (`docs/CLI_SPEC.md`) with no `--ext` flag to judge against, so a
 //!   bound-but-unused module object is not an error there;
-//! * a native `pycc build` refuses it with `I0403`, because a native
-//!   executable embeds no interpreter to import into;
+//! * a plain `pycc build` refuses it with `I0403`, because an embedded
+//!   executable bundles only the standard library (#1223) and `numpy` is
+//!   outside it -- a standard-library import builds embedded instead
+//!   (`tests/issue_1223_embedded_executable.rs`);
 //! * every operation on the bound name other than an attribute load is
 //!   refused, and all but one of them with `I0404`. Part 2 of #1026 (#1081)
 //!   changed *where* that refusal is decided -- from the read of the
