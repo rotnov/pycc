@@ -8,5 +8,7 @@ pub(crate) mod dist;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub(crate) mod marker;
+pub(crate) mod probe;
 pub(crate) mod requirement;
 pub(crate) mod resolve;
+pub(crate) mod schema;
