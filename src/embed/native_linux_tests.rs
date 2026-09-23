@@ -194,6 +194,13 @@ fn the_interpreter_images_vendor_prefix_libraries_and_refuse_outside_ones() {
         elf_bytes(&zlib),
     )
     .unwrap();
+    // A second extension needing `libz` copies it once.
+    let binascii = ElfSpec::module(&["libz.so.1"]).runpath(&rpath);
+    std::fs::write(
+        dynload.join("binascii.cpython-314-x86_64-linux-gnu.so"),
+        elf_bytes(&binascii),
+    )
+    .unwrap();
     // A directory and a dangling link in `lib-dynload` are not images.
     std::fs::create_dir(dynload.join("subdir")).unwrap();
     #[cfg(unix)]

@@ -20,8 +20,8 @@ struct Env {
     _dir: ScratchDir,
     layout: FakeLayout,
     pure: PathBuf,
-    /// Read only by the macOS closure-image tests in `macos_closure_tests`.
-    #[cfg_attr(not(target_os = "macos"), expect(dead_code))]
+    /// Read only by the closure-image tests, which run on Unix hosts.
+    #[cfg_attr(windows, expect(dead_code))]
     plat: PathBuf,
     lock_probe: LockProbe,
     entry: PathBuf,
@@ -354,6 +354,24 @@ fn a_linux_build_copies_and_preloads_its_natives() {
     let libs = ["libnat1.so.1".to_string(), "libnat2.so.2".to_string()];
     let preload = layout::preload_args(EmbedPlatform::Linux, &lib, &libs);
     assert!(plan.link_args.ends_with(&preload), "{:?}", plan.link_args);
+}
+
+/// A refusal only the build's own walk reaches stops a build whose lock is
+/// current: an interpreter extension needing a library outside the prefix.
+#[cfg(unix)]
+#[test]
+fn a_linux_interpreter_image_needing_an_outside_library_is_refused() {
+    use super::super::elf::fixture::{ElfSpec, elf_bytes};
+    let (env, toolchain) = linux_native_env("embed_linux_dynload");
+    lock_linux(&env, &toolchain, false).expect("locked");
+    let outside = env.root.join("outside").display().to_string();
+    let dynload = env.layout.dynload();
+    std::fs::create_dir_all(&dynload).unwrap();
+    let module = ElfSpec::module(&["libnat2.so.2"]).runpath(&outside);
+    std::fs::write(dynload.join("_x.so"), elf_bytes(&module)).unwrap();
+    let err = embed_linux(&env, &toolchain).expect_err("refused");
+    assert!(err.contains("is not relocatable"), "{err}");
+    assert!(err.contains("lib-dynload/_x.so"), "{err}");
 }
 
 /// A native changed after `pycc lock` is refused by the build, which keeps

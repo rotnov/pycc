@@ -355,3 +355,42 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     );
     assert!(!env.sidecar().exists());
 }
+
+/// A native reached twice from one distribution is locked once for it, and
+/// a native whose own dependency is a relative reference is refused by the
+/// build naming #1259, since only absolute install names are vendored.
+#[test]
+fn a_native_with_a_relative_dependency_is_refused_naming_1259() {
+    let env = Env::bare("embed_macos_native_relative", "import tinynat\n");
+    macho_library(&env.layout);
+    let build = env.root.join("build");
+    let outside = env.root.join("outside");
+    let id = Some("@rpath/libout2.dylib");
+    let out2 = image(&build, "libout2.dylib", "-dynamiclib", id, &[], &[]);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("libout2.dylib"), out2).unwrap();
+    let out1 = outside.join("libout1.dylib");
+    dylib(&out1, "pycc_fake_out1", &[&outside.join("libout2.dylib")]);
+    let ext = image(&build, "tinynat_so", "-bundle", None, &[&out1], &[]);
+    let files: [(&str, &[u8]); 3] = [
+        ("tinynat/__init__.py", b"X = 1\n"),
+        ("tinynat/_a.so", &ext),
+        ("tinynat/_b.so", &ext),
+    ];
+    write_dist(&env.plat, "tinynat", "1.0", &files, &[]);
+    env.lock();
+    let lock =
+        crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
+    let natives = &lock.target[0].native;
+    assert_eq!(natives.len(), 1);
+    assert_eq!(natives[0].name, "libout1.dylib");
+    assert_eq!(natives[0].required_by, ["tinynat"]);
+    let err = env
+        .embed_on(&env.toolchain(), EmbedPlatform::MacOs)
+        .expect_err("relative");
+    assert!(
+        err.contains("the native library `lib/libout1.dylib` depends on `@rpath/libout2.dylib`"),
+        "{err}"
+    );
+    assert!(err.contains("(#1259)"), "{err}");
+}
