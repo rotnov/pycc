@@ -6,6 +6,7 @@ mod ext_output;
 mod foreign_import;
 mod frontend;
 mod interop_policy;
+mod lock;
 mod memoryview_mode;
 mod modules;
 mod project_config;

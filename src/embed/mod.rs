@@ -14,7 +14,7 @@ mod bundle;
 pub(crate) mod fake_layout;
 pub(crate) mod layout;
 mod macho;
-mod sha256;
+pub(crate) mod sha256;
 pub(crate) mod stdlib_roots;
 
 use crate::ext_build;
@@ -120,6 +120,12 @@ impl EmbedToolchain {
             interpreter: interpreter.into(),
             probe_override: None,
         }
+    }
+
+    /// The interpreter this toolchain runs, for a second probe of the same
+    /// interpreter (the lock's environment probe).
+    pub(crate) fn interpreter(&self) -> &std::ffi::OsStr {
+        &self.interpreter
     }
 
     /// Probes the interpreter and checks it can be bundled, or returns an
