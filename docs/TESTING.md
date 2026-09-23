@@ -740,9 +740,45 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the protocol has no admissible subject
+### Status: the replacement workload is selected and the criterion is recorded as not met
 
-Nothing above is amended by this subsection. The protocol above has been
+This subsection was titled "the protocol has no admissible subject" until
+2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
+
+**Current state (2026-09-23).** The replacement-workload selection that
+[#1207](https://github.com/rotnov/pycc/issues/1207) pre-registered under
+[D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
+ran on 2026-09-23, and [its result comment](https://github.com/rotnov/pycc/issues/1207#issuecomment-5791727061) is the outcome record. Step 0
+refused no candidate. `idna` 3.20 was refused under clause (iv): its rank-1
+function by self time was own-Python-with-statement-loop at 11.5%, 11.4% and
+11.6% across the three runs. `lark` 1.3.1 was admissible, so it is the
+workload and the stop rule ended the selection: its subject is
+`ParserState.feed_token` in `lark/parsers/lalr_parser_state.py`, at 21.2%,
+21.9% and 21.2% of summed self time. That subject's signature is
+`feed_token(self, token: Token, is_end=False) -> Any`, and `is_end` is not
+annotated, so #1207's pre-registered outcome row (b) applies: **criterion not
+met: subject not compilable unchanged (not fully annotated)**. Row (a) (a
+method, measured through a shim) also applies but is moot. Row (b) records the
+miss without a timed run, so no timing exists or will be taken: no
+pre-registration commit for `lark` follows,
+`scripts/bench_hosted_ext_precommit.json` still carries the refused reference
+workload's fields with `subject_sha256` `null`, and no
+`docs/benchmarks/hosted-ext-product-sprint-1.json` report will be written.
+D-244 rule 6's kill criterion is therefore recorded as not met. The selection's
+instruments are committed as they ran under `scripts/workload_selection/`,
+whose README lists the two harness deviations the result comment discloses.
+
+The selection made one correction that applies to this protocol's own text.
+The **Versions** bullet, `scripts/bench_hosted_ext.py` and #1207's section 5
+all read `sysconfig.get_config_var('CONFIGURE_ARGS')`. No CPython build defines that
+variable: it is `None` on 3.14.6, 3.13.9, 3.9.6 and 3.14.7, so the runner as
+written refuses every interpreter. The variable CPython defines is
+`CONFIG_ARGS`. The selection checked that variable instead, and the uv 3.14.7
+build it used carries `--enable-optimizations` there. The bullet and the
+runner are left as they are, because no run follows.
+
+The rest of this subsection is the record that led to the selection.
+Nothing in the protocol above is amended by this subsection. The protocol has been
 amended exactly once since it was committed: the **Workload admissibility**
 bullet, added on 2026-09-22 by
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
@@ -776,8 +812,9 @@ revising the Subject bullet:
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
 whose operational form is the **Workload admissibility** bullet above. Under
 it the reference workload is refused, so prerequisite 2 is no longer a
-prerequisite of this workload's run at all: there is no run to prepare here,
-and an admissible replacement workload is what #1039 now waits on.
+prerequisite of this workload's run at all: there is no run to prepare here.
+The replacement D-247 admits was then selected under #1207, with the outcome
+stated at the head of this subsection.
 Each correction is dated in place below; none is deleted.
 
 A scored run needs one function that is byte-identical across the three arms
@@ -1125,8 +1162,9 @@ settled as of 2026-09-22 by
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md):
 the protocol keeps the Subject bullet as written and gains a predicate on the
 *workload* instead, under which this reference workload yields no subject and
-is refused. #1039 therefore resumes on an admissible replacement workload, not
-on landing #1027. The compilation diagnostics are the actionable residue: they
+is refused. #1039 therefore resumed on an admissible replacement workload, not
+on landing #1027; that replacement's outcome is stated at the head of this
+subsection. The compilation diagnostics are the actionable residue: they
 are ordinary capability gaps, dominated by dependency-level import families and
 tracked chiefly by [#882](https://github.com/rotnov/pycc/issues/882), sized
 against a real codebase — but read them with prerequisite 2's cascade-suppression
@@ -1145,7 +1183,10 @@ those fields — `generator_path`, `seed`, `input_sha256` and every
 their own pre-registration commit when an admissible workload is adopted, ahead
 of any run. `subject_sha256` is not part of that commit: it keeps the **Subject**
 bullet's own rule, registered as the scoring run's first action in a stage
-commit of its own. Until then nothing here is reshaped by an obstacle.
+commit of its own. Until then nothing here is reshaped by an obstacle. The
+workload #1207 adopted never reached that commit: its row (b) outcome is
+recorded without a run, so these fields still describe the refused reference
+workload.
 
 #### What the boundary costs, measured (not part of the protocol)
 
@@ -1193,8 +1234,7 @@ above, this one does carry replicates, a median, and a correctness
 precondition — all three arms had to agree exactly before any ratio was
 recorded — but it is still not pre-registered, its input is not committed, and
 it is not evidence for either `product-sprint-1` roadmap box or for D-244 rule
-6's kill criterion. Only a run of the protocol above, which #1039 owns, can be
-those things.
+6's kill criterion. Only a run of the protocol above can be those things.
 
 The method: subject `dot9(b: memoryview, n: int) -> float`, summing
 `b[i * 9 + 0] * b[i * 9 + 1]` over `n` rows. Input
@@ -1240,7 +1280,7 @@ number of reads per row, or a different amount of arithmetic between reads
 will give a different number, so no unlabelled "speedup" is derivable from
 this table. And neither reading is evidence about either
 `product-sprint-1` Accept box or D-244 rule 6's 5x bar in either direction —
-only a run of the protocol above, which #1039 owns, can be that.
+only a run of the protocol above can be that.
 
 
 ## Planned CPython interop matrix (v0.7)
