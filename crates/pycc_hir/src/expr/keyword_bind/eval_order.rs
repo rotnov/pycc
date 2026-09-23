@@ -65,7 +65,7 @@ fn is_unobservable(value: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    const DEF_ABC: &str = "def f(a: int, b: int, c: int = 3) -> None:\n    print(a + b + c)\n\ndef g(n: int) -> int:\n    return n\n\n";
+    const DEF_ABC: &str = "def f(a: int, b: int = 2, c: int = 3) -> None:\n    print(a + b + c)\n\ndef g(n: int) -> int:\n    return n\n\n";
 
     fn lower(source: &str) -> Result<crate::HirModule, pycc_diag::Diagnostic> {
         let module = pycc_parser::parse(source).expect("test fixture must parse");
@@ -112,25 +112,9 @@ mod tests {
             "f(c=3, b=x, a=x)",
             "f(c=None, b=True, a='s')",
         ] {
-            let source = format!("{DEF_ABC}x = 1\n{call}\n");
-            let module = pycc_parser::parse(&source).expect("test fixture must parse");
-            let call_expr = module
-                .body
-                .iter()
-                .rev()
-                .find_map(|stmt| match stmt {
-                    pycc_ast::Stmt::Expr(stmt) => match stmt.value.as_ref() {
-                        pycc_ast::Expr::Call(call) => Some(call.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .expect("fixture ends in a call");
-            let signatures = super::super::SignatureTable::collect(&module.body);
-            assert!(
-                super::super::is_bindable_call(&signatures, &call_expr),
-                "call: {call}"
-            );
+            // HIR lowering does no type checking, so `Ok` here means the
+            // call was bound rather than rejected with `C0001`.
+            lower(&format!("{DEF_ABC}x = 1\n{call}\n")).expect(call);
         }
     }
 
