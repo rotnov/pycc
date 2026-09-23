@@ -1140,13 +1140,16 @@ back a module object. Refusing the shape is one rule at one site
 it makes the same-module case agree with the cross-module one above.
 Supporting either order is later work under #1026.
 
-**Native and embedded mode.** A plain `pycc build` of a program whose foreign
-imports are all standard-library roots produces an embedded executable (see
-"Embedded executables" below), which compiles the module exactly as `--ext`
-does. The effective interop policy is decided first, per import: a root it
-rejects is `I0402` on every host (see "Interop policy" below). Any other
-foreign import leaves a plain build with no interpreter to
-import into, so the driver refuses the program with `I0403` before codegen —
+**Native and embedded mode.** A plain `pycc build` of a program with foreign
+imports produces an embedded executable (see "Embedded executables" below),
+which compiles the module exactly as `--ext` does; a root outside the
+standard library bundles its closure from `pycc.lock` (#1242), and a missing
+or stale lock is exit 2 naming `pycc lock`. The effective interop policy is
+decided first, per import: a root it rejects is `I0402` on every host (see
+"Interop policy" below). An import the build cannot embed (an excluded
+Tcl/Tk root, a `--target` build, or a Windows host) leaves a plain build with
+no interpreter to import into, so the driver refuses the program with `I0403`
+before codegen —
 one diagnostic per such import, each at its own `import` statement in the file
 that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
 rule 1) — and `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a

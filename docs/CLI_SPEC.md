@@ -451,10 +451,10 @@ builds one bundling its closure from `pycc.lock` (#1242).
   `pycc lock` records the closure (D-249) and an embedded build bundles it
   (#1242), except native libraries outside the interpreter prefix (#1243);
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
-  named by `allow`, and another direct root fails with `I0402`. Importing a
-  submodule of an allowed root and loading its locked transitive closure
-  do not require separate entries (#1242; a dotted CPython-backed import is
-  `C0001` today). Each entry is one root name, so an empty or dotted entry is
+  named by `allow`, and another direct root fails with `I0402`. A locked
+  root's transitive closure loads without separate entries for its
+  dependencies (#1242); importing a submodule of an allowed root is still
+  `C0001` today. Each entry is one root name, so an empty or dotted entry is
   invalid;
 - `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
   CPython-backed import with `I0402`, so the produced artifact contains no
