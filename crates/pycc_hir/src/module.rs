@@ -745,39 +745,51 @@ fn lower_top_level_item<'a>(
             def.range,
         ));
     }
-    let item = match stmt {
-        Stmt::FunctionDef(def) => lower_function(
+    let span = statement_span(stmt);
+    if let Stmt::FunctionDef(def) = stmt {
+        let item = lower_function(
             def,
             &state.aliases,
             &class_name_defs,
             &state.imports,
             &state.signatures,
-        )?,
-        other => HirItem::TopLevelStmt(stmt::lower_stmt(
-            other,
-            &state.aliases,
-            false,
-            false,
-            false,
-            // #795 (PEP 654): module top level is `Outside` by definition.
-            stmt::ExceptStarCtx::Outside,
-            None,
-            None,
-            &class_name_defs,
-            &state.imports,
-            &state.signatures,
-        )?),
-    };
-    let span = statement_span(stmt);
-    match &item {
-        HirItem::Function { name, .. } => state.definition_spans.push((name.clone(), span)),
-        HirItem::TopLevelStmt(lowered) => {
-            for name in killed_names(std::slice::from_ref(lowered)) {
-                state.definition_spans.push((name, span));
-            }
+        )?;
+        if let HirItem::Function { name, .. } = &item {
+            state.definition_spans.push((name.clone(), span));
+        }
+        state.items.push(item);
+        return Ok(());
+    }
+    // #1213: a chained assignment expands into several statements, all
+    // lowered before any is recorded, so an `Err` still records nothing.
+    let lowered = stmt::lower_stmt_expanded(
+        stmt,
+        &state.aliases,
+        false,
+        false,
+        false,
+        // #795 (PEP 654): module top level is `Outside` by definition.
+        stmt::ExceptStarCtx::Outside,
+        None,
+        None,
+        &class_name_defs,
+        &state.imports,
+        &state.signatures,
+    )?;
+    // A chained-assignment temporary (`0chain_<offset>`) is not a
+    // definition the source wrote, so it never takes part in
+    // `program::link`'s cross-module collision check -- the same reason the
+    // `__name__` seed is not recorded (see `lower_module`). `killed_names`
+    // reaches into nested bodies, so a chain inside a module-level `for` or
+    // `if` contributes its temporary here too and is filtered the same way.
+    for name in killed_names(&lowered) {
+        if !stmt::chain_assign::is_chain_temp_name(&name) {
+            state.definition_spans.push((name, span));
         }
     }
-    state.items.push(item);
+    state
+        .items
+        .extend(lowered.into_iter().map(HirItem::TopLevelStmt));
     Ok(())
 }
 

@@ -1788,41 +1788,27 @@ fn collect_init_attrs(
         let Stmt::Assign(assign) = stmt else {
             continue;
         };
-        // Not a `let [target] = .. else { continue }` guard: `init_body` is
-        // only ever reached here once `stmt::lower_body` has already
-        // lowered this exact body successfully (`lower_class` calls
-        // `collect_init_attrs` after, never before,
-        // `lower_method`'s own `stmt::lower_body(&def.body, ..)?` call --
-        // see `lower_method`'s own doc comment) -- and that pass's own
-        // `Stmt::Assign` handling (`crate::stmt::lower_stmt`) already
-        // rejects a multi-target assignment (`self.x = self.y = 0`) with
-        // `C0001` before this pre-scan ever runs. `.expect()`, not a
-        // hand-rolled `continue`, per this crate's own established
-        // coverage-gate convention for a provably-unreachable shape (see
-        // `lower_type_alias_stmt`'s own `.expect(...)` precedent in
-        // `lib.rs`): the panic path lives in libcore, outside this crate's
-        // instrumented regions, unlike a `continue` here, which real
-        // parsed source can never reach and which D-014's 100%-region gate
-        // would otherwise demand a test for.
-        let target = assign.targets.first().expect(
-            "stmt::lower_body already rejected a multi-target assignment with C0001 \
-             before this pre-scan runs",
-        );
-        let Expr::Attribute(attr) = target else {
-            continue;
-        };
-        let Expr::Name(receiver) = attr.value.as_ref() else {
-            continue;
-        };
-        if receiver.id.as_str() != receiver_name {
-            continue;
+        // #1213: a chained assignment (`self.x = self.y = 0`) declares
+        // every receiver attribute among its targets, each typed from the
+        // one shared right-hand side, exactly as the single-target
+        // assignments `stmt::lower_stmt_expanded` expands it into would.
+        for target in &assign.targets {
+            let Expr::Attribute(attr) = target else {
+                continue;
+            };
+            let Expr::Name(receiver) = attr.value.as_ref() else {
+                continue;
+            };
+            if receiver.id.as_str() != receiver_name {
+                continue;
+            }
+            let attr_name = attr.attr.to_string();
+            if attrs.iter().any(|(name, _)| *name == attr_name) {
+                continue;
+            }
+            let ty = slot_ty_from_init_rhs(&assign.value, params, receiver_name)?;
+            attrs.push((attr_name, ty));
         }
-        let attr_name = attr.attr.to_string();
-        if attrs.iter().any(|(name, _)| *name == attr_name) {
-            continue;
-        }
-        let ty = slot_ty_from_init_rhs(&assign.value, params, receiver_name)?;
-        attrs.push((attr_name, ty));
     }
     Ok(attrs)
 }
@@ -3093,18 +3079,22 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_target_assignment_inside_init_is_rejected_before_the_pre_scan_ever_runs() {
-        // `self.x = self.y = 0` parses to a single `Stmt::Assign` with two
-        // targets (`[Attribute(self.x), Attribute(self.y)]`).
-        // `pycc_hir::stmt::lower_stmt` (D-154's own `Assign` handling is
-        // unchanged there) rejects a multi-target assignment with `C0001`
-        // ("only a single assignment target is supported so far") during
-        // `stmt::lower_body`, which `lower_method` always calls -- and
-        // requires to succeed -- before `collect_init_attrs`'s own
-        // pre-scan ever runs (see that function's own doc comment for why
-        // its `assign.targets.first().expect(...)` is therefore safe, not
-        // a `continue`-guarded shape this pre-scan needs to skip itself).
-        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.x = self.y = 0\n");
+    fn a_chained_assignment_inside_init_declares_every_receiver_attribute_it_targets() {
+        // #1213: `self.x = self.y = 0` declares both `x` and `y`, each typed
+        // from the one shared right-hand side; a non-receiver target in the
+        // same chain (`n`) and a repeat of an already-declared attribute add
+        // no slot.
+        let hir = lower_ok(
+            "class C:\n    def __init__(self, v: int) -> None:\n        self.x = self.y = 0\n        n = self.y = self.z = v\n",
+        );
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+                ("z".to_string(), Ty::Int),
+            ]
+        );
     }
 
     #[test]

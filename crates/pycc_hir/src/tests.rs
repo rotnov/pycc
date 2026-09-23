@@ -505,10 +505,50 @@ fn lowers_a_float_literal() {
 }
 
 #[test]
-fn a_multi_target_assignment_is_unsupported() {
-    assert_capability_error_message(
-        "x = y = 1\n",
-        "only a single assignment target is supported so far",
+fn a_chained_assignment_of_a_literal_lowers_to_one_assignment_per_target() {
+    // #1213: an unobservable right-hand side is copied to each target, so
+    // no temporary appears.
+    let module = pycc_parser_test_helper::parse("x = y = 1\n");
+    let hir = lower_checked(&module).unwrap();
+    let assign = |target: &str| {
+        HirItem::TopLevelStmt(HirStmt::Assign {
+            target: target.to_string(),
+            value: HirExpr::IntLiteral(1),
+        })
+    };
+    assert_eq!(hir.items, vec![assign("x"), assign("y")]);
+}
+
+#[test]
+fn a_chained_assignment_inside_a_function_binds_a_computed_value_once() {
+    // #1213: a call is evaluated once into the temporary, then each target
+    // is assigned from it, left to right.
+    let module = pycc_parser_test_helper::parse(
+        "def g() -> int:\n    return 1\ndef f() -> int:\n    a = b = g()\n    return a\n",
+    );
+    let hir = lower_checked(&module).unwrap();
+    let body = hir
+        .items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "f" => Some(body),
+            _ => None,
+        })
+        .expect("f is lowered");
+    let targets: Vec<&str> = body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            HirStmt::Assign { target, .. } => Some(target.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(targets, ["0chain_49", "a", "b"]);
+    assert_eq!(
+        body[1],
+        HirStmt::Assign {
+            target: "a".to_string(),
+            value: HirExpr::Name("0chain_49".to_string()),
+        }
     );
 }
 
@@ -6307,10 +6347,13 @@ fn a_string_annotation_names_its_kind() {
 }
 
 #[test]
-fn a_multi_target_assignment_reports_the_target_count() {
-    assert_capability_error_message(
-        "a = b = c = 1\n",
-        "only a single assignment target is supported so far, got 3 targets",
+fn a_tuple_target_inside_a_chained_assignment_names_its_kind() {
+    // #1213: each piece of a chain goes through the single-target arm, so a
+    // tuple piece keeps that arm's refusal, spanned on the tuple itself.
+    assert_capability_error(
+        "a = b, c = t\n",
+        "only assigning to a bare name is supported so far, got a tuple",
+        Span::new(4, 8),
     );
 }
 
@@ -6482,7 +6525,7 @@ fn no_capability_message_renders_an_ast_debug_dump() {
     // leaked through any of the rewritten sites.
     for source in [
         "import typing\ndef f(x: typing.Any) -> int:\n    return 1\n",
-        "a = b = 1\n",
+        "class C:\n    a = b = 1\n",
         "a, b = 1, 2\n",
         "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
         "for a, b in pairs:\n    pass\n",

@@ -720,6 +720,69 @@ The byte-exact oracle fixtures are `tests/fixtures/aug_assign_scalars.py` and
 `tests/fixtures/aug_assign_targets.py`.
 
 
+### Chained assignment
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1213](https://github.com/rotnov/pycc/issues/1213), Part 5 of
+[#1018](https://github.com/rotnov/pycc/issues/1018)). For
+`t1 = t2 = ... = tn = e`, CPython evaluates `e` once, then assigns it to `t1`,
+`t2`, ... `tn`, left to right. Each target's own base and key are evaluated
+when that target is assigned, so in `n = d[f"{n}"] = 5` the key reads the `n`
+the first target just bound.
+
+pycc rewrites the chain into single-target assignments
+(`crates/pycc_hir/src/stmt/chain_assign.rs`) and lowers each one as the
+written-out assignment. Every check and refusal of a single-target assignment
+therefore applies to each target unchanged:
+
+- When `e` is `is_unobservable` (a name, or a literal in the subset a parameter
+  default admits), each target is assigned its own copy of `e`:
+  `a = b = 0` becomes `a = 0; b = 0`. Reading such an `e` again cannot be
+  observed. A name target equal to `e` rebinds it to the value it already
+  holds. The copied literals are immutable, and their identity is not
+  observable only because pycc refuses `is` (other than against `None`) and
+  `id()` today. A change that admits either must bind the value once instead.
+- Otherwise `e` is bound once to a synthesized temporary, `0chain_<offset>`
+  (`<offset>` is the statement's byte offset), and each target is assigned
+  from it. The temporary's leading digit means no source name can equal it,
+  the same D-117 argument comprehension variables use. `a = b = [1]` makes
+  `a` and `b` the same list, as in CPython.
+
+A chain is refused, with `C0001`, when:
+
+- `e` is an empty `[]` or `{}`, because the empty-container pass infers the
+  element type from uses of the same name and could only name the temporary.
+  The message is "chained assignment of an empty `[]`/`{}` literal is not
+  supported yet; inside a function, annotate one name and assign it
+  (`a: list[int] = []`, then `b = a`)".
+- a target is a tuple, list or starred target, which gets the single-target
+  refusal "only assigning to a bare name is supported so far, got a tuple"
+  ([#891](https://github.com/rotnov/pycc/issues/891));
+- the chain is in a class body ("a class-level attribute assignment must have a
+  single target") or an enum body, which keep their own refusals.
+
+`self.x = self.y = v` in `__init__` declares both attributes, each typed from
+`v`. A subscript target has the single-target limits: only a `dict[str, int]`
+or buffer store compiles, and `list[int]` item assignment is `T0033`.
+
+Two known limits, neither of which produces wrong output:
+
+- **Module temporaries.** A program's modules share one namespace, so two
+  modules whose module-level chains, with non-trivial values, start at the same
+  byte offset share one `0chain_<offset>` global. The temporary is written
+  immediately before it is read, so sharing it is harmless when both values
+  have the same type. When they differ, the program is refused or its slot
+  type is widened. The temporary is not recorded as a definition, so it never
+  causes the cross-module name collision `C0001`.
+- **Buffer allocations.** Under `pycc build --ext`, `a = b = ndarray(n)` binds
+  the allocation to the temporary. The targets then read a buffer-bound name,
+  so the build is refused with the `C0001` that begins "using `{name}`, which
+  is bound to buffer storage this `pycc build --ext` artifact allocated", and
+  that message names `0chain_<offset>`. Allocate into one name instead.
+
+End-to-end tests are in `tests/issue_1213_chain_assign.rs`, and the byte-exact
+oracle fixture is `tests/fixtures/chain_assign.py`.
+
 ### `and` and `or`
 
 This is the canonical statement of the rule; other documents cross-reference

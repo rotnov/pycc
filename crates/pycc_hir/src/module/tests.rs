@@ -1131,3 +1131,46 @@ fn a_bare_import_of_dunder_future_is_unchanged() {
         span_of(source, source.trim_end(), 0),
     );
 }
+
+// ---------------------------------------------------------------------------
+// #1213: chained assignment at module top level.
+
+/// A chain expands into one top-level item per piece, and its temporary is
+/// never a definition `program::link` can collide on -- whether the chain is
+/// a top-level statement or nested inside one (`killed_names` recurses).
+#[test]
+fn a_chained_assignment_records_its_targets_but_never_its_temporary() {
+    let source =
+        "def g() -> int:\n    return 1\na = b = g()\nfor i in range(2):\n    c = d = g()\n";
+    let module = parse(source);
+    let lowered =
+        lower_module(&module, &ResolvedImports::default(), None).expect("chains must lower");
+    let mut defined: Vec<&str> = lowered
+        .definition_spans
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    defined.sort_unstable();
+    assert_eq!(defined, ["a", "b", "c", "d", "g", "i"]);
+    // `g`, the temporary, `a`, `b`, then the `for` loop.
+    assert_eq!(lowered.hir.items.len(), 5);
+    let chain = span_of(source, "a = b = g()", 0);
+    assert!(
+        lowered
+            .definition_spans
+            .iter()
+            .filter(|(name, _)| name == "a" || name == "b")
+            .all(|(_, span)| *span == chain)
+    );
+}
+
+/// A refused piece of a chain records nothing, not even the pieces lowered
+/// before it: `lower_top_level_item`'s `Err` contract.
+#[test]
+fn a_chain_with_a_refused_piece_records_nothing() {
+    let source = "a = (b, c) = t\n";
+    let diagnostics = lower_module(&parse(source), &ResolvedImports::default(), None)
+        .expect_err("a tuple piece is refused");
+    assert_eq!(diagnostics[0].code, "C0001");
+    assert_eq!(diagnostics.len(), 1);
+}
