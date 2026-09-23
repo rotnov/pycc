@@ -3,6 +3,7 @@ mod boolop;
 mod buffer;
 mod class;
 mod compare_chain;
+mod comprehension;
 mod constraints;
 mod del_stmt;
 mod empty_container;
@@ -25,6 +26,7 @@ mod unop;
 pub use buffer::{
     function_local_producer_spellings, imported_producer_spellings, is_buffer_producer_spelling,
 };
+use comprehension::{CompElts, CompView, check_comp_assign};
 pub(crate) use enum_lower::{
     check_enum_loop_body_function, check_enum_loop_body_module, enum_member_attr_type,
     unroll_enum_loops,
@@ -1339,43 +1341,6 @@ fn collect_named_expr_bindings(
     }
 }
 
-/// Resolves a comprehension's iterable (`pycc_hir::CompIter`) to the loop
-/// variable's type, without binding it -- mirrors `HirStmt::ForList`'s own
-/// resolution exactly (`check_stmt`/`check_stmt_in_function`'s existing
-/// `ForList` arms), reused rather than duplicated a third time (PR-12,
-/// D-117). Range/list/dict/set element-type resolution is identical to
-/// `ForList`'s; a comprehension adds nothing new here.
-fn resolve_comp_iter(
-    env: &Environment,
-    local_names: &[&str],
-    iter: &CompIter,
-) -> Result<Ty, Diagnostic> {
-    match iter {
-        CompIter::Range { start, stop, step } => {
-            check_range_operand_in(env, local_names, "start", start)?;
-            check_range_operand_in(env, local_names, "stop", stop)?;
-            check_range_operand_in(env, local_names, "step", step)?;
-            Ok(Ty::Int)
-        }
-        CompIter::Name(name) => {
-            let base_ty = lookup_bound_name(env, local_names, name)?;
-            match base_ty {
-                Ty::List(elem_ty) => Ok(*elem_ty),
-                Ty::Dict(kv) => Ok(kv.0),
-                Ty::Set(elem_ty) => Ok(*elem_ty),
-                other => Err(Diagnostic::error(
-                    "T0033",
-                    format!(
-                        "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
-                        other.name()
-                    ),
-                    Span::new(0, 0),
-                )),
-            }
-        }
-    }
-}
-
 /// Issue #118 Part 1: joins two branch environments into `env` after an `if`
 /// statement. The join lattice is: `Definitely` > `Maybe` > unbound.
 ///
@@ -2448,73 +2413,42 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
-        // PR-12 Task 3 (D-117): `target = [elt for var in iter [if cond]]`
-        // at module scope. `var` is resolved and bound exactly like
-        // `ForList`'s own loop variable above (via the shared
-        // `resolve_comp_iter` helper) *before* `cond`/`elt` are checked, so
-        // a reference to the loop variable inside either sub-expression
-        // resolves correctly. The produced element type is gated to
-        // `Ty::Int` -- identical rule to `ListLiteral`'s own `T0034` gate
-        // (D-105/D-122), just reached via a new code path (D-119); no new
-        // diagnostic code is minted.
+        // PR-12 Task 3 (D-117): `target = <comp>` at module scope, checked
+        // by the shared `comprehension::check_comp_assign` helper.
         HirStmt::ListCompAssign {
             target,
             var,
             iter,
             cond,
             elt,
-        } => {
-            let var_ty = resolve_comp_iter(env, &[], iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr(env, cond)?;
-            }
-            let elt_ty = infer_expr(env, elt)?;
-            if elt_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0034",
-                    format!(
-                        "list codegen only supports `list[int]` in v0.2, got a comprehension producing `list[{}]`",
-                        elt_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::List(Box::new(Ty::Int)))
-        }
-        // PR-12 Task 3 (D-117): `target = {elt for var in iter [if cond]}`
-        // at module scope. Mirrors `ListCompAssign` above exactly except for
-        // the produced type and diagnostic code (D-119: reuses `T0038`,
-        // identical to `SetLiteral`'s own gate).
+        } => check_comp_assign(
+            env,
+            &[],
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::List(elt),
+            },
+        ),
         HirStmt::SetCompAssign {
             target,
             var,
             iter,
             cond,
             elt,
-        } => {
-            let var_ty = resolve_comp_iter(env, &[], iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr(env, cond)?;
-            }
-            let elt_ty = infer_expr(env, elt)?;
-            if elt_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0038",
-                    format!(
-                        "set codegen only supports `set[int]` in v0.2, got a comprehension producing `set[{}]`",
-                        elt_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::Set(Box::new(Ty::Int)))
-        }
-        // PR-12 Task 3 (D-117): `target = {key: value for var in iter [if
-        // cond]}` at module scope. Mirrors `ListCompAssign` above except for
-        // the key/value split (D-119: reuses `T0036`, identical to
-        // `DictLiteral`'s own gate).
+        } => check_comp_assign(
+            env,
+            &[],
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::Set(elt),
+            },
+        ),
         HirStmt::DictCompAssign {
             target,
             var,
@@ -2522,27 +2456,17 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             cond,
             key,
             value,
-        } => {
-            let var_ty = resolve_comp_iter(env, &[], iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr(env, cond)?;
-            }
-            let key_ty = infer_expr(env, key)?;
-            let value_ty = infer_expr(env, value)?;
-            if key_ty != Ty::Str || value_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0036",
-                    format!(
-                        "dict codegen only supports `dict[str, int]` in v0.2, got a comprehension producing `dict[{}, {}]`",
-                        key_ty.name(),
-                        value_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))))
-        }
+        } => check_comp_assign(
+            env,
+            &[],
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::Dict(key, value),
+            },
+        ),
         HirStmt::Return(_) => Err(Diagnostic::error(
             "T0024",
             "'return' outside a function is not allowed".to_string(),
@@ -3300,62 +3224,42 @@ fn check_stmt_in_function(
                 .to_string(),
             Span::new(0, 0),
         )),
-        // PR-12 Task 3 (D-117): function-scope counterparts of the
-        // module-scope `check_stmt` arms above, `local_names`-aware
-        // (`resolve_comp_iter`/`infer_expr_in` in place of the module-scope
-        // helpers/`&[]`) -- otherwise identical, mirroring exactly how
-        // `ForList`'s own two arms (module vs. function scope) already
-        // differ only in that respect.
+        // PR-12 Task 3 (D-117): `target = <comp>` in a function body,
+        // checked by the shared `comprehension::check_comp_assign` helper.
         HirStmt::ListCompAssign {
             target,
             var,
             iter,
             cond,
             elt,
-        } => {
-            let var_ty = resolve_comp_iter(env, local_names, iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?;
-            }
-            let elt_ty = infer_expr_in(env, local_names, elt)?;
-            if elt_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0034",
-                    format!(
-                        "list codegen only supports `list[int]` in v0.2, got a comprehension producing `list[{}]`",
-                        elt_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::List(Box::new(Ty::Int)))
-        }
+        } => check_comp_assign(
+            env,
+            local_names,
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::List(elt),
+            },
+        ),
         HirStmt::SetCompAssign {
             target,
             var,
             iter,
             cond,
             elt,
-        } => {
-            let var_ty = resolve_comp_iter(env, local_names, iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?;
-            }
-            let elt_ty = infer_expr_in(env, local_names, elt)?;
-            if elt_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0038",
-                    format!(
-                        "set codegen only supports `set[int]` in v0.2, got a comprehension producing `set[{}]`",
-                        elt_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::Set(Box::new(Ty::Int)))
-        }
+        } => check_comp_assign(
+            env,
+            local_names,
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::Set(elt),
+            },
+        ),
         HirStmt::DictCompAssign {
             target,
             var,
@@ -3363,27 +3267,17 @@ fn check_stmt_in_function(
             cond,
             key,
             value,
-        } => {
-            let var_ty = resolve_comp_iter(env, local_names, iter)?;
-            check_assignment(env, var, var_ty)?;
-            if let Some(cond) = cond {
-                infer_expr_in(env, local_names, cond)?;
-            }
-            let key_ty = infer_expr_in(env, local_names, key)?;
-            let value_ty = infer_expr_in(env, local_names, value)?;
-            if key_ty != Ty::Str || value_ty != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0036",
-                    format!(
-                        "dict codegen only supports `dict[str, int]` in v0.2, got a comprehension producing `dict[{}, {}]`",
-                        key_ty.name(),
-                        value_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
-            }
-            check_assignment(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))))
-        }
+        } => check_comp_assign(
+            env,
+            local_names,
+            target,
+            CompView {
+                var,
+                iter,
+                cond: cond.as_deref(),
+                elts: CompElts::Dict(key, value),
+            },
+        ),
         HirStmt::Assign { target, value } => {
             // #1021: `name_binding` is a no-op for every code but `T0003`,
             // and for a `T0003` it substitutes the binding's name only when

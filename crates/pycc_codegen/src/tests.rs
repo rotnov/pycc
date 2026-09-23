@@ -7,8 +7,8 @@
 
 use super::*;
 use pycc_mir::{
-    BinOpKind, CmpOpKind, InstantiateExpr, MirExceptHandler, MirExceptionValue, MirExpr,
-    MirFStringPart, MirItem, MirModule, MirStmt, Ty,
+    BinOpKind, CmpOpKind, CompSource, InstantiateExpr, MirExceptHandler, MirExceptionValue,
+    MirExpr, MirFStringPart, MirItem, MirModule, MirStmt, Ty,
 };
 use std::process::Command;
 

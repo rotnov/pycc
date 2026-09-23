@@ -24,17 +24,18 @@
 //! `C0001`, generator codegen remains out of scope). Every position lexically
 //! *inside a comprehension*'s own scope (`if`-filter `cond`, `elt`, `key`,
 //! `value`, and -- as a documented, narrower exception, see
-//! `lower_comprehension_iter` below -- the comprehension's outermost
+//! `comprehension::lower_comprehension_iter` -- the comprehension's outermost
 //! iterable) instead hardcodes a literal `true`, deliberately preserving
 //! today's exact `C0001`-in-both-scopes behavior for a comprehension-internal
 //! `yield`/`yield from`: CPython's real rule there is a third,
 //! scope-independent classification (`'yield' inside list comprehension`)
 //! this issue does not implement (see D-149 for the full rationale). This is
-//! why the five comprehension-helper functions below need no new parameter at
+//! why the comprehension helpers in `comprehension.rs` need no new parameter at
 //! all -- they never forward the ambient `in_function` value, only the one
 //! literal that reproduces current behavior.
 
 mod bin_op_kind;
+mod comprehension;
 mod container_call;
 pub(crate) mod keyword_bind;
 pub(crate) mod receiver_dispatch;
@@ -42,14 +43,19 @@ mod std_receiver;
 pub(crate) mod unobservable;
 
 pub(crate) use bin_op_kind::bin_op_kind;
+#[cfg(test)]
+pub(crate) use comprehension::{lower_comprehension_header, rename_name_in_expr};
+pub(crate) use comprehension::{
+    lower_dict_comp_assign, lower_list_comp_assign, lower_set_comp_assign,
+};
 use keyword_bind::SignatureTable;
 
 use crate::boolop::{fold_bool_op, mark_truth_context};
 use crate::compare_chain::{lower_cmp_op, lower_compare_chain};
 use crate::int_boundary::check_boundary_literal;
 use crate::{
-    BinOpKind, BoolOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty, UnaryOpKind,
-    context_invalid, unsupported,
+    BinOpKind, BoolOpKind, FStringPart, HirExpr, ImportBinding, Ty, UnaryOpKind, context_invalid,
+    unsupported,
 };
 use pycc_ast::{BoolOp, Expr, Int, Number, UnaryOp};
 use pycc_diag::Diagnostic;
@@ -923,179 +929,6 @@ pub(crate) fn lower_expr(
     };
     Ok(lowered)
 }
-
-/// Rewrites every occurrence of the bare name `from` inside `expr` to `to`
-/// (PR-12, D-117) -- used to give a comprehension's own loop variable a
-/// synthesized, collision-proof internal name (see `synthesize_comp_var_name`
-/// below) without inventing real lexical scoping. Exhaustive over `HirExpr`
-/// on purpose: a future variant added to this enum must add its own arm here
-/// too, the same "let the compiler enumerate every site" discipline this
-/// project's own `Scalar::List` precedent (D-107) already established for
-/// `pycc_codegen`. Safe to apply blindly (no risk of renaming an unrelated
-/// same-named binding from some other nested scope) because v0.2's
-/// comprehension grammar has no nested comprehensions, no lambda, and no
-/// nested function defs inside a comprehension's own `elt`/`cond`/`key`/
-/// `value` -- none of those are expressible here at all yet.
-pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
-    let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
-    match expr {
-        HirExpr::Name(n) => HirExpr::Name(if n == from { to.to_string() } else { n }),
-        HirExpr::IntLiteral(_)
-        | HirExpr::FloatLiteral(_)
-        | HirExpr::BoolLiteral(_)
-        | HirExpr::StringLiteral(_)
-        | HirExpr::EmptyList(_)
-        | HirExpr::EmptyDict(_)
-        | HirExpr::NoneLiteral => expr,
-        // `callee` (a bare `String`, never an `HirExpr::Name`) is
-        // deliberately left untouched even if it equals `from`: this HIR
-        // subset has no first-class functions, so `callee` always names a
-        // module-level function definition, never a local variable this
-        // rename could plausibly shadow -- unlike `args`, which are
-        // recursed into normally.
-        HirExpr::Call { callee, args } => HirExpr::Call {
-            callee,
-            args: args.into_iter().map(recurse).collect(),
-        },
-        HirExpr::UnaryOp { op, operand } => HirExpr::UnaryOp {
-            op,
-            operand: Box::new(recurse(*operand)),
-        },
-        // `truth_only` is carried through: a renamed comprehension filter
-        // stays a truth position.
-        HirExpr::BoolOp {
-            op,
-            left,
-            right,
-            truth_only,
-        } => HirExpr::BoolOp {
-            op,
-            left: Box::new(recurse(*left)),
-            right: Box::new(recurse(*right)),
-            truth_only,
-        },
-        HirExpr::BinOp { op, left, right } => HirExpr::BinOp {
-            op,
-            left: Box::new(recurse(*left)),
-            right: Box::new(recurse(*right)),
-        },
-        HirExpr::Compare { op, left, right } => HirExpr::Compare {
-            op,
-            left: Box::new(recurse(*left)),
-            right: Box::new(recurse(*right)),
-        },
-        HirExpr::CompareChain { first, links } => HirExpr::CompareChain {
-            first: Box::new(recurse(*first)),
-            links: links
-                .into_iter()
-                .map(|link| crate::CompareLink {
-                    op: link.op,
-                    right: recurse(link.right),
-                })
-                .collect(),
-        },
-        HirExpr::FString(parts) => HirExpr::FString(
-            parts
-                .into_iter()
-                .map(|part| match part {
-                    FStringPart::Literal(s) => FStringPart::Literal(s),
-                    FStringPart::Interpolation(e) => {
-                        FStringPart::Interpolation(Box::new(recurse(*e)))
-                    }
-                })
-                .collect(),
-        ),
-        HirExpr::ListLiteral(es) => HirExpr::ListLiteral(es.into_iter().map(recurse).collect()),
-        HirExpr::Subscript { base, index } => HirExpr::Subscript {
-            base: Box::new(recurse(*base)),
-            index: Box::new(recurse(*index)),
-        },
-        HirExpr::Slice {
-            base,
-            start,
-            stop,
-            step,
-        } => HirExpr::Slice {
-            base: Box::new(recurse(*base)),
-            start: start.map(|s| Box::new(recurse(*s))),
-            stop: stop.map(|s| Box::new(recurse(*s))),
-            step: step.map(|s| Box::new(recurse(*s))),
-        },
-        HirExpr::ListAppend { list, value } => HirExpr::ListAppend {
-            list: if list == from { to.to_string() } else { list },
-            value: Box::new(recurse(*value)),
-        },
-        HirExpr::DictLiteral(pairs) => HirExpr::DictLiteral(
-            pairs
-                .into_iter()
-                .map(|(k, v)| (recurse(k), recurse(v)))
-                .collect(),
-        ),
-        HirExpr::SetLiteral(es) => HirExpr::SetLiteral(es.into_iter().map(recurse).collect()),
-        HirExpr::TupleLiteral(es) => HirExpr::TupleLiteral(es.into_iter().map(recurse).collect()),
-        // `list`/`dict`/`set` base-name fields are plain `String`s, mirroring
-        // `ListAppend`'s own arm exactly: renamed only when they equal
-        // `from`, otherwise left untouched. This matters for a
-        // comprehension's own `elt`/`cond` referencing e.g. `xs.pop()` where
-        // `xs` is the loop variable being synthesized-renamed -- the common
-        // case (some other, non-loop-variable base) must not be touched.
-        HirExpr::ListPop { list } => HirExpr::ListPop {
-            list: if list == from { to.to_string() } else { list },
-        },
-        HirExpr::DictGetOrDefault { dict, key, default } => HirExpr::DictGetOrDefault {
-            dict: if dict == from { to.to_string() } else { dict },
-            key: Box::new(recurse(*key)),
-            default: Box::new(recurse(*default)),
-        },
-        HirExpr::SetAdd { set, value } => HirExpr::SetAdd {
-            set: if set == from { to.to_string() } else { set },
-            value: Box::new(recurse(*value)),
-        },
-        HirExpr::AttrGet { base, attr } => HirExpr::AttrGet {
-            base: Box::new(recurse(*base)),
-            attr,
-        },
-        // Issue #1188: only `call` holds sub-expressions; the container
-        // reading is derived from it, so renaming `call` renames both.
-        HirExpr::ReceiverDispatchedCall { call, container } => HirExpr::ReceiverDispatchedCall {
-            call: Box::new(recurse(*call)),
-            container,
-        },
-        HirExpr::MethodCall { base, method, args } => HirExpr::MethodCall {
-            base: Box::new(recurse(*base)),
-            method,
-            args: args.into_iter().map(recurse).collect(),
-        },
-        HirExpr::GenericClassInstantiate {
-            class,
-            type_arg,
-            args,
-        } => HirExpr::GenericClassInstantiate {
-            class,
-            type_arg,
-            args: args.into_iter().map(recurse).collect(),
-        },
-        // #433: `Super` carries no names to rename — it is a compile-time
-        // marker, not a value with sub-expressions.
-        HirExpr::Super => expr,
-        // PEP 572 (#774): a walrus target is renamed exactly like a bound
-        // `Name` would be (mirroring `HirExpr::Name`'s own arm above) if it
-        // happens to collide with the comprehension loop variable being
-        // synthesized-renamed; `value` is recursed into normally. In
-        // practice a walrus embedded in a comprehension's `elt`/`cond` is
-        // out of scope for #774 (comprehension-scope walrus semantics are
-        // not implemented -- see that issue's scope-cut note) and is
-        // rejected upstream before lowering ever reaches a real
-        // comprehension body, but this arm still needs to exist so this
-        // exhaustive match compiles, and it does the structurally correct
-        // thing on its own terms regardless.
-        HirExpr::NamedExpr { name, value } => HirExpr::NamedExpr {
-            name: if name == from { to.to_string() } else { name },
-            value: Box::new(recurse(*value)),
-        },
-    }
-}
-
 /// PEP 572 (#774): whether `expr` contains a `HirExpr::NamedExpr` anywhere
 /// within it, at any nesting depth. `crate::stmt::lower_stmt` calls this on
 /// every expression field of a statement kind other than `Stmt::If`'s/
@@ -1171,32 +1004,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
     }
 }
 
-/// Synthesizes a collision-proof internal name for a comprehension's loop
-/// variable (D-117): a leading digit can never begin a valid Python
-/// identifier (confirmed against the vendored `ruff_python_parser`'s own
-/// tokenizer -- a `NAME` token cannot start with a decimal digit), so this
-/// string can never be produced by lowering real Python source, no matter
-/// what the user names their own variables -- no new lexical-scoping
-/// machinery is needed; this is just another ordinary entry in the existing
-/// flat, name-keyed slot model. Seeded by the loop target's own byte offset,
-/// not a mutable counter: two distinct comprehensions in one file can never
-/// share a target's start offset, so this needs no threaded lowering state
-/// and stays fully deterministic across repeated compiles of the same
-/// source.
-///
-/// Takes a plain `u32` byte offset (from `pycc_ast::expr_range`) rather than
-/// naming `ruff_text_size::TextSize` directly -- `pycc_hir` depends only on
-/// `pycc_ast`, never on `ruff_text_size` (Step 0's own re-export widening is
-/// this crate's one and only upstream-crate seam), and `pycc_ast`'s own
-/// `expr_range`/`stmt_range` exist specifically to keep that boundary from
-/// leaking (see their doc comments).
-fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
-    format!("0comp_{target_start}_{source_name}")
-}
-
 /// Parses `range(...)`'s argument list into `(start, stop, step)` `HirExpr`s,
 /// defaulting `start`/`step` per Python's own `range()` overloads. Shared by
-/// `Stmt::For`'s own lowering and `lower_comprehension_iter` below (PR-12) --
+/// `Stmt::For`'s own lowering and `comprehension::lower_comprehension_iter` (PR-12) --
 /// factored out rather than duplicated a second time. Callers are
 /// responsible for checking the callee is actually `range` and carries no
 /// keyword arguments first (their own diagnostics differ in wording between
@@ -1234,260 +1044,6 @@ pub(crate) fn lower_range_call(
             call.range,
         )),
     }
-}
-
-/// Resolves a comprehension's `for var in <iter>` clause into a `CompIter`,
-/// reusing `Stmt::For`'s own iterable-shape acceptance verbatim (D-117):
-/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`
-/// downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
-/// Any other shape is rejected with the existing generic `C0001` path,
-/// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
-/// <list>` is supported so far" message.
-fn lower_comprehension_iter(
-    iter_expr: &Expr,
-    class_name: Option<&str>,
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<CompIter, Diagnostic> {
-    if let Expr::Name(name) = iter_expr {
-        return Ok(CompIter::Name(name.id.as_str().to_string()));
-    }
-    let Expr::Call(call) = iter_expr else {
-        return Err(unsupported(
-            format!(
-                "only `range(...)` or a bare-name iterable is supported so far in a comprehension, got {} as the iterable",
-                pycc_ast::expr_kind_name(iter_expr)
-            ),
-            pycc_ast::expr_range(iter_expr),
-        ));
-    };
-    let Expr::Name(callee) = call.func.as_ref() else {
-        return Err(unsupported(
-            "only calling `range(...)` is supported so far in a comprehension",
-            pycc_ast::expr_range(&call.func),
-        ));
-    };
-    if callee.id.as_str() != "range" {
-        return Err(unsupported(
-            format!(
-                "only iterating over `range(...)` is supported so far in a comprehension, got `{}`",
-                callee.id
-            ),
-            call.range,
-        ));
-    }
-    if !call.arguments.keywords.is_empty() {
-        return Err(unsupported(
-            "keyword arguments to range() are not supported yet",
-            call.range,
-        ));
-    }
-    // Literal `true`, not comprehension-internal, not the threaded ambient
-    // value (D-149 correction 6): a comprehension's outermost iterable --
-    // including a `range(...)` call and its arguments -- evaluates in the
-    // *enclosing* scope per real CPython grammar, confirmed against the
-    // oracle (`[x for x in range((yield 3))]` is `'yield' outside function`
-    // at module scope, and valid inside a `def` -- the ordinary
-    // scope-dependent rule, not the comprehension-internal one). The literal
-    // `true` here is not the theoretically correct value; it reproduces
-    // today's unconditional `C0001` behavior for this narrow sub-position
-    // with zero regression risk, and getting the enclosing-scope split fully
-    // right for it is deliberately deferred (see D-149 and its own "out of
-    // scope" section).
-    let (start, stop, step) = lower_range_call(call, true, class_name, imports, signatures)?;
-    Ok(CompIter::Range { start, stop, step })
-}
-
-/// Validates and lowers a comprehension's shared shape (D-117): exactly one
-/// generator clause, no `async for`, a bare-name loop target, at most one
-/// `if` filter. Returns the loop target's *source* name, its synthesized
-/// internal replacement, the resolved `CompIter`, and the (not-yet-renamed)
-/// lowered `if`-filter expression, if present -- renaming is the caller's
-/// job (`lower_list_comp_assign`/`lower_set_comp_assign`/
-/// `lower_dict_comp_assign` below), since `elt`/`key`/`value` also need the
-/// identical rename and this helper has no visibility into which of those
-/// the caller is building.
-///
-/// `iter` (the resolved `CompIter` returned above) is deliberately **never**
-/// passed through `rename_name_in_expr` -- neither here nor by any caller --
-/// unlike `cond`/`elt`/`key`/`value`, which all are. This is not an
-/// oversight: it matches real CPython scoping. A comprehension's outermost
-/// iterable expression evaluates in the *enclosing* scope, before the
-/// comprehension's own scope exists at all -- `[i for i in range(i)]`'s
-/// `range(i)` reads the *enclosing* `i`, not the comprehension's own loop
-/// variable (confirmed directly against CPython). Renaming `iter`'s
-/// occurrences of the source loop-variable name would therefore be actively
-/// wrong, not merely redundant: it would make `range(i)` read the
-/// comprehension's own (not-yet-bound) synthesized variable instead of
-/// whatever `i` means in the enclosing scope. See
-/// `a_comprehension_range_iterable_referencing_the_loop_variables_own_source_name_is_not_renamed`
-/// and
-/// `a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name_is_not_renamed`
-/// below, which pin this behavior directly -- without them, a future change
-/// that "fixed" this asymmetry by renaming `iter` too would silently break
-/// correct scoping with every existing test still green.
-pub(crate) fn lower_comprehension_header(
-    generators: &[pycc_ast::Comprehension],
-    class_name: Option<&str>,
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
-    // Named `generator`, not `gen` -- `gen` is a reserved keyword as of the
-    // 2024 edition (this workspace's own edition, reserved for a future
-    // generator-block feature), so the brief's own `gen` binding does not
-    // compile here.
-    let [generator] = generators else {
-        return Err(unsupported(
-            "a comprehension with more than one `for` clause is not supported yet",
-            generators.first().map(|g| g.range).unwrap_or_default(),
-        ));
-    };
-    if generator.is_async {
-        return Err(unsupported(
-            "async comprehensions are not supported yet",
-            generator.range,
-        ));
-    }
-    let Expr::Name(var) = &generator.target else {
-        return Err(unsupported(
-            "only a bare name comprehension target is supported so far",
-            pycc_ast::expr_range(&generator.target),
-        ));
-    };
-    let cond = match generator.ifs.as_slice() {
-        [] => None,
-        // Literal `true`, not the threaded ambient value: a comprehension's
-        // `if`-filter is lexically inside the comprehension's own scope
-        // (D-149 correction 5), so a `yield` there is governed by a third,
-        // scope-independent CPython rule (`'yield' inside list
-        // comprehension`, unconditionally invalid regardless of what
-        // encloses the comprehension) that this issue deliberately does not
-        // implement -- hardcoding `true` here preserves today's exact
-        // `C0001`-in-both-scopes behavior byte-for-byte instead of emitting
-        // the wrong classification.
-        [single] => Some(lower_condition(
-            single, true, class_name, imports, signatures,
-        )?),
-        _ => {
-            return Err(unsupported(
-                "a comprehension with more than one `if` filter is not supported yet",
-                generator.range,
-            ));
-        }
-    };
-    let iter = lower_comprehension_iter(&generator.iter, class_name, imports, signatures)?;
-    let source_name = var.id.as_str().to_string();
-    let synth_var =
-        synthesize_comp_var_name(pycc_ast::expr_range(&generator.target).start, &source_name);
-    Ok((source_name, synth_var, iter, cond))
-}
-
-pub(crate) fn lower_list_comp_assign(
-    target: &str,
-    comp: &pycc_ast::ExprListComp,
-    class_name: Option<&str>,
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
-    // Literal `true`: `elt` is lexically inside the comprehension's own
-    // scope, same reasoning as `lower_comprehension_header`'s `cond` arm
-    // above (D-149 correction 5) -- preserves today's `C0001` classification
-    // for a comprehension-internal `yield`/`yield from` in both enclosing
-    // scopes.
-    let elt_hir = lower_expr(&comp.elt, true, class_name, imports, signatures)?;
-    check_boundary_literal(
-        &elt_hir,
-        pycc_ast::expr_range(&comp.elt),
-        "listcomp element",
-    )?;
-    let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
-    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::ListCompAssign {
-        target: target.to_string(),
-        var: synth_var,
-        iter,
-        cond: cond.map(Box::new),
-        elt: Box::new(elt),
-    })
-}
-
-pub(crate) fn lower_set_comp_assign(
-    target: &str,
-    comp: &pycc_ast::ExprSetComp,
-    class_name: Option<&str>,
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
-    // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
-    // above (D-149 correction 5).
-    let elt_hir = lower_expr(&comp.elt, true, class_name, imports, signatures)?;
-    check_boundary_literal(&elt_hir, pycc_ast::expr_range(&comp.elt), "setcomp element")?;
-    let elt = rename_name_in_expr(elt_hir, &source_name, &synth_var);
-    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::SetCompAssign {
-        target: target.to_string(),
-        var: synth_var,
-        iter,
-        cond: cond.map(Box::new),
-        elt: Box::new(elt),
-    })
-}
-
-pub(crate) fn lower_dict_comp_assign(
-    target: &str,
-    comp: &pycc_ast::ExprDictComp,
-    class_name: Option<&str>,
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<HirStmt, Diagnostic> {
-    // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
-    // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
-    // unlike that literal case, the parser does *not* reject
-    // `{**x for k in y}`-shaped source at parse time: confirmed directly
-    // against the vendored `ruff_python_parser` (0.0.6), which parses it
-    // successfully as `ExprDictComp { key: None, value: Name("x"), .. }`,
-    // silently dropping the `**` token rather than erroring. The brief this
-    // task followed assumed `key: None` was unreachable from real parsed
-    // source and modeled it with an `unreachable!()`/`.expect()` internal
-    // panic; that assumption is false, so this is a real (if unusual)
-    // C0001 capability diagnostic, mirroring `Expr::Dict`'s own analogous
-    // `**`-unpacking rejection, not an internal-error panic.
-    let Some(key_expr) = comp.key.as_deref() else {
-        return Err(unsupported(
-            "dict-unpacking (`**expr`) inside a dict comprehension is not supported yet",
-            pycc_ast::expr_range(&comp.value),
-        ));
-    };
-    let (source_name, synth_var, iter, cond) =
-        lower_comprehension_header(&comp.generators, class_name, imports, signatures)?;
-    // Literal `true` for both `key` and `value`: same reasoning as
-    // `lower_list_comp_assign`'s `elt` above (D-149 correction 5) -- `key`
-    // and `value` are both lexically inside the comprehension's own scope.
-    let key = rename_name_in_expr(
-        lower_expr(key_expr, true, class_name, imports, signatures)?,
-        &source_name,
-        &synth_var,
-    );
-    let value_hir = lower_expr(&comp.value, true, class_name, imports, signatures)?;
-    check_boundary_literal(
-        &value_hir,
-        pycc_ast::expr_range(&comp.value),
-        "dictcomp value",
-    )?;
-    let value = rename_name_in_expr(value_hir, &source_name, &synth_var);
-    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
-    Ok(HirStmt::DictCompAssign {
-        target: target.to_string(),
-        var: synth_var,
-        iter,
-        cond: cond.map(Box::new),
-        key: Box::new(key),
-        value: Box::new(value),
-    })
 }
 
 #[cfg(test)]
