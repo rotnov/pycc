@@ -24,7 +24,8 @@ use std::process::ExitCode;
 /// within each OS pair). `pycc version --verbose` reports this list per
 /// CLI_SPEC.md's command table; nothing else in the codebase enumerates
 /// Tier-1 at runtime, so this constant is that table's only code mirror and
-/// changes only when the table does.
+/// changes only when the table does. `pycc lock` also checks the host's
+/// triple and every `pycc.lock` section's triple against it.
 const TIER1_TARGETS: [&str; 5] = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
@@ -126,6 +127,19 @@ fn main() -> ExitCode {
             error_format,
             interop,
         } => check_paths(&paths, error_format, interop.into_cli()),
+        Command::Lock {
+            path,
+            check,
+            interop,
+        } => {
+            // Read from the environment here, like `build`'s toolchain: the
+            // lock is taken from the interpreter an embedded build bundles.
+            let toolchain = embed::EmbedToolchain::from_env();
+            match lock::run_lock(&path, check, interop.into_cli(), &toolchain) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(failure) => ExitCode::from(lock::report_lock_failure(failure)),
+            }
+        }
         Command::Init { name } => {
             // `std::env::current_dir()` is fallible: the process's cwd may
             // have been deleted, unmounted, or become otherwise inaccessible
