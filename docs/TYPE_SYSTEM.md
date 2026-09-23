@@ -946,7 +946,8 @@ before the body is checked (`narrow::apply_delete_prescan`):
 - a `del` of a function or class name (including a builtin class such as
   `ValueError`), of a `Final` name, of a buffer the function releases on
   return, or of a name holding a CPython object, whose release could run a
-  foreign finalizer (`pycc_types/src/del_stmt.rs`);
+  foreign finalizer (`pycc_types/src/del_stmt.rs`). Like every `pycc_types`
+  diagnostic, these render at `1:1`, not at the `del` (D-043);
 - at module scope, a `del` of an imported name (`import m`, `from m import x`);
 - at module scope, a `del x` while any `def` or `class` of the module mentions
   `x`. Those bodies are checked after all top-level code (D-041), so the

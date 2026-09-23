@@ -175,6 +175,11 @@ fn every_del_refusal_is_named() {
             "def f() -> None:\n    del x\n\nf()\n",
             "error[T0021]: local name `x` is not bound before this use",
         ),
+        // A function-scope `del` makes `x` local: the module's `x` is not it.
+        (
+            "x = 1\n\n\ndef f() -> None:\n    del x\n\n\nf()\n",
+            "error[T0021]: local name `x` is not bound before this use",
+        ),
         // One arm, a loop, a handler, `finally`, `except*`.
         (
             "x = 1\nif len([1]) > 0:\n    del x\nprint(x)\n",

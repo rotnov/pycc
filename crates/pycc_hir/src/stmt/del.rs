@@ -273,7 +273,8 @@ pub(crate) fn collect_target_names(target: &Expr, record: &mut impl FnMut(&str))
 /// and a store of a flat top-level global are both an `Expr::Name`, which is
 /// all the `del` rules need: the other binding forms (`def`/`class` names, an
 /// import alias, an `except ... as` or `match` capture) are either not
-/// deletable (`pycc_types`' allowlist refuses functions, classes and imports)
+/// deletable (`pycc_types`' allowlist refuses functions and classes, and
+/// [`check_module_deletions`] refuses a module-scope `del` of an import alias)
 /// or already reach `definition_spans` and `program::link`'s collision guard.
 #[derive(Default)]
 struct NameScan {
