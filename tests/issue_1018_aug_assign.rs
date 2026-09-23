@@ -56,16 +56,8 @@ fn assert_refused(category: &str, source: &str, header: &str, location: &str) {
 fn every_augmented_assignment_capability_refusal_is_named_and_located() {
     for (source, header) in [
         (
-            "x = 1\nx <<= 1\n",
-            "error[C0001]: augmented assignment operator `<<=` is not supported yet",
-        ),
-        (
             "x = 1\nx @= 1\n",
             "error[C0001]: augmented assignment operator `@=` is not supported yet",
-        ),
-        (
-            "x = 1\nx |= 1\n",
-            "error[C0001]: augmented assignment operator `|=` is not supported yet",
         ),
         (
             "class C:\n    def __init__(self) -> None:\n        self.n = 0\n\n\

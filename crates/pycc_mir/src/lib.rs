@@ -1,4 +1,6 @@
 pub use pycc_hir::{EnumMemberValue, HirClassDef};
+mod binop;
+use binop::binop_result_ty;
 mod class;
 #[cfg(test)]
 use class::eval_isinstance_protocol;
@@ -1903,40 +1905,6 @@ fn resolve_comp_source(
             ),
         },
     }
-}
-
-fn binop_result_ty(op: BinOpKind, left: Ty, right: Ty) -> Ty {
-    // #574 (Part 1 of #123): string repetition. `pycc_types`'
-    // `numeric_result_type` types `str * int` and `int * str` -- with
-    // `bool` accepted as the count, since `bool <: int` -- as `str`, so
-    // this function has to say the same, for exactly the reason the
-    // `Div` paragraph below gives: `pycc_types` already accepted the
-    // program on that promise, and answering `Ty::Int` here would make
-    // MIR's `ty` lie about what codegen must produce. Codegen does not
-    // lower repetition yet; it stops at its own explicit, named D-072
-    // boundary (exit 101, see `docs/CLI_SPEC.md`). Native repetition is
-    // #575.
-    if op == BinOpKind::Mul
-        && ((left == Ty::Str && matches!(right, Ty::Int | Ty::Bool))
-            || (right == Ty::Str && matches!(left, Ty::Int | Ty::Bool)))
-    {
-        return Ty::Str;
-    }
-    if left == Ty::Str && right == Ty::Str && op == BinOpKind::Add {
-        return Ty::Str;
-    }
-    // True division always produces `float`, even for two `int`/`bool`
-    // operands -- this must match `pycc_types::numeric_result_type`'s own
-    // rule (`(Some(_), Some(_)) if op == BinOpKind::Div => Ok(Ty::Float)`)
-    // exactly, since `pycc_types` already accepted this program on that
-    // promise; a mismatch here would make MIR's `ty` lie about what
-    // codegen must produce (self-review correction: an earlier draft of
-    // this function returned `Ty::Int` for `int / int`, which is simply
-    // wrong -- `5 / 2` is `2.5`, not `2`).
-    if op == BinOpKind::Div || left == Ty::Float || right == Ty::Float {
-        return Ty::Float;
-    }
-    Ty::Int
 }
 
 #[cfg(test)]

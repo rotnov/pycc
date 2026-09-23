@@ -49,6 +49,8 @@ mod exception;
 /// D-244 rule 2's `PyObject*` boundary, runtime half (#1025/#1028).
 pub mod ext_bridge;
 mod instance;
+/// `<< >> & | ^` over encoded ints (#1210).
+mod int_bitwise;
 mod int_encoding;
 
 #[cfg(not(test))]
@@ -61,6 +63,9 @@ pub use exception::{
     pycc_rt_exception_active, pycc_rt_exception_alloc, pycc_rt_exception_clear,
     pycc_rt_exception_message, pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause,
     pycc_rt_exception_type_matches, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
+};
+pub use int_bitwise::{
+    pycc_rt_int_and, pycc_rt_int_lshift, pycc_rt_int_or, pycc_rt_int_rshift, pycc_rt_int_xor,
 };
 // D-061/D-141's one-word `int` encoding and its heap bigint representation.
 // Glob-imported so the operations below -- and their `#[cfg(test)]` tests,
