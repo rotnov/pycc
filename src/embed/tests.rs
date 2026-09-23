@@ -223,6 +223,10 @@ fn an_old_format_marker_and_a_plain_file_are_both_unmarked() {
     std::fs::write(&file, "x").expect("write");
     assert!(bundle::check_existing(&file).is_err());
     assert_eq!(bundle::check_existing(&dir.join("absent.pycc")), Ok(false));
+    // A path that cannot even be inspected (its parent is a plain file) is
+    // an environment failure, not an absent sidecar.
+    let err = bundle::check_existing(&file.join("app.pycc")).expect_err("not a directory");
+    assert!(err.contains("could not inspect"), "{err}");
 }
 
 #[cfg(unix)]

@@ -85,11 +85,8 @@ pub(crate) fn cc(dir: &Path, args: &[&str]) {
         .args(args)
         .output()
         .expect("spawn cc");
-    assert!(
-        output.status.success(),
-        "cc {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "cc {args:?} failed: {stderr}");
 }
 
 /// Builds `out` as a tiny dylib whose id is its own absolute path, linked

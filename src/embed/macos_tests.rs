@@ -35,6 +35,13 @@ fn a_macos_bundle_relocates_bundles_and_vendors_every_image() {
         "pycc_fake_b",
         &[&vendor],
     );
+    // An extension linking only system libraries needs no rewrite and so
+    // no re-signing, and a dangling symlink in the standard library is
+    // neither a directory nor a file and is not copied.
+    let plain = layout.dynload().join("_plain.cpython-314-darwin.so");
+    mach_bundle(&plain, "pycc_fake_plain", &[]);
+    std::os::unix::fs::symlink("nowhere", layout.stdlib().join("dangling.py"))
+        .expect("create a dangling symlink");
     let toolchain = EmbedToolchain::with_probe("pyfake", layout.probe.clone());
     let out = dir.join("app");
     let plan = plan_embed(
@@ -80,6 +87,13 @@ fn a_macos_bundle_relocates_bundles_and_vendors_every_image() {
         deps(&lib.join("libinner.dylib"))[0],
         "@rpath/libinner.dylib"
     );
+    assert!(
+        !deps(&dynload.join("_plain.cpython-314-darwin.so"))
+            .iter()
+            .any(|dep| dep.starts_with('@')),
+    );
+    let dangling = lib.join("python3.14").join("dangling.py");
+    assert!(std::fs::symlink_metadata(dangling).is_err());
     // Every rewritten image carries a valid ad-hoc signature again.
     for image in [
         lib.join("libpython3.14.dylib"),

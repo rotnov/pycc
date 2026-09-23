@@ -172,23 +172,27 @@ fn relocate_macho(
     let prefix =
         std::fs::canonicalize(&probe.base_prefix).unwrap_or_else(|_| probe.base_prefix.clone());
     let bundled_id = format!("@rpath/{bundled_name}");
-    run_tool(
-        "install_name_tool",
-        &macho::set_id_args(&bundled_id, &bundled),
-    )?;
+    let set_id = macho::set_id_args(&bundled_id, &bundled);
+    run_tool("install_name_tool", &set_id)?;
     let mut worklist = vec![Image {
         rel: PathBuf::from(bundled_name),
         id: Some(bundled_id),
     }];
     let dynload = PathBuf::from(layout::stdlib_dir_name(probe)).join("lib-dynload");
-    if let Ok(entries) = std::fs::read_dir(lib_dir.join(&dynload)) {
-        let mut names: Vec<OsString> = entries.flatten().map(|entry| entry.file_name()).collect();
-        names.sort();
-        worklist.extend(names.into_iter().map(|name| Image {
-            rel: dynload.join(name),
-            id: None,
-        }));
-    }
+    // An interpreter without a `lib-dynload` directory contributes no
+    // extension images, so a failed listing is an empty one.
+    let mut names: Vec<OsString> = std::fs::read_dir(lib_dir.join(&dynload))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    names.sort();
+    let dynload_images = names.into_iter().map(|name| Image {
+        rel: dynload.join(name),
+        id: None,
+    });
+    worklist.extend(dynload_images);
     let mut vendored: Vec<String> = Vec::new();
     let mut next = 0;
     while let Some(image) = worklist.get(next).cloned() {
@@ -254,9 +258,7 @@ fn vendor(from: &Path, lib_dir: &Path, name: &str) -> Result<(), String> {
     let to = lib_dir.join(name);
     let bytes = std::fs::read(from).map_err(|e| io_error("read", from, &e))?;
     std::fs::write(&to, bytes).map_err(|e| io_error("write", &to, &e))?;
-    run_tool(
-        "install_name_tool",
-        &macho::set_id_args(&format!("@rpath/{name}"), &to),
-    )?;
+    let set_id = macho::set_id_args(&format!("@rpath/{name}"), &to);
+    run_tool("install_name_tool", &set_id)?;
     Ok(())
 }

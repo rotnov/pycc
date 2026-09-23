@@ -213,10 +213,7 @@ pub(crate) fn parse_embed_probe(stdout: &str) -> Option<EmbedProbe> {
         libdir,
         instsoname,
         gil,
-    ] = lines.get(..11)?
-    else {
-        return None;
-    };
+    ]: [&str; 11] = lines.get(..11)?.try_into().ok()?;
     let mut parts = version.split('.').map(str::parse::<u32>);
     let version = (
         parts.next()?.ok()?,
@@ -229,12 +226,12 @@ pub(crate) fn parse_embed_probe(stdout: &str) -> Option<EmbedProbe> {
         include: PathBuf::from(include),
         stdlib: PathBuf::from(stdlib),
         base_prefix: PathBuf::from(base_prefix),
-        enable_shared: *shared == "1",
-        framework: (*framework).to_string(),
-        ldlibrary: (*ldlibrary).to_string(),
+        enable_shared: shared == "1",
+        framework: framework.to_string(),
+        ldlibrary: ldlibrary.to_string(),
         libdir: PathBuf::from(libdir),
-        instsoname: (*instsoname).to_string(),
-        gil_disabled: *gil == "1",
+        instsoname: instsoname.to_string(),
+        gil_disabled: gil == "1",
     })
 }
 
@@ -287,15 +284,11 @@ pub(crate) fn plan_embed(
     let classes = ext_build::collect_user_exception_classes(typed_hir);
     let exports_inc = ext_build::generate_exports_inc("__main__", &[], &classes, &[], &[]);
     write_source(&shim, ext_build::SHIM_C)?;
-    write_source(
-        &obj_path.with_file_name(ext_build::EXPORTS_INC_NAME),
-        &exports_inc,
-    )?;
+    let exports_path = obj_path.with_file_name(ext_build::EXPORTS_INC_NAME);
+    write_source(&exports_path, &exports_inc)?;
     write_source(&launcher, LAUNCHER_C)?;
-    write_source(
-        &obj_path.with_file_name(EMBED_CONFIG_INC_NAME),
-        &layout::embed_config_inc(&sidecar_name),
-    )?;
+    let config_path = obj_path.with_file_name(EMBED_CONFIG_INC_NAME);
+    write_source(&config_path, &layout::embed_config_inc(&sidecar_name))?;
     let library = bundle::assemble(&probe, platform, parent, &sidecar_name, replace_existing)?;
     let mut compile_args = vec![OsString::from("-I"), probe.include.into_os_string()];
     compile_args.extend([OsString::from("-fPIC"), shim.into(), launcher.into()]);
