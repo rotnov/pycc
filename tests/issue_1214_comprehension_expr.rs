@@ -5,10 +5,13 @@
 //! byte-exact oracle fixture is `tests/fixtures/comprehension_expr.py`
 //! (registered in `tests/conformance/classes.rs`); this file owns the
 //! uncaught-exception exits, which CPython reports with a traceback pycc
-//! does not print, and a comprehension re-run from a loop in a function.
+//! does not print, a comprehension re-run from a loop in a function, the
+//! set and dict expression forms without the oracle, and the two-module
+//! programs of [#1237].
 //!
 //! [#1254]: https://github.com/rotnov/pycc/issues/1254
 //! [#1214]: https://github.com/rotnov/pycc/issues/1214
+//! [#1237]: https://github.com/rotnov/pycc/issues/1237
 
 use pycc_scratch::ScratchDir;
 use std::process::{Command, Output};
@@ -112,5 +115,77 @@ fn set_and_dict_comprehension_arguments_run_to_the_cpython_output() {
     assert_eq!(
         String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
         "3 2\n3 3\n"
+    );
+}
+
+/// Writes `modules` (the first is the entry) into one directory, builds the
+/// entry and returns the build output and, when it succeeded, the run.
+fn build_program(category: &str, modules: &[(&str, &str)]) -> (Output, Option<Output>) {
+    let dir = ScratchDir::new(category).expect("scratch");
+    for (name, source) in modules {
+        std::fs::write(dir.join(name), source).expect("write a module");
+    }
+    let build = pycc()
+        .arg("build")
+        .arg(dir.join(modules[0].0))
+        .arg("-o")
+        .arg(dir.join("program"))
+        .output()
+        .expect("pycc should spawn");
+    let run = build.status.success().then(|| {
+        Command::new(dir.join("program"))
+            .output()
+            .expect("the built program should spawn")
+    });
+    (build, run)
+}
+
+/// #1237: two modules whose statement-form comprehensions share a target
+/// name and a byte offset used to fail to link on the synthesized loop
+/// variable the user never wrote. CPython prints `2`.
+#[test]
+fn same_offset_comprehensions_in_two_modules_link_and_run() {
+    let (build, run) = build_program(
+        "e2e_1237_two_modules",
+        &[
+            (
+                "a.py",
+                "ws = [1]\nxs = [y for y in ws]\nfrom b import zs\nprint(len(xs) + len(zs))\n",
+            ),
+            ("b.py", "vs = [1]\nzs = [y for y in vs]\n"),
+        ],
+    );
+    let run = run.unwrap_or_else(|| panic!("{}", rendered(&build)));
+    assert_eq!(run.status.code(), Some(0), "{}", rendered(&run));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
+        "2\n"
+    );
+}
+
+/// A known gap under #1237, not intended behavior: the linked program is
+/// one flat namespace, so same-offset, same-name loop variables of
+/// *different* types (a `range` `int` and a `dict` `str` key) still share
+/// one module-global slot and the checker refuses the second binding.
+/// CPython prints `4`. The refusal is fail-closed (nothing is emitted).
+#[test]
+fn same_offset_comprehension_variables_of_different_types_are_still_refused() {
+    let (build, run) = build_program(
+        "e2e_1237_two_types",
+        &[
+            (
+                "a.py",
+                "ws = [1, 2]\nxs = [y for y in range(3)]\nfrom b import zs\nprint(len(xs) + len(zs))\n",
+            ),
+            ("b.py", "v={\"\":1}\nzs = {y: 1 for y in v}\n"),
+        ],
+    );
+    assert!(run.is_none(), "the build is expected to be refused");
+    assert!(
+        rendered(&build).contains(
+            "error[T0023]: cannot assign `int` to `0comp_24_y`, previously inferred as `str`"
+        ),
+        "{}",
+        rendered(&build)
     );
 }
