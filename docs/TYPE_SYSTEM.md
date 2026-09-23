@@ -743,6 +743,10 @@ therefore applies to each target unchanged:
   holds. The copied literals are immutable, and their identity is not
   observable only because pycc refuses `is` (other than against `None`) and
   `id()` today. A change that admits either must bind the value once instead.
+  Likewise, a copied name reads the same value each time only because no
+  later target's own evaluation can rebind it: pycc refuses `global` and
+  `nonlocal`, so a call in a later target's base or key cannot reach the
+  name. A change that admits either must revisit this path the same way.
 - Otherwise `e` is bound once to a synthesized temporary, `0chain_<offset>`
   (`<offset>` is the statement's byte offset), and each target is assigned
   from it. The temporary's leading digit means no source name can equal it,
