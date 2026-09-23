@@ -223,8 +223,19 @@ fn an_old_format_marker_and_a_plain_file_are_both_unmarked() {
     std::fs::write(&file, "x").expect("write");
     assert!(bundle::check_existing(&file).is_err());
     assert_eq!(bundle::check_existing(&dir.join("absent.pycc")), Ok(false));
-    // A path that cannot even be inspected (its parent is a plain file) is
-    // an environment failure, not an absent sidecar.
+}
+
+/// A path that cannot even be inspected (its parent is a plain file) is an
+/// environment failure, not an absent sidecar. POSIX reports `ENOTDIR`
+/// there; Windows reports the path as not found, so it reads as absent --
+/// harmless, because a Windows host never reaches an embedded build
+/// (#1226).
+#[cfg(unix)]
+#[test]
+fn a_path_under_a_plain_file_is_an_environment_failure() {
+    let dir = ScratchDir::new("embed_not_a_dir").expect("scratch");
+    let file = dir.join("file.pycc");
+    std::fs::write(&file, "x").expect("write");
     let err = bundle::check_existing(&file.join("app.pycc")).expect_err("not a directory");
     assert!(err.contains("could not inspect"), "{err}");
 }

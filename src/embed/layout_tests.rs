@@ -40,7 +40,10 @@ fn the_sidecar_is_named_after_the_output_file() {
 
 #[test]
 fn a_name_the_loader_cannot_carry_is_refused() {
-    for bad in ["a$b", "a:b", "$ORIGIN"] {
+    // `dir/a:b` rather than `a:b`: on Windows a leading `a:` is a drive
+    // prefix, so `a:b`'s file name there is `b`. As a later component the
+    // colon stays in the file name on every host.
+    for bad in ["a$b", "dir/a:b", "$ORIGIN"] {
         let message = sidecar_name(Path::new(bad)).expect_err("refused");
         assert!(message.contains("contains `$` or `:`"), "{message}");
     }

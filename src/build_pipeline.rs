@@ -841,7 +841,11 @@ mod ext_build_wiring_tests {
     }
 }
 
-#[cfg(test)]
+/// Embedded mode exists on macOS and Linux only; on Windows the same
+/// source is refused with `I0403` before any of this runs (#1226), which
+/// `embed_build_windows_tests` below and
+/// `tests/issue_1223_embedded_executable.rs` pin.
+#[cfg(all(test, not(windows)))]
 mod embed_build_wiring_tests {
     use super::*;
     use pycc_scratch::ScratchDir;
@@ -898,6 +902,34 @@ mod embed_build_wiring_tests {
         )
         .expect_err("no interpreter");
         assert_eq!(code, ExitCode::from(2));
+        assert!(!dir.join("main.o").exists(), "codegen never ran");
+        assert!(!dir.join("app.pycc").exists());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod embed_build_windows_tests {
+    use super::*;
+    use pycc_scratch::ScratchDir;
+
+    /// A standard-library import on a Windows host is refused with `I0403`
+    /// (exit 1) before the embed tail: no probe, no codegen, no sidecar.
+    #[test]
+    fn a_standard_library_import_is_refused_before_the_embed_tail() {
+        let dir = ScratchDir::new("embed_windows_refused").expect("scratch");
+        let src = dir.join("main.py");
+        std::fs::write(&src, "import json\n").expect("write source");
+        let code = try_build(
+            &src,
+            &dir.join("app"),
+            None,
+            false,
+            &dir.join("main.o"),
+            None,
+            &no_python(),
+        )
+        .expect_err("refused on a Windows host");
+        assert_eq!(code, ExitCode::from(1));
         assert!(!dir.join("main.o").exists(), "codegen never ran");
         assert!(!dir.join("app.pycc").exists());
     }
