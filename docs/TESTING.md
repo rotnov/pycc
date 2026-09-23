@@ -395,6 +395,13 @@ achieve.
   than folded in. A matched problem whose timing runs disagree with the case is
   reported as dropped, for the same reason: every matched problem is accounted
   for in the report rather than quietly missing from the sample count.
+  A program whose imports are all standard-library roots builds as an
+  embedded executable ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)),
+  detected by its `<binary>.pycc/PYCC-BUNDLE` marker; it keeps its compile and
+  match verdicts but is reported as `embedded K/N` and left out of the
+  speedup median, whose ratio describes native code rather than interpreter
+  start-up. The CI job therefore installs CPython 3.14.7, sets
+  `PYCC_PYTHON=python3.14`, and times the CPython baseline with `python3.14`.
   `--json` writes the same data machine-readably. The script
   reads the corpus, writes nothing inside it, and performs no network I/O.
 - **Gate status: reporting only.** CI's `corpus-compile-rate` job is
