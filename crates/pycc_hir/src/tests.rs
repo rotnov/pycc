@@ -608,7 +608,7 @@ fn a_dict_set_target_with_an_unsupported_value_propagates_the_value_error() {
 
 #[test]
 fn matrix_multiplication_is_unsupported() {
-    assert_capability_error_message("x = a @ b\n", "binary operator not supported yet");
+    assert_capability_error_message("x = a @ b\n", "binary operator `@` is not supported yet");
 }
 
 #[test]

@@ -241,6 +241,11 @@ pub enum BinOpKind {
     FloorDiv,
     Mod,
     Pow,
+    LShift,
+    RShift,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

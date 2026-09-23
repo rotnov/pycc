@@ -44,7 +44,13 @@ use pycc_hir::{BinOpKind, Ty};
 ///   over two `str` operands is `T0021`.
 /// * Every remaining mixed pair, including `str * float` and
 ///   `float * str`, falls through to the generic `T0021` arm.
+///
+/// The bitwise and shift operators (#1210) are tested first, before either
+/// string rule, by [`bitwise_result_type`].
 pub(crate) fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
+    if is_bitwise(op) {
+        return bitwise_result_type(op, &left, &right);
+    }
     // #574: string repetition. Tested before the `str`/`str` arm so that
     // `str * str` still falls through to that arm's `T0021`.
     if op == BinOpKind::Mul
@@ -85,9 +91,158 @@ pub(crate) fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<
     }
 }
 
+/// `<< >> & | ^`: the operators whose operands must be integers.
+fn is_bitwise(op: BinOpKind) -> bool {
+    matches!(
+        op,
+        BinOpKind::LShift
+            | BinOpKind::RShift
+            | BinOpKind::BitAnd
+            | BinOpKind::BitOr
+            | BinOpKind::BitXor
+    )
+}
+
+/// Types a bitwise or shift expression (#1210).
+///
+/// * `bool & bool`, `bool | bool` and `bool ^ bool` are `bool`, as CPython's
+///   `bool.__and__`/`__or__`/`__xor__` return; a shift of two `bool`s is an
+///   `int` (`True << 1 == 2`).
+/// * Any other `int`/`bool` pair is `int`.
+/// * Everything else is `T0021`. A `float`, `str`, container or instance
+///   operand is "not defined", which is what CPython raises as `TypeError`.
+///   The pairs CPython *does* define but pycc does not implement -- `set`
+///   op `set` for `& | ^` and `dict | dict` -- say "not supported yet"
+///   instead, keeping the code `T0021` so no mutable operand reaches the
+///   augmented-assignment rewrite (the S1 condition in
+///   `docs/TYPE_SYSTEM.md`).
+fn bitwise_result_type(op: BinOpKind, left: &Ty, right: &Ty) -> Result<Ty, Diagnostic> {
+    let is_int = |t: &Ty| matches!(t, Ty::Bool | Ty::Int);
+    if is_int(left) && is_int(right) {
+        let keeps_bool = matches!(op, BinOpKind::BitAnd | BinOpKind::BitOr | BinOpKind::BitXor);
+        return Ok(if keeps_bool && *left == Ty::Bool && *right == Ty::Bool {
+            Ty::Bool
+        } else {
+            Ty::Int
+        });
+    }
+    let defined_by_cpython = match (left, right) {
+        (Ty::Set(_), Ty::Set(_)) => op != BinOpKind::LShift && op != BinOpKind::RShift,
+        (Ty::Dict(_), Ty::Dict(_)) => op == BinOpKind::BitOr,
+        _ => false,
+    };
+    let reason = if defined_by_cpython {
+        "is not supported yet"
+    } else {
+        "is not defined"
+    };
+    Err(Diagnostic::error(
+        "T0021",
+        format!(
+            "operator `{}` on `{}` and `{}` {reason}",
+            op.as_str(),
+            left.name(),
+            right.name()
+        ),
+        Span::new(0, 0),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- #1210: bitwise and shift operators ----
+
+    const BITWISE: [BinOpKind; 5] = [
+        BinOpKind::LShift,
+        BinOpKind::RShift,
+        BinOpKind::BitAnd,
+        BinOpKind::BitOr,
+        BinOpKind::BitXor,
+    ];
+
+    #[test]
+    fn a_bitwise_operator_over_two_bools_keeps_bool_but_a_shift_does_not() {
+        for op in BITWISE {
+            let expected = if matches!(op, BinOpKind::LShift | BinOpKind::RShift) {
+                Ty::Int
+            } else {
+                Ty::Bool
+            };
+            assert_eq!(
+                numeric_result_type(op, Ty::Bool, Ty::Bool),
+                Ok(expected),
+                "{op:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bitwise_operator_over_any_other_int_pair_is_int() {
+        for op in BITWISE {
+            for (left, right) in [(Ty::Bool, Ty::Int), (Ty::Int, Ty::Bool), (Ty::Int, Ty::Int)] {
+                assert_eq!(
+                    numeric_result_type(op, left.clone(), right.clone()),
+                    Ok(Ty::Int),
+                    "{op:?} {left:?} {right:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_bitwise_operator_with_a_float_or_str_operand_is_not_defined() {
+        for op in BITWISE {
+            for (left, right) in [
+                (Ty::Float, Ty::Int),
+                (Ty::Int, Ty::Float),
+                (Ty::Int, Ty::Str),
+                (Ty::Str, Ty::Str),
+            ] {
+                let err = numeric_result_type(op, left.clone(), right.clone()).unwrap_err();
+                assert_eq!(err.code, "T0021");
+                assert_eq!(
+                    err.message,
+                    format!(
+                        "operator `{}` on `{}` and `{}` is not defined",
+                        op.as_str(),
+                        left.name(),
+                        right.name()
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_set_and_dict_operators_cpython_defines_are_not_supported_yet() {
+        let set = || Ty::Set(Box::new(Ty::Int));
+        let dict = || Ty::Dict(Box::new((Ty::Str, Ty::Int)));
+        for (op, left, right, reason) in [
+            (BinOpKind::BitOr, set(), set(), "is not supported yet"),
+            (BinOpKind::BitAnd, set(), set(), "is not supported yet"),
+            (BinOpKind::BitXor, set(), set(), "is not supported yet"),
+            (BinOpKind::LShift, set(), set(), "is not defined"),
+            (BinOpKind::RShift, set(), set(), "is not defined"),
+            (BinOpKind::BitOr, dict(), dict(), "is not supported yet"),
+            (BinOpKind::BitAnd, dict(), dict(), "is not defined"),
+            (BinOpKind::BitXor, dict(), dict(), "is not defined"),
+            (BinOpKind::BitOr, set(), Ty::Int, "is not defined"),
+        ] {
+            let err = numeric_result_type(op, left.clone(), right.clone()).unwrap_err();
+            assert_eq!(err.code, "T0021");
+            assert_eq!(
+                err.message,
+                format!(
+                    "operator `{}` on `{}` and `{}` {reason}",
+                    op.as_str(),
+                    left.name(),
+                    right.name()
+                )
+            );
+        }
+    }
 
     #[test]
     fn numeric_result_type_covers_every_int_float_combination() {

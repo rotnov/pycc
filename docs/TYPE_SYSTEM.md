@@ -11,6 +11,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 5. Unreachable code after exhaustive `match` / `Never` is verified (`assert_never` pattern supported).
 6. `==`/`!=` require operands to be comparable under the same numeric-like-or-`str` grouping ordering operators use (`int`/`float`/`bool` interchangeably, or `str`/`str`) — looser than the exact-type rule assignment/parameter/return boundaries enforce (rule 4), but still strict enough to reject genuinely incompatible pairs. Heterogeneous equality across categories (`1 == "1"`) is `T0021`, not `bool`, matching `mypy --strict`'s own `comparison-overlap` check (D-086). Ordering operators (`<`/`>`/`<=`/`>=`) use this identical grouping but are always rejected across it when CPython itself would raise `TypeError` at runtime for the pair.
 7. Binary operators over `str` are operator-sensitive rather than decided by a single numeric-like grouping. `str + str` is concatenation and produces `str`; **`str * int` and `int * str` are repetition and produce `str`** (#574), in either operand order, with `bool` accepted as the count consistently with `bool <: int` (rule 4's no-implicit-widening rule governs *annotation boundaries*, not this operand grouping). Every other combination stays `T0021`: `str * float` and `float * str` (a repetition count must be integral), `str * str`, and any other operator over a `str` operand (`str - int`, `str / int`, and so on). The same rule applies identically in the validation pass and in private-helper constraint inference — both consume the one `numeric_result_type` helper. **Repetition now executes natively** (#575, Part 2 of [#123](https://github.com/rotnov/pycc/issues/123)): `pycc_mir` carries it as `BinOp { op: Mul, ty: Ty::Str }`, `pycc_codegen` lowers both operand orders to `pycc_rt_str_repeat`, and Part 1's D-072 exit-`101` boundary is gone from [CLI_SPEC.md](./CLI_SPEC.md) § Exit codes. A non-positive count yields the empty string, matching CPython (`"ab" * 0` and `"ab" * (0 - 2)` are both `""`); a negative *literal* count is reachable since [#602](https://github.com/rotnov/pycc/issues/602) folds a source-level sign into its literal, and a bigint count hits D-141's existing runtime int boundary. Since [#148](https://github.com/rotnov/pycc/issues/148) (D-178) that boundary is reachable from a source-level *literal* as well as from an arithmetic promotion: an `int` literal outside D-061's tagged 63-bit range now type-checks and compiles, materializing a heap bigint at run time, so `"ab" * 4611686018427387904` -- and every other bigint-valued word crossing an `int` boundary (container value, index, slice bound) -- reaches the runtime abort rather than failing during code generation. **Since [#618](https://github.com/rotnov/pycc/issues/618) (`T0051`)** an out-of-range literal written directly at one of these boundary positions is instead rejected pre-lowering by `pycc_hir`, restoring the compile-time catch D-178 gave up for the literal case; this is narrower than D-178's own boundary inventory for the `str * int` repeat-count position specifically, since `pycc_hir` has no type information yet at lowering time to tell a `str`-typed variable from any other operand -- `"ab" * 4611686018427387904` (a string *literal* on the left) is caught, but `s * 4611686018427387904` for a `str`-typed variable `s` is not, and still reaches the same run-time `pycc_rt_int_untag_checked` abort as before. An arithmetically promoted bigint (`s * (n + 1)`) is unaffected in every position, exactly as D-178 left it. `range` operands are no longer among them: [#147](https://github.com/rotnov/pycc/issues/147) (D-179) made `range()` bigint-capable in its bounds, its step, and an induction variable that promotes mid-loop, while keeping the D-074/D-141 bool-normalization contract unchanged (`range` consumes the numeric value and produces ordinary int objects rather than forwarding bool identity). The static type of such a literal is unchanged: it is `int`, exactly as before.
+8. The shift and bitwise operators `<<`, `>>`, `&`, `|` and `^` ([#1210](https://github.com/rotnov/pycc/issues/1210), Part 2 of [#1018](https://github.com/rotnov/pycc/issues/1018)) are defined over `int` and `bool` operands only, and produce `int`, except that `&`, `|` and `^` of two `bool` operands produce `bool` (`True & False` is `False`, `True << 1` is `2`). Every other operand pair is `T0021`: "operator `|` on `set[int]` and `set[int]` is not supported yet" for the pairs CPython defines but pycc does not implement yet (`set` with `set` for `&`, `|` and `^`, and `dict | dict`), and "... is not defined" for every other pair (`1.0 << 1`, `"a" ^ 1`, `{1} | 1`). The operators are bigint-capable in both operands and in the shift count, with CPython's semantics: a negative count raises `ValueError: negative shift count`, and `>>` floors. One deviation: `<<` raises `OverflowError: too many digits in integer` wherever CPython raises `MemoryError`, which pycc has no class for -- a result too large to allocate, and a non-zero base shifted by a count from `2**62` up to CPython's own `OverflowError` bound (`1 << (1 << 62)`); the D-244 amendment of 2026-09-23 records it. Both operand orders and the unannotated-helper solver consume the same `numeric_result_type` helper, so an inferred `bool` argument to `def _g(a, b): return a & b` merges to `int` as for any other operator.
 
 ### v0.1 local inference
 
@@ -651,13 +652,21 @@ along its own documented deviations and adds none of its own:
 - a bigint `*`, `//`, `%` or `**` raises `OverflowError`
   ([#1040](https://github.com/rotnov/pycc/issues/1040));
 - a `dict` value past the inline-integer range aborts
-  ([#1089](https://github.com/rotnov/pycc/issues/1089)).
+  ([#1089](https://github.com/rotnov/pycc/issues/1089));
+- `<<` raises `OverflowError` where CPython raises `MemoryError` (rule 8).
+
+One imprecision is inherited rather than a deviation: CPython's `d |= pairs`
+on a `dict` accepts any iterable of key-value pairs, but its plain form
+`d | [...]` is a `TypeError`, so `d |= [("a", 1)]` is refused with the plain
+form's `T0021` "not defined" instead of being admitted.
 
 The admitted operators are exactly the plain binary operators
 (`crates/pycc_hir/src/expr/bin_op_kind.rs`, the one mapping both paths use):
-`+= -= *= /= //= %= **=`. Every other operator is `C0001` "augmented
-assignment operator `<<=` is not supported yet", spelled with the operator
-that was written. The admitted target shapes are:
+`+= -= *= /= //= %= **= <<= >>= &= |= ^=` (the last five since
+[#1210](https://github.com/rotnov/pycc/issues/1210), Part 2 of #1018, typed by
+rule 8 above). The one other operator, `@=`, is `C0001` "augmented assignment
+operator `@=` is not supported yet", as the plain `@` is "binary operator `@`
+is not supported yet". The admitted target shapes are:
 
 - a name;
 - an attribute of a name (`self.n`, `obj.n`);
@@ -676,7 +685,9 @@ Each other shape has its own `C0001`:
 Every type refusal is the one the plain assignment gets. So `self.n += 1` in
 `__init__` before any `self.n = ...` is `T0044`, as is a class-level attribute
 or a getter-only property. A name the function binds only through `+=` is the
-unbound-local `T0021`, and a `bool` name is `T0023`. An `Enum` member's `value`
+unbound-local `T0021`, and a `bool` name is `T0023` (it cannot hold the `int`
+the operation produces) unless the operator is `&=`, `|=` or `^=` and the value
+is a `bool`, which keeps the name `bool`. An `Enum` member's `value`
 or `name` is `T0044` too ([#1219](https://github.com/rotnov/pycc/issues/1219)).
 
 The load and the store each read the container and the index. That second

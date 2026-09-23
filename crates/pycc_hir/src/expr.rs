@@ -641,7 +641,10 @@ pub(crate) fn lower_expr(
         Expr::BinOp(bin_op) => {
             let Some(op) = bin_op_kind(bin_op.op) else {
                 return Err(unsupported(
-                    format!("binary operator not supported yet: {:?}", bin_op.op),
+                    format!(
+                        "binary operator `{}` is not supported yet",
+                        bin_op.op.as_str()
+                    ),
                     bin_op.range,
                 ));
             };

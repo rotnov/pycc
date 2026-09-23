@@ -203,3 +203,24 @@ fn aug_assign_scalars_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/aug_assign_scalars.py"
     );
 }
+
+// #1210 (Part 2 of #1018): `<< >> & | ^` and their augmented forms on `int`
+// and `bool`, including bigint operands and counts and a caught
+// `ValueError`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn bitwise_shift_ops_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bitwise_shift_ops.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("bitwise_shift_ops_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/bitwise_shift_ops.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("bitwise_shift_ops_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/bitwise_shift_ops.py"
+    );
+}

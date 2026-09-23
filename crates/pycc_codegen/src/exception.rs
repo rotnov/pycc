@@ -103,9 +103,16 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // a documented no-op on it, so a refused allocation leaves nothing
         // for the unwind path to release.
         | MirExpr::BufferAlloc { .. } => true,
+        // #1210: a shift raises `ValueError` for a negative count and
+        // `OverflowError` for a result too large to allocate; `&`, `|` and
+        // `^` never raise.
         MirExpr::BinOp { op, .. } => matches!(
             op,
-            pycc_mir::BinOpKind::Div | pycc_mir::BinOpKind::FloorDiv | pycc_mir::BinOpKind::Mod
+            pycc_mir::BinOpKind::Div
+                | pycc_mir::BinOpKind::FloorDiv
+                | pycc_mir::BinOpKind::Mod
+                | pycc_mir::BinOpKind::LShift
+                | pycc_mir::BinOpKind::RShift
         ),
         MirExpr::Subscript { base, .. } => matches!(base.ty(), pycc_mir::Ty::List(_)),
         MirExpr::IntLiteral(_)
@@ -1670,6 +1677,9 @@ mod tests {
             pycc_mir::BinOpKind::Sub,
             pycc_mir::BinOpKind::Mul,
             pycc_mir::BinOpKind::Pow,
+            pycc_mir::BinOpKind::BitAnd,
+            pycc_mir::BinOpKind::BitOr,
+            pycc_mir::BinOpKind::BitXor,
         ] {
             assert!(!expression_can_set_exception(&int_binop(op)));
         }
@@ -1677,6 +1687,8 @@ mod tests {
             pycc_mir::BinOpKind::Div,
             pycc_mir::BinOpKind::FloorDiv,
             pycc_mir::BinOpKind::Mod,
+            pycc_mir::BinOpKind::LShift,
+            pycc_mir::BinOpKind::RShift,
         ] {
             assert!(expression_can_set_exception(&int_binop(op)));
         }
