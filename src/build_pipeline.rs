@@ -840,3 +840,65 @@ mod ext_build_wiring_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod embed_build_wiring_tests {
+    use super::*;
+    use pycc_scratch::ScratchDir;
+
+    /// The embedded tail, end to end, on a fake interpreter layout: the
+    /// sidecar is assembled, the launcher and the shim are written, codegen
+    /// runs with export thunks suppressed, and the build fails inside `cc`
+    /// because the layout's `Python.h` is a single `#error` line. Every
+    /// step up to the link spawn ran, with no CPython installed.
+    #[test]
+    fn an_embedded_build_assembles_the_sidecar_and_fails_in_the_compiler() {
+        let dir = ScratchDir::new("embed_try_build").expect("scratch");
+        std::fs::create_dir(dir.join("py")).expect("layout root");
+        let layout = embed::fake_layout::fake_layout(&dir.join("py"));
+        if EmbedPlatform::HOST == EmbedPlatform::MacOs {
+            embed::fake_layout::macho_library(&layout);
+        }
+        let src = dir.join("main.py");
+        std::fs::write(&src, "import json\nprint(str(json.dumps(1)))\n").expect("write source");
+        let out = dir.join("app");
+        let toolchain = embed::EmbedToolchain::with_probe("pyfake", layout.probe.clone());
+        let code = try_build(
+            &src,
+            &out,
+            None,
+            false,
+            &dir.join("main.o"),
+            None,
+            &toolchain,
+        )
+        .expect_err("the stub Python.h makes the compiler reject the launcher");
+        assert_eq!(code, ExitCode::from(1));
+        assert!(dir.join("app.pycc").join("PYCC-BUNDLE").is_file());
+        assert!(dir.join(embed::LAUNCHER_C_NAME).is_file());
+        // Codegen ran before the link: the object exists.
+        assert!(dir.join("main.o").is_file());
+    }
+
+    /// A standard-library import with no usable interpreter is an
+    /// environment failure (exit 2), reported before codegen.
+    #[test]
+    fn an_embedded_build_without_an_interpreter_is_an_environment_failure() {
+        let dir = ScratchDir::new("embed_no_python").expect("scratch");
+        let src = dir.join("main.py");
+        std::fs::write(&src, "import json\n").expect("write source");
+        let code = try_build(
+            &src,
+            &dir.join("app"),
+            None,
+            false,
+            &dir.join("main.o"),
+            None,
+            &no_python(),
+        )
+        .expect_err("no interpreter");
+        assert_eq!(code, ExitCode::from(2));
+        assert!(!dir.join("main.o").exists(), "codegen never ran");
+        assert!(!dir.join("app.pycc").exists());
+    }
+}

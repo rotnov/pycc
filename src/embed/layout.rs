@@ -200,3 +200,7 @@ pub(crate) fn loader_relative(image: &Path, name: &str) -> String {
     path.push_str(name);
     path
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;

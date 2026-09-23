@@ -10,6 +10,8 @@
 //! the shim stays the single layer that moves a `PyObject*` in both modes.
 
 mod bundle;
+#[cfg(test)]
+pub(crate) mod fake_layout;
 pub(crate) mod layout;
 mod macho;
 mod sha256;
@@ -313,3 +315,7 @@ fn write_source(path: &Path, contents: &str) -> Result<(), String> {
         )
     })
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

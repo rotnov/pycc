@@ -102,3 +102,7 @@ pub(crate) fn codesign_args(image: &Path) -> Vec<OsString> {
         image.as_os_str().to_os_string(),
     ]
 }
+
+#[cfg(test)]
+#[path = "macho_tests.rs"]
+mod tests;
