@@ -1,5 +1,6 @@
 use pycc_diag::{Diagnostic, Span};
 
+mod boolop;
 mod buffer_store;
 mod class;
 mod container;
@@ -15,6 +16,7 @@ mod program;
 mod stmt;
 mod typecheck;
 
+pub use boolop::{BoolOpKind, bool_op_result_ty};
 pub use buffer_store::{body_returns_inside_finally, body_returns_slice_of, body_stores_into};
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
@@ -340,6 +342,24 @@ pub enum HirExpr {
     UnaryOp {
         op: UnaryOpKind,
         operand: Box<HirExpr>,
+    },
+    /// `left and right` / `left or right` (#1211, Part 3 of #1018).
+    ///
+    /// The AST node is n-ary; `crate::expr::lower_expr` right-folds it, so
+    /// `a or b or c` is `Or(a, Or(b, c))` and every operand's truth is
+    /// tested at most once (see `crate::boolop`).
+    ///
+    /// `truth_only` is `true` exactly when the value is consumed only for
+    /// its truth -- an `if`/`elif`/`while` test, a comprehension filter, or
+    /// the operand of `not` -- and is set by `crate::boolop::mark_truth_context`
+    /// after lowering. A truth-only node is typed `bool` and its operands
+    /// need not share a type; every other node yields the selected operand's
+    /// *value*, typed by [`bool_op_result_ty`].
+    BoolOp {
+        op: BoolOpKind,
+        left: Box<HirExpr>,
+        right: Box<HirExpr>,
+        truth_only: bool,
     },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this

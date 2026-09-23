@@ -1671,8 +1671,9 @@ fn is_scalar_slot_type(ty: &Ty) -> bool {
 /// `other` (both typed `Ty::Instance(class_name)`), and returns `bool` --
 /// `True` if all fields are equal, `False` otherwise. The body uses a
 /// series of `if self.<field> != other.<field>: return False` checks
-/// followed by `return True`, since pycc's HIR has no `and`/`or` boolean
-/// operator (short-circuit `and` is not lowered). A zero-field dataclass's
+/// followed by `return True`. The synthesis predates `and`/`or` lowering
+/// (#1211), and a chain of early returns needs no field type to be
+/// truth-testable, so it stays as it is. A zero-field dataclass's
 /// `__eq__` always returns `True` (two instances of a fieldless dataclass
 /// are always equal, matching CPython's PEP 557).
 fn synthesize_dataclass_eq(class_name: &str, fields: &[(String, Ty)]) -> HirItem {

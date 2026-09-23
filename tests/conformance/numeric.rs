@@ -184,6 +184,26 @@ fn unary_not_invert_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #1211 (Part 3 of #1018): `and`/`or` select an operand in value context and
+// only test truth in a condition, short-circuiting in both.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn bool_ops_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bool_ops.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("bool_ops_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/bool_ops.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("bool_ops_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/bool_ops.py"
+    );
+}
+
 // #1209 (Part 1 of #1018): `x op= v` on a name bound to an `int`, `float` or
 // `str` is `x = x op v`, for every admitted operator.
 #[test]

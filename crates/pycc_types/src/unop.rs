@@ -51,21 +51,30 @@ pub(crate) fn unary_result_type(op: UnaryOpKind, operand: Ty) -> Result<Ty, Diag
             Ty::Float => Ok(Ty::Float),
             _ => Err(unary_type_error(op, operand)),
         },
-        UnaryOpKind::Not => match operand {
-            Ty::Bool
-            | Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::None
-            | Ty::Optional(_)
-            | Ty::Instance(_) => Ok(Ty::Bool),
-            _ => Err(unary_type_error(op, operand)),
-        },
+        UnaryOpKind::Not if is_truth_testable(&operand) => Ok(Ty::Bool),
+        UnaryOpKind::Not => Err(unary_type_error(op, operand)),
         UnaryOpKind::Invert => match operand {
             Ty::Bool | Ty::Int => Ok(Ty::Int),
             _ => Err(unary_type_error(op, operand)),
         },
     }
+}
+
+/// Whether codegen's `truthy` can compute a truth value for a value of type
+/// `ty`: `bool`, `int`, `float`, `str`, `None`, `Optional[_]` and a class
+/// instance. Containers, protocol values, `memoryview` and the opaque CPython
+/// object are not truth-testable here (see this module's doc comment).
+///
+/// Shared by `not` and by `and`/`or` (#1211, [`crate::boolop`]), which call
+/// it on every operand so that a boolean operator never admits an operand
+/// `not` refuses. `and`/`or` additionally refuse an instance whose class
+/// defines `__bool__` or `__len__`; `not` does not yet, so this predicate
+/// admits every instance.
+pub(crate) fn is_truth_testable(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Bool | Ty::Int | Ty::Float | Ty::Str | Ty::None | Ty::Optional(_) | Ty::Instance(_)
+    )
 }
 
 fn unary_type_error(op: UnaryOpKind, operand: Ty) -> Diagnostic {

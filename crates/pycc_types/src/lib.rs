@@ -1,4 +1,5 @@
 mod binop;
+mod boolop;
 mod buffer;
 mod class;
 mod constraints;
@@ -566,7 +567,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(arg, names);
             }
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             collect_named_expr_names_in_expr(left, names);
             collect_named_expr_names_in_expr(right, names);
         }
@@ -1249,7 +1252,9 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             collect_named_expr_bindings(env, local_names, left)?;
             collect_named_expr_bindings(env, local_names, right)
         }
@@ -3830,7 +3835,9 @@ fn reject_generic_calls_in_expr(
         HirExpr::UnaryOp { operand, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, operand)
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, left)?;
             reject_generic_calls_in_expr(module_env, own_name, right)
         }

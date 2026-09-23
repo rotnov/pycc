@@ -6400,10 +6400,10 @@ fn a_protocol_body_ellipsis_names_the_expression_inside_the_statement() {
 }
 
 #[test]
-fn a_boolean_operator_receiver_names_its_expression_kind() {
+fn a_conditional_expression_receiver_names_its_expression_kind() {
     assert_capability_error_message(
-        "def f(a: str, b: str) -> str:\n    return (a or b).upper()\n",
-        "expression kind not supported yet: an `and`/`or` boolean expression",
+        "def f(a: str, b: str) -> str:\n    return (a if a else b).upper()\n",
+        "expression kind not supported yet: a conditional expression (`x if c else y`)",
     );
 }
 

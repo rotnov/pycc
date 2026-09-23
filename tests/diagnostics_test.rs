@@ -872,9 +872,42 @@ fn c0001_nested_class() {
     assert_diagnostic_matches_fixture("c0001_nested_class");
 }
 
+// #1211: `(a or b).upper()` lowers now, so the receiver reaches the checker,
+// which refuses a method call on `str`.
 #[test]
-fn c0001_boolop_receiver() {
-    assert_diagnostic_matches_fixture("c0001_boolop_receiver");
+fn t0043_boolop_receiver() {
+    assert_diagnostic_matches_fixture("t0043_boolop_receiver");
+}
+
+// #1211: an `and`/`or` value join with no common type (pycc has no unions).
+#[test]
+fn t0021_boolop_no_common_type() {
+    assert_diagnostic_matches_fixture("t0021_boolop_no_common_type");
+}
+
+// #1211: a container has no truth test in codegen, so it is no operand.
+#[test]
+fn t0021_boolop_container_operand() {
+    assert_diagnostic_matches_fixture("t0021_boolop_container_operand");
+}
+
+// #1211: an instance whose class defines `__bool__`/`__len__` is refused.
+#[test]
+fn t0021_boolop_truth_dunder_operand() {
+    assert_diagnostic_matches_fixture("t0021_boolop_truth_dunder_operand");
+}
+
+// #1211: a walrus in a short-circuited operand would bind conditionally.
+#[test]
+fn c0001_boolop_walrus_right_operand() {
+    assert_diagnostic_matches_fixture("c0001_boolop_walrus_right_operand");
+}
+
+// #1211 / D-205: `x is not None and ...` does not narrow `x` in the right
+// operand.
+#[test]
+fn t0021_boolop_no_narrowing() {
+    assert_diagnostic_matches_fixture("t0021_boolop_no_narrowing");
 }
 
 #[test]

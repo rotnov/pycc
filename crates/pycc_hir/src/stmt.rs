@@ -96,7 +96,7 @@ mod type_checking;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
-use crate::expr::{contains_named_expr, lower_expr, lower_range_call};
+use crate::expr::{contains_named_expr, lower_condition, lower_expr, lower_range_call};
 use crate::stmt::type_checking::{
     break_context_violation, check_guarded_body, continue_context_violation,
     return_context_violation,
@@ -323,7 +323,7 @@ pub(crate) fn lower_stmt(
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test, in_function, class_name, imports, signatures)?,
+            test: lower_condition(&if_stmt.test, in_function, class_name, imports, signatures)?,
             body: lower_body(
                 &if_stmt.body,
                 aliases,
@@ -359,7 +359,7 @@ pub(crate) fn lower_stmt(
                 ));
             }
             HirStmt::While {
-                test: lower_expr(
+                test: lower_condition(
                     &while_stmt.test,
                     in_function,
                     class_name,
@@ -870,7 +870,7 @@ pub(crate) fn lower_elif_else_clauses(
             }])
         }
         Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test, in_function, class_name, imports, signatures)?,
+            test: lower_condition(test, in_function, class_name, imports, signatures)?,
             body: lower_body(
                 &first.body,
                 aliases,

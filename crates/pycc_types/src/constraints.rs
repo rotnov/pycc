@@ -78,6 +78,7 @@ use crate::{
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     BinOpKind, CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt, Ty, UnaryOpKind,
+    bool_op_result_ty,
 };
 
 type TypeTerm = Result<Ty, usize>;
@@ -945,6 +946,44 @@ pub(crate) fn collect_expr_constraints(
             collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
             collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
+        }
+        // #1211 (Part 3 of #1018): `and`/`or`. A truth-context node is
+        // `bool` whatever its operands are, exactly like `Not` below. A
+        // value-context node over two concrete operand types takes the one
+        // join rule `pycc_types::boolop` and `pycc_mir` also use; a pair with
+        // no join yields no term, and `infer_expr_in` then reports the
+        // `T0021`. An operand that is still an inference variable is unified
+        // with the other operand -- a sound restriction that infers only the
+        // equal-type case, which `infer_expr_in` re-checks afterwards.
+        HirExpr::BoolOp {
+            op,
+            left,
+            right,
+            truth_only,
+        } => {
+            let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
+            let right =
+                collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
+            if *truth_only {
+                return Ok(Some(Ok(Ty::Bool)));
+            }
+            match (left, right) {
+                (Some(Ok(left)), Some(Ok(right))) => {
+                    Ok(bool_op_result_ty(*op, &left, &right).map(Ok))
+                }
+                (Some(left), Some(right)) => {
+                    unify_terms(
+                        left.clone(),
+                        right,
+                        parents,
+                        concrete,
+                        "T0021",
+                        &format!("`{}` operands", op.as_str()),
+                    )?;
+                    Ok(Some(left))
+                }
+                _ => Ok(None),
+            }
         }
         // #603 (Part 2 of #573). An operand whose type is already concrete
         // is typed directly by `unary_result_type`, so a bad operand keeps
@@ -1880,7 +1919,9 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, left)?;
             bind_named_expr_targets(signatures, parents, concrete, binops, env, right)
         }

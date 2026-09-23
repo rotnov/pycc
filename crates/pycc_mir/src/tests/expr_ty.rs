@@ -180,4 +180,19 @@ fn mir_expr_ty_covers_every_variant() {
         MirExpr::Not(Box::new(MirExpr::IntLiteral(0))).ty(),
         Ty::Bool
     );
+    // `BoolOp` (#1211): the stored type -- the join in value context,
+    // `bool` in truth context.
+    for (truth_only, ty) in [(false, Ty::Int), (true, Ty::Bool)] {
+        assert_eq!(
+            MirExpr::BoolOp {
+                op: BoolOpKind::Or,
+                left: Box::new(MirExpr::BoolLiteral(true)),
+                right: Box::new(MirExpr::IntLiteral(0)),
+                ty: ty.clone(),
+                truth_only,
+            }
+            .ty(),
+            ty
+        );
+    }
 }
