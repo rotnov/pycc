@@ -723,7 +723,7 @@ class Sink(Protocol):
     std::fs::write(
         dir.join("view_probe.py"),
         "\
-import json
+import numpy
 
 from sink import Sink
 

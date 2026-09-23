@@ -49,6 +49,9 @@ if not marker.startswith("# ok"):
         print("error[" + code + "]: shim diagnostic", file=sys.stderr)
     sys.exit(1)
 body = "\\n".join(lines[1:])
+if marker.startswith("# ok embedded"):
+    os.makedirs(out + ".pycc", exist_ok=True)
+    open(os.path.join(out + ".pycc", "PYCC-BUNDLE"), "w").write("pycc-bundle 1\\n")
 with open(out, "w") as handle:
     handle.write("#!" + sys.executable + "\\n" + body + "\\n")
 os.chmod(out, os.stat(out).st_mode | stat.S_IEXEC)
@@ -136,6 +139,9 @@ SLEEPY_SOLUTION = (
     "# ok\nimport sys, time\ntime.sleep(0.6)\nsys.stdout.write(sys.stdin.read())\n"
 )
 WRONG_SOLUTION = "# ok\nprint('nope')\n"
+# Built by the shim as an embedded executable: a `<binary>.pycc/PYCC-BUNDLE`
+# sidecar marker next to the binary, exactly as `pycc build` writes one.
+EMBEDDED_SLOW_SOLUTION = SLOW_SOLUTION.replace("# ok", "# ok embedded", 1)
 # Echoes correctly, but also writes a file next to wherever it happens to run.
 WRITES_A_MARKER_SOLUTION = (
     "# ok\n"
@@ -330,6 +336,28 @@ class SpeedupTests(MetricHarness):
         code, out, err = self.run_metric()
         self.assertEqual(code, 0, err)
         self.assertRegex(out, r"median speedup: \d+\.\d\dx over 1 qualifying problems")
+
+    def test_an_embedded_build_is_counted_and_kept_out_of_the_median(self) -> None:
+        # Slow enough to qualify for a sample if it were native, so its absence
+        # from the median is the exclusion rather than the startup floor.
+        self.corpus.add(1, EMBEDDED_SLOW_SOLUTION, ECHO_CASES)
+        self.corpus.add(2, SLOW_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric("--json", str(self.tmp / "out.json"))
+        self.assertEqual(code, 0, err)
+        self.assertIn("compiled 2/2", out)
+        self.assertIn("matched 2/2", out)
+        self.assertIn("embedded 1/2 (excluded from the speedup median)", out)
+        self.assertRegex(out, r"median speedup: \d+\.\d\dx over 1 qualifying problems")
+        self.assertIn("startup-dominated, excluded: 0; timing dropped: 0", out)
+        result = json.loads((self.tmp / "out.json").read_text())
+        self.assertEqual(result["embedded"], 1)
+        self.assertEqual(result["speedup_samples"], 1)
+
+    def test_a_native_build_is_not_counted_as_embedded(self) -> None:
+        self.corpus.add(1, OK_SOLUTION, ECHO_CASES)
+        code, out, err = self.run_metric()
+        self.assertEqual(code, 0, err)
+        self.assertIn("embedded 0/1", out)
 
     def test_a_dropped_timing_sample_is_counted_not_silently_lost(self) -> None:
         self.corpus.add(1, BINARY_ONLY_SOLUTION, ECHO_CASES)

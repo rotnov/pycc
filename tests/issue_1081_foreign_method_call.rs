@@ -139,15 +139,16 @@ fn a_method_call_inherits_the_positional_bound() {
     assert!(rendered.contains("`gc` is not defined"), "{rendered}");
 }
 
-/// A native `pycc build` still refuses the import itself with `I0403`
-/// before any of this is reachable: a native executable embeds no
-/// interpreter to call into.
+/// A plain `pycc build` still refuses a non-standard-library import with
+/// `I0403` before any of this is reachable: an embedded executable bundles
+/// only the standard library (#1223). A standard-library call such as
+/// `gc.disable()` builds embedded instead; see the hosted test below.
 #[test]
 fn a_native_build_of_a_method_call_is_still_refused_with_i0403() {
     let dir = ScratchDir::new("foreign_call_native").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(source(&dir, "import gc\n\ngc.disable()\n"))
+        .arg(source(&dir, "import numpy\n\nnumpy.seterr()\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
@@ -484,4 +485,31 @@ fn a_bigint_int_argument_raises_overflow_error_in_the_host() {
         "the module body must stop at the refused call: {}",
         stdout_of(&run)
     );
+}
+
+/// Since #1223 a plain `pycc build` of a standard-library method call
+/// builds an embedded executable that really calls into CPython:
+/// `gc.disable()` then `gc.isenabled()` observes the effect.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
+fn a_standard_library_method_call_builds_embedded_and_runs() {
+    let dir = ScratchDir::new("foreign_call_embedded").expect("scratch");
+    let output = pycc()
+        .arg("build")
+        .arg(source(
+            &dir,
+            "import gc\n\ngc.disable()\nif gc.isenabled():\n    print(\"on\")\nelse:\n    print(\"off\")\n",
+        ))
+        .arg("-o")
+        .arg(dir.join("m"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert!(dir.join("m.pycc").join("PYCC-BUNDLE").is_file());
+    let run = Command::new(dir.join("m"))
+        .output()
+        .expect("the embedded binary runs");
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "off\n");
 }

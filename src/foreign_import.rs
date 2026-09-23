@@ -1,23 +1,128 @@
-//! The native-mode gate on a foreign CPython import (Part 1 of #1026).
+//! The native-build gate on a foreign CPython import (Part 1 of #1026,
+//! narrowed by Part 1 of #1028).
 //!
 //! `import numpy` binds an opaque CPython module object, which only exists
 //! while a CPython interpreter is running the artifact. `pycc build --ext`
 //! produces exactly that: an extension module whose `Py_mod_exec` slot runs
-//! inside the interpreter that loaded it. A plain `pycc build` produces a
-//! standalone native executable with no interpreter at all, so there is
-//! nothing to import *from*, and the program is refused here rather than
-//! compiled into a call that could only fail at run time.
+//! inside the interpreter that loaded it. A build without `--ext` gets an
+//! interpreter only by *embedding* one (D-128's `auto` default, realized for
+//! the standard library by Part 1 of #1028): the executable starts a bundled
+//! CPython and runs the compiled module as its `__main__`. Embedding is
+//! possible only for a standard-library root the bundle carries, on a macOS
+//! or Linux host, with no `--target`; every other foreign import is refused
+//! here with `I0403` rather than compiled into a call that could only fail
+//! at run time.
 //!
 //! This is the reason `crates/pycc_codegen/src/foreign_import.rs` may
 //! silently ignore a `MirItem::ForeignImport` under `!options.ext` instead
-//! of asserting: this gate has already refused every program that could
-//! reach it.
+//! of asserting: an embedded build compiles with `options.ext` set, and this
+//! gate has refused every other program that could reach it.
 
+use crate::embed::stdlib_roots::{is_embeddable_stdlib_root, is_excluded_stdlib_root};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, ImportBinding};
 
-/// One `I0403` per foreign import in `hir`, in source order, or `Ok(())`
-/// when the program has none.
+/// Whether this build can embed a CPython interpreter at all, before any
+/// individual import is looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmbedHost {
+    /// A macOS or Linux host building for itself.
+    Available,
+    /// `--target` was given: the bundled interpreter is the build host's,
+    /// so it cannot serve another target.
+    CrossTarget,
+    /// A Windows host, which Part 4 of #1028 (#1226) adds.
+    WindowsHost,
+}
+
+impl EmbedHost {
+    /// Resolves the host from the build's `--target` and the host family.
+    ///
+    /// Pure, and the host family is a parameter rather than a `cfg!` read,
+    /// so every arm is unit-tested on every host (the `ExtLinkPlatform`
+    /// precedent). `--target` wins over a Windows host, so a `--target`
+    /// build reports the same reason on every Tier-1 leg.
+    pub(crate) fn resolve(target: Option<&str>, host_is_windows: bool) -> Self {
+        if target.is_some() {
+            EmbedHost::CrossTarget
+        } else if host_is_windows {
+            EmbedHost::WindowsHost
+        } else {
+            EmbedHost::Available
+        }
+    }
+}
+
+/// Whether a native build has to embed a CPython interpreter: `true` when
+/// the program has at least one foreign import and every one of them is
+/// embeddable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NeedsInterpreter(pub(crate) bool);
+
+/// Why one foreign import cannot be embedded, in precedence order: a
+/// host-level reason applies to every foreign import in the program and
+/// wins over the per-root ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum I0403Reason {
+    CrossTarget,
+    WindowsHost,
+    ExcludedStdlibRoot,
+    NonStdlibRoot,
+}
+
+/// The `I0403` message for `import {module_path}` refused for `reason`.
+///
+/// Every reason names `pycc build --ext` as the working alternative: the
+/// code keeps its meaning ("this build cannot give the import a CPython
+/// interpreter; `--ext` can"), only the set of cases reaching it narrowed.
+pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
+    match reason {
+        I0403Reason::CrossTarget => format!(
+            "`import {module_path}` imports a CPython module, which requires \
+             `pycc build --ext` in a `--target` build: an embedded executable \
+             bundles the build host's own interpreter, which cannot serve another target"
+        ),
+        I0403Reason::WindowsHost => format!(
+            "`import {module_path}` imports a CPython module, which requires \
+             `pycc build --ext` on a Windows host: pycc cannot embed a CPython \
+             interpreter into a Windows executable yet (#1226)"
+        ),
+        I0403Reason::ExcludedStdlibRoot => format!(
+            "`import {module_path}` imports a standard-library module that needs \
+             Tcl/Tk libraries from outside the interpreter, which requires \
+             `pycc build --ext`: an embedded executable does not bundle it"
+        ),
+        I0403Reason::NonStdlibRoot => format!(
+            "`import {module_path}` imports a CPython module outside the standard \
+             library, which requires `pycc build --ext`: an embedded executable \
+             bundles only the standard library until it can load a locked \
+             dependency closure (#1225)"
+        ),
+    }
+}
+
+/// The reason `module_path` cannot be embedded on `host`, or `None` when
+/// it can.
+fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
+    match host {
+        EmbedHost::CrossTarget => return Some(I0403Reason::CrossTarget),
+        EmbedHost::WindowsHost => return Some(I0403Reason::WindowsHost),
+        EmbedHost::Available => {}
+    }
+    let root = module_path.split('.').next().unwrap_or(module_path);
+    if is_embeddable_stdlib_root(root) {
+        None
+    } else if is_excluded_stdlib_root(root) {
+        Some(I0403Reason::ExcludedStdlibRoot)
+    } else {
+        Some(I0403Reason::NonStdlibRoot)
+    }
+}
+
+/// Classifies a program for a build without `--ext`: `Ok(NeedsInterpreter(
+/// false))` when it has no foreign import (a plain native executable),
+/// `Ok(NeedsInterpreter(true))` when every foreign import is embeddable,
+/// and otherwise one `I0403` per non-embeddable import, in source order.
 ///
 /// Shaped like `src/ext_build.rs`'s `collect_exports`: a driver-side
 /// refusal against typed HIR that returns every gap at once rather than
@@ -37,7 +142,11 @@ use pycc_hir::{HirModule, ImportBinding};
 /// and a *leading* import in the next record the same linked index and no
 /// arithmetic on the per-file item bounds can tell them apart. The import
 /// table has no such boundary ambiguity.
-pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, Diagnostic)>> {
+pub(crate) fn classify_for_native_build(
+    hir: &HirModule,
+    host: EmbedHost,
+) -> Result<NeedsInterpreter, Vec<(usize, Diagnostic)>> {
+    let mut any_foreign = false;
     let gaps: Vec<(usize, Diagnostic)> = hir
         .imports
         .iter()
@@ -45,31 +154,32 @@ pub(crate) fn refuse_in_native_mode(hir: &HirModule) -> Result<(), Vec<(usize, D
         .filter_map(|(position, binding)| match binding {
             ImportBinding::Foreign {
                 module_path, span, ..
-            } => Some((
-                position,
-                Diagnostic::error(
-                    "I0403",
-                    format!(
-                        "`import {module_path}` imports a CPython module, which requires \
-                         `pycc build --ext`: a native executable embeds no CPython \
-                         interpreter to import it into"
-                    ),
-                    // The import statement's own range, carried on the
-                    // binding. Before it was, every `I0403` was built with
-                    // `Span::new(0, 0)`, so a foreign import that was not
-                    // the first statement reported at `<file>:1:1` and
-                    // highlighted an unrelated line (PR 1c of #1080 review
-                    // round 4).
-                    *span,
-                ),
-            )),
+            } => {
+                any_foreign = true;
+                refusal_reason(module_path, host).map(|reason| {
+                    (
+                        position,
+                        Diagnostic::error(
+                            "I0403",
+                            i0403_message(module_path, reason),
+                            // The import statement's own range, carried on
+                            // the binding. Before it was, every `I0403` was
+                            // built with `Span::new(0, 0)`, so a foreign
+                            // import that was not the first statement
+                            // reported at `<file>:1:1` and highlighted an
+                            // unrelated line (PR 1c of #1080 review round 4).
+                            *span,
+                        ),
+                    )
+                })
+            }
             ImportBinding::Module { .. }
             | ImportBinding::Symbol { .. }
             | ImportBinding::Project { .. } => None,
         })
         .collect();
     if gaps.is_empty() {
-        return Ok(());
+        return Ok(NeedsInterpreter(any_foreign));
     }
     Err(gaps)
 }
@@ -99,46 +209,147 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_program_without_a_foreign_import_is_admitted() {
+    fn project() -> ImportBinding {
         // A project import is the admitted binding spelled here because
         // the driver crate deliberately does not depend on `pycc_std`,
         // which `ImportBinding::Module`/`Symbol` need to construct; the
         // stdlib arms are covered by `crates/pycc_types/src/foreign/tests.rs`,
         // whose filter is the same shape.
-        let admitted = hir(vec![ImportBinding::Project {
+        ImportBinding::Project {
             local_name: "helper".to_string(),
             module_path: "pkg.helper".to_string(),
             kind: ProjectBindingKind::Function,
-        }]);
-        assert!(refuse_in_native_mode(&admitted).is_ok());
+        }
+    }
+
+    const ALL_HOSTS: [EmbedHost; 3] = [
+        EmbedHost::Available,
+        EmbedHost::CrossTarget,
+        EmbedHost::WindowsHost,
+    ];
+
+    #[test]
+    fn the_host_resolves_with_target_winning_over_windows() {
+        assert_eq!(EmbedHost::resolve(None, false), EmbedHost::Available);
+        assert_eq!(EmbedHost::resolve(None, true), EmbedHost::WindowsHost);
+        assert_eq!(
+            EmbedHost::resolve(Some("x86_64-apple-darwin"), false),
+            EmbedHost::CrossTarget
+        );
+        assert_eq!(
+            EmbedHost::resolve(Some("x86_64-apple-darwin"), true),
+            EmbedHost::CrossTarget
+        );
     }
 
     #[test]
-    fn every_foreign_import_is_reported_not_only_the_first() {
-        let gaps = refuse_in_native_mode(&hir(vec![
-            foreign("numpy"),
-            ImportBinding::Project {
-                local_name: "helper".to_string(),
-                module_path: "pkg.helper".to_string(),
-                kind: ProjectBindingKind::Function,
-            },
-            foreign("scipy"),
-        ]))
-        .expect_err("a foreign import is refused in native mode");
-        let messages: Vec<&str> = gaps.iter().map(|(_, gap)| gap.message.as_str()).collect();
-        assert_eq!(gaps.len(), 2, "{messages:?}");
-        assert!(
-            gaps.iter().all(|(_, gap)| gap.code == "I0403"),
-            "{messages:?}"
+    fn a_program_without_a_foreign_import_needs_no_interpreter_on_any_host() {
+        for host in ALL_HOSTS {
+            assert_eq!(
+                classify_for_native_build(&hir(vec![project()]), host),
+                Ok(NeedsInterpreter(false)),
+                "{host:?}"
+            );
+            assert_eq!(
+                classify_for_native_build(&hir(Vec::new()), host),
+                Ok(NeedsInterpreter(false)),
+                "{host:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_standard_library_program_embeds_on_an_available_host() {
+        let program = hir(vec![foreign("json"), project(), foreign("gc")]);
+        assert_eq!(
+            classify_for_native_build(&program, EmbedHost::Available),
+            Ok(NeedsInterpreter(true))
         );
-        assert!(messages[0].contains("`import numpy`"), "{messages:?}");
-        assert!(messages[1].contains("`import scipy`"), "{messages:?}");
-        // Each gap carries its position in the whole import table -- not its
-        // position among the foreign ones -- because that is the index the
-        // driver joins against the program's per-file import bounds to name
-        // the file that owns the import.
-        let positions: Vec<usize> = gaps.iter().map(|(index, _)| *index).collect();
-        assert_eq!(positions, vec![0, 2], "{messages:?}");
+    }
+
+    fn messages(host: EmbedHost, imports: Vec<ImportBinding>) -> Vec<(usize, String)> {
+        classify_for_native_build(&hir(imports), host)
+            .expect_err("refused")
+            .into_iter()
+            .map(|(position, gap)| {
+                assert_eq!(gap.code, "I0403");
+                (position, gap.message)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_host_level_reason_refuses_every_foreign_import_even_a_standard_library_one() {
+        for (host, reason) in [
+            (EmbedHost::CrossTarget, I0403Reason::CrossTarget),
+            (EmbedHost::WindowsHost, I0403Reason::WindowsHost),
+        ] {
+            let gaps = messages(host, vec![foreign("json"), project(), foreign("numpy")]);
+            assert_eq!(
+                gaps,
+                vec![
+                    (0, i0403_message("json", reason)),
+                    (2, i0403_message("numpy", reason)),
+                ],
+                "{host:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn per_root_reasons_distinguish_excluded_and_third_party_roots() {
+        // A mixed program: the embeddable `json` is not reported, and each
+        // refused import carries its position in the whole import table --
+        // not its position among the foreign ones -- because that is the
+        // index the driver joins against the program's per-file import
+        // bounds to name the file that owns the import.
+        let gaps = messages(
+            EmbedHost::Available,
+            vec![
+                foreign("numpy"),
+                project(),
+                foreign("json"),
+                foreign("tkinter"),
+                foreign("scipy.linalg"),
+            ],
+        );
+        assert_eq!(
+            gaps,
+            vec![
+                (0, i0403_message("numpy", I0403Reason::NonStdlibRoot)),
+                (3, i0403_message("tkinter", I0403Reason::ExcludedStdlibRoot)),
+                (4, i0403_message("scipy.linalg", I0403Reason::NonStdlibRoot)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dotted_path_is_admitted_by_its_root() {
+        assert_eq!(
+            classify_for_native_build(&hir(vec![foreign("xml.etree")]), EmbedHost::Available),
+            Ok(NeedsInterpreter(true))
+        );
+        assert_eq!(
+            messages(EmbedHost::Available, vec![foreign("tkinter.ttk")]),
+            vec![(
+                0,
+                i0403_message("tkinter.ttk", I0403Reason::ExcludedStdlibRoot)
+            )]
+        );
+    }
+
+    #[test]
+    fn every_reason_names_the_import_and_the_ext_alternative() {
+        for (reason, detail) in [
+            (I0403Reason::CrossTarget, "`--target` build"),
+            (I0403Reason::WindowsHost, "Windows host"),
+            (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
+            (I0403Reason::NonStdlibRoot, "outside the standard library"),
+        ] {
+            let message = i0403_message("numpy", reason);
+            assert!(message.starts_with("`import numpy` imports a"), "{message}");
+            assert!(message.contains("requires `pycc build --ext`"), "{message}");
+            assert!(message.contains(detail), "{message}");
+        }
     }
 }
