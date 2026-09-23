@@ -402,10 +402,10 @@ are all standard-library roots), `PYCC_PYTHON` names the interpreter to embed
 and defaults to `python3.14`, because D-128 pins CPython 3.14.
 `PYCC_PYTHON_INCLUDE` has no effect there. The interpreter must be a shared,
 non-free-threaded CPython 3.14.x with its headers, shared library and
-standard library present, and on macOS every native library its
+standard library present, and every native library its libpython and
 `lib-dynload` modules link must be a system library or lie under its own
-prefix; each failure is an environment failure at exit 2 naming the reason
-(D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
+prefix (on Linux, too, since #1243); each failure is an environment failure
+at exit 2 naming the reason (D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
 and neither variable affects it.
 
 `pycc lock` reads `PYCC_PYTHON` the same way and refuses exactly the
@@ -449,7 +449,8 @@ builds one bundling its closure from `pycc.lock` (#1242).
   such as `import numpy as np` then resolves, pins, and bundles the
   compatible CPython runtime and package closure recorded in `pycc.lock`;
   `pycc lock` records the closure (D-249) and an embedded build bundles it
-  (#1242), except native libraries outside the interpreter prefix (#1243);
+  (#1242), with the native libraries it needs outside the interpreter
+  (#1243);
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
   named by `allow`, and another direct root fails with `I0402`. A locked
   root's transitive closure loads without separate entries for its
@@ -497,8 +498,9 @@ rejected as an invalid invocation when combined with any explicit
 `pycc lock PATH` records the CPython dependency closure `PATH`'s embedded
 build will carry. [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md) owns the
 contract; this section summarizes it. Part 1 of #1225 (#1241) implements the
-file and the command, Part 2 (#1242) the build consuming it; native libraries
-outside the interpreter prefix are #1243.
+file and the command, Part 2 (#1242) the build consuming it, Part 3 (#1243)
+native libraries outside the interpreter; macOS relative references outside
+a distribution's payload are Part 4 (#1259).
 
 - **Source.** The closure is read offline from the installed `*.dist-info`
   distributions in the `PYCC_PYTHON` interpreter's `sysconfig` `purelib` and
@@ -529,6 +531,15 @@ outside the interpreter prefix are #1243.
   CPython-backed import has no section and never starts the interpreter; a
   lock left with no sections is deleted. A standard-library-only program
   gets the interpreter fields and `roots = []`, without a site scan.
+- **Native libraries.** Each `[[target.native]]` entry is a library a
+  closure image needs, directly or through another such library, that lies
+  outside the system library directories and the interpreter's prefix and
+  is not libpython: its name in `OUT.pycc/lib/` (the file name on macOS,
+  the `DT_NEEDED` name on Linux), the sha256 of its bytes, and the sorted
+  distributions that need it. macOS follows absolute install names; Linux
+  resolves each `DT_NEEDED` as `ld.so` would on the build host
+  (`DT_RPATH`/`DT_RUNPATH` with `$ORIGIN`, the `ldconfig -p` cache, then the
+  default directories), and leaves one it cannot find to the loader.
 - **`--check`.** Exits 0 only when the file's bytes equal what `pycc lock`
   would write, where a standard-library-only program with no section counts
   as current; otherwise it exits 1 naming the first difference and writes
@@ -538,18 +549,26 @@ outside the interpreter prefix are #1243.
   (#1226), as for an embedded build.
 - **Build.** An embedded build of a program with a root outside the standard
   library reads its (entry, host triple) section before probing the
-  interpreter: a missing lock or section, different `roots`, or a non-empty
-  `[[target.native]]` (#1243) is exit 2 naming `pycc lock`, as is a
-  malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
+  interpreter: a missing lock or section, or different `roots`, is exit 2
+  naming `pycc lock`, as is a malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
   `platform` and `libpython-sha256` must equal the embed interpreter's, and
   each package's version, file set and every copied file's digest must match
   the lock and the installed RECORD (exit 2 otherwise, leaving an existing
   `OUT.pycc` untouched). The payload is copied to `OUT.pycc/closure/`, which
   the launcher appends to `sys.path`; a standard-library-only program needs
   no lock, gets no `closure/`, and has an existing section's interpreter
-  fields checked. On macOS a closure image depending on a library outside
-  the interpreter, the system directories and its own distribution is
-  refused naming #1243. `pycc check` never reads the lock.
+  fields checked. The build re-derives the natives and refuses a difference
+  from `[[target.native]]` naming `pycc lock`, before writing anything; it
+  copies each into `OUT.pycc/lib/`, refusing one whose bytes no longer
+  match. On macOS the references to it are rewritten to the copy; on Linux
+  the executable links every library copied into `lib/` by name, so the
+  loader finds it already loaded. Refused with exit 2: two libraries needing
+  one name in `lib/` (compared case-folded), and on Linux a library whose
+  `DT_SONAME` differs from the name it is needed by, a `DT_NEEDED` given as
+  a path, a closure program image that needs a copied library, and a copied
+  library that would also answer a dependency kept on the system. On macOS
+  a relative reference outside a closure image's own payload stays refused
+  naming #1259. `pycc check` never reads the lock.
 
 ## Exit codes
 

@@ -344,7 +344,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   (pinned by `pycc.lock`, which the build consumes, #1242); native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (embedded mode implemented for standard-library roots, locked package closures and the interop policy; out-of-prefix native libraries planned v0.7; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
+## Transparent CPython interop (embedded mode implemented for standard-library roots, locked package closures with their native libraries and the interop policy; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -1191,12 +1191,18 @@ owns the contract; this is the runtime view of it.
 - **Output ordering.** `buffered_stdio = 0` and `pycc_rt`'s flush at every
   newline keep Python-side and pycc-side writes in order; a future
   `print(..., end=...)` must flush before each foreign call.
-- **Linux gap.** No ELF dependency scan runs: a `lib-dynload` module's or a
-  closure image's native dependencies are resolved by the system loader at run time, so a
-  Linux artifact is relocatable only as far as those libraries are present
-  on the target (#1243). macOS refuses a non-system, non-prefix dependency
-  at build time; for a closure image, also one outside its own
-  distribution's payload, naming #1243.
+- **Native libraries.** Every dependency of libpython, a `lib-dynload`
+  module, a closure image or a copied library is resolved at build time:
+  on macOS by its install name, on Linux as `ld.so` would on the build host
+  (#1243). A system library is kept. A library under the interpreter's
+  prefix, or (for a closure image) a native locked in `[[target.native]]`,
+  is copied into `OUT.pycc/lib/`; on macOS the reference is rewritten to
+  the copy, and on Linux the executable links every copied library by name,
+  so the loader finds it already loaded when an extension module asks for
+  it. An interpreter image needing anything else is refused as not
+  relocatable. A Linux `DT_NEEDED` that resolves nowhere on the build host
+  is left to the target's loader. macOS refuses a relative reference
+  outside a closure image's own payload (#1259).
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

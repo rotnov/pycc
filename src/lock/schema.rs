@@ -50,8 +50,8 @@ pub(crate) struct LockedPackage {
     pub(crate) requires: Vec<String>,
 }
 
-/// One vendored native library, reserved for the native-library part of
-/// #1225; Part 1 always writes none.
+/// One native library a closure image needs outside the interpreter and
+/// the system directories (the pycc.lock decision entry, rule 8; #1243).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct LockedNative {
