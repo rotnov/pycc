@@ -492,7 +492,9 @@ a call whose callee is a bare name that refers to a module-level `def` in
 the *same module*, whose parameters are all positional, whose defaults,
 if any, are all in the admitted literal subset described below, and whose
 name is bound only once in module scope (see "Keyword arguments and default
-parameter values on a redefined name" below). Every other
+parameter values on a redefined name" below), and whose binding would
+not observably reorder its argument values (see "Keyword argument
+evaluation order" below). Every other
 shape — a method call, `super().m()`, a container or stdlib-intrinsic call,
 a class instantiation, `range(stop=3)`, and `**kwargs` unpacking — keeps the
 unchanged `C0001` rejection "keyword call arguments are not supported yet",
@@ -562,7 +564,8 @@ is therefore bound only if at least one of these holds:
 1. its argument values, taken in source order, already land in
    non-decreasing parameter order, so binding moves nothing; or
 2. every argument value of the call, positional and keyword, is a literal in
-   the subset a parameter default admits (below) or a bare name, so moving
+   the subset a parameter default admits ("The admitted subset is
+   syntactic" above) or a bare name, so moving
    one cannot be observed.
 
 Otherwise the call keeps the unchanged `C0001` rejection "keyword call
