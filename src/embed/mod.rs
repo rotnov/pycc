@@ -10,6 +10,7 @@
 //! the shim stays the single layer that moves a `PyObject*` in both modes.
 
 mod bundle;
+mod closure;
 #[cfg(test)]
 pub(crate) mod fake_layout;
 pub(crate) mod layout;
@@ -18,6 +19,7 @@ pub(crate) mod sha256;
 pub(crate) mod stdlib_roots;
 
 use crate::ext_build;
+use crate::lock::probe::LockProbe;
 use layout::EmbedPlatform;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -90,6 +92,7 @@ pub(crate) const EMBED_PROBE_SCRIPT: &str = "import sys,sysconfig\n\
 pub(crate) struct EmbedToolchain {
     interpreter: OsString,
     probe_override: Option<EmbedProbe>,
+    lock_probe_override: Option<LockProbe>,
 }
 
 impl EmbedToolchain {
@@ -101,6 +104,7 @@ impl EmbedToolchain {
             interpreter: std::env::var_os("PYCC_PYTHON")
                 .unwrap_or_else(|| OsString::from("python3.14")),
             probe_override: None,
+            lock_probe_override: None,
         }
     }
 
@@ -110,6 +114,22 @@ impl EmbedToolchain {
         Self {
             interpreter: interpreter.into(),
             probe_override: Some(probe),
+            lock_probe_override: None,
+        }
+    }
+
+    /// A toolchain that answers both the embed probe and the lock probe
+    /// from `probe` and `lock_probe` instead of running anything.
+    #[cfg(test)]
+    pub(crate) fn with_probes(
+        interpreter: impl Into<OsString>,
+        probe: EmbedProbe,
+        lock_probe: LockProbe,
+    ) -> Self {
+        Self {
+            interpreter: interpreter.into(),
+            probe_override: Some(probe),
+            lock_probe_override: Some(lock_probe),
         }
     }
 
@@ -119,13 +139,18 @@ impl EmbedToolchain {
         Self {
             interpreter: interpreter.into(),
             probe_override: None,
+            lock_probe_override: None,
         }
     }
 
-    /// The interpreter this toolchain runs, for a second probe of the same
-    /// interpreter (the lock's environment probe).
-    pub(crate) fn interpreter(&self) -> &std::ffi::OsStr {
-        &self.interpreter
+    /// The interpreter's site directories, tags and marker environment
+    /// (the lock probe), which `pycc lock` records and an embedded build
+    /// compares against the lock.
+    pub(crate) fn lock_probe(&self) -> Result<LockProbe, String> {
+        match &self.lock_probe_override {
+            Some(probe) => Ok(probe.clone()),
+            None => crate::lock::probe::run_lock_probe(&self.interpreter),
+        }
     }
 
     /// Probes the interpreter and checks it can be bundled, or returns an
@@ -269,20 +294,37 @@ pub(crate) struct EmbedPlan {
 
 /// Prepares everything an embedded build links, in order: the sidecar
 /// name, the check of an existing sidecar (before anything is probed), the
-/// probe, the C sources in the scratch directory beside `obj_path`, and the
-/// sidecar itself, swapped into place before the link so the executable
-/// links against the final bundled library.
+/// `pycc.lock` checks that need no interpreter (#1242), the probe, the
+/// lock's interpreter comparison and payload plan, the C sources in the
+/// scratch directory beside `obj_path`, and the sidecar itself (with the
+/// locked closure copied into it), swapped into place before the link so
+/// the executable links against the final bundled library. `host` is the
+/// `(arch, os)` pair the lock section is selected by.
 pub(crate) fn plan_embed(
     out: &Path,
+    entry: &Path,
     typed_hir: &pycc_hir::HirModule,
     toolchain: &EmbedToolchain,
     platform: EmbedPlatform,
+    host: (&str, &str),
     obj_path: &Path,
 ) -> Result<EmbedPlan, String> {
     let sidecar_name = layout::sidecar_name(out)?;
     let parent = layout::sidecar_parent(out);
     let replace_existing = bundle::check_existing(&parent.join(&sidecar_name))?;
+    let check = crate::lock::build::plan_closure(entry, typed_hir, host)?;
     let probe = toolchain.probe()?;
+    let locked = match &check {
+        Some(check) => {
+            let lock_probe = toolchain.lock_probe()?;
+            crate::lock::build::verify_interpreter(check, &probe, &lock_probe)?;
+            Some(crate::lock::build::payload(check, &lock_probe)?)
+        }
+        None => None,
+    };
+    let has_closure = locked
+        .as_ref()
+        .is_some_and(|locked| !locked.files.is_empty());
     let shim = obj_path.with_file_name(ext_build::SHIM_C_NAME);
     let launcher = obj_path.with_file_name(LAUNCHER_C_NAME);
     let classes = ext_build::collect_user_exception_classes(typed_hir);
@@ -292,8 +334,16 @@ pub(crate) fn plan_embed(
     write_source(&exports_path, &exports_inc)?;
     write_source(&launcher, LAUNCHER_C)?;
     let config_path = obj_path.with_file_name(EMBED_CONFIG_INC_NAME);
-    write_source(&config_path, &layout::embed_config_inc(&sidecar_name))?;
-    let library = bundle::assemble(&probe, platform, parent, &sidecar_name, replace_existing)?;
+    let config = layout::embed_config_inc(&sidecar_name, has_closure);
+    write_source(&config_path, &config)?;
+    let library = bundle::assemble(
+        &probe,
+        platform,
+        parent,
+        &sidecar_name,
+        replace_existing,
+        locked.as_ref(),
+    )?;
     let mut compile_args = vec![OsString::from("-I"), probe.include.into_os_string()];
     compile_args.extend([OsString::from("-fPIC"), shim.into(), launcher.into()]);
     let mut link_args = vec![library.into_os_string()];

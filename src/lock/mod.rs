@@ -4,6 +4,7 @@
 //! decision entry under `docs/decisions/`; `docs/CLI_SPEC.md` describes
 //! the command).
 
+pub(crate) mod build;
 pub(crate) mod dist;
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -20,7 +21,7 @@ use crate::interop_policy::InteropCli;
 use pycc_hir::{HirModule, ImportBinding};
 use schema::{LOCK_FILE_NAME, LOCK_VERSION, Lock, LockTarget, LockedPackage};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Why `pycc lock` failed, by exit class (`docs/CLI_SPEC.md`).
 pub(crate) enum LockFailure {
@@ -69,7 +70,7 @@ pub(crate) fn run_lock(
 
 /// [`run_lock`] for an explicit `(arch, os)` host, so the host refusals are
 /// testable on every host.
-fn run_lock_on(
+pub(crate) fn run_lock_on(
     path: &Path,
     check: bool,
     interop: InteropCli,
@@ -86,21 +87,14 @@ fn run_lock_on(
     let triple = schema::host_triple(arch, os).map_err(LockFailure::Env)?;
     let hir = frontend::lock_frontend(path, interop)?;
     let roots = import_roots(&hir);
-    let entry = std::fs::canonicalize(path)
-        .map_err(|e| LockFailure::Env(format!("cannot resolve `{}`: {e}", path.display())))?;
-    let entry_dir = entry.parent().unwrap_or(&entry);
-    let lock_dir = crate::modules::nearest_manifest(entry_dir).map_or(entry_dir, |(_, dir)| dir);
-    let key =
-        entry_key(entry.strip_prefix(lock_dir).unwrap_or(&entry)).map_err(LockFailure::Env)?;
-    let lock_path = lock_dir.join(LOCK_FILE_NAME);
-    let existing_text = read_existing(&lock_path)?;
-    let existing =
-        match &existing_text {
-            Some(text) => Some(schema::parse(text).map_err(|m| {
-                LockFailure::Env(format!("cannot use `{}`: {m}", lock_path.display()))
-            })?),
-            None => None,
-        };
+    let located = locate(path).map_err(LockFailure::Env)?;
+    let key = located.key().map_err(LockFailure::Env)?;
+    let (lock_dir, lock_path) = (located.lock_dir.as_path(), located.lock_path.as_path());
+    let existing_text = read_existing(lock_path).map_err(LockFailure::Env)?;
+    let existing = match &existing_text {
+        Some(text) => Some(parse_lock(text, lock_path).map_err(LockFailure::Env)?),
+        None => None,
+    };
     let old_section = existing
         .as_ref()
         .and_then(|lock| find_section(lock, &key, &triple))
@@ -108,10 +102,7 @@ fn run_lock_on(
     let derived = if roots.is_empty() {
         None
     } else {
-        let direct: BTreeSet<String> = roots
-            .into_iter()
-            .filter(|root| !is_embeddable_stdlib_root(root) && !is_excluded_stdlib_root(root))
-            .collect();
+        let direct = direct_roots(&hir);
         // A standard-library-only program needs no lock (rule 7), so
         // `--check` accepts its absence without starting the interpreter.
         if check && direct.is_empty() && old_section.is_none() {
@@ -149,10 +140,61 @@ fn run_lock_on(
     }
     match rendered {
         Some(text) => write_atomically(lock_dir, LOCK_FILE_NAME, &text),
-        None => std::fs::remove_file(&lock_path)
+        None => std::fs::remove_file(lock_path)
             .map_err(|e| format!("cannot remove `{}`: {e}", lock_path.display())),
     }
     .map_err(LockFailure::Env)
+}
+
+/// Where an entry script's lock lives: the entry, canonicalized, and the
+/// directory of its nearest `pycc.toml` (else the entry's own directory).
+pub(crate) struct Located {
+    entry: PathBuf,
+    pub(crate) lock_dir: PathBuf,
+    pub(crate) lock_path: PathBuf,
+}
+
+impl Located {
+    /// The lock's `entry` key: the entry's path relative to the lock
+    /// directory. Computed only on demand, so a build that needs no lock
+    /// never refuses a non-UTF-8 entry path.
+    pub(crate) fn key(&self) -> Result<String, String> {
+        entry_key(
+            self.entry
+                .strip_prefix(&self.lock_dir)
+                .unwrap_or(&self.entry),
+        )
+    }
+}
+
+/// Locates the lock for the entry script at `path`.
+pub(crate) fn locate(path: &Path) -> Result<Located, String> {
+    let entry = std::fs::canonicalize(path)
+        .map_err(|e| format!("cannot resolve `{}`: {e}", path.display()))?;
+    let entry_dir = entry.parent().unwrap_or(&entry);
+    let lock_dir = crate::modules::nearest_manifest(entry_dir)
+        .map_or(entry_dir, |(_, dir)| dir)
+        .to_path_buf();
+    let lock_path = lock_dir.join(LOCK_FILE_NAME);
+    Ok(Located {
+        entry,
+        lock_dir,
+        lock_path,
+    })
+}
+
+/// Parses the lock text read from `lock_path`, naming the file on failure.
+pub(crate) fn parse_lock(text: &str, lock_path: &Path) -> Result<Lock, String> {
+    schema::parse(text).map_err(|m| format!("cannot use `{}`: {m}", lock_path.display()))
+}
+
+/// The program's direct roots (rule 2): its CPython-backed import roots
+/// that are neither bundled with the standard library nor excluded from it.
+pub(crate) fn direct_roots(hir: &HirModule) -> BTreeSet<String> {
+    import_roots(hir)
+        .into_iter()
+        .filter(|root| !is_embeddable_stdlib_root(root) && !is_excluded_stdlib_root(root))
+        .collect()
 }
 
 /// The first segment of every CPython-backed import in the linked program.
@@ -184,18 +226,20 @@ fn entry_key(relative: &Path) -> Result<String, String> {
     })
 }
 
-fn read_existing(lock_path: &Path) -> Result<Option<String>, LockFailure> {
+/// The lock file's text, or `None` when it does not exist.
+pub(crate) fn read_existing(lock_path: &Path) -> Result<Option<String>, String> {
     match std::fs::read_to_string(lock_path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(LockFailure::Env(format!(
-            "cannot read `{}`: {e}",
-            lock_path.display()
-        ))),
+        Err(e) => Err(format!("cannot read `{}`: {e}", lock_path.display())),
     }
 }
 
-fn find_section<'a>(lock: &'a Lock, entry: &str, triple: &str) -> Option<&'a LockTarget> {
+pub(crate) fn find_section<'a>(
+    lock: &'a Lock,
+    entry: &str,
+    triple: &str,
+) -> Option<&'a LockTarget> {
     lock.target
         .iter()
         .find(|target| target.entry == entry && target.triple == triple)
@@ -211,7 +255,7 @@ fn derive(
     toolchain: &EmbedToolchain,
 ) -> Result<LockTarget, LockFailure> {
     let probe = toolchain.probe().map_err(LockFailure::Env)?;
-    let env = probe::run_lock_probe(toolchain.interpreter()).map_err(LockFailure::Env)?;
+    let env = toolchain.lock_probe().map_err(LockFailure::Env)?;
     let library = embed::layout::source_library(&probe);
     let libpython_sha256 = embed::sha256::sha256_file(&library)
         .map_err(|e| LockFailure::Env(format!("cannot read `{}`: {e}", library.display())))?;
@@ -262,10 +306,21 @@ fn stale_reason(old: Option<&LockTarget>, new: Option<&LockTarget>, orphans: usi
     }
 }
 
+/// The first `(field, locked, now)` whose two values differ, worded for
+/// both `pycc lock --check` and an embedded build.
+pub(crate) fn field_difference(fields: &[(&str, &str, &str)]) -> Option<String> {
+    fields
+        .iter()
+        .find(|(_, locked, now)| locked != now)
+        .map(|(field, locked, now)| {
+            format!("`{field}` is `{locked}` in the lock but `{now}` in the environment")
+        })
+}
+
 /// The first field in which a locked section differs from the derived one.
 fn first_difference(old: &LockTarget, new: &LockTarget) -> String {
     let scalars = [
-        ("python", &old.python, &new.python),
+        ("python", old.python.as_str(), new.python.as_str()),
         ("cache-tag", &old.cache_tag, &new.cache_tag),
         ("platform", &old.platform, &new.platform),
         (
@@ -274,8 +329,8 @@ fn first_difference(old: &LockTarget, new: &LockTarget) -> String {
             &new.libpython_sha256,
         ),
     ];
-    if let Some((field, locked, now)) = scalars.into_iter().find(|(_, a, b)| a != b) {
-        return format!("`{field}` is `{locked}` in the lock but `{now}` in the environment");
+    if let Some(difference) = field_difference(&scalars) {
+        return difference;
     }
     if old.roots != new.roots {
         return format!(

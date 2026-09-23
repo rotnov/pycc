@@ -7113,8 +7113,8 @@ fn every_ordinary_identifier_spelling_lowers_to_the_same_buffer_ty_as_memoryview
     // `C0001` walk both read, and `I0405` reads both.
     //
     // No import: the source mentions numpy nowhere, which is the whole
-    // point of the arm -- `import numpy` is itself refused (`I0403`), so a
-    // spelling gated on one could not be written at all. The return-position
+    // point of the arm -- `import numpy` builds only from a `pycc.lock`
+    // closure (#1242), so a spelling gated on one would need numpy. The return-position
     // sources recurse rather than returning the parameter, because *reading*
     // a buffer parameter is its own refusal (Part 2 of #1027) and would
     // refuse the fixture for an unrelated reason.

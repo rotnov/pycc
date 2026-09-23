@@ -28,7 +28,9 @@
 
 /* Defines PYCC_EMBED_SIDECAR: the sidecar directory's file name, fixed at
  * build time from `-o`'s file name (never derived from the running
- * executable's name, so renaming the executable keeps it working). */
+ * executable's name, so renaming the executable keeps it working). Also
+ * defines PYCC_EMBED_CLOSURE when the sidecar holds a locked dependency
+ * closure in `closure/` (#1242). */
 #include "pycc_embed_config.inc"
 
 extern PyObject *PyInit___main__(void);
@@ -98,6 +100,30 @@ int main(int argc, char **argv) {
     if (PyStatus_Exception(status)) {
         Py_ExitStatusException(status);
     }
+#ifdef PYCC_EMBED_CLOSURE
+    /* The locked closure is appended after the bundled standard library,
+     * so a closure package never shadows a standard-library module. */
+    {
+        char closure[PATH_MAX];
+        PyObject *path = PySys_GetObject("path"); /* borrowed */
+        PyObject *entry = NULL;
+        if ((size_t)snprintf(closure, sizeof closure, "%s/closure", home) < sizeof closure) {
+            entry = PyUnicode_DecodeFSDefault(closure);
+        } else {
+            PyErr_SetString(PyExc_OSError, "the closure directory's path is too long");
+        }
+        if (entry == NULL || path == NULL || PyList_Append(path, entry) != 0) {
+            if (!PyErr_Occurred()) {
+                PyErr_SetString(PyExc_RuntimeError, "sys.path is missing");
+            }
+            PyErr_Print();
+            Py_XDECREF(entry);
+            Py_FinalizeEx();
+            return 1;
+        }
+        Py_DECREF(entry);
+    }
+#endif
     int rc = 1;
     PyObject *def = PyInit___main__();
     PyObject *machinery = def ? PyImport_ImportModule("importlib.machinery") : NULL;

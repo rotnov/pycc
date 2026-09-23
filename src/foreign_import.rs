@@ -8,10 +8,12 @@
 //! interpreter only by *embedding* one (D-128's `auto` default, realized for
 //! the standard library by Part 1 of #1028): the executable starts a bundled
 //! CPython and runs the compiled module as its `__main__`. Embedding is
-//! possible only for a standard-library root the bundle carries, on a macOS
-//! or Linux host, with no `--target`; every other foreign import is refused
-//! here with `I0403` rather than compiled into a call that could only fail
-//! at run time.
+//! possible on a macOS or Linux host, with no `--target`, for every root
+//! except a standard-library one the bundle excludes (Tcl/Tk); a root
+//! outside the standard library is bundled from the program's `pycc.lock`
+//! closure, which the build checks and refuses there, naming `pycc lock`
+//! (#1242). Every other foreign import is refused here with `I0403` rather
+//! than compiled into a call that could only fail at run time.
 //!
 //! The interop policy (D-128, #1224) is evaluated first, per import: an
 //! import the effective policy rejects is `I0402` on every host and
@@ -22,7 +24,7 @@
 //! of asserting: an embedded build compiles with `options.ext` set, and this
 //! gate has refused every other program that could reach it.
 
-use crate::embed::stdlib_roots::{is_embeddable_stdlib_root, is_excluded_stdlib_root};
+use crate::embed::stdlib_roots::is_excluded_stdlib_root;
 use crate::interop_policy::{self, EffectivePolicy};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, ImportBinding};
@@ -72,7 +74,6 @@ pub(crate) enum I0403Reason {
     CrossTarget,
     WindowsHost,
     ExcludedStdlibRoot,
-    NonStdlibRoot,
 }
 
 /// The `I0403` message for `import {module_path}` refused for `reason`.
@@ -97,12 +98,6 @@ pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
              Tcl/Tk libraries from outside the interpreter, which requires \
              `pycc build --ext`: an embedded executable does not bundle it"
         ),
-        I0403Reason::NonStdlibRoot => format!(
-            "`import {module_path}` imports a CPython module outside the standard \
-             library, which requires `pycc build --ext`: an embedded executable \
-             bundles only the standard library until it can load a locked \
-             dependency closure (#1225)"
-        ),
     }
 }
 
@@ -114,14 +109,11 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
         EmbedHost::WindowsHost => return Some(I0403Reason::WindowsHost),
         EmbedHost::Available => {}
     }
+    // A root outside the standard library is embeddable too: the build
+    // bundles it from the program's `pycc.lock` closure, and refuses there,
+    // naming `pycc lock`, when the lock is missing or stale (#1242).
     let root = module_path.split('.').next().unwrap_or(module_path);
-    if is_embeddable_stdlib_root(root) {
-        None
-    } else if is_excluded_stdlib_root(root) {
-        Some(I0403Reason::ExcludedStdlibRoot)
-    } else {
-        Some(I0403Reason::NonStdlibRoot)
-    }
+    is_excluded_stdlib_root(root).then_some(I0403Reason::ExcludedStdlibRoot)
 }
 
 /// Classifies a program for a build without `--ext`: `Ok(NeedsInterpreter(
@@ -310,12 +302,13 @@ mod tests {
     }
 
     #[test]
-    fn per_root_reasons_distinguish_excluded_and_third_party_roots() {
-        // A mixed program: the embeddable `json` is not reported, and each
-        // refused import carries its position in the whole import table --
-        // not its position among the foreign ones -- because that is the
-        // index the driver joins against the program's per-file import
-        // bounds to name the file that owns the import.
+    fn only_an_excluded_root_is_refused_on_an_available_host() {
+        // A mixed program: the embeddable `json` and the third-party roots
+        // `numpy` and `scipy` (bundled from the lock, #1242) are not
+        // reported, and the refused import carries its position in the
+        // whole import table -- not its position among the foreign ones --
+        // because that is the index the driver joins against the program's
+        // per-file import bounds to name the file that owns the import.
         let gaps = messages(
             EmbedHost::Available,
             vec![
@@ -328,11 +321,11 @@ mod tests {
         );
         assert_eq!(
             gaps,
-            vec![
-                (0, i0403_message("numpy", I0403Reason::NonStdlibRoot)),
-                (3, i0403_message("tkinter", I0403Reason::ExcludedStdlibRoot)),
-                (4, i0403_message("scipy.linalg", I0403Reason::NonStdlibRoot)),
-            ]
+            vec![(3, i0403_message("tkinter", I0403Reason::ExcludedStdlibRoot)),]
+        );
+        assert_eq!(
+            classify_for_native_build(&hir(vec![foreign("numpy")]), EmbedHost::Available, &AUTO),
+            Ok(NeedsInterpreter(true))
         );
     }
 
@@ -361,7 +354,6 @@ mod tests {
             (I0403Reason::CrossTarget, "`--target` build"),
             (I0403Reason::WindowsHost, "Windows host"),
             (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
-            (I0403Reason::NonStdlibRoot, "outside the standard library"),
         ] {
             let message = i0403_message("numpy", reason);
             assert!(message.starts_with("`import numpy` imports a"), "{message}");
@@ -378,11 +370,11 @@ mod tests {
     fn a_policy_rejection_wins_over_the_embedding_refusal_per_import() {
         use crate::interop_policy::PolicySource;
         let policy = EffectivePolicy::Allowlist {
-            allow: vec!["json".to_string(), "numpy".to_string()],
+            allow: vec!["json".to_string(), "tkinter".to_string()],
             source: PolicySource::CliFlag,
         };
         let classified = classify_for_native_build(
-            &hir(vec![foreign("pprint"), foreign("numpy"), foreign("json")]),
+            &hir(vec![foreign("pprint"), foreign("tkinter"), foreign("json")]),
             EmbedHost::Available,
             &policy,
         )

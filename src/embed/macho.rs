@@ -3,6 +3,7 @@
 //! dependency, and the `install_name_tool`/`codesign` argument lists.
 //! `bundle.rs` runs the tools; nothing here spawns anything.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,174 @@ pub(crate) fn classify_macho_dep(
         return MachoDep::Vendor(resolved.to_path_buf());
     }
     MachoDep::Refuse
+}
+
+/// Whether `bytes` starts like a Mach-O image: a thin header in either
+/// byte order, or a fat (universal) header whose big-endian `nfat_arch` is
+/// between 1 and 29. The bound keeps a Java `.class` file, which shares
+/// `0xcafebabe` but carries its version (45 or more) in that field, out of
+/// the relocation scan.
+pub(crate) fn is_macho_header(bytes: &[u8]) -> bool {
+    let Some(magic) = bytes.get(..4) else {
+        return false;
+    };
+    let magic = u32::from_be_bytes([magic[0], magic[1], magic[2], magic[3]]);
+    match magic {
+        0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe => true,
+        0xcafe_babe | 0xcafe_babf | 0xbeba_feca | 0xbfba_feca => {
+            let Some(count) = bytes.get(4..8) else {
+                return false;
+            };
+            let count = [count[0], count[1], count[2], count[3]];
+            let count = if magic >> 24 == 0xca {
+                u32::from_be_bytes(count)
+            } else {
+                u32::from_le_bytes(count)
+            };
+            (1..=29).contains(&count)
+        }
+        _ => false,
+    }
+}
+
+/// The install name `otool -D` reports for an image, if it has one: a
+/// bundle prints only its path header, a dylib its id after it, and a
+/// universal image one header and id per slice.
+pub(crate) fn parse_otool_d(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.ends_with(':'))
+        .map(str::to_string)
+}
+
+/// The `LC_RPATH` entries in `otool -l`'s output, in load-command order,
+/// each kept once (a universal image lists them per slice).
+pub(crate) fn parse_otool_rpaths(stdout: &str) -> Vec<String> {
+    let mut rpaths: Vec<String> = Vec::new();
+    let mut in_rpath = false;
+    for line in stdout.lines().map(str::trim) {
+        if let Some(cmd) = line.strip_prefix("cmd ") {
+            in_rpath = cmd.trim() == "LC_RPATH";
+            continue;
+        }
+        let Some(path) = line.strip_prefix("path ").filter(|_| in_rpath) else {
+            continue;
+        };
+        let path = path.rsplit_once(" (offset").map_or(path, |(path, _)| path);
+        let path = path.trim().to_string();
+        if !rpaths.contains(&path) {
+            rpaths.push(path);
+        }
+        in_rpath = false;
+    }
+    rpaths
+}
+
+/// What [`classify_closure_dep`] knows about one closure image, all of it
+/// computed by the caller so the classifier stays pure.
+pub(crate) struct ClosureImage<'a> {
+    /// The image's path under `<sidecar>/closure`, `/`-separated.
+    pub(crate) rel: &'a str,
+    /// Its install name (`otool -D`), if it is a dylib.
+    pub(crate) own_id: Option<&'a str>,
+    /// Its `LC_RPATH` entries, in load-command order.
+    pub(crate) rpaths: &'a [String],
+    /// The payload paths (under `closure/`) of the distribution(s) that
+    /// own it.
+    pub(crate) own_payload: &'a BTreeSet<String>,
+    /// Every file in the staged sidecar, relative to its root
+    /// (`closure/...` and `lib/...`).
+    pub(crate) sidecar: &'a BTreeSet<String>,
+}
+
+/// Classifies one dependency `dep` of a closure image (the pycc.lock
+/// decision entry, rule 8), in precedence order: the image's own id and a
+/// system library are kept; the source libpython is rewritten to the
+/// bundled one; an `@loader_path` reference into the image's own payload
+/// is kept; an `@rpath` reference is resolved in dyld's order over the
+/// image's `LC_RPATH` entries and kept only when its first match is in the
+/// image's own payload; a library under the interpreter's `prefix` is
+/// vendored; anything else is refused (#1243). `resolved`, `prefix`,
+/// `bundle_lib` and `bundled_name` are as for [`classify_macho_dep`].
+pub(crate) fn classify_closure_dep(
+    dep: &str,
+    resolved: &Path,
+    image: &ClosureImage<'_>,
+    prefix: &Path,
+    bundle_lib: &[PathBuf],
+) -> MachoDep {
+    if image.own_id == Some(dep) {
+        return MachoDep::Keep;
+    }
+    if dep.starts_with("/usr/lib/") || dep.starts_with("/System/Library/") {
+        return MachoDep::Keep;
+    }
+    if bundle_lib
+        .iter()
+        .any(|lib| lib.as_path() == Path::new(dep) || lib.as_path() == resolved)
+    {
+        return MachoDep::RewriteToBundled;
+    }
+    let image_dir = format!("closure/{}/..", image.rel);
+    if let Some(rest) = dep.strip_prefix("@loader_path/") {
+        let target = normalize_under_root(&format!("{image_dir}/{rest}"));
+        return match target.as_deref().and_then(|t| t.strip_prefix("closure/")) {
+            Some(rel) if image.own_payload.contains(rel) => MachoDep::Keep,
+            _ => MachoDep::Refuse,
+        };
+    }
+    if let Some(rest) = dep.strip_prefix("@rpath/") {
+        return resolve_rpath(rest, &image_dir, image);
+    }
+    if dep.starts_with('/') && resolved.starts_with(prefix) {
+        return MachoDep::Vendor(resolved.to_path_buf());
+    }
+    MachoDep::Refuse
+}
+
+/// dyld's `@rpath/<rest>` search over `image.rpaths`: the first candidate
+/// that is not relative to the image (an absolute or `@executable_path`
+/// rpath, or one that climbs out of the sidecar) is refused, because on the
+/// machine that runs the program it may exist and win; the first relative
+/// candidate that names a sidecar file decides.
+fn resolve_rpath(rest: &str, image_dir: &str, image: &ClosureImage<'_>) -> MachoDep {
+    for rpath in image.rpaths {
+        let Some(relative) = rpath
+            .strip_prefix("@loader_path")
+            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
+        else {
+            return MachoDep::Refuse;
+        };
+        let Some(candidate) = normalize_under_root(&format!("{image_dir}{relative}/{rest}")) else {
+            return MachoDep::Refuse;
+        };
+        if let Some(rel) = candidate.strip_prefix("closure/")
+            && image.own_payload.contains(rel)
+        {
+            return MachoDep::Keep;
+        }
+        if image.sidecar.contains(&candidate) {
+            return MachoDep::Refuse;
+        }
+    }
+    MachoDep::Refuse
+}
+
+/// Normalizes a `/`-separated path relative to the sidecar root, or `None`
+/// when it climbs above that root.
+fn normalize_under_root(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// `install_name_tool -id <id> <image>`.

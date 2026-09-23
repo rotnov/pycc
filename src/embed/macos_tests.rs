@@ -46,9 +46,11 @@ fn a_macos_bundle_relocates_bundles_and_vendors_every_image() {
     let out = dir.join("app");
     let plan = plan_embed(
         &out,
+        &dir.join("m.py"),
         &typed(&dir),
         &toolchain,
         EmbedPlatform::MacOs,
+        HOST,
         &dir.join("main.o"),
     )
     .expect("planned");
@@ -126,9 +128,11 @@ fn a_dependency_outside_the_prefix_is_refused() {
     let toolchain = EmbedToolchain::with_probe("pyfake", layout.probe.clone());
     let message = plan_embed(
         &dir.join("app"),
+        &dir.join("m.py"),
         &typed(&dir),
         &toolchain,
         EmbedPlatform::MacOs,
+        HOST,
         &dir.join("main.o"),
     )
     .expect_err("not relocatable");

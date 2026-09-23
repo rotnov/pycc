@@ -14,7 +14,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 | 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs` and `tests/issue_1142_ext_buffer_store.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
-| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, plus the unit tests under `src/embed/` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)) |
+| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
 | 10. Interop policy | `tests/issue_1224_interop_policy.rs`, the `i0402_*` snapshots under `tests/diagnostics/`, plus `src/interop_policy/tests.rs` | `--interop-policy`, `--pure` and `[interop]` admit or reject each CPython-backed root alike in `check`, `build` and `run`, a rejection is `I0402` on every host and precedes any `I0403` (D-128) |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
@@ -459,6 +459,16 @@ achieve.
   `EMBEDDABLE_STDLIB_ROOTS` against `sys.stdlib_module_names`. The oracle
   program prints nothing the D-248 deviations touch and raises nothing, so
   no row is added to the CPython oracle exception list.
+- **Locked closure (#1242).** `tests/issue_1242_locked_closure.rs`'s
+  non-ignored tests pin the missing-lock refusal (before any interpreter
+  runs), a stale lock, `pycc check` needing no lock, and a current
+  multi-module lock passing every lock check, through a `sh` fake
+  interpreter; `src/lock/build_tests.rs`, `src/embed/lock_tests.rs` and
+  `src/embed/closure_tests.rs` cover each lock, interpreter and copy
+  refusal, and `src/embed/macos_closure_tests.rs` each closure-image
+  relocation arm on `cc`-built images. Its `#[ignore]`d oracle locks a
+  `venv --without-pip` holding the test-authored `tinypkg`/`tinydep`,
+  builds, moves the venv away, and compares the run with CPython 3.14.7.
 - **Bounds.** Every spawn of a built embedded executable uses
   `Command::output()`, whose stdin is null; a manual run should be
   time-bounded with stdin closed, e.g.
@@ -1323,28 +1333,36 @@ only a run of the protocol above can be that.
 
 D-128's transparent interop contract is partly implemented: the embedded
 executable for standard-library roots (#1223, D-248) and the policy surface
-(#1224) and `pycc lock` (#1241, D-249) exist; bundling the locked closure
-(#1242, #1243) and Windows embedding (#1226) do not. The v0.7 implementation cannot mark its roadmap acceptance complete
+(#1224), `pycc lock` (#1241, D-249) and bundling the locked closure (#1242)
+exist; out-of-prefix native libraries (#1243) and Windows embedding (#1226)
+do not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
 - unchanged source fixtures containing both `import numpy as np` and
   `from numpy import array` build and run under the default `auto` policy
   without a separately installed Python. *Pending:* both spellings are
-  `C0001` today, and a non-standard-library root needs #1225;
+  `C0001` today; a plain `import numpy` embeds from `pycc.lock` (#1242);
 - the produced `pycc.lock` and deployment bundle select the exact intended
   CPython, package, and native-library artifacts and never consult ambient
   `site-packages` at runtime. *Partly covered:* the lock's closure, integrity
   and byte stability (`tests/issue_1241_pycc_lock.rs`, the `src/lock/` unit
-  tests). *Pending:* bundling the locked closure, #1242, and its native
-  libraries, #1243 (the standard-library bundle already carries no
-  `site-packages`, D-248);
+  tests); the build consuming it, every lock and interpreter refusal, the
+  copy's digest, case-collision and permission checks, and the macOS
+  closure-image relocation arms (`tests/issue_1242_locked_closure.rs`, whose
+  `#[ignore]`d oracle runs a `tinypkg`/`tinydep` closure from the sidecar
+  after its venv is moved away; `src/lock/build_tests.rs`,
+  `src/embed/closure_tests.rs`, `src/embed/lock_tests.rs`,
+  `src/embed/macos_closure_tests.rs`, `src/embed/macho_tests.rs`).
+  *Pending:* native libraries outside the interpreter prefix, #1243 (the
+  bundle carries no `site-packages`, D-248);
 - `allowlist` accepts an allowed direct import root, covers its submodules and
   pinned transitive closure, and emits `I0402` for an otherwise-resolvable
   unlisted direct root. *Covered:* acceptance and the unlisted root
   (`tests/issue_1224_interop_policy.rs`, the `interop_allowlist/` snapshots
-  in `tests/diagnostics/`). *Pending:* submodules and the closure, #1225
-  (a dotted CPython-backed import is `C0001` today);
+  in `tests/diagnostics/`); the closure is bundled from `pycc.lock`
+  (`tests/issue_1242_locked_closure.rs`). *Pending:* submodules (a dotted
+  CPython-backed import is `C0001` today);
 - CLI policy precedence covers every usable branch: explicit `auto` and
   `deny` each override the other and a configured `allowlist`; explicit
   `allowlist` with its configured roots accepts an allowed root and emits

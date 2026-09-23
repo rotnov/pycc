@@ -86,8 +86,9 @@ def total(b: NDArray) -> float:
 /// An `NDArray` parameter type-checks with no interpreter, no numpy and no
 /// import.
 ///
-/// `import numpy` is itself refused today (`I0403`), so a spelling gated on
-/// an import could not be written at all; the bare name is recognized
+/// `import numpy` builds only from a `pycc.lock` closure (#1242), so a
+/// spelling gated on an import would need numpy installed; the bare name
+/// is recognized
 /// without one, exactly as `Any`, `Annotated`, `TypeAlias`, `Self` and
 /// `ndarray` are (D-244's #1129 amendment, statement (c)).
 ///

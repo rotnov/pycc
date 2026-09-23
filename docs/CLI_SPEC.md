@@ -18,17 +18,21 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 
 A program with no CPython-backed import writes a native binary at `OUT`, and
 so does every successful `deny`/`--pure` build, since those policies reject every
-CPython-backed import with `I0402` (#1224). A program whose CPython-backed imports
-are all standard-library roots builds an **embedded executable** on a macOS or
-Linux host without `--target` (Part 1 of #1028, D-128's `auto` default): the
-executable at `OUT` plus an `OUT.pycc/` sidecar directory holding the embed
-interpreter's shared library and filtered standard library. The two move
+CPython-backed import with `I0402` (#1224). A program with a CPython-backed
+import builds an **embedded executable** on a macOS or Linux host without
+`--target` (Part 1 of #1028, D-128's `auto` default): the executable at `OUT`
+plus an `OUT.pycc/` sidecar directory holding the embed interpreter's shared
+library and filtered standard library and, when the program imports a root
+outside the standard library, the dependency closure `pycc.lock` records,
+copied into `OUT.pycc/closure/` (#1242; see "`pycc.lock`" below). The two move
 together and must keep their names; D-248 owns the layout, the `PYCC-BUNDLE`
 marker, and the rule that an existing `OUT.pycc` without that marker is never
 replaced (exit 2). An embedded build refuses an `OUT` file name containing `$`
 or `:` (exit 2). The effective interop policy (see `pycc.toml` below) is
-decided first, per import: a root it rejects is `I0402`, and any other
-CPython-backed import it admits is still `I0403`. The
+decided first, per import: a root it rejects is `I0402`; an admitted import
+the build cannot embed (an excluded Tcl/Tk root, a `--target` build, a
+Windows host) is `I0403`; and an admitted root outside the standard library
+without a current `pycc.lock` section is exit 2 naming `pycc lock`. The
 hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
 never an executable or a bundle. The recognized extension suffixes are the
@@ -252,9 +256,10 @@ directory once project mode exists.
                     shadows it, publishing the derived binding or nothing;
                     `docs/RUNTIME.md`'s `ext` boundary section states which
                     classes are published and which are constructible.
-                    `--ext` is also the only mode that imports a
-                    non-standard-library root today (`I0403` otherwise,
-                    until #1242). Conflicts with `--interop-policy` and
+                    `--ext` imports a non-standard-library root from the
+                    host's environment and needs no `pycc.lock`; an
+                    embedded build bundles it from the lock (#1242).
+                    Conflicts with `--interop-policy` and
                     `--pure` (exit 2, D-244 rule 3); will conflict with
                     `--lib` once that flag exists.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
@@ -436,20 +441,20 @@ both flags (D-244 rule 3, mirrored from `RUNTIME.md`'s canonical statement).
 The TOML parser still accepts and ignores other unmodeled sections such as
 `[test]`. What each policy admits is current behavior; what an admitted root
 then builds is bounded by the embedding (D-248): a standard-library root
-builds an embedded executable, and any other admitted root is still `I0403`
-until the build consumes `pycc.lock` (#1242).
+builds an embedded executable with no lock, and any other admitted root
+builds one bundling its closure from `pycc.lock` (#1242).
 
 - omitting `[interop]` selects `policy = "auto"`, which admits every
   CPython-backed root. The target contract is that a standard source import
   such as `import numpy as np` then resolves, pins, and bundles the
   compatible CPython runtime and package closure recorded in `pycc.lock`;
-  today only standard-library roots embed (#1223, D-248); `pycc lock` records
-  the closure (D-249), and bundling it is #1242;
+  `pycc lock` records the closure (D-249) and an embedded build bundles it
+  (#1242), except native libraries outside the interpreter prefix (#1243);
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
-  named by `allow`, and another direct root fails with `I0402`. Importing a
-  submodule of an allowed root and loading its locked transitive closure
-  will not require separate entries (#1242; a dotted CPython-backed import is
-  `C0001` today). Each entry is one root name, so an empty or dotted entry is
+  named by `allow`, and another direct root fails with `I0402`. A locked
+  root's transitive closure loads without separate entries for its
+  dependencies (#1242); importing a submodule of an allowed root is still
+  `C0001` today. Each entry is one root name, so an empty or dotted entry is
   invalid;
 - `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
   CPython-backed import with `I0402`, so the produced artifact contains no
@@ -492,8 +497,8 @@ rejected as an invalid invocation when combined with any explicit
 `pycc lock PATH` records the CPython dependency closure `PATH`'s embedded
 build will carry. [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md) owns the
 contract; this section summarizes it. Part 1 of #1225 (#1241) implements the
-file and the command; the build does not read the lock until #1242, and
-native libraries outside the interpreter prefix are #1243.
+file and the command, Part 2 (#1242) the build consuming it; native libraries
+outside the interpreter prefix are #1243.
 
 - **Source.** The closure is read offline from the installed `*.dist-info`
   distributions in the `PYCC_PYTHON` interpreter's `sysconfig` `purelib` and
@@ -531,6 +536,20 @@ native libraries outside the interpreter prefix are #1243.
 - **Failures.** An unparsable existing lock, or one with another `version`,
   is exit 2 for both forms and is never overwritten. A Windows host is exit 2
   (#1226), as for an embedded build.
+- **Build.** An embedded build of a program with a root outside the standard
+  library reads its (entry, host triple) section before probing the
+  interpreter: a missing lock or section, different `roots`, or a non-empty
+  `[[target.native]]` (#1243) is exit 2 naming `pycc lock`, as is a
+  malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
+  `platform` and `libpython-sha256` must equal the embed interpreter's, and
+  each package's version, file set and every copied file's digest must match
+  the lock and the installed RECORD (exit 2 otherwise, leaving an existing
+  `OUT.pycc` untouched). The payload is copied to `OUT.pycc/closure/`, which
+  the launcher appends to `sys.path`; a standard-library-only program needs
+  no lock, gets no `closure/`, and has an existing section's interpreter
+  fields checked. On macOS a closure image depending on a library outside
+  the interpreter, the system directories and its own distribution is
+  refused naming #1243. `pycc check` never reads the lock.
 
 ## Exit codes
 

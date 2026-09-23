@@ -18,6 +18,10 @@ fn probe_lines(layout: &FakeLayout) -> String {
     )
 }
 
+/// The host the lock section is selected by; a stdlib-only program with no
+/// lock never uses it.
+const HOST: (&str, &str) = ("aarch64", "macos");
+
 fn typed(dir: &Path) -> pycc_hir::HirModule {
     let src = dir.join("m.py");
     std::fs::write(&src, "class Boom(Exception):\n    pass\n\nx = 1\n").expect("write source");
@@ -196,9 +200,11 @@ fn an_unmarked_sidecar_is_refused_before_the_probe_and_left_intact() {
     let toolchain = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python");
     let message = plan_embed(
         &dir.join("app"),
+        &dir.join("m.py"),
         &typed(&dir),
         &toolchain,
         EmbedPlatform::Linux,
+        HOST,
         &dir.join("main.o"),
     )
     .expect_err("unmarked");
@@ -259,9 +265,11 @@ fn a_sidecar_name_the_loader_cannot_carry_is_refused_first() {
     let toolchain = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python");
     let message = plan_embed(
         &dir.join("a$b"),
+        &dir.join("m.py"),
         &typed(&dir),
         &toolchain,
         EmbedPlatform::Linux,
+        HOST,
         &dir.join("main.o"),
     )
     .expect_err("`$` is refused");
@@ -295,8 +303,16 @@ fn a_linux_bundle_copies_the_filtered_stdlib_and_the_soname_library() {
     let toolchain = EmbedToolchain::with_probe("pyfake", layout.probe.clone());
     let out = dir.join("app");
     let obj = dir.join("main.o");
-    let plan =
-        plan_embed(&out, &typed(&dir), &toolchain, EmbedPlatform::Linux, &obj).expect("planned");
+    let plan = plan_embed(
+        &out,
+        &dir.join("m.py"),
+        &typed(&dir),
+        &toolchain,
+        EmbedPlatform::Linux,
+        HOST,
+        &obj,
+    )
+    .expect("planned");
     let sidecar = dir.join("app.pycc");
     assert_eq!(
         relative_files(&sidecar),
@@ -352,7 +368,16 @@ fn a_linux_bundle_copies_the_filtered_stdlib_and_the_soname_library() {
 
     // A rebuild replaces the marked sidecar and leaves nothing beside it.
     std::fs::write(sidecar.join("stale.txt"), "old").expect("write");
-    plan_embed(&out, &typed(&dir), &toolchain, EmbedPlatform::Linux, &obj).expect("replanned");
+    plan_embed(
+        &out,
+        &dir.join("m.py"),
+        &typed(&dir),
+        &toolchain,
+        EmbedPlatform::Linux,
+        HOST,
+        &obj,
+    )
+    .expect("replanned");
     assert!(!sidecar.join("stale.txt").exists());
     let names: Vec<String> = std::fs::read_dir(&*dir)
         .expect("read_dir")
@@ -374,8 +399,15 @@ fn a_failed_assembly_removes_its_staging_directory() {
     let layout = fake_layout(&dir);
     // The probe passed, but the library vanished before the copy.
     std::fs::remove_file(layout.library()).expect("remove");
-    let message = bundle::assemble(&layout.probe, EmbedPlatform::Linux, &dir, "app.pycc", false)
-        .expect_err("no library");
+    let message = bundle::assemble(
+        &layout.probe,
+        EmbedPlatform::Linux,
+        &dir,
+        "app.pycc",
+        false,
+        None,
+    )
+    .expect_err("no library");
     assert!(message.contains("could not read"), "{message}");
     let leftovers: Vec<_> = std::fs::read_dir(&*dir)
         .expect("read_dir")
@@ -391,8 +423,15 @@ fn a_failed_replacement_removes_its_staging_directory() {
     let layout = fake_layout(&dir);
     // Asked to replace a sidecar that is not there: moving it aside fails
     // after the staging directory was fully populated.
-    let message = bundle::assemble(&layout.probe, EmbedPlatform::Linux, &dir, "app.pycc", true)
-        .expect_err("nothing to move aside");
+    let message = bundle::assemble(
+        &layout.probe,
+        EmbedPlatform::Linux,
+        &dir,
+        "app.pycc",
+        true,
+        None,
+    )
+    .expect_err("nothing to move aside");
     assert!(message.contains("could not move aside"), "{message}");
     let leftovers: Vec<_> = std::fs::read_dir(&*dir)
         .expect("read_dir")
@@ -460,3 +499,6 @@ fn a_tool_that_fails_or_cannot_start_is_an_environment_failure() {
 #[cfg(target_os = "macos")]
 #[path = "macos_tests.rs"]
 mod macos_tests;
+
+#[path = "lock_tests.rs"]
+mod lock_tests;

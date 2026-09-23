@@ -176,7 +176,27 @@ fn a_c_string_literal_escapes_everything_outside_printable_ascii() {
     assert_eq!(c_string_literal("a\"b\\c"), "\"a\\042b\\134c\"");
     assert_eq!(c_string_literal("é1"), "\"\\303\\2511\"");
     assert_eq!(c_string_literal("a\nb"), "\"a\\012b\"");
-    assert!(embed_config_inc("app.pycc").contains("#define PYCC_EMBED_SIDECAR \"app.pycc\"\n"));
+    assert!(
+        embed_config_inc("app.pycc", false).contains("#define PYCC_EMBED_SIDECAR \"app.pycc\"\n")
+    );
+}
+
+#[test]
+fn the_closure_define_is_written_only_for_a_closure() {
+    assert!(!embed_config_inc("app.pycc", false).contains("PYCC_EMBED_CLOSURE"));
+    assert!(embed_config_inc("app.pycc", true).ends_with("#define PYCC_EMBED_CLOSURE 1\n"));
+}
+
+#[test]
+fn a_closure_loader_relative_reference_climbs_to_the_sidecar_lib() {
+    assert_eq!(
+        closure_loader_relative("ext.so", "libffi.8.dylib"),
+        "@loader_path/../lib/libffi.8.dylib"
+    );
+    assert_eq!(
+        closure_loader_relative("pkg/sub/_ext.so", "libffi.8.dylib"),
+        "@loader_path/../../../lib/libffi.8.dylib"
+    );
 }
 
 #[test]

@@ -70,7 +70,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0108` | error | import cycle in top-level init, reported as the chain of files that closes it (`import cycle: `a.py` -> `b.py` -> `a.py``), emitted by the driver's project-module loader since #898/D-222 |
 | `I0401` | error | untyped value leaks across interop boundary |
 | `I0402` | error | CPython-backed direct import root rejected by the effective `allowlist` or `deny` interop policy (`--pure`, `--interop-policy`, or `[interop]` in `pycc.toml`), reported by `check`, `build` and `run` on every host since #1224 |
-| `I0403` | error | CPython import the effective interop policy admits but this build cannot embed (a non-standard-library root until #1225, an excluded Tcl/Tk root, a `--target` build, or a Windows host until #1226); `pycc build --ext` is required |
+| `I0403` | error | CPython import the effective interop policy admits but this build cannot embed (an excluded Tcl/Tk root, a `--target` build, or a Windows host until #1226; a root outside the standard library embeds from `pycc.lock` since #1242); `pycc build --ext` is required |
 | `I0404` | error | operation on a CPython object is not supported yet |
 | `I0405` | error | a buffer-typed signature in native mode, under any source spelling (`memoryview`, `ndarray` or `NDArray`), or a function body that allocates artifact-owned buffer storage with `ndarray(n)`/`NDArray(n)` in native mode (#1165); `pycc build --ext` is required |
 | `W1001` | warning | unreachable code |

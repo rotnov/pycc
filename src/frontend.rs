@@ -340,10 +340,11 @@ pub(crate) fn resolve_frontend(
 ///
 /// The foreign-import gate is now a classifier
 /// (`crate::foreign_import::classify_for_native_build`): a program whose
-/// foreign imports are all embeddable standard-library roots on `host` is
-/// admitted with [`NeedsInterpreter`]`(true)` and built as an embedded
-/// executable; any other foreign import is still `I0403`, reported exactly
-/// where the former all-foreign refusal was. The `memoryview` and
+/// foreign imports are all embeddable on `host` (every root but an excluded
+/// standard-library one; a third-party root is bundled from `pycc.lock`,
+/// #1242) is admitted with [`NeedsInterpreter`]`(true)` and built as an
+/// embedded executable; any other foreign import is still `I0403`, reported
+/// exactly where the former all-foreign refusal was. The `memoryview` and
 /// buffer-producer gates keep applying to an embedded build unchanged,
 /// because an embedded executable is still not an extension module.
 ///

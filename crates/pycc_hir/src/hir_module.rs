@@ -407,7 +407,7 @@ pub enum ImportBinding {
     ///
     /// `span` is the `import` statement's own source range. Every other
     /// variant is compile-time-only and is never the subject of a
-    /// diagnostic of its own, but this one can be: a native build refuses
+    /// diagnostic of its own, but this one can be: a native build may refuse
     /// it (`I0403`), and a module that binds the same local name twice
     /// refuses that too (`C0001`). Both diagnostics must point at the
     /// import statement, and the import side table carries no position
