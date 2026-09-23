@@ -265,7 +265,11 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(arg, killed);
             }
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        // `BoolOp` walks both operands even though HIR lowering admits a
+        // walrus only in the first: the kill is conservative.
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             collect_named_expr_targets_in_expr(left, killed);
             collect_named_expr_targets_in_expr(right, killed);
         }

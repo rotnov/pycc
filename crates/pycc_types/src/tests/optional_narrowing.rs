@@ -92,22 +92,24 @@ fn compound_and_test_does_not_narrow() {
     // not None` test -- `pycc_hir::optional_none_test` requires the whole
     // `if` test to itself be an `HirExpr::Compare { op: Is | IsNot, .. }`
     // node, never one operand nested inside a compound `and`/`or` test.
-    // This compiler has no `and`/`or` boolean-operator lowering at all yet
-    // (a separate, pre-existing scope cut unrelated to narrowing), so this
-    // source is rejected at HIR-lowering time with `C0001` before
-    // `pycc_types` (and therefore this narrowing machinery) ever sees it --
-    // which still proves the required property: `x` is never narrowed
-    // through a compound test, because the compound test itself never
-    // reaches the checker.
-    let module = pycc_parser::parse(
+    // `and`/`or` lower since #1211, so the compound test now reaches the
+    // checker, and `x` inside the right operand is still `int | None`:
+    // comparing it with `>` is refused (T0021), and so is binding it to an
+    // `int` in the body (T0025).
+    let err = check_source("x: int | None = 5\nif x is not None and x > 0:\n    print(1)\n")
+        .expect_err("the right operand must not see `x` narrowed");
+    assert_eq!(err.code, "T0021");
+    assert!(
+        err.message
+            .contains("cannot compare `int | None` and `int`"),
+        "{}",
+        err.message
+    );
+    let err = check_source(
         "x: int | None = 5\ny: int = 1\nif x is not None and y > 0:\n    z: int = x\n    print(z)\n",
     )
-    .expect("test fixture must parse");
-    let result = pycc_hir::lower_checked(&module);
-    assert!(
-        result.is_err(),
-        "a compound `and` test must not reach narrowing (either at HIR lowering or at the checker)"
-    );
+    .expect_err("the body must not see `x` narrowed");
+    assert_eq!(err.code, "T0025", "{}", err.message);
 }
 
 #[test]

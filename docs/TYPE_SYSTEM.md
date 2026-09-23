@@ -720,6 +720,81 @@ The byte-exact oracle fixtures are `tests/fixtures/aug_assign_scalars.py` and
 `tests/fixtures/aug_assign_targets.py`.
 
 
+### `and` and `or`
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1211](https://github.com/rotnov/pycc/issues/1211), Part 3 of
+[#1018](https://github.com/rotnov/pycc/issues/1018)). `a and b` and `a or b`
+return one of their operands, as in CPython, and short-circuit: `a` is
+evaluated exactly once, `b` at most once and only when `a` does not decide the
+result, and each operand's truth is tested at most once. A chain
+`a or b or c` is right-folded (`HirExpr::BoolOp`).
+
+**Two contexts.** HIR lowering marks a `BoolOp` as *truth context* when its
+value is consumed only for its truth: an `if`/`elif`/`while` test, a
+comprehension `if` filter, and the operand of `not`. The marking descends only
+through a `BoolOp`'s own operands and through `not`; it does not descend
+through a walrus (`if (x := a or b):` binds the selected value), a comparison,
+a call or any other node. A `match` guard stays value context, since the
+checker requires a guard to be `bool`. Every other position is value context.
+
+- In truth context the result is `bool`, and each operand needs only to be
+  truth-testable; operand types need not agree (`if n > 0 and name:` with an
+  `int` and a `str` compiles).
+- In value context the result type is the join `J` of the two operand types,
+  computed by one function, `pycc_hir::bool_op_result_ty`, that the checker
+  and MIR lowering share. Under `or` a left `Optional[T]` is first read as
+  `T`, because the left operand is selected only when it is truthy, and so
+  present.
+
+| Left (after the `or` rule), right | Result |
+|---|---|
+| equal: `bool`, `int`, `float`, `str`, `Optional[int\|float\|bool]`, or the same class instance | that type |
+| `bool` and `int`, either order | `int` (a selected `bool` keeps its identity: `True or 0` prints `True`) |
+| `T` and `Optional[T]`, either order | `Optional[T]` |
+| anything else | `T0021` "`or` operands have no common type: int and str (pycc has no union types)" |
+
+So `x or default` with `x: int | None` and `default: int` is an `int`. The
+`int`/`float` pair is refused, not widened: `1 or 2.0` is the `int` `1` in
+CPython, and a widened `1.0` would print differently.
+
+**Admitted operands.** In both contexts an operand must be truth-testable:
+`bool`, `int`, `float`, `str`, `None`, `Optional[int|float|bool]` or a class
+instance (`pycc_types::unop::is_truth_testable`, the same set `not` admits).
+A container, `memoryview` or `Protocol`-typed operand is `T0021` ("`and`
+operand of type `list[int]` has no truth value pycc can test"). A class
+instance whose class or any base class defines `__bool__` or `__len__` is
+`T0021` too, naming the dunder, because pycc does not call either for a truth
+test yet. A `None` operand is admitted in truth context only. A CPython-object
+operand is `I0404`: `if obj:` is admitted, but a foreign object has no value
+join yet.
+
+**Walrus.** A walrus in the first operand always executes and is admitted. A
+walrus anywhere in a later operand would bind only conditionally, which the
+function-wide binding walkers do not model, so it is refused at HIR lowering
+with `C0001` "a walrus assignment (`:=`) in a short-circuited `and`/`or`
+operand is not supported".
+
+**No narrowing.** A test inside `and`/`or` does not narrow:
+`x is not None and x > 0` is still `T0021` on the right operand. This is the
+D-205 scope cut described under "Narrowing & flow typing" above.
+
+**Ownership.** An `int` or `str` result is always owned: an operand that is a
+duplicate reference (a name, an attribute read) is retained or incref'd in its
+own arm before any coercion, and the extracted payload of a left
+`Optional[int]` under `or` is always retained. The discarded left operand is
+released before the right one is evaluated, so a right operand that raises
+leaks nothing. In truth context each operand is reduced to a bit and its
+`int` temporary is released at once, as `not` does. Three leaks are accepted
+and bounded: a discarded `str` temporary (as in an `if` test today), the
+always-retained `Optional[int]` payload when the left operand is an owned
+temporary, and a discarded owned `Optional[int]` left operand. An
+`Optional[int]` result copies its arm exactly as `z = y` does.
+
+End-to-end tests are in `tests/issue_1211_bool_ops.rs`, and the byte-exact
+oracle fixture is `tests/fixtures/bool_ops.py`.
+
+
 ## Error philosophy
 
 Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (a planned `pycc check --fix` flag would apply trivial ones once implemented; not yet implemented, see `docs/CLI_SPEC.md`), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).

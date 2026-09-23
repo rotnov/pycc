@@ -1,6 +1,7 @@
 pub use pycc_hir::{EnumMemberValue, HirClassDef};
 mod binop;
 use binop::binop_result_ty;
+mod boolop;
 mod class;
 #[cfg(test)]
 use class::eval_isinstance_protocol;
@@ -28,7 +29,7 @@ use stmt::lower_stmt;
 // `pycc_mir::{Ty, BinOpKind, CmpOpKind}` from any downstream crate, exactly
 // like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
 // 4) for the same reason.
-pub use pycc_hir::{BinOpKind, CmpOpKind, EXCEPTION_GROUP_TYPE_TAG, Ty};
+pub use pycc_hir::{BinOpKind, BoolOpKind, CmpOpKind, EXCEPTION_GROUP_TYPE_TAG, Ty};
 
 /// Monotonic counter for synthesized match-subject temporaries. Each
 /// `match` statement gets a unique `__match_subj_N` name, avoiding
@@ -131,6 +132,22 @@ pub enum MirExpr {
     /// with the same `truthy` helper an `if`/`while` condition already
     /// calls, then inverts the result.
     Not(Box<MirExpr>),
+    /// `left and right` / `left or right` (#1211, Part 3 of #1018), right-
+    /// folded by HIR lowering so `a or b or c` is `Or(a, Or(b, c))`. MIR
+    /// stays tree-shaped: `pycc_codegen` builds the short circuit with basic
+    /// blocks and a join, testing each operand's truth at most once.
+    ///
+    /// `truth_only` is HIR's context flag (`pycc_hir::boolop`). A truth-only
+    /// node is `Ty::Bool` and joins truth bits; any other node's `ty` is
+    /// `pycc_hir::bool_op_result_ty` of its operands, and it joins the
+    /// selected operand's value converted to `ty`.
+    BoolOp {
+        op: BoolOpKind,
+        left: Box<MirExpr>,
+        right: Box<MirExpr>,
+        ty: Ty,
+        truth_only: bool,
+    },
     FString(Vec<MirFStringPart>),
     /// `[e1, e2, ...]`. No `ty` field: `ty()` below derives
     /// `Ty::List(Box::new(elements[0].ty()))` from the first element,
@@ -589,7 +606,8 @@ impl MirExpr {
             MirExpr::Name { ty, .. }
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
-            | MirExpr::Compare { ty, .. } => ty.clone(),
+            | MirExpr::Compare { ty, .. }
+            | MirExpr::BoolOp { ty, .. } => ty.clone(),
             MirExpr::Not(_) => Ty::Bool,
             MirExpr::EmptyList(element) => Ty::List(Box::new(element.clone())),
             MirExpr::EmptyDict(pair) => Ty::Dict(pair.clone()),
@@ -789,7 +807,9 @@ impl MirExpr {
                     arg.collect_named_expr_bindings(out);
                 }
             }
-            MirExpr::BinOp { left, right, .. } | MirExpr::Compare { left, right, .. } => {
+            MirExpr::BinOp { left, right, .. }
+            | MirExpr::Compare { left, right, .. }
+            | MirExpr::BoolOp { left, right, .. } => {
                 left.collect_named_expr_bindings(out);
                 right.collect_named_expr_bindings(out);
             }

@@ -251,6 +251,12 @@ pub(crate) fn infer_expr_in(
             let operand_ty = infer_expr_in(env, local_names, operand)?;
             unary_result_type(*op, operand_ty)
         }
+        HirExpr::BoolOp {
+            op,
+            left,
+            right,
+            truth_only,
+        } => crate::boolop::infer_bool_op(env, local_names, *op, left, right, *truth_only),
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;

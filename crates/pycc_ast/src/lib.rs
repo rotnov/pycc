@@ -7,7 +7,7 @@
 pub use ruff_python_ast::visitor;
 
 pub use ruff_python_ast::{
-    Alias, Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause,
+    Alias, Arguments, BoolOp, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause,
     ExceptHandler, ExceptHandlerExceptHandler, Expr, ExprAttribute, ExprBinOp, ExprBooleanLiteral,
     ExprCall, ExprCompare, ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName,
     ExprNamed, ExprNumberLiteral, ExprSetComp, ExprSlice, ExprStringLiteral, ExprTuple,

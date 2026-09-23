@@ -423,6 +423,17 @@ pub(super) fn lower_expr(
                 UnaryOpKind::Not => MirExpr::Not(Box::new(operand)),
             }
         }
+        HirExpr::BoolOp {
+            op,
+            left,
+            right,
+            truth_only,
+        } => super::boolop::lower_bool_op(
+            *op,
+            lower_expr(left, scopes, classes, current_class),
+            lower_expr(right, scopes, classes, current_class),
+            *truth_only,
+        ),
         HirExpr::BinOp { op, left, right } => {
             let left = lower_expr(left, scopes, classes, current_class);
             let right = lower_expr(right, scopes, classes, current_class);
@@ -1341,7 +1352,9 @@ pub(super) fn pre_bind_named_expr_targets(
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
             }
         }
-        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+        HirExpr::BinOp { left, right, .. }
+        | HirExpr::Compare { left, right, .. }
+        | HirExpr::BoolOp { left, right, .. } => {
             pre_bind_named_expr_targets(left, scopes, classes, current_class);
             pre_bind_named_expr_targets(right, scopes, classes, current_class);
         }

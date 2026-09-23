@@ -20,6 +20,8 @@ use exception::{
 mod bigint_rc;
 /// `<< >> & | ^` operand encoding and the `bool`-result arm (#1210).
 mod binop;
+/// `and`/`or` short circuit and join (#1211).
+mod boolop;
 mod call_result;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, pop_pending_int_release,
@@ -2868,6 +2870,28 @@ fn emit_expr_unchecked<'ctx>(
         // present/payload AND. Every other truthy-call site releases any
         // int temporary the operand produced *after* `truthy` reads it
         // (#146 Part 2, D-181) -- this one follows the identical sequence.
+        // #1211 (Part 3 of #1018): `and`/`or`. See `boolop.rs`.
+        MirExpr::BoolOp {
+            op,
+            left,
+            right,
+            ty,
+            truth_only,
+        } => boolop::emit_bool_op(
+            &boolop::Emitter {
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+            },
+            *op,
+            left,
+            right,
+            ty,
+            *truth_only,
+        ),
         MirExpr::Not(operand) => {
             let operand_scalar = emit_expr(
                 context,
@@ -5092,6 +5116,10 @@ fn emit_assign<'ctx>(
 /// `PyStrObj` while the instance's own slot still points at it -- a
 /// reliably reproducible use-after-free caught in review, not merely a
 /// theoretical gap (D-154 Part 1's own post-merge finding).
+///
+/// A `MirExpr::BoolOp` (#1211) is owning here, like every node this
+/// `matches!` does not name: each of its value arms increfs a duplicate
+/// operand inside that arm, so its `str` result is always a fresh reference.
 fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     matches!(
         expr,

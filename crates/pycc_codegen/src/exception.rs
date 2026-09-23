@@ -178,6 +178,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // re-inspected here either, matching every other arm's own
         // "classify only this node's operation" rule.
         | MirExpr::Not(_)
+        // #1211 (Part 3 of #1018): `and`/`or` is a truth test, a branch
+        // and a join, all infallible. Each operand is emitted through
+        // `emit_expr` inside its own arm, which guards that operand where
+        // it is evaluated, so this node adds no edge of its own.
+        | MirExpr::BoolOp { .. }
         // #1116: `BufferLen` deliberately diverges from *both* its siblings
         // `ObjLen` and `BufferGet`, which are `true` above. A buffer's
         // length read is a plain load of the `len` word the `--ext` wrapper
