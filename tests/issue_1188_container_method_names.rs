@@ -1086,24 +1086,8 @@ fn a_foreign_object_receiver_keeps_its_diagnostic() {
 
 // -- `--ext` -------------------------------------------------------------------
 
-/// `pycc build --ext` of a class defining all four names reports none of the
-/// diagnostics the old refusal or a mis-dispatched call would produce.
-///
-/// `#[ignore]`d for the reason `tests/issue_1145_ext_instance_methods.rs`
-/// gives: an `--ext` build needs a CPython 3.13+ with development headers,
-/// which is a property of the machine. CI runs it on every Tier-1
-/// `native-build-test` leg through `cargo test --workspace --
-/// --include-ignored`. It asserts only the absence of those diagnostics, not
-/// that the build succeeds, so an interpreter too old to build against
-/// (`PYCC_PYTHON`) cannot fail it for a reason #1188 does not own.
-#[test]
-#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
-fn an_ext_build_of_the_four_methods_reports_no_container_diagnostic() {
-    let dir = ScratchDir::new("ext_1188").expect("scratch");
-    let src = dir.join("m.py");
-    std::fs::write(
-        &src,
-        "\
+/// A class defining all four names, published through `--ext`.
+const STORE: &str = "\
 class Store:
     def __init__(self, n: int) -> None:
         self.n = n
@@ -1119,9 +1103,24 @@ class Store:
 
     def pop(self) -> int:
         return self.n - 1
-",
-    )
-    .expect("write the fixture source");
+";
+
+/// `pycc build --ext` of a class defining all four names reports none of the
+/// diagnostics the old refusal or a mis-dispatched call would produce.
+///
+/// `#[ignore]`d for the reason `tests/issue_1145_ext_instance_methods.rs`
+/// gives: an `--ext` build needs a CPython 3.13+ with development headers,
+/// which is a property of the machine. CI runs it on every Tier-1
+/// `native-build-test` leg through `cargo test --workspace --
+/// --include-ignored`. It asserts only the absence of those diagnostics, not
+/// that the build succeeds, so an interpreter too old to build against
+/// (`PYCC_PYTHON`) cannot fail it for a reason #1188 does not own.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_ext_build_of_the_four_methods_reports_no_container_diagnostic() {
+    let dir = ScratchDir::new("ext_1188").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, STORE).expect("write the fixture source");
     let build = pycc()
         .arg("build")
         .arg(&src)
@@ -1144,4 +1143,56 @@ class Store:
             "`--ext` must not report {forbidden:?}: {reported}"
         );
     }
+}
+
+/// The four methods are callable from CPython on an `--ext` artifact, and
+/// each reaches the user's compiled body rather than a container fast path.
+///
+/// Mirrors `tests/issue_1145_ext_instance_methods.rs`'s
+/// `an_instance_is_constructed_and_its_method_reaches_the_compiled_body`:
+/// `#[ignore]`d for the same reason, run by every leg's
+/// `cargo test --workspace -- --include-ignored` with a CPython 3.13+ as
+/// `python3` (or `PYCC_PYTHON`), and asserting the build and the import
+/// exactly as that file does.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_four_methods_are_callable_through_an_ext_build() {
+    let dir = ScratchDir::new("ext_1188_call").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, STORE).expect("write the fixture source");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("store"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(
+            "\
+import store
+s = store.Store(5)
+assert type(s) is store.Store, type(s)
+assert s.get(1) == 6, s.get(1)
+assert s.add(1) == 7, s.add(1)
+assert s.append(2) == 10, s.append(2)
+assert s.pop() == 4, s.pop()
+",
+        )
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(
+        run.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
 }
