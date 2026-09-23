@@ -341,7 +341,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   native-module import cycle is a compile error `E0108`). Embedded-mode
   CPython-backed modules instead use the bundled interpreter's normal import
   initialization, caching, and cycle semantics inside the bundled environment
-  (pinned by a lock once #1225 lands); native `E0108` rules do not reject their dependency closure
+  (pinned by `pycc.lock` once the build consumes it, #1242); native `E0108` rules do not reject their dependency closure
   (D-128).
 
 ## Transparent CPython interop (embedded mode implemented for standard-library roots and the interop policy; arbitrary-package closures planned v0.7; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
@@ -1185,7 +1185,7 @@ owns the contract; this is the runtime view of it.
 - **Linux gap.** No ELF dependency scan runs: a `lib-dynload` module's
   native dependencies are resolved by the system loader at run time, so a
   Linux artifact is relocatable only as far as those libraries are present
-  on the target (#1225). macOS refuses a non-system, non-prefix dependency
+  on the target (#1243). macOS refuses a non-system, non-prefix dependency
   at build time.
 
 A module body that fails reports through one of two channels, and the exec
@@ -1203,9 +1203,10 @@ CPython-backed dependency. A CPython-backed import generates an interop bridge
 without requiring a source rewrite to `pycc.interop`. The deployment artifact
 bundles the pinned CPython 3.14 runtime, the resolved package artifacts, and
 their native-library closure, so the target machine does not need a separately
-installed Python or ambient `site-packages`. The exact resolver, `pycc.lock`
-schema, and bundle layout must be specified during v0.7 planning before implementation;
-the embedded interpreter must never search an unpinned ambient environment.
+installed Python or ambient `site-packages`. The resolver, the `pycc.lock`
+schema and the closure's bundle layout are [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)
+(`pycc lock` exists; the build consuming the lock is #1242); the embedded
+interpreter must never search an unpinned ambient environment.
 
 #### Interop policy
 
@@ -1214,13 +1215,13 @@ policy itself is implemented (#1224): `--interop-policy`, `--pure` and the
 `[interop]` table select it, `check`, `build` and `run` enforce it, and a
 rejected root is `I0402`. `docs/CLI_SPEC.md`'s `pycc.toml` section owns the
 resolution and validation rules. What an admitted root then builds is
-D-248's embedding: standard-library roots only, until the lock and closure
-(#1225).
+D-248's embedding: standard-library roots only, until the build consumes
+`pycc.lock` (#1242).
 
 | Policy | Behavior |
 |---|---|
-| `auto` | Default. Permit every CPython-backed import root present in the source. Bundling its pinned dependency closure is #1225; today only standard-library roots embed. |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. Covering an allowed root's submodules and pinned transitive closure is #1225 (a dotted CPython-backed import is `C0001` today). |
+| `auto` | Default. Permit every CPython-backed import root present in the source. Bundling its pinned dependency closure is #1242; today only standard-library roots embed. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. Covering an allowed root's submodules and pinned transitive closure is #1242 (a dotted CPython-backed import is `C0001` today). |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

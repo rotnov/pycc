@@ -415,11 +415,8 @@ impl Loader {
     }
 
     fn discover_root(&mut self) -> Result<RootInfo, FrontendFailure> {
-        for (climbs, ancestor) in self.entry_dir.ancestors().enumerate() {
+        if let Some((climbs, ancestor)) = nearest_manifest(&self.entry_dir) {
             let toml = ancestor.join("pycc.toml");
-            if !toml.is_file() {
-                continue;
-            }
             // Rendered as-typed (relative to the entry's own spelling)
             // rather than as the canonical absolute path the walk uses.
             let display = display_root(&self.entry_display_dir, climbs)
@@ -433,7 +430,7 @@ impl Loader {
             let mut root = ancestor.join(&config.project.entry);
             root.pop();
             // Recorded before the source-root check below, so a manifest
-            // whose `entry` locates no source root (the `break` arm) still
+            // whose `entry` locates no source root (the fall-through below) still
             // governs the interop policy (#1224).
             self.manifest = Some(DiscoveredManifest { display, config });
             let resolved = root
@@ -446,7 +443,6 @@ impl Loader {
                     display: display_root(&self.entry_display_dir, climbs),
                 });
             }
-            break;
         }
         let mut climbs = 0;
         let mut dir = self.entry_dir.clone();
@@ -627,6 +623,16 @@ fn submodule_names(dir: &Path) -> Vec<String> {
 
 /// How many directory components separate `dir` from its ancestor `root`,
 /// or `None` when `root` is not an ancestor of `dir` at all.
+/// The nearest directory at or above `dir` holding a `pycc.toml` file,
+/// paired with how many levels up it is: the walk source-root discovery
+/// makes, which `pycc lock` repeats to place `pycc.lock` beside the
+/// manifest (a program with no import never runs discovery).
+pub(crate) fn nearest_manifest(dir: &Path) -> Option<(usize, &Path)> {
+    dir.ancestors()
+        .enumerate()
+        .find(|(_, ancestor)| ancestor.join("pycc.toml").is_file())
+}
+
 fn climbs_between(dir: &Path, root: &Path) -> Option<usize> {
     dir.strip_prefix(root)
         .ok()
