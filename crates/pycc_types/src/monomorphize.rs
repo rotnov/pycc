@@ -661,6 +661,22 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             let _ = rewrite_generic_calls_in_expr(env, local_names, operand, instantiations, seen);
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::CompareChain { first, links } => {
+            // `let _ =` rather than `?`, as in the `UnaryOp` arm above: the
+            // `infer_expr_in` on the whole chain below recurses into every
+            // operand and surfaces the identical error.
+            let _ = rewrite_generic_calls_in_expr(env, local_names, first, instantiations, seen);
+            for link in links.iter_mut() {
+                let _ = rewrite_generic_calls_in_expr(
+                    env,
+                    local_names,
+                    &mut link.right,
+                    instantiations,
+                    seen,
+                );
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         HirExpr::BinOp { left, right, .. }
         | HirExpr::Compare { left, right, .. }
         | HirExpr::BoolOp { left, right, .. } => {
@@ -1254,6 +1270,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         }
         HirExpr::UnaryOp { operand, .. } => {
             collect_generic_class_instantiations_from_expr(operand, out);
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                collect_generic_class_instantiations_from_expr(operand, out);
+            }
         }
         HirExpr::BinOp { left, right, .. }
         | HirExpr::Compare { left, right, .. }
@@ -2752,6 +2773,29 @@ fn rewrite_protocol_calls_in_expr(
                 specializations,
                 seen,
             );
+        }
+        // #1212: without this arm the `_ => {}` catch-all below would skip
+        // a protocol-typed call inside a chained comparison and leave it
+        // unspecialized.
+        HirExpr::CompareChain { first, links } => {
+            rewrite_protocol_calls_in_expr(
+                first,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+            for link in links.iter_mut() {
+                rewrite_protocol_calls_in_expr(
+                    &mut link.right,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
         }
         HirExpr::Compare { left, right, .. } => {
             rewrite_protocol_calls_in_expr(

@@ -273,6 +273,13 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
             collect_named_expr_targets_in_expr(left, killed);
             collect_named_expr_targets_in_expr(right, killed);
         }
+        // Every chain operand is walked, like `BoolOp`'s: conservative.
+        HirExpr::CompareChain { first, links } => {
+            collect_named_expr_targets_in_expr(first, killed);
+            for link in links {
+                collect_named_expr_targets_in_expr(&link.right, killed);
+            }
+        }
         HirExpr::UnaryOp { operand, .. } => collect_named_expr_targets_in_expr(operand, killed),
         HirExpr::FString(parts) => {
             for part in parts {

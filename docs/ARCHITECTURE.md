@@ -101,9 +101,11 @@ matching `list[int]` (D-107), and neither ships a `str(...)`/`bool(...)`
 conversion or (for `set`) a membership test -- `in` parses fine (the
 parser produces a valid `CmpOp::In` node like any other comparison
 operator), but `pycc_hir`'s lowering step rejects it with the same generic
-`C0001` capability diagnostic used for `is`/`is not`/chained comparisons,
-so it has no HIR/type-checker/codegen support anywhere in this compiler
-yet (D-123).
+`C0001` capability diagnostic used for general object-identity `is`/`is
+not` (only a comparison against a literal `None` is admitted, D-197; chained
+comparisons are admitted per link, see `docs/TYPE_SYSTEM.md`'s "Chained
+comparisons"), so it has no HIR/type-checker/codegen support anywhere in
+this compiler yet (D-123).
 
 A third slice (D-115/D-116, PR-11b) adds `tuple[...]`, structurally
 different from the first two: every v0.2-accepted element type

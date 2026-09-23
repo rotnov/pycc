@@ -23,6 +23,8 @@ mod binop;
 /// `and`/`or` short circuit and join (#1211).
 mod boolop;
 mod call_result;
+mod compare;
+mod compare_chain;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, int_temporary_word, pop_pending_int_release,
     push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
@@ -2665,199 +2667,40 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::Compare {
             op, left, right, ..
         } => {
-            let left_ty = left.ty();
-            let right_ty = right.ty();
             let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
             // #638 (D-208): same protection as `BinOp`'s `Ty::Int` arm --
-            // `l` must survive `right`'s evaluation intact so the int
-            // branch's own `release_if_int_temporary(left, l)` call below
-            // is guaranteed to see it, even when `right`'s evaluation
+            // `l` must survive `right`'s evaluation intact so its release
+            // below is guaranteed to see it, even when `right`'s evaluation
             // branches away on an exception.
             let pending_l = push_pending_int_release_if_scalar_temporary(rt, left, &l);
             let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
             pop_pending_int_release(rt, pending_l);
-            // `is`/`is not` (D-197, #763, Part 1 of #747). HIR lowering
-            // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm)
-            // guarantees one operand is syntactically `Expr::NoneLiteral`
-            // whenever `op` is `Is`/`IsNot`, and `pycc_types`' own
-            // `Is`/`IsNot` typing arm (`crates/pycc_types/src/expr.rs`)
-            // guarantees the *other* operand's type is `Ty::Optional(_)` or
-            // `Ty::None` -- never anything else. Handled as its own
-            // early-computed branch, before the float/str/numeric branches
-            // below (none of which know what to do with a struct-valued
-            // `Scalar::Optional`), by testing the *other* operand's
-            // present/absent flag directly rather than doing any real
-            // comparison: `None`/`Ty::None` is always absent (`is` is
-            // always `False`, `is not` always `True`, independent of the
-            // operand's own emitted value, so neither `l` nor `r` needs
-            // inspecting for that shape).
-            // Narrows `op`'s 8 `CmpOpKind` variants down to the 6 ordinary
-            // ordering comparators in exactly one place (D-197, #763, Part 1
-            // of #747): `Is`/`IsNot` are handled and returned right here,
-            // inline, so the three type-dispatched matches below (float/
-            // str/int) only ever see `OrderedCmpOp`'s 6 variants and need no
-            // `Is`/`IsNot` arm of their own at all. The project's own
-            // established convention (see `emit_string_literal`'s doc
-            // comment) is to eliminate a provably-dead branch structurally
-            // rather than leave an `unreachable!()` arm as a permanently
-            // uncovered region under this crate's 100%-region gate (D-014)
-            // -- the three-way duplication this replaces (one `unreachable!`
-            // per type-dispatched match) was exactly that anti-pattern.
-            enum OrderedCmpOp {
-                Eq,
-                NotEq,
-                Lt,
-                LtE,
-                Gt,
-                GtE,
-            }
-            let op = match op {
-                pycc_mir::CmpOpKind::Is | pycc_mir::CmpOpKind::IsNot => {
-                    let (other_scalar, other_ty) = if matches!(left.as_ref(), MirExpr::NoneLiteral)
-                    {
-                        (r, right_ty)
-                    } else {
-                        (l, left_ty)
-                    };
-                    // Dispatches on `other_scalar`'s own runtime variant,
-                    // not on `other_ty`, so there is no separate "statically
-                    // `Optional[_]` but did not evaluate to `Scalar::
-                    // Optional`" arm to keep alive: every `Ty::Optional`-
-                    // typed `MirExpr` this crate can emit -- `Name` (guarded
-                    // by its own `debug_assert_eq!` on `slot.ty`),
-                    // `OptionalWrap`, and `Call`'s `Ty::Optional` result
-                    // extraction -- always produces a matching `Scalar::
-                    // Optional`, so that combination is unreachable by
-                    // construction, not merely untested; matching on the
-                    // scalar directly removes the branch instead of leaving
-                    // it as a dead, permanently-uncoverable region.
-                    let present = match other_scalar {
-                        Scalar::Optional(v) => builder
-                            .build_extract_value(v, 1, "opt_present")
-                            .expect("build_extract_value should not fail reading field 1 of a 2-field struct")
-                            .into_int_value(),
-                        _ if other_ty == Ty::None => context.i8_type().const_zero(),
-                        _ => panic!(
-                            "pycc_codegen: internal error: an `is`/`is not` operand's non-`None` side must be `Optional[_]` -- pycc_types::check (T0021) should have rejected this before codegen"
-                        ),
-                    };
-                    let is_absent = builder
-                        .build_int_compare(
-                            IntPredicate::EQ,
-                            present,
-                            context.i8_type().const_zero(),
-                            "is_none",
-                        )
-                        .expect("build_int_compare should not fail comparing two i8 operands");
-                    let as_bool = if matches!(op, pycc_mir::CmpOpKind::Is) {
-                        is_absent
-                    } else {
-                        builder
-                            .build_not(is_absent, "is_not_none")
-                            .expect("build_not should not fail negating an i1 value")
-                    };
-                    return Scalar::Bool(
-                        builder
-                            .build_int_z_extend(as_bool, context.i8_type(), "bool_from_is")
-                            .expect("build_int_z_extend should not fail widening i1 to i8"),
-                    );
-                }
-                pycc_mir::CmpOpKind::Eq => OrderedCmpOp::Eq,
-                pycc_mir::CmpOpKind::NotEq => OrderedCmpOp::NotEq,
-                pycc_mir::CmpOpKind::Lt => OrderedCmpOp::Lt,
-                pycc_mir::CmpOpKind::LtE => OrderedCmpOp::LtE,
-                pycc_mir::CmpOpKind::Gt => OrderedCmpOp::Gt,
-                pycc_mir::CmpOpKind::GtE => OrderedCmpOp::GtE,
-            };
-            let as_bool = if left_ty == Ty::Float || right_ty == Ty::Float {
-                let l = to_float(context, builder, rt, l);
-                let r = to_float(context, builder, rt, r);
-                let predicate = match op {
-                    OrderedCmpOp::Eq => FloatPredicate::OEQ,
-                    // `UNE` ("unordered or not equal"), not `ONE` --
-                    // CPython's `float('nan') != float('nan')` is `True`,
-                    // and `NaN` involves an *unordered* comparison, not an
-                    // ordered not-equal one. The other five predicates
-                    // below correctly stay "ordered" (`O*`): Python's
-                    // `<`/`<=`/`>`/`>=`/`==` on `float` are all `False`
-                    // whenever `NaN` is involved, which is exactly what the
-                    // ordered forms give.
-                    OrderedCmpOp::NotEq => FloatPredicate::UNE,
-                    OrderedCmpOp::Lt => FloatPredicate::OLT,
-                    OrderedCmpOp::LtE => FloatPredicate::OLE,
-                    OrderedCmpOp::Gt => FloatPredicate::OGT,
-                    OrderedCmpOp::GtE => FloatPredicate::OGE,
-                };
-                let cond = builder
-                    .build_float_compare(predicate, l, r, "fcmp")
-                    .expect("build_float_compare should not fail for two f64 operands");
-                builder
-                    .build_int_z_extend(cond, context.i8_type(), "bool_from_fcmp")
-                    .expect("build_int_z_extend should not fail widening i1 to i8")
-            } else if left_ty == Ty::Str || right_ty == Ty::Str {
-                let Scalar::Str(l) = l else {
-                    panic!(
-                        "pycc_codegen: internal error: str Compare operand did not evaluate to str"
-                    )
-                };
-                let Scalar::Str(r) = r else {
-                    panic!(
-                        "pycc_codegen: internal error: str Compare operand did not evaluate to str"
-                    )
-                };
-                let ordering = builder
-                    .build_call(rt.str_cmp, &[l.into(), r.into()], "str_cmp")
-                    .expect("build_call should not fail for a well-formed comparison")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_str_cmp returns a non-void `i32`")
-                    .into_int_value();
-                let zero = context.i32_type().const_int(0, false);
-                let predicate = match op {
-                    OrderedCmpOp::Eq => IntPredicate::EQ,
-                    OrderedCmpOp::NotEq => IntPredicate::NE,
-                    OrderedCmpOp::Lt => IntPredicate::SLT,
-                    OrderedCmpOp::LtE => IntPredicate::SLE,
-                    OrderedCmpOp::Gt => IntPredicate::SGT,
-                    OrderedCmpOp::GtE => IntPredicate::SGE,
-                };
-                let cond = builder
-                    .build_int_compare(predicate, ordering, zero, "str_cmp_pred")
-                    .expect("build_int_compare should not fail for two i32 operands");
-                builder
-                    .build_int_z_extend(cond, context.i8_type(), "bool_from_str_cmp")
-                    .expect("build_int_z_extend should not fail widening i1 to i8")
-            } else {
-                let l = to_numeric_encoded_int(context, builder, l);
-                let r = to_numeric_encoded_int(context, builder, r);
-                let ordering = builder
-                    .build_call(rt.int_cmp, &[l.into(), r.into()], "int_cmp")
-                    .expect("build_call should not fail for a well-formed comparison")
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_int_cmp returns a non-void `i32`")
-                    .into_int_value();
-                let zero = context.i32_type().const_int(0, false);
-                let predicate = match op {
-                    OrderedCmpOp::Eq => IntPredicate::EQ,
-                    OrderedCmpOp::NotEq => IntPredicate::NE,
-                    OrderedCmpOp::Lt => IntPredicate::SLT,
-                    OrderedCmpOp::LtE => IntPredicate::SLE,
-                    OrderedCmpOp::Gt => IntPredicate::SGT,
-                    OrderedCmpOp::GtE => IntPredicate::SGE,
-                };
-                let cond = builder
-                    .build_int_compare(predicate, ordering, zero, "cmp")
-                    .expect("build_int_compare should not fail for two i32 operands");
-                // #146 Part 2 (D-181): `pycc_rt_int_cmp` returns an `i32`
-                // ordering and retains nothing, so both operands are dead
-                // the moment the comparison has been made.
-                release_if_int_temporary(context, builder, rt, left, l);
-                release_if_int_temporary(context, builder, rt, right, r);
-                builder
-                    .build_int_z_extend(cond, context.i8_type(), "bool_from_cmp")
-                    .expect("build_int_z_extend should not fail widening i1 to i8")
-            };
+            let as_bool =
+                compare::emit_compare_values(context, builder, rt, *op, left, l, right, r);
+            // #146 Part 2 (D-181): no comparison retains either operand, so
+            // both are dead the moment the comparison has been made. #1212
+            // moved this out of the int-only branch, which also releases an
+            // `int` temporary compared against a `float`
+            // (`pycc_rt_int_to_float` reads its operand and consumes
+            // nothing).
+            release_scalar_if_int_temporary(context, builder, rt, left, &l);
+            release_scalar_if_int_temporary(context, builder, rt, right, &r);
             Scalar::Bool(as_bool)
         }
+        // #1212 (Part 4 of #1018): chained comparisons. See
+        // `compare_chain.rs`.
+        MirExpr::CompareChain { first, links } => compare_chain::emit_compare_chain(
+            &boolop::Emitter {
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+            },
+            first,
+            links,
+        ),
         MirExpr::BoolLiteral(b) => Scalar::Bool(context.i8_type().const_int(u64::from(*b), false)),
         // #604 (Part 3 of #573): `not x`. Reuses `truthy`, the exact same
         // helper an `if`/`while` condition's own test already calls (see

@@ -559,6 +559,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // that arm (`boolop.rs`), so the joined word is a fresh reference
         // whichever operand was selected.
         | MirExpr::BoolOp { .. }
+        // #1212 (Part 4 of #1018): a chained comparison's `.ty()` is always
+        // `Ty::Bool`, never `Ty::Int`, so like `Not` above it can never
+        // reach this function; it joins the combined answer for the same
+        // reason.
+        | MirExpr::CompareChain { .. }
         // D-244, Part 2 of #1026: `ObjAttrGet`'s own `.ty()` is always
         // `Ty::Object`, never `Ty::Int`, so like `OptionalWrap`/`Not` above
         // it can never reach this function as the `Ty::Int`-classified

@@ -195,4 +195,22 @@ fn mir_expr_ty_covers_every_variant() {
             ty
         );
     }
+    // `CompareChain` (#1212): always `bool`.
+    assert_eq!(
+        MirExpr::CompareChain {
+            first: Box::new(MirExpr::IntLiteral(0)),
+            links: vec![
+                MirCompareLink {
+                    kind: MirCompareKind::Plain(CmpOpKind::Lt),
+                    right: MirExpr::IntLiteral(1),
+                },
+                MirCompareLink {
+                    kind: MirCompareKind::Plain(CmpOpKind::Lt),
+                    right: MirExpr::IntLiteral(2),
+                },
+            ],
+        }
+        .ty(),
+        Ty::Bool
+    );
 }

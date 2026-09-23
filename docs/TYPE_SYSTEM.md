@@ -794,6 +794,42 @@ temporary, and a discarded owned `Optional[int]` left operand. An
 End-to-end tests are in `tests/issue_1211_bool_ops.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/bool_ops.py`.
 
+### Chained comparisons
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1212](https://github.com/rotnov/pycc/issues/1212), Part 4 of
+[#1018](https://github.com/rotnov/pycc/issues/1018)). `a < b < c` means
+`a < b and b < c`, as in CPython, except that `b` is evaluated once. A chain
+of two or more operators lowers to one `HirExpr::CompareChain`; a single
+comparison stays `HirExpr::Compare`.
+
+- **Per-link admission.** Each link is admitted and typed exactly as a single
+  comparison of its two operands: `==`, `!=`, `<`, `<=`, `>`, `>=` over the
+  numeric/`bool`/`str` pairs a single comparison accepts, `==`/`!=` between
+  two instances of the same dataclass, and `is`/`is not` only when one of
+  *that link's* two operands is the literal `None` (D-197). A bad link is the
+  single comparison's `T0021` "cannot compare `int` and `str`". `in`/`not in`
+  anywhere in a chain keep their `C0001` "comparison operator not supported
+  yet".
+- **Evaluation.** Operands are evaluated left to right, each at most once.
+  The chain stops at the first false link, so no later operand runs. The
+  result is always `bool`.
+- **Walrus.** Operands 0 and 1 always run, so a walrus there is admitted. A
+  walrus in operand 2 or later would bind only conditionally and is refused at
+  HIR lowering with `C0001` "a walrus assignment (`:=`) in a short-circuited
+  chained-comparison operand is not supported", the rule `and`/`or` applies
+  to its later operands.
+- **No narrowing.** A chain is not a narrowing test: `if 0 < x is not None:`
+  does not narrow `x`.
+- **Exceptions and ownership.** A link comparing a heap bigint raises pycc's
+  `OverflowError` (the Language-surface row's bigint-comparison gap in
+  `docs/ROADMAP.md`); the chain checks for it after the link, so no later
+  operand runs. Each `int` operand temporary is released exactly once on
+  every path, including that exception edge.
+
+End-to-end tests are in `tests/issue_1212_chained_compare.rs`, and the
+byte-exact oracle fixture is `tests/fixtures/chained_compare.py`.
+
 
 ## Error philosophy
 

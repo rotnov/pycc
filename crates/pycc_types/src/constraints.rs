@@ -947,6 +947,14 @@ pub(crate) fn collect_expr_constraints(
             collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
         }
+        // #1212: a chained comparison mirrors `Compare` -- every operand is
+        // collected, and the result is `bool`.
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+            }
+            Ok(Some(Ok(Ty::Bool)))
+        }
         // #1211 (Part 3 of #1018): `and`/`or`. A truth-context node is
         // `bool` whatever its operands are, exactly like `Not` below. A
         // value-context node over two concrete operand types takes the one
@@ -1924,6 +1932,12 @@ fn bind_named_expr_targets(
         | HirExpr::BoolOp { left, right, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, left)?;
             bind_named_expr_targets(signatures, parents, concrete, binops, env, right)
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, operand)?;
+            }
+            Ok(())
         }
         HirExpr::UnaryOp { operand, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, operand)

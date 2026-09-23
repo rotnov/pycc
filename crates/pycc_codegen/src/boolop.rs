@@ -58,7 +58,7 @@ pub(super) struct Emitter<'a, 'ctx> {
 }
 
 impl<'ctx> Emitter<'_, 'ctx> {
-    fn emit(&self, expr: &MirExpr) -> Scalar<'ctx> {
+    pub(super) fn emit(&self, expr: &MirExpr) -> Scalar<'ctx> {
         emit_expr(
             self.context,
             self.builder,
@@ -74,13 +74,13 @@ impl<'ctx> Emitter<'_, 'ctx> {
         truthy(self.context, self.builder, self.module, self.rt, scalar)
     }
 
-    fn current_block(&self) -> BasicBlock<'ctx> {
+    pub(super) fn current_block(&self) -> BasicBlock<'ctx> {
         self.builder
             .get_insert_block()
             .expect("the builder is always positioned inside a block while emitting")
     }
 
-    fn new_block(&self, name: &str) -> BasicBlock<'ctx> {
+    pub(super) fn new_block(&self, name: &str) -> BasicBlock<'ctx> {
         let function = self
             .current_block()
             .get_parent()
@@ -88,7 +88,7 @@ impl<'ctx> Emitter<'_, 'ctx> {
         self.context.append_basic_block(function, name)
     }
 
-    fn branch_to(&self, block: BasicBlock<'ctx>) {
+    pub(super) fn branch_to(&self, block: BasicBlock<'ctx>) {
         self.builder
             .build_unconditional_branch(block)
             .expect("build_unconditional_branch should not fail for a fresh block");

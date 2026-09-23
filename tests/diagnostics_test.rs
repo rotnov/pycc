@@ -905,6 +905,25 @@ fn c0001_boolop_walrus_right_operand() {
     assert_diagnostic_matches_fixture("c0001_boolop_walrus_right_operand");
 }
 
+// #1212: a walrus in a chained-comparison operand at index 2 or later runs
+// only when every earlier link held, so it would bind conditionally.
+#[test]
+fn c0001_compare_chain_walrus_later_operand() {
+    assert_diagnostic_matches_fixture("c0001_compare_chain_walrus_later_operand");
+}
+
+// #1212: each chain link is typed like a single comparison.
+#[test]
+fn t0021_compare_chain_link_type() {
+    assert_diagnostic_matches_fixture("t0021_compare_chain_link_type");
+}
+
+// #1212: `in`/`not in` inside a chain keeps its `C0001`.
+#[test]
+fn c0001_compare_chain_in_operator() {
+    assert_diagnostic_matches_fixture("c0001_compare_chain_in_operator");
+}
+
 // #1211 / D-205: `x is not None and ...` does not narrow `x` in the right
 // operand.
 #[test]

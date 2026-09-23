@@ -183,6 +183,13 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `emit_expr` inside its own arm, which guards that operand where
         // it is evaluated, so this node adds no edge of its own.
         | MirExpr::BoolOp { .. }
+        // #1212 (Part 4 of #1018): a chained comparison is compares,
+        // branches and a join. Each operand is guarded by its own
+        // `emit_expr`, and each link that can leave an exception pending
+        // (an `int` operand, a dataclass `__eq__` call) is guarded inside
+        // `compare_chain.rs` before its branch, so the node adds no edge of
+        // its own.
+        | MirExpr::CompareChain { .. }
         // #1116: `BufferLen` deliberately diverges from *both* its siblings
         // `ObjLen` and `BufferGet`, which are `true` above. A buffer's
         // length read is a plain load of the `len` word the `--ext` wrapper
