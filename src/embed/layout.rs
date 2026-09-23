@@ -20,6 +20,12 @@ pub(crate) enum EmbedPlatform {
 }
 
 impl EmbedPlatform {
+    /// The platform of a host whose `std::env::consts::OS` is `os`, among
+    /// the hosts an embedded build or `pycc lock` runs on.
+    pub(crate) fn for_os(os: &str) -> Self {
+        if os == "macos" { Self::MacOs } else { Self::Linux }
+    }
+
     /// The build host's own platform.
     pub(crate) const HOST: Self = if cfg!(target_os = "macos") {
         Self::MacOs
@@ -87,6 +93,30 @@ pub(crate) fn rpath_args(platform: EmbedPlatform, sidecar: &str) -> Vec<OsString
         .map(OsString::from)
         .chain([OsString::from(format!("{origin}/{sidecar}/lib"))])
         .collect()
+}
+
+/// Linux only: links every library the bundle copies into `lib/` besides
+/// libpython (`names`, from `dir`) into the executable as `DT_NEEDED`
+/// entries, so the loader has them loaded, by their `DT_SONAME`, before an
+/// extension module that needs one is opened (#1243). `--no-as-needed`
+/// keeps an entry nothing in the executable itself references, and
+/// `-rpath-link` lets the link resolve their own dependencies among them.
+/// Empty on macOS, which rewrites the images' install names instead.
+pub(crate) fn preload_args(platform: EmbedPlatform, dir: &Path, names: &[String]) -> Vec<OsString> {
+    if platform == EmbedPlatform::MacOs || names.is_empty() {
+        return Vec::new();
+    }
+    let mut args: Vec<OsString> = ["-Xlinker", "--push-state", "-Xlinker", "--no-as-needed"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push(OsString::from("-L"));
+    args.push(dir.as_os_str().to_os_string());
+    args.extend(names.iter().map(|name| OsString::from(format!("-l:{name}"))));
+    let tail = ["-Xlinker", "--pop-state", "-Xlinker", "-rpath-link", "-Xlinker"];
+    args.extend(tail.into_iter().map(OsString::from));
+    args.push(dir.as_os_str().to_os_string());
+    args
 }
 
 /// The interpreter's shared library as the probe describes it: on a

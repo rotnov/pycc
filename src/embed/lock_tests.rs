@@ -90,6 +90,10 @@ impl Env {
         .unwrap_or_else(|_| panic!("`pycc lock` must succeed"));
     }
 
+    fn lock_path(&self) -> PathBuf {
+        self.entry.with_file_name("pycc.lock")
+    }
+
     fn out(&self) -> PathBuf {
         self.root.join("app")
     }

@@ -351,17 +351,57 @@ fn an_rpath_reference_is_resolved_in_dyld_order() {
 }
 
 #[test]
-fn a_prefix_library_is_vendored_and_anything_else_refused() {
+fn a_prefix_library_is_vendored_an_outside_one_is_native_and_the_rest_refused() {
     assert_eq!(
         closure_class("/p/lib/libffi.8.dylib", None, &[]),
         MachoDep::Vendor(PathBuf::from("/p/lib/libffi.8.dylib"))
     );
     assert_eq!(
         closure_class("/opt/elsewhere/libz.dylib", None, &[]),
-        MachoDep::Refuse
+        MachoDep::VendorNative(PathBuf::from("/opt/elsewhere/libz.dylib"))
     );
     assert_eq!(
         closure_class("@executable_path/libz.dylib", None, &[]),
         MachoDep::Refuse
     );
+}
+
+fn native_class(dep: &str) -> MachoDep {
+    let bundle_lib = [
+        PathBuf::from("@rpath/libpython3.14.dylib"),
+        PathBuf::from("/p/lib/libpython3.14.dylib"),
+    ];
+    classify_native_dep(
+        dep,
+        Path::new(dep),
+        "@rpath/libssl.3.dylib",
+        Path::new("/p"),
+        &bundle_lib,
+    )
+}
+
+#[test]
+fn a_native_library_vendors_its_absolute_chain_and_refuses_relative_references() {
+    assert_eq!(native_class("@rpath/libssl.3.dylib"), MachoDep::Keep);
+    assert_eq!(native_class("/usr/lib/libSystem.B.dylib"), MachoDep::Keep);
+    assert_eq!(
+        native_class("/p/lib/libpython3.14.dylib"),
+        MachoDep::RewriteToBundled
+    );
+    // The bundled library by a relative id is still the bundled library.
+    assert_eq!(
+        native_class("@rpath/libpython3.14.dylib"),
+        MachoDep::RewriteToBundled
+    );
+    assert_eq!(
+        native_class("/p/lib/libz.1.dylib"),
+        MachoDep::Vendor(PathBuf::from("/p/lib/libz.1.dylib"))
+    );
+    assert_eq!(
+        native_class("/opt/homebrew/lib/libcrypto.3.dylib"),
+        MachoDep::VendorNative(PathBuf::from("/opt/homebrew/lib/libcrypto.3.dylib"))
+    );
+    for relative in ["@rpath/libcrypto.3.dylib", "@loader_path/libcrypto.3.dylib"] {
+        assert_eq!(native_class(relative), MachoDep::Refuse);
+    }
 }

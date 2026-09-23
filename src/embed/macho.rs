@@ -21,6 +21,12 @@ pub(crate) enum MachoDep {
     /// and referenced relative to the loading image. Carries the resolved
     /// source path.
     Vendor(PathBuf),
+    /// A native library (the pycc.lock decision entry, rule 8; #1243): an
+    /// absolute dependency of a closure image, or of another native, that
+    /// lies outside the system directories and the interpreter's prefix.
+    /// Copied into the sidecar, like [`MachoDep::Vendor`], but only when
+    /// the lock lists it. Carries the resolved source path.
+    VendorNative(PathBuf),
     /// Anything else. The build stops rather than ship a bundle that only
     /// runs on the build host (D-128 rule 1).
     Refuse,
@@ -67,20 +73,69 @@ pub(crate) fn classify_macho_dep(
     bundle_lib: &[PathBuf],
     bundled_name: &str,
 ) -> MachoDep {
-    if dep.starts_with("/usr/lib/") || dep.starts_with("/System/Library/") {
+    if is_system(dep) || own_id == Some(dep) || dep == format!("@rpath/{bundled_name}") {
         return MachoDep::Keep;
     }
-    if own_id == Some(dep) || dep == format!("@rpath/{bundled_name}") {
-        return MachoDep::Keep;
-    }
-    if bundle_lib
-        .iter()
-        .any(|lib| lib.as_path() == Path::new(dep) || lib.as_path() == resolved)
-    {
+    if is_bundled(dep, resolved, bundle_lib) {
         return MachoDep::RewriteToBundled;
     }
     if resolved.starts_with(prefix) {
         return MachoDep::Vendor(resolved.to_path_buf());
+    }
+    MachoDep::Refuse
+}
+
+fn is_system(dep: &str) -> bool {
+    dep.starts_with("/usr/lib/") || dep.starts_with("/System/Library/")
+}
+
+fn is_bundled(dep: &str, resolved: &Path, bundle_lib: &[PathBuf]) -> bool {
+    bundle_lib
+        .iter()
+        .any(|lib| lib.as_path() == Path::new(dep) || lib.as_path() == resolved)
+}
+
+/// Classifies an absolute dependency `dep` of a closure image or a native
+/// library (#1243), in precedence order: a system library is kept; the
+/// source libpython is rewritten to the bundled one; a library under the
+/// interpreter's `prefix` is vendored; anything else is a native. The
+/// caller passes only absolute dependencies, or one that names the bundled
+/// library by a relative id. `resolved`, `prefix` and `bundle_lib` are as
+/// for [`classify_macho_dep`].
+pub(crate) fn classify_absolute(
+    dep: &str,
+    resolved: &Path,
+    prefix: &Path,
+    bundle_lib: &[PathBuf],
+) -> MachoDep {
+    if is_system(dep) {
+        return MachoDep::Keep;
+    }
+    if is_bundled(dep, resolved, bundle_lib) {
+        return MachoDep::RewriteToBundled;
+    }
+    if resolved.starts_with(prefix) {
+        return MachoDep::Vendor(resolved.to_path_buf());
+    }
+    MachoDep::VendorNative(resolved.to_path_buf())
+}
+
+/// Classifies one dependency of a vendored native library whose own id is
+/// `own_id`: the id is kept, an absolute dependency (or the bundled library
+/// by any id) goes through [`classify_absolute`], so a whole chain of
+/// natives is vendored, and a relative reference is refused (#1259).
+pub(crate) fn classify_native_dep(
+    dep: &str,
+    resolved: &Path,
+    own_id: &str,
+    prefix: &Path,
+    bundle_lib: &[PathBuf],
+) -> MachoDep {
+    if dep == own_id {
+        return MachoDep::Keep;
+    }
+    if dep.starts_with('/') || is_bundled(dep, resolved, bundle_lib) {
+        return classify_absolute(dep, resolved, prefix, bundle_lib);
     }
     MachoDep::Refuse
 }
@@ -170,9 +225,10 @@ pub(crate) struct ClosureImage<'a> {
 /// bundled one; an `@loader_path` reference into the image's own payload
 /// is kept; an `@rpath` reference is resolved in dyld's order over the
 /// image's `LC_RPATH` entries and kept only when its first match is in the
-/// image's own payload; a library under the interpreter's `prefix` is
-/// vendored; anything else is refused (#1243). `resolved`, `prefix`,
-/// `bundle_lib` and `bundled_name` are as for [`classify_macho_dep`].
+/// image's own payload; any other absolute dependency is vendored, from
+/// the prefix or as a native, per [`classify_absolute`] (#1243); a relative
+/// reference that misses the payload is refused (#1259). `resolved`,
+/// `prefix` and `bundle_lib` are as for [`classify_macho_dep`].
 pub(crate) fn classify_closure_dep(
     dep: &str,
     resolved: &Path,
@@ -183,14 +239,8 @@ pub(crate) fn classify_closure_dep(
     if image.own_id == Some(dep) {
         return MachoDep::Keep;
     }
-    if dep.starts_with("/usr/lib/") || dep.starts_with("/System/Library/") {
-        return MachoDep::Keep;
-    }
-    if bundle_lib
-        .iter()
-        .any(|lib| lib.as_path() == Path::new(dep) || lib.as_path() == resolved)
-    {
-        return MachoDep::RewriteToBundled;
+    if dep.starts_with('/') || is_bundled(dep, resolved, bundle_lib) {
+        return classify_absolute(dep, resolved, prefix, bundle_lib);
     }
     let image_dir = format!("closure/{}/..", image.rel);
     if let Some(rest) = dep.strip_prefix("@loader_path/") {
@@ -202,9 +252,6 @@ pub(crate) fn classify_closure_dep(
     }
     if let Some(rest) = dep.strip_prefix("@rpath/") {
         return resolve_rpath(rest, &image_dir, image);
-    }
-    if dep.starts_with('/') && resolved.starts_with(prefix) {
-        return MachoDep::Vendor(resolved.to_path_buf());
     }
     MachoDep::Refuse
 }

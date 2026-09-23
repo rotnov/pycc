@@ -19,7 +19,7 @@ use crate::embed::{self, EmbedToolchain};
 use crate::frontend::{self, FrontendFailure};
 use crate::interop_policy::InteropCli;
 use pycc_hir::{HirModule, ImportBinding};
-use schema::{LOCK_FILE_NAME, LOCK_VERSION, Lock, LockTarget, LockedPackage};
+use schema::{LOCK_FILE_NAME, LOCK_VERSION, Lock, LockTarget, LockedNative, LockedPackage};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -108,7 +108,9 @@ pub(crate) fn run_lock_on(
         if check && direct.is_empty() && old_section.is_none() {
             None
         } else {
-            Some(derive(&key, &triple, &direct, toolchain)?)
+            let platform = embed::layout::EmbedPlatform::for_os(os);
+            let at = (&located, path, platform);
+            Some(derive(&key, &triple, &direct, toolchain, at)?)
         }
     };
     let base = existing.unwrap_or(Lock {
@@ -247,12 +249,15 @@ pub(crate) fn find_section<'a>(
 
 /// Derives the (entry, triple) section for a program with at least one
 /// CPython-backed import; `direct` is empty for a standard-library-only
-/// program, whose section carries only the interpreter fields.
+/// program, whose section carries only the interpreter fields. `at` is the
+/// located lock, the entry as given, and the host's platform, which the
+/// native libraries (rule 8, #1243) are derived for.
 fn derive(
     entry: &str,
     triple: &str,
     direct: &BTreeSet<String>,
     toolchain: &EmbedToolchain,
+    (located, entry_path, platform): (&Located, &Path, embed::layout::EmbedPlatform),
 ) -> Result<LockTarget, LockFailure> {
     let probe = toolchain.probe().map_err(LockFailure::Env)?;
     let env = toolchain.lock_probe().map_err(LockFailure::Env)?;
@@ -266,12 +271,12 @@ fn derive(
         resolve::resolve(&sites, direct, &env.markers).map_err(LockFailure::Env)?
     };
     let (major, minor, micro) = probe.version;
-    Ok(LockTarget {
+    let mut section = LockTarget {
         entry: entry.to_string(),
         triple: triple.to_string(),
         python: format!("{major}.{minor}.{micro}"),
-        cache_tag: env.cache_tag,
-        platform: env.platform,
+        cache_tag: env.cache_tag.clone(),
+        platform: env.platform.clone(),
         libpython_sha256,
         roots: direct.iter().cloned().collect(),
         package: packages
@@ -286,7 +291,17 @@ fn derive(
             })
             .collect(),
         native: Vec::new(),
-    })
+    };
+    if !section.package.is_empty() {
+        // The natives are derived from the payload the build will copy, by
+        // the derivation the build repeats, so the two cannot disagree.
+        let check = build::ClosureCheck::for_section(section.clone(), located, entry_path);
+        let closure = build::payload(&check, &env).map_err(LockFailure::Env)?;
+        let linux_env = toolchain.linux_env();
+        let natives = embed::plan_natives(platform, &probe, Some(&closure), &linux_env, false);
+        section.native = natives.map_err(LockFailure::Env)?.locked();
+    }
+    Ok(section)
 }
 
 /// Why `--check` found the lock stale, given the locked and the derived
@@ -356,7 +371,37 @@ fn first_difference(old: &LockTarget, new: &LockTarget) -> String {
             _ => {}
         }
     }
-    "its `[[target.native]]` entries differ".to_string()
+    native_difference(&old.native, &new.native)
+        .unwrap_or_else(|| "its `[[target.native]]` entries are in a different order".to_string())
+}
+
+/// The first native library in which the locked `[[target.native]]`
+/// entries differ from the derived ones, compared by name, or `None` when
+/// they hold the same entries (in any order). Worded for both `pycc lock
+/// --check` and an embedded build.
+pub(crate) fn native_difference(locked: &[LockedNative], now: &[LockedNative]) -> Option<String> {
+    let names: BTreeSet<&str> = locked
+        .iter()
+        .chain(now)
+        .map(|native| native.name.as_str())
+        .collect();
+    names.into_iter().find_map(|name| {
+        let old = locked.iter().find(|native| native.name == name);
+        let new = now.iter().find(|native| native.name == name);
+        match (old, new) {
+            (None, _) => Some(format!(
+                "`[[target.native]]` library `{name}` is needed but not locked"
+            )),
+            (_, None) => Some(format!(
+                "`[[target.native]]` library `{name}` is locked but not needed"
+            )),
+            (Some(a), Some(b)) if a != b => Some(format!(
+                "`[[target.native]]` library `{name}` differs from the library the closure \
+                 needs"
+            )),
+            _ => None,
+        }
+    })
 }
 
 /// Writes `text` to `dir/name` through `name.tmp-<pid>` and a rename,
