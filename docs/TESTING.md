@@ -1364,7 +1364,9 @@ tests that cover it now, or the owner of what is still missing.
 - `deny` and its `--pure` shorthand both reject the same CPython-backed fixture,
   while a native pycc import remains accepted and a successful pure artifact
   has no CPython/libpython dependency. *Covered:* the `i0402_*` snapshots in
-  `tests/diagnostics/` and `tests/issue_1224_interop_policy.rs`; and
+  `tests/diagnostics/` and `tests/issue_1224_interop_policy.rs`; the
+  no-`Py*`-symbol check runs on the non-Windows legs, while the Windows leg
+  proves only that the build succeeds with no `OUT.pycc/` sidecar; and
 - the boundary benchmark publishes copied scalar/container marshalling and
   supported zero-copy buffer transfers separately, so compatibility does not
   hide the cost model.

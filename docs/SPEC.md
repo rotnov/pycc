@@ -11,7 +11,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [TYPE_SYSTEM.md](./TYPE_SYSTEM.md) | Strictness rules, type↔representation table, generics, narrowing, call surface | `pycc_types` |
 | [MEMORY_OWNERSHIP.md](./MEMORY_OWNERSHIP.md) | Inferred ownership, RC elision, cycles, GIL-free native thread safety | `pycc_own`, `pycc_rt` |
 | [RUNTIME.md](./RUNTIME.md) | Object model, exceptions, generators, allocator, hosted `ext` and planned transparent CPython interop | `pycc_rt` |
-| [CLI_SPEC.md](./CLI_SPEC.md) | Commands, flags, `pycc.toml`, planned interop policies, exit codes, diagnostic formats | `pycc` driver |
+| [CLI_SPEC.md](./CLI_SPEC.md) | Commands, flags, `pycc.toml`, interop policies (D-128), exit codes, diagnostic formats | `pycc` driver |
 | [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
 | [TESTING.md](./TESTING.md) | 8 test layers, conformance harness, differential fuzzing, both corpora, corpus bot | CI, `pycc_testkit` |

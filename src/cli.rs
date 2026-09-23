@@ -26,9 +26,9 @@ pub enum OutputFormat {
 #[derive(Args, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct InteropFlags {
     /// The interop policy for CPython-backed imports, overriding
-    /// `pycc.toml`'s `[interop] policy`: `auto` admits every one the build
-    /// can embed, `allowlist` only the roots `[interop] allow` lists, `deny`
-    /// none.
+    /// `pycc.toml`'s `[interop] policy`: `auto` admits every root,
+    /// `allowlist` only the roots `[interop] allow` lists, `deny` none. An
+    /// admitted root must still be one the build can embed (`I0403`).
     #[arg(long, value_enum)]
     pub interop_policy: Option<InteropPolicy>,
     /// Shorthand for `--interop-policy deny`; rejected together with any
