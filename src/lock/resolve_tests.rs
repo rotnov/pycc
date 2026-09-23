@@ -233,20 +233,21 @@ fn closure_members_need_metadata_and_record() {
     tiny(&env.pure, &["dep"]);
     let dep = write_dist(&env.pure, "dep", "1", &[("dep.py", b"")], &[]);
     std::fs::remove_file(dep.join("RECORD")).unwrap();
-    let err = env.refusal(&["tinypkg"]);
+    // Messages show native paths; compare with `/` on every host.
+    let err = env.refusal(&["tinypkg"]).replace('\\', "/");
     assert!(
         err.contains("dep-1.dist-info/RECORD") && err.contains("build from a venv"),
         "{err}"
     );
     std::fs::write(dep.join("RECORD"), "").unwrap();
     std::fs::remove_file(dep.join("METADATA")).unwrap();
-    let err = env.refusal(&["tinypkg"]);
+    let err = env.refusal(&["tinypkg"]).replace('\\', "/");
     assert!(
         err.contains("dep-1.dist-info/METADATA") && err.contains("build from a venv"),
         "{err}"
     );
     std::fs::write(dep.join("METADATA"), "Name: other\nVersion: 1\n").unwrap();
-    let err = env.refusal(&["tinypkg"]);
+    let err = env.refusal(&["tinypkg"]).replace('\\', "/");
     assert!(err.contains("`Name: other`"), "{err}");
 }
 
@@ -409,7 +410,7 @@ fn on_disk_files_under_a_root_must_be_recorded_by_location() {
     std::fs::write(env.pure.join("tinypkg/stray.py"), b"").unwrap();
     std::fs::create_dir(env.pure.join("tinypkg/__pycache__")).unwrap();
     std::fs::write(env.pure.join("tinypkg/__pycache__/x.pyc"), b"").unwrap();
-    let err = env.refusal(&["tinypkg"]);
+    let err = env.refusal(&["tinypkg"]).replace('\\', "/");
     assert!(
         err.contains("tinypkg/stray.py") && err.contains("no RECORD"),
         "{err}"
@@ -430,7 +431,7 @@ fn on_disk_files_under_a_root_must_be_recorded_by_location() {
     tiny(&env.pure, &[]);
     std::fs::create_dir(env.plat.join("tinypkg")).unwrap();
     std::fs::write(env.plat.join("tinypkg/sub.py"), b"").unwrap();
-    let err = env.refusal(&["tinypkg"]);
+    let err = env.refusal(&["tinypkg"]).replace('\\', "/");
     assert!(err.contains("plat/tinypkg/sub.py"), "{err}");
 }
 

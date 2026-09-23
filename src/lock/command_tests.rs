@@ -78,7 +78,9 @@ fn a_windows_or_non_tier_1_host_is_refused_before_the_program_is_read() {
 fn the_frontend_refusal_and_every_failure_class_map_to_their_exit_codes() {
     let dir = ScratchDir::new("lock_frontend").unwrap();
     let missing = dir.join("missing.py");
-    let failure = run_lock(&missing, false, InteropCli::default(), &absent(&dir)).unwrap_err();
+    // A fixed Tier-1 host: on Windows `run_lock` refuses before the frontend.
+    let failure =
+        run_lock_on(&missing, false, InteropCli::default(), &absent(&dir), HOST).unwrap_err();
     assert!(matches!(failure, LockFailure::Frontend(_)));
     assert_eq!(report_lock_failure(failure), 2);
     assert_eq!(report_lock_failure(LockFailure::Env("e".to_string())), 2);
