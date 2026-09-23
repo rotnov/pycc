@@ -233,7 +233,14 @@ fn native_env(tag: &str) -> (Env, PathBuf, PathBuf) {
     dylib(&out2, "pycc_fake_out2", &[]);
     dylib(&out1, "pycc_fake_out1", &[&out2]);
     for dist in ["tinynat", "tinyb"] {
-        let ext = image(&build, &format!("{dist}_so"), "-bundle", None, &[&out1], &[]);
+        let ext = image(
+            &build,
+            &format!("{dist}_so"),
+            "-bundle",
+            None,
+            &[&out1],
+            &[],
+        );
         let init = format!("{dist}/__init__.py");
         let so = format!("{dist}/_ext.so");
         let files: [(&str, &[u8]); 2] = [(&init, b"X = 1\n"), (&so, &ext)];
@@ -250,8 +257,8 @@ fn native_env(tag: &str) -> (Env, PathBuf, PathBuf) {
 fn outside_libraries_are_locked_as_natives_and_vendored() {
     let (env, out1, out2) = native_env("embed_macos_native");
     env.lock();
-    let lock = crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap())
-        .unwrap();
+    let lock =
+        crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
     let natives = &lock.target[0].native;
     let names: Vec<&str> = natives.iter().map(|native| native.name.as_str()).collect();
     assert_eq!(names, ["libout1.dylib", "libout2.dylib"]);
@@ -320,7 +327,15 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     let probe = &env.layout.probe;
     let assemble = |plan: &native::NativePlan| {
         let platform = EmbedPlatform::MacOs;
-        bundle::assemble(probe, platform, &env.root, "app.pycc", false, Some(&closure), plan)
+        bundle::assemble(
+            probe,
+            platform,
+            &env.root,
+            "app.pycc",
+            false,
+            Some(&closure),
+            plan,
+        )
     };
     let err = assemble(&native::NativePlan::default()).expect_err("unplanned");
     assert!(
@@ -334,7 +349,8 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     plan.natives[0].locked.sha256 = "00".repeat(32);
     let err = assemble(&plan).expect_err("changed bytes");
     assert!(
-        err.contains("the native library `libout1.dylib`") && err.contains("changed after it was locked"),
+        err.contains("the native library `libout1.dylib`")
+            && err.contains("changed after it was locked"),
         "{err}"
     );
     assert!(!env.sidecar().exists());

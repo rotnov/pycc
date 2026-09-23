@@ -152,7 +152,9 @@ impl EmbedToolchain {
 
     /// Where a Linux build's dependency scan looks for libraries.
     pub(crate) fn linux_env(&self) -> LinuxEnv {
-        self.linux_env_override.clone().unwrap_or_else(LinuxEnv::host)
+        self.linux_env_override
+            .clone()
+            .unwrap_or_else(LinuxEnv::host)
     }
 
     /// A toolchain that really runs `interpreter`.
@@ -346,7 +348,13 @@ pub(crate) fn plan_embed(
         }
         None => None,
     };
-    let natives = plan_natives(platform, &probe, locked.as_ref(), &toolchain.linux_env(), true)?;
+    let natives = plan_natives(
+        platform,
+        &probe,
+        locked.as_ref(),
+        &toolchain.linux_env(),
+        true,
+    )?;
     if let Some(check) = &check {
         let difference = crate::lock::native_difference(&check.section.native, &natives.locked());
         if let Some(difference) = difference {
@@ -381,7 +389,11 @@ pub(crate) fn plan_embed(
     let mut link_args = vec![library.into_os_string()];
     link_args.extend(layout::rpath_args(platform, &sidecar_name));
     let lib_dir = parent.join(&sidecar_name).join("lib");
-    let names: Vec<String> = natives.linux_vendor.into_iter().map(|(name, _)| name).collect();
+    let names: Vec<String> = natives
+        .linux_vendor
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
     link_args.extend(layout::preload_args(platform, &lib_dir, &names));
     Ok(EmbedPlan {
         compile_args,

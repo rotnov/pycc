@@ -6,7 +6,9 @@ fn a_library_reads_every_tag_in_order() {
     let spec = ElfSpec::library("libnat.so.1", &["libdep.so.2", "libc.so.6"])
         .rpath("/opt/r")
         .runpath("$ORIGIN/../lib");
-    let image = parse_elf(&elf_bytes(&spec)).expect("parses").expect("an image");
+    let image = parse_elf(&elf_bytes(&spec))
+        .expect("parses")
+        .expect("an image");
     assert_eq!(image.machine, X86_64);
     assert!(!image.program);
     assert_eq!(image.soname.as_deref(), Some("libnat.so.1"));
@@ -20,7 +22,9 @@ fn a_program_is_marked_and_a_module_has_no_soname() {
     let mut spec = ElfSpec::module(&["libnat.so.1"]);
     spec.program = true;
     spec.machine = AARCH64;
-    let image = parse_elf(&elf_bytes(&spec)).expect("parses").expect("an image");
+    let image = parse_elf(&elf_bytes(&spec))
+        .expect("parses")
+        .expect("an image");
     assert!(image.program);
     assert_eq!(image.machine, AARCH64);
     assert_eq!(image.soname, None);
@@ -45,7 +49,15 @@ fn other_files_are_not_images() {
 fn every_truncation_is_an_error() {
     let bytes = elf_bytes(&ElfSpec::library("libx.so", &["liby.so"]));
     // Header, program header table, dynamic section, and the strings.
-    for cut in [10, 40, 58, 64 + 20, 64 + 56 + 30, bytes.len() - 20, bytes.len() - 1] {
+    for cut in [
+        10,
+        40,
+        58,
+        64 + 20,
+        64 + 56 + 30,
+        bytes.len() - 20,
+        bytes.len() - 1,
+    ] {
         let error = parse_elf(&bytes[..cut]).expect_err(&format!("cut at {cut}"));
         assert!(
             error.contains("runs past the end") || error.contains("outside"),
@@ -118,7 +130,10 @@ fn ldconfig_output_maps_names_to_paths_in_cache_order() {
             PathBuf::from("/lib/i386-linux-gnu/libssl.so.3")
         ]
     );
-    assert_eq!(map["libz.so.1"], [PathBuf::from("/lib/aarch64-linux-gnu/libz.so.1")]);
+    assert_eq!(
+        map["libz.so.1"],
+        [PathBuf::from("/lib/aarch64-linux-gnu/libz.so.1")]
+    );
     assert_eq!(map["libbare.so"], [PathBuf::from("/opt/bare/libbare.so")]);
     assert_eq!(map.len(), 3);
 }

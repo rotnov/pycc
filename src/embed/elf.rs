@@ -112,9 +112,10 @@ pub(crate) fn parse_elf(bytes: &[u8]) -> Result<Option<ElfImage>, String> {
     };
     let mut entries = Vec::new();
     for index in 0..dynamic.filesz / DYN_SIZE {
-        let entry = dynamic.offset.checked_add(index * DYN_SIZE).and_then(|at| {
-            Some((u64_at(bytes, at)?, u64_at(bytes, at.checked_add(8)?)?))
-        });
+        let entry = dynamic
+            .offset
+            .checked_add(index * DYN_SIZE)
+            .and_then(|at| Some((u64_at(bytes, at)?, u64_at(bytes, at.checked_add(8)?)?)));
         let (tag, value) = entry.ok_or_else(|| truncated("dynamic section"))?;
         if tag == DT_NULL {
             break;
@@ -160,7 +161,10 @@ fn string_at(bytes: &[u8], strtab: u64, index: u64) -> Result<String, String> {
         .and_then(|start| usize::try_from(start).ok())
         .ok_or_else(outside)?;
     let rest = bytes.get(start..).ok_or_else(outside)?;
-    let end = rest.iter().position(|byte| *byte == 0).ok_or_else(outside)?;
+    let end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(outside)?;
     Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
 }
 

@@ -120,7 +120,6 @@ struct Walk<'a> {
     /// Every dependency kept on the system, by its `DT_NEEDED` name: the
     /// first image that needs it and where it resolved.
     kept: BTreeMap<String, (String, PathBuf)>,
-    visited: BTreeSet<(PathBuf, Option<String>)>,
     pending: Vec<Node>,
 }
 
@@ -147,7 +146,6 @@ pub(crate) fn plan(
         natives: Natives::new(bundled_name.clone()),
         vendor: BTreeMap::new(),
         kept: BTreeMap::new(),
-        visited: BTreeSet::new(),
         pending: Vec::new(),
     };
     if interpreter {
@@ -305,7 +303,8 @@ impl Walk<'_> {
     }
 
     /// Plans the copy of `needed` (resolved to `canonical`, with its own
-    /// dynamic section `dep`) into `lib/` and queues it for scanning.
+    /// dynamic section `dep`) into `lib/` and queues it for scanning, once
+    /// per library (and, for a native, once per distribution).
     fn copy(
         &mut self,
         node: &Node,
@@ -324,11 +323,18 @@ impl Walk<'_> {
                 canonical.display()
             ));
         }
+        if needed.contains('/') {
+            return Err(format!(
+                "{} needs `{needed}` by its path, which the loader opens on the target \
+                 machine instead of a bundled copy; pycc cannot bundle it",
+                node.describe()
+            ));
+        }
         if dep.soname.as_deref() != Some(needed) {
-            let soname = dep.soname.as_deref().map_or_else(
-                || "missing".to_string(),
-                |soname| format!("`{soname}`"),
-            );
+            let soname = dep
+                .soname
+                .as_deref()
+                .map_or_else(|| "missing".to_string(), |soname| format!("`{soname}`"));
             return Err(format!(
                 "{} needs `{needed}`, found at `{}`, whose `DT_SONAME` is {soname}; pycc \
                  copies it into the bundle's `lib/` as `{needed}` and the loader matches it \
@@ -346,18 +352,16 @@ impl Walk<'_> {
                 (Kind::Native(needed.to_string()), Some(owner))
             }
             _ => {
-                self.natives.claim_name(needed, canonical)?;
+                if self.natives.claim_name(needed, canonical)? {
+                    return Ok(());
+                }
                 (Kind::Interpreter(needed.to_string()), None)
             }
         };
-        self.vendor.insert(needed.to_string(), canonical.to_path_buf());
-        if self.visited.insert((canonical.to_path_buf(), owner.clone())) {
-            self.pending.push(Node {
-                path: canonical.to_path_buf(),
-                kind,
-                owner,
-            });
-        }
+        self.vendor
+            .insert(needed.to_string(), canonical.to_path_buf());
+        let path = canonical.to_path_buf();
+        self.pending.push(Node { path, kind, owner });
         Ok(())
     }
 

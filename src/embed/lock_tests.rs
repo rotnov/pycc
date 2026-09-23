@@ -257,6 +257,117 @@ fn an_interpreter_field_mismatch_is_refused_after_the_probe() {
     assert!(err.contains("3.14.9"), "{err}");
 }
 
+const LINUX: (&str, &str) = ("x86_64", "linux");
+
+/// A Linux build over synthetic ELF images, on every host: two
+/// distributions whose extensions need `libnat1`, which needs `libnat2`,
+/// both outside the interpreter and the system directory (#1243).
+fn linux_native_env(tag: &str) -> (Env, EmbedToolchain) {
+    use super::super::elf::fixture::{ElfSpec, elf_bytes};
+    let env = Env::bare(tag, "import tinynat\nimport tinyb\n");
+    let write = |rel: &str, spec: &ElfSpec| {
+        let path = env.root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, elf_bytes(spec)).unwrap();
+    };
+    write("sys/libc.so.6", &ElfSpec::library("libc.so.6", &[]));
+    let nat1 = ElfSpec::library("libnat1.so.1", &["libnat2.so.2"]).runpath("$ORIGIN");
+    write("outside/libnat1.so.1", &nat1);
+    write(
+        "outside/libnat2.so.2",
+        &ElfSpec::library("libnat2.so.2", &["libc.so.6"]),
+    );
+    let outside = env.root.join("outside").display().to_string();
+    let ext = elf_bytes(&ElfSpec::module(&["libnat1.so.1", "libc.so.6"]).runpath(&outside));
+    for dist in ["tinynat", "tinyb"] {
+        let init = format!("{dist}/__init__.py");
+        let so = format!("{dist}/_ext.so");
+        let files: [(&str, &[u8]); 2] = [(&init, b"X = 1\n"), (&so, &ext)];
+        write_dist(&env.plat, dist, "1.0", &files, &[]);
+    }
+    let linux = LinuxEnv {
+        system_dirs: vec![env.root.join("sys")],
+        ldconfig_programs: vec![env.root.join("absent")],
+    };
+    let toolchain = env.toolchain().with_linux_env(linux);
+    (env, toolchain)
+}
+
+fn lock_linux(env: &Env, toolchain: &EmbedToolchain, check: bool) -> Result<(), String> {
+    use crate::lock::LockFailure::Stale;
+    let result =
+        crate::lock::run_lock_on(&env.entry, check, InteropCli::default(), toolchain, LINUX);
+    // Any other failure is reported as an empty message, which no
+    // assertion accepts.
+    result.map_err(|f| if let Stale(m) = f { m } else { String::new() })
+}
+
+fn embed_linux(env: &Env, toolchain: &EmbedToolchain) -> Result<EmbedPlan, String> {
+    let hir = crate::frontend::lock_frontend(&env.entry, InteropCli::default())
+        .unwrap_or_else(|_| panic!("the fixture must type-check"));
+    let platform = EmbedPlatform::Linux;
+    plan_embed(
+        &env.out(),
+        &env.entry,
+        &hir,
+        toolchain,
+        platform,
+        LINUX,
+        &env.obj(),
+    )
+}
+
+/// `pycc lock` records both natives for both distributions, the build
+/// derives the same entries, copies both into `lib/` and links them into
+/// the executable, and `pycc lock --check` agrees with what it wrote.
+#[test]
+fn a_linux_build_copies_and_preloads_its_natives() {
+    let (env, toolchain) = linux_native_env("embed_linux_native");
+    lock_linux(&env, &toolchain, false).expect("locked");
+    let lock =
+        crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
+    let natives = &lock.target[0].native;
+    let names: Vec<&str> = natives.iter().map(|native| native.name.as_str()).collect();
+    assert_eq!(names, ["libnat1.so.1", "libnat2.so.2"]);
+    assert!(
+        natives
+            .iter()
+            .all(|native| native.required_by == ["tinyb", "tinynat"])
+    );
+    lock_linux(&env, &toolchain, true).expect("the lock is current");
+    let plan = embed_linux(&env, &toolchain).expect("embedded");
+    let lib = env.sidecar().join("lib");
+    for name in names {
+        let copied = std::fs::read(lib.join(name)).unwrap();
+        assert_eq!(
+            copied,
+            std::fs::read(env.root.join("outside").join(name)).unwrap()
+        );
+    }
+    let libs = ["libnat1.so.1".to_string(), "libnat2.so.2".to_string()];
+    let preload = layout::preload_args(EmbedPlatform::Linux, &lib, &libs);
+    assert!(plan.link_args.ends_with(&preload), "{:?}", plan.link_args);
+}
+
+/// A native changed after `pycc lock` is refused by the build, which keeps
+/// the previous sidecar, and reported stale by `pycc lock --check`.
+#[test]
+fn a_linux_native_changed_after_the_lock_is_refused() {
+    let (env, toolchain) = linux_native_env("embed_linux_native_stale");
+    lock_linux(&env, &toolchain, false).expect("locked");
+    let nat2 = env.root.join("outside/libnat2.so.2");
+    let mut bytes = std::fs::read(&nat2).unwrap();
+    bytes.push(0);
+    std::fs::write(&nat2, bytes).unwrap();
+    env.previous_sidecar();
+    let err = embed_linux(&env, &toolchain).expect_err("stale");
+    let differs = "`[[target.native]]` library `libnat2.so.2` differs";
+    assert!(err.contains(differs), "{err}");
+    env.assert_previous_sidecar_intact();
+    let stale = lock_linux(&env, &toolchain, true).expect_err("stale");
+    assert!(stale.contains(differs), "{stale}");
+}
+
 #[cfg(target_os = "macos")]
 #[path = "macos_closure_tests.rs"]
 mod macos_closure_tests;

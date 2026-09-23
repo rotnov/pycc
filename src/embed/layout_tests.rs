@@ -84,6 +84,39 @@ fn the_rpath_is_relative_to_the_executable_on_each_platform() {
 }
 
 #[test]
+fn the_linux_preload_links_every_copied_library_by_name() {
+    let dir = Path::new("/out/app.pycc/lib");
+    let names = ["libnat1.so.1".to_string(), "libz.so.1".to_string()];
+    assert_eq!(
+        preload_args(EmbedPlatform::Linux, dir, &names),
+        [
+            "-Xlinker",
+            "--push-state",
+            "-Xlinker",
+            "--no-as-needed",
+            "-L",
+            "/out/app.pycc/lib",
+            "-l:libnat1.so.1",
+            "-l:libz.so.1",
+            "-Xlinker",
+            "--pop-state",
+            "-Xlinker",
+            "-rpath-link",
+            "-Xlinker",
+            "/out/app.pycc/lib"
+        ]
+    );
+    assert!(preload_args(EmbedPlatform::Linux, dir, &[]).is_empty());
+    assert!(preload_args(EmbedPlatform::MacOs, dir, &names).is_empty());
+}
+
+#[test]
+fn the_platform_follows_the_host_os() {
+    assert_eq!(EmbedPlatform::for_os("macos"), EmbedPlatform::MacOs);
+    assert_eq!(EmbedPlatform::for_os("linux"), EmbedPlatform::Linux);
+}
+
+#[test]
 fn the_source_library_follows_the_framework_or_the_plain_layout() {
     let plain = probe();
     assert_eq!(

@@ -16,8 +16,8 @@ use super::native::{self, NativePlan, Natives};
 use super::sha256::sha256_hex;
 use crate::lock::build::LockedClosure;
 use crate::lock::schema::LockedNative;
-use std::io::Write;
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -453,5 +453,6 @@ fn copy_library(
         return Err(stale(locked, &why));
     }
     let mut file = std::fs::File::create_new(&to).map_err(|e| io_error("write", &to, &e))?;
-    file.write_all(&bytes).map_err(|e| io_error("write", &to, &e))
+    file.write_all(&bytes)
+        .map_err(|e| io_error("write", &to, &e))
 }

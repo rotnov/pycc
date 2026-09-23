@@ -23,7 +23,11 @@ impl EmbedPlatform {
     /// The platform of a host whose `std::env::consts::OS` is `os`, among
     /// the hosts an embedded build or `pycc lock` runs on.
     pub(crate) fn for_os(os: &str) -> Self {
-        if os == "macos" { Self::MacOs } else { Self::Linux }
+        if os == "macos" {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
     }
 
     /// The build host's own platform.
@@ -112,8 +116,18 @@ pub(crate) fn preload_args(platform: EmbedPlatform, dir: &Path, names: &[String]
         .collect();
     args.push(OsString::from("-L"));
     args.push(dir.as_os_str().to_os_string());
-    args.extend(names.iter().map(|name| OsString::from(format!("-l:{name}"))));
-    let tail = ["-Xlinker", "--pop-state", "-Xlinker", "-rpath-link", "-Xlinker"];
+    args.extend(
+        names
+            .iter()
+            .map(|name| OsString::from(format!("-l:{name}"))),
+    );
+    let tail = [
+        "-Xlinker",
+        "--pop-state",
+        "-Xlinker",
+        "-rpath-link",
+        "-Xlinker",
+    ];
     args.extend(tail.into_iter().map(OsString::from));
     args.push(dir.as_os_str().to_os_string());
     args
