@@ -17,7 +17,7 @@
 //! `python3.14`, must be CPython 3.14.7 with a shared libpython); `venv
 //! --without-pip` is offline, and `tinypkg`/`tinydep` are test-authored.
 
-#![cfg_attr(windows, allow(dead_code))]
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
