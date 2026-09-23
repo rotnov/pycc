@@ -5,6 +5,11 @@
 //!
 //! On macOS the libraries are real Mach-O images built with `cc`, so the
 //! `otool`/`install_name_tool`/`codesign` spawns run against them.
+//!
+//! On Windows the embedded mode is refused before any of this runs (#1226),
+//! so the tests that build a real library or run the embed wiring are gated
+//! off there and part of this module has no caller on that host.
+#![cfg_attr(windows, allow(dead_code))]
 
 use super::EmbedProbe;
 use std::path::{Path, PathBuf};
