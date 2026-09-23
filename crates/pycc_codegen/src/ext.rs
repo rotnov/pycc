@@ -49,6 +49,19 @@ pub struct CompileOptions {
     /// `pycc_rt_exception_print_and_exit`, which would terminate the
     /// interpreter process instead of failing the import.
     pub ext: bool,
+    /// `true` skips the export thunks `ext` mode would otherwise emit
+    /// (`ext_thunk::emit_export_thunks`), and means nothing without `ext`.
+    ///
+    /// Set by the embedded-executable mode (Part 1 of #1028), which compiles
+    /// with `ext` for its module-body entry point and failure edge but
+    /// exports no function to a host: the thunk set comes from the MIR
+    /// (`ext_thunk_required`), not from the driver's export list, and in
+    /// `--ext` mode only the driver's `collect_exports` guarantees a thunked
+    /// signature is admissible, which an embedded build never runs. The
+    /// polarity is deliberate -- `false`, the `Default`, is today's
+    /// behaviour, so every `ext: true, ..CompileOptions::default()` literal
+    /// keeps its meaning.
+    pub suppress_export_thunks: bool,
 }
 
 /// The symbol the module body is emitted under in `ext` mode: the fixed C

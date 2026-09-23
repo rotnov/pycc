@@ -6,7 +6,11 @@
 //! third artifact mode; `main.rs` keeps the CLI dispatch and `pycc run`'s
 //! own spawn.
 
-use crate::frontend::{self, report_build_failure, resolve_frontend, resolve_frontend_native};
+use crate::embed::{self, layout::EmbedPlatform};
+use crate::frontend::{
+    self, EmbedHost, NeedsInterpreter, report_build_failure, resolve_frontend,
+    resolve_frontend_native,
+};
 use crate::{ext_build, ext_output, memoryview_mode};
 use std::path::Path;
 use std::process::ExitCode;
@@ -40,6 +44,12 @@ use std::process::ExitCode;
 /// needs to read the emitted object back *after* this function returns --
 /// so the path's owner must outlive the call, which only injection (the
 /// same DI convention as `init`'s `dir` parameter) provides.
+///
+/// `embed`: the interpreter an embedded build bundles (Part 1 of #1028).
+/// Injected like `ext`, but always present: whether it is used depends on
+/// the program, not on a flag, and it spawns nothing until the frontend has
+/// found a standard-library CPython import, so a native build never starts
+/// Python.
 pub(crate) fn try_build(
     path: &Path,
     out: &Path,
@@ -47,10 +57,13 @@ pub(crate) fn try_build(
     release: bool,
     obj_path: &Path,
     ext: Option<&ext_build::ExtToolchain>,
+    embed: &embed::EmbedToolchain,
 ) -> Result<(), ExitCode> {
-    // A CPython import only means anything inside a CPython interpreter, so
-    // a native build refuses it -- before codegen, which is allowed to
-    // ignore the item precisely because of this gate. The gate lives inside
+    // A CPython import only means anything inside a CPython interpreter. A
+    // build without `--ext` embeds one when every such import is a standard
+    // library root it can bundle (Part 1 of #1028), and refuses the rest
+    // with `I0403` -- before codegen, which is allowed to ignore the item in
+    // a native build precisely because of this gate. The gate lives inside
     // the frontend seam because that is where the per-file sources are: the
     // `I0403` has to be rendered against whichever file of the program
     // actually wrote the `import`, which for a multi-file program is
@@ -83,9 +96,11 @@ pub(crate) fn try_build(
         Some(_) => Some(resolve_ext_output(out, target)?.module_name),
         None => None,
     };
-    let typed_hir = match ext {
-        Some(_) => resolve_frontend(path, ext_module_name.as_deref()),
-        None => resolve_frontend_native(path),
+    let host = EmbedHost::resolve(target, cfg!(windows));
+    let (typed_hir, NeedsInterpreter(embedded)) = match ext {
+        Some(_) => resolve_frontend(path, ext_module_name.as_deref())
+            .map(|hir| (hir, NeedsInterpreter(false))),
+        None => resolve_frontend_native(path, host),
     }
     .map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
     // Everything `--ext` needs that can fail on the program itself or on
@@ -98,6 +113,13 @@ pub(crate) fn try_build(
         )?),
         None => None,
     };
+    // An embedded build's sidecar is assembled here, before codegen and
+    // before the link, so every embedded-only line runs ahead of the shared
+    // link site below (§4.6 of the #1028 plan).
+    let embed_plan = match embedded {
+        true => Some(embed_plan_or_exit(out, &typed_hir, embed, obj_path)?),
+        false => None,
+    };
     let mir = pycc_mir::build(&typed_hir);
 
     pycc_codegen::compile_to_object_with_options(
@@ -106,7 +128,12 @@ pub(crate) fn try_build(
         &pycc_codegen::CompileOptions {
             target_triple: target.map(str::to_string),
             release,
-            ext: ext.is_some(),
+            // An embedded executable compiles its entry module as the
+            // `__main__` extension module the launcher executes, but with no
+            // export thunks: nothing checked its functions against the
+            // `--ext` boundary (`collect_exports` does not run here).
+            ext: ext.is_some() || embedded,
+            suppress_export_thunks: embedded,
         },
     )
     .map_err(|e| {
@@ -132,12 +159,20 @@ pub(crate) fn try_build(
     if let Some(plan) = &ext_plan {
         cmd.args(&plan.compile_args).args(&plan.link_args);
     }
+    if let Some(plan) = &embed_plan {
+        cmd.args(&plan.compile_args);
+    }
     cmd.arg(obj_path)
         .arg("-L")
         .arg(&rt_lib_dir)
-        .arg("-lpycc_rt")
-        .arg("-o")
-        .arg(link_out);
+        .arg("-lpycc_rt");
+    // The bundled libpython goes after every object that references it: a
+    // GNU `ld` that defaults to `--as-needed` drops a shared library named
+    // before its users.
+    if let Some(plan) = &embed_plan {
+        cmd.args(&plan.link_args);
+    }
+    cmd.arg("-o").arg(link_out);
     add_windows_system_libs(&mut cmd);
     add_linux_system_libs(&mut cmd);
     // #250: failing to *start* the driver (missing `cc`/`clang`, an
@@ -164,6 +199,21 @@ pub(crate) fn try_build(
     } else {
         Err(ExitCode::from(1))
     }
+}
+
+/// Runs [`embed::plan_embed`] for the host platform, reporting its failure
+/// as an environment failure at exit 2.
+fn embed_plan_or_exit(
+    out: &Path,
+    typed_hir: &pycc_hir::HirModule,
+    toolchain: &embed::EmbedToolchain,
+    obj_path: &Path,
+) -> Result<embed::EmbedPlan, ExitCode> {
+    let plan = embed::plan_embed(out, typed_hir, toolchain, EmbedPlatform::HOST, obj_path);
+    plan.map_err(|e| {
+        eprintln!("error: {e}");
+        ExitCode::from(2)
+    })
 }
 
 /// Everything `try_build`'s link step needs that is specific to `--ext`.
@@ -449,6 +499,14 @@ pub(crate) fn find_pycc_rt_lib_dir(
     )
 }
 
+/// An embed toolchain whose interpreter does not exist: a test build that
+/// must never reach the embed probe passes it, so reaching the probe fails
+/// loudly at exit 2 instead of silently starting a host Python.
+#[cfg(test)]
+fn no_python() -> embed::EmbedToolchain {
+    embed::EmbedToolchain::with_interpreter("pycc-test-no-such-python")
+}
+
 #[cfg(test)]
 mod try_build_release_isolation_tests {
     use super::*;
@@ -494,7 +552,8 @@ mod try_build_release_isolation_tests {
         let obj_path = dir.join("obj.o");
 
         // Exactly what `run()` does: `release: false` straight through.
-        try_build(&src, &out, None, false, &obj_path, None).expect("try_build should succeed");
+        try_build(&src, &out, None, false, &obj_path, None, &no_python())
+            .expect("try_build should succeed");
 
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
@@ -742,6 +801,7 @@ mod ext_build_wiring_tests {
             false,
             &dir.join("main.o"),
             Some(&header_less_toolchain(&dir)),
+            &no_python(),
         )
         .expect_err("`/` names no module");
         assert_eq!(code, ExitCode::from(2));
@@ -765,6 +825,7 @@ mod ext_build_wiring_tests {
             false,
             &obj,
             Some(&header_less_toolchain(&dir)),
+            &no_python(),
         )
         .expect_err("no Python.h means the compiler rejects the shim");
         assert_eq!(code, ExitCode::from(1));

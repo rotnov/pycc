@@ -1,5 +1,6 @@
 mod build_pipeline;
 mod cli;
+mod embed;
 mod ext_build;
 mod ext_output;
 mod foreign_import;
@@ -74,6 +75,7 @@ fn main() -> ExitCode {
                 release,
                 &scratch.join("main.o"),
                 toolchain.as_ref(),
+                &embed::EmbedToolchain::from_env(),
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
@@ -308,8 +310,19 @@ fn run(path: &Path, args: &[std::ffi::OsString]) -> ExitCode {
         Ok(scratch) => scratch,
         Err(code) => return code,
     };
+    // An embedded program's sidecar lands at `scratch/out.pycc` and goes
+    // with the scratch directory (Part 1 of #1028).
     let out = scratch.join("out");
-    if let Err(code) = try_build(path, &out, None, false, &scratch.join("main.o"), None) {
+    let embed = embed::EmbedToolchain::from_env();
+    if let Err(code) = try_build(
+        path,
+        &out,
+        None,
+        false,
+        &scratch.join("main.o"),
+        None,
+        &embed,
+    ) {
         return code;
     }
     ExitCode::from(run_built_binary(&out, args))
@@ -344,11 +357,14 @@ fn run_built_binary(out: &Path, args: &[std::ffi::OsString]) -> u8 {
             return 2;
         }
     };
-    // Generated programs currently have no user-controlled non-zero exit
-    // status. Any unsuccessful termination is therefore a runtime panic,
-    // trap, or uncaught failure and maps to CLI_SPEC.md's stable 101 on
+    // Any unsuccessful termination maps to CLI_SPEC.md's stable 101 on
     // every platform, including Unix signal termination where `code()` is
-    // `None` and Windows abort statuses that do not fit in a u8.
+    // `None` and Windows abort statuses that do not fit in a u8. A native
+    // program has no user-controlled non-zero exit status, so there this is
+    // a runtime panic, trap, or uncaught failure. An embedded program's
+    // `sys.exit(n)` is user-controlled (Part 1 of #1028), and `pycc run`
+    // still maps it to 101: preserving `n` is a CLI contract change left out
+    // of that part (docs/CLI_SPEC.md "Exit codes").
     if status.success() { 0 } else { 101 }
 }
 
