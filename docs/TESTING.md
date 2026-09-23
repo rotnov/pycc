@@ -1323,8 +1323,8 @@ only a run of the protocol above can be that.
 
 D-128's transparent interop contract is partly implemented: the embedded
 executable for standard-library roots (#1223, D-248) and the policy surface
-(#1224) exist; the lock and closure (#1225) and Windows embedding (#1226) do
-not. The v0.7 implementation cannot mark its roadmap acceptance complete
+(#1224) and `pycc lock` (#1241, D-249) exist; bundling the locked closure
+(#1242, #1243) and Windows embedding (#1226) do not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
@@ -1334,8 +1334,11 @@ tests that cover it now, or the owner of what is still missing.
   `C0001` today, and a non-standard-library root needs #1225;
 - the produced `pycc.lock` and deployment bundle select the exact intended
   CPython, package, and native-library artifacts and never consult ambient
-  `site-packages` at runtime. *Pending:* #1225 (the standard-library bundle
-  already carries no `site-packages`, D-248);
+  `site-packages` at runtime. *Partly covered:* the lock's closure, integrity
+  and byte stability (`tests/issue_1241_pycc_lock.rs`, the `src/lock/` unit
+  tests). *Pending:* bundling the locked closure, #1242, and its native
+  libraries, #1243 (the standard-library bundle already carries no
+  `site-packages`, D-248);
 - `allowlist` accepts an allowed direct import root, covers its submodules and
   pinned transitive closure, and emits `I0402` for an otherwise-resolvable
   unlisted direct root. *Covered:* acceptance and the unlisted root
