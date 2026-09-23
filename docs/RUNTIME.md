@@ -344,7 +344,7 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   (pinned by a lock once #1225 lands); native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (embedded mode planned v0.7, not implemented; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
+## Transparent CPython interop (embedded mode implemented for standard-library roots and the interop policy; arbitrary-package closures planned v0.7; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 

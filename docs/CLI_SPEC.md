@@ -16,7 +16,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc version --verbose` | compiler, LLVM, target list |
 
 A program with no CPython-backed import writes a native binary at `OUT`, and
-so does every `deny`/`--pure` build, since those policies reject every
+so does every successful `deny`/`--pure` build, since those policies reject every
 CPython-backed import with `I0402` (#1224). A program whose CPython-backed imports
 are all standard-library roots builds an **embedded executable** on a macOS or
 Linux host without `--target` (Part 1 of #1028, D-128's `auto` default): the
