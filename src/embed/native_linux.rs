@@ -393,6 +393,8 @@ fn candidate(path: &Path, machine: u16) -> Option<ElfImage> {
     (image.machine == machine).then_some(image)
 }
 
-#[cfg(test)]
+// Unix only: the fixtures put host paths in `DT_RUNPATH`, which splits on
+// `:`, and a Windows host refuses an embedded build anyway (#1226).
+#[cfg(all(test, unix))]
 #[path = "native_linux_tests.rs"]
 mod tests;

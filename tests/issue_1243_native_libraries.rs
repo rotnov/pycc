@@ -156,17 +156,15 @@ fn a_closure_needing_outside_natives_runs_from_the_sidecar_and_matches_cpython_3
     compile(&nat2, "int nat2(void) { return 21; }\n", &[], &[]);
     let nat1_source = "int nat2(void);\nint nat1(void) { return nat2() * 2; }\n";
     compile(&nat1, nat1_source, &[], &[&nat2]);
-    let module = format!(
-        "#include <Python.h>\nint nat1(void);\n\
-         static PyObject *value(PyObject *self, PyObject *args) {{ return PyLong_FromLong(nat1()); }}\n\
-         static PyMethodDef methods[] = {{{{\"value\", value, METH_NOARGS, NULL}}, {{NULL}}}};\n\
-         static struct PyModuleDef def = {{PyModuleDef_HEAD_INIT, \"_nat\", NULL, -1, methods}};\n\
-         PyMODINIT_FUNC PyInit__nat(void) {{ return PyModule_Create(&def); }}\n"
-    );
+    let module = "#include <Python.h>\nint nat1(void);\n\
+         static PyObject *value(PyObject *self, PyObject *args) { return PyLong_FromLong(nat1()); }\n\
+         static PyMethodDef methods[] = {{\"value\", value, METH_NOARGS, NULL}, {NULL}};\n\
+         static struct PyModuleDef def = {PyModuleDef_HEAD_INIT, \"_nat\", NULL, -1, methods};\n\
+         PyMODINIT_FUNC PyInit__nat(void) { return PyModule_Create(&def); }\n";
     let built = dir.join("build").join(format!("_nat{suffix}"));
     let mut flags = vec!["-I", include.as_str()];
     flags.extend(undefined);
-    compile(&built, &module, &flags, &[&nat1]);
+    compile(&built, module, &flags, &[&nat1]);
     let so = std::fs::read(&built).expect("read the extension");
     let so_path = format!("tinynat/_nat{suffix}");
     let init = b"from tinynat._nat import value\n";

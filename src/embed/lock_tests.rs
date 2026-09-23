@@ -90,6 +90,7 @@ impl Env {
         .unwrap_or_else(|_| panic!("`pycc lock` must succeed"));
     }
 
+    #[cfg(unix)]
     fn lock_path(&self) -> PathBuf {
         self.entry.with_file_name("pycc.lock")
     }
@@ -257,11 +258,14 @@ fn an_interpreter_field_mismatch_is_refused_after_the_probe() {
     assert!(err.contains("3.14.9"), "{err}");
 }
 
+#[cfg(unix)]
 const LINUX: (&str, &str) = ("x86_64", "linux");
 
-/// A Linux build over synthetic ELF images, on every host: two
-/// distributions whose extensions need `libnat1`, which needs `libnat2`,
-/// both outside the interpreter and the system directory (#1243).
+/// A Linux build over synthetic ELF images, on every Unix host (a Windows
+/// path would split `DT_RUNPATH` at its drive colon): two distributions
+/// whose extensions need `libnat1`, which needs `libnat2`, both outside the
+/// interpreter and the system directory (#1243).
+#[cfg(unix)]
 fn linux_native_env(tag: &str) -> (Env, EmbedToolchain) {
     use super::super::elf::fixture::{ElfSpec, elf_bytes};
     let env = Env::bare(tag, "import tinynat\nimport tinyb\n");
@@ -293,6 +297,7 @@ fn linux_native_env(tag: &str) -> (Env, EmbedToolchain) {
     (env, toolchain)
 }
 
+#[cfg(unix)]
 fn lock_linux(env: &Env, toolchain: &EmbedToolchain, check: bool) -> Result<(), String> {
     use crate::lock::LockFailure::Stale;
     let result =
@@ -302,6 +307,7 @@ fn lock_linux(env: &Env, toolchain: &EmbedToolchain, check: bool) -> Result<(), 
     result.map_err(|f| if let Stale(m) = f { m } else { String::new() })
 }
 
+#[cfg(unix)]
 fn embed_linux(env: &Env, toolchain: &EmbedToolchain) -> Result<EmbedPlan, String> {
     let hir = crate::frontend::lock_frontend(&env.entry, InteropCli::default())
         .unwrap_or_else(|_| panic!("the fixture must type-check"));
@@ -320,6 +326,7 @@ fn embed_linux(env: &Env, toolchain: &EmbedToolchain) -> Result<EmbedPlan, Strin
 /// `pycc lock` records both natives for both distributions, the build
 /// derives the same entries, copies both into `lib/` and links them into
 /// the executable, and `pycc lock --check` agrees with what it wrote.
+#[cfg(unix)]
 #[test]
 fn a_linux_build_copies_and_preloads_its_natives() {
     let (env, toolchain) = linux_native_env("embed_linux_native");
@@ -351,6 +358,7 @@ fn a_linux_build_copies_and_preloads_its_natives() {
 
 /// A native changed after `pycc lock` is refused by the build, which keeps
 /// the previous sidecar, and reported stale by `pycc lock --check`.
+#[cfg(unix)]
 #[test]
 fn a_linux_native_changed_after_the_lock_is_refused() {
     let (env, toolchain) = linux_native_env("embed_linux_native_stale");

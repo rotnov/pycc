@@ -211,6 +211,7 @@ pub(crate) fn search_dirs(value: &str, origin: &Path) -> Vec<(PathBuf, bool)> {
 }
 
 #[cfg(test)]
+#[cfg_attr(windows, allow(dead_code))]
 #[path = "elf_fixture.rs"]
 pub(crate) mod fixture;
 

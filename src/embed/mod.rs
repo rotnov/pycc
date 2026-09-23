@@ -144,7 +144,7 @@ impl EmbedToolchain {
 
     /// The same toolchain, scanning Linux images against `env` instead of
     /// the build host's library directories.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_linux_env(mut self, env: LinuxEnv) -> Self {
         self.linux_env_override = Some(env);
         self
