@@ -460,7 +460,9 @@ fn a_bigint_store_index_is_the_d141_boundary_overflow() {
 /// lowered as the plain `b[i] = b[i] + x`, which *is* that one
 /// `HirStmt::DictSet` node, so the walk sees it and acquires the parameter
 /// writable (pinned hosted in `tests/issue_1018_aug_assign.rs`). Its slice
-/// form stays refused, and is listed here.
+/// form stays refused, and is listed here. A chained store `b[0] = b[1] = v`
+/// is not among them either: since #1213 it is lowered as one `DictSet` per
+/// target (pinned hosted in `tests/issue_1213_chain_assign.rs`).
 #[test]
 fn no_other_store_syntax_reaches_a_buffer_element() {
     for source in [
@@ -468,8 +470,6 @@ fn no_other_store_syntax_reaches_a_buffer_element() {
         "def f(b: memoryview) -> None:\n    b[0:2] += 1.0\n",
         // A tuple target.
         "def f(b: memoryview) -> None:\n    b[0], b[1] = 1.0, 2.0\n",
-        // Chained assignment.
-        "def f(b: memoryview) -> None:\n    b[0] = b[1] = 1.0\n",
         // A slice target.
         "def f(b: memoryview) -> None:\n    b[0:2] = [1.0, 2.0]\n",
     ] {

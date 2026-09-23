@@ -90,6 +90,8 @@
 
 mod assign;
 mod aug_assign;
+pub(crate) mod chain_assign;
+pub(crate) use chain_assign::lower_stmt_expanded;
 mod exception;
 mod for_loop;
 mod type_checking;
@@ -172,6 +174,12 @@ pub(crate) fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> 
     }
 }
 
+/// Lowers one statement to one HIR statement.
+///
+/// # Panics
+///
+/// On a multi-target `Stmt::Assign` (a chained assignment), which only
+/// [`lower_stmt_expanded`] accepts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_stmt(
     stmt: &Stmt,
@@ -795,24 +803,23 @@ pub(crate) fn lower_body(
     // pass` and `def __set_name__: pass` to compile, which is required for
     // PEP 487/PEP 487 hook recognition. A body consisting solely of `pass`
     // produces an empty `Vec<HirStmt>`, which is a valid no-op body.
-    body.iter()
-        .filter(|stmt| !matches!(stmt, Stmt::Pass(_)))
-        .map(|stmt| {
-            lower_stmt(
-                stmt,
-                aliases,
-                in_loop,
-                in_function,
-                in_finally,
-                except_star,
-                class_name,
-                type_param,
-                class_defs,
-                imports,
-                signatures,
-            )
-        })
-        .collect()
+    let mut lowered = Vec::with_capacity(body.len());
+    for stmt in body.iter().filter(|stmt| !matches!(stmt, Stmt::Pass(_))) {
+        lowered.extend(lower_stmt_expanded(
+            stmt,
+            aliases,
+            in_loop,
+            in_function,
+            in_finally,
+            except_star,
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+            signatures,
+        )?);
+    }
+    Ok(lowered)
 }
 
 #[allow(clippy::too_many_arguments)]

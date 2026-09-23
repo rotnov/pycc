@@ -384,3 +384,25 @@ fn aug_assign_targets_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/aug_assign_targets.py"
     );
 }
+
+// #1213 (Part 5 of #1018): chained assignment. The value is evaluated once
+// and assigned left to right, each target's own base and key evaluated as
+// it is assigned: names, attributes (with a property setter and `__init__`'s
+// pre-scan), a `dict[str, int]` subscript and the key-rebinding traps.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn chain_assign_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chain_assign.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("chain_assign_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/chain_assign.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("chain_assign_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/chain_assign.py"
+    );
+}

@@ -1,12 +1,15 @@
-//! The one purity predicate two rules share: whether evaluating an
+//! The one purity predicate three rules share: whether evaluating an
 //! expression early, late or twice can be observed.
 //!
 //! Keyword binding (#1204, `docs/TYPE_SYSTEM.md` "Keyword argument
-//! evaluation order") uses it to decide whether moving a value is safe, and
+//! evaluation order") uses it to decide whether moving a value is safe,
 //! augmented assignment (#1209, "Augmented assignment") uses it to decide
-//! whether a subscript index may be read twice by the desugared assignment.
-//! Widening it widens both rules at once, so it must stay limited to
-//! expressions that can neither raise differently nor have an effect.
+//! whether a subscript index may be read twice by the desugared assignment,
+//! and chained assignment (#1213, "Chained assignment") uses it to decide
+//! whether the value may be copied to every target instead of bound once to
+//! a temporary. Widening it widens all three rules at once, so it must stay
+//! limited to expressions that can neither raise differently nor have an
+//! effect.
 
 use pycc_ast::Expr;
 

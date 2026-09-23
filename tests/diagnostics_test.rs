@@ -852,6 +852,11 @@ fn c0001_multi_target_assign() {
 }
 
 #[test]
+fn c0001_chain_assign_empty_container() {
+    assert_diagnostic_matches_fixture("c0001_chain_assign_empty_container");
+}
+
+#[test]
 fn c0001_tuple_assign_target() {
     assert_diagnostic_matches_fixture("c0001_tuple_assign_target");
 }

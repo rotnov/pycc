@@ -18,7 +18,8 @@ use pycc_diag::Diagnostic;
 /// Lowers `assign` (`Stmt::Assign`) to `HirStmt::Assign`, a comprehension
 /// assignment, `HirStmt::DictSet` or `HirStmt::AttrSet`, by target shape.
 /// The walrus-placement check `lower_stmt` runs on every lowered statement
-/// still applies to the result.
+/// still applies to the result. `assign` has exactly one target: a chained
+/// assignment (#1213) reaches here only as its single-target pieces.
 pub(super) fn lower_assign(
     assign: &StmtAssign,
     in_function: bool,
@@ -26,15 +27,8 @@ pub(super) fn lower_assign(
     imports: &[ImportBinding],
     signatures: &SignatureTable,
 ) -> Result<HirStmt, Diagnostic> {
-    let [target] = assign.targets.as_slice() else {
-        return Err(unsupported(
-            format!(
-                "only a single assignment target is supported so far, got {} targets",
-                assign.targets.len()
-            ),
-            assign.range,
-        ));
-    };
+    let [target] = <&[Expr; 1]>::try_from(assign.targets.as_slice())
+        .expect("lower_stmt_expanded desugars a multi-target (chained) assignment before lowering");
     Ok(match target {
         Expr::Name(name) => match assign.value.as_ref() {
             // Comprehension expressions are recognized only in this
@@ -118,8 +112,8 @@ pub(super) fn lower_assign(
         // used to reject any non-bare-name `Stmt::Assign` target
         // outright ("only assigning to a bare name is supported so
         // far"). The remaining unsupported `Stmt::Assign` target
-        // shape -- multi-target tuple unpacking, e.g. `a, b = 1, 2`
-        // -- still reaches the `other => ..` catch-all just below
+        // shape -- tuple unpacking, e.g. `a, b = 1, 2`, alone or as one
+        // piece of a chain -- still reaches the `other => ..` catch-all just below
         // and is covered by
         // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
         // `crates/pycc_hir/src/tests.rs`.
