@@ -154,4 +154,9 @@ fn lexical_normalization_resolves_dots() {
         normalize_lexically(Path::new("/a/b/./c/../../d")),
         PathBuf::from("/a/d")
     );
+    // `components()` keeps only a leading `.`; it is dropped too.
+    assert_eq!(
+        normalize_lexically(Path::new("./x/../y")),
+        PathBuf::from("y")
+    );
 }

@@ -245,9 +245,11 @@ fn a_reinstalled_package_makes_check_fail_and_lock_update() {
     let dir = ScratchDir::new("lock_reinstalled").expect("scratch");
     let python = fake_python(&dir);
     tiny_closure(&python.site);
-    std::fs::write(dir.join("m.py"), "import tinypkg\n").expect("write");
+    // `import math` is a pycc_std binding, not a CPython-backed root.
+    std::fs::write(dir.join("m.py"), "import math\nimport tinypkg\n").expect("write");
     assert_eq!(lock(&python, &dir, &["m.py"]).status.code(), Some(0));
     let before = read_lock(&dir);
+    assert!(!before.contains("\"math\""), "{before}");
     // A reinstalled build: a payload byte and its RECORD hash change together.
     std::fs::remove_dir_all(python.site.join("tinypkg-1.0.dist-info")).expect("remove");
     write_dist(

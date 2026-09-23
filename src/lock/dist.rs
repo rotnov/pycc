@@ -62,10 +62,12 @@ pub(crate) fn scan_site(site: &Site) -> Result<Vec<DistInfo>, String> {
     })?;
     let mut found = Vec::new();
     for entry in entries.flatten() {
-        let Some(dir_name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        let Some(stem) = dir_name.strip_suffix(".dist-info") else {
+        // A non-UTF-8 name cannot be a dist-info directory either.
+        let file_name = entry.file_name();
+        let Some(stem) = file_name
+            .to_str()
+            .and_then(|n| n.strip_suffix(".dist-info"))
+        else {
             continue;
         };
         let Some((name, _version)) = stem.rsplit_once('-') else {
@@ -76,7 +78,7 @@ pub(crate) fn scan_site(site: &Site) -> Result<Vec<DistInfo>, String> {
         }
         found.push(DistInfo {
             name: normalize_name(name),
-            dir_name,
+            dir_name: format!("{stem}.dist-info"),
             site: site.clone(),
         });
     }
