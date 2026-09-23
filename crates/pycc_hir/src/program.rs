@@ -147,7 +147,13 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     for (index, input) in inputs.iter().enumerate() {
         for (name, span) in &input.module.deleted_top_level {
             if let Some(other) = inputs.iter().enumerate().find(|(other, candidate)| {
-                *other != index && candidate.module.mentioned_names.contains(name)
+                *other != index
+                    && candidate
+                        .module
+                        .mentioned_names
+                        .as_ref()
+                        .expect("the driver fills every module's mentions when one deletes a name")
+                        .contains(name)
             }) {
                 return Err(vec![(
                     index,

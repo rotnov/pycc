@@ -178,14 +178,23 @@ pub(crate) fn check_module_deletions(
 ) -> Result<Vec<(String, Span)>, Diagnostic> {
     let mut scan = ModuleDeleteScan::default();
     scan.visit_body(&module.body);
+    // The common case -- no module-scope `del` -- never walks a `def` or
+    // `class` body: this pass runs on every module the frontend lowers.
+    if scan.deleted.is_empty() {
+        return Ok(scan.deleted);
+    }
+    let mut mentioned_in_defs = NameScan::default();
+    for def in &scan.defs {
+        mentioned_in_defs.visit_stmt(def);
+    }
     for (name, span) in &scan.deleted {
-        if scan.imported.contains(name) {
+        if scan.imported.contains(name.as_str()) {
             return Err(unsupported(
                 format!("a `del` of the imported name `{name}` is not supported yet"),
                 span.start..span.end,
             ));
         }
-        if scan.mentioned_in_defs.contains(name) {
+        if mentioned_in_defs.names.contains(name.as_str()) {
             return Err(unsupported(
                 format!(
                     "a module-level `del {name}` is not supported when a function or class of \
@@ -200,23 +209,19 @@ pub(crate) fn check_module_deletions(
 }
 
 /// One pass over a module's statements: `del` targets and `import` bindings
-/// at module scope, and every name mentioned inside a `def`/`class`
-/// statement.
+/// at module scope, and every `def`/`class` statement, whose body is scanned
+/// for mentions only when the module deletes something.
 #[derive(Default)]
-struct ModuleDeleteScan {
+struct ModuleDeleteScan<'a> {
     deleted: Vec<(String, Span)>,
-    imported: HashSet<String>,
-    mentioned_in_defs: HashSet<String>,
+    imported: HashSet<&'a str>,
+    defs: Vec<&'a Stmt>,
 }
 
-impl<'a> Visitor<'a> for ModuleDeleteScan {
+impl<'a> Visitor<'a> for ModuleDeleteScan<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
-            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {
-                let mut names = NameScan::default();
-                names.visit_stmt(stmt);
-                self.mentioned_in_defs.extend(names.names);
-            }
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => self.defs.push(stmt),
             // An import binds a module marker, a registry symbol, a project
             // definition or a CPython object -- none of them a plain value
             // binding the checker can demote -- so a module-scope `del` of
@@ -245,10 +250,10 @@ impl<'a> Visitor<'a> for ModuleDeleteScan {
 
 /// The name an `import` alias binds: its `as` name, or else the first
 /// component of the dotted module path (`import a.b` binds `a`).
-fn import_local_name(alias: &pycc_ast::Alias) -> String {
+fn import_local_name(alias: &pycc_ast::Alias) -> &str {
     match &alias.asname {
-        Some(asname) => asname.to_string(),
-        None => alias.name.split('.').next().unwrap_or_default().to_string(),
+        Some(asname) => asname.as_str(),
+        None => alias.name.split('.').next().unwrap_or_default(),
     }
 }
 
@@ -276,25 +281,28 @@ pub(crate) fn collect_target_names(target: &Expr, record: &mut impl FnMut(&str))
 /// deletable (`pycc_types`' allowlist refuses functions and classes, and
 /// [`check_module_deletions`] refuses a module-scope `del` of an import alias)
 /// or already reach `definition_spans` and `program::link`'s collision guard.
+///
+/// The names borrow from the AST, so a name mentioned many times costs one
+/// set entry and no allocation.
 #[derive(Default)]
-struct NameScan {
-    names: HashSet<String>,
+struct NameScan<'a> {
+    names: HashSet<&'a str>,
 }
 
-impl<'a> Visitor<'a> for NameScan {
+impl<'a> Visitor<'a> for NameScan<'a> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         if let Expr::Name(name) = expr {
-            self.names.insert(name.id.to_string());
+            self.names.insert(name.id.as_str());
         }
         visitor::walk_expr(self, expr);
     }
 }
 
-/// Every `Expr::Name` id `module` mentions anywhere, published on
-/// `LoweredModule::mentioned_names` for `program::link`'s cross-module `del`
+/// Every `Expr::Name` id `module` mentions anywhere, for
+/// `LoweredModule::mentioned_names` and `program::link`'s cross-module `del`
 /// rule.
-pub(crate) fn mentioned_names(module: &ModModule) -> BTreeSet<String> {
+pub fn mentioned_names(module: &ModModule) -> BTreeSet<String> {
     let mut scan = NameScan::default();
     scan.visit_body(&module.body);
-    scan.names.into_iter().collect()
+    scan.names.into_iter().map(str::to_owned).collect()
 }

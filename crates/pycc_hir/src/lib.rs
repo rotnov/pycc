@@ -49,7 +49,7 @@ pub(crate) use import::{
 };
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
 pub use program::{LinkInput, finalize, link};
-pub use stmt::del::deleted_names;
+pub use stmt::del::{deleted_names, mentioned_names};
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,
     is_abc_base_name, is_builtin_type_name, is_enum_base_name, is_protocol_base_name,

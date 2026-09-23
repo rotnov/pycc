@@ -147,8 +147,12 @@ pub struct LoweredModule {
     /// namespace, so that module's read would see the deleted global.
     pub deleted_top_level: Vec<(String, Span)>,
     /// #1244: every name this module mentions anywhere (each `Expr::Name`
-    /// id, a read or a store), for the same `program::link` rule.
-    pub mentioned_names: BTreeSet<String>,
+    /// id, a read or a store), for the same `program::link` rule. `None` from
+    /// `lower_module`: the walk costs every module on every build, and only a
+    /// multi-module program in which some module deletes a top-level name
+    /// needs it, so the driver fills it from [`crate::mentioned_names`] in
+    /// exactly that case, before calling `program::link`.
+    pub mentioned_names: Option<BTreeSet<String>>,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -454,7 +458,7 @@ pub fn lower_module(
         definition_spans,
         container_method_names,
         deleted_top_level,
-        mentioned_names: stmt::del::mentioned_names(module),
+        mentioned_names: None,
     })
 }
 

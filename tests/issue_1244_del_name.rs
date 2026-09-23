@@ -31,9 +31,9 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
 }
 
-/// Builds `dir/<entry>` into `dir/app`, runs it, runs CPython on the same
-/// entry module, and returns both standard outputs.
-fn build_run_and_oracle(dir: &Path, entry: &str) -> (String, String) {
+/// Builds `dir/<entry>` into `dir/app`, runs it, and returns its standard
+/// output.
+fn build_and_run(dir: &Path, entry: &str) -> String {
     let build = pycc()
         .arg("build")
         .arg(dir.join(entry))
@@ -46,13 +46,20 @@ fn build_run_and_oracle(dir: &Path, entry: &str) -> (String, String) {
         .output()
         .expect("the program should spawn");
     assert!(run.status.success(), "{}", rendered(&run));
+    stdout(&run)
+}
+
+/// [`build_and_run`], plus CPython on the same entry module; returns both
+/// standard outputs.
+fn build_run_and_oracle(dir: &Path, entry: &str) -> (String, String) {
+    let pycc_out = build_and_run(dir, entry);
     let oracle = python()
         .arg(entry)
         .current_dir(dir)
         .output()
         .expect("python3 should spawn");
     assert!(oracle.status.success(), "{}", rendered(&oracle));
-    (stdout(&run), stdout(&oracle))
+    (pycc_out, stdout(&oracle))
 }
 
 /// Runs `pycc check` on the entry module `a.py` of `files` and returns the
@@ -74,6 +81,8 @@ fn check_fails(category: &str, files: &[(&str, &str)]) -> String {
 /// A generic function whose body deletes a local is monomorphized and runs
 /// as CPython does. It is kept out of the fixture because a generic
 /// function beside the fixture's enum loop fails to build today (#1252).
+/// The expected text is CPython 3.14.7's; it is not re-run here because the
+/// `python3` of an unpinned CI job may predate PEP 695's `def f[T]`.
 #[test]
 fn a_generic_function_that_deletes_a_local_matches_cpython() {
     let dir = ScratchDir::new("e2e_1244_generic").expect("scratch");
@@ -83,9 +92,7 @@ fn a_generic_function_that_deletes_a_local_matches_cpython() {
          print(ident(4))\nprint(ident(\"s\"))\n",
     )
     .expect("write the subject");
-    let (pycc_out, cpython_out) = build_run_and_oracle(&dir, "a.py");
-    assert_eq!(pycc_out, cpython_out);
-    assert_eq!(pycc_out, "4\ns\n");
+    assert_eq!(build_and_run(&dir, "a.py"), "4\ns\n");
 }
 
 /// A module may delete and rebind a top-level name no other module of the
@@ -336,7 +343,8 @@ fn every_del_refusal_is_named() {
 }
 
 /// The last `except*` handler may read a name and then delete it: no later
-/// handler runs after it.
+/// handler runs after it. As above, the expected text is CPython 3.14.7's:
+/// an unpinned `python3` may predate PEP 654's `except*`.
 #[test]
 fn the_last_except_star_handler_may_delete_what_it_read() {
     let dir = ScratchDir::new("e2e_1244_except_star").expect("scratch");
@@ -346,7 +354,5 @@ fn the_last_except_star_handler_may_delete_what_it_read() {
          except* TypeError:\n    print(x)\n    del x\nprint(1)\n",
     )
     .expect("write the subject");
-    let (pycc_out, cpython_out) = build_run_and_oracle(&dir, "a.py");
-    assert_eq!(pycc_out, cpython_out);
-    assert_eq!(pycc_out, "1\n");
+    assert_eq!(build_and_run(&dir, "a.py"), "1\n");
 }
