@@ -11,6 +11,7 @@ use crate::frontend::{
     self, EmbedHost, NeedsInterpreter, report_build_failure, resolve_frontend,
     resolve_frontend_native,
 };
+use crate::interop_policy::InteropCli;
 use crate::{ext_build, ext_output, memoryview_mode};
 use std::path::Path;
 use std::process::ExitCode;
@@ -50,6 +51,11 @@ use std::process::ExitCode;
 /// the program, not on a flag, and it spawns nothing until the frontend has
 /// found a standard-library CPython import, so a native build never starts
 /// Python.
+///
+/// `interop`: the D-128 interop flags (#1224). They govern only a build
+/// without `--ext`; clap rejects them together with `--ext`, and the `--ext`
+/// frontend never reads them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn try_build(
     path: &Path,
     out: &Path,
@@ -58,6 +64,7 @@ pub(crate) fn try_build(
     obj_path: &Path,
     ext: Option<&ext_build::ExtToolchain>,
     embed: &embed::EmbedToolchain,
+    interop: InteropCli,
 ) -> Result<(), ExitCode> {
     // A CPython import only means anything inside a CPython interpreter. A
     // build without `--ext` embeds one when every such import is a standard
@@ -100,7 +107,7 @@ pub(crate) fn try_build(
     let (typed_hir, NeedsInterpreter(embedded)) = match ext {
         Some(_) => resolve_frontend(path, ext_module_name.as_deref())
             .map(|hir| (hir, NeedsInterpreter(false))),
-        None => resolve_frontend_native(path, host),
+        None => resolve_frontend_native(path, host, interop),
     }
     .map_err(|failure| ExitCode::from(report_build_failure(failure)))?;
     // Everything `--ext` needs that can fail on the program itself or on
@@ -552,8 +559,17 @@ mod try_build_release_isolation_tests {
         let obj_path = dir.join("obj.o");
 
         // Exactly what `run()` does: `release: false` straight through.
-        try_build(&src, &out, None, false, &obj_path, None, &no_python())
-            .expect("try_build should succeed");
+        try_build(
+            &src,
+            &out,
+            None,
+            false,
+            &obj_path,
+            None,
+            &no_python(),
+            InteropCli::default(),
+        )
+        .expect("try_build should succeed");
 
         let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
 
@@ -802,6 +818,7 @@ mod ext_build_wiring_tests {
             &dir.join("main.o"),
             Some(&header_less_toolchain(&dir)),
             &no_python(),
+            InteropCli::default(),
         )
         .expect_err("`/` names no module");
         assert_eq!(code, ExitCode::from(2));
@@ -826,6 +843,7 @@ mod ext_build_wiring_tests {
             &obj,
             Some(&header_less_toolchain(&dir)),
             &no_python(),
+            InteropCli::default(),
         )
         .expect_err("no Python.h means the compiler rejects the shim");
         assert_eq!(code, ExitCode::from(1));
@@ -875,6 +893,7 @@ mod embed_build_wiring_tests {
             &dir.join("main.o"),
             None,
             &toolchain,
+            InteropCli::default(),
         )
         .expect_err("the stub Python.h makes the compiler reject the launcher");
         assert_eq!(code, ExitCode::from(1));
@@ -899,6 +918,7 @@ mod embed_build_wiring_tests {
             &dir.join("main.o"),
             None,
             &no_python(),
+            InteropCli::default(),
         )
         .expect_err("no interpreter");
         assert_eq!(code, ExitCode::from(2));
@@ -927,6 +947,7 @@ mod embed_build_windows_tests {
             &dir.join("main.o"),
             None,
             &no_python(),
+            InteropCli::default(),
         )
         .expect_err("refused on a Windows host");
         assert_eq!(code, ExitCode::from(1));

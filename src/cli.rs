@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use crate::interop_policy::{InteropCli, InteropPolicy};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -17,6 +18,32 @@ pub enum ErrorFormat {
 pub enum OutputFormat {
     Human,
     Json,
+}
+
+/// D-128's interop flags (#1224), shared by `build`, `run` and `check`.
+/// `docs/CLI_SPEC.md`'s `pycc.toml` `[interop]` section is the canonical
+/// statement of how they combine with the manifest.
+#[derive(Args, Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InteropFlags {
+    /// The interop policy for CPython-backed imports, overriding
+    /// `pycc.toml`'s `[interop] policy`: `auto` admits every one the build
+    /// can embed, `allowlist` only the roots `[interop] allow` lists, `deny`
+    /// none.
+    #[arg(long, value_enum)]
+    pub interop_policy: Option<InteropPolicy>,
+    /// Shorthand for `--interop-policy deny`; rejected together with any
+    /// explicit `--interop-policy`, in either order.
+    #[arg(long, conflicts_with = "interop_policy")]
+    pub pure: bool,
+}
+
+impl InteropFlags {
+    pub fn into_cli(self) -> InteropCli {
+        InteropCli {
+            policy: self.interop_policy,
+            pure: self.pure,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -64,8 +91,14 @@ pub enum Command {
         /// derived. `docs/RUNTIME.md`'s `ext` boundary section is the
         /// canonical admissibility matrix for what the boundary carries;
         /// any signature outside it is a `C0003` capability gap.
-        #[arg(long)]
+        ///
+        /// The interop policy governs only the embedded mode, so `--ext`
+        /// is rejected together with `--interop-policy` or `--pure` (D-244
+        /// rule 3).
+        #[arg(long, conflicts_with_all = ["interop_policy", "pure"])]
         ext: bool,
+        #[command(flatten)]
+        interop: InteropFlags,
     },
     Run {
         path: PathBuf,
@@ -86,26 +119,29 @@ pub enum Command {
         /// error. `std::process::Command::args` accepts `OsStr`/`OsString`
         /// directly, so nothing downstream needs to re-decode these.
         ///
-        /// #824 item 1 also asked whether `trailing_var_arg` should require
-        /// an explicit `--` before capturing anything (so a bare `pycc run
-        /// app.py extra` would need to become `pycc run app.py -- extra`).
-        /// Deliberately kept as-is: `pycc run` has no flags of its own
-        /// today, `trailing_var_arg` only captures a value once `path` (the
-        /// one preceding positional) is already filled, and
-        /// `allow_hyphen_values` guarantees this arm accepts a value that
-        /// looks like a flag either way -- there is no `pycc`-recognized
-        /// flag a bare trailing value could accidentally shadow. Requiring
-        /// `--` here would add ceremony without preventing any actual
-        /// ambiguity; if `run` ever gains its own flags, this call should
-        /// be revisited.
+        /// #824 item 1 asked whether `trailing_var_arg` should require an
+        /// explicit `--` before capturing anything. It still does not, but
+        /// since `run` gained its own flags (#1224) the capture has a
+        /// window: pycc flags (`--pure`, `--interop-policy`) are recognized
+        /// before `PATH` and between `PATH` and the first forwarded value;
+        /// the first forwarded value and everything after it are forwarded,
+        /// and `--` forwards a value that shares a pycc flag's name
+        /// (`pycc run app.py -- --pure`). A misspelled pycc flag after
+        /// `PATH` is therefore forwarded like any other hyphen value, and so
+        /// is every flag after it. `docs/CLI_SPEC.md`'s `run` contract is
+        /// the canonical statement.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<OsString>,
+        #[command(flatten)]
+        interop: InteropFlags,
     },
     Check {
         paths: Vec<PathBuf>,
         /// CLI_SPEC.md's diagnostic-output contract: "human" (default) or "json".
         #[arg(long, value_enum, default_value = "human")]
         error_format: ErrorFormat,
+        #[command(flatten)]
+        interop: InteropFlags,
     },
     Test,
     Explain {
@@ -127,7 +163,7 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, ErrorFormat, OsString, OutputFormat};
+    use super::{Cli, Command, ErrorFormat, InteropFlags, InteropPolicy, OsString, OutputFormat};
     use clap::Parser;
 
     #[cfg(unix)]
@@ -236,7 +272,8 @@ mod tests {
             Command::Check {
                 error_format: ErrorFormat::Json,
                 paths,
-            } if paths.len() == 2
+                interop,
+            } if paths.len() == 2 && interop == InteropFlags::default()
         ));
     }
 
@@ -286,7 +323,7 @@ mod tests {
 
     fn parsed_run(command: Command) -> Option<(std::path::PathBuf, Vec<OsString>)> {
         match command {
-            Command::Run { path, args } => Some((path, args)),
+            Command::Run { path, args, .. } => Some((path, args)),
             _ => None,
         }
     }
@@ -355,10 +392,10 @@ mod tests {
 
     #[test]
     fn run_captures_a_trailing_arg_without_requiring_an_explicit_separator() {
-        // CLI_SPEC.md's #824 note: `pycc run` has no flags of its own, so
-        // `trailing_var_arg` captures a value that follows `path` whether
-        // or not `--` precedes it -- `--` documents the always-safe form,
-        // it is not required today.
+        // CLI_SPEC.md's #824 note: `trailing_var_arg` captures a value that
+        // follows `path` whether or not `--` precedes it -- `--` documents
+        // the always-safe form, and is required only to forward a value
+        // that shares a pycc flag's name (#1224).
         let cli = Cli::try_parse_from(["pycc", "run", "app.py", "extra"]).unwrap();
         let (path, args) = parsed_run(cli.command).unwrap();
         assert_eq!(path, std::path::PathBuf::from("app.py"));
@@ -388,5 +425,156 @@ mod tests {
 
         assert_eq!(args.len(), 1);
         assert_eq!(args[0].as_bytes(), bad_arg.as_bytes());
+    }
+
+    fn parsed_run_interop(command: Command) -> Option<(InteropFlags, Vec<OsString>)> {
+        match command {
+            Command::Run { interop, args, .. } => Some((interop, args)),
+            _ => None,
+        }
+    }
+
+    fn run_interop(argv: &[&str]) -> (InteropFlags, Vec<OsString>) {
+        let cli = Cli::try_parse_from(argv).expect("the command line parses");
+        parsed_run_interop(cli.command).expect("a run command")
+    }
+
+    const PURE: InteropFlags = InteropFlags {
+        interop_policy: None,
+        pure: true,
+    };
+
+    #[test]
+    fn run_consumes_a_pycc_flag_before_or_right_after_path() {
+        // #1224: once `run` has flags, a pycc flag is recognized before
+        // `PATH` and between `PATH` and the first forwarded value.
+        for argv in [
+            ["pycc", "run", "app.py", "--pure"],
+            ["pycc", "run", "--pure", "app.py"],
+        ] {
+            let (interop, args) = run_interop(&argv);
+            assert_eq!(interop, PURE, "{argv:?}");
+            assert!(args.is_empty(), "{argv:?}");
+        }
+        assert!(parsed_run_interop(Command::Clean).is_none());
+        let (interop, _) = run_interop(&["pycc", "run", "app.py", "--interop-policy", "allowlist"]);
+        assert_eq!(interop.interop_policy, Some(InteropPolicy::Allowlist));
+        assert_eq!(interop.into_cli().policy, Some(InteropPolicy::Allowlist));
+        assert!(!interop.into_cli().pure);
+    }
+
+    #[test]
+    fn run_forwards_a_pycc_flag_after_a_separator_or_a_forwarded_value() {
+        let (interop, args) = run_interop(&["pycc", "run", "app.py", "--", "--pure"]);
+        assert_eq!(interop, InteropFlags::default());
+        assert_eq!(args, vec![OsString::from("--pure")]);
+
+        let (interop, args) = run_interop(&["pycc", "run", "app.py", "x", "--pure"]);
+        assert_eq!(interop, InteropFlags::default());
+        assert_eq!(args, vec![OsString::from("x"), OsString::from("--pure")]);
+
+        // Not a conflict: everything from the first forwarded value on is a
+        // program argument, not a pycc flag, so D-128 rule 2's
+        // order-independent conflict among parsed pycc flags is untouched.
+        let (interop, args) = run_interop(&[
+            "pycc",
+            "run",
+            "app.py",
+            "--pure",
+            "x",
+            "--interop-policy",
+            "deny",
+        ]);
+        assert_eq!(interop, PURE);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("x"),
+                OsString::from("--interop-policy"),
+                OsString::from("deny"),
+            ]
+        );
+
+        // An unrecognized hyphen value is still forwarded, and so is every
+        // pycc flag after it.
+        let (interop, args) = run_interop(&["pycc", "run", "app.py", "--pur", "--pure"]);
+        assert_eq!(interop, InteropFlags::default());
+        assert_eq!(
+            args,
+            vec![OsString::from("--pur"), OsString::from("--pure")]
+        );
+    }
+
+    #[test]
+    fn pure_conflicts_with_every_explicit_policy_in_either_order() {
+        for command in [
+            &["build", "in.py", "-o", "out"][..],
+            &["run", "in.py"],
+            &["check", "in.py"],
+        ] {
+            for policy in ["auto", "allowlist", "deny"] {
+                for flags in [
+                    ["--pure", "--interop-policy", policy],
+                    ["--interop-policy", policy, "--pure"],
+                ] {
+                    let argv: Vec<&str> = std::iter::once("pycc")
+                        .chain(command.iter().copied())
+                        .chain(flags)
+                        .collect();
+                    let error = Cli::try_parse_from(&argv).err().expect("a usage error");
+                    assert_eq!(
+                        error.kind(),
+                        clap::error::ErrorKind::ArgumentConflict,
+                        "{argv:?}"
+                    );
+                    assert_eq!(error.exit_code(), 2, "{argv:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ext_conflicts_with_both_interop_flags() {
+        for flags in [&["--pure"][..], &["--interop-policy", "deny"]] {
+            let argv: Vec<&str> = ["pycc", "build", "in.py", "-o", "out.so", "--ext"]
+                .into_iter()
+                .chain(flags.iter().copied())
+                .collect();
+            let error = Cli::try_parse_from(&argv).err().expect("a usage error");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_policy_and_a_repeated_pure_are_usage_errors() {
+        let error = Cli::try_parse_from(["pycc", "check", "in.py", "--interop-policy", "strict"])
+            .err()
+            .expect("a usage error");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        assert_eq!(error.exit_code(), 2);
+        let error = Cli::try_parse_from(["pycc", "check", "in.py", "--pure", "--pure"])
+            .err()
+            .expect("a usage error");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn build_and_check_accept_the_interop_flags() {
+        let cli = Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out", "--pure"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Build { interop, .. } if interop == PURE
+        ));
+        let cli =
+            Cli::try_parse_from(["pycc", "check", "in.py", "--interop-policy", "deny"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Check { interop, .. }
+                if interop.interop_policy == Some(InteropPolicy::Deny)
+        ));
     }
 }

@@ -5,6 +5,16 @@ pub struct PyccToml {
     pub project: ProjectSection,
     #[serde(default)]
     pub build: BuildSection,
+    /// The raw `[interop]` table (D-128, #1224), kept unvalidated here on
+    /// purpose. `parse` is shared with the module loader's project-root
+    /// discovery, which also runs for `pycc build --ext`, and D-244 rule 3
+    /// has `--ext` ignore the table: validating it here would let a bad
+    /// `[interop]` break an `--ext` build. `crate::interop_policy` validates
+    /// it only on the paths the policy governs. A `toml::Value` rather than
+    /// a table type, so a stray top-level `interop = "deny"` still parses
+    /// here and is refused by that validator instead.
+    #[serde(default)]
+    pub interop: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -339,8 +349,11 @@ python = "3.15"
 
     #[test]
     fn accepts_a_file_with_not_yet_implemented_sections() {
-        // [interop] and [test] are documented in docs/CLI_SPEC.md for later
-        // milestones -- a file using the full schema must still parse today.
+        // [test] is documented in docs/CLI_SPEC.md for a later milestone, and
+        // [interop] is kept raw here (#1224): `parse` still accepts this
+        // shape, while `crate::interop_policy`'s validator -- which runs only
+        // for a program with a CPython import -- rejects a non-empty `allow`
+        // without `policy = "allowlist"`.
         let toml = r#"
 [project]
 name = "myapp"
