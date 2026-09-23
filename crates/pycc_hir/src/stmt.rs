@@ -91,6 +91,7 @@
 mod assign;
 mod aug_assign;
 pub(crate) mod chain_assign;
+pub(crate) use chain_assign::lower_stmt_expanded;
 mod exception;
 mod for_loop;
 mod type_checking;
@@ -170,52 +171,6 @@ pub(crate) fn is_type_checking_guard(test: &Expr, imports: &[ImportBinding]) -> 
                 }
         }
         _ => false,
-    }
-}
-
-/// Lowers `stmt` into the statements it means: one for every statement
-/// except a chained assignment (`a = b = e`, #1213), which
-/// [`chain_assign::desugar_chain_assign`] expands into one single-target
-/// assignment per piece, each lowered through [`lower_stmt`]. Every caller
-/// that lowers a statement list goes through here; [`lower_stmt`] itself
-/// never sees a multi-target `Stmt::Assign`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lower_stmt_expanded(
-    stmt: &Stmt,
-    aliases: &[(String, Ty)],
-    in_loop: bool,
-    in_function: bool,
-    in_finally: bool,
-    except_star: ExceptStarCtx,
-    class_name: Option<&str>,
-    type_param: Option<&str>,
-    class_defs: &[ClassAnnotationInfo],
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<Vec<HirStmt>, Diagnostic> {
-    let lower = |piece: &Stmt| {
-        lower_stmt(
-            piece,
-            aliases,
-            in_loop,
-            in_function,
-            in_finally,
-            except_star,
-            class_name,
-            type_param,
-            class_defs,
-            imports,
-            signatures,
-        )
-    };
-    match stmt {
-        Stmt::Assign(assign) if assign.targets.len() > 1 => {
-            chain_assign::desugar_chain_assign(assign)?
-                .iter()
-                .map(lower)
-                .collect()
-        }
-        _ => Ok(vec![lower(stmt)?]),
     }
 }
 

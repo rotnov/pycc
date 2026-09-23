@@ -15,8 +15,11 @@
 //!
 //! An empty `[]`/`{}` display is refused before either path.
 
+use super::ExceptStarCtx;
+use crate::class::ClassAnnotationInfo;
+use crate::expr::keyword_bind::SignatureTable;
 use crate::expr::unobservable::is_unobservable;
-use crate::unsupported;
+use crate::{HirStmt, ImportBinding, Ty, unsupported};
 use pycc_ast::{Expr, ExprContext, ExprName, Stmt, StmtAssign};
 use pycc_diag::Diagnostic;
 
@@ -35,6 +38,49 @@ fn synthesize_chain_temp_name(offset: u32) -> String {
 /// program's source wrote.
 pub(crate) fn is_chain_temp_name(name: &str) -> bool {
     name.starts_with(CHAIN_TEMP_PREFIX)
+}
+
+/// Lowers `stmt` into the statements it means: one for every statement
+/// except a chained assignment (`a = b = e`, #1213), which
+/// [`desugar_chain_assign`] expands into one single-target
+/// assignment per piece, each lowered through [`lower_stmt`](super::lower_stmt). Every caller
+/// that lowers a statement list goes through here; [`lower_stmt`](super::lower_stmt) itself
+/// never sees a multi-target `Stmt::Assign`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_stmt_expanded(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+    in_loop: bool,
+    in_function: bool,
+    in_finally: bool,
+    except_star: ExceptStarCtx,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
+    class_defs: &[ClassAnnotationInfo],
+    imports: &[ImportBinding],
+    signatures: &SignatureTable,
+) -> Result<Vec<HirStmt>, Diagnostic> {
+    let lower = |piece: &Stmt| {
+        super::lower_stmt(
+            piece,
+            aliases,
+            in_loop,
+            in_function,
+            in_finally,
+            except_star,
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+            signatures,
+        )
+    };
+    match stmt {
+        Stmt::Assign(assign) if assign.targets.len() > 1 => {
+            desugar_chain_assign(assign)?.iter().map(lower).collect()
+        }
+        _ => Ok(vec![lower(stmt)?]),
+    }
 }
 
 /// Rewrites the multi-target `assign` into the single-target statements it
