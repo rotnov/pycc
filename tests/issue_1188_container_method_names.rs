@@ -391,8 +391,9 @@ print(xs.pop(), C().%get%(), g())
 
 /// A receiver-dispatched call inside a comprehension element (renamed with
 /// the comprehension variable), inside a generic function's body (scanned
-/// for recursive generic calls) and beside a generic call (rewritten by
-/// monomorphization) keeps its reading in each place.
+/// for recursive generic calls), and on an instance or a class-name receiver
+/// in a module that monomorphization rewrites, keeps its reading in each
+/// place.
 #[test]
 fn comprehensions_and_generic_bodies_hold_either_reading() {
     twins_print(
@@ -402,6 +403,12 @@ fn comprehensions_and_generic_bodies_hold_either_reading() {
 class C:
     def %get%(self, n: int) -> int:
         return n + 1
+
+
+class S:
+    @staticmethod
+    def %pop%() -> int:
+        return 8
 
 
 def twice[T](v: T) -> T:
@@ -422,9 +429,10 @@ ys = [c.%get%(x) for x in range(1, 3)]
 zs = [d.get(\"b\", x) for x in range(7, 8)]
 print(ys[0], ys[1], zs[0])
 print(twice(4), g())
+print(c.%get%(twice(5)), S.%pop%())
 ",
         ),
-        "2 3 7\n2 1\n2 1\n4 4\n",
+        "2 3 7\n2 1\n2 1\n4 4\n2 1\n6 8\n",
     );
 }
 
