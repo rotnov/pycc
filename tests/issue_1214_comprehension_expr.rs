@@ -98,3 +98,19 @@ fn a_comprehension_rerun_in_a_loop_rebuilds_its_container_each_time() {
         "1000000\n2\n"
     );
 }
+
+/// Set and dict comprehensions in expression position, including a dict
+/// source whose `str` loop variable lives in the entry-block slot, run
+/// without the pinned oracle (`3 2` and `3 3` match CPython 3.14.7).
+#[test]
+fn set_and_dict_comprehension_arguments_run_to_the_cpython_output() {
+    let run = build_and_run(
+        "e2e_1254_set_dict",
+        "def keys(d: dict[str, int]) -> int:\n    return len({k: d[k] + 1 for k in d if d[k] > 1})\n\n\nd = {\"a\": 1, \"b\": 2, \"c\": 3}\nprint(len({i % 3 for i in range(10)}), keys(d))\nprint(len({k: 0 for k in d}), len({d[k] for k in d}))\n",
+    );
+    assert_eq!(run.status.code(), Some(0), "{}", rendered(&run));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
+        "3 2\n3 3\n"
+    );
+}

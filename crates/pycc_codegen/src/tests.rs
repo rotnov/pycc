@@ -26,6 +26,9 @@ mod buffer_slice_egress;
 // reason.
 mod compare_chain;
 
+// #1254: the shared entry-block placement helper.
+mod entry_block;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any

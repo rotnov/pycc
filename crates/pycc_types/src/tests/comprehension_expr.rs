@@ -111,3 +111,35 @@ fn comprehensions_calling_a_protocol_function_are_monomorphized_in_both_forms() 
         check_source(&source).unwrap_or_else(|d| panic!("{tail}: {}", d.message));
     }
 }
+
+#[test]
+fn a_generic_function_body_checks_calls_inside_an_expression_comprehension() {
+    assert_eq!(
+        message_of(
+            "def identity[T](x: T) -> T:\n    return x\ndef g[T](x: T) -> int:\n    return len([identity(i) for i in range(3)])\n"
+        ),
+        "generic function `g` calls generic function `identity` -- a generic function cannot call itself or another generic function (recursive generic instantiation is not supported yet)"
+    );
+    check_source(
+        "def g[T](x: T) -> T:\n    n = len([i for i in range(3) if i > 0])\n    return x\nprint(g(4))\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_solver_propagates_an_error_from_an_expression_comprehension_s_range() {
+    assert_eq!(
+        message_of(
+            "def _f():\n    k = len([i for i in range(m)])\n    m = 3\n    return k\nprint(_f())\n"
+        ),
+        "local name `m` is not bound before this use"
+    );
+}
+
+#[test]
+fn an_if_test_holding_an_expression_comprehension_is_walked_for_walrus_targets() {
+    check_source(
+        "def f() -> int:\n    if len([i for i in range(3)]) > 1:\n        return 1\n    return 0\nprint(f())\n",
+    )
+    .unwrap();
+}

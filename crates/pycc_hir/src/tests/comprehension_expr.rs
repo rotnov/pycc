@@ -108,6 +108,8 @@ fn a_walrus_inside_a_comprehension_is_refused_in_both_forms() {
         ("ys = [x for x in range(3) if (y := x)]\n", 5),
         ("ys = {x: (y := 1) for x in d}\n", 5),
         ("ys = {(y := x) for x in range(3)}\n", 5),
+        ("print(len({(y := x) for x in range(3)}))\n", 10),
+        ("print(len({\"a\": (y := x) for x in range(3)}))\n", 10),
     ] {
         let module = pycc_parser_test_helper::parse(source);
         let diagnostic = lower_checked(&module).unwrap_err();
@@ -164,4 +166,35 @@ fn the_sub_expression_views_list_every_operand_in_evaluation_order() {
         *expr = name("f");
     }
     assert_eq!(set.elt, CompElt::Set(name("f")));
+}
+
+/// The outer loop variable is renamed inside a nested dict comprehension's
+/// key and value as well as a list or set element.
+#[test]
+fn a_nested_dict_comprehension_renames_the_outer_variable_in_its_key_and_value() {
+    let outer = inner_comprehension("print(len([len({s: x for s in d}) for x in range(3)]))\n");
+    let CompElt::List(HirExpr::Call { args, .. }) = &outer.elt else {
+        panic!("expected a `len(...)` element, got {:?}", outer.elt);
+    };
+    let HirExpr::Comprehension(inner) = &args[0] else {
+        panic!("expected a nested comprehension, got {:?}", args[0]);
+    };
+    assert_eq!(
+        inner.elt,
+        CompElt::Dict {
+            key: HirExpr::Name(inner.var.clone()),
+            value: HirExpr::Name(outer.var.clone()),
+        }
+    );
+    let set_outer = inner_comprehension("print(len([len({x for s in d}) for x in range(3)]))\n");
+    let CompElt::List(HirExpr::Call { args, .. }) = &set_outer.elt else {
+        panic!("expected a `len(...)` element, got {:?}", set_outer.elt);
+    };
+    let HirExpr::Comprehension(inner) = &args[0] else {
+        panic!("expected a nested comprehension, got {:?}", args[0]);
+    };
+    assert_eq!(
+        inner.elt,
+        CompElt::Set(HirExpr::Name(set_outer.var.clone()))
+    );
 }
