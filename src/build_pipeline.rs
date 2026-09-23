@@ -67,9 +67,9 @@ pub(crate) fn try_build(
     interop: InteropCli,
 ) -> Result<(), ExitCode> {
     // A CPython import only means anything inside a CPython interpreter. A
-    // build without `--ext` embeds one when every such import is a standard
-    // library root it can bundle (Part 1 of #1028), and refuses the rest
-    // with `I0403` -- before codegen, which is allowed to ignore the item in
+    // build without `--ext` embeds one when every such import is a root it
+    // can bundle (Part 1 of #1028; a third-party root from `pycc.lock`,
+    // #1242), and refuses the rest with `I0403` -- before codegen, which is allowed to ignore the item in
     // a native build precisely because of this gate. The gate lives inside
     // the frontend seam because that is where the per-file sources are: the
     // `I0403` has to be rendered against whichever file of the program
@@ -124,7 +124,7 @@ pub(crate) fn try_build(
     // before the link, so every embedded-only line runs ahead of the shared
     // link site below (§4.6 of the #1028 plan).
     let embed_plan = match embedded {
-        true => Some(embed_plan_or_exit(out, &typed_hir, embed, obj_path)?),
+        true => Some(embed_plan_or_exit(out, path, &typed_hir, embed, obj_path)?),
         false => None,
     };
     let mir = pycc_mir::build(&typed_hir);
@@ -212,11 +212,14 @@ pub(crate) fn try_build(
 /// as an environment failure at exit 2.
 fn embed_plan_or_exit(
     out: &Path,
+    entry: &Path,
     typed_hir: &pycc_hir::HirModule,
     toolchain: &embed::EmbedToolchain,
     obj_path: &Path,
 ) -> Result<embed::EmbedPlan, ExitCode> {
-    let plan = embed::plan_embed(out, typed_hir, toolchain, EmbedPlatform::HOST, obj_path);
+    let host = (std::env::consts::ARCH, std::env::consts::OS);
+    let platform = EmbedPlatform::HOST;
+    let plan = embed::plan_embed(out, entry, typed_hir, toolchain, platform, host, obj_path);
     plan.map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)

@@ -66,7 +66,7 @@ fn describe_sites(sites: &[Site]) -> String {
         .join(" and ")
 }
 
-fn read_record(dist: &DistInfo) -> Result<Vec<RecordEntry>, String> {
+pub(crate) fn read_record(dist: &DistInfo) -> Result<Vec<RecordEntry>, String> {
     let path = dist.path().join("RECORD");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
@@ -169,7 +169,7 @@ pub(crate) fn resolve(
     let mut claimed: BTreeMap<String, (String, PathBuf, String)> = BTreeMap::new();
     let mut packages = Vec::new();
     for (name, member) in &members {
-        let payload = classify_payload(&index, member)?;
+        let payload = classify_payload(&index.sites, member.dist, &member.record, true)?;
         for (path, (location, digest)) in &payload {
             if let Some((other, other_location, other_digest)) = claimed.get(path) {
                 if other_location != location || other_digest != digest {
@@ -383,13 +383,20 @@ fn closure<'a>(
     Ok(members)
 }
 
-/// Classifies one member's RECORD entries (rule 4) and hashes its
-/// payload: RECORD path to (location, sha256 hex).
-fn classify_payload(
-    index: &Index,
-    member: &Member<'_>,
+/// Classifies one distribution's RECORD entries (rule 4): RECORD path to
+/// (location, sha256 hex). `sites` are every scanned site directory.
+///
+/// With `verify`, each payload file is hashed and must match its RECORD
+/// digest, and the value is that digest (`pycc lock`). Without it nothing
+/// is read beyond each path's `symlink_metadata`, and the value is the
+/// RECORD digest itself: an embedded build hashes the bytes it copies
+/// instead (#1242), so the two share every path rule and cannot drift.
+pub(crate) fn classify_payload(
+    sites: &[Site],
+    dist: &DistInfo,
+    record: &[RecordEntry],
+    verify: bool,
 ) -> Result<BTreeMap<String, (PathBuf, String)>, String> {
-    let dist = member.dist;
     let own = &dist.site.path;
     let refuse = |path: &str, why: &str| {
         format!(
@@ -399,7 +406,7 @@ fn classify_payload(
         )
     };
     let mut payload = BTreeMap::new();
-    for entry in &member.record {
+    for entry in record {
         let path = entry.path.as_str();
         let installer_file = path
             .strip_prefix(dist.dir_name.as_str())
@@ -413,11 +420,7 @@ fn classify_payload(
         }
         let target = normalize_lexically(&own.join(path));
         if !target.starts_with(own) {
-            if index
-                .sites
-                .iter()
-                .any(|site| target.starts_with(&site.path))
-            {
+            if sites.iter().any(|site| target.starts_with(&site.path)) {
                 return Err(refuse(
                     path,
                     "lies in the other scanned site directory; a distribution split across \
@@ -461,9 +464,13 @@ fn classify_payload(
                 }
             }
         }
+        let expected: String = expected.iter().map(|byte| format!("{byte:02x}")).collect();
+        if !verify {
+            payload.insert(path.to_string(), (target, expected));
+            continue;
+        }
         let actual =
             sha256_file(&target).map_err(|e| refuse(path, &format!("cannot be read: {e}")))?;
-        let expected: String = expected.iter().map(|byte| format!("{byte:02x}")).collect();
         if actual != expected {
             return Err(refuse(
                 path,

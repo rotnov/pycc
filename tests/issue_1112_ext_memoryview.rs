@@ -152,7 +152,7 @@ def total(v: memoryview) -> int:
 #[test]
 fn a_foreign_import_is_still_reported_alongside_the_memoryview_refusal() {
     const BOTH: &str = "\
-import numpy
+import tkinter
 
 
 def total(v: memoryview) -> int:
@@ -723,7 +723,7 @@ class Sink(Protocol):
     std::fs::write(
         dir.join("view_probe.py"),
         "\
-import numpy
+import tkinter
 
 from sink import Sink
 

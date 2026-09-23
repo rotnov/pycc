@@ -401,8 +401,9 @@ fn explain_i0405_names_every_source_spelling() {
 /// The annotation compiles, with no interpreter, no numpy, and no import.
 ///
 /// The one assertion in this file that depends on nothing about the host
-/// at all. `import numpy` is itself refused today (`I0403`), so a spelling
-/// that required one could not be written; the bare name is recognized
+/// at all. `import numpy` builds only from a `pycc.lock` closure (#1242),
+/// so a spelling that required one would need numpy installed; the bare
+/// name is recognized
 /// without it, exactly as `Any`, `Annotated`, `TypeAlias` and `Self` are.
 #[test]
 fn an_ndarray_parameter_type_checks_without_any_import() {

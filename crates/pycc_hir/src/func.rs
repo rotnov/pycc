@@ -770,9 +770,9 @@ pub(crate) fn annotation_to_ty(
                 // Recognized with **no import**, deliberately:
                 // `annotation_to_ty` receives `type_param`, `class_name`,
                 // `aliases` and `class_defs` and no import table at all, and
-                // `import numpy` is itself refused today (`I0403`), so
-                // requiring one would be new machinery gating a spelling on
-                // an import that cannot be written. `Any`, `Annotated`,
+                // `import numpy` builds only from a `pycc.lock` closure
+                // (#1242), so requiring one would be new machinery gating a
+                // spelling on an installed numpy. `Any`, `Annotated`,
                 // `TypeAlias` and `Self` are all recognized on those terms.
                 //
                 // Both are resolved *here* rather than beside `memoryview`

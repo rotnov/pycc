@@ -776,10 +776,10 @@ fn c0001_dict_comprehension_unpacking() {
 // `import cgi` binds a CPython module object now, so what is pinned here
 // is the aliased `import cgi as c`, which still falls through. The plain
 // form is accepted by `pycc check` and, since `cgi` left the standard
-// library in 3.13, refused by a plain `pycc build` with `I0403` like any
-// non-standard-library root -- pinned with `numpy` in
-// `tests/issue_1080_foreign_object.rs`'s
-// `a_native_build_refuses_a_foreign_import_with_i0403`.
+// library in 3.13, built by a plain `pycc build` like any
+// non-standard-library root only from the program's `pycc.lock` closure,
+// and refused with exit 2 naming `pycc lock` without one -- pinned in
+// `tests/issue_1242_locked_closure.rs`.
 #[test]
 fn c0001_import_unrecognized_module() {
     assert_diagnostic_matches_fixture("c0001_import_unrecognized_module");

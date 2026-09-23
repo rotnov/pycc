@@ -7,10 +7,12 @@
 //! * `pycc check` *accepts* a plain foreign import -- it is a frontend-only
 //!   pass (`docs/CLI_SPEC.md`) with no `--ext` flag to judge against, so a
 //!   bound-but-unused module object is not an error there;
-//! * a plain `pycc build` refuses it with `I0403`, because an embedded
-//!   executable bundles only the standard library (#1223) and `numpy` is
-//!   outside it -- a standard-library import builds embedded instead
-//!   (`tests/issue_1223_embedded_executable.rs`);
+//! * a plain `pycc build` refuses an import it cannot embed with `I0403`
+//!   -- here `tkinter`, which needs Tcl/Tk from outside the interpreter
+//!   (D-248 rule 1); a standard-library import builds embedded instead
+//!   (`tests/issue_1223_embedded_executable.rs`), and a third-party root
+//!   such as `numpy` is bundled from `pycc.lock` or refused there, naming
+//!   `pycc lock` (`tests/issue_1242_locked_closure.rs`);
 //! * every operation on the bound name other than an attribute load is
 //!   refused, and all but one of them with `I0404`. Part 2 of #1026 (#1081)
 //!   changed *where* that refusal is decided -- from the read of the
@@ -93,8 +95,9 @@ fn a_bound_but_unused_foreign_import_is_accepted_by_check() {
 }
 
 /// Work item 11: the driver gate. A native executable embeds no CPython
-/// interpreter, so an import a plain build cannot embed (here a
-/// non-standard-library root, D-248 rule 1) has no meaning there and the
+/// interpreter, so an import a plain build cannot embed (here `tkinter`,
+/// an excluded standard-library root, D-248 rule 1; a third-party root is
+/// bundled from `pycc.lock` since #1242) has no meaning there and the
 /// build refuses before codegen -- which is what lets
 /// `crates/pycc_codegen/src/foreign_import.rs` ignore the item under
 /// `!options.ext` rather than assert.
@@ -108,7 +111,7 @@ fn a_native_build_refuses_a_foreign_import_with_i0403() {
     let dir = ScratchDir::new("foreign_native_refused").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(source(&dir, "import numpy\n"))
+        .arg(source(&dir, "import tkinter\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
@@ -118,7 +121,7 @@ fn a_native_build_refuses_a_foreign_import_with_i0403() {
     // stdout (`src/frontend.rs`'s `render_all`).
     let rendered = stderr_of(&output);
     assert!(rendered.contains("error[I0403]"), "{rendered}");
-    assert!(rendered.contains("`import numpy`"), "{rendered}");
+    assert!(rendered.contains("`import tkinter`"), "{rendered}");
     assert!(rendered.contains("--ext"), "{rendered}");
 }
 
@@ -138,7 +141,7 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
     let rows = [
         // (dep.py, main.py, the file the diagnostic must name, its line)
         (
-            "import numpy\ndef f() -> int:\n    return 1\n",
+            "import tkinter\ndef f() -> int:\n    return 1\n",
             "from dep import f\nx = f()\n",
             "dep.py",
             1,
@@ -147,7 +150,7 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
         // dependency's own end bound, the boundary an item-index join would
         // hand to the entry file instead.
         (
-            "def f() -> int:\n    return 1\nimport numpy\n",
+            "def f() -> int:\n    return 1\nimport tkinter\n",
             "from dep import f\nx = f()\n",
             "dep.py",
             3,
@@ -156,7 +159,7 @@ fn a_foreign_import_in_a_dependency_names_the_dependency_not_the_entry() {
         // side.
         (
             "def f() -> int:\n    return 1\n",
-            "from dep import f\nimport numpy\nx = f()\n",
+            "from dep import f\nimport tkinter\nx = f()\n",
             "main.py",
             2,
         ),
@@ -207,7 +210,7 @@ fn a_type_error_is_reported_before_the_native_foreign_refusal() {
     let dir = ScratchDir::new("foreign_native_type_error").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(source(&dir, "import numpy\n\nx: int = \"s\"\n"))
+        .arg(source(&dir, "import tkinter\n\nx: int = \"s\"\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
@@ -552,7 +555,7 @@ fn a_native_refusal_points_at_the_import_statement() {
         .arg("build")
         .arg(source(
             &dir,
-            "def g() -> int:\n    return 1\n\n\nimport numpy\n",
+            "def g() -> int:\n    return 1\n\n\nimport tkinter\n",
         ))
         .arg("-o")
         .arg(dir.join("m"))
@@ -565,7 +568,7 @@ fn a_native_refusal_points_at_the_import_statement() {
         rendered.contains(&format!("{}:5:1", rendered_path(&dir.join("m.py")))),
         "{rendered}"
     );
-    assert!(rendered.contains("5 | import numpy"), "{rendered}");
+    assert!(rendered.contains("5 | import tkinter"), "{rendered}");
 }
 
 /// A function local that happens to share a foreign import's name is an

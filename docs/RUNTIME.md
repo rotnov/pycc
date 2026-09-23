@@ -341,10 +341,10 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
   native-module import cycle is a compile error `E0108`). Embedded-mode
   CPython-backed modules instead use the bundled interpreter's normal import
   initialization, caching, and cycle semantics inside the bundled environment
-  (pinned by `pycc.lock` once the build consumes it, #1242); native `E0108` rules do not reject their dependency closure
+  (pinned by `pycc.lock`, which the build consumes, #1242); native `E0108` rules do not reject their dependency closure
   (D-128).
 
-## Transparent CPython interop (embedded mode implemented for standard-library roots and the interop policy; arbitrary-package closures planned v0.7; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
+## Transparent CPython interop (embedded mode implemented for standard-library roots, locked package closures and the interop policy; out-of-prefix native libraries planned v0.7; hosted `ext` mode implemented for the scalar boundary, `str` and a scalar-element `tuple`)
 
 CPython-backed packages keep ordinary, CPython-compatible source imports:
 
@@ -1162,7 +1162,11 @@ owns the contract; this is the runtime view of it.
   library under `lib/` (macOS: id `@rpath/libpython3.14.dylib`, ad-hoc
   re-signed), its standard library under `lib/python3.14/` without
   `site-packages`, `__pycache__`, `test` and the Tcl/Tk roots, and a
-  `PYCC-BUNDLE` marker. The executable finds the library through an rpath
+  `PYCC-BUNDLE` marker. A program importing a root outside the standard
+  library also gets `closure/`: every file of each distribution its
+  `pycc.lock` section names, copied from the locked site directory and
+  checked against the lock (#1242, D-249 rule 7); a standard-library-only
+  program has no `closure/`. The executable finds the library through an rpath
   relative to itself, so the pair is relocatable together.
 - **Execution.** `src/embed/pycc_embed_launcher.c` starts an isolated
   interpreter (`home` is the sidecar, `platlibdir` is `lib` whatever the
@@ -1171,8 +1175,10 @@ owns the contract; this is the runtime view of it.
   with the GIL held. The compiled module is the one `--ext` would build,
   through the same unchanged C shim, with export thunks suppressed; no
   function is exported.
-- **Isolation.** `sys.path` holds only the bundle's entries; `PYTHONPATH`
-  and ambient `site-packages` are ignored.
+- **Isolation.** `sys.path` holds only the bundle's entries -- the bundled
+  standard library, then `closure/` when the build created it (appended
+  after `Py_InitializeFromConfig`); `PYTHONPATH` and ambient
+  `site-packages` are ignored.
 - **Exit status.** An uncaught exception prints through `PyErr_Print` and
   exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120.
 - **Deviations from CPython.** `sys.flags.isolated` and `sys.flags.no_site`
@@ -1182,11 +1188,12 @@ owns the contract; this is the runtime view of it.
 - **Output ordering.** `buffered_stdio = 0` and `pycc_rt`'s flush at every
   newline keep Python-side and pycc-side writes in order; a future
   `print(..., end=...)` must flush before each foreign call.
-- **Linux gap.** No ELF dependency scan runs: a `lib-dynload` module's
-  native dependencies are resolved by the system loader at run time, so a
+- **Linux gap.** No ELF dependency scan runs: a `lib-dynload` module's or a
+  closure image's native dependencies are resolved by the system loader at run time, so a
   Linux artifact is relocatable only as far as those libraries are present
   on the target (#1243). macOS refuses a non-system, non-prefix dependency
-  at build time.
+  at build time; for a closure image, also one outside its own
+  distribution's payload, naming #1243.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local
@@ -1205,7 +1212,7 @@ bundles the pinned CPython 3.14 runtime, the resolved package artifacts, and
 their native-library closure, so the target machine does not need a separately
 installed Python or ambient `site-packages`. The resolver, the `pycc.lock`
 schema and the closure's bundle layout are [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)
-(`pycc lock` exists; the build consuming the lock is #1242); the embedded
+(`pycc lock` writes the lock and an embedded build consumes it, #1242); the embedded
 interpreter must never search an unpinned ambient environment.
 
 #### Interop policy
@@ -1215,13 +1222,13 @@ policy itself is implemented (#1224): `--interop-policy`, `--pure` and the
 `[interop]` table select it, `check`, `build` and `run` enforce it, and a
 rejected root is `I0402`. `docs/CLI_SPEC.md`'s `pycc.toml` section owns the
 resolution and validation rules. What an admitted root then builds is
-D-248's embedding: standard-library roots only, until the build consumes
-`pycc.lock` (#1242).
+D-248's embedding: a standard-library root needs no lock, and any other
+root is bundled with its closure from `pycc.lock` (#1242).
 
 | Policy | Behavior |
 |---|---|
-| `auto` | Default. Permit every CPython-backed import root present in the source. Bundling its pinned dependency closure is #1242; today only standard-library roots embed. |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. Covering an allowed root's submodules and pinned transitive closure is #1242 (a dotted CPython-backed import is `C0001` today). |
+| `auto` | Default. Permit every CPython-backed import root present in the source; an embedded build bundles its pinned dependency closure from `pycc.lock` (#1242). |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a dotted CPython-backed import is `C0001` today. |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

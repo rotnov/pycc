@@ -1300,17 +1300,18 @@ instead. Since Part 1 of #1026 such an \
 import is compiled as a CPython import: the module object is acquired from \
 the running interpreter at module-execution time. A `pycc build --ext` \
 artifact always has one -- it is an extension module CPython itself loads. \
-Since Part 1 of #1028 a plain build whose CPython imports are all \
-standard-library modules has one too: it produces an embedded executable \
-that bundles CPython 3.14 in an `OUT.pycc/` directory beside it. Every other \
-case is still refused, with the reason in the message: a module outside the \
-standard library (until a locked dependency closure lands, #1225), a \
-standard-library module that needs Tcl/Tk (`tkinter`, `turtle`, `idlelib`), \
-a `--target` build (the bundled interpreter is the build host's own), or a \
-Windows host (#1226). Rebuild with `--ext`, or drop the import.",
+Since Part 1 of #1028 a plain build has one too: it produces an embedded \
+executable that bundles CPython 3.14 in an `OUT.pycc/` directory beside it, \
+and since #1242 it also bundles a module outside the standard library from \
+the program's `pycc.lock` (a missing or stale lock fails the build with exit \
+2, naming `pycc lock`). The remaining cases are refused, with the reason in \
+the message: a standard-library module that needs Tcl/Tk (`tkinter`, \
+`turtle`, `idlelib`), a `--target` build (the bundled interpreter is the \
+build host's own), or a Windows host (#1226). Rebuild with `--ext`, or drop \
+the import.",
         example: "\
-import json   # fine under `pycc build`: builds an embedded executable
-import numpy  # error[I0403] under `pycc build`; fine under `pycc build --ext`
+import json     # fine under `pycc build`: builds an embedded executable
+import tkinter  # error[I0403] under `pycc build`; fine under `pycc build --ext`
 
 def scale(x: float) -> float:
     return x * 2.0

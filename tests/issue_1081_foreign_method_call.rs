@@ -139,16 +139,18 @@ fn a_method_call_inherits_the_positional_bound() {
     assert!(rendered.contains("`gc` is not defined"), "{rendered}");
 }
 
-/// A plain `pycc build` still refuses a non-standard-library import with
-/// `I0403` before any of this is reachable: an embedded executable bundles
-/// only the standard library (#1223). A standard-library call such as
-/// `gc.disable()` builds embedded instead; see the hosted test below.
+/// A plain `pycc build` still refuses an import it cannot embed with
+/// `I0403` before any of this is reachable: `tkinter` needs Tcl/Tk from
+/// outside the interpreter, which an embedded executable does not bundle
+/// (D-248 rule 1). A standard-library call such as `gc.disable()` builds
+/// embedded instead; see the hosted test below. A third-party root is
+/// bundled from `pycc.lock` (#1242).
 #[test]
 fn a_native_build_of_a_method_call_is_still_refused_with_i0403() {
     let dir = ScratchDir::new("foreign_call_native").expect("scratch");
     let output = pycc()
         .arg("build")
-        .arg(source(&dir, "import numpy\n\nnumpy.seterr()\n"))
+        .arg(source(&dir, "import tkinter\n\ntkinter.mainloop()\n"))
         .arg("-o")
         .arg(dir.join("m"))
         .output()
