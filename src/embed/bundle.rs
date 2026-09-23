@@ -99,8 +99,11 @@ pub(crate) fn swap_into_place(
 /// sidecar is back in place (or there was none), otherwise where it was
 /// left, so the user can move it back by hand.
 pub(crate) fn stranded_note(restored: bool, old: &Path) -> String {
-    let stranded = format!("; the previous sidecar is left at `{}`", old.display());
-    (!restored).then_some(stranded).unwrap_or_default()
+    if restored {
+        String::new()
+    } else {
+        format!("; the previous sidecar is left at `{}`", old.display())
+    }
 }
 
 fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String {
