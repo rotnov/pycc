@@ -18,7 +18,8 @@
 
 use crate::cli::ErrorFormat;
 pub(crate) use crate::foreign_import::{EmbedHost, NeedsInterpreter};
-use crate::modules::{self, LoadedProgram};
+use crate::interop_policy::{self, InteropCli};
+use crate::modules::{self, DiscoveredManifest, LoadedProgram};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, LinkInput};
 use pycc_types::DiagnosticKey;
@@ -206,11 +207,15 @@ impl ProgramSources {
 /// `pycc build`/`pycc run`, and the extension module's own name for a
 /// `pycc build --ext`. It reaches `pycc_hir::lower_module` through
 /// `modules::load`, which gives it to the entry module alone.
+///
+/// The third value is the `pycc.toml` source-root discovery parsed, if any,
+/// which the interop policy reads (#1224); `--ext` drops it.
 fn link_frontend(
     path: &Path,
     module_name: Option<&str>,
-) -> Result<(HirModule, ProgramSources), FrontendFailure> {
+) -> Result<(HirModule, ProgramSources, Option<DiscoveredManifest>), FrontendFailure> {
     let program: LoadedProgram = modules::load(path, module_name)?;
+    let manifest = program.manifest;
     let mut files = Vec::with_capacity(program.modules.len());
     let mut bounds = Vec::with_capacity(program.modules.len());
     let mut import_bounds = Vec::with_capacity(program.modules.len());
@@ -254,19 +259,39 @@ fn link_frontend(
         let entry = sources.entry();
         sources.group(diagnostics.into_iter().map(|d| (entry, d)).collect())
     })?;
-    Ok((hir, sources))
+    Ok((hir, sources, manifest))
 }
 
-pub(crate) fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
-    let (hir, sources) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
-    pycc_types::check_all_keyed(&hir).map_err(|keyed| sources.group(attribute(&sources, keyed)))
+/// `pycc check`'s frontend: link, resolve the interop policy, type-check,
+/// then the policy gate (#1224).
+///
+/// The policy is resolved -- and a malformed `[interop]` table refused with
+/// exit 2 -- right after linking, at the same point
+/// [`resolve_frontend_native`] does it, so `check` and `build` agree even on
+/// a program with type errors. A type error still wins over an `I0402`, as
+/// it wins over an import gap in a build. `check` selects no artifact mode,
+/// so it never emits `I0403`: only whether the policy admits each
+/// CPython-backed import is checked here.
+pub(crate) fn check_frontend(path: &Path, interop: InteropCli) -> Result<(), FrontendFailure> {
+    let (hir, sources, manifest) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
+    let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
+    pycc_types::check_all_keyed(&hir).map_err(|keyed| sources.group(attribute(&sources, keyed)))?;
+    let gaps = interop_policy::policy_gaps(&hir, &policy);
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    Err(sources.group(
+        gaps.into_iter()
+            .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic))
+            .collect(),
+    ))
 }
 
 pub(crate) fn resolve_frontend(
     path: &Path,
     module_name: Option<&str>,
 ) -> Result<HirModule, FrontendFailure> {
-    let (hir, sources) = link_frontend(path, module_name)?;
+    let (hir, sources, _manifest) = link_frontend(path, module_name)?;
     pycc_types::check_and_resolve_all_keyed(&hir)
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
@@ -339,12 +364,21 @@ pub(crate) fn resolve_frontend(
 /// [`check_frontend`] reports the `C0001` read refusal there, which is
 /// correct, because `I0405`'s contract is scoped to a *build* without
 /// `--ext`.
+///
+/// The interop policy (#1224) is resolved first, right after linking, so a
+/// malformed `[interop]` table is exit 2 before any gate runs. It then
+/// feeds the foreign-import classification, which gives each CPython-backed
+/// import the policy rejects an `I0402` *instead of* any `I0403`: the
+/// `import_gaps` vector carries both codes through the three report paths
+/// below unchanged.
 pub(crate) fn resolve_frontend_native(
     path: &Path,
     host: EmbedHost,
+    interop: InteropCli,
 ) -> Result<(HirModule, NeedsInterpreter), FrontendFailure> {
-    let (hir, sources) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
-    let import_gaps = crate::foreign_import::classify_for_native_build(&hir, host);
+    let (hir, sources, manifest) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
+    let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
+    let import_gaps = crate::foreign_import::classify_for_native_build(&hir, host, &policy);
     // Keyed by *item* index rather than import position: a `memoryview`
     // annotation lives on an `HirItem::Function`, not in the import table,
     // so it resolves to its owning file through the item bounds.

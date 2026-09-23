@@ -15,6 +15,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 | 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs` and `tests/issue_1142_ext_buffer_store.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
 | 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, plus the unit tests under `src/embed/` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)) |
+| 10. Interop policy | `tests/issue_1224_interop_policy.rs`, the `i0402_*` snapshots under `tests/diagnostics/`, plus `src/interop_policy/tests.rs` | `--interop-policy`, `--pure` and `[interop]` admit or reject each CPython-backed root alike in `check`, `build` and `run`, a rejection is `I0402` on every host and precedes any `I0403` (D-128) |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
@@ -1318,45 +1319,64 @@ this table. And neither reading is evidence about either
 only a run of the protocol above can be that.
 
 
-## Planned CPython interop matrix (v0.7)
+## CPython interop matrix (v0.7)
 
-D-128's transparent interop contract is not implemented by the current
-compiler. The v0.7 implementation cannot mark its roadmap acceptance complete
-until all of the following run on every Tier-1 target:
+D-128's transparent interop contract is partly implemented: the embedded
+executable for standard-library roots (#1223, D-248) and the policy surface
+(#1224) exist; the lock and closure (#1225) and Windows embedding (#1226) do
+not. The v0.7 implementation cannot mark its roadmap acceptance complete
+until all of the following run on every Tier-1 target. Each bullet names the
+tests that cover it now, or the owner of what is still missing.
 
 - unchanged source fixtures containing both `import numpy as np` and
   `from numpy import array` build and run under the default `auto` policy
-  without a separately installed Python;
+  without a separately installed Python. *Pending:* both spellings are
+  `C0001` today, and a non-standard-library root needs #1225;
 - the produced `pycc.lock` and deployment bundle select the exact intended
   CPython, package, and native-library artifacts and never consult ambient
-  `site-packages` at runtime;
+  `site-packages` at runtime. *Pending:* #1225 (the standard-library bundle
+  already carries no `site-packages`, D-248);
 - `allowlist` accepts an allowed direct import root, covers its submodules and
   pinned transitive closure, and emits `I0402` for an otherwise-resolvable
-  unlisted direct root;
+  unlisted direct root. *Covered:* acceptance and the unlisted root
+  (`tests/issue_1224_interop_policy.rs`, the `interop_allowlist/` snapshots
+  in `tests/diagnostics/`). *Pending:* submodules and the closure, #1225
+  (a dotted CPython-backed import is `C0001` today);
 - CLI policy precedence covers every usable branch: explicit `auto` and
   `deny` each override the other and a configured `allowlist`; explicit
   `allowlist` with its configured roots accepts an allowed root and emits
   `I0402` for an unlisted root. A CLI switch *to* `allowlist` from configured
   `auto` or `deny` has no permitted stored roots because non-empty `allow` is
   invalid under those policies, so it deterministically rejects every
-  CPython-backed direct root with `I0402` rather than borrowing a stale list;
+  CPython-backed direct root with `I0402` rather than borrowing a stale list.
+  *Covered:* `tests/issue_1224_interop_policy.rs` and
+  `src/interop_policy/tests.rs`;
 - `check`, `build`, `run`, and the eventual `test` compilation path apply the
   same effective policy and select the same success or policy diagnostic for
-  an equivalent import graph;
+  an equivalent import graph. *Covered* for `check`, `build` and `run`
+  (`tests/issue_1224_interop_policy.rs`). *Pending:* `pycc test`, which is
+  not implemented;
 - invalid policy enum values, a non-empty `[interop].allow` outside
   `allowlist`, and every `--pure` plus explicit `--interop-policy`
   combination fail as bad invocations (exit 2) instead of depending on
-  argument order or silently ignoring stale configuration;
+  argument order or silently ignoring stale configuration. *Covered:*
+  `tests/issue_1224_interop_policy.rs` and `src/cli.rs`'s parser tests;
 - `deny` and its `--pure` shorthand both reject the same CPython-backed fixture,
   while a native pycc import remains accepted and a successful pure artifact
-  has no CPython/libpython dependency; and
+  has no CPython/libpython dependency. *Covered:* the `i0402_*` snapshots in
+  `tests/diagnostics/` and `tests/issue_1224_interop_policy.rs`; the
+  no-`Py*`-symbol check runs on the non-Windows legs, while the Windows leg
+  proves only that the build succeeds with no `OUT.pycc/` sidecar; and
 - the boundary benchmark publishes copied scalar/container marshalling and
   supported zero-copy buffer transfers separately, so compatibility does not
   hide the cost model.
 
 Each negative case requires both human and versioned JSON diagnostic snapshots.
 The automatic and allowlist cases must also exercise target-specific native
-package artifacts rather than passing only with a pure-Python stand-in.
+package artifacts rather than passing only with a pure-Python stand-in
+(*pending:* #1225). Admission on a Windows host is *pending* #1226: an
+admitted root is `I0403` there, so every admission test is gated
+`cfg(not(windows))`.
 
 ## The bot (planned)
 

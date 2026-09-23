@@ -38,7 +38,8 @@ component, not part of the current pipeline. Native imports continue through
 the static pycc pipeline. A CPython-backed import keeps ordinary Python source
 syntax but adds a generated typed bridge and, in embedded mode, a pinned,
 target-specific runtime closure to the deployment artifact under `auto` or
-`allowlist`; `deny` and `--pure` retain the native-only artifact path.
+`allowlist`; `deny` and `--pure` retain the native-only artifact path. The
+policy gate itself is current (`src/interop_policy.rs`, #1224).
 
 ## Workspace crates (Rust 1.97+, edition 2024)
 

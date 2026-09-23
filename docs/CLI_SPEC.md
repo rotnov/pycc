@@ -15,8 +15,9 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
 
-A program with no CPython-backed import, and every future `deny`/`--pure`
-build, writes a native binary at `OUT`. A program whose CPython-backed imports
+A program with no CPython-backed import writes a native binary at `OUT`, and
+so does every successful `deny`/`--pure` build, since those policies reject every
+CPython-backed import with `I0402` (#1224). A program whose CPython-backed imports
 are all standard-library roots builds an **embedded executable** on a macOS or
 Linux host without `--target` (Part 1 of #1028, D-128's `auto` default): the
 executable at `OUT` plus an `OUT.pycc/` sidecar directory holding the embed
@@ -24,7 +25,9 @@ interpreter's shared library and filtered standard library. The two move
 together and must keep their names; D-248 owns the layout, the `PYCC-BUNDLE`
 marker, and the rule that an existing `OUT.pycc` without that marker is never
 replaced (exit 2). An embedded build refuses an `OUT` file name containing `$`
-or `:` (exit 2). Any other CPython-backed import is still `I0403`. The
+or `:` (exit 2). The effective interop policy (see `pycc.toml` below) is
+decided first, per import: a root it rejects is `I0402`, and any other
+CPython-backed import it admits is still `I0403`. The
 hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
 never an executable or a bundle. The recognized extension suffixes are the
@@ -77,12 +80,21 @@ arguments on `build`/`run`/`check`, which are native `PathBuf`s and
 preserve non-UTF-8 bytes the same way, #249), so a non-UTF-8 value after
 `--` is forwarded as the same opaque byte sequence instead of being
 rejected with a CLI parse error (#824). Omitting `-- args` entirely runs
-the program with no arguments, same as before this contract existed. `--`
-itself is never required before a trailing value -- `pycc run app.py extra`
-and `pycc run app.py -- extra` parse identically today, since `run` has no
-flags of its own for a bare trailing value to collide with; the explicit
-`--` above documents the always-safe form and is required only once `run`
-gains a flag that a value could otherwise be mistaken for.
+the program with no arguments, same as before this contract existed.
+
+`run` has flags of its own since #1224 (`--interop-policy`, `--pure`), and it
+recognizes them in a window: before `PATH`, and between `PATH` and the first
+forwarded value. `pycc run app.py --pure` sets `--pure`. The first value that
+is not a recognized `pycc` flag, and every value after it, is forwarded:
+`pycc run app.py x --pure` forwards `x` and `--pure`, and an unrecognized
+hyphen value such as a misspelled `--pur` is forwarded too, taking every
+later value with it. `--` ends the window explicitly, so
+`pycc run app.py -- --pure` forwards `--pure`; it is the always-safe form for
+a program argument that could be mistaken for a `pycc` flag. The conflict
+between `--pure` and an explicit `--interop-policy` holds among the flags
+`pycc` parses, in any order within the window; a value past the window is a
+program argument and conflicts with nothing. `pycc run app.py extra` and
+`pycc run app.py -- extra` still parse identically.
 
 `pycc init` inspects every scaffold destination before writing anything: an
 existing `pycc.toml`, a `src` that is not a directory, or an existing
@@ -241,16 +253,16 @@ directory once project mode exists.
                     classes are published and which are constructible.
                     `--ext` is also the only mode that imports a
                     non-standard-library root today (`I0403` otherwise,
-                    until #1225). Will
-                    conflict with `--lib`, `--interop-policy`, and `--pure`
-                    once those flags exist.
+                    until #1225). Conflicts with `--interop-policy` and
+                    `--pure` (exit 2, D-244 rule 3); will conflict with
+                    `--lib` once that flag exists.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
-                    planned v0.7 embedded-mode policy for CPython-backed
-                    imports (D-128);
+                    embedded-mode policy for CPython-backed imports in
+                    `build`, `run` and `check` (D-128, #1224);
                     CLI value overrides `[interop].policy`
---pure              planned v0.7 shorthand for `--interop-policy deny`;
-                    conflicts with an explicit `--interop-policy`
+--pure              shorthand for `--interop-policy deny`; conflicts
+                    with an explicit `--interop-policy` (exit 2)
 --error-format human|json     json = stable schema for editors/CI (check only)
 --format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-150)
 --fix               planned: apply machine-applicable suggestions (check
@@ -404,37 +416,64 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-window
 static = true
 
 [interop]
-policy = "allowlist"      # planned v0.7: "auto" (default), "allowlist", or "deny"
+policy = "allowlist"      # "auto" (default), "allowlist", or "deny"
 allow = ["numpy", "requests"]   # direct import roots; used only by "allowlist"
 
 [test]
 paths = ["tests/"]
 ```
 
-The `[interop]` table and both interop CLI flags are a **planned v0.7
-contract**, not current compiler behavior, and everything in this section
-describes the **embedded** mode only: an `--ext` build ignores the table
-entirely and rejects both flags (D-244 rule 3, mirrored from `RUNTIME.md`'s
-canonical statement). The current v0.1 TOML parser accepts
-and ignores unmodeled future sections. Only the `auto` default is partly real
-today: a standard-library-only program embeds with no configuration (#1223,
-D-248), while every other CPython-backed root is refused with `I0403` before
-any policy is evaluated; the table, both flags and `I0402` are #1224. When
-v0.7 implements this schema:
+The `[interop]` table and both interop CLI flags are implemented (#1224),
+and everything in this section describes the **embedded** mode only: an
+`--ext` build ignores the table entirely, never validating it, and rejects
+both flags (D-244 rule 3, mirrored from `RUNTIME.md`'s canonical statement).
+The TOML parser still accepts and ignores other unmodeled sections such as
+`[test]`. What each policy admits is current behavior; what an admitted root
+then builds is bounded by the embedding (D-248): a standard-library root
+builds an embedded executable, and any other admitted root is still `I0403`
+until the lock and closure land (#1225).
 
-- omitting `[interop]` selects `policy = "auto"`, so a standard source import
-  such as `import numpy as np` automatically resolves, pins, and bundles the
+- omitting `[interop]` selects `policy = "auto"`, which admits every
+  CPython-backed root. The target contract is that a standard source import
+  such as `import numpy as np` then resolves, pins, and bundles the
   compatible CPython runtime and package closure recorded in `pycc.lock`;
+  today only standard-library roots embed (#1223, D-248), and the lock is
+  #1225;
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
-  named by `allow`; importing a submodule of an allowed root and loading its
-  locked transitive closure do not require separate entries, while another
-  direct root fails with `I0402`;
+  named by `allow`, and another direct root fails with `I0402`. Importing a
+  submodule of an allowed root and loading its locked transitive closure
+  will not require separate entries (#1225; a dotted CPython-backed import is
+  `C0001` today). Each entry is one root name, so an empty or dotted entry is
+  invalid;
 - `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
-  CPython-backed dependency and guarantee that the produced artifact contains
-  no CPython/libpython runtime; and
-- the selected policy never changes native pycc-module imports. `allow` must
-  be absent or empty outside `allowlist`, so a stale list cannot look
-  authoritative while another policy silently ignores it.
+  CPython-backed import with `I0402`, so the produced artifact contains no
+  CPython/libpython runtime; and
+- the selected policy never changes native pycc-module imports (`import math`
+  stays native under `deny`) or project imports. `allow` must be absent or
+  empty outside `allowlist`, so a stale list cannot look authoritative while
+  another policy silently ignores it.
+
+The effective policy is an explicit `--interop-policy` or `--pure`, else the
+`[interop]` table of the program's manifest, else `auto`. The manifest is the
+one `pycc.toml` the module loader discovers for the program, walking up from
+the entry file's directory, so one program has exactly one. A CLI switch to
+`allowlist` uses the configured `allow` list when the table itself selects
+`allowlist`, and an empty list otherwise, rejecting every root. The policy is
+resolved only when the program has a CPython-backed import: a program without
+one, including one whose only imports are project modules, never validates
+the table. When it is resolved, the table is always validated, even when a
+flag overrides it: an unknown key, a `policy` other than `"auto"`,
+`"allowlist"` or `"deny"`, a value of the wrong type, an empty or dotted
+`allow` entry, or a non-empty `allow` outside `allowlist` is an input error
+naming the manifest (exit 2), as is a manifest the loader cannot parse.
+
+The policy is decided per import before the embedding: a root it rejects is
+`I0402` on every host and under `--target`, never `I0403`, and a root it
+admits proceeds to D-248's embedding, where it may still be `I0403`. The
+`I0402` message names the policy and where it was set: the flag, or the
+manifest's path as the command spelled it. `check` has no artifact mode, so
+it checks this embedded contract: a project that configures `deny` but ships
+only `--ext` artifacts gets `I0402` from `check` while `build --ext` succeeds.
 
 The same effective policy applies to `check`, `build`, `run`, and `test`; the
 eventual `pycc test` compilation path cannot bypass the project's dependency

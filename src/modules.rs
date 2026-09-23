@@ -41,6 +41,28 @@ pub(crate) struct LoadedModule {
 /// `pycc_hir::link` expects and the order top-level statements run in.
 pub(crate) struct LoadedProgram {
     pub(crate) modules: Vec<LoadedModule>,
+    /// The `pycc.toml` source-root discovery found and parsed, if it ran and
+    /// found one (#1224).
+    pub(crate) manifest: Option<DiscoveredManifest>,
+}
+
+/// The nearest `pycc.toml` above the entry file, as source-root discovery
+/// found and parsed it (#1224), kept so the interop policy reads the same
+/// file -- under the same display path -- that every other manifest error
+/// already renders.
+///
+/// `None` in [`LoadedProgram::manifest`] means "no manifest" only because
+/// every `ImportBinding::Foreign` depends on discovery having run: the
+/// loader answers `Resolution::Foreign` only for a non-relative base, and
+/// that base always comes from `Loader::source_root`. A future change that
+/// produced a foreign binding without discovery would make the policy fall
+/// back to `auto` silently; `tests/issue_1224_interop_policy.rs`'s
+/// configured-`deny` tests pin that dependency.
+pub(crate) struct DiscoveredManifest {
+    /// The manifest path as diagnostics render it (relative to the entry's
+    /// own spelling, never the canonical absolute path).
+    pub(crate) display: String,
+    pub(crate) config: project_config::PyccToml,
 }
 
 /// The source root a dotted absolute module name resolves against, in both
@@ -109,11 +131,13 @@ pub(crate) fn load(
         entry_dir,
         entry_display_dir,
         root: None,
+        manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
     };
     loader.load_module(&canonical, display, true)?;
     Ok(LoadedProgram {
         modules: loader.modules,
+        manifest: loader.manifest,
     })
 }
 
@@ -128,6 +152,9 @@ struct Loader {
     entry_dir: PathBuf,
     entry_display_dir: PathBuf,
     root: Option<RootInfo>,
+    /// The manifest [`Self::discover_root`] parsed, recorded for the interop
+    /// policy (#1224).
+    manifest: Option<DiscoveredManifest>,
     /// The `__name__` value the entry module is compiled with, or `None` when
     /// the caller supplied none (#1156). Only the entry module ever sees it.
     entry_module_name: Option<String>,
@@ -387,7 +414,7 @@ impl Loader {
         Ok(root)
     }
 
-    fn discover_root(&self) -> Result<RootInfo, FrontendFailure> {
+    fn discover_root(&mut self) -> Result<RootInfo, FrontendFailure> {
         for (climbs, ancestor) in self.entry_dir.ancestors().enumerate() {
             let toml = ancestor.join("pycc.toml");
             if !toml.is_file() {
@@ -402,9 +429,13 @@ impl Loader {
             let contents = std::fs::read_to_string(&toml)
                 .map_err(|error| FrontendFailure::input(display.clone(), error.to_string()))?;
             let config = project_config::parse(&contents)
-                .map_err(|message| FrontendFailure::input(display, message))?;
+                .map_err(|message| FrontendFailure::input(display.clone(), message))?;
             let mut root = ancestor.join(&config.project.entry);
             root.pop();
+            // Recorded before the source-root check below, so a manifest
+            // whose `entry` locates no source root (the `break` arm) still
+            // governs the interop policy (#1224).
+            self.manifest = Some(DiscoveredManifest { display, config });
             let resolved = root
                 .canonicalize()
                 .ok()
