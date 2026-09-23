@@ -15,11 +15,16 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
 
-The current compiler and every future native or `deny`/`--pure` build write a
-native binary at `OUT`. Planned v0.7 embedded-mode builds with a permitted
-CPython-backed import instead use `OUT` as the deployment-artifact destination
-for an autonomous application bundle. D-128 deliberately defers the bundle's
-exact file layout until the v0.7 resolver and packaging plan is accepted. The
+A program with no CPython-backed import, and every future `deny`/`--pure`
+build, writes a native binary at `OUT`. A program whose CPython-backed imports
+are all standard-library roots builds an **embedded executable** on a macOS or
+Linux host without `--target` (Part 1 of #1028, D-128's `auto` default): the
+executable at `OUT` plus an `OUT.pycc/` sidecar directory holding the embed
+interpreter's shared library and filtered standard library. The two move
+together and must keep their names; D-248 owns the layout, the `PYCC-BUNDLE`
+marker, and the rule that an existing `OUT.pycc` without that marker is never
+replaced (exit 2). An embedded build refuses an `OUT` file name containing `$`
+or `:` (exit 2). Any other CPython-backed import is still `I0403`. The
 hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
 never an executable or a bundle. The recognized extension suffixes are the
@@ -233,7 +238,10 @@ directory once project mode exists.
                     another method, a `@property`, an `@abstractmethod` --
                     shadows it, publishing the derived binding or nothing;
                     `docs/RUNTIME.md`'s `ext` boundary section states which
-                    classes are published and which are constructible. Will
+                    classes are published and which are constructible.
+                    `--ext` is also the only mode that imports a
+                    non-standard-library root today (`I0403` otherwise,
+                    until #1225). Will
                     conflict with `--lib`, `--interop-policy`, and `--pure`
                     once those flags exist.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
@@ -344,8 +352,9 @@ pinned 1.97.1: with `.cargo/config.toml` naming `from-config`, a plain
 build wrote there and `CARGO_TARGET_DIR=from-env` redirected to
 `from-env`).
 
-Two further variables apply to `build --ext` only, and only to locating
-the CPython headers the artifact compiles against:
+Two further variables locate CPython for `build --ext`, and the first also
+names the interpreter an embedded build bundles (see the end of this
+section):
 
 - **`PYCC_PYTHON`** names the interpreter to probe for its `include`
   directory, its `libs` directory and its version. Default: `python3`.
@@ -370,7 +379,16 @@ development package is a broken build environment, not a defect in the
 source being compiled, and reporting it as one would misclassify it as a
 compile error.
 
-Neither variable has any effect without `--ext`.
+For an **embedded** build (a plain `build` or `run` whose CPython imports
+are all standard-library roots), `PYCC_PYTHON` names the interpreter to embed
+and defaults to `python3.14`, because D-128 pins CPython 3.14.
+`PYCC_PYTHON_INCLUDE` has no effect there. The interpreter must be a shared,
+non-free-threaded CPython 3.14.x with its headers, shared library and
+standard library present, and on macOS every native library its
+`lib-dynload` modules link must be a system library or lie under its own
+prefix; each failure is an environment failure at exit 2 naming the reason
+(D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
+and neither variable affects it.
 
 ## `pycc.toml`
 
@@ -398,8 +416,11 @@ contract**, not current compiler behavior, and everything in this section
 describes the **embedded** mode only: an `--ext` build ignores the table
 entirely and rejects both flags (D-244 rule 3, mirrored from `RUNTIME.md`'s
 canonical statement). The current v0.1 TOML parser accepts
-and ignores unmodeled future sections, and the current frontend rejects every
-`import` before policy evaluation. When v0.7 implements this schema:
+and ignores unmodeled future sections. Only the `auto` default is partly real
+today: a standard-library-only program embeds with no configuration (#1223,
+D-248), while every other CPython-backed root is refused with `I0403` before
+any policy is evaluated; the table, both flags and `I0402` are #1224. When
+v0.7 implements this schema:
 
 - omitting `[interop]` selects `policy = "auto"`, so a standard source import
   such as `import numpy as np` automatically resolves, pins, and bundles the
@@ -472,7 +493,9 @@ against `crates/pycc_codegen/src/lib.rs` before being treated as a defect:
 Each is an intentional alpha boundary, not a reportable compiler defect.
 
 `pycc run` normalizes every unsuccessful generated-program termination to
-`101`. This includes an ordinary non-zero child status, a Unix signal (which
+`101`. An embedded program's exit status is user-controlled (`sys.exit(3)`
+exits `3` when the built executable runs directly), but `pycc run` still maps
+it to `101`, unchanged by #1223. This includes an ordinary non-zero child status, a Unix signal (which
 has no numeric `ExitStatus::code()`), and a platform abort status wider than
 the CLI's portable one-byte exit-code range; raw child status values are not
 part of the CLI contract.

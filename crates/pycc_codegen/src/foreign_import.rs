@@ -244,10 +244,11 @@ mod tests {
         assert!(numpy < scipy, "{ir}");
     }
 
-    /// The gate `src/foreign_import.rs` exists to make coverable: outside
-    /// `--ext` there is no interpreter to import into, the driver has
-    /// already refused with `I0403`, and this arm emits nothing rather than
-    /// asserting.
+    /// The gate `src/foreign_import.rs` exists to make coverable: a build
+    /// that neither passes `--ext` nor embeds CPython (D-248; an embedded
+    /// build compiles with `ext` set) has no interpreter to import into,
+    /// the driver has already refused with `I0403`, and this arm emits
+    /// nothing rather than asserting.
     #[test]
     fn a_native_build_emits_no_import_call_for_a_foreign_import_item() {
         let dir = pycc_scratch::ScratchDir::new("foreign_import_native").expect("scratch");
