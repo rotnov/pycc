@@ -2,6 +2,8 @@ pub use pycc_hir::{EnumMemberValue, HirClassDef};
 mod binop;
 use binop::binop_result_ty;
 mod boolop;
+mod compare_chain;
+pub use compare_chain::{MirCompareKind, MirCompareLink};
 mod class;
 #[cfg(test)]
 use class::eval_isinstance_protocol;
@@ -123,6 +125,15 @@ pub enum MirExpr {
         left: Box<MirExpr>,
         right: Box<MirExpr>,
         ty: Ty,
+    },
+    /// A chained comparison `first op1 r1 op2 r2 ...` (#1212, Part 4 of
+    /// #1018); `links.len() >= 2`. Every operand is evaluated at most once,
+    /// left to right, and evaluation stops at the first false link. Always
+    /// `Ty::Bool`. `pycc_codegen` builds the short circuit with basic blocks
+    /// and a join, like [`MirExpr::BoolOp`].
+    CompareChain {
+        first: Box<MirExpr>,
+        links: Vec<MirCompareLink>,
     },
     /// `not x` (#604, Part 3 of #573). Unlike `USub`/`UAdd`/`Invert`, `not`
     /// has no equivalent `BinOp` shape to rewrite into -- its truthiness
@@ -608,7 +619,7 @@ impl MirExpr {
             | MirExpr::BinOp { ty, .. }
             | MirExpr::Compare { ty, .. }
             | MirExpr::BoolOp { ty, .. } => ty.clone(),
-            MirExpr::Not(_) => Ty::Bool,
+            MirExpr::Not(_) | MirExpr::CompareChain { .. } => Ty::Bool,
             MirExpr::EmptyList(element) => Ty::List(Box::new(element.clone())),
             MirExpr::EmptyDict(pair) => Ty::Dict(pair.clone()),
             MirExpr::ListLiteral(elements) => {
@@ -805,6 +816,12 @@ impl MirExpr {
             MirExpr::Call { args, .. } => {
                 for arg in args {
                     arg.collect_named_expr_bindings(out);
+                }
+            }
+            MirExpr::CompareChain { first, links } => {
+                first.collect_named_expr_bindings(out);
+                for link in links {
+                    link.right.collect_named_expr_bindings(out);
                 }
             }
             MirExpr::BinOp { left, right, .. }

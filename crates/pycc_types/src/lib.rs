@@ -2,6 +2,7 @@ mod binop;
 mod boolop;
 mod buffer;
 mod class;
+mod compare_chain;
 mod constraints;
 mod empty_container;
 mod enum_lower;
@@ -565,6 +566,11 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_named_expr_names_in_expr(arg, names);
+            }
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                collect_named_expr_names_in_expr(operand, names);
             }
         }
         HirExpr::BinOp { left, right, .. }
@@ -1249,6 +1255,12 @@ fn collect_named_expr_bindings(
         HirExpr::Call { args, .. } => {
             for arg in args {
                 collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                collect_named_expr_bindings(env, local_names, operand)?;
             }
             Ok(())
         }
@@ -3834,6 +3846,12 @@ fn reject_generic_calls_in_expr(
         }
         HirExpr::UnaryOp { operand, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, operand)
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                reject_generic_calls_in_expr(module_env, own_name, operand)?;
+            }
+            Ok(())
         }
         HirExpr::BinOp { left, right, .. }
         | HirExpr::Compare { left, right, .. }

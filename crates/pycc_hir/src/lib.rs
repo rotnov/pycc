@@ -3,6 +3,7 @@ use pycc_diag::{Diagnostic, Span};
 mod boolop;
 mod buffer_store;
 mod class;
+mod compare_chain;
 mod container;
 mod dunder_name;
 mod exception;
@@ -23,6 +24,7 @@ pub use class::{
     ClassAttrValue, EnumMemberValue, HirClassDef, PropertyDef, ProtocolMember,
     declares_name_outside_class_attrs, flat_attr_layout,
 };
+pub use compare_chain::{CompareLink, compare_chain_operands};
 pub use container::{check_container_ty, check_tuple_element_ty};
 pub use dunder_name::DUNDER_NAME;
 pub use exception::{
@@ -331,6 +333,21 @@ pub enum HirExpr {
         op: CmpOpKind,
         left: Box<HirExpr>,
         right: Box<HirExpr>,
+    },
+    /// A chained comparison `first op1 r1 op2 r2 ...` (#1212, Part 4 of
+    /// #1018).
+    ///
+    /// Invariant: `links.len() >= 2`. A single comparison is always
+    /// [`HirExpr::Compare`]; only `crate::expr::lower_expr` builds this node,
+    /// from an AST comparison with two or more operators.
+    ///
+    /// Evaluation contract (CPython's): `a op1 b op2 c` means `(a op1 b) and
+    /// (b op2 c)`, except that each operand is evaluated at most once,
+    /// strictly left to right, and evaluation stops at the first false link
+    /// without evaluating any later operand. The result is always `bool`.
+    CompareChain {
+        first: Box<HirExpr>,
+        links: Vec<CompareLink>,
     },
     /// `-operand` / `+operand` where `operand` is *not* a numeric literal
     /// (#603, Part 2 of #573).

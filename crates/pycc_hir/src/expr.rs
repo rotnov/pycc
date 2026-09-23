@@ -45,12 +45,13 @@ pub(crate) use bin_op_kind::bin_op_kind;
 use keyword_bind::SignatureTable;
 
 use crate::boolop::{fold_bool_op, mark_truth_context};
+use crate::compare_chain::{lower_cmp_op, lower_compare_chain};
 use crate::int_boundary::check_boundary_literal;
 use crate::{
-    BinOpKind, BoolOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty,
-    UnaryOpKind, context_invalid, unsupported,
+    BinOpKind, BoolOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty, UnaryOpKind,
+    context_invalid, unsupported,
 };
-use pycc_ast::{BoolOp, CmpOp, Expr, Int, Number, UnaryOp};
+use pycc_ast::{BoolOp, Expr, Int, Number, UnaryOp};
 use pycc_diag::Diagnostic;
 pub use receiver_dispatch::receiver_takes_method_path;
 use std_receiver::describe_module;
@@ -772,46 +773,14 @@ pub(crate) fn lower_expr(
                 .collect::<Result<Vec<_>, _>>()?;
             HirExpr::FString(parts)
         }
+        // #1212 (Part 4 of #1018): two or more operators lower to a
+        // `HirExpr::CompareChain` (see `crate::compare_chain`); a single
+        // comparison stays `HirExpr::Compare`.
+        Expr::Compare(cmp) if cmp.ops.len() >= 2 => {
+            lower_compare_chain(cmp, in_function, class_name, imports, signatures)?
+        }
         Expr::Compare(cmp) => {
-            if cmp.ops.len() != 1 {
-                return Err(unsupported(
-                    format!("chained comparisons are not supported yet: {:?}", cmp.ops),
-                    cmp.range,
-                ));
-            }
-            // `is`/`is not` (D-197, #763, Part 1 of #747): this compiler's
-            // first support of any kind for either operator, deliberately
-            // scoped at this syntactic gate to exactly the case #763 needs
-            // -- one operand is literally `Expr::NoneLiteral`. Every other
-            // `is`/`is not` use (`x is y` for two arbitrary non-`None`
-            // operands, or `x is None` where the check below finds neither
-            // side is `NoneLiteral` -- unreachable today since `None` is
-            // the only way to spell that side, kept as a real check rather
-            // than an `assert!` so a future second `None`-shaped literal
-            // does not silently widen acceptance) keeps falling through to
-            // the pre-existing `other =>` rejection below unchanged. The
-            // *type* of the non-`None` operand (must be `Ty::Optional(_)`
-            // or `Ty::None`) is `pycc_types`' job, not this lowering step's
-            // -- HIR only records the syntactic shape, matching every other
-            // shape-vs-type division of labor in this module (D-105).
-            let is_none_operand_shape = matches!(cmp.left.as_ref(), Expr::NoneLiteral(_))
-                || matches!(cmp.comparators[0], Expr::NoneLiteral(_));
-            let op = match cmp.ops[0] {
-                CmpOp::Eq => CmpOpKind::Eq,
-                CmpOp::NotEq => CmpOpKind::NotEq,
-                CmpOp::Lt => CmpOpKind::Lt,
-                CmpOp::LtE => CmpOpKind::LtE,
-                CmpOp::Gt => CmpOpKind::Gt,
-                CmpOp::GtE => CmpOpKind::GtE,
-                CmpOp::Is if is_none_operand_shape => CmpOpKind::Is,
-                CmpOp::IsNot if is_none_operand_shape => CmpOpKind::IsNot,
-                other => {
-                    return Err(unsupported(
-                        format!("comparison operator not supported yet: {other:?}"),
-                        cmp.range,
-                    ));
-                }
-            };
+            let op = lower_cmp_op(cmp.ops[0], &cmp.left, &cmp.comparators[0], cmp.range.into())?;
             HirExpr::Compare {
                 op,
                 left: Box::new(lower_expr(
@@ -1015,6 +984,16 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             left: Box::new(recurse(*left)),
             right: Box::new(recurse(*right)),
         },
+        HirExpr::CompareChain { first, links } => HirExpr::CompareChain {
+            first: Box::new(recurse(*first)),
+            links: links
+                .into_iter()
+                .map(|link| crate::CompareLink {
+                    op: link.op,
+                    right: recurse(link.right),
+                })
+                .collect(),
+        },
         HirExpr::FString(parts) => HirExpr::FString(
             parts
                 .into_iter()
@@ -1146,6 +1125,9 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         | HirExpr::Compare { left, right, .. }
         | HirExpr::BoolOp { left, right, .. } => {
             contains_named_expr(left) || contains_named_expr(right)
+        }
+        HirExpr::CompareChain { first, links } => {
+            contains_named_expr(first) || links.iter().any(|link| contains_named_expr(&link.right))
         }
         HirExpr::UnaryOp { operand, .. } => contains_named_expr(operand),
         HirExpr::FString(parts) => parts.iter().any(|part| match part {

@@ -22,6 +22,10 @@ mod d029_guard;
 // cohesion-driven submodule for the same reason `d029_guard` has one.
 mod buffer_slice_egress;
 
+// #1212: chained-comparison codegen, in its own submodule for the same
+// reason.
+mod compare_chain;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any

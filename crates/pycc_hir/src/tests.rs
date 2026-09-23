@@ -788,8 +788,11 @@ fn lowers_every_comparison_operator() {
 }
 
 #[test]
-fn a_chained_comparison_is_not_supported_yet() {
-    assert_capability_error_message("x = 1 < 2 < 3\n", "chained comparisons");
+fn a_chained_comparison_with_in_is_not_supported_yet() {
+    assert_capability_error_message(
+        "x = 1 < 2 in [3]\n",
+        "comparison operator not supported yet: In",
+    );
 }
 
 #[test]

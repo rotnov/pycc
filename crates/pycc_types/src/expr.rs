@@ -24,14 +24,14 @@ use crate::{
     BindingState, Environment, annotation_marker_is_not_a_value, cast_marker_is_not_a_value,
     enum_marker_is_not_a_value, enum_member_attr_type, instantiate_generic_call, is_assignable,
     is_known_callable_builtin, is_local, is_marker_kind, lookup_bound_name, marker_is_not_a_value,
-    non_callable_binding, numeric_or_bool_compatible, possibly_unbound,
-    std_constant_is_not_callable, std_function_used_as_a_value, std_scalar_to_ty,
-    type_checking_marker_is_not_a_value, unbound_local, unsupported_callable_builtin,
+    non_callable_binding, possibly_unbound, std_constant_is_not_callable,
+    std_function_used_as_a_value, std_scalar_to_ty, type_checking_marker_is_not_a_value,
+    unbound_local, unsupported_callable_builtin,
 };
 
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::Ty;
-use pycc_hir::{CmpOpKind as CmpOp, FStringPart, HirExpr};
+use pycc_hir::{FStringPart, HirExpr};
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
     infer_expr_in(env, &[], expr)
@@ -265,65 +265,10 @@ pub(crate) fn infer_expr_in(
         HirExpr::Compare { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            // `is`/`is not` (D-197, #763, Part 1 of #747): HIR lowering
-            // (`crates/pycc_hir/src/expr.rs`'s `Expr::Compare` arm) already
-            // guarantees one operand is syntactically `HirExpr::NoneLiteral`
-            // whenever `op` is `Is`/`IsNot` -- this is the type-level half
-            // of that scoping: the *other* operand's static type must be
-            // `Ty::Optional(_)` or `Ty::None` itself. Every other `is`/`is
-            // not` shape never reaches this arm at all (still `C0001` at
-            // HIR-lowering), so this deliberately does not implement
-            // general object-identity comparison.
-            if matches!(op, CmpOp::Is | CmpOp::IsNot) {
-                let other_ty = if matches!(left.as_ref(), HirExpr::NoneLiteral) {
-                    &right_ty
-                } else {
-                    &left_ty
-                };
-                return match other_ty {
-                    Ty::Optional(_) | Ty::None => Ok(Ty::Bool),
-                    other => Err(Diagnostic::error(
-                        "T0021",
-                        format!(
-                            "cannot compare `{}` and `None` with `is`/`is not` -- only an `Optional[T]` (or `None`) operand is supported",
-                            other.name()
-                        ),
-                        Span::new(0, 0),
-                    )),
-                };
-            }
-            // #378 (PR-18): `==`/`!=` between same-class dataclass instances
-            // is accepted -- the compiler-synthesized `__eq__` method has a
-            // known-correct signature `(self, other: SameClass) -> bool`.
-            // This is restricted to dataclass classes (not any class with a
-            // user-defined `__eq__`) because the MIR rewrite assumes the
-            // synthesized signature; a user-defined `__eq__` with wrong
-            // arity or return type would reach codegen and panic. Ordering
-            // operators (`<`, `<=`, `>`, `>=`) between instances are always
-            // rejected with T0021 -- pycc has no `__lt__`/`__le__`/`__gt__`/
-            // `__ge__` dispatch. Different-class comparisons also stay T0021.
-            if matches!(op, CmpOp::Eq | CmpOp::NotEq)
-                && let (Ty::Instance(left_class), Ty::Instance(right_class)) =
-                    (&left_ty, &right_ty)
-                && left_class == right_class
-                && let Some(class_def) = env.lookup_class(left_class)
-                && class_def.is_dataclass
-            {
-                return Ok(Ty::Bool);
-            }
-            if numeric_or_bool_compatible(left_ty.clone(), right_ty.clone()) {
-                Ok(Ty::Bool)
-            } else {
-                Err(Diagnostic::error(
-                    "T0021",
-                    format!(
-                        "cannot compare `{}` and `{}`",
-                        left_ty.name(),
-                        right_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ))
-            }
+            crate::compare_chain::compare_link_ty(env, *op, left, &left_ty, &right_ty)
+        }
+        HirExpr::CompareChain { first, links } => {
+            crate::compare_chain::infer_compare_chain(env, local_names, first, links)
         }
         HirExpr::Call { callee, args } => {
             // D-110 (#133): a call target resolves through the active value

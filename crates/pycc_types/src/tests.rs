@@ -23,6 +23,7 @@ use crate::binop::numeric_result_type;
 // `typing.TYPE_CHECKING`-marker and `typing.cast` clusters.
 mod boolop;
 mod buffer_producer;
+mod compare_chain;
 mod constraints;
 mod empty_container_registry;
 mod enum_unrolling;

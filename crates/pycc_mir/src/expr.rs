@@ -469,37 +469,12 @@ pub(super) fn lower_expr(
             // lowering in normal compilation, but the MIR itself stays
             // semantically correct for defense-in-depth).
             if matches!(op, pycc_hir::CmpOpKind::Eq | pycc_hir::CmpOpKind::NotEq)
-                && let (Ty::Instance(left_class), Ty::Instance(right_class)) =
-                    (left_lowered.ty(), right_lowered.ty())
-                && left_class == right_class
-                && let Some(class_def) = classes.get(left_class.as_str())
-                && class_def.is_dataclass
+                && let Some(eq_mangled) = super::compare_chain::dataclass_eq_callee(
+                    &left_lowered.ty(),
+                    &right_lowered.ty(),
+                    classes,
+                )
             {
-                let eq_mangled = class_def.mro.iter().find_map(|mro_class| {
-                    // Every class in the MRO was registered when the class
-                    // was lowered; using `.expect` (whose panic path lives
-                    // in libcore, outside this crate's instrumented regions)
-                    // avoids a `?` whose `None` branch is structurally
-                    // unreachable and would show up as a permanently
-                    // uncovered region under D-014's 100% coverage gate.
-                    let mro_def = classes
-                        .get(mro_class.as_str())
-                        .expect("MRO class must be registered");
-                    mro_def
-                        .methods
-                        .iter()
-                        .find(|(mn, _)| mn == "__eq__")
-                        .map(|(_, mangled)| mangled.clone())
-                });
-                // A dataclass always has a synthesized `__eq__` in its
-                // MRO (the `is_dataclass` guard above ensures we only
-                // enter this block for dataclass classes). Using
-                // `.expect` (whose panic path lives in libcore, outside
-                // this crate's instrumented regions) avoids an `if let
-                // Some` whose `None` branch is structurally unreachable
-                // for a dataclass and would show up as a permanently
-                // uncovered region under D-014's 100% coverage gate.
-                let eq_mangled = eq_mangled.expect("dataclass must have __eq__");
                 let eq_call = MirExpr::Call {
                     callee: eq_mangled,
                     args: vec![left_lowered, right_lowered],
@@ -527,6 +502,22 @@ pub(super) fn lower_expr(
                 ty: Ty::Bool,
             }
         }
+        // #1212: every operand is lowered once, left to right; a
+        // same-dataclass `==`/`!=` link keeps both operands as values and
+        // names the synthesized `__eq__` instead of owning them in a `Call`.
+        HirExpr::CompareChain { first, links } => super::compare_chain::lower_compare_chain(
+            lower_expr(first, scopes, classes, current_class),
+            links
+                .iter()
+                .map(|link| {
+                    (
+                        link.op,
+                        lower_expr(&link.right, scopes, classes, current_class),
+                    )
+                })
+                .collect(),
+            classes,
+        ),
         HirExpr::FString(parts) => MirExpr::FString(
             parts
                 .iter()
@@ -1357,6 +1348,11 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::BoolOp { left, right, .. } => {
             pre_bind_named_expr_targets(left, scopes, classes, current_class);
             pre_bind_named_expr_targets(right, scopes, classes, current_class);
+        }
+        HirExpr::CompareChain { first, links } => {
+            for operand in pycc_hir::compare_chain_operands(first, links) {
+                pre_bind_named_expr_targets(operand, scopes, classes, current_class);
+            }
         }
         HirExpr::UnaryOp { operand, .. } => {
             pre_bind_named_expr_targets(operand, scopes, classes, current_class)
