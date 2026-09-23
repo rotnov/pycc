@@ -483,7 +483,7 @@ only `--ext` artifacts gets `I0402` from `check` while `build --ext` succeeds.
 
 The same effective policy applies to `check`, `build`, `run`, and `test`; the
 eventual `pycc test` compilation path cannot bypass the project's dependency
-policy. `pycc lock` applies it too, and locks only the roots it admits. A CLI `--interop-policy` overrides the project setting; `--pure` is
+policy. `pycc lock` applies it too: a root it rejects is `I0402`, exit 1, before anything is written. A CLI `--interop-policy` overrides the project setting; `--pure` is
 rejected as an invalid invocation when combined with any explicit
 `--interop-policy` rather than relying on argument order.
 
@@ -514,10 +514,13 @@ native libraries outside the interpreter prefix are #1243.
   relative to the lock's directory, so every spelling of one script is one
   key. The file is TOML, `version = 1`, sorted, with no absolute path or
   timestamp; a reader refuses another version, an unknown field, a duplicate
-  section or a non-Tier-1 triple.
+  section, a non-Tier-1 triple or an `entry` that is not relative and
+  `..`-free.
 - **Update.** `pycc lock PATH` replaces the (entry, host) section, drops
   sections whose entry script no longer exists, and writes the file through
-  a temporary `pycc.lock.tmp-<pid>` and a rename. A program with no
+  a temporary `pycc.lock.tmp-<pid>` and a rename. Concurrent runs against
+  one file are not serialized: the last rename wins, and `--check` reports
+  a section it dropped. A program with no
   CPython-backed import has no section and never starts the interpreter; a
   lock left with no sections is deleted. A standard-library-only program
   gets the interpreter fields and `roots = []`, without a site scan.

@@ -125,6 +125,21 @@ fn bad_lock_files_are_refused() {
             .unwrap_err()
             .contains("two sections for entry `a.py`")
     );
+    for entry in ["/etc/m.py", "../m.py", "a/./m.py", "a//m.py", ""] {
+        let bad = render(&lock(vec![target(entry, "aarch64-apple-darwin")]));
+        let err = parse(&bad).unwrap_err();
+        assert!(
+            err.contains("is not a relative path below the lock's directory"),
+            "{entry}: {err}"
+        );
+    }
+    assert!(
+        parse(&render(&lock(vec![target(
+            "src/app/m.py",
+            "aarch64-apple-darwin"
+        )])))
+        .is_ok()
+    );
     // An empty lock (no sections) is valid.
     assert!(parse("version = 1\n").unwrap().target.is_empty());
 }

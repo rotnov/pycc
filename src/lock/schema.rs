@@ -137,8 +137,9 @@ pub(crate) fn render(lock: &Lock) -> String {
 }
 
 /// Parses a lock file's text, refusing another schema version, an unknown
-/// field, a duplicate (entry, triple) section, a non-Tier-1 triple or an
-/// unknown `site`.
+/// field, an `entry` that is not a relative `/`-joined path below the lock
+/// directory, a duplicate (entry, triple) section, a non-Tier-1 triple or
+/// an unknown `site`.
 pub(crate) fn parse(text: &str) -> Result<Lock, String> {
     let invalid =
         |e: &dyn std::fmt::Display| format!("{LOCK_FILE_NAME} is not a valid lock file: {e}");
@@ -156,6 +157,16 @@ pub(crate) fn parse(text: &str) -> Result<Lock, String> {
     let lock: Lock = value.try_into().map_err(|e| invalid(&e))?;
     let mut seen = std::collections::BTreeSet::new();
     for target in &lock.target {
+        if target
+            .entry
+            .split('/')
+            .any(|part| matches!(part, "" | "." | ".."))
+        {
+            return Err(invalid(&format!(
+                "entry `{}` is not a relative path below the lock's directory",
+                target.entry
+            )));
+        }
         if !crate::TIER1_TARGETS.contains(&target.triple.as_str()) {
             return Err(invalid(&format!(
                 "`{}` is not a Tier-1 target triple",
