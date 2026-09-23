@@ -11,6 +11,7 @@
 
 mod bundle;
 mod closure;
+mod elf;
 #[cfg(test)]
 pub(crate) mod fake_layout;
 pub(crate) mod layout;
