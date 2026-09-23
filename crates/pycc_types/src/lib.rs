@@ -618,6 +618,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(arg, names);
             }
         }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            collect_named_expr_names_in_expr(call, names)
+        }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
                 collect_named_expr_names_in_expr(arg, names);
@@ -1302,6 +1305,9 @@ fn collect_named_expr_bindings(
                 collect_named_expr_bindings(env, local_names, arg)?;
             }
             Ok(())
+        }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            collect_named_expr_bindings(env, local_names, call)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
@@ -3881,6 +3887,9 @@ fn reject_generic_calls_in_expr(
                 reject_generic_calls_in_expr(module_env, own_name, arg)?;
             }
             Ok(())
+        }
+        HirExpr::ReceiverDispatchedCall { call, .. } => {
+            reject_generic_calls_in_expr(module_env, own_name, call)
         }
         // PEP 695 (#387): `C[type_arg](args)` — recurse into args only.
         // `class` is a bare name (not an expression), and `type_arg` is a

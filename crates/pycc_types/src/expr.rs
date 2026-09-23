@@ -13,6 +13,8 @@
 //! [`lib.rs`](crate) and its other submodules -- so this module is the
 //! expression seam only.
 
+mod receiver_dispatch;
+
 use crate::binop::numeric_result_type;
 use crate::class;
 use crate::std_receiver::{shadowed_std_receiver, std_qualified_symbol, std_receiver_shadowed};
@@ -1537,6 +1539,12 @@ pub(crate) fn infer_expr_in(
             }
             class::resolve_attr_get(env, &base_ty, attr)
         }
+        // Issue #1188: one of the four container method names in a module
+        // that can see a user class defining it; the receiver picks the
+        // reading.
+        HirExpr::ReceiverDispatchedCall { call, container } => {
+            receiver_dispatch::infer_receiver_dispatched_call(env, local_names, call, container)
+        }
         HirExpr::MethodCall { base, method, args } => {
             // #433: `super().method(args)` — resolve the method starting
             // from the next class in the current class's MRO, with `self`
@@ -1562,9 +1570,8 @@ pub(crate) fn infer_expr_in(
             // class method. The guard runs before the method-table walk so
             // a shadowed name short-circuits straight to the ordinary
             // instance path below.
-            if let HirExpr::Name(class_name) = base.as_ref()
-                && class_name_dispatch(env, local_names, class_name)?
-                && class::has_static_or_class_method(env, class_name, method)
+            if let Some(class_name) =
+                receiver_dispatch::static_or_class_method_receiver(env, local_names, base, method)?
             {
                 let arg_tys = args
                     .iter()

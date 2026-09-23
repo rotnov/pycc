@@ -157,6 +157,9 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             // it decides whether the entry module is seeded at all, so by the
             // time modules reach linking the answer has already been applied.
             mentions_dunder_name: _,
+            // Consumed by the driver too (issue #1188): it feeds each
+            // importer's lowering, and linking has no use for it.
+            container_method_names: _,
         } = input.module;
         let mut own: HashSet<&str> = HashSet::new();
         for (name, span) in &definition_spans {

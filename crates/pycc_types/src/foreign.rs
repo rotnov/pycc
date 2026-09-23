@@ -63,12 +63,16 @@
 //! through the same `HirExpr::Name` arm, so a call inside a function body
 //! is still `I0404` and a call above the `import` is still `T0021`.
 //!
-//! The arm is not reached for four method names. `pycc_hir`'s
-//! `CONTAINER_METHOD_NAMES` (`append`, `pop`, `get`, `add`) claims those
-//! spellings while lowering, so `gc.get(1, 2)` never becomes a
-//! `HirExpr::MethodCall` at all and is refused here through a different
-//! consumer. `docs/TYPE_SYSTEM.md`'s `object` row owns that statement,
-//! and #1095 tracks routing them to foreign dispatch.
+//! The arm is not reached for four method names. `pycc_hir`'s container
+//! fast paths claim `append`, `pop`, `get` and `add` while lowering, so
+//! `gc.get(1, 2)` never becomes a plain `HirExpr::MethodCall` and is refused
+//! here through a different consumer. In a module that can see a user class
+//! defining one of those names, the call is a
+//! `HirExpr::ReceiverDispatchedCall` instead (issue #1188), but
+//! `pycc_hir::receiver_takes_method_path` sends a `Ty::Object` receiver down
+//! the container path all the same, so the refusal is unchanged.
+//! `docs/TYPE_SYSTEM.md`'s `object` row owns that statement, and #1095
+//! tracks routing them to foreign dispatch.
 //!
 //! **PR 3a of #1082 (Part 3 of #1026) added `len` and truth testing, and
 //! deleted a whole class of refusal.** `len(o)` type-checks to `Ty::Int`

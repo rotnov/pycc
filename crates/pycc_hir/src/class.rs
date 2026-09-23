@@ -88,22 +88,6 @@ use protocol::lower_protocol_class;
 use pycc_ast::{Decorator, Expr, Number, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
-/// Method names that collide with `crates/pycc_hir/src/expr.rs`'s own
-/// hand-recognized container-method call syntax (`Expr::Call` over
-/// `Expr::Attribute`'s fast path for `.append()`/`.pop()`/`.get()`/
-/// `.add()`, checked *before* the generic instance-method-call fallback --
-/// see that file's own comment on that ordering). That fast path runs with
-/// no type information available -- it cannot tell a real `list`/`dict`/
-/// `set` receiver from a class instance whose own method just happens to
-/// share one of these four names -- so `some_instance.get(5)` would
-/// silently misroute into the dict-`get` fast path and fail with a
-/// confusing "`.get()` is only supported as `dict.get(key, default)` with
-/// exactly two arguments" diagnostic instead of ever reaching the user's own
-/// method (D-068 review finding on #385).
-/// Rejecting the name here, at class-definition time, turns that confusing
-/// failure into a clear, immediate one.
-const CONTAINER_METHOD_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
-
 /// PEP 435 (#892): the value assigned to one enum member. Members may be
 /// `int`- or `str`-valued; `class/enum_class.rs` requires every member of
 /// one class to use the same variant, so the variant in use also fixes that

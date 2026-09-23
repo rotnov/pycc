@@ -60,6 +60,9 @@ enum Resolution {
     Loaded {
         index: usize,
         submodules: Vec<String>,
+        /// The package `__init__.py`s loaded on the way to `index`, which
+        /// are dependencies of the importer too (issue #1188).
+        package_inits: Vec<usize>,
     },
     /// A bare `import m` naming a real project module: recognized, not
     /// loaded (Part 1 binds no module namespace).
@@ -167,7 +170,23 @@ impl Loader {
         }
         for (span, answer) in answers {
             match answer {
-                Resolution::Loaded { index, submodules } => {
+                Resolution::Loaded {
+                    index,
+                    submodules,
+                    package_inits,
+                } => {
+                    // Issue #1188: a direct dependency's container method
+                    // names reach this module, and through them the whole
+                    // transitive import closure's.
+                    for dependency in package_inits.into_iter().chain([index]) {
+                        resolved.inherit_container_method_names(
+                            self.modules[dependency]
+                                .module
+                                .container_method_names
+                                .iter()
+                                .copied(),
+                        );
+                    }
                     let loaded = &self.modules[index];
                     resolved.insert(
                         span,
@@ -274,6 +293,7 @@ impl Loader {
                 message: format!("import cycle: {}", chain.join(" -> ")),
             });
         }
+        let mut package_inits = Vec::new();
         for (init_path, init_display) in target.package_inits {
             let init_canonical = identity_path(&init_path);
             // An `__init__.py` already on the in-progress stack is the
@@ -287,12 +307,13 @@ impl Loader {
             {
                 continue;
             }
-            self.load_module(&init_canonical, init_display, false)?;
+            package_inits.push(self.load_module(&init_canonical, init_display, false)?);
         }
         let index = self.load_module(&canonical, target.display, false)?;
         Ok(Resolution::Loaded {
             index,
             submodules: target.submodules,
+            package_inits,
         })
     }
 
