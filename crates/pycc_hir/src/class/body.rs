@@ -359,6 +359,15 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             )?);
             continue;
         }
+        // #1244: a class-body `del` would unbind a class attribute, which the
+        // class model has no notion of; it gets its own message rather than
+        // the generic one below.
+        if let Stmt::Delete(_) = stmt {
+            return Err(unsupported(
+                "a `del` statement in a class body is not supported yet",
+                pycc_ast::stmt_range(stmt),
+            ));
+        }
         let Stmt::FunctionDef(method_def) = stmt else {
             // #910 reworded this, and split it in two. A bare assignment is
             // now an accepted class-level attribute -- but *only* outside a

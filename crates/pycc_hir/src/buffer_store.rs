@@ -89,6 +89,7 @@ fn stmt_stores_into(stmt: &HirStmt, name: &str) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::Return(_)
         | HirStmt::AttrSet { .. }
+        | HirStmt::Delete { .. }
         | HirStmt::Raise { .. } => false,
     }
 }
@@ -161,6 +162,7 @@ fn stmt_returns_slice_of(stmt: &HirStmt, name: &str) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::DictSet { .. }
         | HirStmt::AttrSet { .. }
+        | HirStmt::Delete { .. }
         | HirStmt::Raise { .. } => false,
     }
 }
@@ -248,6 +250,7 @@ fn stmt_returns_inside_finally(stmt: &HirStmt) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::Return(_)
         | HirStmt::AttrSet { .. }
+        | HirStmt::Delete { .. }
         | HirStmt::Raise { .. } => false,
     }
 }
@@ -300,6 +303,7 @@ fn stmt_contains_return(stmt: &HirStmt) -> bool {
         | HirStmt::DictCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
         | HirStmt::AttrSet { .. }
+        | HirStmt::Delete { .. }
         | HirStmt::Raise { .. } => false,
     }
 }

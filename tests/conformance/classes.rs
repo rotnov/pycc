@@ -406,3 +406,23 @@ fn chain_assign_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/chain_assign.py"
     );
 }
+
+// #1244 (Part 1 of #1216): `del name` at module and function scope, in both
+// `if` arms, in every loop kind and handler kind, followed by a rebinding.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn del_name_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/del_name.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("del_name_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/del_name.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("del_name_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/del_name.py"
+    );
+}

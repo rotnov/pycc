@@ -43,9 +43,11 @@ pub(crate) fn is_chain_temp_name(name: &str) -> bool {
 /// Lowers `stmt` into the statements it means: one for every statement
 /// except a chained assignment (`a = b = e`, #1213), which
 /// [`desugar_chain_assign`] expands into one single-target
-/// assignment per piece, each lowered through [`lower_stmt`](super::lower_stmt). Every caller
-/// that lowers a statement list goes through here; [`lower_stmt`](super::lower_stmt) itself
-/// never sees a multi-target `Stmt::Assign`.
+/// assignment per piece, each lowered through [`lower_stmt`](super::lower_stmt), and a `del`
+/// statement (#1244), which [`lower_delete`](super::del::lower_delete) expands into one
+/// `HirStmt::Delete` per deleted name. Every caller that lowers a statement list goes through
+/// here; [`lower_stmt`](super::lower_stmt) itself never sees a multi-target `Stmt::Assign` or a
+/// `Stmt::Delete`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_stmt_expanded(
     stmt: &Stmt,
@@ -79,6 +81,8 @@ pub(crate) fn lower_stmt_expanded(
         Stmt::Assign(assign) if assign.targets.len() > 1 => {
             desugar_chain_assign(assign)?.iter().map(lower).collect()
         }
+        // #1244: `del a, b` deletes each name in turn, and `del ()` none.
+        Stmt::Delete(del) => super::del::lower_delete(del),
         _ => Ok(vec![lower(stmt)?]),
     }
 }

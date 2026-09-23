@@ -158,9 +158,13 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             HirStmt::ExprStmt(expr) => {
                 collect_named_expr_targets_in_expr(expr, killed);
             }
+            // #1244: a `del` unbinds a name rather than binding it, so it is
+            // not a kill -- it narrows nothing and adds no definition. The
+            // type checker tracks it separately (`deleted_names`).
             HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
             | HirStmt::Return(_)
+            | HirStmt::Delete { .. }
             | HirStmt::Raise { .. } => {}
         }
     }

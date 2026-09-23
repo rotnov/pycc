@@ -715,6 +715,20 @@ fn bind_project_name(
         return Ok(true);
     }
     if top_level_bound_names(&origin.items).contains(name) {
+        // #1244: CPython answers `from m import x` with `ImportError` when
+        // `m`'s top level has deleted `x` by the time the import runs.
+        // Refused whenever `m`'s top level deletes `x` anywhere, even if it
+        // binds `x` again afterwards -- conservative, and sound.
+        if crate::stmt::del::top_level_deleted_names(&origin.items).contains(name) {
+            return Err(unsupported(
+                format!(
+                    "`{}` deletes its top-level `{name}` with `del`, so importing `{name}` \
+                     from it is not supported",
+                    module.display_path
+                ),
+                span.start..span.end,
+            ));
+        }
         lowered.bindings.push(project(ProjectBindingKind::Variable));
         return Ok(true);
     }

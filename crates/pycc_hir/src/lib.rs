@@ -49,6 +49,7 @@ pub(crate) use import::{
 };
 pub use module::{LoweredModule, lower_all, lower_checked, lower_module};
 pub use program::{LinkInput, finalize, link};
+pub use stmt::del::deleted_names;
 pub use typecheck::{
     ExtractClassNamesError, eval_isinstance_single, eval_issubclass_single, extract_class_names,
     is_abc_base_name, is_builtin_type_name, is_enum_base_name, is_protocol_base_name,
@@ -896,6 +897,17 @@ pub enum HirStmt {
     Raise {
         exc: Option<HirExpr>,
         cause: Option<HirExpr>,
+    },
+    /// `del name` (#1244, Part 1 of #1216). One statement per deleted name:
+    /// `del a, (b, c)` is lowered left to right into three of these by
+    /// `stmt::del::lower_delete`. The statement has no runtime effect -- the
+    /// memory model is leak-only (D-124), so nothing is released -- and exists
+    /// so the type checker can unbind `name`; every read that CPython would
+    /// answer with `NameError`/`UnboundLocalError` is refused statically.
+    /// `docs/TYPE_SYSTEM.md`'s "`del` statement" section is the canonical
+    /// statement of the rule.
+    Delete {
+        name: String,
     },
 }
 

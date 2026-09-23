@@ -935,6 +935,10 @@ pub(super) fn lower_stmt(
             }
         }
         HirStmt::Raise { exc, cause } => lower_raise(exc, cause, scopes, classes, current_class),
+        // #1244: `del name` is static-only. The type checker has already
+        // demoted the name's binding state, and under D-124's leak-only
+        // model there is no reference to release, so nothing runs.
+        HirStmt::Delete { .. } => MirStmt::NoOp,
     }
 }
 

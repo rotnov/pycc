@@ -71,7 +71,7 @@
 //!   post-`if` early-return continuation shape only ever narrows to the
 //!   Optional's inner type, never to `Ty::None`.
 
-use crate::env::Environment;
+use crate::env::{BindingState, Environment};
 use crate::{check_stmt, check_stmt_in_function};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirStmt, NoneTestPolarity, Ty, optional_none_test};
@@ -267,6 +267,38 @@ pub(crate) fn join_narrowed(
 /// the existing sequential pass is already sound.
 pub(crate) fn apply_kill_prescan(env: &mut Environment, body: &[HirStmt]) {
     for name in pycc_hir::killed_names(body) {
+        env.narrowed.remove(&name);
+    }
+}
+
+/// #1244: the deletion counterpart of [`apply_kill_prescan`]. Demotes to
+/// `Maybe` every name `body` deletes with `del` *anywhere* (at any nesting
+/// depth) that `env` holds as `Definitely`, and drops it from the
+/// narrowing overlay. Called at the same re-entrant points as the kill
+/// prescan -- every loop body, every `except`/`except*` handler entry --
+/// plus before a non-empty `finally`, because each of those can observe
+/// the state after only a partial run of `body`. `loop_target` names a
+/// `for` target, which the loop rebinds before every iteration (the `for`
+/// sites bind it before this prescan runs), so deleting it inside the body
+/// never leaves it unbound for the next iteration.
+///
+/// The rule is conservative: `while c: del x; x = 2` is refused even
+/// though every iteration rebinds `x` before the next one reads it
+/// (`docs/TYPE_SYSTEM.md`'s "`del` statement" section lists the
+/// limitation).
+pub(crate) fn apply_delete_prescan(
+    env: &mut Environment,
+    body: &[HirStmt],
+    loop_target: Option<&str>,
+) {
+    for name in pycc_hir::deleted_names(body) {
+        if loop_target == Some(name.as_str()) {
+            continue;
+        }
+        if let Some(BindingState::Definitely(ty)) = env.bindings.get(&name) {
+            let ty = ty.clone();
+            env.bindings.insert(name.clone(), BindingState::Maybe(ty));
+        }
         env.narrowed.remove(&name);
     }
 }
