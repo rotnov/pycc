@@ -579,8 +579,9 @@ binder rejects as a `TypeError` (an unexpected, positional-only or
 already-supplied name) keeps that `T0021` whatever its order. The rule is
 `crates/pycc_hir/src/expr/keyword_bind/eval_order.rs`, and its "cannot be
 observed" test is the purity predicate in
-`crates/pycc_hir/src/expr/unobservable.rs`, which augmented assignment shares
-("Augmented assignment" below); end-to-end tests:
+`crates/pycc_hir/src/expr/unobservable.rs`, which augmented assignment and
+chained assignment share ("Augmented assignment" and "Chained assignment"
+below); end-to-end tests:
 `tests/issue_1204_keyword_eval_order.rs`.
 
 ### Keyword arguments and default parameter values on a redefined name

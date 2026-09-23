@@ -1165,10 +1165,13 @@ fn a_chained_assignment_records_its_targets_but_never_its_temporary() {
 }
 
 /// A refused piece of a chain records nothing, not even the pieces lowered
-/// before it: `lower_top_level_item`'s `Err` contract.
+/// before it: `lower_top_level_item`'s `Err` contract. The later `class a`
+/// would collide with a recorded `a` (a second `C0001`), so the single
+/// diagnostic proves the `a = 0chain_N` piece lowered before the refused
+/// tuple piece never reached `definition_spans`.
 #[test]
 fn a_chain_with_a_refused_piece_records_nothing() {
-    let source = "a = (b, c) = t\n";
+    let source = "a = (b, c) = t\nclass a:\n    pass\n";
     let diagnostics = lower_module(&parse(source), &ResolvedImports::default(), None)
         .expect_err("a tuple piece is refused");
     assert_eq!(diagnostics[0].code, "C0001");

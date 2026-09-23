@@ -104,7 +104,8 @@ fn two_modules_with_chains_at_the_same_offsets_link_and_match_cpython() {
 
 /// The refusals a chain can reach: an empty display (the empty-container
 /// pass could only name the temporary), a tuple piece (the single-target
-/// arm's own refusal, spanned on the tuple) and a class-body chain (the
+/// arm's own refusal, spanned on the tuple), a walrus value (the placement
+/// check still sees it on the temporary's store) and a class-body chain (the
 /// class-attribute path, unchanged).
 #[test]
 fn every_chained_assignment_refusal_is_named_and_located() {
@@ -124,6 +125,12 @@ fn every_chained_assignment_refusal_is_named_and_located() {
         (
             "t = (1, 2)\na = (b, c) = t\n",
             "error[C0001]: only assigning to a bare name is supported so far, got a tuple",
+            "2:5",
+        ),
+        (
+            "def f() -> int:\n    a = b = (x := 5)\n    return a\n",
+            "error[C0001]: a walrus assignment (`:=`) is only supported in an `if`/`while` \
+             condition or as a bare expression statement",
             "2:5",
         ),
         (
