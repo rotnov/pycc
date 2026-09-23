@@ -64,6 +64,9 @@ pub use exception::{
     pycc_rt_exception_message, pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause,
     pycc_rt_exception_type_matches, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
 };
+pub use int_bitwise::{
+    pycc_rt_int_and, pycc_rt_int_lshift, pycc_rt_int_or, pycc_rt_int_rshift, pycc_rt_int_xor,
+};
 // D-061/D-141's one-word `int` encoding and its heap bigint representation.
 // Glob-imported so the operations below -- and their `#[cfg(test)]` tests,
 // which reach them through `use super::*` -- keep referring to these names

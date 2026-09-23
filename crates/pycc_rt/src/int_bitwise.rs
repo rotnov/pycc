@@ -547,6 +547,19 @@ mod tests {
         assert_value(word, 2, "(1<<70) >> 69");
     }
 
+    /// A two-limb result past the inline range stays a heap bigint, of
+    /// either sign.
+    #[test]
+    fn a_two_limb_result_past_the_inline_range_is_a_bigint() {
+        pycc_rt_exception_clear();
+        let word = int_rshift(big(1i128 << 70), tag_smallint(7));
+        assert!(!is_smallint(word));
+        assert_value(word, 1i128 << 63, "(1<<70) >> 7");
+        let word = int_rshift(big(-(1i128 << 70)), tag_smallint(7));
+        assert!(!is_smallint(word));
+        assert_value(word, -(1i128 << 63), "-(1<<70) >> 7");
+    }
+
     /// `&`, `|` and `^` over two bool markers keep bool identity; a marker
     /// with a smallint, and every shift, give an ordinary int.
     #[test]

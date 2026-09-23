@@ -86,10 +86,11 @@ mod tests {
             ] {
                 let left = Scalar::Bool(i8_type.const_int(1, false));
                 let right = Scalar::Bool(i8_type.const_int(0, false));
-                let Scalar::Bool(value) = emit_bool_bitwise(builder, op, left, right) else {
-                    panic!("a bool-result BinOp yields a bool");
-                };
-                assert_eq!(constant_of(value), expected, "{op:?}");
+                let result = emit_bool_bitwise(builder, op, left, right);
+                assert!(
+                    matches!(result, Scalar::Bool(value) if constant_of(value) == expected),
+                    "{op:?} should fold to the bool {expected}"
+                );
             }
         });
     }
