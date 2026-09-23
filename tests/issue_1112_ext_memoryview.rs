@@ -423,8 +423,8 @@ def f() -> int:
 /// the one element load `v[i]` is now a real capability and is pinned by
 /// `tests/issue_1113_ext_buffer_index.rs` instead.
 ///
-/// Round 3 of the pinned review: `HirStmt::ForList` and `HirExpr::ListComp`
-/// keep their iterable as a plain `String` rather than a `HirExpr::Name`
+/// Round 3 of the pinned review: `HirStmt::ForList` and a comprehension's
+/// `CompIter::Name` keep their iterable as a plain `String` rather than a `HirExpr::Name`
 /// (D-105's HIR shape), so `for x in v` resolves through
 /// `lookup_bound_name` and never reaches `infer_expr_in`'s own `Name` arm.
 /// The program was still refused, but as `T0033` -- "`memoryview` cannot be

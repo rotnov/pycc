@@ -892,13 +892,6 @@ pub(crate) fn lower_expr(
         Expr::YieldFrom(yf) if !in_function => {
             return Err(context_invalid("'yield from' outside function", yf.range));
         }
-        // PEP 572 (#774): `target := value`. CPython's own grammar only ever
-        // parses a bare identifier as a walrus target -- there is no
-        // tuple/attribute/subscript walrus target to reject here in
-        // practice, but the check is kept explicit (rather than an
-        // unchecked `Expr::Name` pattern) so a future `ruff_python_parser`
-        // upgrade that somehow relaxed the grammar would still surface a
-        // clean diagnostic instead of an `unreachable!()`/panic.
         // #1254 (D-250): a comprehension in any expression position. The
         // `name = <comp>` statement form is recognized earlier, in
         // `stmt::assign`, and builds its statement from the same node.
@@ -911,6 +904,13 @@ pub(crate) fn lower_expr(
         Expr::DictComp(comp) => HirExpr::Comprehension(Box::new(lower_dict_comp(
             comp, class_name, imports, signatures,
         )?)),
+        // PEP 572 (#774): `target := value`. CPython's own grammar only ever
+        // parses a bare identifier as a walrus target -- there is no
+        // tuple/attribute/subscript walrus target to reject here in
+        // practice, but the check is kept explicit (rather than an
+        // unchecked `Expr::Name` pattern) so a future `ruff_python_parser`
+        // upgrade that somehow relaxed the grammar would still surface a
+        // clean diagnostic instead of an `unreachable!()`/panic.
         Expr::Named(named) => {
             let Expr::Name(target) = named.target.as_ref() else {
                 return Err(unsupported(

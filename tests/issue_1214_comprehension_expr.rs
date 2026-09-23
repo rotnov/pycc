@@ -87,6 +87,19 @@ fn a_raising_element_in_a_comprehension_argument_exits_with_zero_division_error(
     assert_uncaught(&run, "before\n0\n1\n", "ZeroDivisionError");
 }
 
+/// A raising element over a dict source stops at the raising key, and the
+/// program exits with the element's own exception.
+#[test]
+fn a_raising_element_over_a_dict_source_exits_with_zero_division_error() {
+    let run = build_and_run(
+        "e2e_1254_dict_elt_raises",
+        "def f(d: dict[str, int], k: str) -> int:\n    print(k)\n    return 10 // d[k]\n\n\
+         d = {\"a\": 1, \"b\": 0, \"c\": 2}\nprint(\"before\")\n\
+         print(len([f(d, k) for k in d]))\nprint(\"after\")\n",
+    );
+    assert_uncaught(&run, "before\na\nb\n", "ZeroDivisionError");
+}
+
 /// The same comprehension, run many times from one call and from many
 /// calls, rebuilds its container each time and never grows the stack: the
 /// loop-variable slot is hoisted to the entry block.

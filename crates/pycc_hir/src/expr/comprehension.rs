@@ -174,14 +174,11 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         // PEP 572 (#774): a walrus target is renamed exactly like a bound
         // `Name` would be (mirroring `HirExpr::Name`'s own arm above) if it
         // happens to collide with the comprehension loop variable being
-        // synthesized-renamed; `value` is recursed into normally. In
-        // practice a walrus embedded in a comprehension's `elt`/`cond` is
-        // out of scope for #774 (comprehension-scope walrus semantics are
-        // not implemented -- see that issue's scope-cut note) and is
-        // rejected upstream before lowering ever reaches a real
-        // comprehension body, but this arm still needs to exist so this
-        // exhaustive match compiles, and it does the structurally correct
-        // thing on its own terms regardless.
+        // synthesized-renamed; `value` is recursed into normally. A walrus
+        // inside a comprehension is refused (D-250), but the renaming runs
+        // *before* `refuse_walrus` checks the renamed tree, so this arm is
+        // reached on real input: it keeps the doomed tree structurally
+        // correct until `refuse_walrus` reports the C0001.
         HirExpr::NamedExpr { name, value } => HirExpr::NamedExpr {
             name: if name == from { to.to_string() } else { name },
             value: Box::new(recurse(*value)),

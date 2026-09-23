@@ -85,6 +85,11 @@ def step(s: int) -> int:
         return -2
 
 
+def show_big(v: int) -> int:
+    print(v)
+    return 1
+
+
 # A call argument, and a `return` value.
 print(total([x * 2 for x in range(5)]))
 print(len(squares(4)), total(squares(4)))
@@ -128,6 +133,11 @@ print(add(total([trace("elt", q) for q in range(trace("stop", 2))]), trace("afte
 # The loop name does not leak: `x` keeps the value it had before.
 x = 100
 print(total([x for x in range(3)]), x)
+
+# Big-int intermediates inside the element and the filter: each one is
+# released inside its own iteration, and only small ints reach the list.
+print(len([show_big(10 ** (r + 28)) for r in range(3)]))
+print(len([r for r in range(3) if show_big(10 ** (r + 28)) == 1]))
 
 # Nested comprehensions, and the inner one naming the outer variable.
 print(total([total([a + b for a in range(b)]) for b in range(4)]))
