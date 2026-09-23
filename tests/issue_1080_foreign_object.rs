@@ -7,8 +7,10 @@
 //! * `pycc check` *accepts* a plain foreign import -- it is a frontend-only
 //!   pass (`docs/CLI_SPEC.md`) with no `--ext` flag to judge against, so a
 //!   bound-but-unused module object is not an error there;
-//! * a native `pycc build` refuses it with `I0403`, because a native
-//!   executable embeds no interpreter to import into;
+//! * a plain `pycc build` refuses it with `I0403`, because an embedded
+//!   executable bundles only the standard library (#1223) and `numpy` is
+//!   outside it -- a standard-library import builds embedded instead
+//!   (`tests/issue_1223_embedded_executable.rs`);
 //! * every operation on the bound name other than an attribute load is
 //!   refused, and all but one of them with `I0404`. Part 2 of #1026 (#1081)
 //!   changed *where* that refusal is decided -- from the read of the
@@ -91,8 +93,9 @@ fn a_bound_but_unused_foreign_import_is_accepted_by_check() {
 }
 
 /// Work item 11: the driver gate. A native executable embeds no CPython
-/// interpreter, so the import has no meaning there and the build refuses
-/// before codegen -- which is what lets
+/// interpreter, so an import a plain build cannot embed (here a
+/// non-standard-library root, D-248 rule 1) has no meaning there and the
+/// build refuses before codegen -- which is what lets
 /// `crates/pycc_codegen/src/foreign_import.rs` ignore the item under
 /// `!options.ext` rather than assert.
 ///

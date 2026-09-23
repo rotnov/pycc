@@ -257,3 +257,4 @@ current.
 | [D-245](./D-245-resolve-empty-container-element-types-in-a-pre-check-hir-pass.md) | Resolve empty-container element types in a pre-check HIR pass | accepted |
 | [D-246](./D-246-seed-dunder-name-all-or-nothing-per-program.md) | Seed `__name__` all-or-nothing per program, deviating from CPython | accepted |
 | [D-247](./D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md) | Pre-register a workload-admissibility predicate for the D-244 rule 6 kill criterion | accepted |
+| [D-248](./D-248-embedded-executable-artifact-layout-and-bridge-split.md) | Embed CPython for standard-library imports as an executable plus an OUT.pycc sidecar, sharing the ext C shim | accepted |

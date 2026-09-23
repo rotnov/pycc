@@ -14,6 +14,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 | 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs` and `tests/issue_1142_ext_buffer_store.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
+| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, plus the unit tests under `src/embed/` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)) |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
 `tests/fuzz/` directory or nightly corpus workflow exists. Their table rows
@@ -394,6 +395,13 @@ achieve.
   than folded in. A matched problem whose timing runs disagree with the case is
   reported as dropped, for the same reason: every matched problem is accounted
   for in the report rather than quietly missing from the sample count.
+  A program whose imports are all standard-library roots builds as an
+  embedded executable ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)),
+  detected by its `<binary>.pycc/PYCC-BUNDLE` marker; it keeps its compile and
+  match verdicts but is reported as `embedded K/N` and left out of the
+  speedup median, whose ratio describes native code rather than interpreter
+  start-up. The CI job therefore installs CPython 3.14.7, sets
+  `PYCC_PYTHON=python3.14`, and times the CPython baseline with `python3.14`.
   `--json` writes the same data machine-readably. The script
   reads the corpus, writes nothing inside it, and performs no network I/O.
 - **Gate status: reporting only.** CI's `corpus-compile-rate` job is
@@ -427,6 +435,33 @@ achieve.
   `timeout-minutes` is a backstop rather than the first thing to fire: a
   job-level timeout runs no further steps, which would skip the report upload
   even though it is guarded by `if: always()`.
+
+## Embedded executable tests (Part 1 of #1028, #1223)
+
+- **Interpreter-free, non-ignored.** `src/embed/`'s unit tests drive a fake
+  interpreter layout (a `Python.h` holding one `#error` line and, on macOS,
+  throwaway dylibs and bundles built with `cc`), so probing, bundle
+  assembly, the Mach-O relocation worklist and the compile step all run on
+  the coverage host, which has no `python3.14`. The build stops
+  deterministically inside `cc`, exactly as the `--ext` wiring tests do.
+  `tests/issue_1223_embedded_executable.rs`'s non-ignored tests pin each
+  `I0403` reason, the unmarked-sidecar and missing-interpreter failures, and
+  that a program with no CPython import links no `Py*` symbol (#1045).
+- **Hosted, `#[ignore]`d.** The `*_matches_cpython_3_14_7_byte_for_byte`
+  tests (and `tests/issue_1081_foreign_method_call.rs`'s embedded `gc`
+  test) build a real embedded executable, so they need `python3.14` on
+  `PATH` to be CPython 3.14.7, or `PYCC_PYTHON` naming one; the Tier-1
+  non-Windows legs run them under `--include-ignored`. Each takes its CPython
+  oracle from the bundle's `PYCC-BUNDLE` marker and asserts it is 3.14.7.
+  They cover the synthetic oracle program, relocation, `PYTHONPATH`
+  isolation, `pycc run`, `sys.exit(3)`, and the freshness of
+  `EMBEDDABLE_STDLIB_ROOTS` against `sys.stdlib_module_names`. The oracle
+  program prints nothing the D-248 deviations touch and raises nothing, so
+  no row is added to the CPython oracle exception list.
+- **Bounds.** Every spawn of a built embedded executable uses
+  `Command::output()`, whose stdin is null; a manual run should be
+  time-bounded with stdin closed, e.g.
+  `perl -e 'alarm 60; exec @ARGV' ./app </dev/null` on macOS.
 
 ## Hosted `ext` boundary conformance harness (NEG-004, #1067)
 

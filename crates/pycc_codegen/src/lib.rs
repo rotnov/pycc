@@ -6333,7 +6333,7 @@ fn compile_to_object_with_observer(
     // convention is not the platform C struct ABI. Emit those thunks now
     // that every callee's `fn_type` and `fnptr_` slot exist, and before the
     // builder is positioned in the module entry point below.
-    if options.ext {
+    if options.ext && !options.suppress_export_thunks {
         ext_thunk::emit_export_thunks(&context, &builder, &module, &rt, mir, &user_functions);
     }
 

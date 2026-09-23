@@ -5,7 +5,10 @@ Reports three things over ``tests/corpus/codecontests``: how many problems
 ``pycc build`` accepts, how many of the resulting binaries reproduce the
 expected output byte-for-byte, and the median speedup against CPython.  It also
 tallies the diagnostics that stopped the failures, so the compile rate comes
-with the reason it is not higher.
+with the reason it is not higher.  A program whose imports are all
+standard-library roots now builds as an embedded executable (D-248) that starts
+a CPython interpreter; those are counted separately and kept out of the
+speedup median, which is a statement about native code.
 
 This is a reporting gate, not a merge gate.  Any measurement outcome -- a zero
 compile rate, no qualifying speedup sample, or exhausting ``--max-seconds``
@@ -374,6 +377,16 @@ def largest_case(cases: list[dict[str, str]]) -> dict[str, str]:
     return max(cases, key=lambda case: len(case.get("input", "")))
 
 
+def is_embedded(binary: Path) -> bool:
+    """Whether ``binary`` is an embedded executable (D-248).
+
+    ``pycc build`` writes the ``PYCC-BUNDLE`` marker into the ``<binary>.pycc``
+    sidecar last, once the sidecar is complete, for every embedded build, and
+    never for a native one.
+    """
+    return (binary.parent / (binary.name + ".pycc") / "PYCC-BUNDLE").is_file()
+
+
 def measure(
     args: argparse.Namespace, corpus: Path, problems: list[dict], scratch: Path
 ) -> dict:
@@ -398,6 +411,7 @@ def measure(
     any_tally: dict[str, int] = {}
     ratios: list[float] = []
     startup_excluded = 0
+    embedded = 0
     timing_dropped = 0
     undiagnosed = 0
     incomplete = False
@@ -456,9 +470,16 @@ def measure(
 
         evaluated += 1
         compiled += 1
+        # An embedded build's run time includes starting an interpreter, so a
+        # ratio from it would not describe generated native code. It keeps its
+        # correctness verdict and is reported in its own count instead.
+        embedded_binary = is_embedded(binary)
+        embedded += embedded_binary
         if not every_case_matched:
             continue
         matched += 1
+        if embedded_binary:
+            continue
         case = largest_case(cases)
         cpython = None if expired() else best_of(
             cpython_argv(args.python, source), case, workdir
@@ -502,6 +523,7 @@ def measure(
         "median_speedup": statistics.median(ratios) if ratios else None,
         "speedup_samples": len(ratios),
         "startup_dominated_excluded": startup_excluded,
+        "embedded": embedded,
         "timing_dropped": timing_dropped,
         "undiagnosed_build_failures": undiagnosed,
         "include_holdout": bool(args.include_holdout),
@@ -515,6 +537,8 @@ def render(result: dict) -> str:
         "corpus compile rate (tests/corpus/codecontests)",
         f"compiled {result['compiled']}/{result['problems']}",
         f"matched {result['matched']}/{result['compiled']}",
+        f"embedded {result['embedded']}/{result['compiled']} "
+        "(excluded from the speedup median)",
     ]
     if result["median_speedup"] is None:
         lines.append(

@@ -17,6 +17,7 @@
 //! dispatch and calls into here.
 
 use crate::cli::ErrorFormat;
+pub(crate) use crate::foreign_import::{EmbedHost, NeedsInterpreter};
 use crate::modules::{self, LoadedProgram};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, LinkInput};
@@ -271,8 +272,18 @@ pub(crate) fn resolve_frontend(
 }
 
 /// [`resolve_frontend`] plus the native-mode artifact gates, for a
-/// `pycc build` without `--ext`: the foreign-import gate (Part 1 of #1026)
-/// and the `memoryview`-annotation gate (Part 1 of #1027).
+/// `pycc build` without `--ext`: the foreign-import gate (Part 1 of #1026,
+/// narrowed by Part 1 of #1028) and the `memoryview`-annotation gate
+/// (Part 1 of #1027).
+///
+/// The foreign-import gate is now a classifier
+/// (`crate::foreign_import::classify_for_native_build`): a program whose
+/// foreign imports are all embeddable standard-library roots on `host` is
+/// admitted with [`NeedsInterpreter`]`(true)` and built as an embedded
+/// executable; any other foreign import is still `I0403`, reported exactly
+/// where the former all-foreign refusal was. The `memoryview` and
+/// buffer-producer gates keep applying to an embedded build unchanged,
+/// because an embedded executable is still not an extension module.
 ///
 /// The gate runs here rather than in `main.rs` for one reason: only this
 /// module holds the `ProgramSources` that says which *file* an import
@@ -328,9 +339,12 @@ pub(crate) fn resolve_frontend(
 /// [`check_frontend`] reports the `C0001` read refusal there, which is
 /// correct, because `I0405`'s contract is scoped to a *build* without
 /// `--ext`.
-pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, FrontendFailure> {
+pub(crate) fn resolve_frontend_native(
+    path: &Path,
+    host: EmbedHost,
+) -> Result<(HirModule, NeedsInterpreter), FrontendFailure> {
     let (hir, sources) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
-    let import_gaps = crate::foreign_import::refuse_in_native_mode(&hir);
+    let import_gaps = crate::foreign_import::classify_for_native_build(&hir, host);
     // Keyed by *item* index rather than import position: a `memoryview`
     // annotation lives on an `HirItem::Function`, not in the import table,
     // so it resolves to its owning file through the item bounds.
@@ -346,12 +360,19 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
     // mean never running it at all.
     let producer_gaps = crate::memoryview_mode::refuse_buffer_producers_in_native_mode(&hir);
     let mut keyed: Vec<(usize, Diagnostic)> = Vec::new();
-    if let Err(gaps) = import_gaps {
-        keyed.extend(
-            gaps.into_iter()
-                .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
-        );
-    }
+    // `Ok` carries the embed verdict for the `Ok(resolved)` tail; an import
+    // gap only ever reaches a path that returns `Err`, so the placeholder
+    // below is never observed.
+    let needs_interpreter = match import_gaps {
+        Ok(needs) => needs,
+        Err(gaps) => {
+            keyed.extend(
+                gaps.into_iter()
+                    .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic)),
+            );
+            NeedsInterpreter(false)
+        }
+    };
     let refused_a_buffer = memoryview_gaps.is_err() || protocol_gaps.is_err();
     if let Err(gaps) = memoryview_gaps {
         keyed.extend(
@@ -442,7 +463,7 @@ pub(crate) fn resolve_frontend_native(path: &Path) -> Result<HirModule, Frontend
             .map(|(index, diagnostic)| (sources.owner_of_item(index), diagnostic)),
     );
     if keyed.is_empty() {
-        return Ok(resolved);
+        return Ok((resolved, needs_interpreter));
     }
     Err(sources.group(keyed))
 }

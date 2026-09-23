@@ -1288,17 +1288,24 @@ compiler.",
     DiagnosticExplanation {
         code: "I0403",
         severity: Severity::Error,
-        summary: "CPython import in native mode; `pycc build --ext` is required",
+        summary: "CPython import this build cannot embed; `pycc build --ext` is required",
         explanation: "\
 I0403 reports an `import` of a module pycc does not implement natively and \
-does not resolve inside the project, in a build that produces a standalone \
-native executable. Since Part 1 of #1026 such an import is compiled as a \
-CPython import: the module object is acquired from the running interpreter \
-at module-execution time. A `pycc build --ext` artifact has such an \
-interpreter -- it is an extension module CPython itself loads -- but a \
-plain `pycc build` executable embeds none, so there is nothing to import \
-from. Rebuild with `--ext`, or drop the import.",
+does not resolve inside the project, in a plain `pycc build` or `pycc run` \
+that cannot give it a CPython interpreter. Since Part 1 of #1026 such an \
+import is compiled as a CPython import: the module object is acquired from \
+the running interpreter at module-execution time. A `pycc build --ext` \
+artifact always has one -- it is an extension module CPython itself loads. \
+Since Part 1 of #1028 a plain build whose CPython imports are all \
+standard-library modules has one too: it produces an embedded executable \
+that bundles CPython 3.14 in an `OUT.pycc/` directory beside it. Every other \
+case is still refused, with the reason in the message: a module outside the \
+standard library (until a locked dependency closure lands, #1225), a \
+standard-library module that needs Tcl/Tk (`tkinter`, `turtle`, `idlelib`), \
+a `--target` build (the bundled interpreter is the build host's own), or a \
+Windows host (#1226). Rebuild with `--ext`, or drop the import.",
         example: "\
+import json   # fine under `pycc build`: builds an embedded executable
 import numpy  # error[I0403] under `pycc build`; fine under `pycc build --ext`
 
 def scale(x: float) -> float:

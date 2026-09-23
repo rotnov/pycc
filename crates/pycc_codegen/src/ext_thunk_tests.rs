@@ -36,6 +36,18 @@ struct Thunk {
 /// mistyped `insertvalue` or a block left without a terminator fails here
 /// rather than in a CPython process much later.
 fn thunks_of(label: &str, mir: &MirModule) -> Vec<Thunk> {
+    thunks_of_with(
+        label,
+        mir,
+        &CompileOptions {
+            ext: true,
+            ..CompileOptions::default()
+        },
+    )
+}
+
+/// [`thunks_of`] under explicit `options`.
+fn thunks_of_with(label: &str, mir: &MirModule, options: &CompileOptions) -> Vec<Thunk> {
     let dir = pycc_scratch::ScratchDir::new(label).expect("failed to create scratch dir");
     let obj_path = dir.join(format!("{label}.o"));
     let mut observed = Vec::new();
@@ -71,16 +83,8 @@ fn thunks_of(label: &str, mir: &MirModule) -> Vec<Thunk> {
             });
         }
     };
-    compile_to_object_with_observer(
-        mir,
-        &obj_path,
-        &CompileOptions {
-            ext: true,
-            ..CompileOptions::default()
-        },
-        Some(&mut observer),
-    )
-    .expect("ext codegen should succeed");
+    compile_to_object_with_observer(mir, &obj_path, options, Some(&mut observer))
+        .expect("ext codegen should succeed");
     observed
 }
 
@@ -123,6 +127,32 @@ fn module(items: Vec<MirItem>) -> MirModule {
 
 fn tuple(elems: Vec<Ty>) -> Ty {
     Ty::Tuple(Box::new(elems))
+}
+
+#[test]
+fn suppress_export_thunks_emits_no_thunk_for_a_signature_that_otherwise_gets_one() {
+    // The embedded-executable mode (Part 1 of #1028) compiles with `ext` for
+    // its module-body entry point but exports nothing, and never runs the
+    // driver's `collect_exports` admissibility check, so a thunk emitted for
+    // a public signature there would be unchecked dead code. The default
+    // (`false`) keeps `--ext`'s behaviour, so the same module still gets
+    // its thunk without the flag.
+    let mir = module(vec![func(
+        "f",
+        &[("t", tuple(vec![Ty::Int, Ty::Float]))],
+        Ty::Int,
+    )]);
+    assert_eq!(thunks_of("ext_thunk_default_emits", &mir).len(), 1);
+    let suppressed = thunks_of_with(
+        "ext_thunk_suppressed",
+        &mir,
+        &CompileOptions {
+            ext: true,
+            suppress_export_thunks: true,
+            ..CompileOptions::default()
+        },
+    );
+    assert_eq!(suppressed, Vec::new());
 }
 
 #[test]

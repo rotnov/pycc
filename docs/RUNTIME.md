@@ -1137,12 +1137,51 @@ back a module object. Refusing the shape is one rule at one site
 it makes the same-module case agree with the cross-module one above.
 Supporting either order is later work under #1026.
 
-**Native mode.** A plain `pycc build` produces a standalone executable with no
-interpreter to import into, so the driver refuses the program with `I0403`
-before codegen — one diagnostic per foreign import, each at its own `import`
-statement in the file that wrote it — and
-`crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
-`MirItem::ForeignImport` when `!options.ext`.
+**Native and embedded mode.** A plain `pycc build` of a program whose foreign
+imports are all standard-library roots produces an embedded executable (see
+"Embedded executables" below), which compiles the module exactly as `--ext`
+does. Any other foreign import leaves a plain build with no interpreter to
+import into, so the driver refuses the program with `I0403` before codegen —
+one diagnostic per such import, each at its own `import` statement in the file
+that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
+rule 1) — and `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
+`MirItem::ForeignImport` when `!options.ext`, which then only happens in a
+build with no foreign import at all.
+
+#### Embedded executables (Part 1 of #1028)
+
+[D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
+owns the contract; this is the runtime view of it.
+
+- **Artifact.** `OUT` plus `OUT.pycc/`: the embed interpreter's shared
+  library under `lib/` (macOS: id `@rpath/libpython3.14.dylib`, ad-hoc
+  re-signed), its standard library under `lib/python3.14/` without
+  `site-packages`, `__pycache__`, `test` and the Tcl/Tk roots, and a
+  `PYCC-BUNDLE` marker. The executable finds the library through an rpath
+  relative to itself, so the pair is relocatable together.
+- **Execution.** `src/embed/pycc_embed_launcher.c` starts an isolated
+  interpreter (`home` is the sidecar, `platlibdir` is `lib` whatever the
+  build host's was, no `site`, no bytecode writes, unbuffered stdio), creates `__main__` from the compiled module's
+  `PyModuleDef` and runs it with `PyModule_ExecDef`; the module body runs
+  with the GIL held. The compiled module is the one `--ext` would build,
+  through the same unchanged C shim, with export thunks suppressed; no
+  function is exported.
+- **Isolation.** `sys.path` holds only the bundle's entries; `PYTHONPATH`
+  and ambient `site-packages` are ignored.
+- **Exit status.** An uncaught exception prints through `PyErr_Print` and
+  exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120.
+- **Deviations from CPython.** `sys.flags.isolated` and `sys.flags.no_site`
+  are 1, `sys.platlibdir` is `lib`, `sys.executable` and `sys.argv[0]` are the executable, and an
+  uncaught pycc exception prints only its final `Type: message` line where a
+  native build prints the whole chain.
+- **Output ordering.** `buffered_stdio = 0` and `pycc_rt`'s flush at every
+  newline keep Python-side and pycc-side writes in order; a future
+  `print(..., end=...)` must flush before each foreign call.
+- **Linux gap.** No ELF dependency scan runs: a `lib-dynload` module's
+  native dependencies are resolved by the system loader at run time, so a
+  Linux artifact is relocatable only as far as those libraries are present
+  on the target (#1225). macOS refuses a non-system, non-prefix dependency
+  at build time.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

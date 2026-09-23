@@ -1228,10 +1228,11 @@ jobs:
     runs-on: ubuntu-latest
     # The cap is the sum of the bounds below it, not a guess: checkout plus
     # `rustup show` (well under a minute), the LLVM install (capped at 5), the
+    # CPython 3.14.7 setup (capped at 3), the
     # release build (capped at 12), the measurement (capped at 12 -- a 600s
     # --max-seconds budget plus at most one 120s build, the script's own
     # BUILD_TIMEOUT_SECONDS, because the deadline is only checked at phase
-    # boundaries), and the upload.  That sums to 30.5, so 35 leaves the
+    # boundaries), and the upload.  That sums to 33.5, so 35 leaves the
     # backstop above every bound rather than under one.  Every long step
     # carries its own bound, so this job-level cap is a backstop rather than
     # the only thing standing between a wedged step and a killed job -- a
@@ -1273,7 +1274,31 @@ jobs:
         timeout-minutes: 12
         run: cargo build --release --locked -p pycc
 
+      # A corpus program whose imports are all standard-library roots builds as
+      # an embedded executable (D-248), which needs CPython 3.14 at build time;
+      # without it pycc exits 2 and the script reports a broken harness. Pinned
+      # to the same 3.14.7 the conformance oracle uses. setup-python also
+      # repoints `python3`, so the timing baseline below names `python3.14`
+      # explicitly. Each embedded build leaves a sidecar of roughly 30 MB in
+      # the scratch bin directory, well inside the runner's disk.
+      - name: Set up CPython 3.14.7 for embedded builds
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14.7"
+
+      - name: Verify the embed interpreter version
+        shell: bash
+        run: |
+          python3.14 --version | grep -qx "Python 3.14.7" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.7'"
+            python3.14 --version
+            exit 1
+          }
+
       - name: Measure the corpus compile rate
+        env:
+          PYCC_PYTHON: python3.14
         run: |
           # --max-seconds is set explicitly, below the script's own 1200s
           # default, so the measurement deadline stays inside this job's
@@ -1291,7 +1316,7 @@ jobs:
           # do.
           python3 -B scripts/check_corpus_compile_rate.py \
             --pycc target/release/pycc \
-            --python python3 \
+            --python python3.14 \
             --max-seconds 600 \
             --json "$RUNNER_TEMP/corpus-compile-rate.json"
 
