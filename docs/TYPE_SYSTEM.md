@@ -974,6 +974,55 @@ Known limits, each a refusal rather than wrong output:
 End-to-end tests are in `tests/issue_1244_del_name.rs`, and the byte-exact
 oracle fixture is `tests/fixtures/del_name.py`.
 
+### Comprehensions
+
+This is the canonical statement of the rule
+([D-250](./decisions/D-250-comprehensions-are-expressions-with-a-node-scoped-loop-variable.md),
+[#1254](https://github.com/rotnov/pycc/issues/1254), Part 1 of
+[#1214](https://github.com/rotnov/pycc/issues/1214)). A list, set or dict
+comprehension is an expression and may appear anywhere an expression may: a
+call argument, a `return` value, an annotated assignment, an f-string, a
+`while` or `if` test, an operand of `and`/`or`, or another comprehension. It
+runs where CPython runs it, so it is skipped in an untaken short-circuit
+operand and keeps its place among its sibling arguments. `name = <comp>`
+still lowers to D-117's statement form; both forms check and emit the same
+way.
+
+**Scoping.** The loop variable is renamed to D-117's synthesized
+`0comp_<offset>_<name>` and bound only inside the comprehension, so it never
+leaks: `x = 100; print(len([x for x in range(3)]), x)` prints `3 100`. The
+iterable is checked in the enclosing scope, so in a nested
+`[len([x for x in range(x)]) for x in range(4)]` the inner `range(x)` reads
+the outer loop variable, as in CPython. The element and filter are checked in
+a scope that adds the loop variable to the enclosing one, so narrowing and
+module globals carry over.
+
+**Types.** The iterable is `range(...)` or a bare name of type `list[T]`,
+`set[T]` or `dict[K, V]` (the loop variable is `T` or the key `K`); a bare
+name of any other type is `T0033`. The result is `list[int]`, `set[int]` or `dict[str, int]`,
+with the element gates of the matching display (`T0034`, `T0038`, `T0036`,
+D-119). An unannotated private helper may take or return a comprehension, and
+its container type is inferred.
+
+**Refused, with `C0001`:**
+
+- a walrus (`:=`) anywhere inside a comprehension, in either form: "a walrus
+  assignment (`:=`) inside a comprehension is not supported yet", spanning the
+  comprehension;
+- more than one `for` clause, more than one `if` filter, a target that is not
+  a bare name, and `async` comprehensions. Parts 2 and 3 of #1214 own these
+  limits and the iterable limit above.
+
+**Across modules.** A synthesized name is not a definition, so it never
+collides in the link step ([#1237](https://github.com/rotnov/pycc/issues/1237)).
+The linked program is one namespace, though, so two modules whose
+statement-form comprehensions have the same target name at the same byte
+offset share one `0comp_` slot. That works when the loop variables have the
+same type and is refused with `T0023` when they do not; #1237 tracks it.
+
+End-to-end tests are in `tests/issue_1214_comprehension_expr.rs`, and the
+byte-exact oracle fixture is `tests/fixtures/comprehension_expr.py`.
+
 ## Error philosophy
 
 Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (a planned `pycc check --fix` flag would apply trivial ones once implemented; not yet implemented, see `docs/CLI_SPEC.md`), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).
