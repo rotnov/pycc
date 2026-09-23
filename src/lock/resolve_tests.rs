@@ -425,7 +425,11 @@ fn on_disk_files_under_a_root_must_be_recorded_by_location() {
     tiny(&env.pure, &[]);
     let co = write_dist(&env.pure, "co", "1", &[("tinypkg/co.py", b"")], &[]);
     std::fs::remove_file(co.join("RECORD")).unwrap();
-    assert!(env.refusal(&["tinypkg"]).contains("tinypkg/co.py"));
+    assert!(
+        env.refusal(&["tinypkg"])
+            .replace('\\', "/")
+            .contains("tinypkg/co.py")
+    );
 
     let env = Env::new("lock_resolve_cover_location");
     tiny(&env.pure, &[]);
