@@ -364,3 +364,23 @@ fn pep_0560_class_getitem_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0560_class_getitem.py"
     );
 }
+
+// #1209 (Part 1 of #1018): `obj.attr op= v` and `d[k] op= v`, including a
+// property's get/value/set order and a `KeyError` raised before the value.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn aug_assign_targets_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/aug_assign_targets.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("aug_assign_targets_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/aug_assign_targets.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("aug_assign_targets_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/aug_assign_targets.py"
+    );
+}

@@ -421,8 +421,9 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 ///   identical to a synthetic one (see D-188).
 ///
 /// The scan is deliberately conservative: it reports `true` for any
-/// top-level `class`/`def`/`type`-alias/annotated-assignment/assignment
-/// target spelling one of the 26 names, whether or not that particular
+/// top-level `class`/`def`/`type`-alias/annotated-assignment/assignment/
+/// augmented-assignment target spelling one of the 26 names (`ValueError += 1`
+/// binds the name as surely as `ValueError = ...` does, #1209), whether or not that particular
 /// spelling would go on to collide with a seeded definition. Over-reporting
 /// only costs the module its synthetic classes; under-reporting would let a
 /// user definition collide with a compiler-synthesized one and surface as a
@@ -447,6 +448,7 @@ pub(crate) fn shadowed_builtin_exception_name(module: &ModModule) -> Option<Stri
             .targets
             .iter()
             .find_map(expr_bound_builtin_exception_name),
+        Stmt::AugAssign(aug_assign) => expr_bound_builtin_exception_name(&aug_assign.target),
         _ => None,
     })
 }
@@ -793,6 +795,19 @@ mod tests {
         // independent of whichever HIR lowering path currently happens to
         // prevent it from firing (deep-reviewer finding on #740).
         except_handler_binding_type_name(&[]);
+    }
+
+    /// #1209: a module-level augmented assignment binds its target name, so
+    /// `ValueError += 1` shadows the builtin exactly as `ValueError = 1` does.
+    #[test]
+    fn a_module_level_augmented_assignment_shadows_a_builtin_exception() {
+        let module = pycc_parser::parse("x = 1\nValueError += 1\n").expect("parses");
+        assert_eq!(
+            shadowed_builtin_exception_name(&module),
+            Some("ValueError".to_string())
+        );
+        let module = pycc_parser::parse("x = 1\nx += 1\n").expect("parses");
+        assert_eq!(shadowed_builtin_exception_name(&module), None);
     }
 }
 

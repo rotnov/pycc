@@ -455,12 +455,17 @@ fn a_bigint_store_index_is_the_d141_boundary_overflow() {
 /// would acquire read-only storage the compiled body then writes through
 /// -- so the shapes below are asserted to be refused *before* type
 /// checking reaches them, rather than assumed.
+///
+/// An augmented store `b[i] += x` is not among them: since #1209 it is
+/// lowered as the plain `b[i] = b[i] + x`, which *is* that one
+/// `HirStmt::DictSet` node, so the walk sees it and acquires the parameter
+/// writable (pinned hosted in `tests/issue_1018_aug_assign.rs`). Its slice
+/// form stays refused, and is listed here.
 #[test]
 fn no_other_store_syntax_reaches_a_buffer_element() {
     for source in [
-        // An augmented store: `pycc_hir` has no `AugAssign` lowering for a
-        // subscript target at all.
-        "def f(b: memoryview) -> None:\n    b[0] += 1.0\n",
+        // An augmented store to a slice.
+        "def f(b: memoryview) -> None:\n    b[0:2] += 1.0\n",
         // A tuple target.
         "def f(b: memoryview) -> None:\n    b[0], b[1] = 1.0, 2.0\n",
         // Chained assignment.

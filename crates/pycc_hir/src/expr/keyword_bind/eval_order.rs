@@ -10,9 +10,10 @@
 //! the unchanged `C0001` rejection. The rule itself is stated once, in
 //! `docs/TYPE_SYSTEM.md` ("Keyword argument evaluation order").
 
-use pycc_ast::{Expr, ExprCall};
+use pycc_ast::ExprCall;
 
 use super::Signature;
+use crate::expr::unobservable::is_unobservable;
 
 /// Whether binding `call` against `signature` would move a value whose
 /// evaluation could be observed.
@@ -55,12 +56,6 @@ pub(super) fn observably_reorders(signature: &Signature, call: &ExprCall) -> boo
             .iter()
             .chain(call.arguments.keywords.iter().map(|keyword| &keyword.value))
             .all(is_unobservable)
-}
-
-/// Whether evaluating `value` early or late cannot be observed: a literal in
-/// the subset a parameter default admits, or a bare name.
-fn is_unobservable(value: &Expr) -> bool {
-    matches!(value, Expr::Name(_)) || crate::func::params::literal_default(value).is_some()
 }
 
 #[cfg(test)]
