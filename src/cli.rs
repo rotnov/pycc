@@ -143,6 +143,18 @@ pub enum Command {
         #[command(flatten)]
         interop: InteropFlags,
     },
+    /// `pycc lock PATH [--check]`: records the CPython dependency closure
+    /// PATH's embedded build will carry into `pycc.lock` (the pycc.lock
+    /// decision entry, D-249; `docs/CLI_SPEC.md`'s `pycc.lock` section).
+    Lock {
+        path: PathBuf,
+        /// Exit 0 only if `pycc.lock` already holds what `pycc lock` would
+        /// write; exit 1 otherwise. Writes nothing.
+        #[arg(long)]
+        check: bool,
+        #[command(flatten)]
+        interop: InteropFlags,
+    },
     Test,
     Explain {
         code: String,
@@ -576,5 +588,27 @@ mod tests {
             Command::Check { interop, .. }
                 if interop.interop_policy == Some(InteropPolicy::Deny)
         ));
+    }
+
+    #[test]
+    fn lock_parses_its_path_check_flag_and_interop_flags() {
+        let cli = Cli::try_parse_from(["pycc", "lock", "app.py"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Lock { path, check: false, interop }
+                if path == std::path::Path::new("app.py") && interop == InteropFlags::default()
+        ));
+        let cli = Cli::try_parse_from(["pycc", "lock", "--check", "app.py", "--pure"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Lock { check: true, interop, .. } if interop == PURE
+        ));
+        let error = Cli::try_parse_from(["pycc", "lock"])
+            .err()
+            .expect("a usage error");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 }

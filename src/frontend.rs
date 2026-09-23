@@ -287,6 +287,29 @@ pub(crate) fn check_frontend(path: &Path, interop: InteropCli) -> Result<(), Fro
     ))
 }
 
+/// `pycc lock`'s frontend (the pycc.lock decision entry, D-249, rule 6):
+/// [`check_frontend`] without the type check. The lock needs only the
+/// linked program's CPython-backed imports and whether the effective
+/// interop policy admits each one, so a policy-rejected root is `I0402`
+/// here exactly as in `check`, and a malformed `[interop]` table is the
+/// same exit-2 input failure.
+pub(crate) fn lock_frontend(
+    path: &Path,
+    interop: InteropCli,
+) -> Result<HirModule, FrontendFailure> {
+    let (hir, sources, manifest) = link_frontend(path, Some(NATIVE_MODULE_NAME))?;
+    let policy = interop_policy::resolve_for_program(&hir, manifest.as_ref(), interop)?;
+    let gaps = interop_policy::policy_gaps(&hir, &policy);
+    if gaps.is_empty() {
+        return Ok(hir);
+    }
+    Err(sources.group(
+        gaps.into_iter()
+            .map(|(position, diagnostic)| (sources.owner_of_import(position), diagnostic))
+            .collect(),
+    ))
+}
+
 pub(crate) fn resolve_frontend(
     path: &Path,
     module_name: Option<&str>,

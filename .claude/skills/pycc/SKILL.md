@@ -20,8 +20,8 @@ complete pycc interface.
 4. State the current revision and whether the requested path is implemented,
    planned, or unknown.
 
-At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
-implementations. `check` accepts one or more native file paths, runs the
+At this alpha revision, `build`, `run`, `check`, `lock`, and `version --verbose`
+have implementations. `check` accepts one or more native file paths, runs the
 parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports every diagnostic the failing pass found for each input
 (parser: all syntax errors; HIR lowering: per top-level item, the item's own

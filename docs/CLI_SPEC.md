@@ -9,6 +9,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc build [PATH] -o OUT` | compile to a deployment artifact; `PATH` and every project module it imports (see "Project imports" below) are linked into one program; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
 | `pycc run [PATH] [-- args]` | build + execute; every imported module's top-level statements run before the entry file's, in dependency order |
 | `pycc check PATH...` | frontend only: parse + HIR + link + types for every explicit file *and its import closure*; reports every diagnostic the failing pass found, each rendered against the file that owns it (parser fan-out since #864 Part 1, D-217; HIR lowering per top-level item with cascade suppression since Part 2, D-219; the type checker one per failing item, solver-first, since Part 3, D-220; per-file attribution across a linked program since #898, D-222); no codegen |
+| `pycc lock PATH [--check]` | record the CPython dependency closure `PATH`'s embedded build will carry into `pycc.lock`, read offline from the `PYCC_PYTHON` interpreter's installed environment; `--check` writes nothing and exits 1 when the lock is not current (see "`pycc.lock`" below) |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
 | `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py`; refuses to overwrite an existing `pycc.toml`, non-directory `src`, or `src/main.py` (exit 2, nothing written) |
@@ -253,13 +254,13 @@ directory once project mode exists.
                     classes are published and which are constructible.
                     `--ext` is also the only mode that imports a
                     non-standard-library root today (`I0403` otherwise,
-                    until #1225). Conflicts with `--interop-policy` and
+                    until #1242). Conflicts with `--interop-policy` and
                     `--pure` (exit 2, D-244 rule 3); will conflict with
                     `--lib` once that flag exists.
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
                     embedded-mode policy for CPython-backed imports in
-                    `build`, `run` and `check` (D-128, #1224);
+                    `build`, `run`, `check` and `lock` (D-128, #1224);
                     CLI value overrides `[interop].policy`
 --pure              shorthand for `--interop-policy deny`; conflicts
                     with an explicit `--interop-policy` (exit 2)
@@ -402,6 +403,11 @@ prefix; each failure is an environment failure at exit 2 naming the reason
 (D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
 and neither variable affects it.
 
+`pycc lock` reads `PYCC_PYTHON` the same way and refuses exactly the
+interpreters an embedded build refuses; it then reads that interpreter's own
+`sysconfig` `purelib` and `platlib` directories, typically a project venv's
+(see "`pycc.lock`" below). `PYCC_PYTHON_INCLUDE` has no effect on it.
+
 ## `pycc.toml`
 
 ```toml
@@ -431,18 +437,18 @@ The TOML parser still accepts and ignores other unmodeled sections such as
 `[test]`. What each policy admits is current behavior; what an admitted root
 then builds is bounded by the embedding (D-248): a standard-library root
 builds an embedded executable, and any other admitted root is still `I0403`
-until the lock and closure land (#1225).
+until the build consumes `pycc.lock` (#1242).
 
 - omitting `[interop]` selects `policy = "auto"`, which admits every
   CPython-backed root. The target contract is that a standard source import
   such as `import numpy as np` then resolves, pins, and bundles the
   compatible CPython runtime and package closure recorded in `pycc.lock`;
-  today only standard-library roots embed (#1223, D-248), and the lock is
-  #1225;
+  today only standard-library roots embed (#1223, D-248); `pycc lock` records
+  the closure (D-249), and bundling it is #1242;
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
   named by `allow`, and another direct root fails with `I0402`. Importing a
   submodule of an allowed root and loading its locked transitive closure
-  will not require separate entries (#1225; a dotted CPython-backed import is
+  will not require separate entries (#1242; a dotted CPython-backed import is
   `C0001` today). Each entry is one root name, so an empty or dotted entry is
   invalid;
 - `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
@@ -477,14 +483,60 @@ only `--ext` artifacts gets `I0402` from `check` while `build --ext` succeeds.
 
 The same effective policy applies to `check`, `build`, `run`, and `test`; the
 eventual `pycc test` compilation path cannot bypass the project's dependency
-policy. A CLI `--interop-policy` overrides the project setting; `--pure` is
+policy. `pycc lock` applies it too: a root it rejects is `I0402`, exit 1, before anything is written. A CLI `--interop-policy` overrides the project setting; `--pure` is
 rejected as an invalid invocation when combined with any explicit
 `--interop-policy` rather than relying on argument order.
+
+## `pycc.lock`
+
+`pycc lock PATH` records the CPython dependency closure `PATH`'s embedded
+build will carry. [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md) owns the
+contract; this section summarizes it. Part 1 of #1225 (#1241) implements the
+file and the command; the build does not read the lock until #1242, and
+native libraries outside the interpreter prefix are #1243.
+
+- **Source.** The closure is read offline from the installed `*.dist-info`
+  distributions in the `PYCC_PYTHON` interpreter's `sysconfig` `purelib` and
+  `platlib` directories, never from user site-packages, `PYTHONPATH` or
+  `.pth` files, and with no network and no version solving. The direct roots
+  are the program's CPython-backed import roots the interop policy admits,
+  minus the standard-library roots; the closure follows their owners'
+  `Requires-Dist` with environment markers evaluated for that interpreter,
+  and refuses anything it cannot evaluate.
+- **Integrity.** Every file of a locked distribution is re-hashed against
+  its RECORD; a mismatch, a missing or symlinked file, an editable install, a
+  top-level `.pth` file, an unowned root or an on-disk file under a root that
+  no RECORD lists refuses the lock (exit 2, naming the file). Each package
+  records a `tree-sha256` over its payload.
+- **Location and key.** The file is `pycc.lock` beside the nearest
+  `pycc.toml` above `PATH`, else beside `PATH`. One file holds one section
+  per (entry, host triple), where `entry` is the canonical entry path
+  relative to the lock's directory, so every spelling of one script is one
+  key. The file is TOML, `version = 1`, sorted, with no absolute path or
+  timestamp; a reader refuses another version, an unknown field, a duplicate
+  section, a non-Tier-1 triple or an `entry` with an empty, `.` or `..`
+  component (so an absolute one too).
+- **Update.** `pycc lock PATH` replaces the (entry, host) section, drops
+  sections whose entry script no longer exists, and writes the file through
+  a temporary `pycc.lock.tmp-<pid>` and a rename. Concurrent runs against
+  one file are not serialized: the last rename wins, and `--check` reports
+  a section it dropped. A program with no
+  CPython-backed import has no section and never starts the interpreter; a
+  lock left with no sections is deleted. A standard-library-only program
+  gets the interpreter fields and `roots = []`, without a site scan.
+- **`--check`.** Exits 0 only when the file's bytes equal what `pycc lock`
+  would write, where a standard-library-only program with no section counts
+  as current; otherwise it exits 1 naming the first difference and writes
+  nothing.
+- **Failures.** An unparsable existing lock, or one with another `version`,
+  is exit 2 for both forms and is never overwritten. A Windows host is exit 2
+  (#1226), as for an embedded build.
 
 ## Exit codes
 
 `0` ok (including `pycc explain` on a recognized code, in either
-`--format`) · `1` compile errors (including `C0001` version-capability gaps)
+`--format`) · `1` compile errors (including `C0001` version-capability gaps), or
+`pycc lock --check` finding `pycc.lock` not current
 · `2` bad invocation, unreadable input, a toolchain/environment failure such
 as a host linker driver that cannot be started or an unusable system temp
 directory in which `build`/`run` cannot create their scratch directory —
