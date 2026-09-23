@@ -514,8 +514,8 @@ native libraries outside the interpreter prefix are #1243.
   relative to the lock's directory, so every spelling of one script is one
   key. The file is TOML, `version = 1`, sorted, with no absolute path or
   timestamp; a reader refuses another version, an unknown field, a duplicate
-  section, a non-Tier-1 triple or an `entry` that is not relative and
-  `..`-free.
+  section, a non-Tier-1 triple or an `entry` with an empty, `.` or `..`
+  component (so an absolute one too).
 - **Update.** `pycc lock PATH` replaces the (entry, host) section, drops
   sections whose entry script no longer exists, and writes the file through
   a temporary `pycc.lock.tmp-<pid>` and a rename. Concurrent runs against

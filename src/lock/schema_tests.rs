@@ -129,7 +129,7 @@ fn bad_lock_files_are_refused() {
         let bad = render(&lock(vec![target(entry, "aarch64-apple-darwin")]));
         let err = parse(&bad).unwrap_err();
         assert!(
-            err.contains("is not a relative path below the lock's directory"),
+            err.contains("has an empty, `.` or `..` component"),
             "{entry}: {err}"
         );
     }

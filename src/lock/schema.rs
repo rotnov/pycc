@@ -137,8 +137,8 @@ pub(crate) fn render(lock: &Lock) -> String {
 }
 
 /// Parses a lock file's text, refusing another schema version, an unknown
-/// field, an `entry` that is not a relative `/`-joined path below the lock
-/// directory, a duplicate (entry, triple) section, a non-Tier-1 triple or
+/// field, an `entry` with an empty, `.` or `..` component (so an absolute one
+/// too), a duplicate (entry, triple) section, a non-Tier-1 triple or
 /// an unknown `site`.
 pub(crate) fn parse(text: &str) -> Result<Lock, String> {
     let invalid =
@@ -163,7 +163,7 @@ pub(crate) fn parse(text: &str) -> Result<Lock, String> {
             .any(|part| matches!(part, "" | "." | ".."))
         {
             return Err(invalid(&format!(
-                "entry `{}` is not a relative path below the lock's directory",
+                "entry `{}` has an empty, `.` or `..` component; it must be a canonical relative path below the lock's directory",
                 target.entry
             )));
         }
