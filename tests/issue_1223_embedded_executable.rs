@@ -151,11 +151,9 @@ fn a_program_without_a_cpython_import_stays_native_with_no_sidecar() {
     let output = build(&dir, "print(42)\n", &[]);
     assert!(output.status.success(), "{}", stderr_of(&output));
     assert!(!dir.join("app.pycc").exists());
-    let exe = if cfg!(windows) {
-        dir.join("app.exe")
-    } else {
-        dir.join("app")
-    };
+    // `pycc build -o app` writes exactly `app` on every host, Windows
+    // included (no `.exe` suffix is appended).
+    let exe = dir.join("app");
     let run = Command::new(&exe).output().expect("the native binary runs");
     assert_eq!(run.stdout, b"42\n");
     #[cfg(not(windows))]
