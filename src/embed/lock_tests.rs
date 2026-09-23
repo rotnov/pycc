@@ -20,6 +20,8 @@ struct Env {
     _dir: ScratchDir,
     layout: FakeLayout,
     pure: PathBuf,
+    /// Read only by the macOS closure-image tests in `macos_closure_tests`.
+    #[cfg_attr(not(target_os = "macos"), expect(dead_code))]
     plat: PathBuf,
     lock_probe: LockProbe,
     entry: PathBuf,
