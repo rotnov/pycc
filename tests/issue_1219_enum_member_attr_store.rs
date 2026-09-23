@@ -10,14 +10,16 @@ use std::process::{Command, Output};
 const ENUM: &str = "from enum import Enum\n\nclass Color(Enum):\n    RED = 1\n\n";
 
 /// Each store and the attribute it names: through a parameter, through a
-/// module-level alias, and through the member expression itself.
-const STORES: [(&str, &str); 3] = [
+/// module-level alias, through the member expression itself, and as an
+/// augmented assignment (#1209), which is lowered as the plain store.
+const STORES: [(&str, &str); 4] = [
     (
         "def f(c: Color) -> None:\n    c.value = c.value + 1\n\nf(Color.RED)\n",
         "value",
     ),
     ("c = Color.RED\nc.name = \"x\"\n", "name"),
     ("Color.RED.value = 3\n", "value"),
+    ("c = Color.RED\nc.value += 1\n", "value"),
 ];
 
 fn write(dir: &ScratchDir, index: usize, store: &str) -> std::path::PathBuf {

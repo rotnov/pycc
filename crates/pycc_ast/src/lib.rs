@@ -10,14 +10,14 @@ pub use ruff_python_ast::{
     Alias, Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause,
     ExceptHandler, ExceptHandlerExceptHandler, Expr, ExprAttribute, ExprBinOp, ExprBooleanLiteral,
     ExprCall, ExprCompare, ExprContext, ExprDictComp, ExprFString, ExprListComp, ExprName,
-    ExprNamed, ExprNumberLiteral, ExprSetComp, ExprSlice, ExprStringLiteral, ExprUnaryOp,
-    Identifier, Int, InterpolatedElement, InterpolatedStringElement,
+    ExprNamed, ExprNumberLiteral, ExprSetComp, ExprSlice, ExprStringLiteral, ExprTuple,
+    ExprUnaryOp, Identifier, Int, InterpolatedElement, InterpolatedStringElement,
     InterpolatedStringLiteralElement, MatchCase, ModModule, Number, Operator, ParameterWithDefault,
     Parameters, Pattern, PatternArguments, PatternKeyword, PatternMatchAs, PatternMatchClass,
     PatternMatchMapping, PatternMatchOr, PatternMatchSequence, PatternMatchSingleton,
-    PatternMatchStar, PatternMatchValue, Singleton, Stmt, StmtAnnAssign, StmtAssign, StmtClassDef,
-    StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtImportFrom, StmtMatch, StmtRaise, StmtReturn,
-    StmtTry, StmtTypeAlias, StmtWhile, TypeParam, TypeParams, UnaryOp,
+    PatternMatchStar, PatternMatchValue, Singleton, Stmt, StmtAnnAssign, StmtAssign, StmtAugAssign,
+    StmtClassDef, StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtImportFrom, StmtMatch, StmtRaise,
+    StmtReturn, StmtTry, StmtTypeAlias, StmtWhile, TypeParam, TypeParams, UnaryOp,
 };
 
 /// Returns the byte range of a statement without exposing the upstream

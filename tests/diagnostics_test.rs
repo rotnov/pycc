@@ -1323,3 +1323,32 @@ fn i0404_foreign_module_operation() {
 fn c0001_foreign_module_shadowed_import() {
     assert_diagnostic_matches_fixture("c0001_foreign_module_shadowed_import");
 }
+
+/// #1209 (Part 1 of #1018): every capability refusal an augmented assignment
+/// gets is spelled for `op=` and spans the augmented statement, instead of
+/// the generic "statement kind not supported yet" or an assignment-worded
+/// message from the rewritten `target = target op value`.
+#[test]
+fn c0001_aug_assign_operator() {
+    assert_diagnostic_matches_fixture("c0001_aug_assign_operator");
+}
+
+#[test]
+fn c0001_aug_assign_computed_attribute_base() {
+    assert_diagnostic_matches_fixture("c0001_aug_assign_computed_attribute_base");
+}
+
+#[test]
+fn c0001_aug_assign_computed_subscript_base() {
+    assert_diagnostic_matches_fixture("c0001_aug_assign_computed_subscript_base");
+}
+
+#[test]
+fn c0001_aug_assign_slice() {
+    assert_diagnostic_matches_fixture("c0001_aug_assign_slice");
+}
+
+#[test]
+fn c0001_aug_assign_computed_index() {
+    assert_diagnostic_matches_fixture("c0001_aug_assign_computed_index");
+}

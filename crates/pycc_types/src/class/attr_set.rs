@@ -204,6 +204,7 @@ mod tests {
             ("c = Color.RED\nc.value = 7\n", "value"),
             ("c = Color.RED\nc.name = \"x\"\n", "name"),
             ("Color.RED.value = 3\n", "value"),
+            ("c = Color.RED\nc.value += 1\n", "value"),
         ] {
             let diagnostic = check(&format!("{ENUM}{store}")).expect_err(store);
             assert_eq!(diagnostic.code, "T0044", "{store}");

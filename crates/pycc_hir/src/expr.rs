@@ -34,11 +34,14 @@
 //! all -- they never forward the ambient `in_function` value, only the one
 //! literal that reproduces current behavior.
 
+mod bin_op_kind;
 mod container_call;
 pub(crate) mod keyword_bind;
 pub(crate) mod receiver_dispatch;
 mod std_receiver;
+pub(crate) mod unobservable;
 
+pub(crate) use bin_op_kind::bin_op_kind;
 use keyword_bind::SignatureTable;
 
 use crate::int_boundary::check_boundary_literal;
@@ -46,7 +49,7 @@ use crate::{
     BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, ImportBinding, Ty, UnaryOpKind,
     context_invalid, unsupported,
 };
-use pycc_ast::{CmpOp, Expr, Int, Number, Operator, UnaryOp};
+use pycc_ast::{CmpOp, Expr, Int, Number, UnaryOp};
 use pycc_diag::Diagnostic;
 pub use receiver_dispatch::receiver_takes_method_path;
 use std_receiver::describe_module;
@@ -636,20 +639,11 @@ pub(crate) fn lower_expr(
             }
         }
         Expr::BinOp(bin_op) => {
-            let op = match bin_op.op {
-                Operator::Add => BinOpKind::Add,
-                Operator::Sub => BinOpKind::Sub,
-                Operator::Mult => BinOpKind::Mul,
-                Operator::Div => BinOpKind::Div,
-                Operator::FloorDiv => BinOpKind::FloorDiv,
-                Operator::Mod => BinOpKind::Mod,
-                Operator::Pow => BinOpKind::Pow,
-                other => {
-                    return Err(unsupported(
-                        format!("binary operator not supported yet: {other:?}"),
-                        bin_op.range,
-                    ));
-                }
+            let Some(op) = bin_op_kind(bin_op.op) else {
+                return Err(unsupported(
+                    format!("binary operator not supported yet: {:?}", bin_op.op),
+                    bin_op.range,
+                ));
             };
             let left = lower_expr(&bin_op.left, in_function, class_name, imports, signatures)?;
             let right = lower_expr(&bin_op.right, in_function, class_name, imports, signatures)?;
