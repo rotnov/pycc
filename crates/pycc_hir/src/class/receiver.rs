@@ -45,10 +45,11 @@
 //!    spelling into the parameter list itself.
 //!
 //! Both guards scan the **raw AST**, not the lowered HIR: shapes such as
-//! `del` and `lambda` never lower at all, so a HIR scan would under-cover.
-//! Both run *before* `stmt::lower_body`, because `global`, `nonlocal` and
-//! `del` each report their own `C0001` from that pass and a scan placed
-//! after it would never reach those arms with the receiver's own message.
+//! `lambda` never lower at all, so a HIR scan would under-cover. Both run
+//! *before* `stmt::lower_body`, because `global` and `nonlocal` each report
+//! their own `C0001` from that pass and a scan placed after it would never
+//! reach those arms with the receiver's own message. A `del` of the receiver
+//! is refused by its own scan, [`check_receiver_not_deleted`] (#1244).
 
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef};
@@ -239,6 +240,53 @@ pub(super) fn check_renamed_receiver(
     Ok(())
 }
 
+/// #1244: refuses a `del` of a method's receiver (`self` or its renamed
+/// spelling for an instance method, `cls` for a `@classmethod`) anywhere in
+/// the method body. CPython's zero-argument `super()` reads the receiver
+/// slot and raises once it is deleted, while pycc binds the canonical
+/// receiver once at entry, so a deleting method could silently answer with
+/// the original receiver. A `@staticmethod` has no receiver and is not
+/// checked. Runs before [`check_renamed_receiver`]'s early return for a
+/// `self`-spelled receiver, so it covers both spellings.
+pub(crate) fn check_receiver_not_deleted(
+    body: &[Stmt],
+    receiver_name: &str,
+    range: std::ops::Range<u32>,
+) -> Result<(), Diagnostic> {
+    struct DeleteScan<'t> {
+        target: &'t str,
+        found: bool,
+    }
+    impl<'a> Visitor<'a> for DeleteScan<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if let Stmt::Delete(del) = stmt {
+                for target in &del.targets {
+                    crate::stmt::del::collect_target_names(target, &mut |name| {
+                        self.found |= name == self.target;
+                    });
+                }
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+    }
+    let mut scan = DeleteScan {
+        target: receiver_name,
+        found: false,
+    };
+    scan.visit_body(body);
+    if scan.found {
+        return Err(unsupported(
+            format!(
+                "a `del` of a method's receiver (`{receiver_name}`) is not supported: \
+                 CPython's zero-argument `super()` reads the receiver slot, while pycc \
+                 binds the receiver once at entry"
+            ),
+            range,
+        ));
+    }
+    Ok(())
+}
+
 /// The alias statement prepended to a lowered method body whose source
 /// receiver is spelled something other than [`CANONICAL_RECEIVER`]:
 /// `<name> = self`. Binding the user's spelling as an ordinary local is what
@@ -293,9 +341,9 @@ fn rebinds_identifier(body: &[Stmt], target: &str) -> bool {
 /// than an `Expr::Name`.
 ///
 /// A `del <target>` is an `Expr::Name` and so counts as an occurrence for
-/// guard 1; it is deliberately *not* a binding for guard 2, because `del` is
-/// itself rejected with its own `C0001` by `stmt::lower_body` -- there is no
-/// accepted program in which `del <receiver>` could be observed.
+/// guard 1; it is deliberately *not* a binding for guard 2, because
+/// [`check_receiver_not_deleted`] refuses a `del` of the receiver (whatever
+/// its spelling, and before this guard runs) with its own message (#1244).
 fn scan(body: &[Stmt], target: &str, include_reads: bool) -> bool {
     struct IdentScan<'t> {
         target: &'t str,

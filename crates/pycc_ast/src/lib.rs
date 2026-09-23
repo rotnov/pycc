@@ -16,8 +16,9 @@ pub use ruff_python_ast::{
     Parameters, Pattern, PatternArguments, PatternKeyword, PatternMatchAs, PatternMatchClass,
     PatternMatchMapping, PatternMatchOr, PatternMatchSequence, PatternMatchSingleton,
     PatternMatchStar, PatternMatchValue, Singleton, Stmt, StmtAnnAssign, StmtAssign, StmtAugAssign,
-    StmtClassDef, StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtImportFrom, StmtMatch, StmtRaise,
-    StmtReturn, StmtTry, StmtTypeAlias, StmtWhile, TypeParam, TypeParams, UnaryOp,
+    StmtClassDef, StmtDelete, StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtImportFrom,
+    StmtMatch, StmtRaise, StmtReturn, StmtTry, StmtTypeAlias, StmtWhile, TypeParam, TypeParams,
+    UnaryOp,
 };
 
 /// Returns the byte range of a statement without exposing the upstream

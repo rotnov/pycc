@@ -87,6 +87,7 @@ pub(crate) fn check_enum_loop_body_module(
     // more than one member re-runs `body` once per member, same
     // re-entrant shape as any other loop -- see `narrow::apply_kill_prescan`.
     narrow::apply_kill_prescan(&mut body_env, body);
+    narrow::apply_delete_prescan(&mut body_env, body, Some(var));
     narrow::check_stmt_sequence(&mut body_env, body)?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {
@@ -113,6 +114,7 @@ pub(crate) fn check_enum_loop_body_function(
     // Issue #769 follow-up (D-068 re-review round 3): see
     // `check_enum_loop_body_module`'s identical comment.
     narrow::apply_kill_prescan(&mut body_env, body);
+    narrow::apply_delete_prescan(&mut body_env, body, Some(var));
     narrow::check_stmt_sequence_in_function(&mut body_env, local_names, body, return_ty.clone())?;
     join_loop_body(env, &body_env);
     if !was_definite && let Some(ty) = env.lookup_any(var) {

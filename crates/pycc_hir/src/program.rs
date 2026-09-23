@@ -139,6 +139,37 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             }
         }
     }
+    // #1244: the linked program is one flat top-level namespace, so a
+    // module-scope `del x` in one module unbinds the `x` every other module
+    // would read. Refused whenever any *other* module mentions `x` at all, in
+    // either dependency order -- hence a pre-pass over all inputs, like the
+    // foreign-shadow check above.
+    for (index, input) in inputs.iter().enumerate() {
+        for (name, span) in &input.module.deleted_top_level {
+            if let Some(other) = inputs.iter().enumerate().find(|(other, candidate)| {
+                *other != index
+                    && candidate
+                        .module
+                        .mentioned_names
+                        .as_ref()
+                        .expect("the driver fills every module's mentions when one deletes a name")
+                        .contains(name)
+            }) {
+                return Err(vec![(
+                    index,
+                    unsupported(
+                        format!(
+                            "a module-level `del {name}` is not supported when another module \
+                             of the program (`{}`) mentions `{name}`: every module shares one \
+                             top-level namespace",
+                            other.1.display_path
+                        ),
+                        span_range(*span),
+                    ),
+                )]);
+            }
+        }
+    }
     let display_paths: Vec<String> = inputs
         .iter()
         .map(|input| input.display_path.clone())
@@ -160,6 +191,9 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             // Consumed by the driver too (issue #1188): it feeds each
             // importer's lowering, and linking has no use for it.
             container_method_names: _,
+            // Consumed by the `del` pre-pass above (#1244).
+            deleted_top_level: _,
+            mentioned_names: _,
         } = input.module;
         let mut own: HashSet<&str> = HashSet::new();
         for (name, span) in &definition_spans {

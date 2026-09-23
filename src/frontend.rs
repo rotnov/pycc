@@ -224,7 +224,21 @@ fn link_frontend(
     let mut total = 0;
     let mut imports_total = 0;
     let mut classes_total = 0;
-    for loaded in program.modules {
+    // #1244: `pycc_hir::link` refuses a module-scope `del x` while another
+    // module mentions `x`. Lowering leaves each module's mentions unset,
+    // since the walk would cost every build; they are computed here, from
+    // the kept source, only for a multi-module program that deletes a name.
+    let needs_mentions = program.modules.len() > 1
+        && program
+            .modules
+            .iter()
+            .any(|loaded| !loaded.module.deleted_top_level.is_empty());
+    for mut loaded in program.modules {
+        if needs_mentions {
+            let parsed = pycc_parser::parse_all(&loaded.source)
+                .expect("a module that lowered once parses again");
+            loaded.module.mentioned_names = Some(pycc_hir::mentioned_names(&parsed));
+        }
         total += loaded.module.hir.items.len();
         bounds.push(total);
         imports_total += loaded.module.hir.imports.len();

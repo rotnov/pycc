@@ -1501,6 +1501,7 @@ fn lower_method(
                     parameters.range,
                 ));
             }
+            receiver::check_receiver_not_deleted(&def.body, "cls", parameters.range.into())?;
             let cls_ty = Ty::Instance(Box::new(class_name.to_string()));
             let mut p = vec![("cls".to_string(), cls_ty)];
             // PEP 570 (#383): remaining posonlyargs follow `cls`, before
@@ -1532,13 +1533,15 @@ fn lower_method(
             // it is spelled; `class::receiver` owns every part of that
             // decision (see its own module doc comment for the rule and for
             // why the two guards below exist). Both guards run *here*,
-            // before the `stmt::lower_body` call further down: `global`,
-            // `nonlocal` and `del` each report their own `C0001` from that
-            // pass, so a scan placed after it would never reach those shapes
-            // with the receiver's own message.
+            // before the `stmt::lower_body` call further down: `global` and
+            // `nonlocal` each report their own `C0001` from that pass, so a
+            // scan placed after it would never reach those shapes with the
+            // receiver's own message. A `del` of the receiver gets its own
+            // refusal (#1244), whatever the receiver's spelling.
             let split = receiver::split_receiver(parameters, def.range.into())?;
             receiver::check_receiver_param(&split, parameters.range.into())?;
             receiver::check_property_arity(kind, &split, parameters.range.into())?;
+            receiver::check_receiver_not_deleted(&def.body, split.name(), parameters.range.into())?;
             receiver::check_renamed_receiver(def, method_name, &split)?;
             receiver_name = Some(split.name().to_string());
             let (posonly_rest, args_rest) = (split.posonly_rest, split.args_rest);

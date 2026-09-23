@@ -899,6 +899,81 @@ End-to-end tests are in `tests/issue_1212_chained_compare.rs`, and the
 byte-exact oracle fixture is `tests/fixtures/chained_compare.py`.
 
 
+### `del` statement
+
+This is the canonical statement of the rule; other documents cross-reference
+it ([#1244](https://github.com/rotnov/pycc/issues/1244), Part 1 of
+[#1216](https://github.com/rotnov/pycc/issues/1216)). `del a, (b, [c])`
+deletes `a`, `b` and `c`, left to right, and `del ()` deletes nothing, as in
+CPython. HIR expands the statement into one `HirStmt::Delete` per name
+(`crates/pycc_hir/src/stmt/del.rs`). Under D-124's leak-only model, MIR lowers
+each one to a no-op: nothing is released, and the checker alone guarantees
+that no read follows the deletion.
+
+**Binding state.** A `del x` needs `x` to be `Definitely` bound. A `Maybe`
+binding is `T0041` and no binding at all is `T0021`, the same diagnostics a
+read gets, so `del a, a` and `del len` are refused. After the `del`, `x` is
+`Maybe` bound with its old type, and its narrowing is dropped. A later read is
+therefore `T0041`, and so is a read after an `if` whose one arm deleted `x`.
+A rebinding makes `x` `Definitely` bound again. The sticky representation
+(D-040) survives the deletion, so `del x; x = "s"` after an `int` binding is
+`T0023`.
+
+**Prescans.** A loop or handler body can run after a `del` in itself or in an
+earlier body, so a deletion anywhere in such a body demotes `x` to `Maybe`
+before the body is checked (`narrow::apply_delete_prescan`):
+
+- every `while` body, and every `for` body over `range`, a list, an `enum` or
+  a CPython iterable (the loop's own target is exempt: each iteration rebinds
+  it);
+- the state after a loop: a name the body deleted stays `Maybe`, even when the
+  body rebinds it later;
+- a `try` handler, after a `del` in the `try` body; an `except*` handler,
+  after a `del` in the body or an earlier handler;
+- the code after a `try` statement that has a non-empty `finally`, after a
+  `del` in any of its bodies.
+
+**Refused, with `C0001`:**
+
+- a target that is not a bare name: an attribute (`del o.a`), a subscript
+  (`del d[k]`, `del xs[i]`, tracked in
+  [#1245](https://github.com/rotnov/pycc/issues/1245) and
+  [#1246](https://github.com/rotnov/pycc/issues/1246)) or a slice;
+- `del __name__`, and a `del` in a class body;
+- a `del` of a method's receiver (`self`, a renamed receiver, or `cls`),
+  because the zero-argument `super()` reads the receiver slot. A
+  `@staticmethod` has no receiver, so `del self` compiles there;
+- a `del` of a function or class name (including a builtin class such as
+  `ValueError`), of a `Final` name, of a buffer the function releases on
+  return, or of a name holding a CPython object, whose release could run a
+  foreign finalizer (`pycc_types/src/del_stmt.rs`). Like every `pycc_types`
+  diagnostic, these render at `1:1`, not at the `del` (D-043);
+- at module scope, a `del` of an imported name (`import m`, `from m import x`);
+- at module scope, a `del x` while any `def` or `class` of the module mentions
+  `x`. Those bodies are checked after all top-level code (D-041), so the
+  checker could not see a call after the `del` that reads `x`;
+- at module scope, a `del x` while another module of the program mentions
+  `x`, because linked modules share one top-level namespace
+  (`program::link`), and a `from m import x` when `m`'s top level deletes `x`.
+
+Every module-scope rule is conservative: a function that only binds its own
+local `x` still blocks `del x` at module scope.
+
+Known limits, each a refusal rather than wrong output:
+
+- a name deleted and rebound in a loop body, or in an earlier `except*`
+  handler, is `Maybe` bound after it;
+- a name deleted and rebound inside a `try` with a `finally` is `Maybe` bound
+  after the statement;
+- `if c: del x; return` still leaves `x` `Maybe` bound after the `if`, and a
+  `for` over `range(0)` or a walrus-driven `while` still counts its body's
+  deletions;
+- a local that shadows a module-level function or class name cannot be
+  deleted.
+
+End-to-end tests are in `tests/issue_1244_del_name.rs`, and the byte-exact
+oracle fixture is `tests/fixtures/del_name.py`.
+
 ## Error philosophy
 
 Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (a planned `pycc check --fix` flag would apply trivial ones once implemented; not yet implemented, see `docs/CLI_SPEC.md`), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).

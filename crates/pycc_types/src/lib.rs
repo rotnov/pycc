@@ -4,6 +4,7 @@ mod buffer;
 mod class;
 mod compare_chain;
 mod constraints;
+mod del_stmt;
 mod empty_container;
 mod enum_lower;
 mod env;
@@ -646,7 +647,10 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     names.push(target);
                 }
             }
-            HirStmt::AnnAssign { target, .. } => {
+            // #1244: `del x` makes `x` local to the function exactly as an
+            // assignment does (CPython's `UnboundLocalError` when the
+            // function never binds it first).
+            HirStmt::AnnAssign { target, .. } | HirStmt::Delete { name: target } => {
                 if !is_local(names, target) {
                     names.push(target);
                 }
@@ -1469,8 +1473,9 @@ fn join_if_branches(
 /// `while` or `for` loop. The loop body may execute zero times, so every
 /// body-only binding joins back as `Maybe`. A name that was `Definitely`
 /// bound before the loop stays `Definitely` (it was bound regardless of
-/// whether the loop ran). A name that was `Maybe` before the loop and is also
-/// bound in the body stays `Maybe`.
+/// whether the loop ran), unless the body leaves it `Maybe` -- a `del`
+/// (#1244). A name that was `Maybe` before the loop and is also bound in the
+/// body stays `Maybe`.
 fn join_loop_body(env: &mut Environment, body_env: &Environment) {
     // For each name bound in the body but not already Definitely bound in env,
     // downgrade to Maybe. Names already Definitely bound in env are unchanged.
@@ -1480,7 +1485,13 @@ fn join_loop_body(env: &mut Environment, body_env: &Environment) {
                 // Already definite before the loop -- stays definite. But if
                 // the body assigned a different (incompatible) type,
                 // check_assignment already caught that inside the body check.
-                // Keep the existing definite binding.
+                // Keep the existing definite binding -- unless the body left
+                // it `Maybe`, which only a `del` can do (#1244): the loop
+                // (or the `try` body this also joins) may have deleted it.
+                if let BindingState::Maybe(ty) = state {
+                    env.bindings
+                        .insert(name.clone(), BindingState::Maybe(ty.clone()));
+                }
             }
             _ => {
                 // Not bound in env, or maybe-bound: the body may or may not
@@ -2208,6 +2219,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // clones `env` after this line and so inherits the pruning)
             // see it. See `narrow::apply_kill_prescan`'s doc comment.
             narrow::apply_kill_prescan(env, body);
+            narrow::apply_delete_prescan(env, body, None);
             // PEP 572 (#774): bind before validating -- see the `ExprStmt`
             // arm's doc comment above for why this order is required.
             collect_named_expr_bindings(env, &[], test)?;
@@ -2246,6 +2258,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // body can re-run, so prescan-drop any name it kills before
             // checking it. See `narrow::apply_kill_prescan`.
             narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
             narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
@@ -2313,6 +2326,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // Issue #769 follow-up (D-068 re-review round 3): see
             // `narrow::apply_kill_prescan`.
             narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
             narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // Issue #118 Part 1: if the loop variable was not definitely bound
@@ -2422,6 +2436,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             env.bind(var.clone(), Ty::Object);
             let mut body_env = env.clone();
             narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
             narrow::check_stmt_sequence(&mut body_env, body)?;
             join_loop_body(env, &body_env);
             // The loop may execute zero times, so a newly introduced loop
@@ -2551,6 +2566,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             finalbody,
         } => check_try_star_stmt(env, &[], body, handlers, orelse, finalbody, None),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
+        HirStmt::Delete { name } => del_stmt::check_delete(env, name),
     }
 }
 
@@ -2814,6 +2830,8 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::ForObject { .. }
             | HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
+            // #1244: a `del` neither returns nor raises.
+            | HirStmt::Delete { .. }
             // PR-12 Task 3 (D-117): a comprehension statement never contains a
             // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
             // statements), so it can never make a block always return, exactly
@@ -3142,6 +3160,7 @@ fn check_stmt_in_function(
             // module-scope `While` arm's identical comment and
             // `narrow::apply_kill_prescan`'s doc comment.
             narrow::apply_kill_prescan(env, body);
+            narrow::apply_delete_prescan(env, body, None);
             // PEP 572 (#774): bind before validating, mirroring the `If`
             // arm just above.
             collect_named_expr_bindings(env, local_names, test)?;
@@ -3181,6 +3200,7 @@ fn check_stmt_in_function(
             // Issue #769 follow-up (D-068 re-review round 3): see
             // `narrow::apply_kill_prescan`.
             narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
             narrow::check_stmt_sequence_in_function(
                 &mut body_env,
                 local_names,
@@ -3240,6 +3260,7 @@ fn check_stmt_in_function(
             // Issue #769 follow-up (D-068 re-review round 3): see
             // `narrow::apply_kill_prescan`.
             narrow::apply_kill_prescan(&mut body_env, body);
+            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
             narrow::check_stmt_sequence_in_function(
                 &mut body_env,
                 local_names,
@@ -3507,6 +3528,7 @@ fn check_stmt_in_function(
             Some(&return_ty),
         ),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
+        HirStmt::Delete { name } => del_stmt::check_delete(env, name),
     }
 }
 
@@ -3728,6 +3750,7 @@ fn reject_generic_calls_in_stmt(
         HirStmt::ExprStmt(expr) | HirStmt::Assign { value: expr, .. } => exprs.push(expr),
         HirStmt::AnnAssign { value, .. } => exprs.extend(value.iter()),
         HirStmt::Return(value) => exprs.extend(value.iter()),
+        HirStmt::Delete { .. } => {}
         HirStmt::If { test, body, orelse } => {
             exprs.push(test);
             blocks.push(body);

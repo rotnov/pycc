@@ -36,6 +36,8 @@ pub(super) fn check_try_stmt(
         // `narrow::apply_kill_prescan`'s doc comment in
         // `crates/pycc_types/src/narrow.rs` for the full rationale.
         super::narrow::apply_kill_prescan(&mut handler_env, body);
+        // #1244: likewise, a name `body` deletes anywhere may be unbound.
+        super::narrow::apply_delete_prescan(&mut handler_env, body, None);
         handler_env.in_except_handler = true;
         if let Some(exc_types) = &handler.exc_type {
             // PEP 758 (#740): a handler may name more than one exception
@@ -125,8 +127,33 @@ pub(super) fn check_try_stmt(
     let previous = joined.clone();
     let _ = join_if_branches(&mut joined, &previous, &else_env);
     *env = joined;
+    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
     check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
+}
+
+/// #1244: a `finally` block can be entered after only a partial run of the
+/// try body, of any handler, or of the `else` block (an exception escaping
+/// any of them), so every name any of them deletes may be unbound there.
+/// Applied to the joined environment that also flows out of the `try`, so
+/// the post-`try` state is conservative too (`docs/TYPE_SYSTEM.md`'s
+/// "`del` statement" section lists the limitation). A `try` without
+/// `finally` needs no prescan: the join already accounts for every path.
+fn apply_finally_delete_prescan(
+    env: &mut Environment,
+    body: &[HirStmt],
+    handlers: &[HirExceptHandler],
+    orelse: &[HirStmt],
+    finalbody: &[HirStmt],
+) {
+    if finalbody.is_empty() {
+        return;
+    }
+    super::narrow::apply_delete_prescan(env, body, None);
+    for handler in handlers {
+        super::narrow::apply_delete_prescan(env, &handler.body, None);
+    }
+    super::narrow::apply_delete_prescan(env, orelse, None);
 }
 
 /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542).
@@ -152,7 +179,7 @@ pub(super) fn check_try_star_stmt(
     check_stmt_sequence_shared(&mut body_env, local_names, body, return_ty)?;
 
     let mut handler_envs = Vec::with_capacity(handlers.len());
-    for handler in handlers {
+    for (index, handler) in handlers.iter().enumerate() {
         let mut handler_env = env.clone();
         // D-068 re-review of #780 (rebase onto #542's except* landing):
         // mirrors `check_try_stmt`'s identical prescan above -- `except*`
@@ -164,6 +191,13 @@ pub(super) fn check_try_star_stmt(
         // `narrow::apply_kill_prescan`'s doc comment in
         // `crates/pycc_types/src/narrow.rs` for the full rationale.
         super::narrow::apply_kill_prescan(&mut handler_env, body);
+        // #1244: several `except*` handlers can run in sequence for one
+        // group, each seeing what the earlier ones left, so handler `index`
+        // sees the deletions of the body *and* of every earlier handler.
+        super::narrow::apply_delete_prescan(&mut handler_env, body, None);
+        for earlier in &handlers[..index] {
+            super::narrow::apply_delete_prescan(&mut handler_env, &earlier.body, None);
+        }
         handler_env.in_except_handler = true;
         // A bare `except*:` is rejected by ruff's own parser as a syntax
         // error (PEP 654 requires every `except*` clause to name a type),
@@ -276,6 +310,7 @@ pub(super) fn check_try_star_stmt(
     let previous = joined.clone();
     let _ = join_if_branches(&mut joined, &previous, &else_env);
     *env = joined;
+    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
     check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
 }

@@ -2291,7 +2291,9 @@ pub(crate) fn collect_block_constraints(
             // parallel declared-side-table for `ConstraintEnvironment` is a
             // separate, independently-testable follow-up if solver-scope
             // coverage of this gap is wanted later.
-            HirStmt::AnnAssign { value: None, .. } => {}
+            // #1244: a `del` binds nothing to infer; the checker owns its
+            // binding-state rule.
+            HirStmt::AnnAssign { value: None, .. } | HirStmt::Delete { .. } => {}
             HirStmt::ExprStmt(expr) => {
                 // PEP 572 (#774), deep-review follow-up (round 4): bind
                 // before unifying -- see `bind_named_expr_targets`'s own
@@ -3331,6 +3333,7 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::ListCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
         | HirStmt::DictCompAssign { .. }
+        | HirStmt::Delete { .. }
         | HirStmt::Raise { .. } => false,
         HirStmt::Try {
             body,
@@ -3365,6 +3368,9 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
         | HirStmt::AttrSet { .. }
         | HirStmt::ListCompAssign { .. }
         | HirStmt::SetCompAssign { .. }
+        // #1244: a `del` changes a binding state, so the in-place fast
+        // paths that assume an unchanged environment must not be taken.
+        | HirStmt::Delete { .. }
         | HirStmt::DictCompAssign { .. } => true,
         HirStmt::If { body, orelse, .. } => {
             introduces_bindings(body) || introduces_bindings(orelse)

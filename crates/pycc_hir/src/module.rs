@@ -141,6 +141,18 @@ pub struct LoweredModule {
     /// every module that imports this one, so the set follows the import
     /// closure rather than the set of modules loaded so far.
     pub container_method_names: BTreeSet<&'static str>,
+    /// #1244: every name a module-scope `del` deletes, with the span of its
+    /// `del` statement. `program::link` refuses a program in which another
+    /// module mentions one of these names: the linked program is one flat
+    /// namespace, so that module's read would see the deleted global.
+    pub deleted_top_level: Vec<(String, Span)>,
+    /// #1244: every name this module mentions anywhere (each `Expr::Name`
+    /// id, a read or a store), for the same `program::link` rule. `None` from
+    /// `lower_module`: the walk costs every module on every build, and only a
+    /// multi-module program in which some module deletes a top-level name
+    /// needs it, so the driver fills it from [`crate::mentioned_names`] in
+    /// exactly that case, before calling `program::link`.
+    pub mentioned_names: Option<BTreeSet<String>>,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -407,6 +419,13 @@ pub fn lower_module(
         &state.imports,
         &state.definition_spans,
     ));
+    // #1244: the module-level `del` late-binding rule, after the per-item
+    // loop so an earlier per-item failure still reports first.
+    let deleted_top_level =
+        stmt::del::check_module_deletions(module).unwrap_or_else(|diagnostic| {
+            diagnostics.push(diagnostic);
+            Vec::new()
+        });
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
@@ -438,6 +457,8 @@ pub fn lower_module(
         mentions_dunder_name,
         definition_spans,
         container_method_names,
+        deleted_top_level,
+        mentioned_names: None,
     })
 }
 

@@ -1057,6 +1057,7 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
+        HirStmt::Delete { .. } => Ok(()),
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1458,7 +1459,7 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
                 collect_generic_class_instantiations_from_expr(c, out);
             }
         }
-        HirStmt::Return(None) => {}
+        HirStmt::Return(None) | HirStmt::Delete { .. } => {}
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
