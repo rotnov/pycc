@@ -260,7 +260,7 @@ fn relocate_macho(
     worklist.extend(dynload_images);
     let sidecar_root = lib_dir.parent().unwrap_or(lib_dir);
     let closure_dir = sidecar_root.join(closure::CLOSURE_DIR);
-    let (locked, sidecar) = match closure {
+    let (locked, mut sidecar) = match closure {
         Some((locked, images)) if !images.is_empty() => {
             worklist.extend(images.iter().map(|rel| Image::Closure { rel: rel.clone() }));
             (Some(locked), closure::sidecar_files(sidecar_root)?)
@@ -331,6 +331,9 @@ fn relocate_macho(
                         .into_owned();
                     if !vendored.contains(&name) {
                         vendor(&from, lib_dir, &name)?;
+                        // A later closure image's `@rpath` walk must see
+                        // the vendored file, as dyld will at run time.
+                        sidecar.insert(format!("lib/{name}"));
                         vendored.push(name.clone());
                         worklist.push(Image::Lib {
                             rel: PathBuf::from(&name),

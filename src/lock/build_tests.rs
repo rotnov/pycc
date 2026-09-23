@@ -155,6 +155,8 @@ fn a_malformed_lock_is_refused_even_for_a_stdlib_only_program() {
         err.contains(&format!("cannot use `{}`", env.lock_path().display())),
         "{err}"
     );
+    // The host is not consulted first: a non-Tier-1 host refuses it too.
+    assert!(env.plan_on(OTHER_HOST).unwrap_err().contains("cannot use"));
     env.write("import tinypkg\n");
     assert!(env.plan().unwrap_err().contains("cannot use"));
 }

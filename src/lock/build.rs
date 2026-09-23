@@ -162,6 +162,12 @@ pub(crate) fn plan_closure(
     if direct.is_empty() && text.is_none() {
         return Ok(None);
     }
+    // A malformed lock is refused before the host is consulted, so it fails
+    // on every host, including one with no Tier-1 triple.
+    let lock = match &text {
+        Some(text) => Some(super::parse_lock(text, &located.lock_path)?),
+        None => None,
+    };
     let triple = match schema::host_triple(arch, os) {
         Ok(triple) => triple,
         Err(_) if direct.is_empty() => return Ok(None),
@@ -172,7 +178,7 @@ pub(crate) fn plan_closure(
         }
     };
     let roots = direct.iter().cloned().collect::<Vec<_>>();
-    let Some(text) = text else {
+    let Some(lock) = lock else {
         return Err(format!(
             "the program imports {} from outside the standard library, so an embedded build \
              bundles its locked closure from `{}`, which does not exist; run `pycc lock {}`",
@@ -181,7 +187,6 @@ pub(crate) fn plan_closure(
             entry.display()
         ));
     };
-    let lock = super::parse_lock(&text, &located.lock_path)?;
     let key = located.key()?;
     let Some(section) = super::find_section(&lock, &key, &triple) else {
         if direct.is_empty() {
