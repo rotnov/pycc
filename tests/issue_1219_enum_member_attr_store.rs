@@ -65,10 +65,10 @@ fn cpython_raises_attribute_error_for_every_refused_store() {
     for (index, (store, attr)) in STORES.iter().enumerate() {
         let path = write(&dir, index, store);
         let output =
-            Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3.14".into()))
+            Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
                 .arg(&path)
                 .output()
-                .expect("python3.14 should spawn");
+                .expect("python3 should spawn");
         assert!(!output.status.success(), "{store}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
