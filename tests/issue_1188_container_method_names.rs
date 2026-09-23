@@ -389,6 +389,45 @@ print(xs.pop(), C().%get%(), g())
     );
 }
 
+/// A receiver-dispatched call inside a comprehension element (renamed with
+/// the comprehension variable), inside a generic function's body (scanned
+/// for recursive generic calls) and beside a generic call (rewritten by
+/// monomorphization) keeps its reading in each place.
+#[test]
+fn comprehensions_and_generic_bodies_hold_either_reading() {
+    twins_print(
+        "1188_compr_generic",
+        &single(
+            "\
+class C:
+    def %get%(self, n: int) -> int:
+        return n + 1
+
+
+def twice[T](v: T) -> T:
+    c = C()
+    d = {\"a\": 1}
+    print(c.%get%(1), d.get(\"a\", 0))
+    return v
+
+
+def g() -> int:
+    c = C()
+    return c.%get%(twice(3))
+
+
+c = C()
+d = {\"a\": 5}
+ys = [c.%get%(x) for x in range(1, 3)]
+zs = [d.get(\"b\", x) for x in range(7, 8)]
+print(ys[0], ys[1], zs[0])
+print(twice(4), g())
+",
+        ),
+        "2 3 7\n2 1\n2 1\n4 4\n",
+    );
+}
+
 #[test]
 fn a_walrus_inside_either_reading_binds_its_target() {
     twins_print(
@@ -708,6 +747,18 @@ fn an_empty_list_still_infers_from_its_append() {
             "def f() -> int:\n    ys = []\n    ys.append(5)\n    return ys.pop()\n\n\nprint(f())\n",
         )),
         "5\n",
+    );
+}
+
+#[test]
+fn an_empty_list_whose_append_fails_to_infer_reports_as_before() {
+    twins_same_diagnostic(
+        "1188_empty_err",
+        &with_all_four(
+            "def f() -> int:\n    ys = []\n    ys.append(nope)\n    return 0\n\n\nprint(f())\n",
+        ),
+        "check",
+        "T0003",
     );
 }
 
