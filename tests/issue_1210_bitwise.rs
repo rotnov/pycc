@@ -241,5 +241,8 @@ fn hosted_bitwise_exports_match_cpython() {
         .output()
         .expect("python3 should spawn");
     assert!(run.status.success(), "{}", rendered(&run));
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "ok\n");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
+        "ok\n"
+    );
 }
