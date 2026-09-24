@@ -333,6 +333,23 @@ mod tests {
         );
     }
 
+    /// #1291: a nested import is refused like a top-level one, at its own
+    /// span.
+    #[test]
+    fn a_block_foreign_import_is_refused_at_its_own_span() {
+        let nested = ImportBinding::Foreign {
+            local_name: "json".to_string(),
+            module_path: "json".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: Span::new(10, 21),
+        };
+        let gaps = classify_for_native_build(&hir(vec![nested]), EmbedHost::CrossTarget, &AUTO)
+            .expect_err("refused");
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].1.code, "I0403");
+        assert_eq!(gaps[0].1.span, Some(Span::new(10, 21)));
+    }
+
     #[test]
     fn only_an_excluded_root_is_refused_on_an_available_host() {
         // A mixed program: the embeddable `json` and the third-party roots

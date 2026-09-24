@@ -5690,6 +5690,17 @@ fn definitely_terminates_is_true_when_both_if_branches_terminate() {
 // these tests isolate each `HirStmt` variant's own contribution to the
 // killed-name set directly.
 
+/// #1291: a nested foreign import binds its name through
+/// `HirModule::imports`, so it is not a kill.
+#[test]
+fn killed_names_ignores_a_foreign_import() {
+    let body = vec![HirStmt::ForeignImport {
+        bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+        span: Span::new(0, 15),
+    }];
+    assert!(killed_names(&body).is_empty());
+}
+
 #[test]
 fn killed_names_is_empty_for_an_empty_body() {
     assert!(killed_names(&[]).is_empty());

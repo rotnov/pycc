@@ -9,6 +9,7 @@ use super::*;
 use crate::pycc_parser_test_helper::parse;
 use crate::{LoweredModule, lower_module};
 
+mod block;
 mod multi;
 
 const DEP: &str = "dep.py";

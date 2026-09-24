@@ -242,3 +242,25 @@ fn the_first_difference_covers_roots_packages_and_natives() {
         "its entries are in a different order"
     );
 }
+
+/// #1291: a foreign import nested in a module-level block is a direct root
+/// exactly like a top-level one; the lock does not read the site.
+#[test]
+fn a_block_foreign_import_is_a_direct_root() {
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: Vec::new(),
+        type_aliases: Vec::new(),
+        imports: vec![ImportBinding::Foreign {
+            local_name: "np".to_string(),
+            module_path: "numpy".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: pycc_diag::Span::new(0, 0),
+        }],
+        class_defs: Vec::new(),
+    };
+    assert_eq!(
+        direct_roots(&hir).into_iter().collect::<Vec<_>>(),
+        vec!["numpy".to_string()]
+    );
+}

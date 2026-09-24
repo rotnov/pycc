@@ -371,3 +371,24 @@ fn a_rejection_is_reported_at_the_import_span() {
     .expect("deny rejects");
     assert_eq!(gap.span, Some(Span::new(3, 9)));
 }
+
+/// #1291: a nested import is judged like a top-level one, at its own span.
+#[test]
+fn a_block_foreign_import_is_judged_at_its_own_span() {
+    let nested = ImportBinding::Foreign {
+        local_name: "numpy".to_string(),
+        module_path: "numpy".to_string(),
+        site: pycc_hir::ForeignImportSite::Block,
+        span: Span::new(10, 22),
+    };
+    let found = policy_gaps(
+        &hir(vec![nested]),
+        &EffectivePolicy::Deny {
+            source: PolicySource::CliFlag,
+        },
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, 0);
+    assert_eq!(found[0].1.code, "I0402");
+    assert_eq!(found[0].1.span, Some(Span::new(10, 22)));
+}

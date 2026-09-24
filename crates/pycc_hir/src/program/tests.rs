@@ -457,3 +457,62 @@ fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
         "{diagnostics:?}"
     );
 }
+
+/// Every plain `import` request in `source` answered `Foreign`, including
+/// an aliased or a nested one (#1291).
+fn all_foreign_input(display_path: &str, source: &str) -> LinkInput {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in crate::project_import_requests(&parsed) {
+        resolved.insert(request.span, crate::ResolvedImport::Foreign);
+    }
+    LinkInput {
+        display_path: display_path.to_string(),
+        module: lower_module(&parsed, &resolved, None).expect("a fixture module must lower"),
+    }
+}
+
+#[test]
+fn one_name_bound_to_two_cpython_modules_across_modules_is_rejected() {
+    let entry = "import colorsys as json\n";
+    let (index, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "import json\n"),
+        all_foreign_input("main.py", entry),
+    ]);
+    assert_eq!(index, 1, "the diagnostic belongs to the later module");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `json` to the CPython module `colorsys`, which `dep.py` binds \
+         to `json`; shadowing a foreign import across modules is not supported yet"
+    );
+    assert_eq!(
+        diagnostic.span,
+        Some(Span::new(0, entry.trim_end().len() as u32))
+    );
+}
+
+#[test]
+fn an_identical_foreign_pair_across_modules_links() {
+    let linked = link_and_finalize(vec![
+        all_foreign_input("dep.py", "import json\n"),
+        all_foreign_input("main.py", "if c:\n    import json\n"),
+    ])
+    .expect("the same module bound to the same name in two modules must link");
+    let sites: Vec<crate::ForeignImportSite> = linked
+        .imports
+        .iter()
+        .filter_map(|binding| match binding {
+            ImportBinding::Foreign { site, .. } => Some(*site),
+            _ => None,
+        })
+        .collect();
+    // The nested import keeps its `Block` site through the rebase.
+    assert_eq!(
+        sites,
+        vec![
+            crate::ForeignImportSite::Item(0),
+            crate::ForeignImportSite::Block
+        ]
+    );
+}

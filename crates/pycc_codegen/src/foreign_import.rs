@@ -280,6 +280,58 @@ mod tests {
         assert!(numpy < scipy, "{ir}");
     }
 
+    /// `if <test>:` wrapping a block foreign import (#1291) of `bindings`.
+    fn if_block_import(bindings: &[(&str, &str)]) -> MirItem {
+        MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![MirStmt::ForeignImport {
+                bindings: bindings
+                    .iter()
+                    .map(|(local, module)| ((*local).to_string(), (*module).to_string()))
+                    .collect(),
+            }],
+            orelse: vec![],
+        })
+    }
+
+    /// #1291: a foreign import nested in a module-level `if` is emitted in
+    /// the branch that runs it, with the same failure edge as a top-level
+    /// one, and its name is stored to a module global that
+    /// `collect_module_bindings` declared.
+    #[test]
+    fn a_block_foreign_import_is_emitted_inside_its_branch() {
+        let ir = entry_ir(
+            "foreign_import_block",
+            vec![
+                print_int(111),
+                if_block_import(&[("colorsys", "colorsys")]),
+                print_int(222),
+            ],
+        );
+        let import = ir.find(EXT_OBJ_IMPORT_SYMBOL).expect("the import call");
+        let then_block = ir.find("if_then:").expect("the `if` branch block");
+        assert!(then_block < import, "{ir}");
+        assert!(ir.contains("foreign_import_fail"), "{ir}");
+        assert!(ir.contains("ret i64 -1"), "{ir}");
+        assert!(
+            ir.contains("store ptr %foreign_import, ptr @pyglobal_colorsys"),
+            "the module global is stored: {ir}"
+        );
+    }
+
+    /// Two bindings of one node are emitted in source order, one call each.
+    #[test]
+    fn two_bindings_of_one_block_import_are_emitted_in_order() {
+        let ir = entry_ir(
+            "foreign_import_block_two",
+            vec![if_block_import(&[("sys", "sys"), ("re", "re")])],
+        );
+        assert_eq!(ir.matches(EXT_OBJ_IMPORT_SYMBOL).count(), 2, "{ir}");
+        let sys = ir.find("@pyglobal_sys").expect("the first global");
+        let re = ir.find("@pyglobal_re").expect("the second global");
+        assert!(sys < re, "{ir}");
+    }
+
     /// The gate `src/foreign_import.rs` exists to make coverable: a build
     /// that neither passes `--ext` nor embeds CPython (D-248; an embedded
     /// build compiles with `ext` set) has no interpreter to import into,
