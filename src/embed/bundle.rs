@@ -171,12 +171,8 @@ fn populate(
         }
     };
     let stdlib = lib_dir.join(layout::stdlib_dir_name(probe));
-    copy_stdlib(
-        &probe.stdlib,
-        &stdlib,
-        Path::new(""),
-        layout::skip_in_stdlib_copy,
-    )?;
+    let skip = layout::skip_in_stdlib_copy;
+    copy_stdlib(&probe.stdlib, &stdlib, Path::new(""), skip)?;
     let images = match locked {
         Some(locked) if !locked.files.is_empty() => closure::copy_closure(locked, staging)?,
         _ => Vec::new(),

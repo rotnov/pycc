@@ -414,7 +414,10 @@ fn the_windows_stub_imports_only_kernel32() {
     let dir = ScratchDir::new("win_embed_imports").expect("scratch");
     let sidecar = build_embedded(&dir, "import json\n\nprint(str(json.dumps(1)))\n");
     let stub = coff_imports(&dir.join("app"));
-    assert_eq!(stub, ["KERNEL32.dll"], "{stub:?}");
+    assert!(
+        stub.len() == 1 && stub[0].eq_ignore_ascii_case("kernel32.dll"),
+        "{stub:?}"
+    );
     let program = coff_imports(&sidecar.join("pycc_program.dll"));
     println!("pycc_program.dll imports: {program:?}");
     assert!(
