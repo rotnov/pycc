@@ -63,7 +63,7 @@ fn a_windows_or_non_tier_1_host_is_refused_before_the_program_is_read() {
         &absent(&dir),
         ("x86_64", "windows"),
     );
-    assert!(env_message(windows).contains("#1226"));
+    assert!(env_message(windows).contains("#1287"));
     let other = run_lock_on(
         &missing,
         false,

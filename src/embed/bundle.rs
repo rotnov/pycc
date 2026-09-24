@@ -23,6 +23,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod windows;
+
 /// Checks the path the sidecar will occupy. `Ok(false)`: nothing is there.
 /// `Ok(true)`: a sidecar with a current marker is there, and the build may
 /// replace it. `Err`: something else is there, and it is left untouched.
@@ -52,7 +54,8 @@ pub(crate) fn check_existing(sidecar: &Path) -> Result<bool, String> {
 /// `pycc.lock` section's closure, when the build has one (#1242), and
 /// `natives` what the build copies into `lib/` besides libpython (#1243).
 /// `static_lib` is a static build's archive (D-251): nothing is bundled in
-/// libpython's place, and the returned path names no file.
+/// libpython's place, and the returned path names no file. On Windows the
+/// library sits at the sidecar root ([`layout::bundled_library_path`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble(
     probe: &EmbedProbe,
@@ -76,9 +79,7 @@ pub(crate) fn assemble(
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e);
     }
-    Ok(sidecar
-        .join("lib")
-        .join(layout::bundled_library_name(platform, probe)))
+    Ok(layout::bundled_library_path(platform, &sidecar, probe))
 }
 
 /// Moves `staging` to `sidecar`. With `replace_existing`, the old sidecar
@@ -140,6 +141,9 @@ fn populate(
     natives: &NativePlan,
     static_lib: Option<&StaticProbe>,
 ) -> Result<(), String> {
+    if platform == EmbedPlatform::Windows {
+        return windows::populate(probe, staging);
+    }
     let lib_dir = staging.join("lib");
     std::fs::create_dir(&lib_dir).map_err(|e| io_error("create", &lib_dir, &e))?;
     let source = layout::source_library(probe);
@@ -167,7 +171,12 @@ fn populate(
         }
     };
     let stdlib = lib_dir.join(layout::stdlib_dir_name(probe));
-    copy_stdlib(&probe.stdlib, &stdlib, Path::new(""))?;
+    copy_stdlib(
+        &probe.stdlib,
+        &stdlib,
+        Path::new(""),
+        layout::skip_in_stdlib_copy,
+    )?;
     let images = match locked {
         Some(locked) if !locked.files.is_empty() => closure::copy_closure(locked, staging)?,
         _ => Vec::new(),
@@ -212,11 +221,12 @@ fn check_locked_digest(locked: &LockedClosure, digest: &str) -> Result<(), Strin
     }
 }
 
-/// Copies `from/rel` into `to/rel`, recursively, skipping what
-/// [`layout::skip_in_stdlib_copy`] names. Files are copied by reading and
+/// Copies `from/rel` into `to/rel`, recursively, skipping what `skip`
+/// names ([`layout::skip_in_stdlib_copy`], or on Windows
+/// [`layout::skip_in_windows_stdlib_copy`]). Files are copied by reading and
 /// writing their bytes, so every copy is writable by the build for the
 /// relocation step regardless of the source's mode.
-fn copy_stdlib(from: &Path, to: &Path, rel: &Path) -> Result<(), String> {
+fn copy_stdlib(from: &Path, to: &Path, rel: &Path, skip: fn(&Path) -> bool) -> Result<(), String> {
     let dest = to.join(rel);
     std::fs::create_dir(&dest).map_err(|e| io_error("create", &dest, &e))?;
     let source = from.join(rel);
@@ -224,13 +234,13 @@ fn copy_stdlib(from: &Path, to: &Path, rel: &Path) -> Result<(), String> {
     for entry in entries {
         let entry = entry.map_err(|e| io_error("read", &source, &e))?;
         let child = rel.join(entry.file_name());
-        if layout::skip_in_stdlib_copy(&child) {
+        if skip(&child) {
             continue;
         }
         let path = entry.path();
         let kind = std::fs::symlink_metadata(&path).map_err(|e| io_error("inspect", &path, &e))?;
         if kind.is_dir() {
-            copy_stdlib(from, to, &child)?;
+            copy_stdlib(from, to, &child, skip)?;
         } else if std::fs::metadata(&path).is_ok_and(|target| target.is_file()) {
             let bytes = std::fs::read(&path).map_err(|e| io_error("read", &path, &e))?;
             let out = to.join(&child);

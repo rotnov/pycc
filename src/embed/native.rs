@@ -89,6 +89,9 @@ pub(crate) fn plan_natives(
             linux_vendor: Vec::new(),
         }),
         EmbedPlatform::Linux => native_linux::plan(probe, closure, env, interpreter, link),
+        // Windows: nothing to vendor; Part 1 copies `DLLs\` wholesale and
+        // refuses a closure (`plan_embed`) until #1287.
+        EmbedPlatform::Windows => Ok(NativePlan::default()),
     }
 }
 

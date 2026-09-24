@@ -6,9 +6,14 @@
 //! On macOS the libraries are real Mach-O images built with `cc`, so the
 //! `otool`/`install_name_tool`/`codesign` spawns run against them.
 //!
-//! On Windows the embedded mode is refused before any of this runs (#1226),
-//! so the tests that build a real library or run the embed wiring are gated
-//! off there and part of this module has no caller on that host.
+//! [`fake_windows_layout`] is the python.org Windows installation's shape
+//! (D-253): the interpreter DLLs beside `python.exe`, the import libraries
+//! in `libs\`, `Lib\`, `DLLs\` and `Include\`. It is plain files, so the
+//! Windows probe, bundle and plan run on every host.
+//!
+//! The tests that build a real Mach-O library or run the POSIX embed
+//! wiring are gated off on Windows, so part of this module has no caller
+//! on that host.
 #![cfg_attr(windows, allow(dead_code))]
 
 use super::EmbedProbe;
@@ -132,4 +137,51 @@ pub(crate) fn macho_library(layout: &FakeLayout) {
         "pycc_fake_json",
         &[&layout.library()],
     );
+}
+
+/// Builds the Windows installation shape under `root`: `base\python314.dll`,
+/// `python3.dll` and `vcruntime140.dll` (no `vcruntime140_1.dll`, so the
+/// optional-copy skip runs), `libs\python314.lib` and `python3.lib`, a
+/// `Lib\` and a `DLLs\` holding one file of every kind the Windows copy
+/// filter keeps or skips, and a stub `Include\Python.h`.
+pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
+    let root = std::fs::canonicalize(root).expect("canonicalize the scratch root");
+    let prefix = root.join("base");
+    let include = prefix.join("Include");
+    write(
+        &include.join("Python.h"),
+        "#error pycc test fixture: not a real Python.h\n",
+    );
+    for (rel, text) in [
+        ("python314.dll", "python314"),
+        ("python3.dll", "python3"),
+        ("vcruntime140.dll", "vcruntime140"),
+        ("libs/python314.lib", "import library"),
+        ("libs/python3.lib", "import library"),
+        ("Lib/os.py", "# os\n"),
+        ("Lib/json/__init__.py", "# json\n"),
+        ("Lib/json/__pycache__/__init__.cpython-314.pyc", "junk"),
+        ("Lib/site-packages/x/__init__.py", "# x\n"),
+        ("Lib/tkinter/__init__.py", "# tkinter\n"),
+        ("DLLs/_ssl.pyd", "ssl"),
+        ("DLLs/libssl-3.dll", "libssl"),
+        ("DLLs/_tkinter.pyd", "tkinter"),
+        ("DLLs/tcl86t.dll", "tcl"),
+    ] {
+        write(&prefix.join(rel), text);
+    }
+    let probe = EmbedProbe {
+        version: (3, 14, 7),
+        executable: prefix.join("python.exe"),
+        include,
+        stdlib: prefix.join("Lib"),
+        base_prefix: prefix.clone(),
+        enable_shared: false,
+        framework: String::new(),
+        ldlibrary: "python314.dll".to_string(),
+        libdir: prefix.join("libs"),
+        instsoname: String::new(),
+        gil_disabled: false,
+    };
+    FakeLayout { prefix, probe }
 }

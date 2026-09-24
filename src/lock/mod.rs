@@ -80,7 +80,7 @@ pub(crate) fn run_lock_on(
     if os == "windows" {
         return Err(LockFailure::Env(
             "`pycc lock` does not run on a Windows host yet: it locks the closure an embedded \
-             build carries, and pycc does not embed CPython into a Windows executable yet (#1226)"
+             build carries, and pycc does not lock a Windows embed interpreter yet (#1287)"
                 .to_string(),
         ));
     }
@@ -263,7 +263,7 @@ fn derive(
     // no shared library: it records the one that identifies the
     // interpreter, which is the `LIBPL` archive when there is none.
     let probe = toolchain
-        .probe_as(embed::LibpythonLink::Static)
+        .probe_as(embed::LibpythonLink::Static, platform)
         .map_err(LockFailure::Env)?;
     let env = toolchain.lock_probe().map_err(LockFailure::Env)?;
     let library = toolchain
