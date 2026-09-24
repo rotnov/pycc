@@ -2,7 +2,11 @@
 //! (Part 1 of #1026, PR 1c of #1080).
 //!
 //! `import numpy` binds `numpy` to [`Ty::Object`], an opaque `PyObject *`
-//! whose shape pycc knows nothing about. Every refusal of an operation on
+//! whose shape pycc knows nothing about. Since #1278 an unaliased
+//! top-level `from itertools import product, chain` binds each imported
+//! name the same way -- `product` is the CPython object
+//! `itertools.product`, typed [`Ty::Object`] like any other foreign
+//! binding, so every refusal below applies to it unchanged. Every refusal of an operation on
 //! such a value is `I0404`.
 //!
 //! **Part 2 of #1026 (#1081) moved the refusal from the producer to the

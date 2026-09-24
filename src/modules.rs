@@ -95,12 +95,13 @@ enum Resolution {
     /// resolves nowhere on disk): left unanswered so `pycc_hir` reports it
     /// exactly as a single-file compilation would.
     Unanswered,
-    /// A bare `import X` -- or one unaliased name `X` of `import X, Y`
-    /// (#1280) -- whose single-segment absolute root is neither a
+    /// A bare `import X` -- or one name `X` of `import X, Y` (#1280), or
+    /// `import X as Y` (#1291), or the module of `from X import a, b`
+    /// (#1278) -- whose single-segment absolute root is neither a
     /// project module nor a `pycc_std` one (Part 1 of #1026): the name is
     /// taken to be a CPython module the produced extension imports at
-    /// module-exec time, and `pycc_hir` binds it as an opaque object
-    /// (`ImportBinding::Foreign`). Whether that module actually exists is
+    /// module-exec time, and `pycc_hir` binds it, or each imported name of
+    /// it, as an opaque object (`ImportBinding::Foreign`). Whether that module actually exists is
     /// not knowable here -- the answer lives in the `sys.path` of the
     /// interpreter that loads the artifact, so the failure is a runtime
     /// `ModuleNotFoundError`, never a compile-time diagnostic.
@@ -522,22 +523,21 @@ impl Loader {
     /// "import of module `x` is not supported yet" `C0001`.
     fn missing(&self, base: &Base, request: &ProjectImportRequest) -> Resolution {
         if !base.relative {
-            // Part 1 of #1026 admits exactly one foreign shape: a bare
-            // `import X` naming a single, undotted root -- or one such name
-            // of a multi-name `import X, Y`, which `pycc_hir` requests alias
-            // by alias under each alias's own span (#1280). `request.names`
-            // is non-empty only for a `from X import n`, which binds
-            // names out of the module rather than the module itself, and
-            // a dotted `import X.Y` binds `X` while importing `X.Y` --
-            // both keep `pycc_hir`'s existing `C0001` until a later part
-            // implements them. An aliased `import X as Y` is requested
-            // under its alias's span like any other name since #1291, and
-            // is answered here on the same terms: `pycc_hir` binds `Y`.
-            if request.names.is_empty()
-                && request
-                    .module
-                    .as_deref()
-                    .is_some_and(|module| !module.contains('.'))
+            // Part 1 of #1026 admits a foreign import of a single, undotted
+            // root: a bare `import X`, one such name of a multi-name
+            // `import X, Y` (which `pycc_hir` requests alias by alias under
+            // each alias's own span, #1280), an aliased `import X as Y`
+            // (#1291; `pycc_hir` binds `Y`), and -- when `request.names` is
+            // non-empty -- a top-level `from X import a, b` (#1278), whose
+            // names `pycc_hir` binds to the module's attributes. A dotted
+            // `X.Y`, in either form, keeps `pycc_hir`'s existing `C0001`
+            // (#1138): `import X.Y` binds `X` while importing `X.Y`, which
+            // no later pass models yet. A non-relative base means
+            // `request.level` is `0`.
+            if request
+                .module
+                .as_deref()
+                .is_some_and(|module| !module.contains('.'))
             {
                 return Resolution::Foreign;
             }

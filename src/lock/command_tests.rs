@@ -255,6 +255,7 @@ fn a_block_foreign_import_is_a_direct_root() {
         imports: vec![ImportBinding::Foreign {
             local_name: "np".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Block { optional: false },
             span: pycc_diag::Span::new(0, 0),
         }],
@@ -274,6 +275,7 @@ fn split_roots_classifies_optional_roots_and_required_wins() {
     let foreign = |module_path: &str, optional: Option<bool>| ImportBinding::Foreign {
         local_name: module_path.to_string(),
         module_path: module_path.to_string(),
+        from: None,
         site: match optional {
             Some(optional) => pycc_hir::ForeignImportSite::Block { optional },
             None => pycc_hir::ForeignImportSite::Item(0),

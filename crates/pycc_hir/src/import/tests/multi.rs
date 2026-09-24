@@ -84,6 +84,7 @@ fn two_foreign_modules_share_the_statement_position_and_span() {
             ImportBinding::Foreign {
                 local_name,
                 module_path,
+                from: None,
                 site: crate::ForeignImportSite::Item(item_index),
                 span,
             } => Some((

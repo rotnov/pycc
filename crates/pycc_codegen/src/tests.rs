@@ -15491,6 +15491,7 @@ fn with_foreign_numpy(mut items: Vec<MirItem>) -> Vec<MirItem> {
         MirItem::ForeignImport {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
         },
     );
     items

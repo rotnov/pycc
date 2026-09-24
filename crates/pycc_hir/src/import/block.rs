@@ -196,6 +196,7 @@ pub(crate) fn nested_foreign_import(stmt: &Stmt, imports: &[ImportBinding]) -> O
             ImportBinding::Foreign {
                 local_name,
                 module_path,
+                from: None,
                 site: ForeignImportSite::Block { .. },
                 span: binding_span,
             } if *binding_span == span => Some((local_name.clone(), module_path.clone())),

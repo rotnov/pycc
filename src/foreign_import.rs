@@ -28,7 +28,9 @@
 use crate::embed::stdlib_roots::is_excluded_stdlib_root;
 use crate::interop_policy::{self, EffectivePolicy};
 use pycc_diag::Diagnostic;
-use pycc_hir::{HirModule, ImportBinding};
+use pycc_hir::{
+    FromImport, HirModule, ImportBinding, foreign_import_statement, opens_foreign_statement,
+};
 
 /// Whether this build can embed a CPython interpreter at all, before any
 /// individual import is looked at.
@@ -69,20 +71,27 @@ pub(crate) enum I0403Reason {
     ExcludedStdlibRoot,
 }
 
-/// The `I0403` message for `import {module_path}` refused for `reason`.
+/// The `I0403` message for `import {module_path}` -- or, when `from` is
+/// `Some`, for `from {module_path} import a, b` (#1278) -- refused for
+/// `reason`.
 ///
 /// Every reason names `pycc build --ext` as the working alternative: the
 /// code keeps its meaning ("this build cannot give the import a CPython
 /// interpreter; `--ext` can"), only the set of cases reaching it narrowed.
-pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
+pub(crate) fn i0403_message(
+    module_path: &str,
+    from: Option<&FromImport>,
+    reason: I0403Reason,
+) -> String {
+    let statement = foreign_import_statement(module_path, from);
     match reason {
         I0403Reason::CrossTarget => format!(
-            "`import {module_path}` imports a CPython module, which requires \
+            "`{statement}` imports a CPython module, which requires \
              `pycc build --ext` in a `--target` build: an embedded executable \
              bundles the build host's own interpreter, which cannot serve another target"
         ),
         I0403Reason::ExcludedStdlibRoot => format!(
-            "`import {module_path}` imports a standard-library module that needs \
+            "`{statement}` imports a standard-library module that needs \
              Tcl/Tk libraries from outside the interpreter, which requires \
              `pycc build --ext`: an embedded executable does not bundle it"
         ),
@@ -139,10 +148,20 @@ pub(crate) fn classify_for_native_build(
         .enumerate()
         .filter_map(|(position, binding)| match binding {
             ImportBinding::Foreign {
-                module_path, span, ..
+                module_path,
+                from,
+                span,
+                ..
             } => {
                 any_foreign = true;
-                if let Some(rejected) = interop_policy::rejection(policy, module_path, *span) {
+                // #1278: `from tkinter import Tk, Label` is one statement
+                // and one diagnostic, reported on its first name only.
+                if !opens_foreign_statement(from.as_ref()) {
+                    return None;
+                }
+                if let Some(rejected) =
+                    interop_policy::rejection(policy, module_path, from.as_ref(), *span)
+                {
                     return Some((position, rejected));
                 }
                 refusal_reason(module_path, host).map(|reason| {
@@ -150,7 +169,7 @@ pub(crate) fn classify_for_native_build(
                         position,
                         Diagnostic::error(
                             "I0403",
-                            i0403_message(module_path, reason),
+                            i0403_message(module_path, from.as_ref(), reason),
                             // The import statement's own range, carried on
                             // the binding. Before it was, every `I0403` was
                             // built with `Span::new(0, 0)`, so a foreign
@@ -193,6 +212,7 @@ mod tests {
         ImportBinding::Foreign {
             local_name: name.to_string(),
             module_path: name.to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         }
@@ -270,8 +290,8 @@ mod tests {
         assert_eq!(
             gaps,
             vec![
-                (0, i0403_message("json", reason)),
-                (2, i0403_message("numpy", reason)),
+                (0, i0403_message("json", None, reason)),
+                (2, i0403_message("numpy", None, reason)),
             ]
         );
     }
@@ -283,6 +303,7 @@ mod tests {
         let nested = ImportBinding::Foreign {
             local_name: "json".to_string(),
             module_path: "json".to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Block { optional: false },
             span: Span::new(10, 21),
         };
@@ -313,7 +334,10 @@ mod tests {
         );
         assert_eq!(
             gaps,
-            vec![(3, i0403_message("tkinter", I0403Reason::ExcludedStdlibRoot)),]
+            vec![(
+                3,
+                i0403_message("tkinter", None, I0403Reason::ExcludedStdlibRoot)
+            ),]
         );
         assert_eq!(
             classify_for_native_build(&hir(vec![foreign("numpy")]), EmbedHost::Available, &AUTO),
@@ -335,7 +359,7 @@ mod tests {
             messages(EmbedHost::Available, vec![foreign("tkinter.ttk")]),
             vec![(
                 0,
-                i0403_message("tkinter.ttk", I0403Reason::ExcludedStdlibRoot)
+                i0403_message("tkinter.ttk", None, I0403Reason::ExcludedStdlibRoot)
             )]
         );
     }
@@ -346,7 +370,7 @@ mod tests {
             (I0403Reason::CrossTarget, "`--target` build"),
             (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
         ] {
-            let message = i0403_message("numpy", reason);
+            let message = i0403_message("numpy", None, reason);
             assert!(message.starts_with("`import numpy` imports a"), "{message}");
             assert!(message.contains("requires `pycc build --ext`"), "{message}");
             assert!(message.contains(detail), "{message}");
@@ -386,6 +410,88 @@ mod tests {
         }
         assert_eq!(
             classify_for_native_build(&hir(vec![foreign("json")]), EmbedHost::Available, &policy),
+            Ok(NeedsInterpreter(true))
+        );
+    }
+
+    /// The binding `from {module} import {names}` makes for `names[index]`,
+    /// at the fixed statement span `span`.
+    fn from_foreign(module: &str, names: &[&str], index: usize, span: Span) -> ImportBinding {
+        ImportBinding::Foreign {
+            local_name: names[index].to_string(),
+            module_path: module.to_string(),
+            from: Some(FromImport {
+                name: names[index].to_string(),
+                fromlist: names.iter().map(ToString::to_string).collect(),
+                index,
+            }),
+            site: pycc_hir::ForeignImportSite::Item(0),
+            span,
+        }
+    }
+
+    /// #1278: every name of `from tkinter import Tk, Label` shares one
+    /// statement, so it is refused once, on its first name, quoting the
+    /// statement as written.
+    #[test]
+    fn a_multi_name_from_import_is_refused_once_quoting_the_statement() {
+        let span = Span::new(0, 29);
+        let statement = |index| from_foreign("tkinter", &["Tk", "Label"], index, span);
+        let gaps = messages(EmbedHost::Available, vec![statement(0), statement(1)]);
+        assert_eq!(
+            gaps,
+            vec![(
+                0,
+                i0403_message(
+                    "tkinter",
+                    Some(&FromImport {
+                        name: "Tk".to_string(),
+                        fromlist: vec!["Tk".to_string(), "Label".to_string()],
+                        index: 0,
+                    }),
+                    I0403Reason::ExcludedStdlibRoot
+                )
+            )]
+        );
+        let message = &gaps[0].1;
+        let prefix = "`from tkinter import Tk, Label` imports a";
+        assert!(message.starts_with(prefix), "{message}");
+    }
+
+    /// The dedup keys on the statement, not on the span: two linked files
+    /// can hold byte-identical spans, and each statement keeps its own
+    /// diagnostic, as each alias of a plain `import a, b` does.
+    #[test]
+    fn identical_spans_from_two_statements_each_keep_their_diagnostic() {
+        let span = Span::new(0, 22);
+        let gaps = messages(
+            EmbedHost::Available,
+            vec![
+                from_foreign("tkinter", &["Tk"], 0, span),
+                from_foreign("tkinter", &["Tk"], 0, span),
+            ],
+        );
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
+        let plain = messages(EmbedHost::CrossTarget, vec![foreign("json"), foreign("gc")]);
+        assert_eq!(plain.len(), 2, "{plain:?}");
+    }
+
+    /// A later name of a from-import is still a foreign import, so the
+    /// program still needs an interpreter even though that name is never
+    /// reported on its own.
+    #[test]
+    fn a_later_from_import_name_still_needs_an_interpreter() {
+        assert_eq!(
+            classify_for_native_build(
+                &hir(vec![from_foreign(
+                    "json",
+                    &["dumps", "loads"],
+                    1,
+                    Span::new(0, 0)
+                )]),
+                EmbedHost::Available,
+                &AUTO
+            ),
             Ok(NeedsInterpreter(true))
         );
     }

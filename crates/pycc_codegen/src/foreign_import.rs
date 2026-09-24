@@ -5,8 +5,12 @@
 //! Cohesion-driven carve out of `lib.rs` under AGENTS.md's decomposability
 //! rule: everything that knows how a foreign `import numpy` becomes machine
 //! code lives here -- the module global its local name gets, the extern
-//! declaration of the shim's import helper, and the call emitted at the
-//! import's own source position.
+//! declaration of the shim's import helpers, and the call emitted at the
+//! import's own source position. Since #1278 that includes `from numpy
+//! import pi`, which binds the module's attribute through
+//! `pycc_ext_obj_import_from` instead of the module through
+//! `pycc_ext_obj_import`, and the `MirItem::ForeignImport` arm of
+//! `compile_to_object`'s item loop, which is only a call to [`emit_item`].
 //!
 //! **Ordering.** The call is emitted from `compile_to_object`'s single
 //! source-order `for item in &mir.items` loop, at the position
@@ -50,7 +54,9 @@
 
 use super::*;
 use crate::ext::EXT_IMPORT_ERROR_BRIDGE_SYMBOL;
+use crate::ext::EXT_OBJ_IMPORT_FROM_SYMBOL;
 use inkwell::builder::Builder;
+use pycc_mir::FromImport;
 
 /// What a failed import's `NULL` edge does.
 pub(super) enum FailureEdge<'a, 'ctx> {
@@ -109,15 +115,129 @@ fn obj_import_fn<'ctx>(
     )
 }
 
+/// One foreign import binding as codegen emits it: the module global it
+/// stores into (`local_name`), the module, and -- for one name of a
+/// `from X import a, b` (#1278) -- that name's place in the statement's
+/// fromlist.
+#[derive(Clone, Copy)]
+pub(super) struct ForeignBinding<'a> {
+    pub(super) local_name: &'a str,
+    pub(super) module_path: &'a str,
+    pub(super) from: Option<&'a FromImport>,
+}
+
+/// Emits a top-level [`MirItem::ForeignImport`] at its own position in
+/// `compile_to_object`'s source-order item loop, or nothing at all in a
+/// build without `ext` (see the module doc's **Native mode**). `def_iter`
+/// in that loop is deliberately not advanced: it pairs with
+/// `MirItem::Function` items only.
+pub(super) fn emit_item<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    entry_fn: FunctionValue<'ctx>,
+    ext: bool,
+    module_globals: &BTreeMap<String, StorageSlot<'ctx>>,
+    binding: ForeignBinding<'_>,
+) {
+    if ext {
+        emit(
+            context,
+            builder,
+            module,
+            entry_fn,
+            &module_globals[binding.local_name],
+            binding,
+            FailureEdge::ReturnFailed,
+        );
+    }
+}
+
+/// Declares the shim's `PyObject *pycc_ext_obj_import_from(const char *,
+/// const char *const *, long long, long long)` once per module (#1278).
+fn obj_import_from_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_IMPORT_FROM_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64t = context.i64_type();
+    module.add_function(
+        EXT_OBJ_IMPORT_FROM_SYMBOL,
+        ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into(), i64t.into()], false),
+        None,
+    )
+}
+
+/// Emits the `pycc_ext_obj_import_from` call for one name of a
+/// `from X import a, b` (#1278) and returns the new reference it yields.
+///
+/// The whole fromlist is passed on every name's call: CPython's
+/// `IMPORT_NAME` receives all of it before its first `IMPORT_FROM`, so a
+/// package submodule listed later in the statement is already imported
+/// when an earlier name is fetched. Each name is a private string global
+/// (`pycc_foreign_attr_{local}`), and the list is a private constant array
+/// of pointers to them (`pycc_foreign_fromlist_{local}`).
+fn emit_import_from_call<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    local_name: &str,
+    module_name: PointerValue<'ctx>,
+    from: &FromImport,
+) -> PointerValue<'ctx> {
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let names: Vec<PointerValue<'ctx>> = from
+        .fromlist
+        .iter()
+        .map(|name| {
+            builder
+                .build_global_string_ptr(name, &format!("pycc_foreign_attr_{local_name}"))
+                .expect("build_global_string_ptr should not fail")
+                .as_pointer_value()
+        })
+        .collect();
+    let array_ty = ptr.array_type(names.len() as u32);
+    let fromlist = module.add_global(
+        array_ty,
+        None,
+        &format!("pycc_foreign_fromlist_{local_name}"),
+    );
+    fromlist.set_initializer(&ptr.const_array(&names));
+    fromlist.set_constant(true);
+    fromlist.set_linkage(Linkage::Private);
+    let i64t = context.i64_type();
+    builder
+        .build_call(
+            obj_import_from_fn(context, module),
+            &[
+                module_name.into(),
+                fromlist.as_pointer_value().into(),
+                i64t.const_int(from.fromlist.len() as u64, false).into(),
+                i64t.const_int(from.index as u64, false).into(),
+            ],
+            "foreign_import",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_import_from")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_import_from returns PyObject *")
+        .into_pointer_value()
+}
+
 /// Emits the import call for one foreign import binding (a
 /// [`MirItem::ForeignImport`], or one pair of a `MirStmt::ForeignImport`)
-/// and stores the resulting module object into `slot`, `local_name`'s
-/// module global. `local_name` also names the module-path string global;
-/// two imports binding the same name get two strings, which LLVM names
-/// apart by emission order.
+/// and stores the resulting object into `slot`, the binding's module
+/// global. `pycc_ext_obj_import(module_path)` binds the module for `import
+/// X`; `pycc_ext_obj_import_from` binds the named attribute for `from X
+/// import n` (#1278). The local name also names the module-path string
+/// global; two imports binding the same name get two strings, which LLVM
+/// names apart by emission order.
 ///
-/// A `NULL` return means CPython raised (`ModuleNotFoundError` being the
-/// expected one), and `edge` decides what happens next. Under
+/// A `NULL` return means CPython raised (`ModuleNotFoundError`, or
+/// `ImportError` for a missing name of a from-import), and `edge` decides
+/// what happens next. Under
 /// [`FailureEdge::ReturnFailed`] the exception is already set by the shim,
 /// so the entry point returns [`EXT_MODULE_EXEC_FAILED`] immediately -- the
 /// `Py_mod_exec` slot's failure convention -- and the module body's
@@ -126,29 +246,39 @@ fn obj_import_fn<'ctx>(
 /// `ImportError` is now a pending pycc exception, and control branches to
 /// the innermost exception target exactly as an explicit `raise` does
 /// (`emit_body`); a zero answer takes the same direct return, from a block
-/// named `foreign_import_unbridged`.
-#[allow(clippy::too_many_arguments)]
+/// named `foreign_import_unbridged`. A from-import is only ever a top-level
+/// item (#1278), so it always takes [`FailureEdge::ReturnFailed`].
 pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     entry_fn: FunctionValue<'ctx>,
     slot: &StorageSlot<'ctx>,
-    local_name: &str,
-    module_path: &str,
+    binding: ForeignBinding<'_>,
     edge: FailureEdge<'_, 'ctx>,
 ) {
-    let import = obj_import_fn(context, module);
+    let ForeignBinding {
+        local_name,
+        module_path,
+        from,
+    } = binding;
     let name = builder
         .build_global_string_ptr(module_path, &format!("pycc_foreign_module_{local_name}"))
         .expect("build_global_string_ptr should not fail")
         .as_pointer_value();
-    let imported = builder
-        .build_call(import, &[name.into()], "foreign_import")
-        .expect("build_call should not fail for pycc_ext_obj_import")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_import returns PyObject *")
-        .into_pointer_value();
+    let imported = match from {
+        None => builder
+            .build_call(
+                obj_import_fn(context, module),
+                &[name.into()],
+                "foreign_import",
+            )
+            .expect("build_call should not fail for pycc_ext_obj_import")
+            .try_as_basic_value()
+            .expect_basic("pycc_ext_obj_import returns PyObject *")
+            .into_pointer_value(),
+        Some(from) => emit_import_from_call(context, builder, module, local_name, name, from),
+    };
     let failed = builder
         .build_is_null(imported, "foreign_import_failed")
         .expect("build_is_null should not fail");
@@ -217,7 +347,8 @@ pub(super) fn emit<'ctx>(
 /// in an `ext` build, because the driver refuses every other build with
 /// `I0403`, and `expect_module_exec_entry` pins the entry point. Each
 /// binding's failure edge is [`FailureEdge::Bridge`] (#1293), so a failed
-/// binding stops the remaining ones exactly as a raise would.
+/// binding stops the remaining ones exactly as a raise would. A block
+/// import is never a from-import (#1278; see `MirStmt::ForeignImport`).
 pub(super) fn emit_stmt<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -234,8 +365,11 @@ pub(super) fn emit_stmt<'ctx>(
             module,
             entry_fn,
             &locals[local_name],
-            local_name,
-            module_path,
+            ForeignBinding {
+                local_name,
+                module_path,
+                from: None,
+            },
             FailureEdge::Bridge { rt },
         );
     }
@@ -319,6 +453,7 @@ mod tests {
                 MirItem::ForeignImport {
                     local_name: "numpy".to_string(),
                     module_path: "numpy".to_string(),
+                    from: None,
                 },
                 print_int(222),
             ],
@@ -351,10 +486,12 @@ mod tests {
                 MirItem::ForeignImport {
                     local_name: "numpy".to_string(),
                     module_path: "numpy".to_string(),
+                    from: None,
                 },
                 MirItem::ForeignImport {
                     local_name: "scipy".to_string(),
                     module_path: "scipy".to_string(),
+                    from: None,
                 },
             ],
         );
@@ -561,6 +698,7 @@ mod tests {
             vec![MirItem::ForeignImport {
                 local_name: "numpy".to_string(),
                 module_path: "numpy".to_string(),
+                from: None,
             }],
         );
         assert!(!ir.contains(EXT_IMPORT_ERROR_BRIDGE_SYMBOL), "{ir}");
@@ -663,6 +801,7 @@ mod tests {
                 items: vec![MirItem::ForeignImport {
                     local_name: "numpy".to_string(),
                     module_path: "numpy".to_string(),
+                    from: None,
                 }],
                 ..Default::default()
             },
@@ -675,5 +814,131 @@ mod tests {
             !symbols.iter().any(|s| s == EXT_OBJ_IMPORT_SYMBOL),
             "{symbols:?}"
         );
+    }
+
+    /// The whole-module LLVM text after compiling `items` as an `ext`
+    /// object, verified by the same object emission `entry_ir` runs.
+    fn module_ir(label: &str, items: Vec<MirItem>) -> String {
+        let dir = pycc_scratch::ScratchDir::new(label).expect("scratch");
+        let mut ir = String::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
+            if module.get_function(EXT_MODULE_EXEC_SYMBOL).is_some() {
+                ir = crate::llvm_string_to_owned(module.print_to_string());
+            }
+        };
+        compile_to_object_with_observer(
+            &MirModule {
+                items,
+                ..Default::default()
+            },
+            &dir.join(format!("{label}.o")),
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            Some(&mut observer),
+        )
+        .expect("ext codegen should succeed");
+        assert!(!ir.is_empty(), "no {EXT_MODULE_EXEC_SYMBOL} was emitted");
+        ir
+    }
+
+    /// The item `from itertools import product, chain` lowers to for
+    /// `fromlist[index]`.
+    fn from_item(index: usize) -> MirItem {
+        let fromlist = vec!["product".to_string(), "chain".to_string()];
+        MirItem::ForeignImport {
+            local_name: fromlist[index].clone(),
+            module_path: "itertools".to_string(),
+            from: Some(pycc_mir::FromImport {
+                name: fromlist[index].clone(),
+                fromlist,
+                index,
+            }),
+        }
+    }
+
+    /// A from-import is only ever a top-level item (#1278), so, like a
+    /// top-level `import`, its failure edge is the direct return and it never
+    /// calls the #1293 bridge.
+    #[test]
+    fn a_from_import_item_never_calls_the_bridge() {
+        let ir = entry_ir("foreign_from_import_no_bridge", vec![from_item(0)]);
+        assert!(ir.contains(EXT_OBJ_IMPORT_FROM_SYMBOL), "{ir}");
+        assert!(!ir.contains(EXT_IMPORT_ERROR_BRIDGE_SYMBOL), "{ir}");
+        assert_eq!(
+            block_terminator(&ir, "foreign_import_fail"),
+            "ret i64 -1",
+            "{ir}"
+        );
+    }
+
+    /// #1278: each name of a from-import calls `pycc_ext_obj_import_from`
+    /// with the module, the statement's whole fromlist, its length and the
+    /// name's own index; the helper is declared once, the plain import
+    /// helper not at all, and each result takes the usual failure edge and
+    /// is stored to its own module global.
+    #[test]
+    fn a_from_import_passes_the_whole_fromlist_and_its_own_index() {
+        let ir = module_ir("foreign_import_from", vec![from_item(0), from_item(1)]);
+        let calls: Vec<&str> = ir
+            .lines()
+            .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_FROM_SYMBOL}(")))
+            .collect();
+        assert_eq!(calls.len(), 2, "{ir}");
+        assert!(
+            calls[0].ends_with(
+                "(ptr @pycc_foreign_module_product, ptr @pycc_foreign_fromlist_product, \
+                 i64 2, i64 0)"
+            ),
+            "{ir}"
+        );
+        assert!(
+            calls[1].ends_with(
+                "(ptr @pycc_foreign_module_chain, ptr @pycc_foreign_fromlist_chain, i64 2, i64 1)"
+            ),
+            "{ir}"
+        );
+        assert_eq!(
+            ir.matches(&format!("declare ptr @{EXT_OBJ_IMPORT_FROM_SYMBOL}("))
+                .count(),
+            1,
+            "{ir}"
+        );
+        assert!(!ir.contains(&format!("@{EXT_OBJ_IMPORT_SYMBOL}(")), "{ir}");
+        let fromlist = ir
+            .lines()
+            .find(|line| line.starts_with("@pycc_foreign_fromlist_product "))
+            .expect("the fromlist global");
+        assert!(
+            fromlist.contains("private constant [2 x ptr]"),
+            "{fromlist}"
+        );
+        for name in ["product", "chain"] {
+            assert!(
+                ir.lines()
+                    .any(|line| line.starts_with("@pycc_foreign_attr_")
+                        && line.contains(&format!("c\"{name}\\00\""))),
+                "the `{name}` string: {ir}"
+            );
+        }
+        assert!(
+            ir.lines()
+                .any(|line| line.starts_with("@pycc_foreign_module_product ")
+                    && line.contains("c\"itertools\\00\"")),
+            "the module string names the module, not the name: {ir}"
+        );
+        assert_eq!(
+            ir.lines()
+                .filter(|line| line.starts_with("foreign_import_fail"))
+                .count(),
+            2,
+            "one failure edge per name: {ir}"
+        );
+        assert!(
+            ir.contains("store ptr %foreign_import, ptr @pyglobal_product"),
+            "{ir}"
+        );
+        assert!(ir.contains("@pyglobal_chain"), "{ir}");
     }
 }
