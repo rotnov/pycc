@@ -3,8 +3,9 @@
 //! diagnostic shape is rejected by each parser step.
 //!
 //! The two tests were moved here from `module/tests.rs` for Part 1 of #1283
-//! (#1318) per AGENTS.md's file-decomposition rule; that change renamed the
-//! round-trip test for its fourth builder and added the builtin-base lines.
+//! (#1318) per AGENTS.md's file-decomposition rule, then extended: the
+//! round-trip test was renamed for its fourth builder and gained the
+//! builtin-base lines.
 //! The `lower_module` suppression behaviour those messages drive is tested
 //! in the parent module and in `builtin_base`.
 

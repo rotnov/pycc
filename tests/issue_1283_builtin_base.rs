@@ -53,7 +53,11 @@ fn assert_check_matches(stem: &str, extra: &[&str], extension: &str) {
         expected,
         "{stem}: output did not match its .{extension} fixture"
     );
-    assert_eq!(output.status.code(), Some(1), "{stem} should be a compile error");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stem} should be a compile error"
+    );
 }
 
 #[test]
@@ -103,9 +107,10 @@ print("ok")
 #[ignore = "requires a CPython 3.13+ on PATH (PYCC_PYTHON)"]
 fn cpython_accepts_the_frozenset_subclass_and_pycc_refuses_it_honestly() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source =
-        std::fs::read_to_string(repo_root.join("tests/diagnostics/c0001_builtin_frozenset_base.py"))
-            .expect("read the fixture");
+    let source = std::fs::read_to_string(
+        repo_root.join("tests/diagnostics/c0001_builtin_frozenset_base.py"),
+    )
+    .expect("read the fixture");
     let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
         .arg("-c")
         .arg(format!("{source}\n{ORACLE_DRIVER}"))

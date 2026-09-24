@@ -406,9 +406,10 @@ fn a_poisoned_container_name_suppresses_a_later_bare_container_annotation() {
     }
 }
 
-// The cascade classifier's own tests (moved out unchanged for Part 1 of
-// #1283 per AGENTS.md's file-decomposition rule) and the builtin-type base
-// tests live in child modules.
+// The cascade classifier's own tests (moved out, then extended for the
+// builtin-base builder, in Part 1 of #1283 per AGENTS.md's
+// file-decomposition rule) and the builtin-type base tests live in child
+// modules.
 mod builtin_base;
 mod cascade_classifier;
 

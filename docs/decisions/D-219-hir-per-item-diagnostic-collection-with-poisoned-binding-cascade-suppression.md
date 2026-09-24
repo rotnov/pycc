@@ -135,6 +135,8 @@ status: accepted
   as two is now four, and `cascade_name` parses all four: D-228 added the
   bare-container annotation message, and Part 1 of #1283 (#1318) added the
   builtin-type base message ("class X inherits from builtin type T --
-  subclassing a builtin type is not supported yet"), so a class whose base is
-  a subclassable builtin type poisons its name exactly as an unknown base
-  does.
+  subclassing a builtin type is not supported yet"). Rule 3's poisoning of a
+  failed class's own name is unchanged and independent of which message it
+  reports; what the fourth parser adds is that a builtin-base `C0001` whose
+  base name an earlier failed item already poisoned is itself suppressed as
+  a cascade.

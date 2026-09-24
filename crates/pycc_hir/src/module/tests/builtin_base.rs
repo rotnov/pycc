@@ -99,8 +99,10 @@ fn a_foreign_import_named_like_a_builtin_keeps_the_unknown_class_message() {
 #[test]
 fn a_function_named_like_a_builtin_keeps_the_unknown_class_message() {
     assert_eq!(
-        only_diagnostic("def frozenset() -> int:\n    return 1\n\n\nclass F(frozenset):\n    pass\n")
-            .message,
+        only_diagnostic(
+            "def frozenset() -> int:\n    return 1\n\n\nclass F(frozenset):\n    pass\n"
+        )
+        .message,
         unknown_base_message("F", "frozenset")
     );
 }
@@ -110,5 +112,47 @@ fn a_top_level_binding_named_like_a_builtin_keeps_the_unknown_class_message() {
     assert_eq!(
         only_diagnostic("frozenset = 1\n\n\nclass C(frozenset):\n    pass\n").message,
         unknown_base_message("C", "frozenset")
+    );
+}
+
+// -- A failed import of a builtin-shaped name silences the subclass ----------
+
+/// Every diagnostic `source` reports when the driver answers each of its
+/// imports as a foreign (CPython-backed) module.
+fn all_foreign_diagnostics(source: &str) -> Vec<Diagnostic> {
+    let module = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in crate::project_import_requests(&module) {
+        resolved.insert(request.span, crate::ResolvedImport::Foreign);
+    }
+    lower_module(&module, &resolved, None).expect_err("the module must fail to lower")
+}
+
+#[test]
+fn a_failed_aliased_import_of_a_builtin_name_silences_its_subclass() {
+    // `import json as list` fails (binding a foreign module to a name pycc
+    // resolves by spelling) and poisons `list`, so the class's builtin-base
+    // `C0001` is a cascade: only the import's diagnostic is reported.
+    let diagnostics =
+        all_foreign_diagnostics("import json as list\n\n\nclass A(list):\n    pass\n");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .starts_with("binding the CPython module `json` to `list`"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn a_failed_from_import_of_a_builtin_name_silences_its_subclass() {
+    let diagnostics =
+        all_foreign_diagnostics("from json import frozenset\n\n\nclass E(frozenset):\n    pass\n");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .starts_with("binding the CPython object `json.frozenset` to `frozenset`"),
+        "{diagnostics:#?}"
     );
 }

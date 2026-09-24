@@ -265,8 +265,10 @@ CPython accepts as a base (`int`, `float`, `str`, `bytes`, `bytearray`,
 `list`, `tuple`, `dict`, `set`, `frozenset`, `complex`) is rejected from the
 same `validate_bases` arm with `C0001` "class \`X\` inherits from builtin
 type \`T\` -- subclassing a builtin type is not supported yet" (Part 1 of
-issue #1283, #1318); that text is cascade-shaped, so later items naming the
-failed class are silenced as D-219 describes. Every other unresolved base
+issue #1283, #1318). The failed class's own name is poisoned as for any
+failed item, and the message is cascade-shaped, so it is itself suppressed
+when an earlier failed item (a `class frozenset:` that did not lower, a
+failed `import json as list`) already poisoned the base name (D-219). Every other unresolved base
 name -- including `object`, the four types CPython refuses as a base
 (`bool`, `range`, `slice`, `memoryview`), and any of the eleven names that
 the module rebinds earlier through a type alias, an import, a `def`, or a

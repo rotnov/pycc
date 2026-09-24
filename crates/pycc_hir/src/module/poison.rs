@@ -249,7 +249,7 @@ pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
 /// so the actionable advice is "write `list[int]`", not "this name means
 /// nothing here".
 ///
-/// Cascade-shaped like the other two, and parsed back by [`cascade_name`]
+/// Cascade-shaped like the other three, and parsed back by [`cascade_name`]
 /// through its own prefix/infix/suffix triple. That is load-bearing rather
 /// than cosmetic: the classifier's job is not to decide whether *this*
 /// diagnostic poisons a name, it is to name the annotation so `lower_module`
