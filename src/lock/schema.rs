@@ -30,6 +30,8 @@ pub(crate) struct LockTarget {
     pub(crate) python: String,
     pub(crate) cache_tag: String,
     pub(crate) platform: String,
+    /// The sha256 of the interpreter's shared libpython, or of its `LIBPL`
+    /// static archive when it is configured without one (#1272).
     pub(crate) libpython_sha256: String,
     pub(crate) roots: Vec<String>,
     #[serde(default)]
