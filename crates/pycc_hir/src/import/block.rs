@@ -158,7 +158,7 @@ fn walk_stmt(
 
 /// The exception names whose handler catches a failed `import`: the
 /// `ModuleNotFoundError` pycc raises, its base `ImportError`, and
-/// `Exception`. `BaseException` is refused at lowering (`T0021`), and a
+/// `Exception`. `BaseException` is refused by type checking (`T0021`), and a
 /// module-level rebinding of any of these names is refused too, so matching
 /// by spelling is sound.
 const IMPORT_ERROR_CATCHERS: [&str; 3] = ["ImportError", "ModuleNotFoundError", "Exception"];
