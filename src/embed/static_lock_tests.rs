@@ -209,7 +209,7 @@ fn pycc_lock_refuses_an_interpreter_it_cannot_identify() {
 }
 
 /// A closure extension that needs a shared libpython is refused by name
-/// in a static build, before any lock comparison: `libpython3.so` (the
+/// in a static build, not as a stale lock: `libpython3.so` (the
 /// stable-ABI shim) resolves to nothing here, and the lock itself is
 /// current.
 #[cfg(unix)]
@@ -240,6 +240,50 @@ fn a_static_linux_build_refuses_a_closure_image_needing_libpython() {
     );
     assert!(!err.contains("pycc lock"), "{err}");
     env.assert_previous_sidecar_intact();
+}
+
+/// A static build vendors a locked closure's natives as a shared build
+/// does: `pycc lock` under a static-only interpreter records both natives,
+/// the build derives the same entries (so `--check` and the build agree),
+/// copies them into `lib/` and preloads them, and bundles no libpython.
+#[cfg(unix)]
+#[test]
+fn a_static_linux_build_vendors_its_locked_natives() {
+    let (env, _) = linux_native_env("embed_static_linux_native");
+    let linux = LinuxEnv {
+        system_dirs: vec![env.root.join("sys")],
+        ldconfig_programs: vec![env.root.join("absent")],
+    };
+    let probe = static_only(&env);
+    let archive = archive(&env);
+    let toolchain = static_toolchain(&env, probe, &archive).with_linux_env(linux);
+    lock_linux(&env, &toolchain, false).expect("locked");
+    lock_linux(&env, &toolchain, true).expect("the lock is current");
+    let lock =
+        crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
+    let names: Vec<String> = lock.target[0]
+        .native
+        .iter()
+        .map(|native| native.name.clone())
+        .collect();
+    assert_eq!(names, ["libnat1.so.1", "libnat2.so.2"]);
+    let plan = embed_linux(&env, &toolchain).expect("embedded");
+    let lib = env.sidecar().join("lib");
+    for name in &names {
+        let copied = std::fs::read(lib.join(name)).unwrap();
+        assert_eq!(
+            copied,
+            std::fs::read(env.root.join("outside").join(name)).unwrap()
+        );
+    }
+    let preload = layout::preload_args(EmbedPlatform::Linux, &lib, &names);
+    assert!(plan.link_args.ends_with(&preload), "{:?}", plan.link_args);
+    let files = relative_files(&env.sidecar());
+    assert!(
+        !files.iter().any(|rel| rel.contains("libpython")),
+        "{files:?}"
+    );
+    assert!(marker(&env).ends_with("libpython-link static\n"));
 }
 
 /// Real Mach-O images: the derivation and the relocation meet a static

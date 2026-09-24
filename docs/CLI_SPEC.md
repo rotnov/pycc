@@ -280,8 +280,8 @@ directory once project mode exists.
                     (exit 2). A `pycc.lock` section is consumed as in a
                     shared build (Part 2 of #1227, #1272): its
                     `libpython-sha256` is checked against the interpreter's
-                    shared library, or against the archive when it has
-                    none. The sidecar keeps the standard library, and its marker
+                    shared library, or against the archive when it is
+                    configured without one. The sidecar keeps the standard library, and its marker
                     records the archive's digest and `libpython-link
                     static`. No explicit flag falls back to a neighboring
                     pycc.toml's `[build] static = true`. A build that
@@ -442,8 +442,8 @@ at exit 2 naming the reason (D-248 rules 4 and 5). A build with no CPython impor
 and neither variable affects it.
 
 `pycc lock` reads `PYCC_PYTHON` the same way and refuses the interpreters an
-embedded build refuses, except that it accepts one without a shared library
-as a `--static-libpython` build does, since one lock serves either kind of
+embedded build refuses, except that it accepts one configured without a shared
+library as a `--static-libpython` build does, since one lock serves either kind of
 build (#1272); it then reads that interpreter's own
 `sysconfig` `purelib` and `platlib` directories, typically a project venv's
 (see "`pycc.lock`" below). `PYCC_PYTHON_INCLUDE` has no effect on it.

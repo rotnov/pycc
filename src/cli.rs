@@ -104,7 +104,7 @@ pub enum Command {
         /// `libpython3.14.a`; a missing, thin or non-archive file is
         /// refused. A `pycc.lock` section is consumed as for a shared
         /// build, checked against the interpreter's shared library, or its
-        /// archive when it has none (#1272). Omit to use a neighboring
+        /// archive when configured without one (#1272). Omit to use a neighboring
         /// `pycc.toml`'s `[build]
         /// static = true` when one is present, or the shared library
         /// otherwise. Only an embedded build uses it: a native, `--pure`
