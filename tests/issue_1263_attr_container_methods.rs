@@ -274,3 +274,27 @@ fn an_unannotated_private_helper_needs_a_return_annotation() {
     );
     assert_eq!(out, "5\n");
 }
+
+/// Attribute receivers inside a generic function's body, as the argument of
+/// a generic class's constructor, and around generic calls, plus a bare-name
+/// `.pop()` statement in an unannotated private helper: the walkers that
+/// reject, rewrite and collect generic calls and instantiations, and the
+/// private-helper solver's walrus pre-pass, all reach the receiver.
+#[test]
+fn attribute_receivers_in_generic_code_and_private_helpers_match_cpython() {
+    let out = matches_cpython(
+        "e2e_1263_generic",
+        "class C:\n    def __init__(self, xs: list[int], d: dict[str, int]) -> None:\n        \
+         self.xs = xs\n        self.d = d\n\n\n\
+         class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n\n\
+         def ident[T](v: T) -> T:\n    return v\n\n\n\
+         def poke[T](c: C, v: T) -> T:\n    c.xs.append(1)\n    \
+         print(c.d.get(\"a\", 0), c.xs.pop())\n    return v\n\n\n\
+         def _drop(xs: list[int]):\n    xs.pop()\n\n\n\
+         def main() -> None:\n    c = C([ident(4)], {\"a\": ident(2)})\n    ys = [5, 6]\n    \
+         _drop(ys)\n    print(poke(c, 3), c.xs.pop(), len(ys))\n    \
+         c.xs.append(ident(7))\n    b = Box[int](c.xs.pop())\n    \
+         print(b.v, c.d.get(\"a\", ident(0)))\n\n\nmain()\n",
+    );
+    assert_eq!(out, "2 1\n3 4 1\n7 2\n");
+}
