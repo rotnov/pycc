@@ -1212,7 +1212,12 @@ Supporting either order is later work under #1026.
 imports produces an embedded executable (see "Embedded executables" below),
 which compiles the module exactly as `--ext` does; a root outside the
 standard library bundles its closure from `pycc.lock` (#1242), and a missing
-or stale lock is exit 2 naming `pycc lock`. The effective interop policy is
+or stale lock is exit 2 naming `pycc lock`. A root imported only inside a
+`try` whose handler catches `ImportError` is optional (#1290): it is locked
+like any other root, but when no installed distribution owns it the lock
+records no package, the build bundles nothing for it, and at run time the
+import raises `ModuleNotFoundError` and the handler runs, as in CPython
+without the package. The effective interop policy is
 decided first, per import: a root it rejects is `I0402` on every host (see
 "Interop policy" below). An import the build cannot embed (an excluded
 Tcl/Tk root or a `--target` build) leaves a plain build with
@@ -1378,7 +1383,8 @@ policy itself is implemented (#1224): `--interop-policy`, `--pure` and the
 rejected root is `I0402`. `docs/CLI_SPEC.md`'s `pycc.toml` section owns the
 resolution and validation rules. What an admitted root then builds is
 D-248's embedding: a standard-library root needs no lock, and any other
-root is bundled with its closure from `pycc.lock` (#1242).
+root is bundled with its closure from `pycc.lock` (#1242), or, when it is
+an optional root (#1290) that is not installed, with none.
 
 | Policy | Behavior |
 |---|---|

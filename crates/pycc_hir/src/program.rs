@@ -271,7 +271,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                 // no item position to rebase (#1291).
                 site: match site {
                     ForeignImportSite::Item(index) => ForeignImportSite::Item(index + item_offset),
-                    ForeignImportSite::Block => ForeignImportSite::Block,
+                    site @ ForeignImportSite::Block { .. } => site,
                 },
                 span,
             },

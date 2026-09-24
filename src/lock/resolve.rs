@@ -143,18 +143,34 @@ impl Index {
     }
 }
 
-/// Resolves the closure of `roots` over the installed environment in
-/// `sites`, evaluated under `env`, for a lock on `platform`.
+/// Resolves the closure of the program's `required` and `optional` direct
+/// roots over the installed environment in `sites`, evaluated under `env`,
+/// for a lock on `platform`.
+///
+/// An optional root (#1290) with an owner is resolved exactly like a
+/// required one. An optional root no installed distribution owns is not a
+/// refusal -- the program's `ImportError` handler takes over at run time
+/// -- but its site entries are still checked, so an unrecorded file or
+/// link under it (which CPython would import) refuses the lock.
 pub(crate) fn resolve(
     sites: &[Site],
-    roots: &BTreeSet<String>,
+    required: &BTreeSet<String>,
+    optional: &BTreeSet<String>,
     env: &MarkerEnv,
     platform: EmbedPlatform,
 ) -> Result<Vec<ResolvedPackage>, String> {
     let index = Index::build(sites, platform)?;
     let mut requested: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for root in roots {
+    let roots = required
+        .iter()
+        .map(|root| (root, false))
+        .chain(optional.iter().map(|root| (root, true)));
+    for (root, is_optional) in roots {
         let owners = index.owners(root);
+        if owners.is_empty() && is_optional {
+            check_coverage(&index, root, &owners)?;
+            continue;
+        }
         if owners.is_empty() {
             return Err(format!(
                 "no installed distribution owns import root `{root}`: no `*.dist-info` RECORD \
@@ -206,7 +222,9 @@ pub(crate) fn resolve(
 }
 
 /// Checks every on-disk file under `root` in every scanned site is a
-/// location one of its owners' RECORDs lists.
+/// location one of its owners' RECORDs lists. `owners` is empty only for an
+/// optional root no distribution owns (#1290), where any file is
+/// unrecorded.
 fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(), String> {
     let mut recorded = BTreeSet::new();
     for owner in owners {
@@ -231,6 +249,12 @@ fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(),
     found.sort();
     match found.into_iter().find(|path| !recorded.contains(path)) {
         None => Ok(()),
+        Some(path) if owners.is_empty() => Err(format!(
+            "`{}` is under optional import root `{root}`, which no installed distribution \
+             owns; CPython would import it, but an embedded build bundles only files a \
+             RECORD lists -- install it through its distribution or remove the file",
+            path.display()
+        )),
         Some(path) => Err(format!(
             "`{}` is under import root `{root}` but no RECORD of its owning distributions ({}) \
              lists it; reinstall them or remove the file",
@@ -249,8 +273,8 @@ fn walk(path: &Path, root: &str, found: &mut Vec<PathBuf>) -> Result<(), String>
         .map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
     if meta.file_type().is_symlink() {
         return Err(format!(
-            "`{}` under import root `{root}` is a symbolic link; the lock refuses links in a \
-             locked package",
+            "`{}` under import root `{root}` is a symbolic link; the lock refuses links under \
+             an import root",
             path.display()
         ));
     }

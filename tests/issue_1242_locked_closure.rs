@@ -238,8 +238,7 @@ fn a_stale_lock_is_refused_and_a_current_multi_module_lock_is_accepted() {
     assert_eq!(output.status.code(), Some(2), "{}", stderr_of(&output));
     let rendered = stderr_of(&output);
     assert!(
-        rendered
-            .contains("its section locks `tinydep`, `tinypkg` but the program imports `tinypkg`"),
+        rendered.contains("`roots` lists `tinydep`, `tinypkg` but the program requires `tinypkg`"),
         "{rendered}"
     );
     assert!(rendered.contains("run `pycc lock m.py`"), "{rendered}");
@@ -322,4 +321,116 @@ fn a_locked_closure_runs_from_the_sidecar_and_matches_cpython_3_14_7() {
         file.ends_with("/app.pycc/closure/tinypkg/__init__.py"),
         "{file}"
     );
+}
+
+/// The #1290 program: `tinypkg` is optional, and the fallback prints.
+#[cfg(not(windows))]
+const OPTIONAL_PROGRAM: &str = "try:\n    import tinypkg\nexcept ImportError:\n    print('fallback')\nelse:\n    tinypkg.run()\n";
+
+/// #1290: a root imported only under an `except ImportError` guard is an
+/// optional root. It is locked under `optional-roots`, with its closure when
+/// it is installed and none when it is absent. The built program's roots
+/// (post-monomorphize) agree with the lock in both cases, so the build
+/// passes every lock check and goes on to bundle the (fake, so
+/// unbundleable) interpreter. `pycc lock --check` still needs the lock.
+#[cfg(not(windows))]
+#[test]
+fn an_optional_root_is_locked_and_accepted_whether_installed_or_absent() {
+    let dir = ScratchDir::new("closure_optional").expect("scratch");
+    let python = fake_python(&dir);
+    std::fs::write(dir.join("m.py"), OPTIONAL_PROGRAM).expect("write");
+
+    let output = run_in(&dir, &python.script, &["lock", "--check", "m.py"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(stderr_of(&output).contains("it does not exist"));
+
+    for installed in [false, true] {
+        if installed {
+            tiny_closure(&python.site);
+        }
+        let output = run_in(&dir, &python.script, &["lock", "m.py"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+        let text = std::fs::read_to_string(dir.join("pycc.lock")).expect("read the lock");
+        assert!(
+            text.contains("roots = []\noptional-roots = [\"tinypkg\"]\n"),
+            "{text}"
+        );
+        assert_eq!(text.contains("name = \"tinypkg\""), installed, "{text}");
+        let output = build(&dir, &python.script);
+        let rendered = stderr_of(&output);
+        assert!(!output.status.success(), "the fake library cannot link");
+        assert!(!rendered.contains("pycc lock"), "{rendered}");
+    }
+
+    // Installing the package after the lock makes it stale.
+    std::fs::remove_dir_all(&python.site).expect("remove the site");
+    std::fs::create_dir_all(&python.site).expect("recreate the site");
+    let output = run_in(&dir, &python.script, &["lock", "m.py"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    tiny_closure(&python.site);
+    let output = run_in(&dir, &python.script, &["lock", "--check", "m.py"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert!(
+        stderr_of(&output).contains("package `tinydep` is in the closure but not locked"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+/// #1290: the optional-import program runs its fallback when `tinypkg` is
+/// absent and uses the bundled package when it is installed, in both cases
+/// exactly as CPython 3.14.7 does in the same environment.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "needs CPython 3.14.7 with a shared libpython (PYCC_PYTHON, default python3.14)"]
+fn an_optional_import_matches_cpython_3_14_7_absent_and_installed() {
+    let dir = ScratchDir::new("closure_optional_oracle").expect("scratch");
+    let dir = std::fs::canonicalize(&*dir).expect("canonicalize");
+    let base = std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3.14".into());
+    let venv = dir.join("venv");
+    let status = Command::new(&base)
+        .args(["-m", "venv", "--without-pip"])
+        .arg(&venv)
+        .status()
+        .expect("spawn the base interpreter");
+    assert!(status.success());
+    let python = venv.join("bin").join("python");
+    let site = Command::new(&python)
+        .args([
+            "-c",
+            "import sysconfig; print(sysconfig.get_path('purelib'))",
+        ])
+        .output()
+        .expect("spawn the venv interpreter");
+    let site = PathBuf::from(String::from_utf8_lossy(&site.stdout).trim());
+    std::fs::write(dir.join("m.py"), OPTIONAL_PROGRAM).expect("write");
+    for (installed, expected) in [(false, "fallback\n"), (true, "tinypkg 42\n")] {
+        if installed {
+            tiny_closure(&site);
+        }
+        let output = run_in(&dir, &python, &["lock", "m.py"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+        let output = build(&dir, &python);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+        assert_eq!(
+            dir.join("app.pycc/closure").exists(),
+            installed,
+            "a closure is bundled only for an installed optional root"
+        );
+        let oracle = Command::new(&python)
+            .arg(dir.join("m.py"))
+            .output()
+            .expect("CPython runs the program");
+        let embedded = Command::new(dir.join("app"))
+            .output()
+            .expect("the embedded binary runs");
+        assert_eq!(embedded.status.code(), Some(0), "{}", stderr_of(&embedded));
+        assert_eq!(oracle.status.code(), Some(0), "{}", stderr_of(&oracle));
+        let stdout = String::from_utf8_lossy(&embedded.stdout).replace("\r\n", "\n");
+        assert_eq!(stdout, expected);
+        assert_eq!(
+            String::from_utf8_lossy(&oracle.stdout).replace("\r\n", "\n"),
+            expected
+        );
+    }
 }

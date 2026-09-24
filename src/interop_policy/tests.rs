@@ -378,7 +378,7 @@ fn a_block_foreign_import_is_judged_at_its_own_span() {
     let nested = ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        site: pycc_hir::ForeignImportSite::Block,
+        site: pycc_hir::ForeignImportSite::Block { optional: false },
         span: Span::new(10, 22),
     };
     let found = policy_gaps(

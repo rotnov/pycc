@@ -40,6 +40,7 @@ fn section(entry: &str) -> LockTarget {
         platform: "macosx-11.0-arm64".to_string(),
         libpython_sha256: "aa".to_string(),
         roots: vec!["tinypkg".to_string()],
+        optional_roots: Vec::new(),
         package: vec![LockedPackage {
             name: "tinypkg".to_string(),
             version: "1.0".to_string(),
@@ -203,6 +204,12 @@ fn the_first_difference_covers_roots_packages_and_natives() {
     let mut roots = old.clone();
     roots.roots.push("other".to_string());
     assert!(first_difference(&old, &roots).starts_with("`roots`"));
+    let mut optional = old.clone();
+    optional.optional_roots.push("fastpkg".to_string());
+    assert_eq!(
+        first_difference(&old, &optional),
+        "`optional-roots` is [] in the lock but [\"fastpkg\"] for the program"
+    );
     let mut added = old.clone();
     added.package.push(LockedPackage {
         name: "tinydep".to_string(),
@@ -248,7 +255,7 @@ fn a_block_foreign_import_is_a_direct_root() {
         imports: vec![ImportBinding::Foreign {
             local_name: "np".to_string(),
             module_path: "numpy".to_string(),
-            site: pycc_hir::ForeignImportSite::Block,
+            site: pycc_hir::ForeignImportSite::Block { optional: false },
             span: pycc_diag::Span::new(0, 0),
         }],
         class_defs: Vec::new(),
@@ -256,5 +263,47 @@ fn a_block_foreign_import_is_a_direct_root() {
     assert_eq!(
         direct_roots(&hir).into_iter().collect::<Vec<_>>(),
         vec!["numpy".to_string()]
+    );
+}
+
+/// #1290: a root imported only under an `ImportError` guard is optional,
+/// one imported anywhere unguarded is required, and a standard-library
+/// root is neither; every one of them is still a direct root.
+#[test]
+fn split_roots_classifies_optional_roots_and_required_wins() {
+    let foreign = |module_path: &str, optional: Option<bool>| ImportBinding::Foreign {
+        local_name: module_path.to_string(),
+        module_path: module_path.to_string(),
+        site: match optional {
+            Some(optional) => pycc_hir::ForeignImportSite::Block { optional },
+            None => pycc_hir::ForeignImportSite::Item(0),
+        },
+        span: pycc_diag::Span::new(0, 0),
+    };
+    let hir = HirModule {
+        seeded_builtin_exception_classes: false,
+        items: Vec::new(),
+        type_aliases: Vec::new(),
+        imports: vec![
+            foreign("fastpkg.speedups", Some(true)),
+            foreign("bothpkg", Some(true)),
+            foreign("bothpkg", None),
+            foreign("json", Some(true)),
+            foreign("tkinter", Some(true)),
+            foreign("plainpkg", Some(false)),
+            ImportBinding::Project {
+                local_name: "helper".to_string(),
+                module_path: "helper".to_string(),
+                kind: pycc_hir::ProjectBindingKind::Function,
+            },
+        ],
+        class_defs: Vec::new(),
+    };
+    let split = split_roots(&hir);
+    assert_eq!(split.required(), ["bothpkg", "plainpkg"]);
+    assert_eq!(split.optional(), ["fastpkg"]);
+    assert_eq!(
+        direct_roots(&hir).into_iter().collect::<Vec<_>>(),
+        ["bothpkg", "fastpkg", "plainpkg"]
     );
 }

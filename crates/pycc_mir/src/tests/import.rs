@@ -149,7 +149,7 @@ fn a_block_foreign_import_lowers_in_place_and_is_not_spliced() {
         ..module_with_imports(vec![ImportBinding::Foreign {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
-            site: pycc_hir::ForeignImportSite::Block,
+            site: pycc_hir::ForeignImportSite::Block { optional: false },
             span: Span::new(0, 0),
         }])
     };

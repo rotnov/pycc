@@ -33,7 +33,17 @@ pub(crate) struct LockTarget {
     /// The sha256 of the interpreter's shared libpython, or of its `LIBPL`
     /// static archive when it is configured without one (#1272).
     pub(crate) libpython_sha256: String,
+    /// The program's required direct roots (rule 2).
     pub(crate) roots: Vec<String>,
+    /// The program's optional direct roots (#1290): roots imported only
+    /// inside the body of a `try` whose handler catches `ImportError`, and
+    /// not required elsewhere. An optional root no installed distribution
+    /// owns is recorded here with no package. Rendered only when non-empty,
+    /// so a lock with no optional root is byte-identical to one written
+    /// before the field existed; an older pycc refuses the field as
+    /// unknown.
+    #[serde(default)]
+    pub(crate) optional_roots: Vec<String>,
     #[serde(default)]
     pub(crate) package: Vec<LockedPackage>,
     #[serde(default)]
@@ -110,6 +120,12 @@ pub(crate) fn render(lock: &Lock) -> String {
             out.push_str(&format!("{key} = {}\n", quote(value)));
         }
         out.push_str(&format!("roots = {}\n", quote_list(&target.roots)));
+        if !target.optional_roots.is_empty() {
+            out.push_str(&format!(
+                "optional-roots = {}\n",
+                quote_list(&target.optional_roots)
+            ));
+        }
         let mut packages: Vec<&LockedPackage> = target.package.iter().collect();
         packages.sort_by(|a, b| a.name.cmp(&b.name));
         for package in packages {

@@ -35,7 +35,24 @@ impl Env {
     ) -> Result<Vec<ResolvedPackage>, String> {
         let sites = scanned_sites(&self.pure, &self.plat)?;
         let roots = roots.iter().map(|r| r.to_string()).collect();
-        resolve(&sites, &roots, &env(), platform)
+        resolve(&sites, &roots, &BTreeSet::new(), &env(), platform)
+    }
+
+    /// Resolves `required` and `optional` roots (#1290) for a POSIX host.
+    fn resolve_split(
+        &self,
+        required: &[&str],
+        optional: &[&str],
+    ) -> Result<Vec<ResolvedPackage>, String> {
+        let sites = scanned_sites(&self.pure, &self.plat)?;
+        let set = |roots: &[&str]| roots.iter().map(|r| r.to_string()).collect();
+        resolve(
+            &sites,
+            &set(required),
+            &set(optional),
+            &env(),
+            EmbedPlatform::Linux,
+        )
     }
 
     fn names(&self, roots: &[&str]) -> Vec<String> {
@@ -577,4 +594,73 @@ fn a_windows_lock_refuses_a_record_path_windows_would_reinterpret() {
     );
     assert_eq!(env.resolve_on(&["tinypkg"], windows).unwrap()[0].files, 4);
     assert_eq!(env.names(&["tinypkg"]), ["tinypkg"]);
+}
+
+/// #1290: an optional root no distribution owns locks no package, while a
+/// required one alongside it still resolves.
+#[test]
+fn an_absent_optional_root_is_not_a_refusal() {
+    let env = Env::new("lock_resolve_optional_absent");
+    tiny(&env.pure, &[]);
+    assert!(env.resolve_split(&[], &["absentpkg"]).unwrap().is_empty());
+    let names: Vec<String> = env
+        .resolve_split(&["tinypkg"], &["absentpkg"])
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(names, ["tinypkg"]);
+    // The same absent root, required, is still refused.
+    let err = env.resolve_split(&["absentpkg"], &[]).unwrap_err();
+    assert!(
+        err.contains("no installed distribution owns import root `absentpkg`"),
+        "{err}"
+    );
+}
+
+/// #1290: an installed optional root is locked with its dependencies,
+/// exactly like a required one.
+#[test]
+fn an_installed_optional_root_locks_its_closure() {
+    let env = Env::new("lock_resolve_optional_installed");
+    tiny(&env.pure, &["tinydep>=1"]);
+    write_dist(
+        &env.plat,
+        "tinydep",
+        "2.0",
+        &[("tinydep.py", b"Z = 3\n")],
+        &[],
+    );
+    let packages = env.resolve_split(&[], &["tinypkg"]).unwrap();
+    let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["tinydep", "tinypkg"]);
+    assert_eq!(packages[1].requires, ["tinydep"]);
+}
+
+/// #1290: an unowned optional root with an unrecorded file or link on disk
+/// is refused, because CPython would import what the bundle cannot carry.
+#[test]
+fn an_unowned_optional_root_with_files_on_disk_is_refused() {
+    let env = Env::new("lock_resolve_optional_stray");
+    std::fs::write(env.pure.join("strayopt.py"), b"X = 1\n").unwrap();
+    let err = env.resolve_split(&[], &["strayopt"]).unwrap_err();
+    assert!(
+        err.contains("strayopt.py")
+            && err.contains("optional import root `strayopt`")
+            && err.contains("no installed distribution owns"),
+        "{err}"
+    );
+
+    #[cfg(unix)]
+    {
+        let env = Env::new("lock_resolve_optional_link");
+        std::fs::create_dir_all(env.plat.join("linkopt")).unwrap();
+        std::os::unix::fs::symlink(env.plat.join("elsewhere"), env.plat.join("linkopt/m.py"))
+            .unwrap();
+        let err = env.resolve_split(&[], &["linkopt"]).unwrap_err();
+        assert!(
+            err.contains("symbolic link") && err.contains("under an import root"),
+            "{err}"
+        );
+    }
 }

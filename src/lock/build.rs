@@ -211,12 +211,25 @@ pub(crate) fn plan_closure(
         lock_path: located.lock_path,
         entry: entry.to_path_buf(),
     };
-    if section.roots != roots {
+    // `roots` holds the required roots and `optional-roots` the ones only a
+    // `try` whose handler catches `ImportError` imports (#1290); each is
+    // compared on its own, so the refusal names the field that differs.
+    let split = super::split_roots(hir);
+    let (required, optional) = (split.required(), split.optional());
+    if section.roots != required {
         return Err(check.stale(&format!(
-            "its section locks {} but the program imports {} from outside the standard \
-             library",
+            "its section's `roots` lists {} but the program requires {} from outside the \
+             standard library",
             describe_roots(&section.roots),
-            describe_roots(&roots)
+            describe_roots(&required)
+        )));
+    }
+    if section.optional_roots != optional {
+        return Err(check.stale(&format!(
+            "its section's `optional-roots` lists {} but the program imports {} from outside \
+             the standard library only under an `ImportError` handler",
+            describe_roots(&section.optional_roots),
+            describe_roots(&optional)
         )));
     }
     Ok(Some(check))
