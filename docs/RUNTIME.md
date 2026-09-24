@@ -830,8 +830,11 @@ CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
    name, as CPython sets them. The message, `.name` and the fallback key come
    from the module object's `__name__`, not from the requested string.
 
-`tests/issue_1278_from_foreign_import.rs` compares each of those against the
-host interpreter's own run of the same source. Like `pycc_ext_obj_import`, the
+`tests/issue_1278_from_foreign_import.rs` compares the success path, the
+submodule fallback (`from xml import dom`) and the missing-name `ImportError`
+(its message, `.name`, `.path` and `.name_from`) against the host
+interpreter's own run of the same source; the missing-`__import__` branch and
+a non-`AttributeError` lookup failure are not exercised by a test. Like `pycc_ext_obj_import`, the
 returned reference is never released. Three narrow divergences from CPython
 remain:
 
