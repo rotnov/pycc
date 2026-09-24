@@ -159,10 +159,11 @@ a dotted one. Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
 alias on an undotted module that is neither a project module nor a
 `pycc_std` registration (`import numpy as np`) is a foreign import instead,
 binding the CPython module object. An alias pycc resolves by its spelling
-(`TYPE_CHECKING`, `range` or a `pycc_std` module name such as `typing`) is
-refused with its own C0001 (``binding the CPython module `foo` to `range`, a
-name pycc resolves by its spelling (a stdlib module, `range` or
-`TYPE_CHECKING`), is not supported yet``), because the alias would otherwise
+(`TYPE_CHECKING`, `range`, a `pycc_std` module name such as `typing`, or a
+base-class marker `Enum`, `StrEnum`, `Protocol` or `ABC`) is refused with its
+own C0001 (``binding the CPython module `foo` to `range`, a name pycc resolves
+by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a base-class
+marker), is not supported yet``), because the alias would otherwise
 be read as that other meaning.
 
 `pycc_types` also uses it for calls to known Python 3.14

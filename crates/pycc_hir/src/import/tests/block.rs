@@ -259,7 +259,16 @@ fn a_failed_block_reports_in_source_order_and_binds_nothing() {
 
 #[test]
 fn an_alias_shadowing_a_resolved_spelling_is_refused() {
-    for alias in ["typing", "TYPE_CHECKING", "math", "range"] {
+    for alias in [
+        "typing",
+        "TYPE_CHECKING",
+        "math",
+        "range",
+        "Enum",
+        "StrEnum",
+        "Protocol",
+        "ABC",
+    ] {
         for source in [
             format!("import colorsys as {alias}\n"),
             format!("if c:\n    import colorsys as {alias}\n"),
@@ -269,8 +278,8 @@ fn an_alias_shadowing_a_resolved_spelling_is_refused() {
                 message,
                 format!(
                     "binding the CPython module `colorsys` to `{alias}`, a name pycc resolves \
-                     by its spelling (a stdlib module, `range` or `TYPE_CHECKING`), \
-                     is not supported yet"
+                     by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a \
+                     base-class marker), is not supported yet"
                 ),
                 "{source:?}"
             );

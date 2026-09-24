@@ -332,6 +332,64 @@ mod tests {
         assert!(sys < re, "{ir}");
     }
 
+    /// The identical pair #1291 admits (`import numpy` in both arms of an
+    /// `if`/`else`) requests the module-path global
+    /// `pycc_foreign_module_numpy` twice. LLVM uniquifies the second name,
+    /// so each emission must still pass a global holding its own path
+    /// string: both calls are emitted, and every module-path global the
+    /// module declares holds `numpy`.
+    #[test]
+    fn an_identical_pair_in_both_arms_emits_two_imports_of_its_own_path() {
+        let import = || MirStmt::ForeignImport {
+            bindings: vec![("numpy".to_string(), "numpy".to_string())],
+        };
+        let dir = pycc_scratch::ScratchDir::new("foreign_import_block_pair").expect("scratch");
+        let mut ir = String::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
+            if module.get_function(EXT_MODULE_EXEC_SYMBOL).is_some() {
+                ir = crate::llvm_string_to_owned(module.print_to_string());
+            }
+        };
+        compile_to_object_with_observer(
+            &MirModule {
+                items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::BoolLiteral(true),
+                    body: vec![import()],
+                    orelse: vec![import()],
+                })],
+                ..Default::default()
+            },
+            &dir.join("pair.o"),
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            Some(&mut observer),
+        )
+        .expect("ext codegen should succeed");
+        let calls: Vec<&str> = ir
+            .lines()
+            .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_SYMBOL}(")))
+            .collect();
+        assert_eq!(calls.len(), 2, "{ir}");
+        assert!(
+            calls[0].ends_with("(ptr @pycc_foreign_module_numpy)"),
+            "{ir}"
+        );
+        assert!(
+            calls[1].ends_with("(ptr @pycc_foreign_module_numpy.1)"),
+            "{ir}"
+        );
+        let globals: Vec<&str> = ir
+            .lines()
+            .filter(|line| line.starts_with("@pycc_foreign_module_numpy"))
+            .collect();
+        assert_eq!(globals.len(), 2, "{ir}");
+        for global in globals {
+            assert!(global.contains("c\"numpy\\00\""), "{global}");
+        }
+    }
+
     /// The gate `src/foreign_import.rs` exists to make coverable: a build
     /// that neither passes `--ext` nor embeds CPython (D-248; an embedded
     /// build compiles with `ext` set) has no interpreter to import into,

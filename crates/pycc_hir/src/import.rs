@@ -470,8 +470,8 @@ fn lower_import_alias(
             return Err(unsupported(
                 format!(
                     "binding the CPython module `{module_name}` to `{local_name}`, a name pycc \
-                     resolves by its spelling (a stdlib module, `range` or `TYPE_CHECKING`), \
-                     is not supported yet"
+                     resolves by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a \
+                     base-class marker), is not supported yet"
                 ),
                 statement.start..statement.end,
             ));
@@ -508,11 +508,17 @@ fn lower_import_alias(
 /// fallback -- so `import foo as typing` followed by
 /// `if typing.TYPE_CHECKING:` would fold a live body away. `range` is also
 /// resolved by its spelling, with no shadowing check, so
-/// `import foo as range` would silently call the builtin. The unaliased
-/// shapes (`import TYPE_CHECKING`, `import range`) predate #1291 and are
-/// not covered here.
+/// `import foo as range` would silently call the builtin. The base-class
+/// markers `Enum`, `StrEnum`, `Protocol` and `ABC` are likewise recognised
+/// by their bare spelling (`crate::typecheck::is_enum_base_name` and its
+/// siblings), so `import foo as Enum` followed by `class C(Enum):` would
+/// lower an enum class. The unaliased shapes (`import TYPE_CHECKING`,
+/// `import range`, `import Enum`) predate #1291 and are not covered here.
 fn shadows_a_resolved_spelling(local_name: &str) -> bool {
     matches!(local_name, "TYPE_CHECKING" | "range")
+        || crate::typecheck::is_enum_base_name(local_name)
+        || crate::typecheck::is_protocol_base_name(local_name)
+        || crate::typecheck::is_abc_base_name(local_name)
         || pycc_std::resolve_module(local_name).is_some()
 }
 
