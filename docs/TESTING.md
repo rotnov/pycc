@@ -888,7 +888,7 @@ edit was made:
 
 | Diagnostic in `lark/utils.py` | Count | Nearest open issue |
 |---|---|---|
-| `C0001` import of `itertools` / `collections` not supported yet | 1 each | #1278 (`itertools`); #882 (`collections`) |
+| `C0001` import of `itertools` / `collections` not supported yet | 0 (was 1 each) | #1278 admits an unaliased, top-level `from X import a, b` of an undotted foreign module, so `from itertools import product` (line 3) and `from collections import deque` (line 4) now compile, each binding CPython's own object; #882 still tracks a native `collections`. The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1278 change on top of `main` at `17189dde`, on the unedited subject module) reports 13 errors, all still in `lark/utils.py`; the first is now the `C0002` for `typing.Callable` (line 5) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
 | `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
 | `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. That is compile-time only: both sit in `try: ... except ImportError:`, and when the module is absent the handler does not run yet (the #1096 deviation; catching it is #1293). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
@@ -908,7 +908,9 @@ itself were never reached. A separate probe compiled only the subject module's
 own first two lines, `from copy import deepcopy, copy` and `from typing import
 Dict, Any, Generic, List`. That probe is not the workload. It was refused with
 ``C0001 import of module `copy` is not supported yet`` (#1279) and ``C0002 module
-`typing` has no importable symbol named `Dict` ``. The subject's own `-> Any`
+`typing` has no importable symbol named `Dict` ``. Since #1278 the `copy` line
+compiles as a foreign import, and the probe's only remaining error is the
+`typing.Dict` `C0002`. The subject's own `-> Any`
 return would also meet `T0002` (#1285); that is an inference, since
 compilation never reached the subject. Replacing it is not an addition, so D-252 does
 not admit that edit. That makes it a second blocker, independent of the
@@ -1494,8 +1496,11 @@ tests that cover it now, or the owner of what is still missing.
 - unchanged source fixtures containing both `import numpy as np` and
   `from numpy import array` build and run under the default `auto` policy
   without a separately installed Python. *Pending:* `from numpy import
-  array` is `C0001` today; `import numpy as np` binds a foreign module since
-  #1291, and a plain `import numpy` embeds from `pycc.lock` (#1242);
+  array` binds the CPython object `numpy.array` since #1278 and
+  `import numpy as np` binds a foreign module since #1291, and a plain
+  `import numpy` embeds from `pycc.lock` (#1242), but calling `array(...)`
+  directly is still `I0404` and no test yet runs the combined fixture from a
+  lock;
 - the produced `pycc.lock` and deployment bundle select the exact intended
   CPython, package, and native-library artifacts and never consult ambient
   `site-packages` at runtime. *Partly covered:* the lock's closure, integrity

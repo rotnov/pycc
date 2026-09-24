@@ -759,6 +759,21 @@ which is itself an `object` — but the admissibility table above is still why o
 can never leave: an `object` parameter or return on an exported function is a
 `C0003` capability gap, so the value stays inside the artifact.
 
+[#1278](https://github.com/rotnov/pycc/issues/1278) adds the from form: an
+unaliased, top-level `from <name> import a, b` of such a module binds each
+listed name to the CPython object `<name>.<a>`, typed `object` like the module
+binding, so `from itertools import product` holds CPython's own
+`itertools.product`. Only that shape is admitted. An aliased name
+(`from X import a as b`), the wildcard, a dotted module (`from X.Y import a`,
+[#1138](https://github.com/rotnov/pycc/issues/1138)), a relative import and a
+from-import inside a block body keep their `C0001`, and so does a name pycc
+already resolves by its spelling (`from builtins import range`,
+`from numpy import ndarray`), because binding it to a CPython object would
+change what every later use of that spelling means. Each name is its own
+foreign binding, whose identity is the module *and* the name, so
+`import copy` followed by `from copy import copy` is the same shadowing refusal
+as any other rebinding of a foreign name.
+
 **Position, not a prologue.** D-244 rule 3 binds the artifact to CPython's
 statement-by-statement module body, so each foreign import runs *where it was
 written*. `pycc_mir::build` splices one `MirItem::ForeignImport` into the item
@@ -792,6 +807,44 @@ missing module surfaces to the host as `ModuleNotFoundError` naming the module,
 not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
 so the import statement that loaded the artifact fails and no partially
 initialized module is left in `sys.modules`.
+
+**The from form.** Each name of `from X import a, b` is one call to
+`pycc_ext_obj_import_from(module, fromlist, nfrom, index)`, in source order at
+the statement's position, and it takes the same `NULL` edge. The helper mirrors
+CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
+
+1. It calls `builtins.__import__(X, None, None, fromlist, 0)` with the
+   statement's *whole* fromlist, as `IMPORT_NAME` does, so a package whose
+   submodule import sets another listed name still works. When `__import__` is
+   missing from the builtins it raises CPython's `ImportError("__import__ not
+   found")`.
+2. It returns the module's attribute `<name>` when there is one. On an
+   `AttributeError` only, it returns the `sys.modules` entry
+   `<module.__name__>.<name>` instead, so `from xml import dom` binds the
+   submodule the fromlist import just loaded. Any other failure of the lookup
+   propagates unchanged.
+3. Otherwise it raises CPython's own `ImportError`,
+   `cannot import name 'n' from 'X' (<location>)`, where the location is the
+   module's `__file__` or `unknown location`. `.name` is the module's
+   `__name__`, `.path` its `__file__` or `None`, and `.name_from` the missing
+   name, as CPython sets them. The message, `.name` and the fallback key come
+   from the module object's `__name__`, not from the requested string.
+
+`tests/issue_1278_from_foreign_import.rs` compares each of those against the
+host interpreter's own run of the same source. Like `pycc_ext_obj_import`, the
+returned reference is never released. Three narrow divergences from CPython
+remain:
+
+- The import step runs once per *name* rather than once per statement. Each
+  call passes the same fromlist, and `_handle_fromlist` skips every name that
+  is already bound, so the repeat binds nothing new and raises nothing new. It
+  is observable only to an overridden `builtins.__import__`, which sees N calls
+  instead of one, and as a repeated finder lookup for a missing `pkg.<name>`.
+- CPython's "(most likely due to a circular import)" variant of the message,
+  which depends on the module's `__spec__._initializing`, is not reproduced.
+- CPython 3.13's "(consider renaming '…' since it has the same name as the
+  standard library module …)" variant, for a local file shadowing a
+  standard-library module, is not reproduced either.
 
 An attribute load fails the same way and takes the same edge.
 `pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and

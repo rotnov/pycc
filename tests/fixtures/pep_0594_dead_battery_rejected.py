@@ -1,1 +1,1 @@
-from cgi import escape
+from cgi import escape as esc

@@ -176,6 +176,24 @@ exception class the module mentions, is refused with the same ``import `X`
 collides with a class of the same name already defined in this module`` C0001
 as the top-level form, at the nested statement.
 
+Since [#1278](https://github.com/rotnov/pycc/issues/1278) an unaliased,
+top-level `from X import a, b` of an undotted module that is neither a
+project module nor a `pycc_std` registration is a foreign import too: each
+listed name binds the CPython object `X.<name>`. A listed name pycc resolves
+by its spelling is refused with the from form's own C0001 (``binding the
+CPython object `builtins.range` to `range`, a name pycc resolves by its
+spelling (...), is not supported yet``), against the same canonical lists.
+Every other from-import shape of such a module keeps its C0001: an aliased
+name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
+the wildcard, a dotted `X` (`from xml.dom import minidom`,
+[#1138](https://github.com/rotnov/pycc/issues/1138)), a relative import, and a
+from-import inside a block body. A foreign import's identity for the shadowing
+rules is its module *and* its name, so `import copy` followed by
+`from copy import copy` is the same C0001 as any other rebinding of a foreign
+name. `I0402` and `I0403` are reported once per statement, not once per name:
+`from tkinter import Tk, Label` under a native build is one `I0403`, and its
+message quotes the whole statement.
+
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.
 `ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` as a
