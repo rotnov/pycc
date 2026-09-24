@@ -215,24 +215,10 @@ fn out_slot_in_entry_block<'ctx>(
     slot_ty: impl inkwell::types::BasicType<'ctx>,
     name: &str,
 ) -> PointerValue<'ctx> {
-    let resume_at = builder
-        .get_insert_block()
-        .expect("the builder is positioned inside a block");
-    let entry_block = entry_fn
-        .get_first_basic_block()
-        .expect("a function being emitted into has an entry block");
-    // Never empty: a foreign object exists only because an `import` bound
-    // it, and that import's own call was emitted into this block before any
-    // expression could read the binding.
-    let first = entry_block
-        .get_first_instruction()
-        .expect("the module-exec entry block already holds the foreign import's own call");
-    builder.position_before(&first);
-    let slot = builder
-        .build_alloca(slot_ty, name)
-        .expect("build_alloca should not fail");
-    builder.position_at_end(resume_at);
-    slot
+    super::build_at_entry_block(builder, entry_fn, |b| {
+        b.build_alloca(slot_ty, name)
+            .expect("build_alloca should not fail")
+    })
 }
 
 /// Emits one `len(o)` against a CPython object and yields the length as an

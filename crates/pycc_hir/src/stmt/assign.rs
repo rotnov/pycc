@@ -7,8 +7,8 @@
 
 use crate::expr::keyword_bind::SignatureTable;
 use crate::expr::{
-    is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
-    lower_set_comp_assign,
+    comp_assign_stmt, is_zero_arg_super_call, lower_dict_comp, lower_expr, lower_list_comp,
+    lower_set_comp,
 };
 use crate::int_boundary::check_boundary_literal;
 use crate::{HirStmt, ImportBinding, unsupported};
@@ -31,25 +31,23 @@ pub(super) fn lower_assign(
         .expect("lower_stmt_expanded desugars a multi-target (chained) assignment before lowering");
     Ok(match target {
         Expr::Name(name) => match assign.value.as_ref() {
-            // Comprehension expressions are recognized only in this
-            // one position: the direct RHS of a bare-name
-            // `Stmt::Assign` (PR-12, D-117). Every other position
-            // (function args, nested expressions, `return`,
-            // `Expr::Subscript` assignment targets) still routes
-            // through plain `lower_expr`, which has no arm for
-            // `Expr::ListComp`/`SetComp`/`DictComp`/`GeneratorExp`
-            // and falls through to that function's existing
-            // generic "expression kind not supported yet"
-            // catch-all.
-            Expr::ListComp(comp) => {
-                lower_list_comp_assign(name.id.as_str(), comp, class_name, imports, signatures)?
-            }
-            Expr::SetComp(comp) => {
-                lower_set_comp_assign(name.id.as_str(), comp, class_name, imports, signatures)?
-            }
-            Expr::DictComp(comp) => {
-                lower_dict_comp_assign(name.id.as_str(), comp, class_name, imports, signatures)?
-            }
+            // `name = <comp>` keeps its own statement variants (PR-12,
+            // D-117): about twenty statement passes dispatch on them. A
+            // comprehension in any other position lowers through
+            // `lower_expr` to `HirExpr::Comprehension` (#1254, D-250);
+            // both forms are built from the same lowered node.
+            Expr::ListComp(comp) => comp_assign_stmt(
+                name.id.as_str(),
+                lower_list_comp(comp, class_name, imports, signatures)?,
+            ),
+            Expr::SetComp(comp) => comp_assign_stmt(
+                name.id.as_str(),
+                lower_set_comp(comp, class_name, imports, signatures)?,
+            ),
+            Expr::DictComp(comp) => comp_assign_stmt(
+                name.id.as_str(),
+                lower_dict_comp(comp, class_name, imports, signatures)?,
+            ),
             _ => HirStmt::Assign {
                 target: name.id.as_str().to_string(),
                 value: lower_expr(&assign.value, in_function, class_name, imports, signatures)?,

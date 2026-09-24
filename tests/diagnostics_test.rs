@@ -733,13 +733,36 @@ fn c0001_comprehension_two_if_filters() {
     assert_diagnostic_matches_fixture("c0001_comprehension_two_if_filters");
 }
 
-// D-117: a comprehension outside the `Stmt::Assign`-RHS position it is
-// specially recognized in (here, a `print(...)` call argument) falls
-// through to `lower_expr`'s existing generic "expression kind not
-// supported yet" C0001 catch-all, not a new comprehension-specific error.
+// #1254 (D-250): a comprehension lowers in any expression position now, so
+// the former call-argument refusal is gone; a walrus inside one is refused
+// in both the expression and the statement form, spanning the comprehension.
 #[test]
-fn c0001_comprehension_as_call_argument() {
-    assert_diagnostic_matches_fixture("c0001_comprehension_as_call_argument");
+fn c0001_comprehension_walrus_in_expression() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_walrus_in_expression");
+}
+
+#[test]
+fn c0001_comprehension_walrus_in_assignment() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_walrus_in_assignment");
+}
+
+// #1254: the one-`for`-clause limit applies to the expression form too.
+#[test]
+fn c0001_comprehension_expression_two_for_clauses() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_expression_two_for_clauses");
+}
+
+// #1254: the expression form resolves its iterable exactly like `for`.
+#[test]
+fn t0033_comprehension_expression_str_iterable() {
+    assert_diagnostic_matches_fixture("t0033_comprehension_expression_str_iterable");
+}
+
+// #1254: an inner comprehension's iterable naming the outer loop variable
+// resolves to that variable (an `int`), not to the module-level list.
+#[test]
+fn t0033_comprehension_nested_iterable_names_outer_variable() {
+    assert_diagnostic_matches_fixture("t0033_comprehension_nested_iterable_names_outer_variable");
 }
 
 #[test]

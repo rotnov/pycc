@@ -1847,6 +1847,29 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::NamedExpr { name: _, value } => {
             collect_expr_constraints(signatures, parents, concrete, binops, env, value)
         }
+        // #1254 (D-250): the loop variable is bound in a clone, so it never
+        // becomes a binding of the enclosing scope. `bind_comp_loop_var`
+        // collects the range operands itself, against the enclosing
+        // bindings (the clone is still identical to `env` at that point).
+        // The element gate is `infer_expr_in`'s, as for a display; the
+        // container type is returned so `return [..]` from an unannotated
+        // helper still infers its return type.
+        HirExpr::Comprehension(comp) => {
+            let mut scoped = env.clone();
+            bind_comp_loop_var(
+                signatures,
+                parents,
+                concrete,
+                binops,
+                &mut scoped,
+                &comp.var,
+                &comp.iter,
+            )?;
+            for sub in comp.body_exprs() {
+                collect_expr_constraints(signatures, parents, concrete, binops, &scoped, sub)?;
+            }
+            Ok(Some(Ok(crate::comprehension::comp_container_of(&comp.elt))))
+        }
     }
 }
 
@@ -1921,6 +1944,8 @@ fn bind_named_expr_targets(
         | HirExpr::Name(_)
         | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),
+        // #1254 (D-250): lowering refuses a walrus inside a comprehension.
+        HirExpr::Comprehension(_) => Ok(()),
         HirExpr::Call { args, .. } => {
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
@@ -2063,6 +2088,24 @@ fn bind_comp_loop_var(
         }
     }
     Ok(())
+}
+
+/// Binds a comprehension statement's `target` (`name = <comp>`) exactly as
+/// the `Assign` arm binds a plain assignment's target, with the produced
+/// container type as its term (#1254). Before this, the solver bound no term
+/// for `target` at all, so any later read of it in a module that also holds
+/// an unannotated private helper (the only case the solver runs for) failed
+/// with a spurious `T0021` "not bound before this use". The container type
+/// is exact: the check phase's element gate (D-119) admits only
+/// `list[int]`, `set[int]` and `dict[str, int]`.
+fn bind_comp_target(env: &mut ConstraintEnvironment<'_, '_>, target: &str, container: Ty) {
+    env.defs_rebound.remove(target);
+    env.maybe_bindings.remove(target);
+    env.opaque_bindings.remove(target);
+    env.rebind_over_owned_buffer(target);
+    env.bindings
+        .entry(target.to_string())
+        .or_insert(Ok(container));
 }
 
 pub(crate) fn collect_block_constraints(
@@ -2892,7 +2935,11 @@ pub(crate) fn collect_block_constraints(
                 // `var` needs no such call: it is the D-117 synthesized
                 // internal loop name (see `HirStmt::ListCompAssign`'s own
                 // doc comment), which cannot collide with a source name.
-                env.rebind_over_owned_buffer(target);
+                let container = match stmt {
+                    HirStmt::SetCompAssign { .. } => Ty::Set(Box::new(Ty::Int)),
+                    _ => Ty::List(Box::new(Ty::Int)),
+                };
+                bind_comp_target(env, target, container);
             }
             HirStmt::DictCompAssign {
                 target,
@@ -2938,7 +2985,7 @@ pub(crate) fn collect_block_constraints(
                     value,
                 )?;
                 // Round-11 review finding 2: see the list/set arm above.
-                env.rebind_over_owned_buffer(target);
+                bind_comp_target(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))));
             }
             HirStmt::Match { subject, cases } => {
                 collect_expr_constraints(

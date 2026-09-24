@@ -102,7 +102,12 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // sufficient rather than merely conservative: the epilogue's free is
         // a documented no-op on it, so a refused allocation leaves nothing
         // for the unwind path to release.
-        | MirExpr::BufferAlloc { .. } => true,
+        | MirExpr::BufferAlloc { .. }
+        // #1254 (D-250): a comprehension expression runs a whole loop whose
+        // iterable, condition and elements may each raise -- a `range` step
+        // of `0` or a `1 // 0` element -- so it is always fallible, exactly
+        // like the statement form the loop body already guards.
+        | MirExpr::Comprehension(_) => true,
         // #1210: a shift raises `ValueError` for a negative count and
         // `OverflowError` for a result too large to allocate; `&`, `|` and
         // `^` never raise.

@@ -797,14 +797,15 @@ fn lower_top_level_item<'a>(
         &state.imports,
         &state.signatures,
     )?;
-    // A chained-assignment temporary (`0chain_<offset>`) is not a
-    // definition the source wrote, so it never takes part in
-    // `program::link`'s cross-module collision check -- the same reason the
-    // `__name__` seed is not recorded (see `lower_module`). `killed_names`
-    // reaches into nested bodies, so a chain inside a module-level `for` or
-    // `if` contributes its temporary here too and is filtered the same way.
+    // A synthesized name -- a chained-assignment temporary (`0chain_<offset>`,
+    // #1213) or a comprehension loop variable (`0comp_<offset>_<name>`,
+    // D-117, #1237) -- is not a definition the source wrote, so it never
+    // takes part in `program::link`'s cross-module collision check -- the
+    // same reason the `__name__` seed is not recorded (see `lower_module`).
+    // `killed_names` reaches into nested bodies, so one inside a
+    // module-level `for` or `if` is filtered the same way.
     for name in killed_names(&lowered) {
-        if !stmt::chain_assign::is_chain_temp_name(&name) {
+        if !is_synthesized_name(&name) {
             state.definition_spans.push((name, span));
         }
     }
@@ -812,6 +813,14 @@ fn lower_top_level_item<'a>(
         .items
         .extend(lowered.into_iter().map(HirItem::TopLevelStmt));
     Ok(())
+}
+
+/// Whether `name` was synthesized by lowering rather than written in the
+/// source. Every synthesized name -- #1213's `0chain_<offset>` and D-117's
+/// `0comp_<offset>_<name>` -- starts with an ASCII digit, which no Python
+/// identifier can, so the test cannot match a source name.
+pub(crate) fn is_synthesized_name(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_digit)
 }
 
 fn statement_span(stmt: &Stmt) -> Span {

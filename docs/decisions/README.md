@@ -259,3 +259,4 @@ current.
 | [D-247](./D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md) | Pre-register a workload-admissibility predicate for the D-244 rule 6 kill criterion | accepted |
 | [D-248](./D-248-embedded-executable-artifact-layout-and-bridge-split.md) | Embed CPython for standard-library imports as an executable plus an OUT.pycc sidecar, sharing the ext C shim | accepted |
 | [D-249](./D-249-pycc-lock-schema-environment-resolver-and-update-command.md) | Lock the CPython dependency closure from the PYCC_PYTHON environment into a per-entry, per-triple pycc.lock | accepted |
+| [D-250](./D-250-comprehensions-are-expressions-with-a-node-scoped-loop-variable.md) | Comprehensions are expressions with a node-scoped loop variable | accepted |

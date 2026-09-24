@@ -7,8 +7,8 @@
 
 use super::*;
 use pycc_mir::{
-    BinOpKind, CmpOpKind, InstantiateExpr, MirExceptHandler, MirExceptionValue, MirExpr,
-    MirFStringPart, MirItem, MirModule, MirStmt, Ty,
+    BinOpKind, CmpOpKind, CompSource, InstantiateExpr, MirExceptHandler, MirExceptionValue,
+    MirExpr, MirFStringPart, MirItem, MirModule, MirStmt, Ty,
 };
 use std::process::Command;
 
@@ -25,6 +25,9 @@ mod buffer_slice_egress;
 // #1212: chained-comparison codegen, in its own submodule for the same
 // reason.
 mod compare_chain;
+
+// #1254: the shared entry-block placement helper.
+mod entry_block;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s

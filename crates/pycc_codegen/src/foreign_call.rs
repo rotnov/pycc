@@ -103,28 +103,14 @@ fn alloca_in_entry_block<'ctx>(
     entry_fn: FunctionValue<'ctx>,
     slots: usize,
 ) -> inkwell::values::PointerValue<'ctx> {
-    let resume_at = builder
-        .get_insert_block()
-        .expect("the builder is positioned inside a block");
-    let entry_block = entry_fn
-        .get_first_basic_block()
-        .expect("a function being emitted into has an entry block");
-    // The entry block is never empty here: a foreign object exists only
-    // because an `import` bound it, and that import's own call was emitted
-    // into this block before any expression could read the binding.
-    let first = entry_block
-        .get_first_instruction()
-        .expect("the module-exec entry block already holds the foreign import's own call");
-    builder.position_before(&first);
-    let arg_array = builder
-        .build_array_alloca(
+    super::build_at_entry_block(builder, entry_fn, |b| {
+        b.build_array_alloca(
             context.ptr_type(inkwell::AddressSpace::default()),
             context.i64_type().const_int(slots as u64, false),
             "foreign_call_args",
         )
-        .expect("build_array_alloca should not fail");
-    builder.position_at_end(resume_at);
-    arg_array
+        .expect("build_array_alloca should not fail")
+    })
 }
 
 /// Routes a NULL `value` to the module-exec failure edge, leaving the

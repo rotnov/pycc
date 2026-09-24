@@ -579,6 +579,44 @@ pub enum MirExpr {
         value: Box<MirExpr>,
         ty: Ty,
     },
+    /// A comprehension in expression position (#1254, D-250), mirroring
+    /// `pycc_hir::HirExpr::Comprehension`. Boxed for the same
+    /// `large_enum_variant` reason as [`InstantiateExpr`].
+    Comprehension(Box<MirComprehension>),
+}
+
+/// [`MirExpr::Comprehension`]'s payload (#1254, D-250). The fields mirror
+/// `MirStmt::ListCompAssign` and its siblings minus `target`: `var` is the
+/// D-117 synthesized loop-variable name, scoped to this node -- codegen
+/// gives it a slot of its own, and no enclosing-scope binding exists for
+/// it -- and `var_ty` its resolved type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirComprehension {
+    pub var: String,
+    pub var_ty: Ty,
+    pub source: CompSource,
+    pub cond: Option<MirExpr>,
+    pub elt: MirCompElt,
+}
+
+/// A lowered comprehension's element expressions, by kind (#1254).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MirCompElt {
+    List(MirExpr),
+    Set(MirExpr),
+    Dict { key: MirExpr, value: MirExpr },
+}
+
+impl MirComprehension {
+    /// The produced container type, derived from the element types exactly
+    /// as the statement form's binding of `target` is.
+    pub fn ty(&self) -> Ty {
+        match &self.elt {
+            MirCompElt::List(elt) => Ty::List(Box::new(elt.ty())),
+            MirCompElt::Set(elt) => Ty::Set(Box::new(elt.ty())),
+            MirCompElt::Dict { key, value } => Ty::Dict(Box::new((key.ty(), value.ty()))),
+        }
+    }
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -768,6 +806,7 @@ impl MirExpr {
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
+            MirExpr::Comprehension(comp) => comp.ty(),
         }
     }
 
@@ -922,6 +961,10 @@ impl MirExpr {
                 value.collect_named_expr_bindings(out);
                 out.push((name.clone(), ty.clone()));
             }
+            // #1254 (D-250): `pycc_hir` refuses a walrus inside a
+            // comprehension, and the loop variable is node-scoped, so there
+            // is no enclosing-scope binding to predeclare.
+            MirExpr::Comprehension(_) => {}
         }
     }
 }
@@ -1897,7 +1940,7 @@ fn mro_class_def<'a>(
 /// flags `lower_stmt`'s own `&mut Vec` as unnecessary; it keeps the owned
 /// type by convention, matching its only caller, `lower_item`, rather than
 /// out of its own requirement.
-fn resolve_comp_source(
+pub(crate) fn resolve_comp_source(
     iter: &CompIter,
     var: &str,
     scopes: &mut [HashMap<String, Ty>],

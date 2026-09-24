@@ -39,8 +39,8 @@ use crate::{
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt, ImportBinding,
-    PropertyDef, Ty,
+    CompElt, CompIter, FStringPart, HirClassDef, HirComprehension, HirExpr, HirItem, HirModule,
+    HirStmt, ImportBinding, PropertyDef, Ty,
 };
 
 /// One successful D-134 call-site monomorphization: the concrete return
@@ -861,6 +861,19 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             env.bind(name, ty.clone());
             Ok(ty)
         }
+        // #1254 (D-250): `env` has no scope stack, so the synthesized loop
+        // variable is bound directly, exactly as the statement arms in
+        // `rewrite_generic_calls_in_stmt` do. That is harmless: the
+        // digit-led name is unique per source offset and no user code can
+        // name it.
+        HirExpr::Comprehension(comp) => {
+            let var_ty = rewrite_comp_iter(env, local_names, &mut comp.iter, instantiations, seen)?;
+            env.bind(comp.var.clone(), var_ty);
+            for sub in comp.body_exprs_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            Ok(crate::comprehension::comp_container_of(&comp.elt))
+        }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
@@ -1339,6 +1352,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         // mirroring `AttrGet`'s own single-sub-expression shape just above.
         HirExpr::NamedExpr { name: _, value } => {
             collect_generic_class_instantiations_from_expr(value, out);
+        }
+        HirExpr::Comprehension(comp) => {
+            for sub in comp.sub_exprs() {
+                collect_generic_class_instantiations_from_expr(sub, out);
+            }
         }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
@@ -2484,19 +2502,30 @@ fn rewrite_protocol_calls_in_stmt(
                 seen,
             );
         }
-        HirStmt::ListCompAssign { cond, elt, .. } | HirStmt::SetCompAssign { cond, elt, .. } => {
-            if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(
-                    c,
-                    protocol_funcs,
-                    env,
-                    local_names,
-                    specializations,
-                    seen,
-                );
-            }
-            rewrite_protocol_calls_in_expr(
-                elt,
+        // #1254: the loop variable is bound in a scoped clone of `env`
+        // before `cond` and the elements are walked, so a protocol call
+        // whose argument reads it resolves; before, `infer_expr_in` failed
+        // on the unbound name and the call was silently left unrewritten.
+        HirStmt::ListCompAssign {
+            var,
+            iter,
+            cond,
+            elt,
+            ..
+        }
+        | HirStmt::SetCompAssign {
+            var,
+            iter,
+            cond,
+            elt,
+            ..
+        } => {
+            let mut body: Vec<&mut HirExpr> = cond.iter_mut().map(|c| c.as_mut()).collect();
+            body.push(elt);
+            rewrite_protocol_calls_in_comprehension(
+                var,
+                iter,
+                body,
                 protocol_funcs,
                 env,
                 local_names,
@@ -2505,28 +2534,19 @@ fn rewrite_protocol_calls_in_stmt(
             );
         }
         HirStmt::DictCompAssign {
-            cond, key, value, ..
+            var,
+            iter,
+            cond,
+            key,
+            value,
+            ..
         } => {
-            if let Some(c) = cond {
-                rewrite_protocol_calls_in_expr(
-                    c,
-                    protocol_funcs,
-                    env,
-                    local_names,
-                    specializations,
-                    seen,
-                );
-            }
-            rewrite_protocol_calls_in_expr(
-                key,
-                protocol_funcs,
-                env,
-                local_names,
-                specializations,
-                seen,
-            );
-            rewrite_protocol_calls_in_expr(
-                value,
+            let mut body: Vec<&mut HirExpr> = cond.iter_mut().map(|c| c.as_mut()).collect();
+            body.extend([key.as_mut(), value.as_mut()]);
+            rewrite_protocol_calls_in_comprehension(
+                var,
+                iter,
+                body,
                 protocol_funcs,
                 env,
                 local_names,
@@ -2866,7 +2886,77 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
+        // #1254 (D-250): without this arm a protocol call inside a
+        // comprehension fell into the catch-all below and was left calling
+        // an item `monomorphize_protocol_params` drops (the #774 bug class).
+        HirExpr::Comprehension(comp) => {
+            let HirComprehension {
+                var,
+                iter,
+                cond,
+                elt,
+            } = comp.as_mut();
+            let mut body: Vec<&mut HirExpr> = cond.iter_mut().collect();
+            match elt {
+                CompElt::List(e) | CompElt::Set(e) => body.push(e),
+                CompElt::Dict { key, value } => body.extend([key, value]),
+            }
+            rewrite_protocol_calls_in_comprehension(
+                var,
+                iter,
+                body,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+        }
         _ => {}
+    }
+}
+
+/// Protocol-call rewriting for one comprehension, statement or expression
+/// form (#1254): the range operands are walked against `env`, where they
+/// are evaluated; `cond` and the elements against a clone of `env` with the
+/// synthesized loop variable bound, since this walker's `env` is immutable
+/// and `bind_local_types_in_stmt` never binds that variable.
+#[allow(clippy::too_many_arguments)]
+fn rewrite_protocol_calls_in_comprehension(
+    var: &str,
+    iter: &mut CompIter,
+    body: Vec<&mut HirExpr>,
+    protocol_funcs: &HashMap<String, HirItem>,
+    env: &Environment,
+    local_names: &[&str],
+    specializations: &mut Vec<HirItem>,
+    seen: &mut HashSet<String>,
+) {
+    if let CompIter::Range { start, stop, step } = iter {
+        for operand in [start, stop, step] {
+            rewrite_protocol_calls_in_expr(
+                operand,
+                protocol_funcs,
+                env,
+                local_names,
+                specializations,
+                seen,
+            );
+        }
+    }
+    let mut scoped = env.clone();
+    if let Ok(var_ty) = crate::comprehension::resolve_comp_iter(env, local_names, iter) {
+        scoped.bind(var.to_string(), var_ty);
+    }
+    for sub in body {
+        rewrite_protocol_calls_in_expr(
+            sub,
+            protocol_funcs,
+            &scoped,
+            local_names,
+            specializations,
+            seen,
+        );
     }
 }
 
