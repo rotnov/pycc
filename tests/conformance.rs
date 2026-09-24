@@ -17,6 +17,7 @@ macro_rules! harness_modules {
 harness_modules! {
     classes => "conformance/classes.rs",
     exceptions => "conformance/exceptions.rs",
+    imports => "conformance/imports.rs",
     numeric => "conformance/numeric.rs",
 }
 

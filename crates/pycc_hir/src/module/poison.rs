@@ -23,9 +23,12 @@ use pycc_diag::Diagnostic;
 /// -> `[Point, Line]`, `import pkg.dep as d` -> `[d]`, and a rejected
 /// `from math import *` -> `math`'s whole export list. Since Part 1 of
 /// #883 (#962, D-231) a `Stmt::Import` lowers -- and so poisons nothing --
-/// exactly when it has one alias and a `pycc_std`-resolvable module, with
-/// or without an `asname`: `import math as m` binds `m` and yields nothing,
-/// while `import numpy as np` yields `[np]`. Both import arms therefore
+/// exactly when every alias names a `pycc_std`-resolvable module, with or
+/// without an `asname` (several aliases in one statement since #1280):
+/// `import math as m` and `import math, enum` yield nothing, while
+/// `import numpy as np` yields `[np]` and `import math, os` yields
+/// `[math, os]`, because the statement fails as a whole on its first
+/// failing alias. Both import arms therefore
 /// mirror `import::lower_import_stmt`'s own success conditions for
 /// every shape decidable from the statement alone, one arm per
 /// statement kind, so such a shape that lowers poisons nothing and
@@ -41,10 +44,11 @@ use pycc_diag::Diagnostic;
 /// unaliased, undotted name that is neither a `pycc_std` module nor a
 /// project module lowers to an `ImportBinding::Foreign` when -- and only
 /// when -- the driver's `ResolvedImports` table answers
-/// `ResolvedImport::Foreign` for that statement's span. That answer is not
-/// derivable from the statement alone, which is all this function sees, so
-/// `import numpy` is still classified here as a poisoning shape even in a
-/// build where it lowers. What keeps the stale prediction harmless is the
+/// `ResolvedImport::Foreign` for that alias's span (#1280 keys a plain
+/// `import`'s answers per alias). That answer is not derivable from the
+/// statement alone, which is all this function sees, so `import numpy` --
+/// and `import sys, re`, alias by alias -- is still classified here as a
+/// poisoning shape even in a build where it lowers. What keeps the stale prediction harmless is the
 /// *asymmetry* in `lower_module`'s loop, not a surviving biconditional: the
 /// loop consults `poisonable_names` on both arms, but on `Ok` it only
 /// `retain`s -- un-poisoning what the statement actually bound -- so a name
@@ -104,26 +108,31 @@ pub(crate) fn poisonable_names(stmt: &Stmt) -> Vec<&str> {
         }
         Stmt::Import(import) => {
             // `import::lower_import_stmt` accepts exactly one shape this
-            // function can recognize: a single alias (with or without an
-            // `asname` -- Part 1 of #883, #962) and a module name `pycc_std`
-            // resolves. The condition is exact rather than an approximation
-            // of that arm -- its earlier `ResolvedImport::Found` branch
-            // cannot fire for a stdlib-resolving name, because
-            // `project_import_request` returns `None` for one, so no answer
-            // is ever recorded for its span. Its `ResolvedImport::Foreign`
+            // function can recognize: every alias (with or without an
+            // `asname` -- Part 1 of #883, #962; several of them since #1280)
+            // names a module `pycc_std` resolves. The condition is exact
+            // rather than an approximation of that arm -- its earlier
+            // `ResolvedImport::Found` branch cannot fire for a
+            // stdlib-resolving name, because `project_import_request` records
+            // no request for one, so no answer is ever recorded for its
+            // alias's span. Its `ResolvedImport::Foreign`
             // branch is the recorded divergence documented above: it turns
             // on a span-keyed driver answer this function does not have, so
             // a bare foreign name falls through and poisons even though it
             // lowers.
-            if let [alias] = import.names.as_slice()
-                && pycc_std::resolve_module(alias.name.as_str()).is_some()
+            if import
+                .names
+                .iter()
+                .all(|alias| pycc_std::resolve_module(alias.name.as_str()).is_some())
             {
                 return Vec::new();
             }
             // Every other shape fails, so poison what it would have bound:
             // the alias when present, and otherwise the first dotted segment,
             // since `import pkg.dep` binds `pkg`. `import a, b` fails as a
-            // whole statement, so both of its names are poisoned.
+            // whole statement on its first failing alias and keeps no
+            // binding, so every one of its names is poisoned, a
+            // `pycc_std` one included.
             import
                 .names
                 .iter()

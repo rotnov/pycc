@@ -9,6 +9,8 @@ use super::*;
 use crate::pycc_parser_test_helper::parse;
 use crate::{LoweredModule, lower_module};
 
+mod multi;
+
 const DEP: &str = "dep.py";
 
 /// Lowers `source` as a standalone module (no project imports), the way
@@ -352,10 +354,18 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
         shapes,
         vec![
             (0, Some("geometry"), 0),
+            // #1280: a multi-name `import a, b` asks one request per
+            // qualifying alias, each keyed by that alias's own span.
+            (0, Some("a"), 0),
+            (0, Some("b"), 0),
             (1, Some("rel"), 1),
             (0, Some("pkg.sub"), 1),
         ]
     );
+    let statement = "import math\nfrom math import sqrt\nimport geometry\n".len() as u32;
+    let alias = |offset: u32| Span::new(statement + offset, statement + offset + 1);
+    assert_eq!(requests[1].span, alias("import ".len() as u32));
+    assert_eq!(requests[2].span, alias("import a, ".len() as u32));
     // Part 1 of #883 (#962) keeps the driver contract unchanged: an
     // aliased `import geometry as g` is still never requested (project
     // module aliasing is Part 3, #964), so the driver never sees one --
@@ -526,15 +536,18 @@ fn an_imported_alias_to_a_class_the_importer_never_copied_still_accepts_a_subscr
 /// answers an import that resolves to neither a project module nor a
 /// `pycc_std` one (Part 1 of #1026).
 fn foreign_dependency(source: &str, import_stmt: &str) -> HirModule {
-    let start = source
-        .find(import_stmt)
-        .expect("the fixture must contain its import statement");
     let parsed = parse(source);
+    let name = import_stmt
+        .strip_prefix("import ")
+        .expect("a foreign fixture imports with a plain `import <name>`");
+    // Keyed by the span `pycc_hir` requests the answer under -- the alias's
+    // own span since #1280 -- rather than a re-derived one.
+    let request = project_import_requests(&parsed)
+        .into_iter()
+        .find(|request| request.module.as_deref() == Some(name) && request.names.is_empty())
+        .expect("the fixture must contain its import statement");
     let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        Span::new(start as u32, (start + import_stmt.len()) as u32),
-        ResolvedImport::Foreign,
-    );
+    resolved.insert(request.span, ResolvedImport::Foreign);
     lower_module(&parsed, &resolved, None)
         .expect("a dependency fixture must lower")
         .hir

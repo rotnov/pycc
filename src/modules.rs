@@ -95,7 +95,8 @@ enum Resolution {
     /// resolves nowhere on disk): left unanswered so `pycc_hir` reports it
     /// exactly as a single-file compilation would.
     Unanswered,
-    /// A bare `import X` whose single-segment absolute root is neither a
+    /// A bare `import X` -- or one unaliased name `X` of `import X, Y`
+    /// (#1280) -- whose single-segment absolute root is neither a
     /// project module nor a `pycc_std` one (Part 1 of #1026): the name is
     /// taken to be a CPython module the produced extension imports at
     /// module-exec time, and `pycc_hir` binds it as an opaque object
@@ -522,14 +523,16 @@ impl Loader {
     fn missing(&self, base: &Base, request: &ProjectImportRequest) -> Resolution {
         if !base.relative {
             // Part 1 of #1026 admits exactly one foreign shape: a bare
-            // `import X` naming a single, undotted root. `request.names`
+            // `import X` naming a single, undotted root -- or one such name
+            // of a multi-name `import X, Y`, which `pycc_hir` requests alias
+            // by alias under each alias's own span (#1280). `request.names`
             // is non-empty only for a `from X import n`, which binds
             // names out of the module rather than the module itself, and
             // a dotted `import X.Y` binds `X` while importing `X.Y` --
             // both keep `pycc_hir`'s existing `C0001` until a later part
             // implements them. (`import X as Y` never reaches here at
             // all: `project_import_request` records no request for an
-            // aliased import, so no answer is ever looked up for it.)
+            // aliased name, so no answer is ever looked up for it.)
             if request.names.is_empty()
                 && request
                     .module

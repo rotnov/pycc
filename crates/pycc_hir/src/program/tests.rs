@@ -315,18 +315,29 @@ fn many_exception_classes(prefix: &str, count: usize) -> String {
 /// `ImportBinding::Foreign` (Part 1 of #1026). `input` cannot do this: it
 /// lowers against an empty answer table, which that branch never fires on.
 fn foreign_input(display_path: &str, source: &str, import_stmt: &str) -> LinkInput {
-    let start = source
-        .find(import_stmt)
-        .expect("the fixture must contain its import statement");
-    let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        Span::new(start as u32, (start + import_stmt.len()) as u32),
-        crate::ResolvedImport::Foreign,
-    );
+    let parsed = parse(source);
+    let resolved = foreign_answer(&parsed, import_stmt);
     LinkInput {
         display_path: display_path.to_string(),
-        module: lower_module(&parse(source), &resolved, None).expect("a fixture module must lower"),
+        module: lower_module(&parsed, &resolved, None).expect("a fixture module must lower"),
     }
+}
+
+/// The driver's `ResolvedImport::Foreign` answer for the plain
+/// `import_stmt` (`import <name>`), keyed by the span `pycc_hir` itself
+/// requests it under -- the alias's own span since #1280 -- rather than a
+/// re-derived one.
+fn foreign_answer(parsed: &pycc_ast::ModModule, import_stmt: &str) -> ResolvedImports<'static> {
+    let name = import_stmt
+        .strip_prefix("import ")
+        .expect("a foreign fixture imports with a plain `import <name>`");
+    let request = crate::project_import_requests(parsed)
+        .into_iter()
+        .find(|request| request.module.as_deref() == Some(name) && request.names.is_empty())
+        .expect("the fixture must contain its import statement");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(request.span, crate::ResolvedImport::Foreign);
+    resolved
 }
 
 #[test]
@@ -433,16 +444,10 @@ fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
     // cross-module. Asserted here rather than only at the lowering site so
     // the two rules cannot drift into either a gap or a double report.
     let source = "import json\n\n\ndef json() -> int:\n    return 1\n";
-    let start = source
-        .find("import json")
-        .expect("fixture contains its import");
-    let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        Span::new(start as u32, (start + "import json".len()) as u32),
-        crate::ResolvedImport::Foreign,
-    );
-    let diagnostics = lower_module(&parse(source), &resolved, None)
-        .expect_err("the shadowing module must be refused");
+    let parsed = parse(source);
+    let resolved = foreign_answer(&parsed, "import json");
+    let diagnostics =
+        lower_module(&parsed, &resolved, None).expect_err("the shadowing module must be refused");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
     assert!(

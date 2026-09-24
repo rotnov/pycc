@@ -746,7 +746,11 @@ written*. `pycc_mir::build` splices one `MirItem::ForeignImport` into the item
 list at the import statement's own recorded position rather than hoisting every
 import to the top of `Py_mod_exec`; a module-level statement with an observable
 effect written above a failing import therefore has already run when the import
-raises, exactly as under CPython. `tests/issue_1080_foreign_object.rs` asserts
+raises, exactly as under CPython. Each qualifying name of a multi-name
+`import a, b` is its own foreign import (#1280), and the names run in source
+order at the statement's position, so the first missing one raises and the
+names after it are never imported (`tests/issue_1280_multi_import.rs`).
+`tests/issue_1080_foreign_object.rs` asserts
 that against a real host interpreter, and
 `crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
 emission layer.

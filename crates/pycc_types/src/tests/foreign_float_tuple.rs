@@ -26,16 +26,16 @@ use super::*;
 /// driver's job (`src/modules.rs`), so the answer is supplied directly --
 /// `pycc_hir`'s own `program/tests.rs` establishes the pattern.
 fn lower_foreign(source: &str) -> Result<pycc_hir::HirModule, Vec<pycc_diag::Diagnostic>> {
-    const IMPORT: &str = "import gc";
-    let start = source
-        .find(IMPORT)
-        .expect("the fixture must contain its import statement");
-    let mut resolved = pycc_hir::ResolvedImports::default();
-    resolved.insert(
-        pycc_diag::Span::new(start as u32, (start + IMPORT.len()) as u32),
-        pycc_hir::ResolvedImport::Foreign,
-    );
     let parsed = pycc_parser::parse(source).expect("test fixture must parse");
+    let mut resolved = pycc_hir::ResolvedImports::default();
+    // The key is whatever span `pycc_hir` asks under (an alias's own span
+    // for a plain `import` since #1280), so it is taken from the request
+    // rather than re-derived here.
+    let request = pycc_hir::project_import_requests(&parsed)
+        .into_iter()
+        .find(|request| request.module.as_deref() == Some("gc") && request.names.is_empty())
+        .expect("the fixture must contain its `import gc`");
+    resolved.insert(request.span, pycc_hir::ResolvedImport::Foreign);
     pycc_hir::lower_module(&parsed, &resolved, None).map(|lowered| lowered.hir)
 }
 

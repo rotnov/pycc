@@ -882,7 +882,7 @@ edit was made:
 |---|---|---|
 | `C0001` import of `itertools` / `collections` not supported yet | 1 each | #1278 (`itertools`); #882 (`collections`) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
-| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280 |
+| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted, and a re-run of the same build reports 17 errors, all still in `lark/utils.py` |
 | `C0001` `import` inside a block body (module-level `try`/`if`) | 3 | #1282 |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
