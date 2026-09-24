@@ -305,19 +305,20 @@ impl Walk<'_> {
                 self.bundled_name
             ));
         }
-        if self.system.iter().any(|dir| canonical.starts_with(dir)) {
-            return Ok(LinuxDep::Keep);
-        }
         let closure_image = matches!(node.kind, Kind::Closure(_));
         if closure_image && via_origin && self.payload.contains(canonical) {
             return Ok(LinuxDep::Keep);
         }
-        // Before the prefix: a non-venv interpreter's site directories lie
-        // under it, and an unlocked distribution's library there is not
-        // the interpreter's.
+        // Before the system directories and the prefix: a distribution
+        // Python's site directory lies under `/usr/lib`, a non-venv
+        // interpreter's under its prefix, and an unlocked distribution's
+        // library there is neither the system's nor the interpreter's.
         let interpreter_image = matches!(node.kind, Kind::Interpreter(_));
         if !interpreter_image && self.sites.iter().any(|site| canonical.starts_with(site)) {
             return Ok(LinuxDep::Native);
+        }
+        if self.system.iter().any(|dir| canonical.starts_with(dir)) {
+            return Ok(LinuxDep::Keep);
         }
         if canonical.starts_with(&self.prefix) {
             return Ok(LinuxDep::Vendor);

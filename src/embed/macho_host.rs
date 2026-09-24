@@ -148,18 +148,24 @@ fn resolve(
         let path = PathBuf::from(dep);
         return Ok((probe(&path).unwrap_or(path), None));
     }
-    let (tail, candidates) = if let Some(tail) = dep.strip_prefix("@loader_path/") {
-        (tail, vec![Candidate::Loader(String::new())])
-    } else if let Some(tail) = dep.strip_prefix("@rpath/") {
-        let candidates = image.rpaths.iter().map(|rpath| rpath_candidate(rpath));
-        (tail, candidates.collect::<Result<Vec<_>, String>>()?)
-    } else if dep.starts_with("@executable_path/") {
-        return Err(format!(
-            "is `@executable_path`-relative, which {EXECUTABLE_PATH}"
-        ));
-    } else {
-        return Err("is neither absolute nor an `@rpath` or `@loader_path` reference".to_string());
-    };
+    // An `@rpath` search converts each `LC_RPATH` entry only when it is
+    // reached, so a bad entry after the match refuses nothing (R1, R3).
+    let loader = [Ok(Candidate::Loader(String::new()))];
+    let (tail, candidates): (_, Box<dyn Iterator<Item = Result<Candidate, String>>>) =
+        if let Some(tail) = dep.strip_prefix("@loader_path/") {
+            (tail, Box::new(loader.into_iter()))
+        } else if let Some(tail) = dep.strip_prefix("@rpath/") {
+            let candidates = image.rpaths.iter().map(|rpath| rpath_candidate(rpath));
+            (tail, Box::new(candidates))
+        } else if dep.starts_with("@executable_path/") {
+            return Err(format!(
+                "is `@executable_path`-relative, which {EXECUTABLE_PATH}"
+            ));
+        } else {
+            return Err(
+                "is neither absolute nor an `@rpath` or `@loader_path` reference".to_string(),
+            );
+        };
     let site = context
         .scanned_sites
         .iter()
@@ -168,7 +174,7 @@ fn resolve(
     let mut keep = site.is_some();
     let mut searched = Vec::new();
     for candidate in candidates {
-        let (path, relative) = match candidate {
+        let (path, relative) = match candidate? {
             Candidate::Loader(dir) => (normalize(&image.source_dir.join(dir).join(tail)), true),
             Candidate::Absolute(dir) => (normalize(&dir.join(tail)), false),
         };

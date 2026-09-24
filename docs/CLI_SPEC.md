@@ -577,10 +577,13 @@ references outside a distribution's payload.
   any locked distribution) is kept when the spelling already reaches it in
   the sidecar, and otherwise rewritten to an explicit `@loader_path` path to
   its `closure/` copy; a relatively named system library is rewritten to
-  its absolute path; anything else outside the prefix is a native. Refused
-  with exit 2, naming the image and the reason: an `@executable_path`
-  reference or rpath, a reference that resolves nowhere from the image's
-  own rpaths, and any other `@` form. `pycc check` never reads the lock.
+  its absolute path; a file under a scanned site directory or
+  `<stdlib>/site-packages` is a native even inside the prefix; anything
+  else outside the prefix is a native. Refused with exit 2, naming the
+  image and the reason: an `@executable_path` reference or an
+  `@executable_path` rpath the search reaches before a match; a reference
+  that resolves nowhere from the image's own rpaths; and any other `@`
+  form. `pycc check` never reads the lock.
 
 ## Exit codes
 

@@ -561,3 +561,38 @@ fn a_site_directory_library_inside_the_prefix_is_a_native_for_closure_images() {
     assert_eq!(vendor_names(&planned), ["libu.so.1"]);
     assert!(planned.natives.is_empty());
 }
+
+/// A distribution Python's site directory lies under a system directory
+/// (`/usr/lib/python3/dist-packages`): an unlocked distribution's library
+/// there is still a native, not a kept system library, while the image's
+/// own `$ORIGIN` payload sibling and a real system library stay kept
+/// (#1259).
+#[test]
+fn a_site_directory_under_a_system_directory_still_yields_natives() {
+    let mut fx = Fixture::new("native_linux_system_site");
+    let site = fx.root.join("sys/python3/dist-packages");
+    fx.write(
+        "sys/python3/dist-packages/unlocked/libd.so.1",
+        &ElfSpec::library("libd.so.1", &[]),
+    );
+    let search = format!("$ORIGIN:{}", site.join("unlocked").display());
+    let module = ElfSpec::module(&["libp.so.1", "libd.so.1", "libc.so.6"]).runpath(&search);
+    for (rel, spec) in [
+        ("pd/_d.so", module),
+        ("pd/libp.so.1", ElfSpec::library("libp.so.1", &[])),
+    ] {
+        let source = fx.write(&format!("sys/python3/dist-packages/{rel}"), &spec);
+        fx.files.push(ClosureFile {
+            rel: rel.to_string(),
+            source,
+            digest: String::new(),
+            package: "pd".to_string(),
+        });
+    }
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![site];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libd.so.1"]);
+    // Only the native is copied: the payload sibling and libc are kept.
+    assert_eq!(vendor_names(&planned), ["libd.so.1"]);
+}

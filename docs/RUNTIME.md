@@ -1213,7 +1213,8 @@ owns the contract; this is the runtime view of it.
   native; `@executable_path`, an unresolvable reference and an unknown `@`
   form are refused. On both hosts a closure image's or a native's dependency
   under a site-packages directory is a native unless it is kept or rebound
-  as a payload file, even when that directory lies inside the prefix.
+  as a payload file, even when that directory lies inside the prefix or
+  (on Linux) under a system library directory.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

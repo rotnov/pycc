@@ -272,3 +272,18 @@ fn normalize_drops_dot_and_dot_dot_lexically() {
     assert_eq!(normalize(Path::new("/../a")), PathBuf::from("/a"));
     assert_eq!(normalize(Path::new("./a/../b")), PathBuf::from("b"));
 }
+
+/// R1 and R3 on an `LC_RPATH` entry apply only when the search reaches it:
+/// an entry after the match is never consulted, as dyld never does.
+#[test]
+fn a_bad_rpath_entry_after_the_match_is_not_reached() {
+    for bad in ["@executable_path/../lib", "@foo/lib"] {
+        let rpaths = ["@loader_path/.dylibs", bad];
+        assert_eq!(closure("@rpath/libx.dylib", &rpaths), MachoDep::Keep);
+        let rpaths = [bad, "@loader_path/.dylibs"];
+        assert!(matches!(
+            closure("@rpath/libx.dylib", &rpaths),
+            MachoDep::RefuseWith(_)
+        ));
+    }
+}
