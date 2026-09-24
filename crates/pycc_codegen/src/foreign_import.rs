@@ -16,9 +16,13 @@
 //! the artifact to CPython's observable behaviour. `MirItem::ForeignImport`
 //! exists precisely so that ordering is structural rather than a convention
 //! this file would have to re-derive. A nested import is a statement, so
-//! `emit_stmt` emits it where its block runs; its failure edge returns from
-//! the same entry point, skipping any enclosing `except`/`finally` (the
-//! #1096 edge, `docs/RUNTIME.md`).
+//! `emit_stmt` emits it where its block runs. Its failure edge first asks
+//! the shim to bridge the failure (#1293): an `ImportError` becomes a
+//! pending pycc exception and control branches to the innermost exception
+//! target, so an enclosing `except`/`finally` runs as in CPython; any other
+//! exception still returns from the entry point directly (the #1096
+//! residual, `docs/RUNTIME.md`). A top-level import has nothing to enclose
+//! it and keeps the direct return.
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The module object is imported exactly
 //! once, during `pycc_ext_module_exec`, into a module-level global, and is
@@ -45,7 +49,48 @@
 //! the refusal is actually tested.
 
 use super::*;
+use crate::ext::EXT_IMPORT_ERROR_BRIDGE_SYMBOL;
 use inkwell::builder::Builder;
+
+/// What a failed import's `NULL` edge does.
+pub(super) enum FailureEdge<'a, 'ctx> {
+    /// Return [`EXT_MODULE_EXEC_FAILED`] from the entry point with CPython's
+    /// exception set: a top-level [`MirItem::ForeignImport`], which no
+    /// handler can enclose.
+    ReturnFailed,
+    /// Bridge an `ImportError` into a pending pycc exception and branch to
+    /// the innermost exception target, falling back to the direct return
+    /// for anything the shim does not bridge: a nested
+    /// `MirStmt::ForeignImport` (#1293).
+    Bridge { rt: &'a RtFns<'ctx> },
+}
+
+/// Declares the shim's `int pycc_ext_import_error_bridge(void)` once per
+/// module, returning the existing declaration on every later call.
+fn import_error_bridge_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_IMPORT_ERROR_BRIDGE_SYMBOL) {
+        return existing;
+    }
+    module.add_function(
+        EXT_IMPORT_ERROR_BRIDGE_SYMBOL,
+        context.i32_type().fn_type(&[], false),
+        None,
+    )
+}
+
+/// Emits `ret i64 EXT_MODULE_EXEC_FAILED` at the builder's position.
+fn return_failed(context: &Context, builder: &Builder<'_>) {
+    builder
+        .build_return(Some(
+            &context
+                .i64_type()
+                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
+        ))
+        .expect("build_return should not fail");
+}
 
 /// Declares the shim's `PyObject *pycc_ext_obj_import(const char *)` once
 /// per module, returning the existing declaration on every later call.
@@ -72,10 +117,17 @@ fn obj_import_fn<'ctx>(
 /// apart by emission order.
 ///
 /// A `NULL` return means CPython raised (`ModuleNotFoundError` being the
-/// expected one): the exception is already set by the shim, so the entry
-/// point returns [`EXT_MODULE_EXEC_FAILED`] immediately -- the
+/// expected one), and `edge` decides what happens next. Under
+/// [`FailureEdge::ReturnFailed`] the exception is already set by the shim,
+/// so the entry point returns [`EXT_MODULE_EXEC_FAILED`] immediately -- the
 /// `Py_mod_exec` slot's failure convention -- and the module body's
-/// remaining statements never run.
+/// remaining statements never run. Under [`FailureEdge::Bridge`] the shim's
+/// `pycc_ext_import_error_bridge` is asked first: a non-zero answer means an
+/// `ImportError` is now a pending pycc exception, and control branches to
+/// the innermost exception target exactly as an explicit `raise` does
+/// (`emit_body`); a zero answer takes the same direct return, from a block
+/// named `foreign_import_unbridged`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -84,6 +136,7 @@ pub(super) fn emit<'ctx>(
     slot: &StorageSlot<'ctx>,
     local_name: &str,
     module_path: &str,
+    edge: FailureEdge<'_, 'ctx>,
 ) {
     let import = obj_import_fn(context, module);
     let name = builder
@@ -105,13 +158,45 @@ pub(super) fn emit<'ctx>(
         .build_conditional_branch(failed, fail_bb, cont_bb)
         .expect("build_conditional_branch should not fail");
     builder.position_at_end(fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
+    match edge {
+        FailureEdge::ReturnFailed => return_failed(context, builder),
+        FailureEdge::Bridge { rt } => {
+            let bridged = builder
+                .build_call(
+                    import_error_bridge_fn(context, module),
+                    &[],
+                    "import_bridged",
+                )
+                .expect("build_call should not fail for pycc_ext_import_error_bridge")
+                .try_as_basic_value()
+                .expect_basic("pycc_ext_import_error_bridge returns int")
+                .into_int_value();
+            let raised = builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    bridged,
+                    context.i32_type().const_zero(),
+                    "import_error_raised",
+                )
+                .expect("build_int_compare should not fail");
+            // A bare branch, with no `guard_statement_effects` unwind: a
+            // `ForeignImport` is a statement, emitted at a statement
+            // boundary, where `rt.exceptions.pending_int_releases` is empty
+            // by that field's own invariant, so nothing can be orphaned.
+            let target = *rt
+                .exceptions
+                .targets
+                .borrow()
+                .last()
+                .expect("a module body statement is always inside an exception target");
+            let unbridged_bb = context.append_basic_block(entry_fn, "foreign_import_unbridged");
+            builder
+                .build_conditional_branch(raised, target, unbridged_bb)
+                .expect("build_conditional_branch should not fail");
+            builder.position_at_end(unbridged_bb);
+            return_failed(context, builder);
+        }
+    }
     builder.position_at_end(cont_bb);
     builder
         .build_store(slot.ptr, imported)
@@ -130,11 +215,14 @@ pub(super) fn emit<'ctx>(
 /// in order, into the module-exec entry point `builder` is emitting into.
 /// No `options.ext` guard is needed: a foreign binding reaches codegen only
 /// in an `ext` build, because the driver refuses every other build with
-/// `I0403`, and `expect_module_exec_entry` pins the entry point.
+/// `I0403`, and `expect_module_exec_entry` pins the entry point. Each
+/// binding's failure edge is [`FailureEdge::Bridge`] (#1293), so a failed
+/// binding stops the remaining ones exactly as a raise would.
 pub(super) fn emit_stmt<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     bindings: &[(String, String)],
 ) {
@@ -148,6 +236,7 @@ pub(super) fn emit_stmt<'ctx>(
             &locals[local_name],
             local_name,
             module_path,
+            FailureEdge::Bridge { rt },
         );
     }
 }
@@ -312,10 +401,174 @@ mod tests {
         let then_block = ir.find("if_then:").expect("the `if` branch block");
         assert!(then_block < import, "{ir}");
         assert!(ir.contains("foreign_import_fail"), "{ir}");
-        assert!(ir.contains("ret i64 -1"), "{ir}");
+        assert_eq!(
+            block_terminator(&ir, "foreign_import_unbridged"),
+            "ret i64 -1",
+            "{ir}"
+        );
         assert!(
             ir.contains("store ptr %foreign_import, ptr @pyglobal_colorsys"),
             "the module global is stored: {ir}"
+        );
+    }
+
+    /// The terminator of the block labelled `label` in `ir`: its last
+    /// non-empty instruction line, trimmed.
+    fn block_terminator<'a>(ir: &'a str, label: &str) -> &'a str {
+        let header = format!("{label}:");
+        let mut lines = ir.lines().skip_while(|line| !line.starts_with(&header));
+        assert!(lines.next().is_some(), "no block `{label}`: {ir}");
+        lines
+            .take_while(|line| !line.is_empty() && !line.starts_with(|c: char| c.is_alphanumeric()))
+            .last()
+            .expect("a block has a terminator")
+            .trim()
+    }
+
+    /// The two labels of the conditional branch on the bridge's answer:
+    /// `(raised, unbridged)`, with LLVM's uniquing digits stripped.
+    fn bridge_branch_labels(ir: &str) -> (String, String) {
+        let call = ir
+            .find(&format!("call i32 @{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}()"))
+            .expect("the bridge call");
+        assert!(
+            ir.find(EXT_OBJ_IMPORT_SYMBOL).expect("the import call") < call,
+            "{ir}"
+        );
+        let branch = ir
+            .lines()
+            .find(|line| line.contains("br i1 %import_error_raised,"))
+            .expect("the branch on the bridge's answer");
+        let labels: Vec<String> = branch
+            .split("label %")
+            .skip(1)
+            .map(|rest| {
+                rest.trim_end_matches(|c: char| c == ',' || c.is_whitespace())
+                    .trim_end_matches(|c: char| c.is_ascii_digit())
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "{branch}");
+        (labels[0].clone(), labels[1].clone())
+    }
+
+    /// A `try` whose body is `body` and whose one `except Exception:`
+    /// handler runs `handler`.
+    fn try_stmt(body: Vec<MirStmt>, handler: Vec<MirStmt>) -> MirItem {
+        MirItem::TopLevelStmt(MirStmt::Try {
+            body,
+            handlers: vec![pycc_mir::MirExceptHandler {
+                exc_type_tag: Some(vec![0]),
+                binding_name: None,
+                binding_ty: None,
+                body: handler,
+            }],
+            orelse: vec![],
+            finalbody: vec![],
+        })
+    }
+
+    fn import_stmt(name: &str) -> MirStmt {
+        MirStmt::ForeignImport {
+            bindings: vec![(name.to_string(), name.to_string())],
+        }
+    }
+
+    /// #1293: an import in a `try` body bridges its failure to the
+    /// handler dispatch, and falls back to the direct return only on the
+    /// named unbridged edge.
+    #[test]
+    fn a_try_block_foreign_import_bridges_to_the_handler_dispatch() {
+        let ir = entry_ir(
+            "foreign_import_bridge_try",
+            vec![try_stmt(vec![import_stmt("colorsys")], vec![MirStmt::NoOp])],
+        );
+        let (raised, unbridged) = bridge_branch_labels(&ir);
+        assert_eq!(raised, "try_handler_dispatch", "{ir}");
+        assert_eq!(unbridged, "foreign_import_unbridged", "{ir}");
+        assert_eq!(
+            block_terminator(&ir, "foreign_import_unbridged"),
+            "ret i64 -1",
+            "{ir}"
+        );
+    }
+
+    /// With no enclosing `try`, the bridged exception goes where any other
+    /// module-level raise goes.
+    #[test]
+    fn an_if_block_foreign_import_bridges_to_the_top_exception_exit() {
+        let ir = entry_ir(
+            "foreign_import_bridge_if",
+            vec![if_block_import(&[("colorsys", "colorsys")])],
+        );
+        let (raised, unbridged) = bridge_branch_labels(&ir);
+        assert_eq!(raised, "top_exception_exit", "{ir}");
+        assert_eq!(unbridged, "foreign_import_unbridged", "{ir}");
+    }
+
+    /// An import in a handler body is past the dispatch: its failure goes to
+    /// the `try`'s finally target.
+    #[test]
+    fn a_handler_body_foreign_import_bridges_to_the_finally_target() {
+        let ir = entry_ir(
+            "foreign_import_bridge_handler",
+            vec![try_stmt(vec![MirStmt::NoOp], vec![import_stmt("colorsys")])],
+        );
+        let (raised, _) = bridge_branch_labels(&ir);
+        assert_eq!(raised, "try_finally", "{ir}");
+    }
+
+    /// Two bridged imports share one lazy declaration of the bridge helper
+    /// and call it once each.
+    #[test]
+    fn two_bridged_imports_in_one_module_share_one_bridge_declaration() {
+        let dir = pycc_scratch::ScratchDir::new("foreign_import_bridge_two").expect("scratch");
+        let mut ir = String::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
+            if module.get_function(EXT_MODULE_EXEC_SYMBOL).is_some() {
+                ir = crate::llvm_string_to_owned(module.print_to_string());
+            }
+        };
+        compile_to_object_with_observer(
+            &MirModule {
+                items: vec![if_block_import(&[("sys", "sys"), ("re", "re")])],
+                ..Default::default()
+            },
+            &dir.join("two.o"),
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            Some(&mut observer),
+        )
+        .expect("ext codegen should succeed");
+        let declared = format!("declare i32 @{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}()");
+        assert_eq!(ir.matches(&declared).count(), 1, "{ir}");
+        assert!(
+            !ir.contains(&format!("@{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}.")),
+            "{ir}"
+        );
+        let called = format!("call i32 @{EXT_IMPORT_ERROR_BRIDGE_SYMBOL}()");
+        assert_eq!(ir.matches(&called).count(), 2, "{ir}");
+    }
+
+    /// A top-level import has nothing to enclose it, so it keeps the direct
+    /// return and never calls the bridge.
+    #[test]
+    fn a_top_level_foreign_import_item_never_calls_the_bridge() {
+        let ir = entry_ir(
+            "foreign_import_bridge_top_level",
+            vec![MirItem::ForeignImport {
+                local_name: "numpy".to_string(),
+                module_path: "numpy".to_string(),
+            }],
+        );
+        assert!(!ir.contains(EXT_IMPORT_ERROR_BRIDGE_SYMBOL), "{ir}");
+        assert!(!ir.contains("foreign_import_unbridged"), "{ir}");
+        assert_eq!(
+            block_terminator(&ir, "foreign_import_fail"),
+            "ret i64 -1",
+            "{ir}"
         );
     }
 

@@ -775,12 +775,35 @@ any nesting depth of those blocks, but not inside a function, a loop, a
 `with` or a `match`). It lowers to a `MirStmt::ForeignImport` in place in that block rather
 than to a spliced `MirItem`, so it runs only if control reaches it: a branch
 that is not taken imports nothing, and a missing module in a taken one raises
-from that statement (`tests/issue_1291_block_import.rs`). The failure edge
-below is the same one, and so is its bound: `Py_mod_exec` returns `-1`
-directly, so an enclosing `except` or `finally` body does **not** run for a
-failed foreign import (the [#1096](https://github.com/rotnov/pycc/issues/1096)
-deviation), and `except ImportError` cannot catch it yet
-([#1293](https://github.com/rotnov/pycc/issues/1293)).
+from that statement (`tests/issue_1291_block_import.rs`). Since
+[#1293](https://github.com/rotnov/pycc/issues/1293) such a failure can be
+caught. When the import raises an `ImportError`, the shim's
+`pycc_ext_import_error_bridge` translates it into a pending pycc exception
+before anything else runs: a `ModuleNotFoundError` (or a subclass of it)
+becomes pycc's `ModuleNotFoundError` (tag 27), any other `ImportError` becomes
+`ImportError` (tag 26), and the message is CPython's own `str(exc)`. The
+generated code then branches to the innermost exception target exactly as an
+explicit `raise` does, so an enclosing `except ImportError`,
+`except ModuleNotFoundError`, `except Exception`, bare `except`, `except*` or
+`finally` runs as under CPython, and the statements after the import in the
+same body do not (`tests/issue_1293_import_bridge.rs`). The shim keeps each
+bridged pycc exception paired with a strong reference to CPython's original in
+a per-exec bridge table. If that pycc exception escapes the module body
+unchanged through a plain `try`/`except`/`finally` -- unmatched, re-raised with
+a bare `raise`, or re-raised after `finally` -- `pycc_ext_raise_pending` finds
+it there and re-raises the *original* object rather than a rebuilt one, so the
+host still sees its `.name`, `.path` and exact class, and an embedded
+executable's uncaught output is unchanged. The table is emptied when
+`Py_mod_exec` returns. Two bounds remain. An escape through an `except*`
+statement re-raises the exception group pycc wrapped the exception in, which is
+not in the table, so the host receives a rebuilt `Exception` carrying the
+import's message (a recorded deviation). And an import that fails with anything
+other than an `ImportError` -- the imported module body's own `ValueError`, a
+`SyntaxError`, a `BaseException` such as `KeyboardInterrupt` -- is not bridged:
+`Py_mod_exec` returns `-1` directly with CPython's exception untouched, so an
+enclosing `except` or `finally` body does **not** run for it (the remaining
+[#1096](https://github.com/rotnov/pycc/issues/1096) deviation). A top-level
+foreign import has no enclosing handler and keeps that direct edge too.
 `tests/issue_1080_foreign_object.rs` asserts
 that against a real host interpreter, and
 `crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
@@ -791,7 +814,9 @@ emission layer.
 missing module surfaces to the host as `ModuleNotFoundError` naming the module,
 not as a pycc diagnostic and not as an abort — and `Py_mod_exec` returns `-1`,
 so the import statement that loaded the artifact fails and no partially
-initialized module is left in `sys.modules`.
+initialized module is left in `sys.modules`. A nested import's `ImportError`
+is translated into a pycc exception first (#1293, above); when it goes
+uncaught, the host still receives CPython's original exception object.
 
 An attribute load fails the same way and takes the same edge.
 `pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and

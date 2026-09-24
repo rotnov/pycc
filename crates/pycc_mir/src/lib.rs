@@ -1267,8 +1267,10 @@ pub enum MirStmt {
     /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
     /// order, stores the module object `pycc_ext_obj_import(module_path)`
     /// returns into the module global `local_name`, where the statement
-    /// runs. A failed import returns `-1` from `Py_mod_exec` directly
-    /// (#1096), so it is not a pycc raise.
+    /// runs. A failed import whose exception is an `ImportError` becomes a
+    /// pycc raise of `ImportError`/`ModuleNotFoundError` (#1293), so an
+    /// enclosing handler runs; any other failure returns `-1` from
+    /// `Py_mod_exec` directly (the #1096 residual).
     ForeignImport {
         bindings: Vec<(String, String)>,
     },

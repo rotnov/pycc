@@ -2796,8 +2796,9 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::AttrSet { .. }
             // #1244: a `del` neither returns nor raises.
             | HirStmt::Delete { .. }
-            // #1291: a failed nested foreign import leaves `Py_mod_exec`
-            // directly; it is not a pycc raise.
+            // #1291: a nested foreign import never returns. Its failure is
+            // either a pycc raise (an `ImportError`, bridged by #1293) or a
+            // direct exit from `Py_mod_exec` (any other exception, #1096).
             | HirStmt::ForeignImport { .. }
             // PR-12 Task 3 (D-117): a comprehension statement never contains a
             // `return` (its `elt`/`cond`/`key`/`value` are expressions, not

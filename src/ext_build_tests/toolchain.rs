@@ -385,6 +385,44 @@ fn every_exception_tag_the_c_shim_switches_on_still_names_that_class() {
     assert_eq!(seen, expected);
 }
 
+/// The failed-import bridge (#1293) raises its two tags through named
+/// `#define`s rather than through the switch above, so that guard cannot see
+/// them. This one parses each tag and its class-name literal and pins both
+/// against `BUILTIN_EXCEPTION_CLASSES`: renumbering the array, or a name that
+/// drifts from its tag, fails here instead of raising a pycc exception that
+/// `except ImportError` silently stops matching.
+#[test]
+fn the_c_shims_import_error_bridge_tags_still_name_their_classes() {
+    let define = |name: &str| -> &str {
+        let prefix = format!("#define {name} ");
+        SHIM_C
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
+            .expect("src/ext/pycc_ext_module.c defines every bridge constant")
+            .trim()
+    };
+    for (tag, name, class) in [
+        (
+            "PYCC_EXT_TAG_IMPORT_ERROR",
+            "PYCC_EXT_NAME_IMPORT_ERROR",
+            "ImportError",
+        ),
+        (
+            "PYCC_EXT_TAG_MODULE_NOT_FOUND_ERROR",
+            "PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR",
+            "ModuleNotFoundError",
+        ),
+    ] {
+        let tag: usize = define(tag).parse().expect("a decimal tag");
+        assert_eq!(
+            pycc_hir::BUILTIN_EXCEPTION_CLASSES.get(tag).copied(),
+            Some(class),
+            "tag {tag}"
+        );
+        assert_eq!(define(name), format!("\"{class}\""));
+    }
+}
+
 #[test]
 fn the_probe_runs_the_interpreter_in_isolated_mode() {
     let command = probe_command(OsStr::new("python3"), "print(1)");

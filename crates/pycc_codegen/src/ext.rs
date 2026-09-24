@@ -116,6 +116,17 @@ pub const EXT_THUNK_PREFIX: &str = "pycc_ext_thunk_";
 /// error. One constant, referenced by both sides, makes that impossible.
 pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 
+/// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called
+/// on the `NULL` edge of a foreign import nested in a module-level
+/// `if`/`try` block, it returns `1` after translating CPython's pending
+/// `ImportError` into a pending pycc exception, or `0` with CPython's
+/// exception left as it was.
+///
+/// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`]
+/// directly above is. Deliberately not prefixed `pycc_ext_obj_import`:
+/// tests count that symbol's occurrences in the emitted IR.
+pub const EXT_IMPORT_ERROR_BRIDGE_SYMBOL: &str = "pycc_ext_import_error_bridge";
+
 /// The fixed C shim's attribute-load helper (Part 2 of #1026): it takes a
 /// borrowed `PyObject *` and a NUL-terminated attribute name, and returns a
 /// *new* reference to the attribute's value, or `NULL` with the CPython

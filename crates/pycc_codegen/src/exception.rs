@@ -271,8 +271,9 @@ pub(super) fn block_always_terminates(body: &[MirStmt]) -> bool {
             | MirStmt::ListCompAssign { .. }
             | MirStmt::DictCompAssign { .. }
             | MirStmt::SetCompAssign { .. }
-            // #1291: a failed nested foreign import returns from the entry
-            // point on its own edge; the success path falls through.
+            // #1291: the success path falls through. A failed nested foreign
+            // import either raises a pycc exception to the innermost target
+            // (#1293) or returns from the entry point on its own edge.
             | MirStmt::ForeignImport { .. }
             | MirStmt::AttrSet { .. } => false,
         };
