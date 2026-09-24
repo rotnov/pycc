@@ -453,13 +453,9 @@ mod tests {
                 )
             )]
         );
-        assert!(
-            gaps[0]
-                .1
-                .starts_with("`from tkinter import Tk, Label` imports a"),
-            "{}",
-            gaps[0].1
-        );
+        let message = &gaps[0].1;
+        let prefix = "`from tkinter import Tk, Label` imports a";
+        assert!(message.starts_with(prefix), "{message}");
     }
 
     /// The dedup keys on the statement, not on the span: two linked files
