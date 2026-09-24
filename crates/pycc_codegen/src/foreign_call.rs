@@ -362,12 +362,14 @@ pub(super) fn emit_call<'ctx>(
 /// Marshals `args` and calls `callee` *itself* (#1313), yielding the call's
 /// result as an opaque [`Scalar::Object`].
 ///
-/// `callee` is the already-evaluated foreign binding -- a `MirExpr::Name`
-/// read of a module global, which is a *borrow* (`lib.rs`'s `Ty::Object`
-/// load arm). It therefore goes to [`EXT_OBJ_CALL_BORROWED_SYMBOL`], which
-/// takes its own reference before delegating to `pycc_ext_obj_call`;
-/// passing the global straight to [`emit_call`]'s consuming helper would
-/// release the artifact's only reference on the first call. The packed
+/// `callee` is the already-evaluated `object`-typed name -- a
+/// `MirExpr::Name` read, which is a *borrow* of a reference the caller
+/// keeps (a retained module global, or a `for` loop target's slot;
+/// `lib.rs`'s `Ty::Object` load arm). It therefore goes to
+/// [`EXT_OBJ_CALL_BORROWED_SYMBOL`], which takes its own reference before
+/// delegating to the consuming `pycc_ext_obj_call`; passing the callee
+/// straight to [`emit_call`]'s consuming helper would release the caller's
+/// reference on the first call. The packed
 /// arguments are consumed on every path, exactly as for a method call.
 pub(super) fn emit_call_borrowed<'ctx>(
     context: &'ctx Context,

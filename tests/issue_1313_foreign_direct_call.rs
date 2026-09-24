@@ -90,12 +90,15 @@ fn check_accepts_a_module_body_direct_call() {
 
 /// The admission is by type, not provenance: a `for` loop target bound to
 /// a CPython object is callable in the loop body like a foreign binding.
-/// `sys.meta_path` holds the importer classes, each callable with no
-/// arguments.
-const LOOP_TARGET: &str = "import sys\n\
+/// `OrderedDict.__mro__` is fixed by CPython itself -- `OrderedDict`,
+/// `dict`, `object`, each callable with no arguments -- so the output does
+/// not depend on the host's site configuration the way an iterable such
+/// as `sys.meta_path` would (a `.pth`-installed finder instance is not
+/// callable).
+const LOOP_TARGET: &str = "from collections import OrderedDict\n\
     n = 0\n\
-    for f in sys.meta_path:\n    f()\n    n = n + 1\n\
-    print(n > 0)\n";
+    for c in OrderedDict.__mro__:\n    c()\n    n = n + 1\n\
+    print(n)\n";
 
 #[test]
 fn check_accepts_a_call_of_a_foreign_loop_target() {
@@ -262,7 +265,7 @@ fn a_call_of_a_foreign_loop_target_runs_like_cpython_in_the_host() {
         "pycc_obj_call_loop_target_mod",
         LOOP_TARGET,
     );
-    assert_eq!(out, "True\nno error\n");
+    assert_eq!(out, "3\nno error\n");
 }
 
 /// A raising call surfaces CPython's own exception from the import.

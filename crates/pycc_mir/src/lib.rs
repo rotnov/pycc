@@ -401,13 +401,15 @@ pub enum MirExpr {
         method: String,
         args: Vec<MirExpr>,
     },
-    /// `callee(args)` where `callee` is itself a foreign CPython binding
-    /// (#1313) -- `product("ab", "cd")` after `from itertools import
-    /// product` -- the direct-call sibling of [`MirExpr::ObjMethodCall`]
-    /// directly above. `callee` is a plain [`MirExpr::Name`] read of the
-    /// foreign module global, which codegen loads as a *borrow*; the shim's
-    /// `pycc_ext_obj_call_borrowed` therefore takes its own reference before
-    /// the vectorcall rather than consuming the global's.
+    /// `callee(args)` where `callee` is any name typed `Ty::Object` (#1313)
+    /// -- `product("ab", "cd")` after `from itertools import product`, or a
+    /// call of a `for` loop target bound to an object -- the direct-call
+    /// sibling of [`MirExpr::ObjMethodCall`] directly above. `callee` is a
+    /// plain [`MirExpr::Name`] read, which codegen loads as a *borrow* of a
+    /// reference the caller keeps (a retained module global, or a `for`
+    /// loop target's slot); the shim's `pycc_ext_obj_call_borrowed`
+    /// therefore takes its own reference before delegating to the consuming
+    /// `pycc_ext_obj_call`.
     ///
     /// `args` are already-checked scalars under the method call's rule
     /// (`pycc_types`' `check_object_call_args`). The call can fail -- the

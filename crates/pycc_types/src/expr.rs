@@ -321,8 +321,9 @@ pub(crate) fn infer_expr_in(
             if let Some(ty) = env.lookup(callee)
                 && !env.def_rebound.contains(callee)
             {
-                // #1313: a direct call of a foreign binding in a module
-                // body is an `object` producer under the method call's
+                // #1313: a direct call of an `object`-typed name (a foreign
+                // binding or a `for` loop target) in a module body is an
+                // `object` producer under the method call's
                 // positional-scalar argument rule (`crate::foreign`'s module
                 // doc). `lookup` answers `None` for a maybe-bound name, so a
                 // one-arm-`if` import falls through to the `T0041` below.

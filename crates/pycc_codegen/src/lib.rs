@@ -3733,11 +3733,13 @@ fn emit_expr_unchecked<'ctx>(
                 .collect();
             foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
         }
-        // #1313: `callee(args)` on a foreign binding. CPython's order --
-        // the callee, then each argument left to right -- and no lookup
-        // step: the callee is the module global itself, read as a borrow,
-        // which is why `foreign_call::emit_call_borrowed` hands it to the
-        // shim helper that takes its own reference.
+        // #1313: `callee(args)` on an `object`-typed name (a foreign
+        // binding or a `for` loop target). CPython's order -- the callee,
+        // then each argument left to right -- and no lookup step: the
+        // callee is read as a borrow of a reference the caller keeps (a
+        // retained module global, or the loop target's slot), which is why
+        // `foreign_call::emit_call_borrowed` hands it to the shim helper
+        // that takes its own reference.
         MirExpr::ObjCall { callee, args } => {
             let callee_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, callee);

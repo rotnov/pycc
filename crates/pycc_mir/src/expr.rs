@@ -73,11 +73,18 @@ pub(super) fn lower_expr(
             // admission is by type, not provenance -- the same rule
             // `ObjAttrGet`/`ObjMethodCall` follow -- so it covers both a
             // foreign binding and a `ForObject` loop target
-            // (`for f in o.attr:` then `f(1)`). That is sound because the
-            // shadowing rule (`crates/pycc_hir/src/import/shadow.rs`; see
-            // the eager foreign bind in `build`, `lib.rs`) keeps any other
-            // top-level binding off a foreign name, so a name typed
-            // `object` here is one the checker admitted as such. Checked
+            // (`for f in o.attr:` then `f(1)`). That is sound for both
+            // provenances. For a foreign binding, the shadowing rule
+            // (`crates/pycc_hir/src/import/shadow.rs`; see the eager foreign
+            // bind in `build`, `lib.rs`) keeps any other top-level binding
+            // off a foreign name. For a loop target, `pycc_types`'
+            // `HirStmt::ForObject` arm (`crates/pycc_types/src/lib.rs`)
+            // refuses a target already bound to another type with `T0023`,
+            // binds it `object` through `Environment::bind`, and downgrades
+            // a newly introduced target to maybe-bound after the loop, so a
+            // post-loop call is refused as `T0041` before this arm. Either
+            // way a name typed `object` here is one the checker admitted as
+            // such. Checked
             // first, mirroring `pycc_types`' callee-first gate, so no
             // builtin interception below can claim a foreign name that
             // happens to spell one. The probe is non-panicking (`lookup`

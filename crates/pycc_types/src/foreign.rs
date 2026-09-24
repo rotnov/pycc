@@ -184,8 +184,9 @@
 //! in-function arm gains no branch at all: the read of the foreign name is
 //! already `I0404` there, which PR 4c's own test pins.
 //!
-//! **#1313 added a direct call of a foreign binding** (`product("ab")`
-//! after `from itertools import product`). `expr::infer_expr_in`'s
+//! **#1313 added a direct call of an `object`-typed name** (`product("ab")`
+//! after `from itertools import product`, or a call of a `for` loop target
+//! bound to an object). `expr::infer_expr_in`'s
 //! `HirExpr::Call` arm answers [`Ty::Object`] for a callee bound to
 //! [`Ty::Object`] in a module body, under the same positional-scalar
 //! argument rule as a method call ([`check_object_call_args`]); the
@@ -268,7 +269,7 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
 ///
 /// The one statement of the argument rule both object-call shapes share: a
 /// method call (`o.method(args)`, PR 2b of #1081, `what` = `"method"`) and
-/// a direct call of a foreign binding (`product(args)`, #1313, `what` =
+/// a direct call of an `object`-typed name (`product(args)`, #1313, `what` =
 /// `"call"`). Anything else -- a container, an instance, `None`, or a
 /// second `Ty::Object` -- has no boundary representation yet and is
 /// refused here rather than reaching codegen, naming the first offending

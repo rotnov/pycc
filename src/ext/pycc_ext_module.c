@@ -1417,13 +1417,15 @@ PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
 
 /*
  * #1313: call `callee` itself -- `product(1, 2)` where `product` is a
- * foreign binding -- rather than a method looked up on it
- * (`EXT_OBJ_CALL_BORROWED_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ * foreign binding, or a call of a `for` loop target bound to an object --
+ * rather than a method looked up on it (`EXT_OBJ_CALL_BORROWED_SYMBOL` in
+ * `crates/pycc_codegen/src/ext.rs`).
  *
- * `callee` is BORROWED: it is a module global the artifact retains for its
- * whole lifetime, not a fresh reference like the bound method
- * `pycc_ext_obj_call` consumes, so handing it to that helper directly would
- * drop the global's only reference on the first call. The extra reference
+ * `callee` is BORROWED: it is a reference the caller keeps (a module global
+ * the artifact retains, or a `for` loop target's slot), not a fresh
+ * reference like the bound method `pycc_ext_obj_call` consumes, so handing
+ * it to that helper directly would drop the caller's reference on the first
+ * call. The extra reference
  * taken here is the one `pycc_ext_obj_call` then releases, which keeps a
  * single implementation of the packed-argument scan and the vectorcall.
  *

@@ -921,9 +921,9 @@ loop target bound to one). There is no method to resolve, so codegen loads
 the name's storage and hands it, with the packed arguments, to
 `pycc_ext_obj_call_borrowed`. That helper takes one extra
 reference on the callee and delegates to `pycc_ext_obj_call`, which consumes
-it — so the module global keeps its own reference across any number of calls,
-where passing the global straight to the consuming helper would release it
-once per call. Its result, its argument slots and its `NULL` failure edge are
+it — so the caller's reference (the retained module global, or the `for` loop
+target's slot) survives any number of calls, where passing the callee straight
+to the consuming helper would release it once per call. Its result, its argument slots and its `NULL` failure edge are
 exactly the method call's, and it inherits the same module-body-only bound
 ([#1316](https://github.com/rotnov/pycc/issues/1316) tracks function bodies).
 Because the packers are shared, a run-time packing failure reads the same for

@@ -114,7 +114,7 @@ fn a_direct_call_can_set_an_exception() {
 /// through a direct call: `pycc_mir` builds `ObjCall` only over a
 /// `Ty::Object` callee, and the panic text names that node.
 #[test]
-#[should_panic(expected = "`ObjCall` only for a `Ty::Object` base or callee")]
+#[should_panic(expected = "did not evaluate to a CPython object")]
 fn a_non_object_callee_is_an_internal_error() {
     entry_ir(
         "foreign_direct_call_bad_callee",
