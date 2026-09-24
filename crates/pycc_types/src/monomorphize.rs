@@ -2283,11 +2283,13 @@ fn remap_foreign_import_positions(
             ImportBinding::Foreign {
                 local_name,
                 module_path,
+                from,
                 site,
                 span,
             } => ImportBinding::Foreign {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
+                from: from.clone(),
                 // A block import has no item position (#1291).
                 site: match site {
                     ForeignImportSite::Item(index) => ForeignImportSite::Item(

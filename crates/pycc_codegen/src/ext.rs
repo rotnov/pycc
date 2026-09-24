@@ -116,6 +116,16 @@ pub const EXT_THUNK_PREFIX: &str = "pycc_ext_thunk_";
 /// error. One constant, referenced by both sides, makes that impossible.
 pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 
+/// The fixed C shim's from-import helper (#1278): `PyObject
+/// *pycc_ext_obj_import_from(const char *module, const char *const
+/// *fromlist, long long nfrom, long long index)` runs CPython's
+/// `IMPORT_NAME` with the statement's whole fromlist, then `IMPORT_FROM` of
+/// `fromlist[index]`, and returns a *new* reference to that object, or
+/// `NULL` with the CPython exception (an `ImportError` for a missing name)
+/// already set. Spelled once here for exactly the reason
+/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
+
 /// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called
 /// on the `NULL` edge of a foreign import nested in a module-level
 /// `if`/`try` block, it returns `1` after translating CPython's pending

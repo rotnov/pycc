@@ -37,7 +37,7 @@ No new HIR, MIR, type, or codegen node exists for `__name__`: the seed is an ord
 | `time`, `datetime` | v0.4 | |
 | `json` | v0.4 | serde-grade native perf |
 | `collections` (`deque`, `Counter`, `defaultdict`, `namedtuple`) | v0.4 | |
-| `itertools`, `functools` (`partial`, `reduce`, `lru_cache`, `cache`) | v0.5 | |
+| `itertools`, `functools` (`partial`, `reduce`, `lru_cache`, `cache`) | v0.5 | **`itertools` is deliberately unregistered today.** `import itertools` and, since [#1278](https://github.com/rotnov/pycc/issues/1278), `from itertools import product` reach CPython's own module through the foreign-import channel ([RUNTIME.md](RUNTIME.md), "Foreign imports in the module body"). HIR never asks the driver about a module `pycc_std` registers, so registering `itertools` would pull both spellings off that channel: every `itertools.<name>` the registry lacked would become `C0002`, and D-136 forbids registering a symbol with no lowering. A future native registration must therefore decide, as part of its own change, what happens to programs that use the foreign form today. |
 | `io`, `struct`, `csv` | v0.5 | |
 | `re` | v0.5 | `regex` crate engine; documented deviation list vs `sre` |
 | `random`, `secrets`, `hashlib`, `base64`, `uuid` | v0.6 | |

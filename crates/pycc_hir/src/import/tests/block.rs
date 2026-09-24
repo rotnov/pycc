@@ -126,6 +126,7 @@ fn an_import_in_an_if_body_lowers_to_a_foreign_import_node() {
         vec![ImportBinding::Foreign {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
+            from: None,
             site: ForeignImportSite::Block,
             span: statement,
         }]

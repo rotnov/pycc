@@ -862,6 +862,7 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: crate::ForeignImportSite::Item(0),
             span: Span::new(0, "import numpy".len() as u32),
         }]
@@ -888,6 +889,7 @@ fn an_aliased_foreign_import_lowers_and_still_poisons_its_alias() {
         vec![ImportBinding::Foreign {
             local_name: "np".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: crate::ForeignImportSite::Item(0),
             span: Span::new(0, "import numpy as np".len() as u32),
         }]
