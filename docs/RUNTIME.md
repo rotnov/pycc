@@ -1201,8 +1201,12 @@ owns the contract; this is the runtime view of it.
   so the loader finds it already loaded when an extension module asks for
   it. An interpreter image needing anything else is refused as not
   relocatable. A Linux `DT_NEEDED` that resolves nowhere on the build host
-  is left to the target's loader. macOS refuses a relative reference
-  outside a closure image's own payload (#1259).
+  is left to the target's loader when an image loaded on import needs it,
+  and refused when a copied library needs it, since the executable loads
+  those at start-up. On Linux a closure image's dependency that resolves
+  through `$ORIGIN` to another image of the closure's payload is kept.
+  macOS refuses a relative reference outside a closure image's own payload
+  (#1259).
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

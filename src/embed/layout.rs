@@ -21,7 +21,9 @@ pub(crate) enum EmbedPlatform {
 
 impl EmbedPlatform {
     /// The platform of a host whose `std::env::consts::OS` is `os`, among
-    /// the hosts an embedded build or `pycc lock` runs on.
+    /// the hosts an embedded build or `pycc lock` runs on. Any other host
+    /// (Windows included) folds into Linux here; the embedded build and
+    /// `pycc lock` both refuse Windows before they get this far (#1226).
     pub(crate) fn for_os(os: &str) -> Self {
         if os == "macos" {
             Self::MacOs

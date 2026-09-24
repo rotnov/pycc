@@ -469,3 +469,52 @@ fn the_loader_cache_comes_from_the_first_ldconfig_that_succeeds() {
     let plan = fx.plan(false).expect("planned");
     assert_eq!(names(&plan), ["libcache.so.1"]);
 }
+
+/// A copied library is loaded at start-up, so a dependency of it that does
+/// not resolve is refused naming it; the same dependency of an image loaded
+/// on import is left to the loader.
+#[test]
+fn a_copied_library_with_an_unresolved_dependency_is_refused() {
+    let mut fx = Fixture::new("native_linux_unresolved");
+    let outside = fx.outside();
+    fx.image(
+        "pa/_a.so",
+        "pa",
+        &ElfSpec::module(&["libnope.so.1"]).runpath(&outside),
+    );
+    assert!(fx.plan(false).expect("planned").natives.is_empty());
+    fx.write(
+        "outside/libnat1.so.1",
+        &ElfSpec::library("libnat1.so.1", &["libnope.so.1"]),
+    );
+    fx.image(
+        "pa/_b.so",
+        "pa",
+        &ElfSpec::module(&["libnat1.so.1"]).runpath(&outside),
+    );
+    let err = fx.plan(false).expect_err("refused");
+    assert!(
+        err.contains("the native library `lib/libnat1.so.1`"),
+        "{err}"
+    );
+    assert!(err.contains("needs `libnope.so.1`"), "{err}");
+    assert!(err.contains("does not resolve on this machine"), "{err}");
+
+    // A library vendored from the prefix is held to the same rule.
+    let fx = Fixture::new("native_linux_unresolved_prefix");
+    let rpath = fx.layout.prefix.join("lib").display().to_string();
+    fx.write(
+        "prefix/lib/libz.so.1",
+        &ElfSpec::library("libz.so.1", &["libnope.so.1"]),
+    );
+    let zlib = ElfSpec::module(&["libz.so.1"]).runpath(&rpath);
+    std::fs::write(
+        fx.layout
+            .dynload()
+            .join("zlib.cpython-314-x86_64-linux-gnu.so"),
+        elf_bytes(&zlib),
+    )
+    .unwrap();
+    let err = fx.plan(true).expect_err("refused");
+    assert!(err.contains("`libz.so.1` needs `libnope.so.1`"), "{err}");
+}

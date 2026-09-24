@@ -77,11 +77,13 @@ enum Kind {
 }
 
 /// One image to scan: the path it was found at (which `$ORIGIN` expands
-/// from), what it is, and the distribution it is scanned for.
+/// from), what it is, the distribution it is scanned for, and whether the
+/// build copies it into `lib/` (so the executable loads it at start-up).
 struct Node {
     path: PathBuf,
     kind: Kind,
     owner: Option<String>,
+    preloaded: bool,
 }
 
 impl Node {
@@ -153,6 +155,7 @@ pub(crate) fn plan(
             path: source_library,
             kind: Kind::Interpreter(bundled_name),
             owner: None,
+            preloaded: false,
         });
         let dynload = probe.stdlib.join("lib-dynload");
         // An interpreter without a `lib-dynload` directory contributes no
@@ -172,6 +175,7 @@ pub(crate) fn plan(
                 path: dynload.join(&name),
                 kind: Kind::Interpreter(format!("{stdlib}/lib-dynload/{name}")),
                 owner: None,
+                preloaded: false,
             });
         }
     }
@@ -182,6 +186,7 @@ pub(crate) fn plan(
                 path: file.source.clone(),
                 kind: Kind::Closure(file.rel.clone()),
                 owner: Some(file.package.clone()),
+                preloaded: false,
             });
         }
     }
@@ -207,8 +212,19 @@ impl Walk<'_> {
         };
         for needed in &image.needed {
             let Some((found, via_origin, dep)) = self.resolve(needed, &image, &node.path) else {
-                // Left to the loader, which fails on the target exactly as
-                // it would here.
+                if node.preloaded {
+                    // The executable loads a copied library at start-up,
+                    // so a dependency it cannot resolve would stop every
+                    // run, not one import.
+                    return Err(format!(
+                        "{} needs `{needed}`, which does not resolve on this machine; pycc \
+                         copies it into the bundle's `lib/` and loads it at start-up, so \
+                         every dependency it has must resolve",
+                        node.describe()
+                    ));
+                }
+                // An image loaded on import: left to the loader, which
+                // fails on the target exactly as it would here.
                 continue;
             };
             let canonical = resolved(&found);
@@ -361,7 +377,12 @@ impl Walk<'_> {
         self.vendor
             .insert(needed.to_string(), canonical.to_path_buf());
         let path = canonical.to_path_buf();
-        self.pending.push(Node { path, kind, owner });
+        self.pending.push(Node {
+            path,
+            kind,
+            owner,
+            preloaded: true,
+        });
         Ok(())
     }
 

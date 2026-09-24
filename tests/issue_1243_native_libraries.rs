@@ -97,7 +97,8 @@ fn query(python: &Path, code: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-/// Compiles `source` into the shared library `out`, linking `libs`.
+/// Compiles `source` into the shared library `out`, linking `libs`, which
+/// it finds at run time in their own directories.
 fn compile(out: &Path, source: &str, extra: &[&str], libs: &[&Path]) {
     let c = out.with_extension("c");
     write(&c, source.as_bytes());
@@ -108,8 +109,11 @@ fn compile(out: &Path, source: &str, extra: &[&str], libs: &[&Path]) {
     } else {
         let name = out.file_name().expect("a name").to_string_lossy();
         command.arg(format!("-Wl,-soname,{name}"));
-        let dir = out.parent().expect("a parent").display().to_string();
-        command.arg(format!("-Wl,-rpath,{dir}"));
+        // Each linked library resolves from its own directory.
+        for lib in libs {
+            let dir = lib.parent().expect("a parent").display().to_string();
+            command.arg(format!("-Wl,-rpath,{dir}"));
+        }
     }
     command.args(extra).args(libs);
     let output = command.output().expect("spawn cc");
