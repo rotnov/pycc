@@ -24,7 +24,10 @@ import builds an **embedded executable** on a macOS or Linux host without
 plus an `OUT.pycc/` sidecar directory holding the embed interpreter's shared
 library and filtered standard library and, when the program imports a root
 outside the standard library, the dependency closure `pycc.lock` records,
-copied into `OUT.pycc/closure/` (#1242; see "`pycc.lock`" below). The two move
+copied into `OUT.pycc/closure/` (#1242; see "`pycc.lock`" below). With
+`--static-libpython` or `[build] static = true`, the executable links
+libpython statically instead and the sidecar holds no copy of it (D-251; see
+`--static-libpython` below). The two move
 together and must keep their names; D-248 owns the layout, the `PYCC-BUNDLE`
 marker, and the rule that an existing `OUT.pycc` without that marker is never
 replaced (exit 2). An embedded build refuses an `OUT` file name containing `$`
@@ -262,6 +265,31 @@ directory once project mode exists.
                     Conflicts with `--interop-policy` and
                     `--pure` (exit 2, D-244 rule 3); will conflict with
                     `--lib` once that flag exists.
+--static-libpython  embedded build only: link libpython into the executable
+                    from the embed interpreter's static archive
+                    (`sysconfig` `LIBPL/LIBRARY`, e.g.
+                    `libpython3.14.a`) instead of bundling its shared
+                    library, and export its C-API symbols so the bundled
+                    `lib-dynload` modules resolve against the executable
+                    (D-251, Part 1 of #1227). The archive must be a
+                    regular `ar` archive -- a missing file, a thin archive,
+                    or a file that is not an archive (such as a
+                    `libpython3.14.a` symlink to the shared library) is
+                    exit 2 -- and a bundled image that needs a shared
+                    libpython is refused (exit 2). A build that consumes a
+                    `pycc.lock` section is refused at exit 2 until #1272.
+                    The sidecar keeps the standard library, and its marker
+                    records the archive's digest and `libpython-link
+                    static`. No explicit flag falls back to a neighboring
+                    pycc.toml's `[build] static = true`. A build that
+                    embeds no interpreter (native, `--pure`, `--target`)
+                    ignores it; `--ext` rejects it (exit 2); `run` has no
+                    such flag and always links the shared library.
+                    Force-loading makes every archive member's own
+                    dependencies mandatory: an archive whose built-in
+                    modules need libraries outside `LIBS`/`SYSLIBS`, or a
+                    non-PIC archive in a PIE link, fails in the linker
+                    (exit 1).
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
 --interop-policy auto|allowlist|deny
                     embedded-mode policy for CPython-backed imports in
@@ -402,7 +430,9 @@ are all standard-library roots), `PYCC_PYTHON` names the interpreter to embed
 and defaults to `python3.14`, because D-128 pins CPython 3.14.
 `PYCC_PYTHON_INCLUDE` has no effect there. The interpreter must be a shared,
 non-free-threaded CPython 3.14.x with its headers, shared library and
-standard library present, and every native library its libpython and
+standard library present (a `--static-libpython` build instead needs its
+static archive at `LIBPL` and accepts an interpreter built without a shared
+library, D-251), and every native library its libpython and
 `lib-dynload` modules link must be a system library or lie under its own
 prefix (on Linux, too, since #1243); each failure is an environment failure
 at exit 2 naming the reason (D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
@@ -424,7 +454,7 @@ python = "3.14"          # language level; only 3.14 in v1
 [build]
 opt = "release"          # default profile for `pycc build`
 targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
-static = true
+static = false           # `true` links libpython statically into an embedded executable; needs the interpreter's `LIBPL/libpython3.14.a` (D-251)
 
 [interop]
 policy = "allowlist"      # "auto" (default), "allowlist", or "deny"
@@ -433,6 +463,15 @@ allow = ["numpy", "requests"]   # direct import roots; used only by "allowlist"
 [test]
 paths = ["tests/"]
 ```
+
+`[build] static` means "statically link every library the artifact would
+otherwise load dynamically, where pycc supports it" (D-251). Today that is
+exactly libpython in an embedded `pycc build`, the same as
+`--static-libpython`; a native artifact, `--ext` and `pycc run` ignore it, and
+an absent key keeps each artifact's own default. `true` makes every embedded
+build need the interpreter's static archive, so a copied manifest that sets it
+turns a missing archive into an exit-2 refusal that names both the key and the
+flag.
 
 The `[interop]` table and both interop CLI flags are implemented (#1224),
 and everything in this section describes the **embedded** mode only: an

@@ -407,6 +407,7 @@ fn a_failed_assembly_removes_its_staging_directory() {
         false,
         None,
         &native::NativePlan::default(),
+        None,
     )
     .expect_err("no library");
     assert!(message.contains("could not read"), "{message}");
@@ -432,6 +433,7 @@ fn a_failed_replacement_removes_its_staging_directory() {
         true,
         None,
         &native::NativePlan::default(),
+        None,
     )
     .expect_err("nothing to move aside");
     assert!(message.contains("could not move aside"), "{message}");
@@ -504,3 +506,6 @@ mod macos_tests;
 
 #[path = "lock_tests.rs"]
 mod lock_tests;
+
+#[path = "static_embed_tests.rs"]
+mod static_embed_tests;

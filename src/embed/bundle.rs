@@ -14,7 +14,8 @@ use super::layout::{self, EmbedPlatform};
 use super::macho::{self, MachoDep};
 use super::macho_host::{HostContext, HostImage, HostKind, classify_on_host};
 use super::native::{self, MachoImage, NativePlan, Natives};
-use super::sha256::sha256_hex;
+use super::sha256::{sha256_file, sha256_hex};
+use super::static_lib::{self, StaticProbe};
 use crate::lock::build::LockedClosure;
 use crate::lock::schema::LockedNative;
 use std::ffi::OsString;
@@ -50,6 +51,9 @@ pub(crate) fn check_existing(sidecar: &Path) -> Result<bool, String> {
 /// path, which the link step names by file. `locked` is the consumed
 /// `pycc.lock` section's closure, when the build has one (#1242), and
 /// `natives` what the build copies into `lib/` besides libpython (#1243).
+/// `static_lib` is a static build's archive (D-251): nothing is bundled in
+/// libpython's place, and the returned path names no file.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble(
     probe: &EmbedProbe,
     platform: EmbedPlatform,
@@ -58,12 +62,13 @@ pub(crate) fn assemble(
     replace_existing: bool,
     locked: Option<&LockedClosure>,
     natives: &NativePlan,
+    static_lib: Option<&StaticProbe>,
 ) -> Result<PathBuf, String> {
     let pid = std::process::id();
     let sidecar = parent.join(sidecar_name);
     let staging = parent.join(format!("{sidecar_name}.tmp-{pid}"));
     std::fs::create_dir(&staging).map_err(|e| io_error("create", &staging, &e))?;
-    if let Err(e) = populate(probe, platform, &staging, locked, natives) {
+    if let Err(e) = populate(probe, platform, &staging, locked, natives, static_lib) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e);
     }
@@ -123,32 +128,31 @@ pub(crate) fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String 
 /// Fills `staging` with the library, the filtered standard library, the
 /// locked closure, the Linux vendored libraries or the macOS relocation,
 /// and last the marker. The library's digest is taken once, before
-/// relocation, for the marker and for the lock's `libpython-sha256`.
+/// relocation, for the marker and for the lock's `libpython-sha256`. A
+/// static build writes no library and records the archive's digest.
 fn populate(
     probe: &EmbedProbe,
     platform: EmbedPlatform,
     staging: &Path,
     locked: Option<&LockedClosure>,
     natives: &NativePlan,
+    static_lib: Option<&StaticProbe>,
 ) -> Result<(), String> {
     let lib_dir = staging.join("lib");
     std::fs::create_dir(&lib_dir).map_err(|e| io_error("create", &lib_dir, &e))?;
     let source = layout::source_library(probe);
-    let bytes = std::fs::read(&source).map_err(|e| io_error("read", &source, &e))?;
-    let digest = sha256_hex(&bytes);
-    if let Some(locked) = locked {
-        let fields = [(
-            "libpython-sha256",
-            locked.libpython_sha256.as_str(),
-            digest.as_str(),
-        )];
-        if let Some(difference) = crate::lock::field_difference(&fields) {
-            return Err(locked.stale(&difference));
-        }
-    }
     let bundled_name = layout::bundled_library_name(platform, probe);
-    let bundled = lib_dir.join(&bundled_name);
-    std::fs::write(&bundled, &bytes).map_err(|e| io_error("write", &bundled, &e))?;
+    let (digest, link) = match static_lib {
+        Some(static_lib) => {
+            let archive = &static_lib.archive;
+            let digest = sha256_file(archive).map_err(|e| io_error("read", archive, &e))?;
+            (digest, layout::LibpythonLink::Static)
+        }
+        None => {
+            let digest = bundle_library(&source, &lib_dir.join(&bundled_name), locked)?;
+            (digest, layout::LibpythonLink::Shared)
+        }
+    };
     let stdlib = lib_dir.join(layout::stdlib_dir_name(probe));
     copy_stdlib(&probe.stdlib, &stdlib, Path::new(""))?;
     let images = match locked {
@@ -160,11 +164,35 @@ fn populate(
     }
     if platform == EmbedPlatform::MacOs {
         let closure = locked.map(|locked| (locked, images.as_slice()));
-        relocate_macho(probe, &lib_dir, &source, &bundled_name, closure, natives)?;
+        let names = (source.as_path(), bundled_name.as_str());
+        relocate_macho(probe, &lib_dir, names, closure, natives, link)?;
     }
     let marker = staging.join(layout::MARKER_NAME);
-    let text = layout::marker_text(probe, &digest);
+    let text = layout::marker_text(probe, &digest, link);
     std::fs::write(&marker, text).map_err(|e| io_error("write", &marker, &e))
+}
+
+/// Copies the shared library `source` to `bundled` and returns its digest,
+/// after checking it against the lock's `libpython-sha256`.
+fn bundle_library(
+    source: &Path,
+    bundled: &Path,
+    locked: Option<&LockedClosure>,
+) -> Result<String, String> {
+    let bytes = std::fs::read(source).map_err(|e| io_error("read", source, &e))?;
+    let digest = sha256_hex(&bytes);
+    if let Some(locked) = locked {
+        let fields = [(
+            "libpython-sha256",
+            locked.libpython_sha256.as_str(),
+            digest.as_str(),
+        )];
+        if let Some(difference) = crate::lock::field_difference(&fields) {
+            return Err(locked.stale(&difference));
+        }
+    }
+    std::fs::write(bundled, &bytes).map_err(|e| io_error("write", bundled, &e))?;
+    Ok(digest)
 }
 
 /// Copies `from/rel` into `to/rel`, recursively, skipping what
@@ -248,24 +276,38 @@ enum Image {
 /// re-signing every image it rewrote. A closure image keeps its own id. A
 /// native is vendored only when `natives` lists it, from bytes that still
 /// match its lock entry.
+///
+/// A static build (D-251) bundles no libpython, so the walk starts at the
+/// extensions, and any dependency on a shared libpython is refused: by its
+/// name first, then by resolving to the source library under another name.
 fn relocate_macho(
     probe: &EmbedProbe,
     lib_dir: &Path,
-    source: &Path,
-    bundled_name: &str,
+    (source, bundled_name): (&Path, &str),
     closure: Option<(&LockedClosure, &[String])>,
     natives: &NativePlan,
+    link: layout::LibpythonLink,
 ) -> Result<(), String> {
+    let is_static = link == layout::LibpythonLink::Static;
     let bundled = lib_dir.join(bundled_name);
-    let bundle_lib = native::macho_bundle_lib(&bundled, source)?;
     let prefix = native::canonical_prefix(probe);
-    let bundled_id = format!("@rpath/{bundled_name}");
-    let set_id = macho::set_id_args(&bundled_id, &bundled);
-    run_tool("install_name_tool", &set_id)?;
-    let mut worklist = vec![Image::Lib {
-        rel: PathBuf::from(bundled_name),
-        id: Some(bundled_id),
-    }];
+    let mut worklist = Vec::new();
+    let bundle_lib: Vec<PathBuf> = if !is_static {
+        let bundle_lib = native::macho_bundle_lib(&bundled, source)?;
+        let bundled_id = format!("@rpath/{bundled_name}");
+        let set_id = macho::set_id_args(&bundled_id, &bundled);
+        run_tool("install_name_tool", &set_id)?;
+        worklist.push(Image::Lib {
+            rel: PathBuf::from(bundled_name),
+            id: Some(bundled_id),
+        });
+        bundle_lib.to_vec()
+    } else if source.is_file() && macho::is_macho_header(&native::read_head(source)?) {
+        // A static build's interpreter may also ship the shared library.
+        native::macho_bundle_lib(source, source)?.to_vec()
+    } else {
+        Vec::new()
+    };
     let dynload = PathBuf::from(layout::stdlib_dir_name(probe)).join("lib-dynload");
     // An interpreter without a `lib-dynload` directory contributes no
     // extension images, so a failed listing is an empty one.
@@ -330,6 +372,10 @@ fn relocate_macho(
         // libpython and every vendored image had their id rewritten already.
         let mut rewritten = !matches!(&image, Image::Lib { id: None, .. } | Image::Closure { .. });
         for dep in &facts.deps {
+            if is_static && static_lib::names_libpython(dep, probe.version) {
+                let image = describe(&image, locked);
+                return Err(static_lib::second_libpython(&image, dep));
+            }
             let class = match &host {
                 Some((sidecar_rel, kind, source_dir)) => {
                     let host_image = HostImage {
@@ -359,6 +405,10 @@ fn relocate_macho(
             };
             let (from, locked_native) = match class {
                 MachoDep::Keep => continue,
+                MachoDep::RewriteToBundled if is_static => {
+                    let image = describe(&image, locked);
+                    return Err(static_lib::second_libpython(&image, dep));
+                }
                 MachoDep::RewriteToBundled | MachoDep::Rebind(_) => {
                     let new = match class {
                         MachoDep::Rebind(new) => new,

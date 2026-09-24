@@ -91,7 +91,15 @@ fn a_macos_closure_without_images_has_no_natives() {
     let layout = fake_layout(&dir);
     let env = LinuxEnv::host();
     let platform = EmbedPlatform::MacOs;
-    let plan = plan_natives(platform, &layout.probe, None, &env, true).expect("empty");
+    let plan = plan_natives(
+        platform,
+        &layout.probe,
+        None,
+        &env,
+        true,
+        LibpythonLink::Shared,
+    )
+    .expect("empty");
     assert!(plan.natives.is_empty() && plan.linux_vendor.is_empty());
     let source = file(&dir, "mod.py", "X = 1\n");
     let files = vec![ClosureFile {
@@ -101,7 +109,14 @@ fn a_macos_closure_without_images_has_no_natives() {
         package: "p".to_string(),
     }];
     let closure = LockedClosure::of_files(files);
-    let plan = plan_natives(platform, &layout.probe, Some(&closure), &env, false);
+    let plan = plan_natives(
+        platform,
+        &layout.probe,
+        Some(&closure),
+        &env,
+        false,
+        LibpythonLink::Shared,
+    );
     assert!(plan.expect("no images").natives.is_empty());
     let files = vec![ClosureFile {
         rel: "p/gone.so".to_string(),
@@ -110,7 +125,14 @@ fn a_macos_closure_without_images_has_no_natives() {
         package: "p".to_string(),
     }];
     let closure = LockedClosure::of_files(files);
-    let err = plan_natives(platform, &layout.probe, Some(&closure), &env, false);
+    let err = plan_natives(
+        platform,
+        &layout.probe,
+        Some(&closure),
+        &env,
+        false,
+        LibpythonLink::Shared,
+    );
     assert!(err.expect_err("unreadable").contains("could not read"));
 }
 

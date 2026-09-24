@@ -233,6 +233,20 @@ fn a_missing_lock_is_refused_before_the_interpreter_is_probed() {
     env.assert_previous_sidecar_intact();
 }
 
+/// A static build does not consume a lock section yet (#1272): refused
+/// before the interpreter is even probed, with the previous sidecar kept.
+#[test]
+fn a_static_build_that_consumes_a_lock_is_refused_before_the_probe() {
+    let env = Env::new("embed_lock_static", "import json\n");
+    env.lock();
+    env.previous_sidecar();
+    let toolchain = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python")
+        .with_link(LibpythonLink::Static);
+    let err = env.embed_with(&toolchain).unwrap_err();
+    assert_eq!(err, static_lib::closure_refusal());
+    env.assert_previous_sidecar_intact();
+}
+
 #[test]
 fn a_payload_file_edited_after_the_lock_is_refused_and_the_old_sidecar_kept() {
     let env = Env::new("embed_lock_edited", "import tinypkg\n");

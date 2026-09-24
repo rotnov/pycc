@@ -16,7 +16,7 @@
 use super::EmbedProbe;
 use super::bundle::{io_error, run_tool};
 use super::closure::CLOSURE_DIR;
-use super::layout::{self, EmbedPlatform};
+use super::layout::{self, EmbedPlatform, LibpythonLink};
 use super::macho::{self, MachoDep};
 use super::macho_host::{HostContext, HostImage, HostKind, classify_on_host};
 use super::native_linux::{self, LinuxEnv};
@@ -69,13 +69,16 @@ impl NativePlan {
 /// walks the interpreter's own images on Linux (libpython and
 /// `lib-dynload`), which the build needs for their prefix-vendored
 /// libraries and refusals; `pycc lock` walks the closure alone, as on
-/// macOS, where the relocation walks the interpreter's images.
+/// macOS, where the relocation walks the interpreter's images. `link` is
+/// how the executable links libpython (D-251): a static build walks no
+/// libpython and refuses an image that needs one.
 pub(crate) fn plan_natives(
     platform: EmbedPlatform,
     probe: &EmbedProbe,
     closure: Option<&LockedClosure>,
     env: &LinuxEnv,
     interpreter: bool,
+    link: LibpythonLink,
 ) -> Result<NativePlan, String> {
     match platform {
         EmbedPlatform::MacOs => Ok(NativePlan {
@@ -85,7 +88,7 @@ pub(crate) fn plan_natives(
             },
             linux_vendor: Vec::new(),
         }),
-        EmbedPlatform::Linux => native_linux::plan(probe, closure, env, interpreter),
+        EmbedPlatform::Linux => native_linux::plan(probe, closure, env, interpreter, link),
     }
 }
 

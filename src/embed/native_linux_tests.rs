@@ -61,8 +61,18 @@ impl Fixture {
     }
 
     fn plan(&self, interpreter: bool) -> Result<NativePlan, String> {
+        self.plan_linked(interpreter, LibpythonLink::Shared)
+    }
+
+    fn plan_linked(&self, interpreter: bool, link: LibpythonLink) -> Result<NativePlan, String> {
         let closure = LockedClosure::of_files(self.files.clone());
-        plan(&self.layout.probe, Some(&closure), &self.env, interpreter)
+        plan(
+            &self.layout.probe,
+            Some(&closure),
+            &self.env,
+            interpreter,
+            link,
+        )
     }
 }
 
@@ -259,6 +269,61 @@ fn libpython_is_kept_by_its_bundled_name_and_refused_by_any_other() {
     );
     assert!(err.contains("the interpreter's own library"), "{err}");
     assert!(err.contains("`libpython3.14.so.1.0`"), "{err}");
+}
+
+/// A static build (D-251) scans no libpython, and refuses any image that
+/// needs a shared one: by name before resolving it, since a static-only
+/// host may have none to resolve to.
+#[test]
+fn a_static_build_skips_libpython_and_refuses_an_image_that_needs_one() {
+    let fx = Fixture::new("native_linux_static");
+    let static_link = LibpythonLink::Static;
+    let dynload = fx.layout.dynload();
+    let plain = ElfSpec::module(&["libc.so.6"]);
+    let plain_name = "_plain.cpython-314-x86_64-linux-gnu.so";
+    std::fs::write(dynload.join(plain_name), elf_bytes(&plain)).unwrap();
+    let plan = fx.plan_linked(true, static_link).expect("planned");
+    assert!(plan.linux_vendor.is_empty() && plan.natives.is_empty());
+    let needs = ElfSpec::module(&["libc.so.6", "libpython3.14.so.1.0"]);
+    let needs_name = "_json.cpython-314-x86_64-linux-gnu.so";
+    std::fs::write(dynload.join(needs_name), elf_bytes(&needs)).unwrap();
+    let err = fx.plan_linked(true, static_link).expect_err("refused");
+    let image = format!("`python3.14/lib-dynload/{needs_name}`");
+    assert!(err.contains(&image), "{err}");
+    assert!(
+        err.contains("depends on `libpython3.14.so.1.0`, a shared libpython"),
+        "{err}"
+    );
+    assert!(err.contains("links libpython statically"), "{err}");
+}
+
+/// Under a name that does not look like libpython, the source library is
+/// still caught once the name resolves to it.
+#[cfg(unix)]
+#[test]
+fn a_static_build_refuses_the_source_library_under_another_name() {
+    let mut fx = Fixture::new("native_linux_static_alias");
+    let prefix_lib = fx.layout.prefix.join("lib");
+    std::fs::write(
+        fx.layout.library(),
+        elf_bytes(&ElfSpec::library("libpython3.14.dylib", &[])),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(fx.layout.library(), prefix_lib.join("libalias.so")).unwrap();
+    let runpath = prefix_lib.display().to_string();
+    fx.image(
+        "p/_alias.so",
+        "p",
+        &ElfSpec::module(&["libalias.so"]).runpath(&runpath),
+    );
+    let err = fx
+        .plan_linked(false, LibpythonLink::Static)
+        .expect_err("second libpython");
+    assert!(
+        err.starts_with("`closure/p/_alias.so` (distribution `p`) depends on `libalias.so`"),
+        "{err}"
+    );
+    assert!(err.contains("a shared libpython"), "{err}");
 }
 
 #[test]
@@ -541,7 +606,14 @@ fn a_site_directory_library_inside_the_prefix_is_a_native_for_closure_images() {
     fx.image("pa/_a.so", "pa", &module);
     let mut closure = LockedClosure::of_files(fx.files.clone());
     closure.sites = vec![scanned];
-    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    let planned = plan(
+        &fx.layout.probe,
+        Some(&closure),
+        &fx.env,
+        false,
+        LibpythonLink::Shared,
+    )
+    .expect("planned");
     assert_eq!(names(&planned), ["libs.so.1", "libu.so.1"]);
 
     let fx = Fixture::new("native_linux_site_interpreter");
@@ -574,7 +646,14 @@ fn a_payload_file_reached_through_an_absolute_runpath_is_a_native() {
     fx.image("pq/libq.so.1", "pq", &ElfSpec::library("libq.so.1", &[]));
     let mut closure = LockedClosure::of_files(fx.files.clone());
     closure.sites = vec![fx.root.join("site")];
-    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    let planned = plan(
+        &fx.layout.probe,
+        Some(&closure),
+        &fx.env,
+        false,
+        LibpythonLink::Shared,
+    )
+    .expect("planned");
     assert_eq!(names(&planned), ["libq.so.1"]);
     assert_eq!(planned.natives[0].locked.required_by, ["pq"]);
     assert_eq!(vendor_names(&planned), ["libq.so.1"]);
@@ -609,7 +688,14 @@ fn a_site_directory_under_a_system_directory_still_yields_natives() {
     }
     let mut closure = LockedClosure::of_files(fx.files.clone());
     closure.sites = vec![site];
-    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    let planned = plan(
+        &fx.layout.probe,
+        Some(&closure),
+        &fx.env,
+        false,
+        LibpythonLink::Shared,
+    )
+    .expect("planned");
     assert_eq!(names(&planned), ["libd.so.1"]);
     // Only the native is copied: the payload sibling and libc are kept.
     assert_eq!(vendor_names(&planned), ["libd.so.1"]);
