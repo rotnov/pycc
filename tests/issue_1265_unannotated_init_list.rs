@@ -389,3 +389,19 @@ fn a_whole_attribute_rebinding_leaves_the_slot_refused() {
         "{text}"
     );
 }
+
+/// A local alias of `self` in `__init__` is not the receiver: the refusal
+/// names the spelling that established the slot.
+#[test]
+fn a_local_alias_of_self_is_not_named_as_the_receiver() {
+    let text = fails(
+        "e2e_1265_alias",
+        "check",
+        "class Buffer:\n    def __init__(self) -> None:\n        me = self\n        \
+         self.xs = []\n\n\nprint(Buffer())\n",
+    );
+    assert!(
+        text.contains("`self.xs` in class `Buffer`") && !text.contains("me.xs"),
+        "{text}"
+    );
+}

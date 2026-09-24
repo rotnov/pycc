@@ -87,7 +87,9 @@
 //! the class's own methods, then types every `self.<attr> = []`/`{}` in those
 //! methods from the class's slot layout. A provisional slot it cannot
 //! resolve is refused with `T0003` by [`attr_slot::reject_unresolved_attr_slots`].
-//! The unannotated `self.d = {}` stays `C0001` in `pycc_hir`: its producer,
+//! An unannotated `self.d = {}` establishing the attribute in `__init__`
+//! stays `C0001` in `pycc_hir` (a later reset in a method is typed from the
+//! slot like `[]`, or left for `T0003` on a shape mismatch): its producer,
 //! `self.d[k] = v`, is not lowerable yet (#891). D-245's 2026-09-24
 //! amendment for #1265 is the canonical statement.
 //!

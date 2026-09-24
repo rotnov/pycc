@@ -285,9 +285,11 @@ literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An \
 unannotated `self.xs = []` in `__init__` reports it too when no source types \
 the slot: annotate the attribute (`self.xs: list[int] = []`) or append a value \
 to it in one of the class's own methods (`self.xs.append(1)`); a renamed \
-receiver (`def __init__(this)`) is named as written. The unannotated \
-`self.d = {}` and a tuple-unpacking target (`L, R = [], []`) never reach this \
-check: both are rejected earlier with `C0001`. Where a binding \
+receiver (`def __init__(this)`) is named as written. An unannotated \
+`self.d = {}` establishing the attribute in `__init__` and a tuple-unpacking \
+target (`L, R = [], []`) never reach this check: both are rejected earlier \
+with `C0001`. A later `self.d = {}` or `self.xs = {}` reset in another method \
+does reach it when the slot it stores into is not a `dict`. Where a binding \
 name *is* available at a function-scope assignment it is named in the \
 message; a module-level assignment keeps the generic wording, because the \
 substitution is wired into the function-scope seams only. Inside a function \

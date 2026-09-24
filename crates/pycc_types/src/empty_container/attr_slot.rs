@@ -301,10 +301,11 @@ pub(crate) fn reject_unresolved_attr_slots(hir: &HirModule) -> Result<(), KeyedD
     let key = init_item.map_or(DiagnosticKey::Module, |(index, _)| {
         DiagnosticKey::Function(index)
     });
-    // Name the receiver as the source spells it: a renamed receiver (#1181)
-    // cannot be annotated through `self`.
+    // Name the receiver exactly as the establishing `<receiver>.<attr> = []`
+    // spells it: a renamed receiver (#1181) cannot be annotated through
+    // `self`, and a local alias (`me = self`) is not the receiver at all.
     let receiver = init_item
-        .and_then(|(_, body)| receiver_spellings(body).last().copied())
+        .and_then(|(_, body)| establishing_receiver(body, attr))
         .unwrap_or("self");
     let message = format!(
         "an empty list literal has no inferable element type for `{receiver}.{attr}` in class \
@@ -315,6 +316,19 @@ pub(crate) fn reject_unresolved_attr_slots(hir: &HirModule) -> Result<(), KeyedD
          in one of `{class_name}`'s own methods (`{receiver}.{attr}.append(...)`)"
     ));
     Err(vec![(key, diagnostic)])
+}
+
+/// The receiver spelling of the first top-level `<name>.<attr> = ...` in an
+/// `__init__` body -- the statement that established the slot.
+fn establishing_receiver<'a>(body: &'a [HirStmt], attr: &str) -> Option<&'a str> {
+    body.iter().find_map(|stmt| match stmt {
+        HirStmt::AttrSet {
+            base: HirExpr::Name(receiver),
+            attr: stored,
+            ..
+        } if stored == attr => Some(receiver.as_str()),
+        _ => None,
+    })
 }
 
 #[cfg(test)]

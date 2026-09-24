@@ -491,3 +491,29 @@ fn the_gate_keys_an_init_that_is_not_the_first_item() {
     let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
     assert_eq!(errors[0].0, DiagnosticKey::Function(init));
 }
+
+#[test]
+fn the_gate_names_the_establishing_receiver_not_a_local_alias() {
+    let hir = resolve(
+        "class B:\n    def __init__(self) -> None:\n        me = self\n        \
+         self.xs = []\n",
+    );
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    let diagnostic = &errors[0].1;
+    assert!(diagnostic.message.contains("`self.xs` in class `B`"));
+    let help = diagnostic.help.as_deref().expect("help");
+    assert!(help.contains("`self.xs: list[int] = []`"), "{help}");
+    assert!(!diagnostic.message.contains("me.xs") && !help.contains("me.xs"));
+}
+
+#[test]
+fn establishing_receiver_skips_other_statements() {
+    let store = |attr: &str| HirStmt::AttrSet {
+        base: HirExpr::Name("self".to_string()),
+        attr: attr.to_string(),
+        value: HirExpr::IntLiteral(0),
+    };
+    let body = [store("n"), store("xs")];
+    assert_eq!(establishing_receiver(&body, "xs"), Some("self"));
+    assert_eq!(establishing_receiver(&body, "ys"), None);
+}
