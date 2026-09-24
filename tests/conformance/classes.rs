@@ -532,6 +532,28 @@ fn instance_unannotated_list_slots_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #1266 (Part 5 of #1218): a value-less class-body annotation declares an
+// instance attribute's type; `[]`/`{}` establishing a declared container slot
+// takes the declared type, and a subclass may declare its own attribute.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn instance_declared_attrs_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/instance_declared_attrs.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("instance_declared_attrs_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/instance_declared_attrs.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("instance_declared_attrs_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/instance_declared_attrs.py"
+    );
+}
+
 // #1254 (Part 1 of #1214, D-250): list, set and dict comprehensions in any
 // expression position, including nested ones and ones inside `try`.
 #[test]

@@ -331,7 +331,9 @@ def total() -> int:
 /// admitted it everywhere at once. Three of the five non-signature
 /// positions were already closed by gates that predate this branch -- a
 /// class attribute and a dataclass field are both restricted to a scalar
-/// slot type -- so what this pins is the two that were not: the bare
+/// slot type (since #1266 a value-less class-body annotation is an instance
+/// attribute declaration, whose own type gate refuses `memoryview` the same
+/// way) -- so what this pins is the two that were not: the bare
 /// declaration (`crates/pycc_types`' `reject_memoryview_declaration`, at
 /// module scope and in a function body alike) and the protocol attribute
 /// (`crates/pycc_hir`'s own D-228 arm in `class/protocol.rs`). All of them
@@ -383,7 +385,7 @@ def f() -> int:
 def f() -> int:
     return 1
 ",
-            "class attribute `x` has type `memoryview`",
+            "instance attribute `x` declared in class `C` has type `memoryview`",
         ),
         (
             "1112_dataclass_field",

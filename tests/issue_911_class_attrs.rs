@@ -303,10 +303,24 @@ fn a_non_name_class_attribute_target_is_rejected() {
 // -- right-hand-side rejections -------------------------------------------
 
 #[test]
-fn a_class_attribute_without_a_value_is_rejected() {
+fn a_value_less_annotation_is_an_instance_declaration_its_init_must_establish() {
+    // #1266: a value-less, non-`ClassVar` annotation is an instance
+    // attribute declaration, not a valueless class constant, so the refusal
+    // names the missing `__init__` assignment instead.
     assert_rejected(
         "911_no_value",
         "class C:\n    X: int\n\n    def __init__(self) -> None:\n        self.n = 0\n",
+        "instance attribute `X` declared in class `C` is never assigned at the top level of \
+         `C.__init__`",
+    );
+}
+
+#[test]
+fn a_class_var_without_a_value_is_rejected() {
+    assert_rejected(
+        "911_class_var_no_value",
+        "from typing import ClassVar\n\n\nclass C:\n    X: ClassVar[int]\n\n    \
+         def __init__(self) -> None:\n        self.n = 0\n",
         "has no value",
     );
 }
