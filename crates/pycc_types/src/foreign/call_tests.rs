@@ -135,3 +135,10 @@ fn binding_or_printing_a_call_result_is_still_refused() {
         "printing or formatting",
     );
 }
+
+/// A `for` loop target bound to a CPython object is callable in the loop
+/// body: the admission is by type, not by how the name was bound.
+#[test]
+fn a_call_of_a_foreign_loop_target_is_admitted() {
+    admitted("import sys\nfor f in sys.meta_path:\n    f()\n");
+}

@@ -109,3 +109,18 @@ fn a_direct_call_can_set_an_exception() {
     };
     assert!(crate::exception::expression_can_set_exception(&node));
 }
+
+/// The defensive arm in `foreign_attr::expect_object_pointer`, reached
+/// through a direct call: `pycc_mir` builds `ObjCall` only over a
+/// `Ty::Object` callee, and the panic text names that node.
+#[test]
+#[should_panic(expected = "`ObjCall` only for a `Ty::Object` base or callee")]
+fn a_non_object_callee_is_an_internal_error() {
+    entry_ir(
+        "foreign_direct_call_bad_callee",
+        vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjCall {
+            callee: Box::new(MirExpr::IntLiteral(1)),
+            args: Vec::new(),
+        }))],
+    );
+}

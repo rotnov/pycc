@@ -733,7 +733,7 @@ mod tests {
     /// through this node: only `pycc_mir`'s own lowering builds it, and only
     /// over a `Ty::Object` base.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_base_is_an_internal_error() {
         entry_ir(
             "foreign_call_bad_base",
@@ -1058,7 +1058,7 @@ mod tests {
     /// The defensive arm in `foreign_attr::expect_object_pointer` reached
     /// through the *loop* node, which has its own call to it.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_for_loop_iterable_is_an_internal_error() {
         entry_ir(
             "foreign_iter_bad_iterable",
@@ -1073,7 +1073,7 @@ mod tests {
     /// The defensive arm in `foreign_attr::expect_object_pointer` reached
     /// through the *subscript* node, which has its own call to it.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_subscript_base_is_an_internal_error() {
         entry_ir(
             "foreign_subscript_bad_base",

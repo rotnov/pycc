@@ -1345,16 +1345,18 @@ such arguments (#1313), `len`, using it as an \
 `if`/`while` condition or comprehension guard, *loading* a subscript \
 `o[k]` whose key is an `int`, `float`, `bool` or `str`, and iterating it \
 with `for` -- the last only when the iterable is written as an attribute \
-load (`for x in o.attr:`) or a method call (`for x in o.method(...):`), \
-the two shapes that can produce an object. Everything else is \
+load (`for x in o.attr:`) or a method call (`for x in o.method(...):`): \
+the loop is admitted by the iterable's syntactic shape, because lowering \
+runs before types are known. Everything else is \
 still refused, including printing or f-string interpolation, binding the \
 value to a name, `isinstance`, a `match` subject, iterating over a bare \
 imported module or over a subscript load (`for x in o[k]:`), \
 passing an argument of any other type to one of its methods or to the \
 object itself, and indexing with a key of any other type. Storing through a \
-subscript (`o[k] = v`) and slicing (`o[a:b]`) are still refused too, but \
-by their own pre-existing diagnostics rather than by this code -- `C0001` \
-and `T0033` respectively. A method named `append`, `pop`, \
+subscript (`o[k] = v`), slicing (`o[a:b]`) and iterating a direct \
+call's result (`for x in o(...):`) are still refused too, but by their own \
+pre-existing diagnostics rather than by this code -- `C0001`, `T0033` and \
+`C0001` respectively. A method named `append`, `pop`, \
 `get` or `add` is also still refused: container lowering claims those four \
 spellings before the foreign path sees them, so they do not reach it even \
 with admitted arguments. Since #1263 container lowering admits an \

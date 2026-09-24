@@ -916,15 +916,21 @@ ordering-aware name resolution TYPE_SYSTEM.md describes.
 **A direct call of the object fails on that same edge, and borrows its
 callee.** [#1313](https://github.com/rotnov/pycc/issues/1313) added
 `MirExpr::ObjCall` for a module-body call of a name bound to an `object`
-(`product("ab")` after `from itertools import product`). There is no method
-to resolve, so codegen loads the module global and hands it, with the packed
-arguments, to `pycc_ext_obj_call_borrowed`. That helper takes one extra
+(`product("ab")` after `from itertools import product`, or a call of a `for`
+loop target bound to one). There is no method to resolve, so codegen loads
+the name's storage and hands it, with the packed arguments, to
+`pycc_ext_obj_call_borrowed`. That helper takes one extra
 reference on the callee and delegates to `pycc_ext_obj_call`, which consumes
 it — so the module global keeps its own reference across any number of calls,
 where passing the global straight to the consuming helper would release it
 once per call. Its result, its argument slots and its `NULL` failure edge are
 exactly the method call's, and it inherits the same module-body-only bound
 ([#1316](https://github.com/rotnov/pycc/issues/1316) tracks function bodies).
+Because the packers are shared, a run-time packing failure reads the same for
+both: an out-of-range `int` argument's `OverflowError` says "an int argument
+to a CPython object's method" even when the call is a direct one. The
+compile-time refusal of a non-scalar argument does distinguish them, naming a
+"method" or a "call".
 
 **`len` and a truth test fail on that same edge, and inherit that same bound.**
 PR 3a of [#1082](https://github.com/rotnov/pycc/issues/1082) added two more shim

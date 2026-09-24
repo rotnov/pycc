@@ -88,6 +88,28 @@ fn check_accepts_a_module_body_direct_call() {
     }
 }
 
+/// The admission is by type, not provenance: a `for` loop target bound to
+/// a CPython object is callable in the loop body like a foreign binding.
+/// `sys.meta_path` holds the importer classes, each callable with no
+/// arguments.
+const LOOP_TARGET: &str = "import sys\n\
+    n = 0\n\
+    for f in sys.meta_path:\n    f()\n    n = n + 1\n\
+    print(n > 0)\n";
+
+#[test]
+fn check_accepts_a_call_of_a_foreign_loop_target() {
+    let dir = ScratchDir::new("obj_call_loop_target_check").expect("scratch");
+    let output = check_with(&dir, LOOP_TARGET);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+}
+
 /// The module-body-only rule is unchanged: a function body cannot read the
 /// object (#1316), and above its import the name is not yet bound.
 #[test]
@@ -230,6 +252,17 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 fn a_direct_call_returns_cpythons_result_in_the_host() {
     let out = assert_matches_cpython("obj_call_hosted", "pycc_obj_call_mod", SUCCESS);
     assert_eq!(out, "5\nab\n3\nFalse\nno error\n");
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_call_of_a_foreign_loop_target_runs_like_cpython_in_the_host() {
+    let out = assert_matches_cpython(
+        "obj_call_loop_target",
+        "pycc_obj_call_loop_target_mod",
+        LOOP_TARGET,
+    );
+    assert_eq!(out, "True\nno error\n");
 }
 
 /// A raising call surfaces CPython's own exception from the import.
