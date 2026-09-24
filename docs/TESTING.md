@@ -866,7 +866,9 @@ error[C0001]: import of module `itertools` is not supported yet
 
 Only two of the 18 (`T0001` on the unannotated parameters of
 `combine_alternatives` and `bfs_all_unique`) could be fixed by annotation-only
-additions. The rest cannot, so no further edit was made:
+additions, and D-252 admits additions only to the subject module, not to its
+import closure. The other 16 could not be fixed that way either, so no further
+edit was made:
 
 | Diagnostic in `lark/utils.py` | Count | Nearest open issue |
 |---|---|---|
@@ -880,8 +882,8 @@ additions. The rest cannot, so no further edit was made:
 | `C0001` attribute-form base class | 1 | #886 (v0.4) |
 | `C0001` class inherits from `frozenset` | 1 | #1283 |
 | `C0001` class attribute initialised with a non-literal | 1 | #1284 |
-| `T0002` `Any` outside a declared interop boundary | 2 | none: a D-244 boundary rule, not a missing feature |
-| `T0001` unannotated public parameter | 2 | annotation-fixable |
+| `T0002` `Any` outside a declared interop boundary | 2 | none: internal `Any` use inside a dependency, refused by design; unlike the subject's own `-> Any` (#1285) it is not at the timed boundary |
+| `T0001` unannotated public parameter | 2 | annotation-fixable, but outside D-252's scope (a closure module) |
 
 This list is a lower bound. `lark/lexer.py`, `lark/common.py`,
 `lark/parsers/lalr_analysis.py`, `lark/exceptions.py` and the subject module
