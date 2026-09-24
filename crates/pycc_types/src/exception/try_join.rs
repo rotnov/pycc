@@ -34,15 +34,15 @@ pub(super) struct TryPaths<'a> {
 /// not bound before the `try` must keep one representation across all of
 /// them: a later type must be assignable to the first-established one, in
 /// `check_assignment`'s direction. `Maybe` bindings and terminating handlers
-/// count, because every path stores into the same slot. A handler's own `as`
-/// name is exempt: it is never compared with any other path's binding of the
-/// same spelling, an ordinary binding included, because codegen already
-/// stores differing exception instances in one slot. So `try: e = 10 // d /
-/// except ZeroDivisionError as e: ...` is accepted, as it was before #1289.
-/// The exemption is safe because such a name is never made definite by this
-/// join (below), so every read of it after the statement stays under the
-/// pre-#1289 conservative handling and is `T0041`. The first-established type
-/// becomes the type after the statement of every other name.
+/// count, because every path stores into the same slot. The first-established
+/// type becomes the name's type after the statement.
+///
+/// A name that any handler of the statement binds with `as` is left out of
+/// this walk entirely, on every path, and out of the definiteness join below:
+/// its type and its definiteness after the statement are exactly the
+/// pre-#1289 conservative join's. On that join `try: e = 10 // d / except
+/// ZeroDivisionError as e: ...` is accepted, a later `e = 5` is `T0023`
+/// against the exception type, and a later read is `T0041`.
 ///
 /// `join_if_branches` is deliberately not used to fold the paths: it checks
 /// `is_assignable(first, later)`, the reverse direction, and keeps the first
@@ -55,18 +55,18 @@ pub(super) struct TryPaths<'a> {
 /// Those are the `else` path (when neither the body nor `else` always
 /// terminates) and every handler whose body does not always terminate. A
 /// name is `Definitely` bound after the statement when it is `Definitely`
-/// bound on every such path. A name that any handler of the statement binds
-/// with `as` is never promoted this way and keeps its conservative state:
-/// CPython unbinds it on that handler's exit with an implicit `del`, and even
-/// when that handler always terminates, codegen gives the name one slot typed
-/// for the exception instance, which a later read of the body's `int` cannot
-/// share. So `try: e = 10 // d / except ZeroDivisionError as e: raise /
+/// bound on every such path. A handler's `as` name is never promoted this
+/// way and keeps its conservative state: CPython unbinds it on that
+/// handler's exit with an implicit `del`, and even when that handler always
+/// terminates, codegen gives the name one slot typed for the exception
+/// instance, which a later read of the body's `int` cannot share. So `try: e = 10 // d / except ZeroDivisionError as e: raise /
 /// return e` is `T0041` although CPython runs it: a documented limitation
 /// that refuses rather than miscompiles.
 ///
 /// The pre-#1289 conservative join (the body joined like a loop body, then every
 /// handler and `else` like `if` branches) is still computed, with the
-/// first-established types written over its own. It supplies the name set
+/// first-established types written over its own for every name that is not
+/// an `as` name. It supplies the name set
 /// and buffer provenance, and is the entry state of `finally`, which can be
 /// entered after any partial run. When no path falls through, it is also the
 /// state after the statement. Otherwise `finally` is checked a second time
@@ -94,7 +94,12 @@ pub(super) fn join_try_outcome(
     }
     let previous = conservative.clone();
     join_if_branches(&mut conservative, &previous, paths.else_env)?;
-    for (name, ty) in first_established_types(env, &paths)? {
+    let as_names: HashSet<&str> = paths
+        .handlers
+        .iter()
+        .filter_map(|handler| handler.name.as_deref())
+        .collect();
+    for (name, ty) in first_established_types(env, &paths, &as_names)? {
         let (BindingState::Definitely(slot) | BindingState::Maybe(slot)) = conservative
             .bindings
             .get_mut(&name)
@@ -116,11 +121,6 @@ pub(super) fn join_try_outcome(
         }
         exits.push(exit);
     }
-    let as_names: HashSet<&str> = paths
-        .handlers
-        .iter()
-        .filter_map(|handler| handler.name.as_deref())
-        .collect();
     let fallthrough = exits.split_first().map(|(first, rest)| {
         let mut joined = env.clone();
         joined.bindings = conservative
@@ -169,27 +169,23 @@ pub(super) fn join_try_outcome(
 
 /// #1289: the type-consistency half of [`join_try_outcome`]. Returns the
 /// first-established type of every name a path binds that `env` (the state
-/// before the `try`) does not, or `T0023` for the first later binding that
-/// cannot be assigned to it. Names are visited in sorted order within each
+/// before the `try`) does not and no handler binds with `as`, or `T0023` for
+/// the first later binding that cannot be assigned to it. Names are visited in sorted order within each
 /// environment so the reported name does not depend on hash order.
 fn first_established_types(
     env: &Environment,
     paths: &TryPaths<'_>,
+    as_names: &HashSet<&str>,
 ) -> Result<HashMap<String, Ty>, Diagnostic> {
-    let handler_paths = paths
-        .handlers
-        .iter()
-        .zip(paths.handler_envs)
-        .map(|(handler, handler_env)| (handler_env, handler.name.as_deref()));
-    let walk = std::iter::once((paths.body_env, None))
-        .chain(handler_paths)
-        .chain(std::iter::once((paths.else_env, None)));
+    let walk = std::iter::once(paths.body_env)
+        .chain(paths.handler_envs)
+        .chain(std::iter::once(paths.else_env));
     let mut first: HashMap<String, Ty> = HashMap::new();
-    for (path_env, own_as_name) in walk {
+    for path_env in walk {
         let mut names: Vec<&String> = path_env
             .bindings
             .keys()
-            .filter(|name| !env.bindings.contains_key(*name) && own_as_name != Some(name.as_str()))
+            .filter(|name| !env.bindings.contains_key(*name) && !as_names.contains(name.as_str()))
             .collect();
         names.sort();
         for name in names {

@@ -101,18 +101,17 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   `try` or `try`/`except*` statement (#1289), a name is definitely bound when
   every path that can complete the statement normally binds it: the `else`
   path after a completed body, plus every handler whose body does not always
-  return or raise. A name that any handler of the statement binds with
-  `except ... as` is never made definite this way and keeps the pre-#1289
-  conservative state, and `finally` is checked against
-  the conservative state, because it also runs on the paths that leave early,
+  return or raise. `finally` is checked against the conservative state,
+  because it also runs on the paths that leave early,
   so a read of a try-bound name inside `finally` is still `T0041`. Every
   path's binding is type-checked in `check_assignment`'s direction, including
   a handler that always terminates (a mismatch is `T0023`), and the name keeps
-  the first path's type. A handler's own `as` name is exempt: it is never
-  compared with any other path's binding of that spelling, an ordinary
-  binding included, so `try: e = 10 // d / except ZeroDivisionError as e:`
-  is accepted. Such a name is possibly unbound after the statement, so every
-  read of it there is `T0041` -- even when its handler always terminates and
+  the first path's type. A name that any handler of the statement binds with
+  `except ... as` is left out of both rules on every path: its type and its
+  definiteness after the statement are exactly the pre-#1289 conservative
+  join's. So `try: e = 10 // d / except ZeroDivisionError as e:` is
+  accepted, a later `e = 5` is `T0023` against the exception type, and a
+  later read of `e` is `T0041` -- even when its handler always terminates and
   every other path binds it. That is a documented pycc limitation: CPython
   runs `try: e = 10 // d / except ZeroDivisionError as e: raise / return e`,
   but pycc gives `e` one storage slot typed for the exception instance, which

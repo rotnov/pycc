@@ -237,6 +237,62 @@ def f(d: int) -> int:
     assert_eq!(code_of(other_handler_binds), "T0041");
 }
 
+/// The type walk leaves a handler's `as` name out on every path, not only
+/// its own handler's: a body binding of the same spelling must not replace
+/// the exception type the pre-#1289 join gives it, so a later `e = 5` is
+/// still `T0023` against that type, as on main. The other-handler variant
+/// puts the plain binding first so the walk would otherwise establish `int`.
+#[test]
+fn an_as_name_keeps_the_conservative_type_when_another_path_binds_it() {
+    let function = "\
+def f(c: bool) -> None:
+    try:
+        if c:
+            e = 1
+    except ZeroDivisionError as e:
+        pass
+    e = 5
+    print(e)
+f(True)
+";
+    assert_eq!(code_of(function), "T0023");
+    let module = "\
+c = True
+try:
+    if c:
+        e = 1
+except ZeroDivisionError as e:
+    pass
+e = 5
+print(e)
+";
+    assert_eq!(code_of(module), "T0023");
+    let other_handler = "\
+def f(d: int) -> None:
+    try:
+        x = 10 // d
+    except ValueError:
+        e = 1
+    except ZeroDivisionError as e:
+        x = 0
+    e = 5
+    print(e)
+";
+    assert_eq!(code_of(other_handler), "T0023");
+    let star = "\
+def f(c: bool) -> None:
+    try:
+        if c:
+            e = 1
+    except* ZeroDivisionError as e:
+        pass
+    e = 5
+    print(e)
+f(True)
+";
+    assert_eq!(code_of(star), "T0023");
+}
+
 // -- The check phase: the type walk --
 
 /// Two `as` handlers binding the same spelling to different exception

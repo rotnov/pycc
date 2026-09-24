@@ -620,6 +620,11 @@ fn t0041_try_as_name_terminating_handler() {
 }
 
 #[test]
+fn t0023_try_as_name_rebound_after() {
+    assert_diagnostic_matches_fixture("t0023_try_as_name_rebound_after");
+}
+
+#[test]
 fn t0023_try_handler_else_mismatch() {
     assert_diagnostic_matches_fixture("t0023_try_handler_else_mismatch");
 }
