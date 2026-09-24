@@ -242,6 +242,9 @@ fn a_windows_locked_closure_runs_from_the_sidecar_and_matches_cpython() {
     let text = std::fs::read_to_string(dir.join("pycc.lock")).expect("the lock");
     assert!(text.contains("x86_64-pc-windows-msvc"), "{text}");
     assert!(!text.contains("[[target.native]]"), "{text}");
+    // Plan risk R6: a Windows venv keeps purelib and platlib in one
+    // `Lib\site-packages`, and the section must still record purelib.
+    assert!(text.contains("site = \"purelib\""), "{text}");
 
     let output = fixture.pycc(&["build", "main.py", "-o", "app"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
