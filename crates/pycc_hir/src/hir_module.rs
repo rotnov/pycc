@@ -525,7 +525,20 @@ pub enum ForeignImportSite {
     /// policy (`I0402`) and native-build (`I0403`) gates, and the
     /// position-blind passes that seed every foreign name as a
     /// `Ty::Object` module global.
-    Block,
+    ///
+    /// `optional` is true when the import is *optional* (#1290): it sits,
+    /// at any depth, in the body of a `try` (or `try`/`except*`) that is
+    /// at module level or nested only in module-level `if`/`try` blocks,
+    /// with a handler that catches a failed import -- a bare
+    /// `except:`, or a handler naming `ImportError`, `ModuleNotFoundError`
+    /// or `Exception`, alone or in a tuple. A handler, `else` or `finally`
+    /// body inherits the enclosing guard rather than creating one. The lock
+    /// records an optional root under `optional-roots` and does not refuse
+    /// it when no installed distribution owns it (D-249, amended by #1290).
+    Block {
+        /// Whether a qualifying `try` guards this import (see above).
+        optional: bool,
+    },
 }
 
 /// Which kind of top-level definition an [`ImportBinding::Project`] names

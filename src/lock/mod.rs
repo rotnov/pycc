@@ -18,7 +18,7 @@ use crate::embed::stdlib_roots::{is_embeddable_stdlib_root, is_excluded_stdlib_r
 use crate::embed::{self, EmbedToolchain};
 use crate::frontend::{self, FrontendFailure};
 use crate::interop_policy::InteropCli;
-use pycc_hir::{HirModule, ImportBinding};
+use pycc_hir::{ForeignImportSite, HirModule, ImportBinding};
 use schema::{LOCK_FILE_NAME, LOCK_VERSION, Lock, LockTarget, LockedNative, LockedPackage};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -98,12 +98,14 @@ pub(crate) fn run_lock_on(
         let direct = direct_roots(&hir);
         // A standard-library-only program needs no lock (rule 7), so
         // `--check` accepts its absence without starting the interpreter.
+        // An optional root (#1290) is a direct root here, so a program
+        // whose only third-party imports are optional still needs one.
         if check && direct.is_empty() && old_section.is_none() {
             None
         } else {
             let platform = embed::layout::EmbedPlatform::for_os(os);
             let at = (&located, path, platform);
-            Some(derive(&key, &triple, &direct, toolchain, at)?)
+            Some(derive(&key, &triple, &split_roots(&hir), toolchain, at)?)
         }
     };
     let base = existing.unwrap_or(Lock {
@@ -192,6 +194,52 @@ pub(crate) fn direct_roots(hir: &HirModule) -> BTreeSet<String> {
         .collect()
 }
 
+/// The program's direct roots split into required and optional (#1290).
+/// A root is optional when every import of it is
+/// [`ForeignImportSite::Block`] with `optional` set -- inside the body of a
+/// `try` whose handler catches a failed import -- and required as soon as one
+/// import of it is not. Together they are [`direct_roots`].
+pub(crate) struct SplitRoots {
+    required: BTreeSet<String>,
+    optional: BTreeSet<String>,
+}
+
+impl SplitRoots {
+    /// The required roots, sorted, as `roots` records them.
+    pub(crate) fn required(&self) -> Vec<String> {
+        self.required.iter().cloned().collect()
+    }
+
+    /// The optional roots, sorted, as `optional-roots` records them.
+    pub(crate) fn optional(&self) -> Vec<String> {
+        self.optional.iter().cloned().collect()
+    }
+}
+
+/// Splits the program's [`direct_roots`] into required and optional ones.
+pub(crate) fn split_roots(hir: &HirModule) -> SplitRoots {
+    let mut required = BTreeSet::new();
+    let mut guarded = BTreeSet::new();
+    let foreign = hir.imports.iter().filter_map(|binding| match binding {
+        ImportBinding::Foreign {
+            module_path, site, ..
+        } => module_path.split('.').next().map(|root| (root, site)),
+        _ => None,
+    });
+    for (root, site) in foreign {
+        if is_embeddable_stdlib_root(root) || is_excluded_stdlib_root(root) {
+            continue;
+        }
+        let set = match site {
+            ForeignImportSite::Block { optional: true } => &mut guarded,
+            _ => &mut required,
+        };
+        set.insert(root.to_string());
+    }
+    let optional = guarded.difference(&required).cloned().collect();
+    SplitRoots { required, optional }
+}
+
 /// The first segment of every CPython-backed import in the linked program.
 fn import_roots(hir: &HirModule) -> BTreeSet<String> {
     hir.imports
@@ -241,14 +289,14 @@ pub(crate) fn find_section<'a>(
 }
 
 /// Derives the (entry, triple) section for a program with at least one
-/// CPython-backed import; `direct` is empty for a standard-library-only
+/// CPython-backed import; `direct` holds no root for a standard-library-only
 /// program, whose section carries only the interpreter fields. `at` is the
 /// located lock, the entry as given, and the host's platform, which the
 /// native libraries (rule 8, #1243) are derived for.
 fn derive(
     entry: &str,
     triple: &str,
-    direct: &BTreeSet<String>,
+    direct: &SplitRoots,
     toolchain: &EmbedToolchain,
     (located, entry_path, platform): (&Located, &Path, embed::layout::EmbedPlatform),
 ) -> Result<LockTarget, LockFailure> {
@@ -264,11 +312,16 @@ fn derive(
         .map_err(LockFailure::Env)?;
     let libpython_sha256 = embed::sha256::sha256_file(&library)
         .map_err(|e| LockFailure::Env(format!("cannot read `{}`: {e}", library.display())))?;
-    let packages = if direct.is_empty() {
+    // An optional root is scanned like a required one (#1290): when it is
+    // installed its closure is bundled, and an unowned one is still checked
+    // for unrecorded files.
+    let packages = if direct.required.is_empty() && direct.optional.is_empty() {
         Vec::new()
     } else {
         let sites = resolve::scanned_sites(&env.purelib, &env.platlib).map_err(LockFailure::Env)?;
-        resolve::resolve(&sites, direct, &env.markers, platform).map_err(LockFailure::Env)?
+        let (required, optional) = (&direct.required, &direct.optional);
+        resolve::resolve(&sites, required, optional, &env.markers, platform)
+            .map_err(LockFailure::Env)?
     };
     let (major, minor, micro) = probe.version;
     let mut section = LockTarget {
@@ -278,7 +331,8 @@ fn derive(
         cache_tag: env.cache_tag.clone(),
         platform: env.platform.clone(),
         libpython_sha256,
-        roots: direct.iter().cloned().collect(),
+        roots: direct.required(),
+        optional_roots: direct.optional(),
         package: packages
             .into_iter()
             .map(|package| LockedPackage {
@@ -359,6 +413,12 @@ fn first_difference(old: &LockTarget, new: &LockTarget) -> String {
         return format!(
             "`roots` is {:?} in the lock but {:?} for the program",
             old.roots, new.roots
+        );
+    }
+    if old.optional_roots != new.optional_roots {
+        return format!(
+            "`optional-roots` is {:?} in the lock but {:?} for the program",
+            old.optional_roots, new.optional_roots
         );
     }
     let names: BTreeSet<&str> = old

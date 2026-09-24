@@ -127,7 +127,7 @@ fn an_import_in_an_if_body_lowers_to_a_foreign_import_node() {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
             from: None,
-            site: ForeignImportSite::Block,
+            site: ForeignImportSite::Block { optional: false },
             span: statement,
         }]
     );
@@ -135,14 +135,31 @@ fn an_import_in_an_if_body_lowers_to_a_foreign_import_node() {
 
 #[test]
 fn every_try_and_elif_position_lowers_a_nested_import() {
-    for source in [
-        "try:\n    import colorsys\nexcept Exception:\n    pass\n",
-        "try:\n    pass\nexcept Exception:\n    import colorsys\n",
-        "try:\n    pass\nexcept Exception:\n    pass\nelse:\n    import colorsys\n",
-        "try:\n    pass\nfinally:\n    import colorsys\n",
-        "try:\n    pass\nexcept* ValueError:\n    import colorsys\n",
-        "try:\n    if c:\n        import colorsys\nexcept Exception:\n    pass\n",
-        "if c:\n    pass\nelif d:\n    import colorsys\n",
+    // The flag is #1290's `optional`: only a `try` body whose handler
+    // catches a failed import guards it.
+    for (source, optional) in [
+        (
+            "try:\n    import colorsys\nexcept Exception:\n    pass\n",
+            true,
+        ),
+        (
+            "try:\n    pass\nexcept Exception:\n    import colorsys\n",
+            false,
+        ),
+        (
+            "try:\n    pass\nexcept Exception:\n    pass\nelse:\n    import colorsys\n",
+            false,
+        ),
+        ("try:\n    pass\nfinally:\n    import colorsys\n", false),
+        (
+            "try:\n    pass\nexcept* ValueError:\n    import colorsys\n",
+            false,
+        ),
+        (
+            "try:\n    if c:\n        import colorsys\nexcept Exception:\n    pass\n",
+            true,
+        ),
+        ("if c:\n    pass\nelif d:\n    import colorsys\n", false),
     ] {
         let lowered = lower_ok(source);
         assert_eq!(
@@ -152,7 +169,11 @@ fn every_try_and_elif_position_lowers_a_nested_import() {
         );
         assert_eq!(
             foreign_sites(&lowered),
-            vec![("colorsys", "colorsys", ForeignImportSite::Block)],
+            vec![(
+                "colorsys",
+                "colorsys",
+                ForeignImportSite::Block { optional }
+            )],
             "{source:?}"
         );
     }
@@ -167,7 +188,7 @@ fn a_type_checking_body_binds_nothing_and_its_else_is_admitted() {
     assert_eq!(nested_nodes(&lowered), vec![pair("json", "json")]);
     assert_eq!(
         foreign_sites(&lowered),
-        vec![("json", "json", ForeignImportSite::Block)]
+        vec![("json", "json", ForeignImportSite::Block { optional: false })]
     );
 
     // The same guard as an `elif` test.
@@ -189,7 +210,11 @@ fn an_aliased_foreign_import_binds_the_alias_at_top_level_and_nested() {
     let lowered = lower_ok("if x:\n    import colorsys as c\n");
     assert_eq!(
         foreign_sites(&lowered),
-        vec![("c", "colorsys", ForeignImportSite::Block)]
+        vec![(
+            "c",
+            "colorsys",
+            ForeignImportSite::Block { optional: false }
+        )]
     );
     assert_eq!(nested_nodes(&lowered), vec![pair("c", "colorsys")]);
 }
@@ -408,4 +433,100 @@ fn function_and_loop_body_imports_are_not_requested_but_type_checking_ones_are()
         .filter_map(|request| request.module.as_deref())
         .collect();
     assert_eq!(modules, vec!["a", "b", "d"]);
+}
+
+/// #1290: which `try` shapes make a nested import optional.
+#[test]
+fn a_try_whose_handler_catches_a_failed_import_makes_its_body_import_optional() {
+    for (source, optional) in [
+        // Each qualifying handler shape.
+        (
+            "try:\n    import colorsys\nexcept ImportError:\n    pass\n",
+            true,
+        ),
+        (
+            "try:\n    import colorsys\nexcept ModuleNotFoundError:\n    pass\n",
+            true,
+        ),
+        ("try:\n    import colorsys\nexcept:\n    pass\n", true),
+        (
+            "try:\n    import colorsys\nexcept (ValueError, ImportError):\n    pass\n",
+            true,
+        ),
+        (
+            "try:\n    import colorsys\nexcept* ImportError:\n    pass\n",
+            true,
+        ),
+        // A later handler qualifies as well as the first.
+        (
+            "try:\n    import colorsys\nexcept ValueError:\n    pass\nexcept ImportError:\n    \
+             pass\n",
+            true,
+        ),
+        // A non-matching handler, and a `try` with only `finally`.
+        (
+            "try:\n    import colorsys\nexcept ValueError:\n    pass\n",
+            false,
+        ),
+        (
+            "try:\n    import colorsys\nexcept (ValueError, KeyError):\n    pass\n",
+            false,
+        ),
+        ("try:\n    import colorsys\nfinally:\n    pass\n", false),
+        // The guard reaches through a nested `if`/`try`, and an inner
+        // non-matching `try` does not remove an outer guard.
+        (
+            "try:\n    try:\n        import colorsys\n    except ValueError:\n        pass\nexcept \
+             ImportError:\n    pass\n",
+            true,
+        ),
+        (
+            "if c:\n    try:\n        import colorsys\n    except ImportError:\n        pass\n",
+            true,
+        ),
+        // A handler body of a guarding `try` nested inside an outer guard
+        // inherits the outer guard.
+        (
+            "try:\n    try:\n        pass\n    except ValueError:\n        import colorsys\nexcept \
+             ImportError:\n    pass\n",
+            true,
+        ),
+        // The fallback import in the handler is what runs: required.
+        (
+            "try:\n    pass\nexcept ImportError:\n    import colorsys\n",
+            false,
+        ),
+    ] {
+        let lowered = lower_ok(source);
+        assert_eq!(
+            foreign_sites(&lowered),
+            vec![(
+                "colorsys",
+                "colorsys",
+                ForeignImportSite::Block { optional }
+            )],
+            "{source:?}"
+        );
+        // The statement still lowers to its node whatever the flag.
+        assert_eq!(
+            nested_nodes(&lowered),
+            vec![pair("colorsys", "colorsys")],
+            "{source:?}"
+        );
+    }
+}
+
+/// #1290: a handler type that is not a bare name or a tuple of names never
+/// guards, even when it spells an import-error class.
+#[test]
+fn a_non_name_handler_type_does_not_catch_a_failed_import() {
+    let parsed =
+        parse("try:\n    pass\nexcept builtins.ImportError:\n    pass\nexcept f():\n    pass\n");
+    let pycc_ast::Stmt::Try(try_stmt) = &parsed.body[0] else {
+        panic!("not a try");
+    };
+    assert!(!crate::import::block::handlers_catch_import_error(
+        &try_stmt.handlers
+    ));
+    assert!(!crate::import::block::handlers_catch_import_error(&[]));
 }

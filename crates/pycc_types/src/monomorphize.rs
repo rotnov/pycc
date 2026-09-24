@@ -2298,7 +2298,7 @@ fn remap_foreign_import_positions(
                             .filter(|kept| **kept)
                             .count(),
                     ),
-                    ForeignImportSite::Block => ForeignImportSite::Block,
+                    site @ ForeignImportSite::Block { .. } => *site,
                 },
                 span: *span,
             },

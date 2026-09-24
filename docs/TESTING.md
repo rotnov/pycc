@@ -479,6 +479,10 @@ achieve.
   relocation arm on `cc`-built images. Its `#[ignore]`d oracle locks a
   `venv --without-pip` holding the test-authored `tinypkg`/`tinydep`,
   builds, moves the venv away, and compares the run with CPython 3.14.7.
+  An import under a module-level `try`/`except ImportError` (#1290) is
+  pinned the same way: a non-ignored test locks it absent and installed
+  and reports a newly installed package as stale, and an `#[ignore]`d
+  oracle compares the fallback and the installed run with CPython 3.14.7.
 - **Real static archive (#1273).** `tests/issue_1273_real_static_archive.rs`'s
   `#[ignore]`d tests probe the interpreter's `LIBPL/LIBRARY`. When it is a
   genuine ar archive, they build `--static-libpython` executables and

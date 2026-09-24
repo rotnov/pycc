@@ -304,7 +304,7 @@ mod tests {
             local_name: "json".to_string(),
             module_path: "json".to_string(),
             from: None,
-            site: pycc_hir::ForeignImportSite::Block,
+            site: pycc_hir::ForeignImportSite::Block { optional: false },
             span: Span::new(10, 21),
         };
         let gaps = classify_for_native_build(&hir(vec![nested]), EmbedHost::CrossTarget, &AUTO)

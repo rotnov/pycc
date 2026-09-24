@@ -1038,7 +1038,7 @@ fn a_block_binding_is_not_bound_by_item_position() {
         local_name: "colorsys".to_string(),
         module_path: "colorsys".to_string(),
         from: None,
-        site: pycc_hir::ForeignImportSite::Block,
+        site: pycc_hir::ForeignImportSite::Block { optional: false },
         span: Span::new(0, 0),
     }];
     bind_foreign_objects_at(&mut env, &imports, 0);
@@ -1090,7 +1090,7 @@ fn a_block_site_survives_both_item_remapping_passes_unchanged() {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
             from: None,
-            site: pycc_hir::ForeignImportSite::Block,
+            site: pycc_hir::ForeignImportSite::Block { optional: true },
             span: Span::new(0, 0),
         });
         let resolved = crate::check_and_resolve_all_keyed(&hir)
@@ -1100,7 +1100,7 @@ fn a_block_site_survives_both_item_remapping_passes_unchanged() {
             matches!(
                 resolved.imports.as_slice(),
                 [ImportBinding::Foreign {
-                    site: pycc_hir::ForeignImportSite::Block,
+                    site: pycc_hir::ForeignImportSite::Block { optional: true },
                     ..
                 }]
             ),

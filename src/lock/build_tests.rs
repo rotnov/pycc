@@ -187,7 +187,9 @@ fn a_section_whose_roots_differ_from_the_program_is_stale() {
     env.write("import tinypkg\nimport tinydep\n");
     let err = env.plan().unwrap_err();
     assert!(
-        err.contains("its section locks `tinypkg` but the program imports `tinydep`, `tinypkg`"),
+        err.contains(
+            "its section's `roots` lists `tinypkg` but the program requires `tinydep`, `tinypkg`"
+        ),
         "{err}"
     );
     assert!(err.contains("does not match this build"), "{err}");
@@ -195,9 +197,92 @@ fn a_section_whose_roots_differ_from_the_program_is_stale() {
     env.write("import json\n");
     let err = env.plan().unwrap_err();
     assert!(
-        err.contains("locks `tinypkg` but the program imports no roots"),
+        err.contains("lists `tinypkg` but the program requires no roots"),
         "{err}"
     );
+}
+
+/// #1290: a program whose only third-party import is optional still needs
+/// its lock, and the refusal names the optional root.
+#[test]
+fn an_optional_only_program_without_a_lock_is_refused_naming_its_root() {
+    let env = Env::new(
+        "build_optional_no_lock",
+        "try:\n    import absentpkg\nexcept ImportError:\n    pass\n",
+    );
+    let err = env.plan().unwrap_err();
+    assert!(
+        err.contains("the program imports `absentpkg` from outside the standard library"),
+        "{err}"
+    );
+    assert!(err.contains("which does not exist"), "{err}");
+}
+
+/// #1290: an absent optional root locks as `optional-roots` with no
+/// package, the build plans no files for it, and a section whose
+/// `optional-roots` differs from the program's is stale, naming the field.
+#[test]
+fn an_absent_optional_root_locks_and_builds_with_no_files() {
+    let env = Env::new(
+        "build_optional_absent",
+        "try:\n    import absentpkg\nexcept ImportError:\n    pass\n",
+    );
+    env.lock();
+    let text = std::fs::read_to_string(env.lock_path()).unwrap();
+    assert!(
+        text.contains("roots = []\noptional-roots = [\"absentpkg\"]\n"),
+        "{text}"
+    );
+    let check = env.check();
+    assert!(check.section.package.is_empty());
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
+    assert!(closure.files.is_empty());
+
+    // The same import made unconditional: `roots` differs first.
+    env.write("import absentpkg\n");
+    let err = env.plan().unwrap_err();
+    assert!(
+        err.contains("`roots` lists no roots but the program requires `absentpkg`"),
+        "{err}"
+    );
+    // Another optional root: `optional-roots` differs.
+    env.write("try:\n    import otherpkg\nexcept ImportError:\n    pass\n");
+    let err = env.plan().unwrap_err();
+    assert!(
+        err.contains(
+            "its section's `optional-roots` lists `absentpkg` but the program imports \
+             `otherpkg` from outside the standard library only under a handler that catches a failed import"
+        ),
+        "{err}"
+    );
+    assert!(err.contains("does not match this build"), "{err}");
+}
+
+/// #1290: an installed optional root is locked with its closure and
+/// bundled, and one required elsewhere in the program is required.
+#[test]
+fn an_installed_optional_root_is_locked_with_its_closure() {
+    let env = Env::with_tiny(
+        "build_optional_installed",
+        "try:\n    import tinypkg\nexcept ImportError:\n    pass\n",
+    );
+    env.lock();
+    let check = env.check();
+    assert!(check.section.roots.is_empty());
+    assert_eq!(check.section.optional_roots, ["tinypkg"]);
+    let names: Vec<&str> = check
+        .section
+        .package
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(names, ["tinydep", "tinypkg"]);
+
+    env.write("import tinypkg\ntry:\n    import tinypkg\nexcept ImportError:\n    pass\n");
+    env.lock();
+    let check = env.check();
+    assert_eq!(check.section.roots, ["tinypkg"]);
+    assert!(check.section.optional_roots.is_empty());
 }
 
 /// Native libraries no longer stop the plan: the embedded build re-derives

@@ -513,7 +513,10 @@ The TOML parser still accepts and ignores other unmodeled sections such as
 `[test]`. What each policy admits is current behavior; what an admitted root
 then builds is bounded by the embedding (D-248): a standard-library root
 builds an embedded executable with no lock, and any other admitted root
-builds one bundling its closure from `pycc.lock` (#1242).
+builds one bundling its closure from `pycc.lock` (#1242). A root imported
+only inside the body of a `try` whose handler catches a failed import is optional
+(#1290, the **Source** rule below): it still needs the lock, but when it is absent the lock records no
+package for it and the program's handler runs.
 
 - omitting `[interop]` selects `policy = "auto"`, which admits every
   CPython-backed root. The target contract is that a standard source import
@@ -580,12 +583,24 @@ references outside a distribution's payload.
   are the program's CPython-backed import roots the interop policy admits,
   minus the standard-library roots; the closure follows their owners'
   `Requires-Dist` with environment markers evaluated for that interpreter,
-  and refuses anything it cannot evaluate.
+  and refuses anything it cannot evaluate. A direct root is *optional*
+  (#1290) when every import of it sits, at any depth, in the body of a
+  `try` (or `try`/`except*`) at module level or nested only in
+  module-level `if`/`try` blocks, with a bare `except:` or a handler
+  naming `ImportError`, `ModuleNotFoundError` or `Exception`, alone or in
+  a tuple; a handler, `else` or `finally` body is not guarded by its
+  own `try`. One unguarded import makes the root required. Optional roots
+  are recorded as `optional-roots` and required ones as `roots`.
 - **Integrity.** Every file of a locked distribution is re-hashed against
   its RECORD; a mismatch, a missing or symlinked file, an editable install, a
   top-level `.pth` file, an unowned root or an on-disk file under a root that
   no RECORD lists refuses the lock (exit 2, naming the file). Each package
-  records a `tree-sha256` over its payload.
+  records a `tree-sha256` over its payload. An *unowned optional* root is
+  not refused: it is recorded with no package, and its on-disk files are
+  still checked, so an unrecorded file, a symlink, or a directory holding
+  no file (a namespace package CPython would import) under it refuses the
+  lock. An optional root reachable only through a `.pth` file or an
+  editable finder is not detected (D-249 rule 1).
 - **Location and key.** The file is `pycc.lock` beside the nearest
   `pycc.toml` above `PATH`, else beside `PATH`. One file holds one section
   per (entry, host triple), where `entry` is the canonical entry path
@@ -602,6 +617,11 @@ references outside a distribution's payload.
   CPython-backed import has no section and never starts the interpreter; a
   lock left with no sections is deleted. A standard-library-only program
   gets the interpreter fields and `roots = []`, without a site scan.
+  `optional-roots` is written only when the program has an optional root,
+  so a lock without one is unchanged; an older pycc refuses the field.
+  An optional package installed after `pycc lock` is not bundled until the
+  lock is rerun; `pycc lock --check` reports it (D-249's #1290 amendment
+  (e)).
 - **Native libraries.** Each `[[target.native]]` entry is a library a
   closure image needs, directly or through another such library, that lies
   outside the system library directories and the interpreter's prefix and
@@ -626,8 +646,9 @@ references outside a distribution's payload.
   always empty, since the build refuses a closure PE image until #1297.
 - **Build.** An embedded build of a program with a root outside the standard
   library reads its (entry, host triple) section before probing the
-  interpreter: a missing lock or section, or different `roots`, is exit 2
-  naming `pycc lock`, as is a malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
+  interpreter: a missing lock or section, or different `roots` or
+  `optional-roots` (each compared on its own, and the refusal names the
+  field), is exit 2 naming `pycc lock`, as is a malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
   `platform` and `libpython-sha256` must equal the embed interpreter's (the
   digest is of its shared library, or of its `LIBPL` archive when it is
   configured without one -- by `Py_ENABLE_SHARED` and `PYTHONFRAMEWORK`,

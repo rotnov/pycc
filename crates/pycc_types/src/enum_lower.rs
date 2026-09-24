@@ -241,7 +241,7 @@ fn remap_foreign_import_positions(
                     ForeignImportSite::Item(index) => ForeignImportSite::Item(
                         produced[..(*index).min(produced.len())].iter().sum(),
                     ),
-                    ForeignImportSite::Block => ForeignImportSite::Block,
+                    site @ ForeignImportSite::Block { .. } => *site,
                 },
                 span: *span,
             },

@@ -445,7 +445,7 @@ fn a_non_import_error_is_not_bridged() {
 
 /// Builds `body` as a plain (embedded) executable and runs it and CPython on
 /// the same source. `msvcrt` is a standard-library root that is absent off
-/// Windows, so no `pycc.lock` is needed (#1242, #1290).
+/// Windows, so no `pycc.lock` is needed (#1242).
 #[cfg(not(windows))]
 fn run_embedded(tag: &str, body: &str) -> (Output, Output) {
     let dir = ScratchDir::new(tag).expect("scratch");

@@ -9,6 +9,7 @@ fn target(entry: &str, triple: &str) -> LockTarget {
         platform: "macosx-11.0-arm64".into(),
         libpython_sha256: "ab".repeat(32),
         roots: vec!["zeta".into(), "alpha".into()],
+        optional_roots: vec![],
         package: vec![
             LockedPackage {
                 name: "zeta".into(),
@@ -79,6 +80,29 @@ fn natives_render_and_parse() {
     assert!(text.contains("[[target.native]]\nname = \"liba.dylib\"\nsha256 = "));
     assert!(text.contains("required-by = [\"zeta\"]\n"));
     assert_eq!(render(&parse(&text).unwrap()), text);
+}
+
+/// #1290: `optional-roots` renders sorted right after `roots` and round
+/// trips; an empty list is omitted, so an older lock is byte-identical.
+#[test]
+fn optional_roots_render_only_when_present_and_round_trip() {
+    let plain = render(&lock(vec![target("a.py", "aarch64-apple-darwin")]));
+    assert!(!plain.contains("optional-roots"), "{plain}");
+    assert!(
+        parse(&plain).unwrap().target[0].optional_roots.is_empty(),
+        "a lock without the key parses with no optional root"
+    );
+
+    let mut with_optional = target("a.py", "aarch64-apple-darwin");
+    with_optional.optional_roots = vec!["ujson".into(), "regex".into()];
+    let text = render(&lock(vec![with_optional]));
+    assert!(
+        text.contains("roots = [\"alpha\", \"zeta\"]\noptional-roots = [\"regex\", \"ujson\"]\n"),
+        "{text}"
+    );
+    let parsed = parse(&text).unwrap();
+    assert_eq!(parsed.target[0].optional_roots, ["regex", "ujson"]);
+    assert_eq!(render(&parsed), text);
 }
 
 #[test]

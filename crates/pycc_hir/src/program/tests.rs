@@ -499,7 +499,10 @@ fn one_name_bound_to_two_cpython_modules_across_modules_is_rejected() {
 fn an_identical_foreign_pair_across_modules_links() {
     let linked = link_and_finalize(vec![
         all_foreign_input("dep.py", "import json\n"),
-        all_foreign_input("main.py", "if c:\n    import json\n"),
+        all_foreign_input(
+            "main.py",
+            "try:\n    import json\nexcept ImportError:\n    pass\n",
+        ),
     ])
     .expect("the same module bound to the same name in two modules must link");
     let sites: Vec<crate::ForeignImportSite> = linked
@@ -510,12 +513,13 @@ fn an_identical_foreign_pair_across_modules_links() {
             _ => None,
         })
         .collect();
-    // The nested import keeps its `Block` site through the rebase.
+    // The nested import keeps its `Block` site, and its #1290 `optional`
+    // flag, through the rebase.
     assert_eq!(
         sites,
         vec![
             crate::ForeignImportSite::Item(0),
-            crate::ForeignImportSite::Block
+            crate::ForeignImportSite::Block { optional: true }
         ]
     );
 }
