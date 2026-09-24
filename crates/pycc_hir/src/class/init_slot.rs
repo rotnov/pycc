@@ -8,7 +8,12 @@
 //! `list[int]`/`dict[str, int]` parameter there, stored as a pointer word
 //! (D-154's slot layout, leak-only per D-107/D-124). #1264 (Part 3) adds
 //! the annotated `<receiver>.<attr>: list[int] = []` / `dict[str, int] = {}`
-//! form, whose slot `Ty` is its written annotation's.
+//! form, whose slot `Ty` is its written annotation's. #1265 (Part 4) admits
+//! the unannotated `<receiver>.<attr> = []` as a *provisional*
+//! `list[<Ty::Infer>]` slot: `pycc_types`' empty-container pass resolves its
+//! element type class-wide, and its gate refuses any provisional slot it
+//! could not resolve (D-245's 2026-09-24 amendment for #1265). The
+//! unannotated `{}` stays `C0001` until its producer exists (#891).
 
 use crate::{Ty, unsupported};
 use pycc_ast::{Expr, Number, Stmt};
@@ -18,7 +23,9 @@ use pycc_diag::Diagnostic;
 /// nested `if`/`while`/`for` -- see `super`'s own module doc comment) for
 /// `self.<attr> = <value>` assignments and annotated `self.<attr>: <T> =
 /// <value>` ones (#1264), building the attribute-slot list in
-/// first-assignment source order across both statement kinds. Only the *first* assignment to a given
+/// first-assignment source order across both statement kinds. An
+/// unannotated `self.<attr> = []` records the provisional
+/// `list[<Ty::Infer>]` slot (#1265; see `slot_ty_from_init_rhs`). Only the *first* assignment to a given
 /// attribute name establishes its slot and `Ty`; a later `self.<attr> =
 /// ...` reassignment further down `__init__`'s own body is structurally
 /// ignored here (it is still lowered normally by `stmt::lower_body` into an
@@ -102,15 +109,22 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// inside `__init__`, structurally -- see `super`'s own module doc comment
 /// and `lower_method`'s doc comment for why this must not require a real
 /// type-inference pass: only a bare reference to one of `__init__`'s own
-/// (always-annotated) parameters, or a scalar literal, is accepted. A
-/// parameter may be a scalar (int/float/bool/str), a PEP 695 type
-/// parameter, or -- since #1262 -- a `list[int]`/`dict[str, int]`
-/// container, which the slot stores as its pointer word. Every
-/// other RHS shape -- including an arithmetic expression, a call, or a
-/// reference to `self` itself -- is `C0001`, matching the plan's own
-/// explicit authorization ("any class-body statement kind other than a
-/// `def` or a `self.<attr> = ...` inside `__init__` is `C0001` for this
-/// PR").
+/// (always-annotated) parameters, a scalar literal, or -- since #1265 -- an
+/// empty list display is accepted. A parameter may be a scalar
+/// (int/float/bool/str), a PEP 695 type parameter, or -- since #1262 -- a
+/// `list[int]`/`dict[str, int]` container, which the slot stores as its
+/// pointer word.
+///
+/// `[]` yields the provisional slot type `list[<Ty::Infer>]`. It is the one
+/// place this crate records a `Ty::Infer` slot on purpose, and it never
+/// reaches `pycc_mir`: `pycc_types::empty_container` replaces it with the
+/// element type of an inherited declaration or of the first
+/// `self.<attr>.append(v)` in the class's own methods, and refuses the
+/// program with `T0003` when neither exists. An empty dict display has no
+/// such producer yet (`self.d[k] = v` is #891), so it gets its own `C0001`
+/// naming the annotated spelling that works. Every other RHS shape --
+/// including an arithmetic expression, a call, or a reference to `self`
+/// itself -- is `C0001`.
 fn slot_ty_from_init_rhs(
     value: &Expr,
     params: &[(String, Ty)],
@@ -228,10 +242,23 @@ fn slot_ty_from_init_rhs(
         }
         Expr::BooleanLiteral(_) => Ok(Ty::Bool),
         Expr::StringLiteral(_) => Ok(Ty::Str),
+        // #1265 (Part 4 of #1218): the provisional slot -- see this
+        // function's doc comment.
+        Expr::List(list) if list.elts.is_empty() => Ok(Ty::List(Box::new(Ty::Infer))),
+        Expr::Dict(dict) if dict.items.is_empty() => Err(unsupported(
+            format!(
+                "an unannotated `{receiver_name}.<attr> = {{}}` has no key/value type source \
+                 yet -- annotate it (`{receiver_name}.d: dict[str, int] = {{}}`); inferring it \
+                 from `{receiver_name}.d[k] = v` needs a subscript store on an attribute \
+                 receiver (#891)"
+            ),
+            pycc_ast::expr_range(value),
+        )),
         other => Err(unsupported(
             "an instance attribute's first assignment inside `__init__` must be a bare \
-             parameter name or a scalar literal (int/float/bool/str) so its type is known \
-             at compile time",
+             parameter name, a scalar literal (int/float/bool/str) or an empty list `[]` \
+             whose element type the class's own methods supply, so its type is known at \
+             compile time",
             pycc_ast::expr_range(other),
         )),
     }
@@ -316,15 +343,62 @@ mod tests {
     }
 
     #[test]
-    fn an_init_attr_assigned_an_empty_list_literal_is_still_unsupported() {
-        // `self.xs = []` has no parameter to take its element type from; the
-        // annotated spelling `self.xs: list[int] = []` is #1264 (Part 3,
-        // pinned below) and the unannotated one is #1218's Part 4, pinned
-        // here so its diff shows the change.
+    fn an_init_attr_assigned_an_empty_list_literal_establishes_a_provisional_slot() {
+        // #1265 (Part 4 of #1218): the element type is left for
+        // `pycc_types::empty_container` to resolve class-wide.
+        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.xs = []\n");
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("xs".to_string(), Ty::List(Box::new(Ty::Infer)))]
+        );
+    }
+
+    #[test]
+    fn a_this_spelled_empty_list_establishes_a_provisional_slot() {
+        // #1181: the receiver is whatever the first parameter is called.
+        let hir = lower_ok("class C:\n    def __init__(this) -> None:\n        this.xs = []\n");
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("xs".to_string(), Ty::List(Box::new(Ty::Infer)))]
+        );
+    }
+
+    #[test]
+    fn an_init_attr_assigned_an_empty_dict_literal_names_the_annotated_spelling() {
+        // The dict half has no producer yet: `self.d[k] = v` is #891.
         let message =
-            c0001_message("class C:\n    def __init__(self) -> None:\n        self.xs = []\n");
+            c0001_message("class C:\n    def __init__(this) -> None:\n        this.d = {}\n");
+        assert_eq!(
+            message,
+            "an unannotated `this.<attr> = {}` has no key/value type source yet -- annotate \
+             it (`this.d: dict[str, int] = {}`); inferring it from `this.d[k] = v` needs a \
+             subscript store on an attribute receiver (#891)"
+        );
+    }
+
+    #[test]
+    fn a_chained_empty_list_initialiser_stays_refused() {
+        // CPython binds one list to both attributes; two separate `[]`
+        // evaluations would break that identity, so the chain refusal (which
+        // runs before this pre-scan) is load-bearing.
+        let message = c0001_message(
+            "class C:\n    def __init__(self) -> None:\n        self.a = self.b = []\n",
+        );
         assert!(
-            message.contains("must be a bare parameter name or a scalar literal"),
+            message.starts_with("chained assignment of an empty `[]`/`{}` literal"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn any_other_init_rhs_names_every_admitted_shape() {
+        let message =
+            c0001_message("class C:\n    def __init__(self) -> None:\n        self.xs = [1]\n");
+        assert!(
+            message.contains(
+                "must be a bare parameter name, a scalar literal (int/float/bool/str) or an \
+                 empty list `[]`"
+            ),
             "{message}"
         );
     }

@@ -78,6 +78,21 @@
 //! ordinary mangled `HirItem::Function` items). Module-level statements keep
 //! failing, now with `T0003`.
 //!
+//! **Instance attributes (#1265).** An attribute store is not a function
+//! local, so the three sources above never type one. `pycc_hir` lowers an
+//! unannotated `self.xs = []` at the top level of `__init__` to a
+//! *provisional* `list[<Ty::Infer>]` slot, and a class phase ([`attr_slot`])
+//! runs ahead of the per-function phase: it resolves each provisional slot
+//! from an inherited concrete slot or from the first `self.xs.append(v)` in
+//! the class's own methods, then types every `self.<attr> = []`/`{}` in those
+//! methods from the class's slot layout. A provisional slot it cannot
+//! resolve is refused with `T0003` by [`attr_slot::reject_unresolved_attr_slots`].
+//! An unannotated `self.d = {}` establishing the attribute in `__init__`
+//! stays `C0001` in `pycc_hir` (a later reset in a method is typed from the
+//! slot like `[]`, or left for `T0003` on a shape mismatch): its producer,
+//! `self.d[k] = v`, is not lowerable yet (#891). D-245's 2026-09-24
+//! amendment for #1265 is the canonical statement.
+//!
 //! Within a function body the pass walks *every* block statement this HIR has
 //! -- `if`/`else`, `while`, both `for` forms, every `match` case body, and
 //! every `try`/`except`/`except*`/`else`/`finally` suite (see
@@ -108,7 +123,11 @@
 //! container at all) and is untouched here; it is tracked as issue #1046.
 
 use super::*;
-use pycc_hir::ContainerReceiver;
+
+pub(crate) mod attr_slot;
+mod producer;
+
+use producer::find_producer;
 
 /// What a resolution produced: the *element* type of a list, or the
 /// key/value pair of a dict.
@@ -156,16 +175,48 @@ fn empty_literal(expr: &HirExpr) -> Option<EmptyLiteral> {
 
 /// Rewrites every resolvable empty container in `hir`, returning `None` when
 /// the module contains no empty container literal in a function body at all
-/// -- which is the overwhelmingly common case, and which keeps this pass
-/// from adding a whole-module clone to `check_all_keyed`, a path that does
-/// not otherwise clone.
+/// and no provisional attribute slot (#1265) -- which is the overwhelmingly
+/// common case, and which keeps this pass from adding a whole-module clone to
+/// `check_all_keyed`, a path that does not otherwise clone.
 pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
-    if !hir.items.iter().any(|item| match item {
-        HirItem::Function { body, .. } => body_has_empty_literal(body),
-        HirItem::TopLevelStmt(_) => false,
-    }) {
+    let class_phase = attr_slot::needs_class_phase(hir);
+    if !class_phase
+        && !hir.items.iter().any(|item| match item {
+            HirItem::Function { body, .. } => body_has_empty_literal(body),
+            HirItem::TopLevelStmt(_) => false,
+        })
+    {
         return None;
     }
+    let local_names = crate::module::module_function_local_names(hir);
+    let mut resolved = hir.clone();
+    // #1265: the class phase runs first, so the per-function phase below
+    // builds its module scope from the class-resolved module -- a local
+    // producer reading `self.xs` then sees the resolved `list[int]` rather
+    // than the provisional `list[<inferred>]`, which `concrete` would discard.
+    if class_phase {
+        attr_slot::resolve_class_slots(hir, &mut resolved, &local_names);
+    }
+    let module_env = module_environment(&resolved);
+    for (index, item) in resolved.items.iter_mut().enumerate() {
+        let HirItem::Function {
+            name, params, body, ..
+        } = item
+        else {
+            continue;
+        };
+        let names = &local_names[index];
+        let env = function_environment(&module_env, name, params, body, names);
+        let producers = body.clone();
+        rewrite_body(body, &producers, &env, names);
+    }
+    Some(resolved)
+}
+
+/// The module scope every producer inference in `hir` reads: the annotated
+/// function table, the std-module aliases, the foreign names, and the
+/// module-level bindings in source order.
+fn module_environment(hir: &HirModule) -> Environment {
     // #1021 review round 5: build the module scope from the *annotated*
     // functions rather than through `concrete_function_environment`, which
     // refuses the whole module the moment any one signature still carries
@@ -269,39 +320,40 @@ pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
             }
         }
     }
-    let local_names = crate::module::module_function_local_names(hir);
-    let mut resolved = hir.clone();
-    for (index, item) in resolved.items.iter_mut().enumerate() {
-        let HirItem::Function {
-            name, params, body, ..
-        } = item
-        else {
-            continue;
-        };
-        let names = &local_names[index];
-        let mut env = module_env.child_for_function(names);
-        // #433, mirroring `check_function_in`: extract the class name from a
-        // mangled `<ClassName>.<method>` name so producer inference can
-        // resolve `super()`. Without it `resolve_super_method_call` reaches
-        // its `env.current_class().unwrap()` with `self` bound (the loop
-        // below binds every parameter) and no class, and aborts the
-        // compiler on `xs = []` / `xs.append(super().m())`. A top-level
-        // function name contains no `.`, so this leaves `current_class`
-        // `None` for those exactly as the checker does.
-        env.current_class = name
-            .split('.')
-            .next()
-            .filter(|prefix| *prefix != name.as_str())
-            .map(String::from);
-        for (param_name, param_ty) in params.iter() {
-            env.bind(param_name.clone(), param_ty.clone());
-        }
-        crate::bind_local_types_in_body(&mut env, names, body);
-        demote_conditional_bindings(&mut env, params, names, body);
-        let producers = body.clone();
-        rewrite_body(body, &producers, &env, names);
+    module_env
+}
+
+/// The environment a producer in function `name`'s body is inferred in:
+/// `module_env`'s child scope, the enclosing class (for `super()`), the
+/// parameters, the flat whole-body bindings, and the D-245 demotion of every
+/// conditionally bound name.
+fn function_environment(
+    module_env: &Environment,
+    name: &str,
+    params: &[(String, Ty)],
+    body: &[HirStmt],
+    names: &[&str],
+) -> Environment {
+    let mut env = module_env.child_for_function(names);
+    // #433, mirroring `check_function_in`: extract the class name from a
+    // mangled `<ClassName>.<method>` name so producer inference can
+    // resolve `super()`. Without it `resolve_super_method_call` reaches
+    // its `env.current_class().unwrap()` with `self` bound (the loop
+    // below binds every parameter) and no class, and aborts the
+    // compiler on `xs = []` / `xs.append(super().m())`. A top-level
+    // function name contains no `.`, so this leaves `current_class`
+    // `None` for those exactly as the checker does.
+    env.current_class = name
+        .split('.')
+        .next()
+        .filter(|prefix| *prefix != name)
+        .map(String::from);
+    for (param_name, param_ty) in params.iter() {
+        env.bind(param_name.clone(), param_ty.clone());
     }
-    Some(resolved)
+    crate::bind_local_types_in_body(&mut env, names, body);
+    demote_conditional_bindings(&mut env, params, names, body);
+    env
 }
 
 /// Demotes every binding `bind_local_types_in_body` recorded that the check
@@ -497,18 +549,22 @@ fn scoped_for_body(
 }
 
 fn body_has_empty_literal(body: &[HirStmt]) -> bool {
-    body.iter().any(|stmt| {
-        let own = match stmt {
-            HirStmt::Assign { value, .. } => empty_literal(value).is_some(),
-            HirStmt::AnnAssign { value, .. } => {
-                value.as_ref().is_some_and(|v| empty_literal(v).is_some())
-            }
-            _ => false,
-        };
-        own || nested_bodies(stmt)
-            .iter()
-            .any(|b| body_has_empty_literal(b))
+    any_stmt(body, &|stmt| match stmt {
+        HirStmt::Assign { value, .. } => empty_literal(value).is_some(),
+        HirStmt::AnnAssign { value, .. } => {
+            value.as_ref().is_some_and(|v| empty_literal(v).is_some())
+        }
+        _ => false,
     })
+}
+
+/// Whether `found` holds for any statement of `body`, at any block depth
+/// [`nested_bodies`] reaches. The one traversal both fast-path triggers
+/// share: the local-binding one above and #1265's attribute-reset one
+/// (`attr_slot::needs_class_phase`).
+fn any_stmt(body: &[HirStmt], found: &dyn Fn(&HirStmt) -> bool) -> bool {
+    body.iter()
+        .any(|stmt| found(stmt) || nested_bodies(stmt).iter().any(|b| any_stmt(b, found)))
 }
 
 /// Every nested statement sequence of a block statement, for every block
@@ -519,8 +575,8 @@ fn body_has_empty_literal(body: &[HirStmt]) -> bool {
 /// annotation source needs no environment at all (#1021 bot review round).
 /// `Try` and `TryStar` share one arm because their field shapes are
 /// identical; a future block form must be added here and in
-/// [`rewrite_body`]'s own match, which cannot share this borrow because it
-/// needs `&mut`.
+/// [`for_each_stmt_mut`]'s own match, which cannot share this borrow because
+/// it needs `&mut`.
 fn nested_bodies(stmt: &HirStmt) -> Vec<&[HirStmt]> {
     match stmt {
         HirStmt::If { body, orelse, .. } => vec![body, orelse],
@@ -560,29 +616,43 @@ fn rewrite_body(
     env: &Environment,
     local_names: &[&str],
 ) {
+    for_each_stmt_mut(body, &mut |stmt| match stmt {
+        HirStmt::Assign { target, value } => {
+            rewrite_value(value, target, None, producers, env, local_names);
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value: Some(value),
+            ..
+        } => {
+            rewrite_value(value, target, Some(annotation), producers, env, local_names);
+        }
+        _ => {}
+    });
+}
+
+/// Visits every statement of `body` and then every statement of each of its
+/// nested block bodies, mutably. This is [`nested_bodies`]' `&mut` twin (it
+/// cannot share that borrow), and the one traversal both rewrites share: the
+/// local-binding one in [`rewrite_body`] and #1265's attribute-reset one in
+/// `attr_slot`. `visit` only ever rewrites an expression inside the
+/// statement, never its nested bodies, so recursing after the visit sees the
+/// same statement list it would have seen before.
+fn for_each_stmt_mut(body: &mut [HirStmt], visit: &mut dyn FnMut(&mut HirStmt)) {
     for stmt in body.iter_mut() {
+        visit(stmt);
         match stmt {
-            HirStmt::Assign { target, value } => {
-                rewrite_value(value, target, None, producers, env, local_names);
-            }
-            HirStmt::AnnAssign {
-                target,
-                annotation,
-                value: Some(value),
-                ..
-            } => {
-                rewrite_value(value, target, Some(annotation), producers, env, local_names);
-            }
             HirStmt::If { body, orelse, .. } => {
-                rewrite_body(body, producers, env, local_names);
-                rewrite_body(orelse, producers, env, local_names);
+                for_each_stmt_mut(body, visit);
+                for_each_stmt_mut(orelse, visit);
             }
-            HirStmt::While { body, .. } => rewrite_body(body, producers, env, local_names),
-            HirStmt::ForRange { body, .. } => rewrite_body(body, producers, env, local_names),
-            HirStmt::ForList { body, .. } => rewrite_body(body, producers, env, local_names),
+            HirStmt::While { body, .. } => for_each_stmt_mut(body, visit),
+            HirStmt::ForRange { body, .. } => for_each_stmt_mut(body, visit),
+            HirStmt::ForList { body, .. } => for_each_stmt_mut(body, visit),
             HirStmt::Match { cases, .. } => {
                 for case in cases.iter_mut() {
-                    rewrite_body(&mut case.body, producers, env, local_names);
+                    for_each_stmt_mut(&mut case.body, visit);
                 }
             }
             HirStmt::Try {
@@ -597,12 +667,12 @@ fn rewrite_body(
                 orelse,
                 finalbody,
             } => {
-                rewrite_body(body, producers, env, local_names);
+                for_each_stmt_mut(body, visit);
                 for handler in handlers.iter_mut() {
-                    rewrite_body(&mut handler.body, producers, env, local_names);
+                    for_each_stmt_mut(&mut handler.body, visit);
                 }
-                rewrite_body(orelse, producers, env, local_names);
-                rewrite_body(finalbody, producers, env, local_names);
+                for_each_stmt_mut(orelse, visit);
+                for_each_stmt_mut(finalbody, visit);
             }
             _ => {}
         }
@@ -767,140 +837,6 @@ fn from_container_ty(ty: &Ty) -> Option<Resolution> {
         Ty::Dict(pair) => Some(Resolution::Dict(pair.0.clone(), pair.1.clone())),
         _ => None,
     }
-}
-
-/// The first producer use of `target` anywhere in `body`, in source order.
-///
-/// Scanning the whole function body from its start -- rather than only
-/// forward from the assignment being resolved -- is what implements the
-/// **first-wins-within-a-scope** rule for a name assigned `[]` in more than
-/// one branch: `if c: xs = []; xs.append(1)` / `else: xs = [];
-/// xs.append("a")` resolves *both* nodes from the first producer, and the
-/// second branch's `append` then fails with the ordinary element-type
-/// mismatch. A name-keyed resolution cannot represent two different types
-/// for one binding, and neither can the binding itself.
-///
-/// A producer is recognized only in **statement position** -- a bare
-/// `xs.append(v)` or `d[k] = v`. `HirExpr::ListAppend` is also a valid value
-/// expression (`y = xs.append(v)` binds `None`), and such an occurrence is
-/// *not* a producer here, so `xs = []` followed only by `y = xs.append(1)`
-/// reports `T0003`. That restriction is deliberate and matches the rewrite
-/// side: `rewrite_body` and `body_has_empty_literal` likewise visit direct
-/// assignment values and block bodies, never nested *expression* positions, so
-/// the whole pass has one statable shape. The boundary is between statement
-/// and expression nesting, not between one block form and another: every block
-/// form is walked, via the shared [`nested_bodies`] inventory. See D-245
-/// item 8.
-///
-/// The scan returns the first *syntactic* producer occurrence for the name,
-/// not the first shape-compatible one: a `ListAppend` on a name later used as
-/// a dict ends the scan with a `Resolution::List`. `Resolution::matches`
-/// discards a resolution of the wrong shape at the rewrite site, so a
-/// cross-shape hit costs a missed resolution (`T0003`) and never yields a
-/// wrong element type. Such a program fails type-checking on its own terms
-/// anyway. The same is true of a producer whose value does not infer: the
-/// scan ends there with a miss rather than continuing to a later producer,
-/// because a later producer's element type is not the one the program's
-/// first use asks for, and selecting it would be a wrong resolution rather
-/// than a missed one. See [`ProducerScan`].
-fn find_producer(
-    body: &[HirStmt],
-    target: &str,
-    env: &Environment,
-    local_names: &[&str],
-) -> Option<Resolution> {
-    let mut sites: Vec<&str> = Vec::new();
-    collect_binding_sites(body, &mut sites);
-    match scan_for_producer(body, target, env, local_names, &sites) {
-        ProducerScan::Resolved(resolution) => Some(resolution),
-        ProducerScan::Matched | ProducerScan::NotFound => None,
-    }
-}
-
-/// The outcome of scanning one statement list for `target`'s first producer.
-///
-/// The middle variant is what makes the scan stop at the *first syntactic*
-/// producer rather than the first *inferring* one: a producer whose value
-/// fails to infer -- because it reads a name the flat whole-function
-/// environment never bound, such as one assigned inside a `try` suite --
-/// ends the scan with a miss instead of falling through to a later producer
-/// that might carry an entirely different element type.
-enum ProducerScan {
-    /// No statement in this list, or in any body nested inside it, names
-    /// `target` in producer position.
-    NotFound,
-    /// A producer for `target` was found, but its element type could not be
-    /// inferred. The scan is over; the caller resolves nothing.
-    Matched,
-    /// A producer for `target` was found and its element type inferred.
-    Resolved(Resolution),
-}
-
-fn scan_for_producer<'a>(
-    body: &'a [HirStmt],
-    target: &str,
-    env: &Environment,
-    local_names: &[&str],
-    sites: &[&'a str],
-) -> ProducerScan {
-    for stmt in body {
-        // Issue #1188: an admitted container reading of a receiver-dispatched
-        // `target.append(v)` is a producer too. `target` is bound to an empty
-        // list literal, so the container reading is the only one it can take.
-        let dispatched = match stmt {
-            HirStmt::ExprStmt(HirExpr::ReceiverDispatchedCall {
-                call,
-                container: pycc_hir::ContainerFallback::Admitted,
-            }) => call.container_form(),
-            _ => None,
-        };
-        if let Some(HirExpr::ListAppend {
-            list: ContainerReceiver::Name(list),
-            value,
-        }) = &dispatched
-            && list == target
-        {
-            return match crate::infer_expr_in(env, local_names, value) {
-                Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
-                Err(_) => ProducerScan::Matched,
-            };
-        }
-        match stmt {
-            // #1263: only a bare-name receiver can be `target`; an
-            // attribute receiver (`self.xs.append(v)`) is never a producer
-            // for a local name.
-            HirStmt::ExprStmt(HirExpr::ListAppend {
-                list: ContainerReceiver::Name(list),
-                value,
-            }) if list == target => {
-                return match crate::infer_expr_in(env, local_names, value) {
-                    Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
-                    Err(_) => ProducerScan::Matched,
-                };
-            }
-            HirStmt::DictSet { dict, key, value } if dict == target => {
-                return match (
-                    crate::infer_expr_in(env, local_names, key),
-                    crate::infer_expr_in(env, local_names, value),
-                ) {
-                    (Ok(key_ty), Ok(value_ty)) => {
-                        ProducerScan::Resolved(Resolution::Dict(key_ty, value_ty))
-                    }
-                    _ => ProducerScan::Matched,
-                };
-            }
-            _ => {}
-        }
-        for nested in nested_bodies(stmt) {
-            let scoped = scoped_for_body(stmt, nested, env, sites);
-            let inner = scoped.as_ref().unwrap_or(env);
-            match scan_for_producer(nested, target, inner, local_names, sites) {
-                ProducerScan::NotFound => {}
-                outcome => return outcome,
-            }
-        }
-    }
-    ProducerScan::NotFound
 }
 
 /// `T0003` for an empty list literal no source of evidence could type.
