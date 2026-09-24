@@ -148,6 +148,56 @@ def f(d: int) -> None:
     assert_eq!(code_of(src), "T0023");
 }
 
+/// A handler's own `as` name is not compared with the body's binding of the
+/// same spelling: the body's `e` is an `int` and the handler's is the
+/// exception instance, and the statement is accepted as CPython accepts it.
+/// The handler's exit unbinds `e`, so it stays possibly unbound and a read
+/// after the statement is `T0041`, which is what makes the skip safe.
+#[test]
+fn an_as_name_is_exempt_from_the_type_walk_and_stays_maybe() {
+    let base = "\
+def f(d: int) -> None:
+    try:
+        e = 10 // d
+    except ZeroDivisionError as e:
+        print(\"zero\")
+";
+    assert!(parse_check(&format!("{base}    print(1)\n")).is_ok());
+    let err = parse_check(&format!("{base}    print(e)\n")).unwrap_err();
+    assert_eq!(err.code, "T0041");
+    assert!(err.message.contains("`e`"), "{}", err.message);
+}
+
+/// Module scope, with no `def` wrapper: every handler binds `x`, so the
+/// read after the statement is accepted.
+#[test]
+fn at_module_scope_a_name_bound_on_every_path_is_definite() {
+    let src = "\
+d = 0
+try:
+    x = 10 // d
+except ZeroDivisionError:
+    x = -1
+print(x)
+";
+    assert!(parse_check(src).is_ok());
+}
+
+/// Module scope: a handler that falls through without binding `x` leaves it
+/// possibly unbound, so the read after the statement is `T0041`.
+#[test]
+fn at_module_scope_a_handler_that_does_not_bind_is_t0041() {
+    let src = "\
+d = 0
+try:
+    x = 10 // d
+except ZeroDivisionError:
+    y = 1
+print(x)
+";
+    assert_eq!(code_of(src), "T0041");
+}
+
 // -- The check phase: the type walk --
 
 /// Two `as` handlers binding the same spelling to different exception
@@ -325,6 +375,8 @@ print(_h(0))
 }
 
 /// No fall-through path: every path returns, and nothing is promoted.
+/// This pins `promote_try_fallthrough`'s empty-path early return only; the
+/// promotion logic itself is pinned by the tests around it.
 #[test]
 fn the_solver_promotes_nothing_without_a_fall_through_path() {
     let src = "\

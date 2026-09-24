@@ -107,7 +107,11 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   so a read of a try-bound name inside `finally` is still `T0041`. Every
   path's binding is type-checked in `check_assignment`'s direction, including
   a handler that always terminates (a mismatch is `T0023`), and the name keeps
-  the first path's type. This join deliberately does not reuse
+  the first path's type. A handler's own `as` name is exempt: it is never
+  compared with any other path's binding of that spelling, an ordinary
+  binding included, so `try: e = 10 // d / except ZeroDivisionError as e:`
+  is accepted. Such a name stays `Maybe` after the statement, because the
+  handler's exit demotes it, so every read of it there is `T0041`. This join deliberately does not reuse
   `join_if_branches`: that function checks the reversed direction, so it
   admits a later `int` into an earlier `bool` and keeps the `bool` -- which
   is why `if d == 0: x = True / else: x = 1 / print(x)` prints `True` for

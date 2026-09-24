@@ -34,9 +34,14 @@ pub(super) struct TryPaths<'a> {
 /// them: a later type must be assignable to the first-established one, in
 /// `check_assignment`'s direction. `Maybe` bindings and terminating handlers
 /// count, because every path stores into the same slot. A handler's own `as`
-/// name is skipped in that handler, since codegen already stores differing
-/// exception instances in one slot. The first-established type becomes the
-/// name's type after the statement.
+/// name is exempt: it is never compared with any other path's binding of the
+/// same spelling, an ordinary binding included, because codegen already
+/// stores differing exception instances in one slot. So `try: e = 10 // d /
+/// except ZeroDivisionError as e: ...` is accepted, as it was before #1289.
+/// The exemption is safe because the handler's exit demotes that name to
+/// `Maybe`, so it is possibly unbound after the statement and every read of
+/// it there is `T0041`. The first-established type becomes the type after the
+/// statement of every other name.
 ///
 /// `join_if_branches` is deliberately not used to fold the paths: it checks
 /// `is_assignable(first, later)`, the reverse direction, and keeps the first
