@@ -1,10 +1,19 @@
 //! Type checking for builtin exceptions (#382).
 
-use super::{Environment, HirExpr, HirStmt, Ty, infer_expr_in, join_if_branches, join_loop_body};
+use std::collections::HashMap;
+
+use super::env::BindingState;
+use super::{
+    Environment, HirExpr, HirStmt, Ty, block_always_returns, infer_expr_in, join_if_branches,
+    join_loop_body,
+};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     EXCEPTION_INIT_MANGLED_NAME, HirClassDef, HirExceptHandler, except_handler_binding_type_name,
 };
+
+mod try_join;
+use try_join::{TryPaths, join_try_outcome};
 
 pub(super) fn check_try_stmt(
     env: &mut Environment,
@@ -118,42 +127,20 @@ pub(super) fn check_try_stmt(
     let mut else_env = body_env.clone();
     check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
-    let mut joined = env.clone();
-    join_loop_body(&mut joined, &body_env);
-    for handler_env in &handler_envs {
-        let previous = joined.clone();
-        join_if_branches(&mut joined, &previous, handler_env)?;
-    }
-    let previous = joined.clone();
-    let _ = join_if_branches(&mut joined, &previous, &else_env);
-    *env = joined;
-    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
-    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
-    Ok(())
-}
-
-/// #1244: a `finally` block can be entered after only a partial run of the
-/// try body, of any handler, or of the `else` block (an exception escaping
-/// any of them), so every name any of them deletes may be unbound there.
-/// Applied to the joined environment that also flows out of the `try`, so
-/// the post-`try` state is conservative too (`docs/TYPE_SYSTEM.md`'s
-/// "`del` statement" section lists the limitation). A `try` without
-/// `finally` needs no prescan: the join already accounts for every path.
-fn apply_finally_delete_prescan(
-    env: &mut Environment,
-    body: &[HirStmt],
-    handlers: &[HirExceptHandler],
-    orelse: &[HirStmt],
-    finalbody: &[HirStmt],
-) {
-    if finalbody.is_empty() {
-        return;
-    }
-    super::narrow::apply_delete_prescan(env, body, None);
-    for handler in handlers {
-        super::narrow::apply_delete_prescan(env, &handler.body, None);
-    }
-    super::narrow::apply_delete_prescan(env, orelse, None);
+    join_try_outcome(
+        env,
+        local_names,
+        return_ty,
+        TryPaths {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            body_env: &body_env,
+            handler_envs: &handler_envs,
+            else_env: &else_env,
+        },
+    )
 }
 
 /// `try: ... except* T: ...` (PEP 654, Part 3 of #382, #542).
@@ -301,18 +288,20 @@ pub(super) fn check_try_star_stmt(
     let mut else_env = body_env.clone();
     check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
-    let mut joined = env.clone();
-    join_loop_body(&mut joined, &body_env);
-    for handler_env in &handler_envs {
-        let previous = joined.clone();
-        join_if_branches(&mut joined, &previous, handler_env)?;
-    }
-    let previous = joined.clone();
-    let _ = join_if_branches(&mut joined, &previous, &else_env);
-    *env = joined;
-    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
-    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
-    Ok(())
+    join_try_outcome(
+        env,
+        local_names,
+        return_ty,
+        TryPaths {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            body_env: &body_env,
+            handler_envs: &handler_envs,
+            else_env: &else_env,
+        },
+    )
 }
 
 pub(super) fn check_raise_stmt(

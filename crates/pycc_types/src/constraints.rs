@@ -24,7 +24,8 @@
 //!   [`fresh_term`], [`root`], [`resolved_term`], [`unify_terms`],
 //!   [`merge_inferred_types`], [`term_for_type`]);
 //! * constraint collection ([`collect_expr_constraints`],
-//!   [`bind_comp_loop_var`], [`collect_block_constraints`]);
+//!   [`bind_comp_loop_var`], [`collect_block_constraints`], whose shared
+//!   `try`/`except`/`except*` walk lives in the [`try_stmt`] submodule);
 //! * constraint application ([`propagate_binop_constraints`],
 //!   [`apply_annotation_defaults`]) and the signature materialization that
 //!   validates a solved signature set against the ordinary checker
@@ -59,6 +60,7 @@
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
 mod signatures;
+mod try_stmt;
 pub(crate) use signatures::*;
 
 use std::collections::{HashMap, HashSet};
@@ -3088,169 +3090,27 @@ pub(crate) fn collect_block_constraints(
                 handlers,
                 orelse,
                 finalbody,
-            } => {
-                // #382 (PR-22 Part 1): collect constraints from the try
-                // body, each handler, the else body, and the finally body.
-                // The try body's bindings are joined back as `Maybe` (the
-                // body may raise before reaching an assignment).
-                // Issue #771 join-site follow-up: include `opaque_bindings`
-                // alongside `bindings` here. A name definitely-but-opaquely
-                // bound before this construct must count as pre-existing
-                // too -- otherwise a branch that reassigns it to a real,
-                // solver-representable term looks "newly introduced" to the
-                // join helper below, and when only one branch performs that
-                // reassignment the name is misclassified as bound in both
-                // branches (the other, untouched branch still carries the
-                // opaque marker), unmasking a term that only reflects one
-                // path as if it were unconditionally correct. Confirmed as a
-                // real gap by the pinned local reviewer's second pass.
-                let pre_existing: HashSet<String> = env
-                    .bindings
-                    .keys()
-                    .chain(env.opaque_bindings.iter())
-                    .cloned()
-                    .collect();
-                let mut body_env = env.clone();
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    &mut body_env,
-                    body,
-                    return_term.clone(),
-                )?;
-                solver::join_loop_body_solver(env, &body_env, &pre_existing);
-                for handler in handlers {
-                    let mut henv = env.clone();
-                    // Bind the `as` name in the handler environment.
-                    // Inside the handler body, the binding is definite.
-                    if let Some(exc_types) = &handler.exc_type
-                        && let Some(name) = &handler.name
-                    {
-                        let binding_type = pycc_hir::except_handler_binding_type_name(exc_types);
-                        // Round-11 review finding 2: an `as` name rebinds,
-                        // so it drops any artifact-owned buffer provenance
-                        // it carried; the join helper then carries that
-                        // invalidation back out of the handler environment.
-                        henv.rebind_over_owned_buffer(name);
-                        henv.bindings
-                            .insert(name.clone(), Ok(Ty::Instance(Box::new(binding_type))));
-                    }
-                    collect_block_constraints(
-                        signatures,
-                        parents,
-                        concrete,
-                        constraints,
-                        &mut henv,
-                        &handler.body,
-                        return_term.clone(),
-                    )?;
-                    solver::join_loop_body_solver(env, &henv, &pre_existing);
-                }
-                let mut else_env = env.clone();
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    &mut else_env,
-                    orelse,
-                    return_term.clone(),
-                )?;
-                solver::join_loop_body_solver(env, &else_env, &pre_existing);
-                // The finally body always runs — collect in-place.
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    env,
-                    finalbody,
-                    return_term.clone(),
-                )?;
             }
-            // Part 3 of #382 (#542): `except*` collects constraints exactly
-            // like plain `try`/`except`, except an `as` binding always
-            // resolves to `ExceptionGroup` (never the named handler type) --
-            // see `check_try_star_stmt` in `pycc_types::exception` for the
-            // same rule at type-checking time.
-            HirStmt::TryStar {
+            | HirStmt::TryStar {
                 body,
                 handlers,
                 orelse,
                 finalbody,
-            } => {
-                // Issue #771 join-site follow-up: include `opaque_bindings`
-                // alongside `bindings` here, exactly as the `Try` arm above
-                // does. A name definitely-but-opaquely bound before this
-                // construct must count as pre-existing too -- otherwise a
-                // branch that reassigns it to a real, solver-representable
-                // term looks "newly introduced" to the join helper below,
-                // and when only one branch performs that reassignment the
-                // name is misclassified as bound in both branches (the
-                // other, untouched branch still carries the opaque marker),
-                // unmasking a term that only reflects one path as if it
-                // were unconditionally correct.
-                let pre_existing: HashSet<String> = env
-                    .bindings
-                    .keys()
-                    .chain(env.opaque_bindings.iter())
-                    .cloned()
-                    .collect();
-                let mut body_env = env.clone();
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    &mut body_env,
+            } => try_stmt::collect_try_constraints(
+                signatures,
+                parents,
+                concrete,
+                constraints,
+                env,
+                try_stmt::TryShape {
                     body,
-                    return_term.clone(),
-                )?;
-                solver::join_loop_body_solver(env, &body_env, &pre_existing);
-                for handler in handlers {
-                    let mut henv = env.clone();
-                    if let Some(name) = &handler.name {
-                        // Round-11 review finding 2: see the plain `Try` arm.
-                        henv.rebind_over_owned_buffer(name);
-                        henv.bindings.insert(
-                            name.clone(),
-                            Ok(Ty::Instance(Box::new("ExceptionGroup".to_string()))),
-                        );
-                    }
-                    collect_block_constraints(
-                        signatures,
-                        parents,
-                        concrete,
-                        constraints,
-                        &mut henv,
-                        &handler.body,
-                        return_term.clone(),
-                    )?;
-                    solver::join_loop_body_solver(env, &henv, &pre_existing);
-                }
-                let mut else_env = env.clone();
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    &mut else_env,
+                    handlers,
                     orelse,
-                    return_term.clone(),
-                )?;
-                solver::join_loop_body_solver(env, &else_env, &pre_existing);
-                collect_block_constraints(
-                    signatures,
-                    parents,
-                    concrete,
-                    constraints,
-                    env,
                     finalbody,
-                    return_term.clone(),
-                )?;
-            }
+                    star: matches!(stmt, HirStmt::TryStar { .. }),
+                },
+                return_term.clone(),
+            )?,
             HirStmt::Raise { exc, cause } => {
                 // #382 (PR-22 Part 1): A raise expression that is a direct
                 // call to a builtin exception class (e.g.
