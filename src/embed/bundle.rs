@@ -12,9 +12,12 @@ use super::EmbedProbe;
 use super::closure;
 use super::layout::{self, EmbedPlatform};
 use super::macho::{self, ClosureImage, MachoDep};
+use super::native::{self, NativePlan, Natives};
 use super::sha256::sha256_hex;
 use crate::lock::build::LockedClosure;
+use crate::lock::schema::LockedNative;
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -44,7 +47,8 @@ pub(crate) fn check_existing(sidecar: &Path) -> Result<bool, String> {
 /// Builds the sidecar for `probe` in a staging directory beside it, then
 /// swaps it into `parent/sidecar_name`. Returns the bundled library's final
 /// path, which the link step names by file. `locked` is the consumed
-/// `pycc.lock` section's closure, when the build has one (#1242).
+/// `pycc.lock` section's closure, when the build has one (#1242), and
+/// `natives` what the build copies into `lib/` besides libpython (#1243).
 pub(crate) fn assemble(
     probe: &EmbedProbe,
     platform: EmbedPlatform,
@@ -52,12 +56,13 @@ pub(crate) fn assemble(
     sidecar_name: &str,
     replace_existing: bool,
     locked: Option<&LockedClosure>,
+    natives: &NativePlan,
 ) -> Result<PathBuf, String> {
     let pid = std::process::id();
     let sidecar = parent.join(sidecar_name);
     let staging = parent.join(format!("{sidecar_name}.tmp-{pid}"));
     std::fs::create_dir(&staging).map_err(|e| io_error("create", &staging, &e))?;
-    if let Err(e) = populate(probe, platform, &staging, locked) {
+    if let Err(e) = populate(probe, platform, &staging, locked, natives) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e);
     }
@@ -115,14 +120,15 @@ pub(crate) fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String 
 }
 
 /// Fills `staging` with the library, the filtered standard library, the
-/// locked closure, the macOS relocation, and last the marker. The library's
-/// digest is taken once, before relocation, for the marker and for the
-/// lock's `libpython-sha256`.
+/// locked closure, the Linux vendored libraries or the macOS relocation,
+/// and last the marker. The library's digest is taken once, before
+/// relocation, for the marker and for the lock's `libpython-sha256`.
 fn populate(
     probe: &EmbedProbe,
     platform: EmbedPlatform,
     staging: &Path,
     locked: Option<&LockedClosure>,
+    natives: &NativePlan,
 ) -> Result<(), String> {
     let lib_dir = staging.join("lib");
     std::fs::create_dir(&lib_dir).map_err(|e| io_error("create", &lib_dir, &e))?;
@@ -148,9 +154,12 @@ fn populate(
         Some(locked) if !locked.files.is_empty() => closure::copy_closure(locked, staging)?,
         _ => Vec::new(),
     };
+    for (name, from) in &natives.linux_vendor {
+        copy_library(from, &lib_dir, name, natives.native_at(from), locked)?;
+    }
     if platform == EmbedPlatform::MacOs {
         let closure = locked.map(|locked| (locked, images.as_slice()));
-        relocate_macho(probe, &lib_dir, &source, &bundled_name, closure)?;
+        relocate_macho(probe, &lib_dir, &source, &bundled_name, closure, natives)?;
     }
     let marker = staging.join(layout::MARKER_NAME);
     let text = layout::marker_text(probe, &digest);
@@ -208,34 +217,36 @@ fn otool_deps(image: &Path) -> Result<Vec<String>, String> {
 }
 
 /// One image the relocation scans: its path relative to `<sidecar>/lib`
-/// and the id it answers to, if it is a dylib; or, for a closure image,
-/// its path relative to `<sidecar>/closure` (#1242).
+/// and the id it answers to, if it is a dylib; for a closure image, its
+/// path relative to `<sidecar>/closure` (#1242); for a native library, its
+/// name in `<sidecar>/lib` (#1243).
 #[derive(Clone)]
 enum Image {
     Lib { rel: PathBuf, id: Option<String> },
     Closure { rel: String },
+    Native { name: String },
 }
 
 /// Makes the copied Mach-O images load only from the sidecar: rewrites the
 /// bundled libpython's id to `@rpath/<name>`, then walks a worklist of
 /// libpython, every `lib-dynload` extension, every closure image and every
 /// image it vendors, rewriting or vendoring each dependency per
-/// [`macho::classify_macho_dep`] (or, for a closure image,
-/// [`macho::classify_closure_dep`]) and ad-hoc re-signing every image it
-/// rewrote. A closure image keeps its own id.
+/// [`macho::classify_macho_dep`] (for a closure image,
+/// [`macho::classify_closure_dep`]; for a native,
+/// [`macho::classify_native_dep`]) and ad-hoc re-signing every image it
+/// rewrote. A closure image keeps its own id. A native is vendored only
+/// when `natives` lists it, from bytes that still match its lock entry.
 fn relocate_macho(
     probe: &EmbedProbe,
     lib_dir: &Path,
     source: &Path,
     bundled_name: &str,
     closure: Option<(&LockedClosure, &[String])>,
+    natives: &NativePlan,
 ) -> Result<(), String> {
     let bundled = lib_dir.join(bundled_name);
-    let original_id = otool_deps(&bundled)?.into_iter().next().unwrap_or_default();
-    let resolved_source = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
-    let bundle_lib = [PathBuf::from(original_id), resolved_source];
-    let prefix =
-        std::fs::canonicalize(&probe.base_prefix).unwrap_or_else(|_| probe.base_prefix.clone());
+    let bundle_lib = native::macho_bundle_lib(&bundled, source)?;
+    let prefix = native::canonical_prefix(probe);
     let bundled_id = format!("@rpath/{bundled_name}");
     let set_id = macho::set_id_args(&bundled_id, &bundled);
     run_tool("install_name_tool", &set_id)?;
@@ -267,12 +278,17 @@ fn relocate_macho(
         }
         _ => (None, Default::default()),
     };
-    let mut vendored: Vec<String> = Vec::new();
+    // Every library vendored into `lib/`, by the name it claims there.
+    let mut vendored = Natives::new(bundled_name.to_string());
     let mut next = 0;
     while let Some(image) = worklist.get(next).cloned() {
         next += 1;
         let (path, own_id, rpaths, own_payload) = match &image {
             Image::Lib { rel, id } => (lib_dir.join(rel), id.clone(), Vec::new(), None),
+            Image::Native { name } => {
+                let id = Some(format!("@rpath/{name}"));
+                (lib_dir.join(name), id, Vec::new(), None)
+            }
             Image::Closure { rel } => {
                 let path = closure_dir.join(rel);
                 let id_listing = run_tool("otool", &[OsString::from("-D"), path.clone().into()])?;
@@ -287,10 +303,10 @@ fn relocate_macho(
             }
         };
         // libpython and every vendored image had their id rewritten already.
-        let mut rewritten = matches!(&image, Image::Lib { id: Some(_), .. });
+        let mut rewritten = !matches!(&image, Image::Lib { id: None, .. } | Image::Closure { .. });
         for dep in otool_deps(&path)? {
             let resolved = if dep.starts_with('/') {
-                std::fs::canonicalize(&dep).unwrap_or_else(|_| PathBuf::from(&dep))
+                native::resolved(Path::new(&dep))
             } else {
                 PathBuf::from(&dep)
             };
@@ -311,6 +327,10 @@ fn relocate_macho(
                         &bundle_lib,
                     )
                 }
+                (Image::Native { .. }, _) => {
+                    let own_id = own_id.as_deref().unwrap_or_default();
+                    macho::classify_native_dep(&dep, &resolved, own_id, &prefix, &bundle_lib)
+                }
                 _ => macho::classify_macho_dep(
                     &dep,
                     &resolved,
@@ -320,32 +340,49 @@ fn relocate_macho(
                     bundled_name,
                 ),
             };
-            let new = match class {
+            let (from, locked_native) = match class {
                 MachoDep::Keep => continue,
-                MachoDep::RewriteToBundled => format!("@rpath/{bundled_name}"),
-                MachoDep::Vendor(from) => {
-                    let name = from
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
-                    if !vendored.contains(&name) {
-                        vendor(&from, lib_dir, &name)?;
-                        // A later closure image's `@rpath` walk must see
-                        // the vendored file, as dyld will at run time.
-                        sidecar.insert(format!("lib/{name}"));
-                        vendored.push(name.clone());
-                        worklist.push(Image::Lib {
-                            rel: PathBuf::from(&name),
-                            id: Some(format!("@rpath/{name}")),
-                        });
-                    }
-                    match &image {
-                        Image::Lib { rel, .. } => layout::loader_relative(rel, &name),
-                        Image::Closure { rel } => layout::closure_loader_relative(rel, &name),
-                    }
+                MachoDep::RewriteToBundled => {
+                    let new = format!("@rpath/{bundled_name}");
+                    run_tool("install_name_tool", &macho::change_args(&dep, &new, &path))?;
+                    rewritten = true;
+                    continue;
+                }
+                MachoDep::Vendor(from) => (from, None),
+                MachoDep::VendorNative(from) => {
+                    let Some(entry) = natives.native_at(&from) else {
+                        let why = format!(
+                            "{} needs the native library `{}`, which its \
+                             `[[target.native]]` entries do not list",
+                            describe(&image, locked),
+                            from.display()
+                        );
+                        return Err(stale(locked, &why));
+                    };
+                    (from, Some(entry))
                 }
                 MachoDep::Refuse => return Err(refusal(probe, &image, &dep, locked)),
+            };
+            let name = native::file_name(&from);
+            if !vendored.claim_name(&name, &from)? {
+                copy_library(&from, lib_dir, &name, locked_native, locked)?;
+                let set_id = macho::set_id_args(&format!("@rpath/{name}"), &lib_dir.join(&name));
+                run_tool("install_name_tool", &set_id)?;
+                // A later closure image's `@rpath` walk must see the
+                // vendored file, as dyld will at run time.
+                sidecar.insert(format!("lib/{name}"));
+                worklist.push(match locked_native {
+                    Some(_) => Image::Native { name: name.clone() },
+                    None => Image::Lib {
+                        rel: PathBuf::from(&name),
+                        id: Some(format!("@rpath/{name}")),
+                    },
+                });
+            }
+            let new = match &image {
+                Image::Lib { rel, .. } => layout::loader_relative(rel, &name),
+                Image::Native { name: own } => layout::loader_relative(Path::new(own), &name),
+                Image::Closure { rel } => layout::closure_loader_relative(rel, &name),
             };
             run_tool("install_name_tool", &macho::change_args(&dep, &new, &path))?;
             rewritten = true;
@@ -357,32 +394,65 @@ fn relocate_macho(
     Ok(())
 }
 
+/// How a refusal names `image`.
+fn describe(image: &Image, locked: Option<&LockedClosure>) -> String {
+    match image {
+        Image::Lib { rel, .. } => format!("`{}`", rel.display()),
+        Image::Closure { rel } => format!(
+            "`closure/{rel}` (distribution `{}`)",
+            locked.map_or("", |locked| locked.owner_of(rel))
+        ),
+        Image::Native { name } => format!("the native library `lib/{name}`"),
+    }
+}
+
+/// A refusal naming the lock and `pycc lock` when the build has a lock.
+fn stale(locked: Option<&LockedClosure>, why: &str) -> String {
+    locked.map_or_else(|| why.to_string(), |locked| locked.stale(why))
+}
+
 /// Why `image` cannot be bundled because of its dependency `dep`.
 fn refusal(probe: &EmbedProbe, image: &Image, dep: &str, locked: Option<&LockedClosure>) -> String {
+    let described = describe(image, locked);
     match image {
-        Image::Lib { rel, .. } => format!(
-            "the embed interpreter `{}` is not relocatable: `{}` depends on `{dep}` outside \
-             the interpreter and the system library directories; pycc cannot bundle it yet \
-             (#1225)",
-            probe.executable.display(),
-            rel.display()
+        Image::Lib { .. } => format!(
+            "the embed interpreter `{}` is not relocatable: {described} depends on `{dep}` \
+             outside the interpreter and the system library directories; pycc cannot bundle \
+             it",
+            probe.executable.display()
         ),
-        Image::Closure { rel } => format!(
-            "the locked closure is not relocatable: `closure/{rel}` (distribution `{}`) \
-             depends on `{dep}`, which is outside the interpreter, the system library \
-             directories and the distribution's own files; pycc cannot bundle it yet (#1243)",
-            locked.map_or("", |locked| locked.owner_of(rel))
+        Image::Closure { .. } => format!(
+            "the locked closure is not relocatable: {described} depends on `{dep}`, which is \
+             a relative reference outside the interpreter and the distribution's own files; \
+             pycc cannot bundle it yet (#1259)"
+        ),
+        Image::Native { .. } => format!(
+            "the locked closure is not relocatable: {described} depends on `{dep}`, which is \
+             a relative reference; pycc cannot bundle it yet (#1259)"
         ),
     }
 }
 
-/// Copies a prefix-internal library into the sidecar and gives it an
-/// `@rpath` id. Its own signature is renewed when the worklist reaches it.
-fn vendor(from: &Path, lib_dir: &Path, name: &str) -> Result<(), String> {
+/// Copies the library `from` into `lib_dir/name`, refusing to overwrite a
+/// file already there. A native's bytes must still match its lock entry.
+fn copy_library(
+    from: &Path,
+    lib_dir: &Path,
+    name: &str,
+    native: Option<&LockedNative>,
+    locked: Option<&LockedClosure>,
+) -> Result<(), String> {
     let to = lib_dir.join(name);
     let bytes = std::fs::read(from).map_err(|e| io_error("read", from, &e))?;
-    std::fs::write(&to, bytes).map_err(|e| io_error("write", &to, &e))?;
-    let set_id = macho::set_id_args(&format!("@rpath/{name}"), &to);
-    run_tool("install_name_tool", &set_id)?;
-    Ok(())
+    if let Some(native) = native.filter(|native| sha256_hex(&bytes) != native.sha256) {
+        let why = format!(
+            "the native library `{}` (`{}`) changed after it was locked",
+            native.name,
+            from.display()
+        );
+        return Err(stale(locked, &why));
+    }
+    let mut file = std::fs::File::create_new(&to).map_err(|e| io_error("write", &to, &e))?;
+    file.write_all(&bytes)
+        .map_err(|e| io_error("write", &to, &e))
 }

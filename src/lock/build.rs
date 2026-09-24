@@ -29,8 +29,18 @@ pub(crate) struct ClosureCheck {
 }
 
 impl ClosureCheck {
+    /// The check of `section`, which `pycc lock` itself just derived, for
+    /// the payload plan the native derivation reads.
+    pub(crate) fn for_section(section: LockTarget, located: &super::Located, entry: &Path) -> Self {
+        Self {
+            section,
+            lock_path: located.lock_path.clone(),
+            entry: entry.to_path_buf(),
+        }
+    }
+
     /// A refusal naming the lock, `why`, and the command that refreshes it.
-    fn stale(&self, why: &str) -> String {
+    pub(crate) fn stale(&self, why: &str) -> String {
         stale_message(&self.lock_path, &self.entry, why)
     }
 }
@@ -203,12 +213,6 @@ pub(crate) fn plan_closure(
         lock_path: located.lock_path,
         entry: entry.to_path_buf(),
     };
-    if !section.native.is_empty() {
-        return Err(check.stale(
-            "its section lists `[[target.native]]` libraries, which this pycc cannot bundle \
-             yet (#1243)",
-        ));
-    }
     if section.roots != roots {
         return Err(check.stale(&format!(
             "its section locks {} but the program imports {} from outside the standard \

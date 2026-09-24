@@ -141,7 +141,7 @@ fn a_dependency_outside_the_prefix_is_refused() {
         message.contains("_ssl.cpython-314-darwin.so") && message.contains("libout.dylib"),
         "{message}"
     );
-    assert!(message.contains("#1225"), "{message}");
+    assert!(message.contains("pycc cannot bundle it"), "{message}");
     let leftovers: Vec<_> = std::fs::read_dir(&*dir)
         .expect("read_dir")
         .map(|entry| entry.expect("entry").file_name())
