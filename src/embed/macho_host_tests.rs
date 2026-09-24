@@ -303,3 +303,20 @@ fn a_bad_rpath_entry_after_the_match_is_not_reached() {
         ));
     }
 }
+
+/// The walk yields the site-relative path while it stays inside the site
+/// directory (a leading `./` reaches the `CurDir` arm; interior ones are
+/// dropped by `Path::components`), and nothing once it climbs out.
+#[test]
+fn within_site_walks_the_spelling_and_refuses_to_leave_the_site() {
+    let within = |start: &str, spelled: &str| within_site(Path::new(start), Path::new(spelled));
+    assert_eq!(
+        within("pkg", "./.dylibs/libx.dylib").as_deref(),
+        Some("pkg/.dylibs/libx.dylib")
+    );
+    assert_eq!(
+        within("pkg", "../pkg/libx.dylib").as_deref(),
+        Some("pkg/libx.dylib")
+    );
+    assert_eq!(within("pkg", "../../plat/pkg/libx.dylib"), None);
+}
