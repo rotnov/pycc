@@ -25,8 +25,10 @@ use pycc_ast::{Expr, ModModule, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{BTreeSet, HashMap};
 
-/// One module-level import statement that `pycc_std`'s registry does not
-/// answer, so the driver must resolve it on the filesystem before
+/// One project-import request -- a whole module-level `from ... import`
+/// statement, or one qualifying alias of a plain `import` (#1280) -- that
+/// `pycc_std`'s registry does not answer, so the driver must resolve it on
+/// the filesystem before
 /// `module::lower_module` runs (#898, D-222). `pycc_hir` itself never
 /// touches the filesystem: this is the request half of the contract, and
 /// [`ResolvedImports`] is the answer half.

@@ -3,9 +3,10 @@
 //! cascade-shaped `C0001` message builders plus [`cascade_name`], which
 //! recognizes a later diagnostic that names a poisoned binding.
 //!
-//! Extracted from `module.rs` (issue #1280) per AGENTS.md's
-//! file-decomposition rule, unchanged; `module.rs` re-exports every item at
-//! its previous `crate::module::` path.
+//! Moved out of `module.rs` unchanged (issue #1280) per AGENTS.md's
+//! file-decomposition rule; `module.rs` re-exports every item at its
+//! previous `crate::module::` path. #1280 then widened the `Stmt::Import`
+//! arm of [`poisonable_names`] to multi-name `import a, b` statements.
 
 use crate::import::{is_future_import, is_noop_future_feature};
 use pycc_ast::{Expr, Stmt};
