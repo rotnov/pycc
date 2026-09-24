@@ -82,7 +82,7 @@ pub(super) fn emit_exception_value<'ctx>(
             class_name,
             message,
         } => {
-            let message = emit_expr(
+            let message_scalar = emit_expr(
                 context,
                 builder,
                 module,
@@ -91,6 +91,13 @@ pub(super) fn emit_exception_value<'ctx>(
                 locals,
                 message,
             );
+            // #1298: the exception owns its own reference to its message,
+            // whatever the message's shape. A borrowed read (`msg`, `obj.s`)
+            // is retained here, so the exception's pointer survives its
+            // owner releasing it; a fresh message already arrives as +1.
+            // The reference is never released because exception objects
+            // are leak-only -- the same leak a literal message has.
+            let message = incref_if_str_duplicate(builder, rt, message, message_scalar);
             let Scalar::Str(message) = message else {
                 let prefix = if role == "cause" {
                     "raise cause"
@@ -139,6 +146,14 @@ pub(super) fn emit_exception_value<'ctx>(
                 locals,
                 message,
             );
+            // #1298: as in the `Constructed` arm, the group owns its own
+            // reference to its message. Leak-only exception objects are
+            // also what makes it sound for `pycc_rt`'s group partition to
+            // share this pointer with each derived group without an incref:
+            // a change that frees exception objects must first give each
+            // derived group its own reference and release the message in
+            // the destructor.
+            let message_scalar = incref_if_str_duplicate(builder, rt, message, message_scalar);
             let Scalar::Str(message_scalar) = message_scalar else {
                 return Err(format!(
                     "{} message must be a string",

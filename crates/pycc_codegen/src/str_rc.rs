@@ -8,13 +8,17 @@
 
 use super::*;
 
-/// Whether evaluating `expr` produces a *duplicate* reference to an
-/// already-owned `str` (a bare `str`-typed variable read) rather than a
-/// fresh object owning exactly one reference from its own construction.
-/// v0.1's grammar makes this purely syntactic: every str-producing
-/// expression other than a bare `Name` (`StringLiteral`, string
-/// concatenation, a `Call`'s return value) freshly constructs its result
-/// and already owns exactly one reference (D-060, Task 7).
+/// Whether evaluating `expr` produces a *duplicate* (borrowed) reference to
+/// an already-owned `str` rather than a fresh object owning exactly one
+/// reference from its own construction. This doc comment is the canonical
+/// list of borrowed `str` reads; every other description of it
+/// cross-references this function. The classification is purely
+/// syntactic. The borrowed reads are exactly the nodes the `matches!` below
+/// names: a bare `str`-typed `Name`, a `str`-typed `AttrGet`, and
+/// `ExceptionMessage`. Every other str-producing expression
+/// (`StringLiteral`, string concatenation, an f-string, a `Call`'s return
+/// value, a `BoolOp`, ...) freshly constructs its result and already owns
+/// exactly one reference (D-060, Task 7).
 ///
 /// Gated on `ty: Ty::Str`, not just the bare-`Name` shape (Task 5, D-089).
 /// The gate was originally added because `emit_expr`'s `Name` arm carried a
@@ -47,6 +51,14 @@ use super::*;
 /// A `MirExpr::BoolOp` (#1211) is owning here, like every node this
 /// `matches!` does not name: each of its value arms increfs a duplicate
 /// operand inside that arm, so its `str` result is always a fresh reference.
+///
+/// `MirExpr::ExceptionMessage` (#1298) -- `print(e)` and `f"{e}"` on a caught
+/// exception binding -- is a duplicate reference for the same field-load
+/// reason as `AttrGet`: `pycc_rt_exception_message` returns the exception's
+/// own `message` pointer borrowed and unretained, and the exception keeps
+/// owning it after the read. Classifying it as owning made every rendering
+/// release a reference it never took, so the second `print(e)` read freed
+/// memory.
 pub(super) fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     matches!(
         expr,
@@ -56,12 +68,12 @@ pub(super) fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         } | MirExpr::AttrGet {
             ty: pycc_mir::Ty::Str,
             ..
-        }
+        } | MirExpr::ExceptionMessage(_)
     )
 }
 
-/// Increments a `str` scalar's refcount when `source_expr` is a bare
-/// variable read (see `str_value_is_a_duplicate_reference`) -- binding a
+/// Increments a `str` scalar's refcount when `source_expr` is a borrowed
+/// read (see `str_value_is_a_duplicate_reference`) -- binding a
 /// second owning reference to the same `PyStrObj` without this would leave
 /// the original binding's own eventual decref underflowing the refcount
 /// (D-060, Task 7). A no-op for every non-`Str` scalar.

@@ -7096,8 +7096,8 @@ fn emit_eval_print_arg<'ctx>(
 /// `None` case (the literal `"None"`), or `print_write_str` followed by
 /// `str_decref` for a `Some(str_ptr)` scalar (writing the `str` built in
 /// phase 1, then freeing the temporary `to_str` allocated for
-/// `int`/`float`/`bool` or the incref'd duplicate of a bare `Name`/
-/// `AttrGet` `str`). `emit_stmt`'s `print`-call arm calls this once per
+/// `int`/`float`/`bool`, or the incref'd duplicate of a borrowed `str` read
+/// as classified by `str_value_is_a_duplicate_reference`). `emit_stmt`'s `print`-call arm calls this once per
 /// argument in its second loop, after `emit_eval_print_arg` has already
 /// evaluated every argument, so that output happens only after all
 /// argument side effects complete (see `emit_eval_print_arg`'s own doc

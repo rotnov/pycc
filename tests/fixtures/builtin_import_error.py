@@ -19,6 +19,7 @@ def main() -> None:
         load_plain()
     except ImportError as e:
         print("ImportError:", e)
+        print("again:", e)
     try:
         load_missing()
     except ModuleNotFoundError as e:

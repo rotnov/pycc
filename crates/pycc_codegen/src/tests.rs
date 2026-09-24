@@ -29,6 +29,10 @@ mod compare_chain;
 // #1254: the shared entry-block placement helper.
 mod entry_block;
 
+// #1298: a caught exception's message ownership (print/f-string renderings
+// and borrowed raise messages).
+mod exception_message_rc;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any
