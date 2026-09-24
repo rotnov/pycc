@@ -14,7 +14,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 | 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs`, `tests/issue_1142_ext_buffer_store.rs` and `tests/issue_1292_import_error.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
-| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, `tests/issue_1286_windows_embedded_executable.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; on a Windows host, the stub `OUT` plus the program DLL match CPython 3.14.7 for standard-library programs (D-253); a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
+| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, `tests/issue_1286_windows_embedded_executable.rs`, `tests/issue_1296_windows_locked_closure.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; on a Windows host, the stub `OUT` plus the program DLL match CPython 3.14.7 for standard-library programs (D-253) and for a pure-Python locked closure (#1296); a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
 | 10. Interop policy | `tests/issue_1224_interop_policy.rs`, the `i0402_*` snapshots under `tests/diagnostics/`, plus `src/interop_policy/tests.rs` | `--interop-policy`, `--pure` and `[interop]` admit or reject each CPython-backed root alike in `check`, `build` and `run`, a rejection is `I0402` on every host and precedes any `I0403` (D-128) |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
@@ -1479,8 +1479,9 @@ executable for standard-library roots (#1223, D-248) and the policy surface
 (#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242),
 its native libraries outside the interpreter (#1243), and macOS relative
 references outside a closure payload (#1259) exist, and so does Windows
-embedding of standard-library roots (#1286, D-253); a root outside the
-standard library on a Windows host (#1287) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
+embedding of standard-library roots (#1286, D-253) and of a pure-Python
+locked closure (#1296, `tests/issue_1296_windows_locked_closure.rs`); a
+Windows closure holding a native image (#1297) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
@@ -1553,8 +1554,9 @@ The automatic and allowlist cases must also exercise target-specific native
 package artifacts rather than passing only with a pure-Python stand-in
 (*pending:* #1225). Admission on a Windows host is delivered for
 standard-library roots by #1286 (`tests/issue_1224_interop_policy.rs`'s
-admission tests run on every host) and is *pending* #1287 for other roots,
-which are still `I0403` there.
+admission tests run on every host) and for other roots with a pure-Python
+locked closure by #1296 (`tests/issue_1296_windows_locked_closure.rs`); a
+closure holding a native image is *pending* #1297.
 
 ## The bot (planned)
 
