@@ -213,3 +213,127 @@ fn api_sets_are_recognized_case_insensitively() {
         assert!(!is_api_set(name), "{name}");
     }
 }
+
+fn forwarders(bytes: &[u8]) -> Vec<String> {
+    parse_forwarders(bytes).expect("the forwarders parse")
+}
+
+fn forwarder_refused(bytes: &[u8]) -> String {
+    parse_forwarders(bytes).expect_err("refused")
+}
+
+/// No export directory, a zero `NumberOfRvaAndSizes` and an empty address
+/// table all forward nowhere.
+#[test]
+fn an_image_without_forwarders_forwards_nowhere() {
+    assert!(forwarders(&PeSpec::dll(&["KERNEL32.dll"]).bytes()).is_empty());
+    let spec = PeSpec::dll(&[]).forwards(&["NTDLL.RtlAllocateHeap"]);
+    assert!(forwarders(&spec.clone().rva_count(0).bytes()).is_empty());
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, spec.export_offset() + 20, 0);
+    assert!(forwarders(&bytes).is_empty());
+}
+
+/// Each forwarder names its module before the last `.`, with `.dll`
+/// appended unless present; duplicates fold case-insensitively; an
+/// ordinary export beside them is skipped; a forwarder longer than a
+/// file name is read to its NUL.
+#[test]
+fn forwarders_name_their_modules_once_in_first_seen_order() {
+    let long = format!("python314.{}", "x".repeat(300));
+    let spec = PeSpec::dll(&["KERNEL32.dll"]).plain_export().forwards(&[
+        "NTDLL.RtlAllocateHeap",
+        &long,
+        "ntdll.RtlFreeHeap",
+        "api-ms-win-core-heap-l1-1-0.HeapAlloc",
+        "helper.dll.#12",
+        "HELPER.DLL.Other",
+    ]);
+    assert_eq!(
+        forwarders(&spec.bytes()),
+        [
+            "NTDLL.dll",
+            "python314.dll",
+            "api-ms-win-core-heap-l1-1-0.dll",
+            "helper.dll"
+        ]
+    );
+    assert!(parse_pe(&spec.bytes()).is_ok_and(|image| image.is_some()));
+}
+
+#[test]
+fn a_forwarder_without_a_module_is_refused() {
+    let bytes = PeSpec::dll(&[]).forwards(&["nodot"]).bytes();
+    assert_eq!(
+        forwarder_refused(&bytes),
+        "the forwarder `nodot` names no module"
+    );
+}
+
+#[test]
+fn a_forwarder_without_a_nul_in_the_export_directory_is_refused() {
+    let mut bytes = PeSpec::dll(&[]).forwards(&["a.b"]).bytes();
+    let end = bytes.len();
+    bytes[end - 1] = b'x';
+    let err = forwarder_refused(&bytes);
+    assert!(
+        err.contains("has no NUL within the export directory"),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_address_table_past_its_section_is_refused() {
+    let spec = PeSpec::dll(&[]).forwards(&["a.b"]);
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, spec.export_offset() + 20, 1000);
+    let err = forwarder_refused(&bytes);
+    assert_eq!(err, "the export address table runs past its section");
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, spec.export_offset() + 28, 0x10);
+    let err = forwarder_refused(&bytes);
+    assert!(
+        err.contains("export address table RVA 0x10 maps to no section"),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_export_directory_outside_its_section_is_refused() {
+    let spec = PeSpec::dll(&[]).forwards(&["a.b"]);
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, OPTIONAL + 112, 0x10);
+    let err = forwarder_refused(&bytes);
+    assert!(
+        err.contains("export directory RVA 0x10 maps to no section"),
+        "{err}"
+    );
+    // The directory starts in the section but its 40 bytes run past it.
+    let mut bytes = spec.bytes();
+    let section_len = (bytes.len() - RAW) as u32;
+    put32(&mut bytes, OPTIONAL + 112, VA + section_len - 8);
+    let err = forwarder_refused(&bytes);
+    assert_eq!(err, "the export directory runs past its section");
+}
+
+/// A declared export range wider than the section admits an address past
+/// the section's file data, which is refused, not read.
+#[test]
+fn a_forwarder_outside_every_section_is_refused() {
+    let spec = PeSpec::dll(&[]).forwards(&["a.b"]);
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, OPTIONAL + 112 + 4, 0x10000);
+    put32(&mut bytes, spec.export_offset() + 40, VA + 0x8000);
+    let err = forwarder_refused(&bytes);
+    assert!(
+        err.contains("export forwarder RVA 0xa000 maps to no section"),
+        "{err}"
+    );
+}
+
+#[test]
+fn forwarders_of_a_malformed_image_are_refused() {
+    let mut bytes = PeSpec::dll(&[]).forwards(&["a.b"]).bytes();
+    bytes[0x40] = b'X';
+    assert!(forwarder_refused(&bytes).contains("no `PE` signature"));
+}

@@ -1,13 +1,15 @@
 //! The Windows sidecar (D-253, Part 1 of #1226): the interpreter's DLL,
 //! `python3.dll` and the VC runtime DLLs at the sidecar root, a filtered
-//! `Lib\` and `DLLs\`, the locked pure-Python closure in `closure\`
-//! (#1296), and the marker. There is no `lib\` and no relocation: the
-//! stub loads the program DLL with the sidecar as its DLL search root and
-//! the launcher adds the sidecar as a DLL directory, every interpreter
-//! image copied here was scanned before staging (#1305), and a closure
-//! holding a PE image was refused before staging (#1297).
+//! `Lib\` and `DLLs\`, the locked closure in `closure\` (#1296), the
+//! closure's natives in `natives\` (#1306), and the marker. There is no
+//! `lib\` (it would be `Lib\` on a case-insensitive volume) and no
+//! relocation: the stub loads the program DLL with the sidecar as its DLL
+//! search root and the launcher adds the sidecar, and `natives\` when it
+//! exists, as DLL directories. Every interpreter image copied here was
+//! scanned before staging (#1305), and every closure image and native was
+//! classified before staging (#1306).
 
-use super::{EmbedProbe, bundle_library, copy_stdlib, io_error};
+use super::{EmbedProbe, NativePlan, bundle_library, copy_library, copy_stdlib, io_error};
 use crate::embed::closure;
 use crate::embed::layout::{self, LibpythonLink};
 use crate::lock::build::LockedClosure;
@@ -16,11 +18,14 @@ use std::path::Path;
 /// Fills `staging` for a Windows embedded executable. The interpreter
 /// DLL's digest is recorded in the marker, as on every platform, and
 /// checked against a consumed lock section's `libpython-sha256`, which
-/// `pycc lock` took from the same DLL.
+/// `pycc lock` took from the same DLL. Each native is copied into
+/// `natives\`, created only when there is one, after its bytes are checked
+/// against its lock entry.
 pub(super) fn populate(
     probe: &EmbedProbe,
     staging: &Path,
     locked: Option<&LockedClosure>,
+    natives: &NativePlan,
 ) -> Result<(), String> {
     // The interpreter's DLL comes first; the probe checked `python3.dll`,
     // and the list holds only the VC runtime DLLs that exist.
@@ -35,9 +40,18 @@ pub(super) fn populate(
     let extensions = probe.base_prefix.join("DLLs");
     copy_stdlib(&extensions, &staging.join("DLLs"), skip)?;
     if let Some(locked) = locked.filter(|locked| !locked.files.is_empty()) {
-        // No Mach-O image is relocated on Windows, and a PE image was
-        // refused before staging, so the image list is not needed.
+        // No Mach-O image is relocated on Windows: the closure's PE images
+        // were classified before staging (#1306) and are copied as they
+        // are, so the image list is not needed.
         closure::copy_closure(locked, staging)?;
+    }
+    if !natives.natives.is_empty() {
+        let dir = staging.join(layout::WINDOWS_NATIVES_DIR);
+        std::fs::create_dir(&dir).map_err(|e| io_error("create", &dir, &e))?;
+        for native in &natives.natives {
+            let name = &native.locked.name;
+            copy_library(&native.source, &dir, name, Some(&native.locked), locked)?;
+        }
     }
     let marker = staging.join(layout::MARKER_NAME);
     let text = layout::marker_text(probe, &digest, LibpythonLink::Shared);

@@ -220,6 +220,12 @@ pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
     FakeLayout { prefix, probe }
 }
 
+/// Writes an x86-64 PE32+ DLL importing `imports` at `path`, creating its
+/// directory: a closure image or native in a fake site (#1306).
+pub(crate) fn write_pe_dll(path: &Path, imports: &[&str]) {
+    write(path, PeSpec::dll(imports).bytes());
+}
+
 /// The system directory [`fake_windows_layout`] writes beside `base\`.
 pub(crate) fn fake_windows_env(layout: &FakeLayout) -> WindowsEnv {
     let root = layout.prefix.parent().expect("the layout root");

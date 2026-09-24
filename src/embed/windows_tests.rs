@@ -179,6 +179,28 @@ fn the_windows_launcher_adds_the_sidecar_dll_directory_first() {
     assert!(add < failure && exit < init);
 }
 
+/// With natives (#1306) the launcher adds `<sidecar>\natives` as a DLL
+/// directory right after the sidecar, only under `PYCC_EMBED_NATIVES`, and
+/// before the interpreter is configured; a failure exits 1.
+#[test]
+fn the_windows_launcher_adds_the_natives_dll_directory_under_its_define() {
+    let launcher = super::super::LAUNCHER_C.replace("\r\n", "\n");
+    let main = &launcher[launcher.find("int pycc_embed_main(").expect("the entry")..];
+    let sidecar = main
+        .find("AddDllDirectory(sidecar)")
+        .expect("the sidecar call");
+    let guard = main.find("#ifdef PYCC_EMBED_NATIVES").expect("the guard");
+    let form = main.find("L\"%ls\\\\natives\"").expect("the natives path");
+    let add = main
+        .find("AddDllDirectory(natives)")
+        .expect("the natives call");
+    let end = guard + main[guard..].find("#endif").expect("the guard's end");
+    let init = main.find("PyConfig_InitIsolatedConfig").expect("the init");
+    assert!(sidecar < guard && guard < form && form < add && add < end && end < init);
+    let failure = add + main[add..].find("return 1;").expect("the exit");
+    assert!(failure < end);
+}
+
 /// A static libpython request on a Windows host is refused before any
 /// interpreter is probed: the interpreter here does not exist.
 #[test]
@@ -312,8 +334,9 @@ fn the_stub_source_loads_the_program_dll_through_the_sidecar_header() {
     assert!(!STUB_C.contains("Python.h"));
 }
 
-/// A Windows build vendors no native library: the interpreter's images are
-/// scanned (#1305) and `DLLs\` is bundled as it is.
+/// A Windows build with no closure vendors no native library: the
+/// interpreter's images are scanned (#1305) and `DLLs\` is bundled as it
+/// is; only a closure's images yield natives (#1306).
 #[test]
 fn a_windows_build_plans_no_native_libraries() {
     let dir = ScratchDir::new("embed_windows_natives").expect("scratch");
@@ -358,26 +381,4 @@ fn a_windows_build_under_a_plain_file_fails_at_staging() {
     assert!(message.contains("could not"), "{message}");
     assert!(!out.exists());
     assert!(!file.join("app.pycc").exists());
-}
-
-/// A closure file the image screen cannot open is an environment failure
-/// naming the path, not a silent pass; any other host skips the screen.
-#[test]
-fn the_closure_image_screen_reports_an_unreadable_file() {
-    let dir = ScratchDir::new("windows_image_screen_unreadable").unwrap();
-    let missing = dir.join("gone.py");
-    let closure =
-        crate::lock::build::LockedClosure::of_files(vec![crate::lock::build::ClosureFile {
-            rel: "pkg/gone.py".into(),
-            source: missing.clone(),
-            digest: String::new(),
-            package: "pkg".into(),
-        }]);
-    let err = check_closure_images(EmbedPlatform::Windows, Some(&closure)).unwrap_err();
-    assert!(err.contains(&missing.display().to_string()), "{err}");
-    assert_eq!(
-        check_closure_images(EmbedPlatform::Linux, Some(&closure)),
-        Ok(())
-    );
-    assert_eq!(check_closure_images(EmbedPlatform::Windows, None), Ok(()));
 }

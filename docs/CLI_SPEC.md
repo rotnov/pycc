@@ -458,10 +458,14 @@ DLL from its own sidecar; the sidecar holds `python314.dll`, `python3.dll`,
 the interpreter's `vcruntime140.dll` and `vcruntime140_1.dll` when present,
 and the filtered `Lib\` and `DLLs\`, plus `closure\` when the program's
 `pycc.lock` section records one (#1296, D-249). `--static-libpython` and
-`[build] static = true` are refused at exit 2 (D-251), and so is a locked
-closure holding a file Windows would load as a PE image (a `.pyd` or `.dll`
-suffix, or an `MZ` header on any suffix other than `.exe`), naming #1297 and
-`pycc build --ext`. Before staging, the build also refuses at exit 2 an
+`[build] static = true` are refused at exit 2 (D-251). A locked closure file
+Windows would load as a PE image (a `.pyd` or `.dll` suffix, or an `MZ`
+header on any suffix other than `.exe`) must be an x86-64 PE32+ DLL whose
+imports resolve by D-253's strict classification (#1306): each is an API set,
+a root DLL, a locked closure image, a native copied into `OUT.pycc\natives\`
+(which the launcher adds as a DLL directory), or a system DLL, and anything
+else is refused at exit 2 by the lock and the build alike, naming the image,
+its distribution and the import, and `pycc build --ext`. Before staging, the build also refuses at exit 2 an
 interpreter image it would bundle (a root DLL or a kept `DLLs\` image) that is
 not an x86-64 PE32+ DLL or whose import would not resolve once the pair is
 moved, naming the image (and the import that does not resolve), and a kept `Lib\` file that is a PE
@@ -623,16 +627,24 @@ references outside a distribution's payload.
   lock is rerun; `pycc lock --check` reports it (D-249's #1290 amendment
   (e)).
 - **Native libraries.** Each `[[target.native]]` entry is a library a
-  closure image needs, directly or through another such library, that lies
-  outside the system library directories and the interpreter's prefix and
-  is not libpython: its name in `OUT.pycc/lib/` (the file name on macOS,
-  the `DT_NEEDED` name on Linux), the sha256 of its bytes, and the sorted
-  distributions that need it. macOS follows absolute install names; Linux
-  resolves each `DT_NEEDED` as `ld.so` would on the build host
+  closure image needs, directly or through another such library: its name
+  in the sidecar's native directory, the sha256 of its bytes, and the
+  sorted distributions that need it. On macOS and Linux it is a library
+  that lies outside the system library directories and the interpreter's
+  prefix and is not libpython, named in `OUT.pycc/lib/` (the file name on
+  macOS, the `DT_NEEDED` name on Linux). macOS follows absolute install
+  names; Linux resolves each `DT_NEEDED` as `ld.so` would on the build host
   (`DT_RPATH`/`DT_RUNPATH` with `$ORIGIN`, the `ldconfig -p` cache, then the
-  default directories). A dependency it cannot find is left to the loader
-  when an image loaded on import needs it, and refused when a library the
-  build copies into `lib/` needs it.
+  default directories). There, a dependency it cannot find is left to the
+  loader when an image loaded on import needs it, and refused when a
+  library the build copies into `lib/` needs it. On Windows (#1306) a
+  native is a file beside a closure image or another native that is not a
+  locked closure file, named by its on-disk file name in
+  `OUT.pycc\natives\`; any import that is not an API set, a root DLL, a
+  locked closure image or a native, nor a system DLL, is refused by the
+  lock and the build. Under a direct import root a file outside `RECORD`
+  is already refused (D-249 rule 2), so Windows natives come from
+  transitive distributions.
 - **`--check`.** Exits 0 only when the file's bytes equal what `pycc lock`
   would write, where a standard-library-only program with no section counts
   as current; otherwise it exits 1 naming the first difference and writes
@@ -642,8 +654,10 @@ references outside a distribution's payload.
   section like any other host (#1296): its ownership suffixes add `.pyw`,
   `.pyd` and `.<tag>.pyd`; a `RECORD` path inside the site that holds a `\`
   or a `:`, a component ending in `.` or a space, or a reserved device name
-  (`CON`, `NUL`, `COM1`, ...) is refused; and the section's natives are
-  always empty, since the build refuses a closure PE image until #1297.
+  (`CON`, `NUL`, `COM1`, ...) is refused; and a closure PE image or native
+  that D-253's #1306 classification refuses (an unscannable image, an
+  import no rule places, a native shadowing a system, closure-image or
+  `DLLs\` name) refuses the lock as it refuses the build.
 - **Build.** An embedded build of a program with a root outside the standard
   library reads its (entry, host triple) section before probing the
   interpreter: a missing lock or section, or different `roots` or
@@ -661,11 +675,13 @@ references outside a distribution's payload.
   no lock, gets no `closure/`, and has an existing section's interpreter
   fields checked. The build re-derives the natives and refuses a difference
   from `[[target.native]]` naming `pycc lock`, before writing anything; it
-  copies each into `OUT.pycc/lib/`, refusing one whose bytes no longer
-  match. On macOS the references to it are rewritten to the copy; on Linux
+  copies each into `OUT.pycc/lib/` (`OUT.pycc\natives\` on Windows),
+  refusing one whose bytes no longer match. On macOS the references to it are rewritten to the copy; on Linux
   the executable links every library copied into `lib/` by name, so the
   loader finds it already loaded. Refused with exit 2: two libraries needing
-  one name in `lib/` (compared case-folded), and on Linux a library whose
+  one name in `lib/` (compared case-folded), or on Windows in `natives\`,
+  where a native named like a system DLL, a closure image or a file in the
+  interpreter's `DLLs\` is refused too; and on Linux a library whose
   `DT_SONAME` differs from the name it is needed by, a `DT_NEEDED` given as
   a path, a closure program image that needs a copied library, a copied
   library that would also answer a dependency kept on the system, a copied

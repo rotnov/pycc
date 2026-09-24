@@ -1,14 +1,13 @@
 //! The Windows embedded executable (D-253, Part 1 of #1226): a stub `OUT`
 //! that loads a program DLL from `OUT.pycc\`, with a locked pure-Python
-//! closure in `OUT.pycc\closure\` (#1296); a closure holding a native
-//! image is refused until its PE dependencies are scanned (#1297). Pure
-//! functions, compiled and unit-tested on every host; only the stub's link
-//! spawn in `src/build_pipeline.rs` is `cfg(windows)`.
+//! closure in `OUT.pycc\closure\` (#1296), whose PE images are scanned
+//! and whose natives are copied into `OUT.pycc\natives\`
+//! (`native_windows_closure.rs`, #1306). Pure functions, compiled and
+//! unit-tested on every host; only the stub's link spawn in
+//! `src/build_pipeline.rs` is `cfg(windows)`.
 
 use super::layout::{self, EmbedPlatform, LibpythonLink};
-use super::native::read_head;
 use super::{EmbedProbe, write_source};
-use crate::lock::build::LockedClosure;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -59,34 +58,6 @@ pub(crate) fn is_windows_image(rel: &str, head: &[u8]) -> bool {
         return true;
     }
     head.starts_with(b"MZ") && !lower.ends_with(".exe")
-}
-
-/// Refuses a Windows build whose locked closure holds a PE image
-/// ([`is_windows_image`]), naming the first in `files` order: the build
-/// scans the interpreter's images (#1305) but no closure image, so it
-/// cannot know what such an image loads, and relocation stays fail-closed
-/// until #1297. Runs after the
-/// payload is planned and before anything is staged. `Ok` on every other
-/// platform, and for no closure.
-pub(crate) fn check_closure_images(
-    platform: EmbedPlatform,
-    locked: Option<&LockedClosure>,
-) -> Result<(), String> {
-    let Some(locked) = locked.filter(|_| platform == EmbedPlatform::Windows) else {
-        return Ok(());
-    };
-    for file in &locked.files {
-        let head = read_head(&file.source)?;
-        if is_windows_image(&file.rel, &head) {
-            return Err(format!(
-                "the locked closure holds the native image `{}` of distribution `{}`; an \
-                 embedded Windows build does not bundle a `.pyd` or DLL until its PE \
-                 dependencies are scanned (#1297) -- use `pycc build --ext`",
-                file.rel, file.package
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// The Windows half of the embed probe (D-253): the import libraries in
