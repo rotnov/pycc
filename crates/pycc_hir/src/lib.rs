@@ -427,13 +427,16 @@ pub enum HirExpr {
     /// An empty `[]` whose element type was resolved by `pycc_types`'
     /// empty-container pre-pass (#1021, D-245).
     ///
-    /// **Construction invariant:** this variant is *never* built by
-    /// `pycc_hir` lowering. `lower_expr` always produces
-    /// `ListLiteral(vec![])` for an empty list literal; the only
-    /// construction site in the workspace is
+    /// **Construction invariant:** `lower_expr` never builds this variant --
+    /// it always produces `ListLiteral(vec![])` for an empty list literal.
+    /// The only *inference* construction site in the workspace is
     /// `pycc_types::empty_container::resolve_empty_containers`, which
     /// rewrites the module before either `check_all_keyed` or
-    /// `check_and_resolve_all_keyed` walks it. The carried `Ty` is always
+    /// `check_and_resolve_all_keyed` walks it. The one *syntactic* site is
+    /// `pycc_hir`'s `stmt::ann_assign` (#1264): an annotated attribute
+    /// target `self.xs: list[int] = []` builds it from the written
+    /// annotation, so both checkers still consume the same node (D-245's
+    /// 2026-09-24 amendment). The carried `Ty` is always
     /// fully concrete -- never `Ty::Infer` -- and is the *element* type, so
     /// the expression's own type is `Ty::List(element)`.
     ///
@@ -449,8 +452,10 @@ pub enum HirExpr {
     /// itself is still read-only-indexed, D-105, but that is now
     /// `pycc_types`' judgment on `HirStmt::DictSet`'s base type, not a
     /// structural HIR-shape restriction), and every other assignment/for
-    /// target (`Stmt::AnnAssign`, `Stmt::For`) still rejects a non-bare-name
-    /// target before ever calling `lower_expr` on it. So a `Subscript` node
+    /// target (`Stmt::AnnAssign`, `Stmt::For`) still rejects a subscript
+    /// target before ever calling `lower_expr` on it (`Stmt::AnnAssign`
+    /// admits an attribute target since #1264, lowering only its base, never
+    /// a subscript). So a `Subscript` node
     /// still reaches this arm only in a value (Load) position; no separate
     /// `ExprContext` check is needed to enforce that here.
     Subscript {
@@ -524,8 +529,10 @@ pub enum HirExpr {
     /// An empty `{}` whose key/value types were resolved by `pycc_types`'
     /// empty-container pre-pass (#1021, D-245). The dict counterpart of
     /// [`HirExpr::EmptyList`], and it carries that variant's construction
-    /// invariant verbatim: never built by `pycc_hir` lowering, always a
-    /// fully concrete key/value pair, so the expression's own type is
+    /// invariant verbatim: never built by `lower_expr`, inferred only by the
+    /// pre-pass, built syntactically only by `stmt::ann_assign` for
+    /// `self.d: dict[str, int] = {}` (#1264), and always a fully concrete
+    /// key/value pair, so the expression's own type is
     /// `Ty::Dict(pair)`.
     EmptyDict(Box<(Ty, Ty)>),
     /// `{e1, e2, ...}`. Element homogeneity and the `set[int]`-only codegen

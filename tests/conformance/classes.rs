@@ -471,6 +471,36 @@ fn attr_container_methods_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #1264 (Part 3 of #1218): annotated empty `list[int]`/`dict[str, int]`
+// initialisers in `__init__`, a fresh container per instance, a reset in a
+// method, a store from a free function, and a `this` receiver.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn instance_annotated_container_slots_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/instance_annotated_container_slots.py");
+    let (debug_pycc, debug_cpython) = run_conformance_fixture_with_profile(
+        "instance_annotated_container_slots_debug",
+        &fixture,
+        false,
+    );
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on \
+         tests/fixtures/instance_annotated_container_slots.py"
+    );
+    let (release_pycc, release_cpython) = run_conformance_fixture_with_profile(
+        "instance_annotated_container_slots_release",
+        &fixture,
+        true,
+    );
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on \
+         tests/fixtures/instance_annotated_container_slots.py"
+    );
+}
+
 // #1254 (Part 1 of #1214, D-250): list, set and dict comprehensions in any
 // expression position, including nested ones and ones inside `try`.
 #[test]
