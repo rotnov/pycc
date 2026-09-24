@@ -161,6 +161,50 @@ fn a_subclass_reset_resolves_from_a_declared_base_slot() {
     );
 }
 
+/// A subclass that repeats the base's declarations with the same types and
+/// establishes them again in its own `__init__` shares the base slots.
+#[test]
+fn a_subclass_redeclaring_a_base_declaration_matches_cpython() {
+    assert_eq!(
+        matches_cpython(
+            "e2e_1266_redeclare",
+            "class Base:\n    n: int\n    xs: list[int]\n\n    def __init__(self) -> None:\n        \
+             self.n = 1\n        self.xs = []\n\n\nclass Child(Base):\n    n: int\n    \
+             xs: list[int]\n\n    def __init__(self) -> None:\n        super().__init__()\n        \
+             self.n = 5\n        self.xs = []\n        self.xs.append(self.n)\n\n\n\
+             c = Child()\nprint(c.n, len(c.xs), c.xs[0], Base().n)\n",
+        ),
+        "5 1 5 1\n"
+    );
+}
+
+/// A subclass redeclaration with a different type is D-210's `T0052`.
+#[test]
+fn a_subclass_redeclaration_with_another_type_is_t0052() {
+    let dir = ScratchDir::new("e2e_1266_redeclare_conflict").expect("scratch");
+    let subject = dir.join("a.py");
+    std::fs::write(
+        &subject,
+        "class Base:\n    n: int\n\n    def __init__(self) -> None:\n        self.n = 1\n\n\n\
+         class Child(Base):\n    n: str\n\n    def __init__(self) -> None:\n        \
+         self.n = \"a\"\n\n\nprint(Child().n)\n",
+    )
+    .expect("write the subject");
+    let check = pycc()
+        .arg("check")
+        .arg(&subject)
+        .output()
+        .expect("run pycc check");
+    assert!(!check.status.success(), "{}", rendered(&check));
+    assert!(
+        rendered(&check).contains(
+            "error[T0052]: attribute `n` is declared as `str` in class `Child` and as `int` in class `Base`"
+        ),
+        "{}",
+        rendered(&check)
+    );
+}
+
 /// A type-parameter declaration, against hard-coded CPython output (PEP 695
 /// syntax needs Python 3.12, so this program is not run under an arbitrary
 /// `python3`).
