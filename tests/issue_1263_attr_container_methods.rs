@@ -190,8 +190,8 @@ fn a_mistyped_attribute_receiver_or_argument_is_refused() {
     }
 }
 
-/// A receiver that is neither a name nor an attribute read is refused with
-/// the widened wording; `.add()` keeps its bare-name-only wording, since no
+/// A receiver that is neither a name nor an attribute read (a call result,
+/// a `pycc_std` module constant) is refused with the widened wording; `.add()` keeps its bare-name-only wording, since no
 /// `set` instance slot exists.
 #[test]
 fn an_unsupported_receiver_is_refused() {
@@ -202,6 +202,15 @@ fn an_unsupported_receiver_is_refused() {
     assert!(
         text.contains(
             "error[C0001]: `.pop()` is only supported on a name or an instance attribute so far"
+        ),
+        "{text}"
+    );
+    // A `pycc_std` module constant lowers to a qualified name, not an
+    // attribute read, so it is the same refusal.
+    let text = check_fails("e2e_1263_std_constant", "import math\nmath.pi.append(1)\n");
+    assert!(
+        text.contains(
+            "error[C0001]: `.append()` is only supported on a name or an instance attribute so far"
         ),
         "{text}"
     );
