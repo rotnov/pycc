@@ -248,6 +248,7 @@ fn a_block_foreign_import_is_a_direct_root() {
         imports: vec![ImportBinding::Foreign {
             local_name: "np".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Block,
             span: pycc_diag::Span::new(0, 0),
         }],

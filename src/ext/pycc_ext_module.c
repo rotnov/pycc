@@ -854,6 +854,177 @@ PyObject *pycc_ext_obj_import(const char *name)
 }
 
 /*
+ * #1278: raise CPython's `IMPORT_FROM` `ImportError` for `name` missing from
+ * `module`, and return NULL. `pycc_ext_obj_import_from` below documents the
+ * contract; this only builds the exception.
+ */
+static PyObject *pycc_ext_import_from_error(PyObject *module, PyObject *name)
+{
+    PyObject *pkgname = NULL;
+    PyObject *shown = NULL;
+    PyObject *pkgpath = NULL;
+    PyObject *message = NULL;
+    PyObject *raised = NULL;
+
+    if (PyObject_GetOptionalAttrString(module, "__name__", &pkgname) < 0) {
+        return NULL;
+    }
+    if (pkgname != NULL && !PyUnicode_Check(pkgname)) {
+        Py_CLEAR(pkgname);
+    }
+    shown = (pkgname != NULL) ? Py_NewRef(pkgname)
+                              : PyUnicode_FromString("<unknown module name>");
+    if (shown == NULL) {
+        goto done;
+    }
+    if (PyModule_Check(module)) {
+        pkgpath = PyModule_GetFilenameObject(module);
+        if (pkgpath == NULL) {
+            if (!PyErr_ExceptionMatches(PyExc_SystemError)) {
+                goto done;
+            }
+            /* A module without `__file__`, such as the builtin `itertools`. */
+            PyErr_Clear();
+        }
+    }
+    if (pkgpath == NULL || !PyUnicode_Check(pkgpath)) {
+        Py_CLEAR(pkgpath);
+        message = PyUnicode_FromFormat("cannot import name %R from %R (unknown location)",
+                                       name, shown);
+    } else {
+        message = PyUnicode_FromFormat("cannot import name %R from %R (%S)",
+                                       name, shown, pkgpath);
+    }
+    if (message == NULL) {
+        goto done;
+    }
+    PyErr_SetImportError(message, pkgname, pkgpath);
+    /*
+     * `PyErr_SetImportError` leaves `name_from` unset; CPython's own
+     * `IMPORT_FROM` sets it, and its "Did you mean" suggestion reads it.
+     */
+    raised = PyErr_GetRaisedException();
+    if (raised != NULL && PyObject_SetAttrString(raised, "name_from", name) < 0) {
+        Py_DECREF(raised);
+        goto done;
+    }
+    PyErr_SetRaisedException(raised);
+done:
+    Py_XDECREF(message);
+    Py_XDECREF(pkgpath);
+    Py_XDECREF(shown);
+    Py_XDECREF(pkgname);
+    return NULL;
+}
+
+/*
+ * #1278: the helper compiled code calls for each name of a foreign
+ * `from itertools import product, chain`.
+ *
+ * It mirrors CPython 3.14's `IMPORT_NAME` with a fromlist followed by one
+ * `IMPORT_FROM`, and returns a new reference to the value bound to
+ * `fromlist[index]`, or NULL with the CPython exception set:
+ *
+ * 1. The import runs `builtins.__import__(module, None, None, fromlist, 0)`
+ *    with the statement's *whole* fromlist, as `IMPORT_NAME` does, so a
+ *    package whose submodule import sets another listed attribute still
+ *    works. It runs once per name rather than once per statement; that
+ *    repeats no binding and raises nothing new, because
+ *    `_handle_fromlist` skips every name already bound. The two
+ *    observable differences -- an overridden `__import__` sees N calls,
+ *    and a failed finder lookup for a missing `pkg.<name>` repeats -- are
+ *    recorded in `docs/RUNTIME.md`.
+ * 2. `IMPORT_FROM`: the attribute when the module has one. On a missing
+ *    attribute only, the `sys.modules` entry `<mod.__name__>.<name>`, so a
+ *    submodule the fromlist import just loaded (`from xml import dom`) is
+ *    found. Any other attribute-lookup failure propagates unchanged.
+ * 3. Otherwise CPython's own `ImportError`: `cannot import name 'n' from
+ *    'm' (<__file__>)`, or `(unknown location)` when the module has no
+ *    file, with `.name`, `.path` and `.name_from` set as CPython sets them.
+ *    The message, `.name` and the fallback key come from the module
+ *    object's `__name__`, not from the requested string, as CPython's do.
+ *    CPython's circular-import and stdlib-shadowing variants of the
+ *    message are not reproduced; `docs/RUNTIME.md` records both.
+ *
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_OBJ_IMPORT_FROM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ * `module` and every `fromlist` entry are NUL-terminated UTF-8 constants
+ * the artifact owns; `index` is always inside `[0, nfrom)` because the
+ * compiler emits both. The returned reference is never released, on the
+ * same leak-only rule as `pycc_ext_obj_import`.
+ */
+PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *fromlist,
+                                   long long nfrom, long long index)
+{
+    PyObject *import = NULL;
+    PyObject *names = NULL;
+    PyObject *module = NULL;
+    PyObject *name = NULL;
+    PyObject *pkgname = NULL;
+    PyObject *fullname = NULL;
+    PyObject *value = NULL;
+    long long i;
+    int found;
+
+    found = PyDict_GetItemStringRef(PyEval_GetBuiltins(), "__import__", &import);
+    if (found < 0) {
+        return NULL;
+    }
+    if (found == 0) {
+        PyErr_SetString(PyExc_ImportError, "__import__ not found");
+        return NULL;
+    }
+    names = PyTuple_New((Py_ssize_t)nfrom);
+    if (names == NULL) {
+        goto done;
+    }
+    for (i = 0; i < nfrom; i++) {
+        PyObject *item = PyUnicode_FromString(fromlist[i]);
+        if (item == NULL) {
+            goto done;
+        }
+        /* Steals `item`, even on failure. */
+        if (PyTuple_SetItem(names, (Py_ssize_t)i, item) < 0) {
+            goto done;
+        }
+    }
+    module = PyObject_CallFunction(import, "sOOOi", module_name, Py_None, Py_None, names, 0);
+    if (module == NULL) {
+        goto done;
+    }
+    name = PyUnicode_FromString(fromlist[index]);
+    if (name == NULL) {
+        goto done;
+    }
+    if (PyObject_GetOptionalAttr(module, name, &value) != 0) {
+        /* Found (1) or a non-`AttributeError` failure (-1): done either way. */
+        goto done;
+    }
+    if (PyObject_GetOptionalAttrString(module, "__name__", &pkgname) < 0) {
+        goto done;
+    }
+    if (pkgname != NULL && PyUnicode_Check(pkgname)) {
+        fullname = PyUnicode_FromFormat("%U.%U", pkgname, name);
+        if (fullname == NULL) {
+            goto done;
+        }
+        value = PyImport_GetModule(fullname);
+        if (value != NULL || PyErr_Occurred()) {
+            goto done;
+        }
+    }
+    pycc_ext_import_from_error(module, name);
+done:
+    Py_XDECREF(fullname);
+    Py_XDECREF(pkgname);
+    Py_XDECREF(name);
+    Py_XDECREF(module);
+    Py_XDECREF(names);
+    Py_XDECREF(import);
+    return value;
+}
+
+/*
  * Part 2 of #1026: the attribute-load helper compiled code calls for
  * `numpy.pi` on a value whose static type is the opaque `object`.
  *

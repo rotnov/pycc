@@ -55,7 +55,11 @@ pub(crate) fn import_local_name(binding: &ImportBinding) -> &str {
 /// the same type, so no read depends on which one ran last. Two foreign
 /// imports of one local name from *different* modules (`import a as x`,
 /// `import b as x`) are refused like any other shadow, because a read would
-/// then depend on the positional question the refusal exists to avoid.
+/// then depend on the positional question the refusal exists to avoid. The
+/// object is the module *and*, for a from-import, the attribute (#1278):
+/// `import copy` followed by `from copy import copy` binds two different
+/// objects to `copy`, so it is refused too, while `from copy import copy`
+/// written twice is the identical pair.
 ///
 /// At most one diagnostic per name, so a duplicated import reports once. A
 /// definition's span is preferred over the import's when both exist: it is
@@ -70,6 +74,7 @@ pub(crate) fn reject_shadowed_foreign_imports(
         let ImportBinding::Foreign {
             local_name,
             module_path,
+            from,
             span,
             ..
         } = binding
@@ -88,7 +93,9 @@ pub(crate) fn reject_shadowed_foreign_imports(
                 && import_local_name(candidate) == local_name
                 && !matches!(
                     candidate,
-                    ImportBinding::Foreign { module_path: other_path, .. } if other_path == module_path
+                    ImportBinding::Foreign { module_path: other_path, from: other_from, .. }
+                        if other_path == module_path
+                            && other_from.as_ref().map(|f| &f.name) == from.as_ref().map(|f| &f.name)
                 )
         });
         let Some(span) = definition.or(shadowed_by_import.then_some(*span)) else {

@@ -43,6 +43,7 @@ fn foreign(local_name: &str, item_index: usize) -> ImportBinding {
     ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     }
@@ -131,6 +132,36 @@ fn two_foreign_imports_straddling_a_statement_keep_their_order() {
     assert!(matches!(mir.items[1], MirItem::TopLevelStmt(_)));
 }
 
+/// #1278: a from-import's binding is spliced with its `from` intact, so
+/// codegen receives the attribute name, the whole fromlist and the index.
+#[test]
+fn a_foreign_from_import_carries_its_from_import_into_the_item() {
+    let from = pycc_hir::FromImport {
+        name: "chain".to_string(),
+        fromlist: vec!["product".to_string(), "chain".to_string()],
+        index: 1,
+    };
+    let hir = module_with_stmts(
+        1,
+        vec![ImportBinding::Foreign {
+            local_name: "chain".to_string(),
+            module_path: "itertools".to_string(),
+            from: Some(from.clone()),
+            site: pycc_hir::ForeignImportSite::Item(1),
+            span: Span::new(0, 0),
+        }],
+    );
+    let mir = build(&hir);
+    assert_eq!(
+        mir.items[1],
+        MirItem::ForeignImport {
+            local_name: "chain".to_string(),
+            module_path: "itertools".to_string(),
+            from: Some(from),
+        }
+    );
+}
+
 /// #1291: a foreign import nested in a module-level `if` is not spliced as
 /// an item; it lowers to a `MirStmt::ForeignImport` inside the `if` body,
 /// where it runs only when the branch does.
@@ -149,6 +180,7 @@ fn a_block_foreign_import_lowers_in_place_and_is_not_spliced() {
         ..module_with_imports(vec![ImportBinding::Foreign {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Block,
             span: Span::new(0, 0),
         }])

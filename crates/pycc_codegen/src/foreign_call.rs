@@ -493,6 +493,7 @@ mod tests {
             MirItem::ForeignImport {
                 local_name: module.to_string(),
                 module_path: module.to_string(),
+                from: None,
             },
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjMethodCall {
                 base: Box::new(MirExpr::Name {
@@ -709,6 +710,7 @@ mod tests {
             MirItem::ForeignImport {
                 local_name: module.to_string(),
                 module_path: module.to_string(),
+                from: None,
             },
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjSubscript {
                 base: Box::new(MirExpr::Name {
@@ -809,6 +811,7 @@ mod tests {
             MirItem::ForeignImport {
                 local_name: module.to_string(),
                 module_path: module.to_string(),
+                from: None,
             },
             MirItem::TopLevelStmt(MirStmt::ForObject {
                 var: "x".to_string(),

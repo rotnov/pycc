@@ -302,18 +302,33 @@ fn a_bare_import_of_a_real_project_module_is_recognized_but_unsupported() {
 
 #[test]
 fn an_absolute_name_that_resolves_nowhere_keeps_the_single_file_diagnostic() {
+    // Dotted, because an undotted `from nowhere import thing` has been a
+    // foreign import since #1278 (the next test).
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from no.where import thing\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("import of module `no.where` is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+/// #1278: an undotted module found nowhere in the project is answered as a
+/// CPython module for the from form too, so the program loads.
+#[test]
+fn an_undotted_from_import_that_resolves_nowhere_is_a_foreign_import() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
     let entry = write(
         &scratch,
         "main.py",
         "from nowhere import thing\n\n\ndef main() -> None:\n    print(1)\n",
     );
-    let (_, code, message) = first_diagnostic(&entry);
-    assert_eq!(code, "C0001");
-    assert!(
-        message.contains("import of module `nowhere` is not supported yet"),
-        "unexpected message: {message}"
-    );
+    assert_eq!(loaded_paths(&entry), vec!["main.py"]);
 }
 
 #[test]

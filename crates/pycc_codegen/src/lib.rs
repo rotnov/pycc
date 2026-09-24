@@ -6245,19 +6245,20 @@ fn compile_to_object_with_observer(
             MirItem::ForeignImport {
                 local_name,
                 module_path,
-            } => {
-                if options.ext {
-                    foreign_import::emit(
-                        &context,
-                        &builder,
-                        &module,
-                        entry_fn,
-                        &module_globals[local_name],
-                        local_name,
-                        module_path,
-                    );
-                }
-            }
+                from,
+            } => foreign_import::emit_item(
+                &context,
+                &builder,
+                &module,
+                entry_fn,
+                options.ext,
+                &module_globals,
+                foreign_import::ForeignBinding {
+                    local_name,
+                    module_path,
+                    from: from.as_ref(),
+                },
+            ),
             MirItem::Function { name, .. } => {
                 // Store this definition's function pointer into the
                 // global slot, representing the `def`'s runtime binding.

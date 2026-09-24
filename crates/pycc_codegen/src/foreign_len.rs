@@ -569,6 +569,7 @@ mod tests {
         let mut items = vec![MirItem::ForeignImport {
             local_name: module.to_string(),
             module_path: module.to_string(),
+            from: None,
         }];
         items.extend(
             build(MirExpr::Name {

@@ -26,7 +26,9 @@ use crate::frontend::FrontendFailure;
 use crate::modules::DiscoveredManifest;
 use clap::ValueEnum;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{HirModule, ImportBinding};
+use pycc_hir::{
+    FromImport, HirModule, ImportBinding, foreign_import_statement, opens_foreign_statement,
+};
 
 /// One of D-128's three interop policies, as `--interop-policy` and
 /// `[interop] policy` spell it.
@@ -233,19 +235,22 @@ fn describe(policy: InteropPolicy, source: &PolicySource) -> String {
     }
 }
 
-/// The `I0402` for `import {module_path}` under `policy`, or `None` when the
-/// policy admits it. The root is the first dot segment, the same rule the
-/// embedding gate uses.
+/// The `I0402` for `import {module_path}` -- or, when `from` is `Some`, for
+/// `from {module_path} import a, b` (#1278) -- under `policy`, or `None`
+/// when the policy admits it. The root is the first dot segment of the
+/// module, the same rule the embedding gate uses.
 pub(crate) fn rejection(
     policy: &EffectivePolicy,
     module_path: &str,
+    from: Option<&FromImport>,
     span: Span,
 ) -> Option<Diagnostic> {
     let root = module_path.split('.').next().unwrap_or(module_path);
+    let statement = foreign_import_statement(module_path, from);
     let message = match policy {
         EffectivePolicy::Auto => return None,
         EffectivePolicy::Deny { source } => format!(
-            "`import {module_path}` is a CPython-backed import, which the `deny` interop \
+            "`{statement}` is a CPython-backed import, which the `deny` interop \
              policy ({}) rejects: it admits no CPython import",
             describe(InteropPolicy::Deny, source)
         ),
@@ -254,7 +259,7 @@ pub(crate) fn rejection(
                 return None;
             }
             format!(
-                "`import {module_path}` is a CPython-backed import, which the `allowlist` \
+                "`{statement}` is a CPython-backed import, which the `allowlist` \
                  interop policy ({}) rejects: its root `{root}` is not in `[interop] allow`",
                 describe(InteropPolicy::Allowlist, source)
             )
@@ -264,16 +269,25 @@ pub(crate) fn rejection(
 }
 
 /// `pycc check`'s policy gate: one `I0402` per rejected CPython-backed
-/// import, paired with its position in `hir.imports` (the index
+/// import statement, paired with its position in `hir.imports` (the index
 /// `src/frontend.rs` maps back to the owning file), in import-table order.
+/// Each alias of `import a, b` is its own import (#1280); every name of
+/// `from X import a, b` shares one statement, reported on its first name
+/// (#1278).
 pub(crate) fn policy_gaps(hir: &HirModule, policy: &EffectivePolicy) -> Vec<(usize, Diagnostic)> {
     hir.imports
         .iter()
         .enumerate()
         .filter_map(|(position, binding)| match binding {
             ImportBinding::Foreign {
-                module_path, span, ..
-            } => rejection(policy, module_path, *span).map(|gap| (position, gap)),
+                module_path,
+                from,
+                span,
+                ..
+            } if opens_foreign_statement(from.as_ref()) => {
+                rejection(policy, module_path, from.as_ref(), *span).map(|gap| (position, gap))
+            }
+            ImportBinding::Foreign { .. } => None,
             ImportBinding::Module { .. }
             | ImportBinding::Symbol { .. }
             | ImportBinding::Project { .. } => None,

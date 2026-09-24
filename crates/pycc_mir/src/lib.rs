@@ -1,4 +1,4 @@
-pub use pycc_hir::{EnumMemberValue, HirClassDef};
+pub use pycc_hir::{EnumMemberValue, FromImport, HirClassDef};
 mod binop;
 use binop::binop_result_ty;
 mod boolop;
@@ -1268,7 +1268,9 @@ pub enum MirStmt {
     /// order, stores the module object `pycc_ext_obj_import(module_path)`
     /// returns into the module global `local_name`, where the statement
     /// runs. A failed import returns `-1` from `Py_mod_exec` directly
-    /// (#1096), so it is not a pycc raise.
+    /// (#1096), so it is not a pycc raise. It never carries a from-import
+    /// (#1278): `pycc_hir` lowers a `from X import n` nested in a block to
+    /// its block-body `C0001`, so every pair is a plain `import`.
     ForeignImport {
         bindings: Vec<(String, String)>,
     },
@@ -1319,9 +1321,15 @@ pub enum MirItem {
     /// a module's imports ahead of a preceding statement's observable
     /// effects -- a divergence from CPython that D-244 rule 3 does not
     /// admit.
+    ///
+    /// `from` is `None` for `import X`, and for one name of a top-level
+    /// `from X import a, b` (#1278) it is that binding's name, its index,
+    /// and the statement's whole fromlist, which the
+    /// `pycc_ext_obj_import_from` call passes to CPython's `__import__`.
     ForeignImport {
         local_name: String,
         module_path: String,
+        from: Option<FromImport>,
     },
 }
 
@@ -1459,6 +1467,7 @@ fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
         let ImportBinding::Foreign {
             local_name,
             module_path,
+            from,
             site: ForeignImportSite::Item(item_index),
             ..
         } = binding
@@ -1470,6 +1479,7 @@ fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
             MirItem::ForeignImport {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
+                from: from.clone(),
             },
         );
         inserted += 1;
