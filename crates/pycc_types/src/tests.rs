@@ -41,6 +41,7 @@ mod optional_narrowing;
 mod pattern_matching;
 mod protocol_argument;
 mod protocol_return;
+mod try_definite;
 mod type_checking_marker;
 mod typing_cast;
 

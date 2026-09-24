@@ -593,6 +593,47 @@ fn t0041_maybe_bound_for_range() {
     assert_diagnostic_matches_fixture("t0041_maybe_bound_for_range");
 }
 
+// #1289: a `try` statement's fall-through join. A name the body binds but a
+// falling-through handler does not stays possibly unbound; `finally` is
+// checked against the conservative state because it also runs on the paths
+// that leave early; an `as` name is unbound after its handler (CPython's
+// implicit `del`); and every path's binding is type-checked, including a
+// handler that always terminates and the `else` path against a handler.
+#[test]
+fn t0041_maybe_bound_try_handler() {
+    assert_diagnostic_matches_fixture("t0041_maybe_bound_try_handler");
+}
+
+#[test]
+fn t0041_maybe_bound_try_finally_read() {
+    assert_diagnostic_matches_fixture("t0041_maybe_bound_try_finally_read");
+}
+
+#[test]
+fn t0041_try_as_name_after_handler() {
+    assert_diagnostic_matches_fixture("t0041_try_as_name_after_handler");
+}
+
+#[test]
+fn t0041_try_as_name_terminating_handler() {
+    assert_diagnostic_matches_fixture("t0041_try_as_name_terminating_handler");
+}
+
+#[test]
+fn t0023_try_as_name_rebound_after() {
+    assert_diagnostic_matches_fixture("t0023_try_as_name_rebound_after");
+}
+
+#[test]
+fn t0023_try_handler_else_mismatch() {
+    assert_diagnostic_matches_fixture("t0023_try_handler_else_mismatch");
+}
+
+#[test]
+fn t0023_try_terminating_handler_mismatch() {
+    assert_diagnostic_matches_fixture("t0023_try_terminating_handler_mismatch");
+}
+
 // PEP 591 (#383): reassigning a `Final`-annotated name after its initial
 // binding is T0045. `T0045` covers the variable-level position only
 // (module-level and function-local annotated assignments); `Final` on a
