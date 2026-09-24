@@ -37,9 +37,11 @@ pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
 ///
 /// Only these do: a function or method parameter, a function or method
 /// return annotation (#925), a local or module-level `AnnAssign`, and a type
-/// alias. An annotated attribute target (#1264) lowers only `list[int]` and
-/// `dict[str, int]`, so it opts in through [`with_bare_list_or_dict_advice`]. Class-attribute, dataclass-field and protocol-attribute positions
-/// each reject `list[int]` with a `C0001` of their own, so advising the
+/// alias. An annotated attribute target (#1264) and a class-body instance
+/// attribute declaration (#1266) lower only `list[int]` and `dict[str, int]`,
+/// so they opt in through [`with_bare_list_or_dict_advice`]. Class-constant
+/// (an annotation with a value), dataclass-field and protocol-attribute
+/// positions each reject `list[int]` with a `C0001` of their own, so advising the
 /// parameterized form there would walk the user straight into a second
 /// error. They opt out simply by not calling this, which is why the advice
 /// is an opt-in upgrade rather than a position argument threaded through
@@ -75,7 +77,8 @@ pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -
 
 /// [`with_bare_container_advice`] restricted to a bare `list`/`dict`, for
 /// a position that lowers only those two parameterized forms (an annotated
-/// attribute target, #1264): a bare `set`/`tuple` there keeps `error`, so the
+/// attribute target, #1264, or a class-body instance attribute declaration,
+/// #1266): a bare `set`/`tuple` there keeps `error`, so the
 /// advice never names a form the position refuses too.
 pub(crate) fn with_bare_list_or_dict_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
     match strip_transparent_wrappers(annotation) {

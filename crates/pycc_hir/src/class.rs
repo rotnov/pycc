@@ -61,6 +61,7 @@
 
 mod attrs;
 mod body;
+mod declared_attrs;
 pub(crate) mod enum_call;
 mod enum_class;
 mod init;
