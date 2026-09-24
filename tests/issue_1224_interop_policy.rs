@@ -5,7 +5,8 @@
 //!
 //! Every assertion holds on every host. Every admitted root here is in the
 //! standard library, which a Windows host embeds too since #1286 (D-253);
-//! a root outside it is still `I0403` there until #1287. An admission is observed without an interpreter: with `PYCC_PYTHON` naming
+//! a root outside it is embedded from `pycc.lock` there too since #1296.
+//! An admission is observed without an interpreter: with `PYCC_PYTHON` naming
 //! a missing file, an admitted `build` or `run` reaches the embedding step
 //! and stops with an environment failure (exit 2) that names
 //! `PYCC_PYTHON`, the technique `tests/issue_1223_embedded_executable.rs`

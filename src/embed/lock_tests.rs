@@ -421,11 +421,11 @@ mod macos_relative_tests;
 #[path = "static_lock_tests.rs"]
 mod static_lock_tests;
 
-/// A static libpython request on Windows is refused before a lock is read
-/// or the interpreter probed (D-253): the lock here is a macOS one, and
-/// the interpreter does not exist.
+/// A static libpython request on Windows is refused before the interpreter
+/// is probed or the locked closure planned (D-253): the interpreter here
+/// does not exist.
 #[test]
-fn a_windows_static_request_is_refused_before_the_lock_is_read() {
+fn a_windows_static_request_is_refused_before_the_probe() {
     let env = Env::new("embed_lock_windows_static", "import json\n");
     env.lock();
     env.previous_sidecar();

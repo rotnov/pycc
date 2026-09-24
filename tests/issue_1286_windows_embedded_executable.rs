@@ -435,10 +435,11 @@ fn the_windows_stub_imports_only_system_dlls() {
     );
 }
 
-/// A root outside the standard library is still `I0403` on a Windows host
-/// (#1287); the default `auto` policy admits it, so it is not `I0402`.
+/// A root outside the standard library with no `pycc.lock` is refused on a
+/// Windows host as on every host (#1296): an environment failure naming
+/// `pycc lock`, before any interpreter is probed, with nothing written.
 #[test]
-fn a_windows_host_refuses_a_root_outside_the_standard_library() {
+fn a_windows_host_refuses_a_root_outside_the_standard_library_without_a_lock() {
     if !cfg!(windows) {
         return;
     }
@@ -448,13 +449,15 @@ fn a_windows_host_refuses_a_root_outside_the_standard_library() {
         .arg(source(&dir, "import numpy\n"))
         .arg("-o")
         .arg(dir.join("app"))
+        .env("PYCC_PYTHON", r"C:\nonexistent\pycc-no-python.exe")
         .output()
         .expect("pycc should spawn");
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
+    assert_eq!(output.status.code(), Some(2), "{}", stderr_of(&output));
     let rendered = stderr_of(&output);
-    assert!(rendered.contains("error[I0403]"), "{rendered}");
-    assert!(rendered.contains("#1287"), "{rendered}");
+    assert!(rendered.contains("pycc lock"), "{rendered}");
+    assert!(!rendered.contains("I0403"), "{rendered}");
     assert!(!dir.join("app").exists());
+    assert!(!dir.join("app.pycc").exists());
 }
 
 /// `--static-libpython` is refused before the probe (D-251, D-253): no

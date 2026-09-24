@@ -443,10 +443,10 @@ pub(crate) fn classify_payload(
         if has_component(path, "..") {
             return Err(refuse(path, "contains `..`"));
         }
-        if platform == EmbedPlatform::Windows {
-            if let Some(defect) = windows_record_path_defect(path) {
-                return Err(refuse(path, defect));
-            }
+        if platform == EmbedPlatform::Windows
+            && let Some(defect) = windows_record_path_defect(path)
+        {
+            return Err(refuse(path, defect));
         }
         let Some(encoded) = entry.hash.strip_prefix("sha256=") else {
             return Err(refuse(path, "has no sha256 hash"));
