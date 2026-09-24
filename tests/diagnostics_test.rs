@@ -1386,10 +1386,26 @@ fn t0003_unresolved_attribute_list() {
 }
 
 /// #1265: the unannotated `self.d = {}` stays `C0001`, naming the annotated
-/// spelling and the #891 producer it waits for.
+/// spelling, the class-body declaration spelling (#1266), and the #891
+/// producer it waits for.
 #[test]
 fn c0001_unannotated_attribute_empty_dict() {
     assert_diagnostic_matches_fixture("c0001_unannotated_attribute_empty_dict");
+}
+
+/// #1266: a value-less class-body annotation is an instance attribute
+/// declaration its own `__init__` must establish; one it never assigns names
+/// both fixes, including the class-constant spelling for a scalar.
+#[test]
+fn c0001_unestablished_instance_declaration() {
+    assert_diagnostic_matches_fixture("c0001_unestablished_instance_declaration");
+}
+
+/// #1266: a declared type with no instance-slot representation names the
+/// admitted set.
+#[test]
+fn c0001_instance_declaration_type() {
+    assert_diagnostic_matches_fixture("c0001_instance_declaration_type");
 }
 
 /// A non-binding position. `infer_expr_in` has no expected type and there is

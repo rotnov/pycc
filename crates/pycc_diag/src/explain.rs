@@ -288,7 +288,9 @@ to it in one of the class's own methods (`self.xs.append(1)`); a renamed \
 receiver (`def __init__(this)`) is named as written. An unannotated \
 `self.d = {}` establishing the attribute in `__init__` and a tuple-unpacking \
 target (`L, R = [], []`) never reach this check: both are rejected earlier \
-with `C0001`. A later `self.d = {}` or `self.xs = {}` reset in another method \
+with `C0001`. A class-body declaration (`d: dict[str, int]`) types an \
+establishing `self.d = {}` instead, and an establishing `[]` or `{}` of the \
+wrong shape for its declared slot does reach this check. A later `self.d = {}` or `self.xs = {}` reset in another method \
 does reach it when the slot it stores into is not a `dict`. Where a binding \
 name *is* available at a function-scope assignment it is named in the \
 message; a module-level assignment keeps the generic wording, because the \
