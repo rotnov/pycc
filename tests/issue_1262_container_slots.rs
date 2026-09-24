@@ -103,6 +103,30 @@ fn module_scope_container_slots_match_cpython() {
     assert_eq!(pycc_out, "3 6 9\n1 3\n");
 }
 
+/// A slice of a list attribute is a fresh list, as in CPython: appending to
+/// it leaves the attribute unchanged.
+#[test]
+fn slicing_a_list_attribute_matches_cpython() {
+    let dir = ScratchDir::new("e2e_1262_slice").expect("scratch");
+    let source = dir.join("a.py");
+    std::fs::write(
+        &source,
+        "class Box:\n    def __init__(self, xs: list[int]) -> None:\n        self.xs = xs\n\n\n\
+         def main() -> None:\n    b = Box([1, 2, 3, 4])\n    ys = b.xs[1:3]\n    ys.append(9)\n    \
+         print(len(ys), ys[0], ys[2], len(b.xs))\n\n\nmain()\n",
+    )
+    .expect("write the subject");
+    let pycc_out = build_and_run(&dir, &source);
+    let oracle = python()
+        .arg("a.py")
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(oracle.status.success(), "{}", rendered(&oracle));
+    assert_eq!(pycc_out, stdout(&oracle));
+    assert_eq!(pycc_out, "3 2 9 4\n");
+}
+
 /// A `set[int]` or `tuple[int, int]` parameter still cannot seed a slot, and
 /// the message names what can.
 #[test]

@@ -125,8 +125,9 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         | Scalar::Optional(_)
         // D-244, Part 2 of #1026: a foreign CPython object joins the same
         // or-pattern for the identical reason the aggregate variants above
-        // do -- `slot_ty_from_init_rhs` admits only `int`/`bool`/`float`/
-        // `str` slots, so a `Ty::Object` attribute is never built. Folded
+        // do -- `slot_ty_from_init_rhs` admits only a scalar or a
+        // `list[int]`/`dict[str, int]` slot, so a `Ty::Object` attribute is
+        // never built. Folded
         // into the existing group rather than given its own arm so it adds
         // no separate, permanently-unexecutable region.
         // Part 2 of #1027: a `memoryview` joins the same or-pattern for

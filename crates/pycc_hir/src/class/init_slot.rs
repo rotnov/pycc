@@ -221,7 +221,15 @@ mod tests {
         // A class-instance-typed slot (here the receiver itself) is not
         // admitted: `slot_ty_from_init_rhs` accepts only a scalar, a type
         // parameter, or a `list[int]`/`dict[str, int]` parameter (#1262).
-        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
+        let message =
+            c0001_message("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
+        assert!(
+            message.ends_with(
+                "yet -- only a scalar (int/float/bool/str), `list[int]` or `dict[str, int]` \
+                 parameter is supported"
+            ),
+            "{message}"
+        );
     }
 
     fn c0001_message(source: &str) -> String {
