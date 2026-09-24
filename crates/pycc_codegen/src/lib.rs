@@ -11,10 +11,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod exception;
-use exception::{
-    ExceptionCodegenState, emit_exception_set_frame, emit_exception_value,
-    expression_can_set_exception, guard_statement_effects,
-};
+use exception::{ExceptionCodegenState, expression_can_set_exception, guard_statement_effects};
+mod exception_value;
+use exception_value::{emit_exception_set_frame, emit_exception_value};
 mod attr_slot;
 use attr_slot::{
     decref_str_attr_slot_before_store, release_int_attr_slot_before_store, scalar_to_slot_word,
@@ -41,6 +40,8 @@ mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
 mod exception_render;
 use exception_render::emit_exception_message;
+mod str_rc;
+use str_rc::{decref_str_slot_before_store, incref_if_str_duplicate};
 mod rt_fns;
 use rt_fns::{RtFns, declare_rt_functions};
 mod ext;
@@ -4923,112 +4924,6 @@ fn emit_assign<'ctx>(
     }
 }
 
-/// Whether evaluating `expr` produces a *duplicate* reference to an
-/// already-owned `str` (a bare `str`-typed variable read) rather than a
-/// fresh object owning exactly one reference from its own construction.
-/// v0.1's grammar makes this purely syntactic: every str-producing
-/// expression other than a bare `Name` (`StringLiteral`, string
-/// concatenation, a `Call`'s return value) freshly constructs its result
-/// and already owns exactly one reference (D-060, Task 7).
-///
-/// Gated on `ty: Ty::Str`, not just the bare-`Name` shape (Task 5, D-089).
-/// The gate was originally added because `emit_expr`'s `Name` arm carried a
-/// `Ty::List(_)`-typed read in `Scalar::Str` too, which made a bare
-/// `list[T]`-typed `Name` indistinguishable from a `str`-typed one at the
-/// `Scalar` level -- and `incref_if_str_duplicate` below dispatches on the
-/// `Scalar` variant alone, so without the gate it would have called
-/// `pycc_rt_str_incref` on a list pointer.
-///
-/// Task 11a (D-107) removed that reuse: a list read is now `Scalar::List`,
-/// so the two are no longer confusable and this gate is no longer what
-/// prevents the spurious incref. It is kept because it is independently the
-/// correct contract for this function -- it answers "is this a duplicate
-/// reference to an already-owned *`str`*", and a non-`str` `Name` is not
-/// one, whatever `Scalar` variant it happens to produce. Behavior-identical
-/// either way for every reachable case: `incref_if_str_duplicate` only ever
-/// consults this function *after* confirming `scalar` is `Scalar::Str`.
-///
-/// `MirExpr::AttrGet { ty: Ty::Str, .. }` (D-154, Part 1 of #375) is a
-/// duplicate reference for exactly the same reason a bare `Name` is: the
-/// instance's own slot keeps its copy of the pointer after this read
-/// returns one too, so both `to_str`'s pass-through and every ordinary
-/// store site (`Assign`, a call argument, a dict key/value, ...) would
-/// otherwise treat this read's result as freshly-owned and eventually
-/// decref it once too many, underflowing the refcount and freeing the
-/// `PyStrObj` while the instance's own slot still points at it -- a
-/// reliably reproducible use-after-free caught in review, not merely a
-/// theoretical gap (D-154 Part 1's own post-merge finding).
-///
-/// A `MirExpr::BoolOp` (#1211) is owning here, like every node this
-/// `matches!` does not name: each of its value arms increfs a duplicate
-/// operand inside that arm, so its `str` result is always a fresh reference.
-fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
-    matches!(
-        expr,
-        MirExpr::Name {
-            ty: pycc_mir::Ty::Str,
-            ..
-        } | MirExpr::AttrGet {
-            ty: pycc_mir::Ty::Str,
-            ..
-        }
-    )
-}
-
-/// Increments a `str` scalar's refcount when `source_expr` is a bare
-/// variable read (see `str_value_is_a_duplicate_reference`) -- binding a
-/// second owning reference to the same `PyStrObj` without this would leave
-/// the original binding's own eventual decref underflowing the refcount
-/// (D-060, Task 7). A no-op for every non-`Str` scalar.
-fn incref_if_str_duplicate<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    source_expr: &MirExpr,
-    scalar: Scalar<'ctx>,
-) -> Scalar<'ctx> {
-    if let Scalar::Str(ptr) = scalar {
-        if str_value_is_a_duplicate_reference(source_expr) {
-            builder
-                .build_call(rt.str_incref, &[ptr.into()], "str_incref")
-                .expect("build_call should not fail for a well-formed incref");
-        }
-        Scalar::Str(ptr)
-    } else {
-        scalar
-    }
-}
-
-/// Only meaningful for `Ty::Str` targets: loads the target's predeclared
-/// slot and decrefs its current value before the new value overwrites it.
-/// String slots start as null, whose runtime decref is a no-op, so the same
-/// path is correct for both first assignment and reassignment and prevents
-/// loop-body-first bindings from leaking earlier iteration values (D-074).
-fn decref_str_slot_before_store<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    locals: &HashMap<String, StorageSlot<'ctx>>,
-    target: &str,
-) {
-    let slot = &locals[target];
-    if slot.ty != pycc_mir::Ty::Str {
-        panic!(
-            "pycc_codegen: internal error: string assignment target `{target}` has a non-string storage slot"
-        );
-    }
-    let old = builder
-        .build_load(
-            context.ptr_type(inkwell::AddressSpace::default()),
-            slot.ptr,
-            "old_str",
-        )
-        .expect("build_load should not fail for this function's own alloca")
-        .into_pointer_value();
-    builder
-        .build_call(rt.str_decref, &[old.into()], "str_decref_old")
-        .expect("build_call should not fail for a well-formed decref");
-}
-
 /// Mirror of [`decref_str_slot_before_store`] for an artifact-owned buffer
 /// slot (Part 2a of #1142, #1165): loads the target's predeclared slot and
 /// frees its current storage before the new view pointer overwrites it.
@@ -7201,8 +7096,8 @@ fn emit_eval_print_arg<'ctx>(
 /// `None` case (the literal `"None"`), or `print_write_str` followed by
 /// `str_decref` for a `Some(str_ptr)` scalar (writing the `str` built in
 /// phase 1, then freeing the temporary `to_str` allocated for
-/// `int`/`float`/`bool` or the incref'd duplicate of a bare `Name`/
-/// `AttrGet` `str`). `emit_stmt`'s `print`-call arm calls this once per
+/// `int`/`float`/`bool`, or the incref'd duplicate of a borrowed `str` read
+/// as classified by `str_value_is_a_duplicate_reference`). `emit_stmt`'s `print`-call arm calls this once per
 /// argument in its second loop, after `emit_eval_print_arg` has already
 /// evaluated every argument, so that output happens only after all
 /// argument side effects complete (see `emit_eval_print_arg`'s own doc
@@ -8461,9 +8356,9 @@ fn emit_stmt<'ctx>(
         // For a `Ty::Str` attribute, mirrors `MirStmt::Assign`'s own two
         // refcount obligations exactly (D-154 Part 1's own post-merge
         // review finding -- the first version of this arm had neither):
-        // `incref_if_str_duplicate` before storing, since a bare-`Name`/
-        // `AttrGet` source value is a *duplicate* reference whose original
-        // binding/slot keeps its own copy; and
+        // `incref_if_str_duplicate` before storing, since a source value
+        // `str_value_is_a_duplicate_reference` classifies as borrowed is a
+        // *duplicate* reference whose original owner keeps its own copy; and
         // `decref_str_attr_slot_before_store` before overwriting, to
         // release whatever the slot held previously (a no-op on a fresh
         // instance's zero-initialized slot, exactly like a local's

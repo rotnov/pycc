@@ -5,6 +5,11 @@
 //! (D-185/AGENTS.md's "keep source files decomposable" rule) -- the logic
 //! here is narrowly the new codegen this issue adds, not a home for the
 //! pre-existing `to_str`/`Scalar::Instance` panic path, which is untouched.
+//!
+//! The rendered `str` is **borrowed**: the exception object keeps owning its
+//! message (#1298). `str_value_is_a_duplicate_reference` classifies
+//! `MirExpr::ExceptionMessage` as a borrowed read, so every consumer retains
+//! the value before it consumes it.
 
 use super::{RtFns, Scalar, expect_instance_pointer};
 use inkwell::values::PointerValue;
@@ -14,6 +19,12 @@ use inkwell::values::PointerValue;
 /// wraps) and returns the resulting `str` scalar. Never touches
 /// `exception_print_and_exit`'s own uncaught-exception `"{type}: {message}"`
 /// format -- this is the message alone.
+///
+/// The returned `Scalar::Str` is a borrowed pointer (the accessor returns
+/// the exception's own `message` field unretained, and the exception keeps
+/// owning it). Callers never consume it directly: they go through
+/// `incref_if_str_duplicate`, which retains it because
+/// `str_value_is_a_duplicate_reference` names `MirExpr::ExceptionMessage`.
 pub(super) fn emit_exception_message<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
