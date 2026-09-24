@@ -8356,9 +8356,9 @@ fn emit_stmt<'ctx>(
         // For a `Ty::Str` attribute, mirrors `MirStmt::Assign`'s own two
         // refcount obligations exactly (D-154 Part 1's own post-merge
         // review finding -- the first version of this arm had neither):
-        // `incref_if_str_duplicate` before storing, since a bare-`Name`/
-        // `AttrGet` source value is a *duplicate* reference whose original
-        // binding/slot keeps its own copy; and
+        // `incref_if_str_duplicate` before storing, since a source value
+        // `str_value_is_a_duplicate_reference` classifies as borrowed is a
+        // *duplicate* reference whose original owner keeps its own copy; and
         // `decref_str_attr_slot_before_store` before overwriting, to
         // release whatever the slot held previously (a no-op on a fresh
         // instance's zero-initialized slot, exactly like a local's
