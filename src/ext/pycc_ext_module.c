@@ -146,7 +146,9 @@ extern void pycc_rt_exception_raise(void *obj);
  * nested foreign import is admitted only at a module-level `if`/`try` site,
  * never in a loop, so one exec adds at most one entry per static import
  * site. Populated only during `pycc_ext_module_exec`, and emptied by
- * `pycc_ext_bridge_table_clear` on both of `pycc_ext_exec_module`'s exits.
+ * `pycc_ext_bridge_table_clear` on both of `pycc_ext_exec_module`'s exits
+ * after the module body has run. Its three earlier returns precede the
+ * `pycc_ext_module_exec` call, when the table is still empty.
  */
 typedef struct {
     void *pycc;
@@ -2231,8 +2233,9 @@ static int pycc_ext_exec_module(PyObject *module)
          * pycc pending state at all. The first channel has a third case
          * since #1293: a pending exception the failed-import bridge made
          * from a CPython one, which `pycc_ext_raise_pending` finds in the
-         * bridge table and re-raises as that original object. `pycc_ext_raise_pending` returns 0 in
-         * that second case, so raising unconditionally here would replace
+         * bridge table and re-raises as that original object.
+         * `pycc_ext_raise_pending` returns 0 for the second channel, so
+         * raising unconditionally here would replace
          * the real exception (a `ModuleNotFoundError` from a failed host
          * import, say) with a message that names neither the cause nor the
          * culprit. Check `PyErr_Occurred` before overwriting, and keep

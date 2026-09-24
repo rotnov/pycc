@@ -299,6 +299,32 @@ fn a_second_bridged_failure_does_not_evict_the_first() {
     assert_eq!(stdout_of(&run), "");
 }
 
+/// Six swallowed inner failures leave seven live entries, past the bridge
+/// table's initial capacity of four, so the table grows while the outer
+/// entry is live; the bare `raise` must still find and restore it.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn the_bridge_table_grows_without_losing_a_live_entry() {
+    let inner: String = (0..6)
+        .map(|i| {
+            format!(
+                "    try:\n        import pycc_nosuch_1293_g{i}\n    \
+                 except ImportError:\n        pass\n"
+            )
+        })
+        .collect();
+    let body =
+        format!("try:\n    import pycc_nosuch_1293\nexcept ImportError:\n{inner}    raise\n");
+    let run = run_hosted(
+        "bridge_grow",
+        "pycc_bridge_grow_mod",
+        &body,
+        &expect_original("pycc_bridge_grow_mod", "pycc_nosuch_1293"),
+    );
+    assert_ok(&run);
+    assert_eq!(stdout_of(&run), "");
+}
+
 /// A handler that raises something new replaces the import error: the
 /// bridge table misses, and the ordinary rebuild runs.
 #[test]
