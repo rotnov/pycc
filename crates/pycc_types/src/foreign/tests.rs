@@ -1061,3 +1061,44 @@ fn a_hand_built_function_body_foreign_import_binds_a_local() {
     ];
     crate::check_all(&hir).unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
 }
+
+/// Both item-count-changing passes -- `monomorphize` dropping generic
+/// originals and `unroll_enum_loops` expanding a top-level `for c in
+/// Color:` -- remap every `ForeignImportSite::Item` position, and must
+/// carry a block site through unchanged: a nested import runs where its
+/// `HirStmt::ForeignImport` stands, so it has no item position to remap.
+#[test]
+fn a_block_site_survives_both_item_remapping_passes_unchanged() {
+    for (source, items) in [
+        (
+            "def _a[T](x: T) -> T:\n    return x\n\n\ndef f() -> int:\n    return 1\n",
+            1,
+        ),
+        (
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor c in Color:\n    print(c.value)\n",
+            4,
+        ),
+    ] {
+        let mut hir = lower(source);
+        hir.imports.push(ImportBinding::Foreign {
+            local_name: "colorsys".to_string(),
+            module_path: "colorsys".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: Span::new(0, 0),
+        });
+        let resolved = crate::check_and_resolve_all_keyed(&hir)
+            .unwrap_or_else(|diagnostics| panic!("{source:?}: {diagnostics:#?}"));
+        assert_eq!(resolved.items.len(), items, "{:?}", resolved.items);
+        assert!(
+            matches!(
+                resolved.imports.as_slice(),
+                [ImportBinding::Foreign {
+                    site: pycc_hir::ForeignImportSite::Block,
+                    ..
+                }]
+            ),
+            "{source:?}: {:?}",
+            resolved.imports
+        );
+    }
+}
