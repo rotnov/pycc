@@ -65,15 +65,19 @@ fn matches_cpython(dir: &Path, entry: &str) -> String {
     pycc_out
 }
 
-/// Runs `pycc <subcommand>` on `a.py` holding `source`, asserting failure,
-/// and returns the rendered diagnostics.
+/// Runs `pycc <subcommand> a.py` from a scratch directory holding `source`
+/// as `a.py`, asserting failure, and returns the rendered diagnostics. The
+/// relative path keeps the rendering independent of the scratch directory.
 fn fails(category: &str, subcommand: &str, source: &str) -> String {
     let dir = ScratchDir::new(category).expect("scratch");
     std::fs::write(dir.join("a.py"), source).expect("write the subject");
     let mut command = pycc();
-    command.arg(subcommand).arg(dir.join("a.py"));
+    command
+        .arg(subcommand)
+        .arg("a.py")
+        .current_dir(dir.join("."));
     if subcommand == "build" {
-        command.arg("-o").arg(dir.join("app"));
+        command.arg("-o").arg("app");
     }
     let output = command.output().expect("pycc should spawn");
     assert!(!output.status.success(), "{source:?} was accepted");
@@ -178,15 +182,19 @@ fn an_unresolved_slot_in_another_module_points_at_that_module() {
     assert!(text.contains("`self.items` in class `Bare`"), "{text}");
 }
 
-/// `pycc check` and `pycc build` refuse a slot no source types identically.
+/// `pycc check` and `pycc build` render byte-identical refusals for a slot
+/// no source types.
 #[test]
 fn check_and_build_report_the_same_t0003() {
     let check = fails("e2e_1265_check", "check", NO_PRODUCER);
     let build = fails("e2e_1265_build", "build", NO_PRODUCER);
-    let message = "error[T0003]: an empty list literal has no inferable element type for \
-                   `self.xs` in class `Buffer`";
-    assert!(check.contains(message), "{check}");
-    assert!(build.contains(message), "{build}");
+    assert_eq!(
+        check,
+        "error[T0003]: an empty list literal has no inferable element type for `self.xs` in \
+         class `Buffer`\n --> a.py:1:1\n  |\n1 | class Buffer:\n  | ^ an empty list literal \
+         has no inferable element type for `self.xs` in class `Buffer`\n"
+    );
+    assert_eq!(check, build);
 }
 
 /// A base's unresolved slot redeclared by an annotated subclass is the
@@ -347,4 +355,37 @@ fn the_solver_path_reports_the_gate_t0003() {
             "{text}"
         );
     }
+}
+
+/// A renamed receiver is named as written, so the suggested annotation is one
+/// the receiver rule (#1181) accepts.
+#[test]
+fn a_renamed_receiver_is_named_as_written() {
+    let text = fails(
+        "e2e_1265_this",
+        "check",
+        "class Buffer:\n    def __init__(this) -> None:\n        this.xs = []\n\n\n\
+         print(Buffer())\n",
+    );
+    assert!(
+        text.contains("`this.xs` in class `Buffer`") && !text.contains("self.xs"),
+        "{text}"
+    );
+}
+
+/// Rebinding the whole attribute (`self.xs = other`) in another method is
+/// not an element-type source; the slot stays unresolved.
+#[test]
+fn a_whole_attribute_rebinding_leaves_the_slot_refused() {
+    let text = fails(
+        "e2e_1265_rebind_attr",
+        "check",
+        "class B:\n    def __init__(self) -> None:\n        self.xs = []\n\n    \
+         def load(self, other: list[int]) -> None:\n        self.xs = other\n\n\n\
+         print(len(B().xs))\n",
+    );
+    assert!(
+        text.contains("error[T0003]") && text.contains("`self.xs` in class `B`"),
+        "{text}"
+    );
 }

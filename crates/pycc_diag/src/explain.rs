@@ -284,7 +284,8 @@ to scan forward from: a call argument (`f([])`), a `return []`, a nested \
 literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An \
 unannotated `self.xs = []` in `__init__` reports it too when no source types \
 the slot: annotate the attribute (`self.xs: list[int] = []`) or append a value \
-to it in one of the class's own methods (`self.xs.append(1)`). The unannotated \
+to it in one of the class's own methods (`self.xs.append(1)`); a renamed \
+receiver (`def __init__(this)`) is named as written. The unannotated \
 `self.d = {}` and a tuple-unpacking target (`L, R = [], []`) never reach this \
 check: both are rejected earlier with `C0001`. Where a binding \
 name *is* available at a function-scope assignment it is named in the \

@@ -451,3 +451,30 @@ fn a_producer_only_in_a_free_function_leaves_the_slot_refused() {
     assert_eq!(slot(&hir, "B", "xs"), provisional());
     assert!(reject_unresolved_attr_slots(&hir).is_err());
 }
+
+#[test]
+fn the_gate_names_a_renamed_receiver_in_the_message_and_the_help() {
+    let hir = resolve("class B:\n    def __init__(this) -> None:\n        this.xs = []\n");
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    let diagnostic = &errors[0].1;
+    assert_eq!(
+        diagnostic.message,
+        "an empty list literal has no inferable element type for `this.xs` in class `B`"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some(
+            "annotate the attribute (`this.xs: list[int] = []`) or append a value to it in one \
+             of `B`'s own methods (`this.xs.append(...)`)"
+        )
+    );
+}
+
+#[test]
+fn a_whole_attribute_rebinding_is_not_a_source() {
+    let hir = resolve(&format!(
+        "{INIT}    def load(self, other: list[int]) -> None:\n        self.xs = other\n"
+    ));
+    assert_eq!(slot(&hir, "B", "xs"), provisional());
+    assert!(reject_unresolved_attr_slots(&hir).is_err());
+}

@@ -288,20 +288,31 @@ pub(crate) fn reject_unresolved_attr_slots(hir: &HirModule) -> Result<(), KeyedD
         .iter()
         .find(|(method, _)| method == "__init__")
         .map(|(_, mangled)| mangled.as_str());
-    let key = hir
+    let init_item = hir
         .items
         .iter()
-        .position(
-            |item| matches!(item, HirItem::Function { name, .. } if Some(name.as_str()) == init),
-        )
-        .map_or(DiagnosticKey::Module, DiagnosticKey::Function);
+        .enumerate()
+        .find_map(|(index, item)| match item {
+            HirItem::Function { name, body, .. } if Some(name.as_str()) == init => {
+                Some((index, body))
+            }
+            _ => None,
+        });
+    let key = init_item.map_or(DiagnosticKey::Module, |(index, _)| {
+        DiagnosticKey::Function(index)
+    });
+    // Name the receiver as the source spells it: a renamed receiver (#1181)
+    // cannot be annotated through `self`.
+    let receiver = init_item
+        .and_then(|(_, body)| receiver_spellings(body).last().copied())
+        .unwrap_or("self");
     let message = format!(
-        "an empty list literal has no inferable element type for `self.{attr}` in class \
+        "an empty list literal has no inferable element type for `{receiver}.{attr}` in class \
          `{class_name}`"
     );
     let diagnostic = Diagnostic::error("T0003", message, Span::new(0, 0)).with_help(format!(
-        "annotate the attribute (`self.{attr}: list[int] = []`) or append a value to it in \
-             one of `{class_name}`'s own methods (`self.{attr}.append(...)`)"
+        "annotate the attribute (`{receiver}.{attr}: list[int] = []`) or append a value to it \
+         in one of `{class_name}`'s own methods (`{receiver}.{attr}.append(...)`)"
     ));
     Err(vec![(key, diagnostic)])
 }
