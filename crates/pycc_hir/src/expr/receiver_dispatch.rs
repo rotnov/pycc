@@ -15,7 +15,7 @@
 use super::container_call::lower_container_method_call;
 use super::keyword_bind::SignatureTable;
 use super::lower_expr;
-use crate::{ContainerFallback, HirExpr, ImportBinding, Ty};
+use crate::{ContainerFallback, ContainerReceiver, HirExpr, ImportBinding, Ty};
 use pycc_diag::Diagnostic;
 
 /// The four method names the container fast paths claim syntactically.
@@ -55,21 +55,12 @@ impl HirExpr {
         }
     }
 
-    /// The receiver name of a `MethodCall` whose receiver is a bare name;
-    /// `None` for every other expression. Every
-    /// [`ContainerFallback::Admitted`] reading's `call` has one, because the
-    /// container fast paths refuse any other receiver.
-    pub fn bare_receiver_name(&self) -> Option<&str> {
-        match self.method_receiver()?.0 {
-            HirExpr::Name(name) => Some(name),
-            _ => None,
-        }
-    }
-
     /// The container node the container fast path builds for this call,
-    /// when `self` is a `MethodCall` of that exact shape: a bare-name
-    /// receiver, one of the four names and its container arity (issue
-    /// #1188). `None` for every other expression.
+    /// when `self` is a `MethodCall` of that exact shape: a receiver the
+    /// fast path admits, one of the four names and its container arity
+    /// (issue #1188). The admitted receiver is a bare name, or (#1263) an
+    /// attribute read for `append`/`pop`/`get` but not `add`. `None` for
+    /// every other expression.
     ///
     /// Used for a [`ContainerFallback::Admitted`] reading only, whose `call`
     /// always has that shape, so the node is rebuilt from `call`'s own base
@@ -78,10 +69,11 @@ impl HirExpr {
         let HirExpr::MethodCall { base, method, args } = self else {
             return None;
         };
-        let HirExpr::Name(receiver) = base.as_ref() else {
-            return None;
+        let receiver = match base.as_ref() {
+            HirExpr::Name(name) => ContainerReceiver::Name(name.clone()),
+            HirExpr::AttrGet { .. } => ContainerReceiver::Attr(base.clone()),
+            _ => return None,
         };
-        let receiver = receiver.clone();
         match (method.as_str(), args.as_slice()) {
             ("append", [value]) => Some(HirExpr::ListAppend {
                 list: receiver,
@@ -93,10 +85,13 @@ impl HirExpr {
                 key: Box::new(key.clone()),
                 default: Box::new(default.clone()),
             }),
-            ("add", [value]) => Some(HirExpr::SetAdd {
-                set: receiver,
-                value: Box::new(value.clone()),
-            }),
+            ("add", [value]) => match receiver {
+                ContainerReceiver::Name(set) => Some(HirExpr::SetAdd {
+                    set,
+                    value: Box::new(value.clone()),
+                }),
+                ContainerReceiver::Attr(_) => None,
+            },
             _ => None,
         }
     }

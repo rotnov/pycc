@@ -11,7 +11,8 @@ use super::keyword_bind::SignatureTable;
 use super::{contains_named_expr, lower_condition, lower_expr, lower_range_call};
 use crate::int_boundary::check_boundary_literal;
 use crate::{
-    CompElt, CompIter, FStringPart, HirComprehension, HirExpr, HirStmt, ImportBinding, unsupported,
+    CompElt, CompIter, ContainerReceiver, FStringPart, HirComprehension, HirExpr, HirStmt,
+    ImportBinding, unsupported,
 };
 use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
@@ -29,6 +30,21 @@ use pycc_diag::Diagnostic;
 /// and a nested comprehension (#1254) renames its own loop variable to a
 /// digit-led name before this runs, so the only occurrences of `from` left
 /// inside it are reads of the enclosing loop variable.
+/// Renames a container node's receiver (#1263): a bare-name receiver is
+/// renamed only when it equals `from`, exactly as the plain `String` field
+/// always was; an attribute receiver is an ordinary sub-expression and is
+/// renamed recursively (`[self.xs.pop() for _ in r]` keeps `self`).
+fn rename_receiver(receiver: ContainerReceiver, from: &str, to: &str) -> ContainerReceiver {
+    match receiver {
+        ContainerReceiver::Name(n) => {
+            ContainerReceiver::Name(if n == from { to.to_string() } else { n })
+        }
+        ContainerReceiver::Attr(receiver) => {
+            ContainerReceiver::Attr(Box::new(rename_name_in_expr(*receiver, from, to)))
+        }
+    }
+}
+
 pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
     let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
     match expr {
@@ -115,7 +131,7 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             step: step.map(|s| Box::new(recurse(*s))),
         },
         HirExpr::ListAppend { list, value } => HirExpr::ListAppend {
-            list: if list == from { to.to_string() } else { list },
+            list: rename_receiver(list, from, to),
             value: Box::new(recurse(*value)),
         },
         HirExpr::DictLiteral(pairs) => HirExpr::DictLiteral(
@@ -133,10 +149,10 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         // `xs` is the loop variable being synthesized-renamed -- the common
         // case (some other, non-loop-variable base) must not be touched.
         HirExpr::ListPop { list } => HirExpr::ListPop {
-            list: if list == from { to.to_string() } else { list },
+            list: rename_receiver(list, from, to),
         },
         HirExpr::DictGetOrDefault { dict, key, default } => HirExpr::DictGetOrDefault {
-            dict: if dict == from { to.to_string() } else { dict },
+            dict: rename_receiver(dict, from, to),
             key: Box::new(recurse(*key)),
             default: Box::new(recurse(*default)),
         },

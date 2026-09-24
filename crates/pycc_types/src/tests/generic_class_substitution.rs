@@ -303,7 +303,7 @@ fn collect_generic_class_instantiations_from_expr_covers_every_arm() {
     // ListAppend
     collect_generic_class_instantiations_from_expr(
         &HirExpr::ListAppend {
-            list: "xs".to_string(),
+            list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
             value: Box::new(gci.clone()),
         },
         &mut out,
@@ -319,7 +319,7 @@ fn collect_generic_class_instantiations_from_expr_covers_every_arm() {
     // DictGetOrDefault
     collect_generic_class_instantiations_from_expr(
         &HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
             key: Box::new(gci.clone()),
             default: Box::new(gci.clone()),
         },
@@ -353,7 +353,7 @@ fn collect_generic_class_instantiations_from_expr_covers_every_arm() {
     collect_generic_class_instantiations_from_expr(&HirExpr::Name("x".to_string()), &mut out);
     collect_generic_class_instantiations_from_expr(
         &HirExpr::ListPop {
-            list: "xs".to_string(),
+            list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
         },
         &mut out,
     );

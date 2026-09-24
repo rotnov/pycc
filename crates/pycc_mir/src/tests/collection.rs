@@ -123,7 +123,7 @@ fn lowers_list_append_to_mir_recursively() {
                 value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
             }),
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListAppend {
-                list: "x".to_string(),
+                list: pycc_hir::ContainerReceiver::Name("x".to_string()),
                 value: Box::new(HirExpr::IntLiteral(2)),
             })),
         ],
@@ -135,7 +135,7 @@ fn lowers_list_append_to_mir_recursively() {
     assert_eq!(
         mir.items[1],
         MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
-            list: "x".to_string(),
+            list: crate::MirContainerReceiver::Name("x".to_string()),
             value: Box::new(MirExpr::IntLiteral(2)),
         }))
     );
@@ -160,7 +160,7 @@ fn lowers_list_pop_to_mir_deriving_its_element_type_from_the_list_binding() {
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "y".to_string(),
                 value: HirExpr::ListPop {
-                    list: "xs".to_string(),
+                    list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
                 },
             }),
         ],
@@ -174,7 +174,7 @@ fn lowers_list_pop_to_mir_deriving_its_element_type_from_the_list_binding() {
         MirItem::TopLevelStmt(MirStmt::Assign {
             target: "y".to_string(),
             value: MirExpr::ListPop {
-                list: "xs".to_string(),
+                list: crate::MirContainerReceiver::Name("xs".to_string()),
                 ty: Ty::Int,
             },
         })
@@ -197,7 +197,7 @@ fn list_pop_over_a_non_list_binding_panics_with_an_internal_error() {
                 value: HirExpr::IntLiteral(5),
             }),
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListPop {
-                list: "xs".to_string(),
+                list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
             })),
         ],
         type_aliases: Vec::new(),
@@ -225,7 +225,7 @@ fn lowers_dict_get_or_default_to_mir_recursively_deriving_its_value_type() {
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "y".to_string(),
                 value: HirExpr::DictGetOrDefault {
-                    dict: "d".to_string(),
+                    dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                     key: Box::new(HirExpr::StringLiteral("z".to_string())),
                     default: Box::new(HirExpr::IntLiteral(-1)),
                 },
@@ -241,7 +241,7 @@ fn lowers_dict_get_or_default_to_mir_recursively_deriving_its_value_type() {
         MirItem::TopLevelStmt(MirStmt::Assign {
             target: "y".to_string(),
             value: MirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: crate::MirContainerReceiver::Name("d".to_string()),
                 key: Box::new(MirExpr::StringLiteral("z".to_string())),
                 default: Box::new(MirExpr::IntLiteral(-1)),
                 ty: Ty::Int,
@@ -263,7 +263,7 @@ fn dict_get_or_default_over_a_non_dict_binding_panics_with_an_internal_error() {
                 value: HirExpr::IntLiteral(5),
             }),
             HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                 key: Box::new(HirExpr::StringLiteral("a".to_string())),
                 default: Box::new(HirExpr::IntLiteral(0)),
             })),

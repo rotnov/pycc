@@ -262,8 +262,12 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
+        HirExpr::ListPop { list } => {
+            if let Some(receiver) = list.attr_expr() {
+                collect_named_expr_targets_in_expr(receiver, killed);
+            }
+        }
         // #1254 (D-250): lowering refuses a walrus anywhere inside a
         // comprehension, and its loop variable is node-scoped, so a
         // comprehension kills no name of the enclosing scope.
@@ -316,7 +320,13 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(bound, killed);
             }
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            if let Some(receiver) = list.attr_expr() {
+                collect_named_expr_targets_in_expr(receiver, killed);
+            }
+            collect_named_expr_targets_in_expr(value, killed);
+        }
+        HirExpr::SetAdd { value, .. } => {
             collect_named_expr_targets_in_expr(value, killed);
         }
         HirExpr::DictLiteral(pairs) => {
@@ -325,7 +335,10 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 collect_named_expr_targets_in_expr(v, killed);
             }
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            if let Some(receiver) = dict.attr_expr() {
+                collect_named_expr_targets_in_expr(receiver, killed);
+            }
             collect_named_expr_targets_in_expr(key, killed);
             collect_named_expr_targets_in_expr(default, killed);
         }

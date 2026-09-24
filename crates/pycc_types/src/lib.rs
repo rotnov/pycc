@@ -564,8 +564,12 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
+        HirExpr::ListPop { list } => {
+            if let Some(receiver) = list.attr_expr() {
+                collect_named_expr_names_in_expr(receiver, names);
+            }
+        }
         // #1254 (D-250): lowering refuses a walrus inside a comprehension,
         // and its loop variable is node-scoped, not a local of the function.
         HirExpr::Comprehension(_) => {}
@@ -613,16 +617,23 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(bound, names);
             }
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            if let Some(receiver) = list.attr_expr() {
+                collect_named_expr_names_in_expr(receiver, names);
+            }
             collect_named_expr_names_in_expr(value, names);
         }
+        HirExpr::SetAdd { value, .. } => collect_named_expr_names_in_expr(value, names),
         HirExpr::DictLiteral(pairs) => {
             for (k, v) in pairs {
                 collect_named_expr_names_in_expr(k, names);
                 collect_named_expr_names_in_expr(v, names);
             }
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            if let Some(receiver) = dict.attr_expr() {
+                collect_named_expr_names_in_expr(receiver, names);
+            }
             collect_named_expr_names_in_expr(key, names);
             collect_named_expr_names_in_expr(default, names);
         }
@@ -1259,8 +1270,11 @@ fn collect_named_expr_bindings(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),
+        HirExpr::ListPop { list } => match list.attr_expr() {
+            Some(receiver) => collect_named_expr_bindings(env, local_names, receiver),
+            None => Ok(()),
+        },
         // #1254 (D-250): no walrus can sit inside a comprehension (lowering
         // refuses it), so there is nothing to bind in the enclosing scope.
         HirExpr::Comprehension(_) => Ok(()),
@@ -1313,9 +1327,13 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            if let Some(receiver) = list.attr_expr() {
+                collect_named_expr_bindings(env, local_names, receiver)?;
+            }
             collect_named_expr_bindings(env, local_names, value)
         }
+        HirExpr::SetAdd { value, .. } => collect_named_expr_bindings(env, local_names, value),
         HirExpr::DictLiteral(pairs) => {
             for (k, v) in pairs {
                 collect_named_expr_bindings(env, local_names, k)?;
@@ -1323,7 +1341,10 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            if let Some(receiver) = dict.attr_expr() {
+                collect_named_expr_bindings(env, local_names, receiver)?;
+            }
             collect_named_expr_bindings(env, local_names, key)?;
             collect_named_expr_bindings(env, local_names, default)
         }
@@ -3821,10 +3842,17 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            if let Some(receiver) = list.attr_expr() {
+                reject_generic_calls_in_expr(module_env, own_name, receiver)?;
+            }
             reject_generic_calls_in_expr(module_env, own_name, value)
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
+        HirExpr::SetAdd { value, .. } => reject_generic_calls_in_expr(module_env, own_name, value),
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            if let Some(receiver) = dict.attr_expr() {
+                reject_generic_calls_in_expr(module_env, own_name, receiver)?;
+            }
             reject_generic_calls_in_expr(module_env, own_name, key)?;
             reject_generic_calls_in_expr(module_env, own_name, default)
         }
@@ -3868,7 +3896,10 @@ fn reject_generic_calls_in_expr(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),
+        HirExpr::ListPop { list } => match list.attr_expr() {
+            Some(receiver) => reject_generic_calls_in_expr(module_env, own_name, receiver),
+            None => Ok(()),
+        },
     }
 }
