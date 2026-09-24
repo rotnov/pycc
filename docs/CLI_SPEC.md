@@ -580,8 +580,9 @@ references outside a distribution's payload.
   minus the standard-library roots; the closure follows their owners'
   `Requires-Dist` with environment markers evaluated for that interpreter,
   and refuses anything it cannot evaluate. A direct root is *optional*
-  (#1290) when every import of it sits in the body of a module-level `try`
-  (or `try`/`except*`) with a bare `except:` or a handler naming
+  (#1290) when every import of it sits in the body of a `try` (or
+  `try`/`except*`) at module level or nested only in module-level
+  `if`/`try` blocks, with a bare `except:` or a handler naming
   `ImportError`, `ModuleNotFoundError` or `Exception`, alone or in a tuple,
   at any depth; a handler, `else` or `finally` body is not guarded by its
   own `try`. One unguarded import makes the root required. Optional roots

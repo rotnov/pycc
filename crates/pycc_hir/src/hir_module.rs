@@ -460,8 +460,9 @@ pub enum ForeignImportSite {
     /// `Ty::Object` module global.
     ///
     /// `optional` is true when the import is *optional* (#1290): it sits,
-    /// at any depth, in the body of a module-level `try` (or `try`/
-    /// `except*`) with a handler that catches a failed import -- a bare
+    /// at any depth, in the body of a `try` (or `try`/`except*`) that is
+    /// at module level or nested only in module-level `if`/`try` blocks,
+    /// with a handler that catches a failed import -- a bare
     /// `except:`, or a handler naming `ImportError`, `ModuleNotFoundError`
     /// or `Exception`, alone or in a tuple. A handler, `else` or `finally`
     /// body inherits the enclosing guard rather than creating one. The lock

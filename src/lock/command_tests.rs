@@ -266,7 +266,7 @@ fn a_block_foreign_import_is_a_direct_root() {
     );
 }
 
-/// #1290: a root imported only under an `ImportError` guard is optional,
+/// #1290: a root imported only through `optional` block sites is optional,
 /// one imported anywhere unguarded is required, and a standard-library
 /// root is neither; every one of them is still a direct root.
 #[test]
