@@ -96,6 +96,7 @@ fn a_macos_closure_without_images_has_no_natives() {
         &layout.probe,
         None,
         &env,
+        &WindowsEnv::host(),
         true,
         LibpythonLink::Shared,
     )
@@ -114,6 +115,7 @@ fn a_macos_closure_without_images_has_no_natives() {
         &layout.probe,
         Some(&closure),
         &env,
+        &WindowsEnv::host(),
         false,
         LibpythonLink::Shared,
     );
@@ -130,6 +132,7 @@ fn a_macos_closure_without_images_has_no_natives() {
         &layout.probe,
         Some(&closure),
         &env,
+        &WindowsEnv::host(),
         false,
         LibpythonLink::Shared,
     );

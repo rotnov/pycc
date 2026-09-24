@@ -258,6 +258,11 @@ fn the_stdlib_copy_skips_exactly_the_filtered_paths() {
         "lib-dynload/_json.cpython-314-darwin.so",
         "unittest/test/__init__.py",
         "turtledemo_notes.txt",
+        "_ssl.cp314-win_amd64.pyd",
+        "_ssl.cp3t-win_amd64.pyd",
+        "_ssl.cp314x-win_amd64.pyd",
+        "x.cp3",
+        "_d.py",
         "",
     ] {
         assert!(!skip_in_stdlib_copy(Path::new(kept)), "{kept} is kept");
@@ -390,6 +395,23 @@ fn the_windows_library_is_the_dll_beside_python_at_the_sidecar_root() {
     );
 }
 
+/// The root set is the interpreter's DLL, the stable-ABI DLL, then only
+/// the VC runtime DLLs present in `base_prefix`.
+#[test]
+fn the_windows_root_dlls_are_the_interpreter_pair_and_the_present_runtime() {
+    let dir = pycc_scratch::ScratchDir::new("embed_windows_root_dlls").expect("scratch");
+    std::fs::write(dir.join("vcruntime140_1.dll"), b"MZ").expect("write");
+    let probe = EmbedProbe {
+        base_prefix: dir.to_path_buf(),
+        ldlibrary: "python314.dll".to_string(),
+        ..probe()
+    };
+    assert_eq!(
+        windows_root_dlls(&probe),
+        ["python314.dll", "python3.dll", "vcruntime140_1.dll"]
+    );
+}
+
 #[test]
 fn the_windows_stdlib_copy_skips_exactly_the_filtered_paths() {
     for skipped in [
@@ -408,6 +430,11 @@ fn the_windows_stdlib_copy_skips_exactly_the_filtered_paths() {
         "tcl86t.dll",
         "TK86T.DLL",
         "tcl9tk9.0.dll",
+        "_ssl.cp314t-win_amd64.pyd",
+        "sub/_Ctypes.CP314T-win_amd64.PYD",
+        "_ssl_d.pyd",
+        "_SSL_D.PYD",
+        "python314_d.dll",
     ] {
         assert!(
             skip_in_windows_stdlib_copy(Path::new(skipped)),
@@ -425,6 +452,11 @@ fn the_windows_stdlib_copy_skips_exactly_the_filtered_paths() {
         "tk.dll",
         "unittest/test/__init__.py",
         "turtledemo_notes.txt",
+        "_ssl.cp314-win_amd64.pyd",
+        "_ssl.cp3t-win_amd64.pyd",
+        "_ssl.cp314x-win_amd64.pyd",
+        "x.cp3",
+        "_d.py",
         "",
     ] {
         assert!(
