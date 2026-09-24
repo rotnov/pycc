@@ -426,6 +426,19 @@ pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -
     }
 }
 
+/// [`with_bare_container_advice`] restricted to a bare `list`/`dict`, for
+/// a position that lowers only those two parameterized forms (an annotated
+/// attribute target, #1264): a bare `set`/`tuple` there keeps `error`, so the
+/// advice never names a form the position refuses too.
+pub(crate) fn with_bare_list_or_dict_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
+    match strip_transparent_wrappers(annotation) {
+        Expr::Name(name) if matches!(name.id.as_str(), "list" | "dict") => {
+            with_bare_container_advice(error, annotation)
+        }
+        _ => error,
+    }
+}
+
 /// Peels the wrappers `annotation_to_ty` lowers by recursing into their
 /// inner type, so a diagnostic about that inner type can be recognized from
 /// the outside.

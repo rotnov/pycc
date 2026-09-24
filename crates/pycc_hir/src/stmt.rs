@@ -88,6 +88,7 @@
 //! live with the `except*` lowering itself in [`exception`]; the arms below
 //! only read the value this module threads through them.
 
+mod ann_assign;
 mod assign;
 mod aug_assign;
 pub(crate) mod chain_assign;
@@ -105,8 +106,8 @@ use crate::stmt::type_checking::{
     return_context_violation,
 };
 use crate::{
-    CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, ImportBinding, Ty, annotation_to_ty,
-    context_invalid, unsupported,
+    CompIter, HirExpr, HirMatchCase, HirPattern, HirStmt, ImportBinding, Ty, context_invalid,
+    unsupported,
 };
 pub(crate) use exception::ExceptStarCtx;
 use exception::lower_except_handler;
@@ -225,60 +226,16 @@ pub(crate) fn lower_stmt(
                 signatures,
             );
         }
-        Stmt::AnnAssign(ann) => {
-            let Expr::Name(name) = ann.target.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only assigning to a bare name is supported so far, got {}",
-                        pycc_ast::expr_kind_name(&ann.target)
-                    ),
-                    pycc_ast::expr_range(&ann.target),
-                ));
-            };
-            // `ann.simple` is false either when the target isn't a bare name
-            // (already rejected above) or when a bare name target is itself
-            // parenthesized, e.g. `(x): int = 1` -- upstream's own parser
-            // sets `simple = target.is_name_expr() && !target.is_parenthesized`
-            // (verified against the pinned ruff_python_parser = "0.0.6"
-            // registry source). CPython treats a parenthesized target as not
-            // "simple" (it doesn't record a `__annotations__` entry the same
-            // way), a real semantic difference this compiler doesn't model
-            // yet -- reject explicitly instead of silently treating it the
-            // same as the unparenthesized form.
-            if !ann.simple {
-                return Err(unsupported(
-                    "a parenthesized annotated-assignment target is not supported yet",
-                    pycc_ast::expr_range(&ann.target),
-                ));
-            }
-            let annotation =
-                annotation_to_ty(&ann.annotation, type_param, class_name, aliases, class_defs)
-                    .map_err(|error| crate::with_bare_container_advice(error, &ann.annotation))?;
-            let value = ann
-                .value
-                .as_deref()
-                .map(|e| lower_expr(e, in_function, class_name, imports, signatures))
-                .transpose()?;
-            // PEP 591 (#383): detect `Final[X]` at the AST level (before
-            // `annotation_to_ty` unwrapped it to `X`) so the type checker
-            // can track this binding as non-reassignable. `Final` is
-            // recognized as a bare name without requiring `from typing
-            // import Final`, matching the existing `TypeAlias`/`Any`
-            // precedent.
-            let is_final = matches!(
-                ann.annotation.as_ref(),
-                Expr::Subscript(sub) if matches!(
-                    sub.value.as_ref(),
-                    Expr::Name(base) if base.id.as_str() == "Final"
-                )
-            );
-            HirStmt::AnnAssign {
-                target: name.id.as_str().to_string(),
-                annotation,
-                value,
-                is_final,
-            }
-        }
+        Stmt::AnnAssign(ann) => ann_assign::lower_ann_assign(
+            ann,
+            aliases,
+            in_function,
+            class_name,
+            type_param,
+            class_defs,
+            imports,
+            signatures,
+        )?,
         Stmt::If(if_stmt) if is_type_checking_guard(&if_stmt.test, imports) => {
             // #790: `if TYPE_CHECKING:` is CPython's standard idiom for
             // guarding imports/statements meant only for static type

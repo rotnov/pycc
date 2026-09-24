@@ -6,7 +6,11 @@
 //! container literal was a hard error -- including the annotated
 //! `xs: list[int] = []` form (#927).
 //!
-//! This module is the single place that resolves one. It is an infallible
+//! This module is the single place that *infers* one. (The one other
+//! construction site is syntactic: `pycc_hir`'s annotated attribute target
+//! `self.xs: list[int] = []` builds the typed node straight from its written
+//! annotation, #1264 and D-245's 2026-09-24 amendment; such a node is already
+//! typed and this pass leaves it alone.) It is an infallible
 //! HIR-to-HIR rewrite that runs **once, at the top of both
 //! [`crate::check_all_keyed`] and [`crate::check_and_resolve_all_keyed`]**,
 //! replacing a resolvable `HirExpr::ListLiteral(vec![])` with

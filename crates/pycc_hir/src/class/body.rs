@@ -517,7 +517,20 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             // so it declares at least one parameter.
             let receiver_split =
                 super::receiver::split_receiver(&method_def.parameters, method_def.range.into())?;
-            attrs = collect_init_attrs(&method_def.body, &params, receiver_split.name())?;
+            attrs = collect_init_attrs(
+                &method_def.body,
+                &params,
+                receiver_split.name(),
+                &|annotation| {
+                    crate::annotation_to_ty(
+                        annotation,
+                        type_param,
+                        Some(class_name),
+                        aliases,
+                        class_name_defs,
+                    )
+                },
+            )?;
         }
         match &kind {
             MethodKind::Regular { is_override } => {

@@ -12,7 +12,7 @@ use crate::expr::{
 };
 use crate::int_boundary::check_boundary_literal;
 use crate::{HirStmt, ImportBinding, unsupported};
-use pycc_ast::{Expr, StmtAssign};
+use pycc_ast::{Expr, ExprAttribute, StmtAssign};
 use pycc_diag::Diagnostic;
 
 /// Lowers `assign` (`Stmt::Assign`) to `HirStmt::Assign`, a comprehension
@@ -125,13 +125,7 @@ pub(super) fn lower_assign(
             // that doesn't name the actual unsupported operation
             // (attribute assignment through super()). Emit a dedicated
             // C0001 diagnostic instead.
-            if is_zero_arg_super_call(&attr.value) {
-                return Err(unsupported(
-                    "super().attr = value is not supported yet — super() attribute \
-                     assignment is not implemented in this version",
-                    pycc_ast::expr_range(&attr.value),
-                ));
-            }
+            reject_super_attr_base(attr)?;
             HirStmt::AttrSet {
                 base: lower_expr(&attr.value, in_function, class_name, imports, signatures)?,
                 attr: attr.attr.to_string(),
@@ -148,4 +142,19 @@ pub(super) fn lower_assign(
             ));
         }
     })
+}
+
+/// #448: `super().attr = value` -- super() attribute assignment is not
+/// implemented. Shared by the plain (`lower_assign`) and the annotated
+/// (`ann_assign`, #1264) attribute-target arms so both refuse it with the
+/// same dedicated `C0001` rather than `lower_expr`'s bare-`super()` message.
+pub(super) fn reject_super_attr_base(attr: &ExprAttribute) -> Result<(), Diagnostic> {
+    if is_zero_arg_super_call(&attr.value) {
+        return Err(unsupported(
+            "super().attr = value is not supported yet — super() attribute \
+             assignment is not implemented in this version",
+            pycc_ast::expr_range(&attr.value),
+        ));
+    }
+    Ok(())
 }

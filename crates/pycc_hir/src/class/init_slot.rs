@@ -36,9 +36,25 @@ pub(super) fn collect_init_attrs(
     init_body: &[Stmt],
     params: &[(String, Ty)],
     receiver_name: &str,
+    annotation_ty: &dyn Fn(&Expr) -> Result<Ty, Diagnostic>,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     let mut attrs: Vec<(String, Ty)> = Vec::new();
     for stmt in init_body {
+        // #1264 (Part 3 of #1218): `self.xs: list[int] = []` declares the
+        // slot with the annotation's type. `stmt::lower_body` has already
+        // lowered this body, and its `ann_assign` arm admits an attribute
+        // target only as a `list[int]`/`dict[str, int]` annotation with the
+        // matching empty literal, so `annotation_ty` -- the same
+        // `annotation_to_ty` call, in the same context -- resolves it again
+        // to exactly the type that arm built the value from.
+        if let Stmt::AnnAssign(ann) = stmt {
+            if let Some(attr_name) = receiver_attr(&ann.target, receiver_name)
+                && !attrs.iter().any(|(name, _)| *name == attr_name)
+            {
+                attrs.push((attr_name, annotation_ty(&ann.annotation)?));
+            }
+            continue;
+        }
         let Stmt::Assign(assign) = stmt else {
             continue;
         };
@@ -47,16 +63,9 @@ pub(super) fn collect_init_attrs(
         // one shared right-hand side, exactly as the single-target
         // assignments `stmt::lower_stmt_expanded` expands it into would.
         for target in &assign.targets {
-            let Expr::Attribute(attr) = target else {
+            let Some(attr_name) = receiver_attr(target, receiver_name) else {
                 continue;
             };
-            let Expr::Name(receiver) = attr.value.as_ref() else {
-                continue;
-            };
-            if receiver.id.as_str() != receiver_name {
-                continue;
-            }
-            let attr_name = attr.attr.to_string();
             if attrs.iter().any(|(name, _)| *name == attr_name) {
                 continue;
             }
@@ -65,6 +74,20 @@ pub(super) fn collect_init_attrs(
         }
     }
     Ok(attrs)
+}
+
+/// The attribute name `target` assigns when it is `<receiver>.<attr>` on
+/// the receiver's own source spelling (#1181), and `None` for any other
+/// target shape -- a bare name, a subscript, or an attribute of some other
+/// base (including a nested `self.x.y`).
+fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
+    let Expr::Attribute(attr) = target else {
+        return None;
+    };
+    let Expr::Name(receiver) = attr.value.as_ref() else {
+        return None;
+    };
+    (receiver.id.as_str() == receiver_name).then(|| attr.attr.to_string())
 }
 
 /// Resolves an instance attribute's slot `Ty` from its first-assignment RHS
@@ -286,9 +309,10 @@ mod tests {
 
     #[test]
     fn an_init_attr_assigned_an_empty_list_literal_is_still_unsupported() {
-        // `self.xs = []` has no parameter to take its element type from; it
-        // is #1218's Parts 3 (annotated) and 4 (inferred), pinned here so
-        // their diffs show the change.
+        // `self.xs = []` has no parameter to take its element type from; the
+        // annotated spelling `self.xs: list[int] = []` is #1264 (Part 3,
+        // pinned below) and the unannotated one is #1218's Part 4, pinned
+        // here so its diff shows the change.
         let message =
             c0001_message("class C:\n    def __init__(self) -> None:\n        self.xs = []\n");
         assert!(
@@ -400,6 +424,74 @@ mod tests {
         // instance type, which is out of this crate's own scope to assert
         // on here.
         let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x.y = 0\n");
+        assert_eq!(hir.class_defs[0].1.attrs, Vec::<(String, Ty)>::new());
+    }
+
+    #[test]
+    fn an_annotated_empty_list_in_init_establishes_a_list_slot() {
+        // #1264: the slot type is the written annotation's.
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self.xs: list[int] = []\n",
+        );
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))]
+        );
+    }
+
+    #[test]
+    fn an_annotated_empty_dict_in_init_establishes_a_dict_slot() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self.d: dict[str, int] = {}\n",
+        );
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))]
+        );
+    }
+
+    #[test]
+    fn an_annotated_slot_follows_the_receivers_source_spelling() {
+        // #1181: the receiver is whatever the first parameter is called.
+        let hir = lower_ok(
+            "class C:\n    def __init__(this) -> None:\n        this.xs: list[int] = []\n",
+        );
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))]
+        );
+    }
+
+    #[test]
+    fn annotated_and_plain_init_assignments_share_first_assignment_wins_ordering() {
+        // A later plain or annotated store to an already-declared attribute
+        // adds no slot; slots keep source order across both statement kinds;
+        // a non-receiver annotated target and an annotated local add none.
+        let hir = lower_ok(
+            "class C:\n    def __init__(self, n: int, xs: list[int]) -> None:\n        \
+             self.n = n\n        self.xs: list[int] = []\n        self.xs = xs\n        \
+             self.xs: list[int] = []\n        k: int = 1\n        \
+             other.ys: list[int] = []\n        self.d: dict[str, int] = {}\n",
+        );
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![
+                ("n".to_string(), Ty::Int),
+                ("xs".to_string(), Ty::List(Box::new(Ty::Int))),
+                ("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_annotated_store_nested_in_an_init_block_declares_no_slot() {
+        // Only `__init__`'s top-level statements declare a slot, exactly as
+        // for a plain `self.x = ...`; the store itself still lowers and
+        // `pycc_types` reports the missing attribute (`T0044`).
+        let hir = lower_ok(
+            "class C:\n    def __init__(self, c: bool) -> None:\n        if c:\n            \
+             self.xs: list[int] = []\n",
+        );
         assert_eq!(hir.class_defs[0].1.attrs, Vec::<(String, Ty)>::new());
     }
 }
