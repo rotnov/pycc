@@ -158,6 +158,11 @@ pub fn check_and_resolve_all_keyed(hir: &HirModule) -> Result<HirModule, KeyedDi
     // (checker, solver, `monomorphize`, MIR lowering, codegen) consumes.
     let resolved = empty_container::resolve_empty_containers(hir);
     let hir = resolved.as_ref().unwrap_or(hir);
+    // #1265 (D-245's 2026-09-24 amendment): a provisional `self.xs = []`
+    // slot the pass above could not type is refused here, ahead of D-210's
+    // redeclaration check -- which would otherwise report the placeholder as
+    // a `T0052` naming `list[<inferred>]` -- and ahead of every other check.
+    empty_container::attr_slot::reject_unresolved_attr_slots(hir)?;
     let function_local_names = module_function_local_names(hir);
     let signatures = checked_function_signatures_all(hir, &function_local_names)?;
 
@@ -424,6 +429,11 @@ pub fn check_all_keyed(hir: &HirModule) -> Result<(), KeyedDiagnostics> {
     // program. See `crate::empty_container`.
     let resolved = empty_container::resolve_empty_containers(hir);
     let hir = resolved.as_ref().unwrap_or(hir);
+    // #1265 (D-245's 2026-09-24 amendment): a provisional `self.xs = []`
+    // slot the pass above could not type is refused here, ahead of D-210's
+    // redeclaration check -- which would otherwise report the placeholder as
+    // a `T0052` naming `list[<inferred>]` -- and ahead of every other check.
+    empty_container::attr_slot::reject_unresolved_attr_slots(hir)?;
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path -- including a same-arity, `Ty::Infer`-
