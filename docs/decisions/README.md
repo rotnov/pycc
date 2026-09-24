@@ -261,3 +261,4 @@ current.
 | [D-249](./D-249-pycc-lock-schema-environment-resolver-and-update-command.md) | Lock the CPython dependency closure from the PYCC_PYTHON environment into a per-entry, per-triple pycc.lock | accepted |
 | [D-250](./D-250-comprehensions-are-expressions-with-a-node-scoped-loop-variable.md) | Comprehensions are expressions with a node-scoped loop variable | accepted |
 | [D-251](./D-251-static-libpython-link-for-embedded-executables.md) | Link libpython statically into an embedded executable on request, with the whole archive loaded and its symbols exported | accepted |
+| [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) | Admit annotation-only additions to a kill-criterion subject (owner directive) | accepted |

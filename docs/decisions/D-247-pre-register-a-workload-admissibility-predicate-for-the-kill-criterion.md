@@ -6,6 +6,7 @@ status: accepted
 
 ## D-247: Pre-register a workload-admissibility predicate for the D-244 rule 6 kill criterion
 - Status: accepted
+- Amendment (2026-09-24, [#1207](https://github.com/rotnov/pycc/issues/1207)): this entry's admissibility predicate is unchanged. [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) admits annotation-only additions to the subject of a workload this predicate admitted, which removes #1207's row (b) outcome for `lark` and leaves row (c) governing; a result under D-252 is labelled "annotated".
 - Context: [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6
   states `product-sprint-1`'s kill criterion as a ratio measured on "the reference
   codebase's hot loop", and `docs/TESTING.md`'s "Hosted `ext` benchmark protocol
