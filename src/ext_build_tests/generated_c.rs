@@ -1077,7 +1077,8 @@ fn a_program_with_no_user_exception_class_still_emits_both_class_functions() {
     // them by name whatever the program declares, so an artifact that
     // omitted them would fail to link. A program whose only exception
     // classes are the seeded builtins is this same case -- they carry
-    // `None` or a fixed sub-26 tag and are never table entries.
+    // `None` or a fixed tag below `FIRST_USER_EXCEPTION_TYPE_TAG` and are
+    // never table entries.
     let inc = inc_no_classes("m", &[]);
     assert!(
         inc.contains(&format!(

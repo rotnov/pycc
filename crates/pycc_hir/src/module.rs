@@ -113,8 +113,8 @@ struct ModuleState<'a> {
 /// One module's lowering, before `program::link`/`program::finalize`
 /// (#898). `shadowed_builtin_exception_name` is the first builtin exception
 /// name this module's top level binds, if any -- the input to `link`'s
-/// cross-module seeding check, since a module that shadows one of the 25
-/// names is never seeded itself but cannot be linked with a module that
+/// cross-module seeding check, since a module that shadows a builtin
+/// exception name is never seeded itself but cannot be linked with a module that
 /// was. `definition_spans` feeds `link`'s collision diagnostics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoweredModule {
@@ -245,13 +245,13 @@ pub fn lower_module(
     // (`class MyError(ValueError):`) exactly as it inherits from a user
     // base. Two gates, both of which must pass:
     //
-    // * The module must actually *reference* one of the 26 names. Every
+    // * The module must actually *reference* a builtin exception name. Every
     //   entry in `class_defs` costs the per-item work below (the projected
     //   class slice, the name-collision checks) and the per-function class
     //   binding in `pycc_types`, and a module that never names a builtin
     //   exception cannot observe the difference -- see
     //   `exception::module_references_builtin_exception_name`.
-    // * The module's own top level must not *bind* any of the 26 names.
+    // * The module's own top level must not *bind* any builtin exception name.
     //   That gate is all-or-nothing, so every existing name-collision check
     //   below applies to the synthetic definitions with no exemption -- see
     //   `exception::shadowed_builtin_exception_name`. Both gates are

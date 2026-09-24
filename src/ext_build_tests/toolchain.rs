@@ -376,11 +376,12 @@ fn every_exception_tag_the_c_shim_switches_on_still_names_that_class() {
     // tags through `default:`, and 23..=24 (`BaseExceptionGroup`/
     // `ExceptionGroup`) stay there deliberately -- the shim's own comment
     // carries why. The expected set is therefore non-contiguous: 1..=22 plus
-    // Part A of #1038 (#1063)'s `OverflowError` at 25, with the 23..=24 hole
-    // in between. Widening this to `1..=25` would swallow that hole and stop
-    // detecting a group tag that drifted into the switch.
+    // 25..=27 (`OverflowError`, #1063; `ImportError`/`ModuleNotFoundError`,
+    // #1292), with the 23..=24 hole in between. Widening this to `1..=27`
+    // would swallow that hole and stop detecting a group tag that drifted
+    // into the switch.
     let mut expected = (1..=22).collect::<Vec<_>>();
-    expected.push(25);
+    expected.extend([25, 26, 27]);
     assert_eq!(seen, expected);
 }
 

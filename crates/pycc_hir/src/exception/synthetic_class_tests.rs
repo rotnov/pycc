@@ -64,7 +64,7 @@ fn every_non_root_builtin_exception_inherits_init_from_its_mro() {
 }
 
 /// Part 2 of #543 (#739): every class whose real parent is `Exception`
-/// directly (the original flat six plus `OSError`) still gets the
+/// directly (the original flat six plus `OSError` and `ImportError`) still gets the
 /// historical two-entry MRO.
 #[test]
 fn direct_children_of_exception_get_a_two_entry_mro() {
@@ -77,6 +77,7 @@ fn direct_children_of_exception_get_a_two_entry_mro() {
         "ZeroDivisionError",
         "RuntimeError",
         "OSError",
+        "ImportError",
     ] {
         let (_, def) = defs
             .iter()
@@ -85,6 +86,29 @@ fn direct_children_of_exception_get_a_two_entry_mro() {
         assert_eq!(def.bases, vec!["Exception".to_string()]);
         assert_eq!(def.mro, vec![name.to_string(), "Exception".to_string()]);
     }
+}
+
+/// #1292: `ModuleNotFoundError` carries CPython's real parentage -- it derives
+/// from `ImportError`, not directly from `Exception`. The existing
+/// `every_non_root_builtin_exception_inherits_init_from_its_mro` catches a
+/// *missing* parent arm (the MRO would not end at `Exception`) but not a
+/// class wrongly parented straight to `Exception`; this pin does.
+#[test]
+fn module_not_found_error_derives_from_import_error() {
+    let defs = builtin_exception_class_defs();
+    let (_, def) = defs
+        .iter()
+        .find(|(name, _)| name == "ModuleNotFoundError")
+        .expect("`ModuleNotFoundError` must be synthesized");
+    assert_eq!(def.bases, vec!["ImportError".to_string()]);
+    assert_eq!(
+        def.mro,
+        vec![
+            "ModuleNotFoundError".to_string(),
+            "ImportError".to_string(),
+            "Exception".to_string(),
+        ]
+    );
 }
 
 /// Part 2 of #543 (#739): `BrokenPipeError`'s real MRO is 3 ancestor levels

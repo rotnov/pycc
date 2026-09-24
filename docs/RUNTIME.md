@@ -77,23 +77,35 @@ presence gates below, which now differ between the two groups.
 **Part 3 of #382 (#542, PEP 654)** adds `BaseExceptionGroup` (23) and
 `ExceptionGroup` (24), and **Part A of #1038 ([#1063](https://github.com/rotnov/pycc/issues/1063))**
 adds `OverflowError` (25), each by the same fixed-array-index mechanism. The
-append order matters: `OverflowError` goes last so every earlier tag keeps its
-value, and it parents to `Exception` rather than CPython's own
-`ArithmeticError`, which pycc does not model -- the same deliberate hierarchy
-simplification D-202 records for `BaseExceptionGroup`. `except Exception:`
-therefore catches it, and `except OverflowError:` resolves by name.
+append order matters: `OverflowError` was appended after the groups so every
+earlier tag keeps its value, and it parents to `Exception` rather than
+CPython's own `ArithmeticError`, which pycc does not model -- the same
+deliberate hierarchy simplification D-202 records for `BaseExceptionGroup`.
+`except Exception:` therefore catches it, and `except OverflowError:` resolves
+by name.
+
+**[#1292](https://github.com/rotnov/pycc/issues/1292) (Part 2 of #1282)**
+appends `ImportError` (26) and `ModuleNotFoundError` (27) after
+`OverflowError` by the same mechanism, so every earlier tag again keeps its
+value. Both carry CPython's real parentage -- `ModuleNotFoundError` ->
+`ImportError` -> `Exception` -- so, unlike `OverflowError`, this is **not** a
+D-202-style simplification: `except ImportError:` catches a
+`ModuleNotFoundError`, `except ModuleNotFoundError:` does not catch a plain
+`ImportError`, and `except Exception:` catches both. Each resolves through its
+fixed class-table tag, and a user `class PluginMissing(ImportError)` is
+raisable and caught by `except ImportError:`. `ImportError`'s `name`/`path`
+keyword arguments and attributes are not supported (a keyword argument is
+`C0001`).
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
-class whose MRO reaches one of those 26 builtins is raisable and catchable.
-HIR lowering assigns it a type tag from `26..=255` in module source order and
-records it on `HirClassDef::exception_type_tag`; the 26 builtins (the
-original 23 plus `ExceptionGroup`/`BaseExceptionGroup`, Part 3 of #382, #542,
-PEP 654, D-202, plus `OverflowError`, Part A of #1038, #1063) keep `0..=25`
-and either carry `None` there (the flat seven,
-resolved by name), their own fixed tag (the 16-member `OSError` family), or a
-fixed tag (`ExceptionGroup`/`BaseExceptionGroup`, always reconstructed with
-that fixed tag regardless of the original raised object's dynamic subclass --
-see D-202). A module declaring more than 230 such classes is rejected with
+class whose MRO reaches a builtin exception class is raisable and catchable.
+HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=255`
+in module source order and records it on `HirClassDef::exception_type_tag`;
+the builtins keep the tags below that and either carry `None` (the flat seven,
+resolved by name) or a fixed tag by array index (every builtin past them; the
+groups are always reconstructed with that fixed tag regardless of the raised
+object's dynamic subclass -- see D-202). A module declaring more than
+`MAX_USER_EXCEPTION_CLASSES` (currently 228) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -134,12 +146,13 @@ apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
 Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202; to all 26 by
-Part A of #1038, #1063, which appended `OverflowError`).** HIR
+Part A of #1038, #1063, which appended `OverflowError`; to all 28 by #1292,
+which appended `ImportError`/`ModuleNotFoundError`).** HIR
 lowering synthesizes a
-real `HirClassDef` for each of those 26 names, seeded before any
+real `HirClassDef` for each builtin exception name, seeded before any
 user statement of a module that references one of them is lowered, so they
 participate in the same class table user-defined classes do. `Exception` carries a synthetic
-`__init__(self, message: str)`; the other six inherit it through their MRO.
+`__init__(self, message: str)`; every other builtin inherits it through its MRO.
 Three consequences:
 
 - `class MyError(ValueError):` resolves its base and linearizes an MRO
@@ -177,9 +190,9 @@ supported surface (`raise ValueError("msg")`) is exactly one `str` message.
 
 Two gates decide whether a module is seeded, and both must pass.
 
-*The module must reference one of the 23 names somewhere.* Every entry in
+*The module must reference a builtin exception name somewhere.* Every entry in
 the class table costs per-item work in lowering and per-function class binding
-in the type checker, and a module that never spells one of the 23 cannot
+in the type checker, and a module that never spells a builtin exception name cannot
 observe the difference -- so it is seeded with none of them. The reference
 scan uses the AST crate's generic visitor, so every position a name can be
 spelled in counts: a base class, a `raise` operand, an `except` type, an
@@ -188,7 +201,7 @@ comprehension, an f-string interpolation, a decorator, at any nesting depth.
 A string forward reference (`x: "ValueError"`) does not count, because
 annotation lowering does not resolve string annotations either.
 
-*The module's own top level must bind none of the 23 names.* That gate is
+*The module's own top level must bind none of the builtin exception names.* That gate is
 all-or-nothing: a module whose top level binds any of them (a `class`, `def`,
 `type` alias, annotated assignment, or assignment target spelling one) is
 seeded with none of them, and that name keeps its ordinary user-defined
@@ -201,22 +214,27 @@ Part 2 of #541 did **not** close it: raisability keys on the MRO reaching a
 builtin exception class, which is orthogonal to a partially shadowed
 hierarchy. It is tracked independently by
 [#704](https://github.com/rotnov/pycc/issues/704).
+Because `ImportError` and `ModuleNotFoundError` joined the seeded set in
+#1292, a module that declares its own `class ImportError(Exception)` now
+withholds seeding and fails with `C0001` "class `ImportError` inherits from
+unknown class `Exception`", exactly as a user `class OverflowError(Exception)`
+already did.
 
 **Absence is not shadowing -- but that statement now splits by name-set (Part
 2 of #543, #739).** For the original flat seven, absence from the class table
 still reads as un-shadowed, exactly its pre-Part-1 meaning: `raise`/`except`
 name-resolve independent of `env.classes`
 (`pycc_mir::exception::resolve_exception_tag`), so a module that never seeded
-them behaves identically to one that did. For the 16-member `OSError` family
-this is **no longer true**. Those 16 names have no name-based fallback --
+them behaves identically to one that did. For every builtin past the flat seven
+this is **no longer true**. Those names have no name-based fallback --
 deliberately, so `pycc_mir::exception::handler_type_tags`'s MRO-containment
 scan never needs special-casing for them -- so `raise FileNotFoundError(...)`
 or `except FileNotFoundError:` for a name outside the flat seven now requires
 *actual class-table presence* to count as unshadowed
 (`pycc_types::exception::is_unshadowed_builtin_exception`'s
-`env.classes.contains_key(name)` conjunct). An occurrence of one of the 16
+`env.classes.contains_key(name)` conjunct). An occurrence of one of those
 names in a module where seeding was withheld by the shadow gate above --
-because the module shadows some *other* member of the same 23-name group,
+because the module shadows some *other* member of the same builtin group,
 possibly one it never itself uses -- therefore behaves as *not recognized*
 (`T0021`, or `C0001` at a `raise`-side call expression that also matches
 `KNOWN_CALLABLE_BUILTINS`, since type inference reaches that fallback before
@@ -652,9 +670,9 @@ raise that was meant to report it. Closing that is runtime-wide and is not
 emitted *ahead* of `pycc_rt_int_set_add`, so a compiled `s.add(v)` with a
 bigint `v` aborts there before reaching the converted guard, which remains as
 defense-in-depth for a direct ABI caller. An exception that
-escapes an export is re-raised as the matching CPython class for the twenty-four
-builtin classes the bridge carries a tag for (the original twenty-three plus
-`OverflowError`, Part A of #1038, #1063). A *user-defined* exception class
+escapes an export is re-raised as the matching CPython class for every
+builtin class the bridge carries a tag for (all of them except the two PEP 654
+groups, which cross as `Exception`). A *user-defined* exception class
 keeps its identity as of Part D of #1038 (#1066): the artifact synthesizes one
 CPython class per such class at import time, parented on the same bases the
 source declares, so `except m.MyError:`, `except ValueError:` for a subclass of

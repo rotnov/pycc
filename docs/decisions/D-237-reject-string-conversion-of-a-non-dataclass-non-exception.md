@@ -8,6 +8,7 @@ status: accepted
 
 - Status: accepted
 - Amendment (2026-09-13): every "the 25 builtin exception names" in this decision (the acceptance table row for a seeded `Ty::Instance(c)`, and the two Consequences sentences about a user class declared under one of those names) counted `BUILTIN_EXCEPTION_CLASSES` as it stood at #977. Part A of #1038 (#1063) appends `OverflowError`, so each of those now reads 26. The predicate itself is unchanged: it asks `pycc_hir::is_builtin_exception_class`, which is defined over the whole array, so it picked the new name up with no edit and the accept/reject verdict for every previously covered name is identical.
+- Amendment (2026-09-24): #1292 appends `ImportError` and `ModuleNotFoundError` to `BUILTIN_EXCEPTION_CLASSES`, so every "the 25 builtin exception names" in this decision (already amended to 26 above) now reads 28. The predicate is unchanged: `pycc_hir::is_builtin_exception_class` is defined over the whole array and picked both names up with no edit.
 - Context:
   Exactly two surfaces hand a value to `pycc_codegen`'s `to_str`: a `print()`
   argument and an f-string interpolation (the `str()` builtin is already

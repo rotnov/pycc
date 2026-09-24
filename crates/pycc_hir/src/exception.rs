@@ -4,7 +4,7 @@ use super::{HirClassDef, HirItem, HirStmt, Ty};
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
-pub const BUILTIN_EXCEPTION_CLASSES: [&str; 26] = [
+pub const BUILTIN_EXCEPTION_CLASSES: [&str; 28] = [
     "Exception",
     "ValueError",
     "TypeError",
@@ -46,18 +46,26 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 26] = [
     // `BaseExceptionGroup`. Raised by `pycc_rt`'s `float_pow` when a finite
     // base and exponent produce a non-finite result.
     "OverflowError",
+    // #1292 (Part 2 of #1282): `ImportError` and `ModuleNotFoundError`,
+    // tags 26..=27, appended so every existing tag keeps its value. Unlike
+    // `OverflowError` and `BaseExceptionGroup` these carry CPython's real
+    // parentage (`ModuleNotFoundError` -> `ImportError` -> `Exception`), so
+    // this is not a `D-202`-style hierarchy simplification. The base goes
+    // before its subclass, as `ConnectionError` does before its children.
+    "ImportError",
+    "ModuleNotFoundError",
 ];
 
 /// Part 2 of #541 (D-189): the number of names in [`BUILTIN_EXCEPTION_CLASSES`]
 /// that predate Part 2 of #543 (#739) and are resolved by name, independent of
 /// the class table, through `pycc_mir::exception::resolve_exception_tag`'s
-/// hardcoded `match`. Everything from this index onward -- the PEP 3151
-/// `OSError` family -- carries a fixed `Some(index as u8)` tag on its
+/// hardcoded `match`. Everything from this index onward carries a fixed
+/// `Some(index as u8)` tag on its
 /// [`HirClassDef`] instead (see [`builtin_exception_class_defs`]) and has no
 /// entry in that `match`.
 ///
 /// This is deliberately a separate, smaller constant from
-/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] (7 vs. 26) and the two must never be
+/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] (7 vs. the array length) and the two must never be
 /// conflated: this one names "the first index in `BUILTIN_EXCEPTION_CLASSES`
 /// that is *not* one of the original flat seven", while
 /// `FIRST_USER_EXCEPTION_TYPE_TAG` names "the first tag available to a user's
@@ -73,29 +81,30 @@ const FIRST_OSERROR_FAMILY_TAG: usize = 7;
 /// decide which builtin names may be treated as "unshadowed" even when the
 /// class table withheld seeding (see `shadowed_builtin_exception_name`)
 /// -- the flat seven may be, by the same table-independent-resolution
-/// property that keeps `resolve_exception_tag` correct for them; the sixteen
-/// `OSError`-family names, which carry no such fallback, may not.
+/// property that keeps `resolve_exception_tag` correct for them; every
+/// builtin past the flat seven (array index `>= FIRST_OSERROR_FAMILY_TAG`)
+/// carries no such fallback and may not.
 pub fn is_flat_builtin_exception_class(name: &str) -> bool {
     BUILTIN_EXCEPTION_CLASSES[..FIRST_OSERROR_FAMILY_TAG].contains(&name)
 }
 
 /// Part 2 of #541 (D-189): the first runtime exception type tag available to
-/// a user-defined exception class. Tags `0..=25` are permanently reserved for
+/// a user-defined exception class. Tags `0..FIRST_USER_EXCEPTION_TYPE_TAG` are
+/// permanently reserved for
 /// [`BUILTIN_EXCEPTION_CLASSES`], in that array's order: `0..=6` for the
 /// original flat seven, resolved by name; `7..=22` for the PEP 3151
 /// `OSError` family added by Part 2 of #543 (#739); `23..=24` for
 /// `BaseExceptionGroup`/`ExceptionGroup` added by Part 3 of #382 (#542); `25`
-/// for `OverflowError` added by Part A of #1038 (#1063) -- everything past the
+/// for `OverflowError` added by Part A of #1038 (#1063); `26`/`27` for
+/// `ImportError`/`ModuleNotFoundError` added by #1292 -- everything past the
 /// flat seven resolved by a fixed tag stored on each class's own
 /// [`HirClassDef`].
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
 
 /// Part 2 of #541 (D-189): how many user-defined exception classes one module
 /// may declare. The runtime carries the type tag as a `u8`, so the whole
-/// hierarchy is capped at 256 types; the 26 builtins (Part 2 of #543/#739's
-/// 16-member `OSError` family, Part 3 of #382/#542's `BaseExceptionGroup`/
-/// `ExceptionGroup` and Part A of #1038/#1063's `OverflowError`, added to the
-/// original flat seven) take the low tags and the remaining `26..=255` are
+/// hierarchy is capped at 256 types; the builtins take the low
+/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] tags and the rest, up to 255, are
 /// available to the module's own classes.
 /// Exceeding this is rejected with `C0001` during HIR lowering.
 pub const MAX_USER_EXCEPTION_CLASSES: usize = 256 - BUILTIN_EXCEPTION_CLASSES.len();
@@ -152,7 +161,9 @@ pub fn is_builtin_exception_class(name: &str) -> bool {
 /// non-`Exception` name's parent was `Exception`). Part 2 of #543 (#739)
 /// added the real PEP 3151 `OSError` tree: `OSError` and the other six
 /// original names are still direct children of `Exception`, as is Part A of
-/// #1038 (#1063)'s `OverflowError`; ten more names
+/// #1038 (#1063)'s `OverflowError` and #1292's `ImportError`, whose own child
+/// `ModuleNotFoundError` is one level deeper (CPython's real parentage); ten
+/// more names
 /// are direct children of `OSError`; and four more (`BrokenPipeError`,
 /// `ConnectionAbortedError`, `ConnectionRefusedError`, `ConnectionResetError`)
 /// are children of `ConnectionError`, itself a direct child of `OSError`.
@@ -172,11 +183,13 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
         // model -- the same deliberate simplification as `BaseExceptionGroup`
         // above. Omitting it here would make the new class a second hierarchy
         // root that `except Exception:` silently stops catching.
+        // #1292: `ImportError` parents to `Exception` and `ModuleNotFoundError`
+        // to `ImportError` -- CPython's real hierarchy, not a simplification.
         "OSError" | "ValueError" | "TypeError" | "KeyError" | "IndexError"
-        | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" | "OverflowError" => {
-            Some("Exception")
-        }
+        | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" | "OverflowError"
+        | "ImportError" => Some("Exception"),
         "ExceptionGroup" => Some("BaseExceptionGroup"),
+        "ModuleNotFoundError" => Some("ImportError"),
         "BlockingIOError" | "ChildProcessError" | "ConnectionError" | "FileExistsError"
         | "FileNotFoundError" | "InterruptedError" | "IsADirectoryError" | "NotADirectoryError"
         | "PermissionError" | "ProcessLookupError" | "TimeoutError" => Some("OSError"),
@@ -190,12 +203,14 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
 /// consumer needs to special-case it.
 pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 
-/// Builds the 26 synthetic [`HirClassDef`]s that give the builtin
+/// Builds one synthetic [`HirClassDef`] per [`BUILTIN_EXCEPTION_CLASSES`]
+/// name, giving the builtin
 /// exception hierarchy a first-class presence in the class table
 /// (Part 1 of #541, extending D-173; widened from 7 to 23 by Part 2 of
 /// #543/#739's PEP 3151 `OSError` family, then to 25 by Part 3 of #382/#542's
 /// `BaseExceptionGroup`/`ExceptionGroup`, then to 26 by Part A of
-/// #1038/#1063's `OverflowError`).
+/// #1038/#1063's `OverflowError`, then to 28 by #1292's
+/// `ImportError`/`ModuleNotFoundError`).
 ///
 /// Before this existed, `Exception`/`ValueError`/... were recognized only
 /// by name, through [`is_builtin_exception_class`], with no `HirClassDef`
@@ -205,14 +220,15 @@ pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 /// frontend never materialized".
 ///
 /// Lowering seeds them only into a module that actually references one of
-/// the 26 names and shadows none of them -- see this module's
+/// the builtin exception names and shadows none of them -- see this module's
 /// (crate-private) `module_references_builtin_exception_name` and
 /// `shadowed_builtin_exception_name`.
 ///
 /// The definitions are derived from [`BUILTIN_EXCEPTION_CLASSES`] and
 /// [`builtin_exception_parent`], so the hierarchy has exactly one source of
-/// truth. `Exception` is the root (no bases); the other six original names
-/// derive from it directly, as does `OSError`; the `OSError` family
+/// truth. `Exception` is the root (no bases); every other builtin whose real
+/// parent is `Exception` in [`builtin_exception_parent`] derives from it
+/// directly; the `OSError` family
 /// (Part 2 of #543/#739) reaches up to three levels deep (e.g.
 /// `BrokenPipeError` -> `ConnectionError` -> `OSError` -> `Exception`), so
 /// each entry's MRO is built by walking [`builtin_exception_parent`] up to
@@ -257,9 +273,10 @@ pub fn builtin_exception_class_defs() -> Vec<(String, HirClassDef)> {
                 class_attrs: Vec::new(),
                 // Part 2 of #543 (#739): the original flat seven keep `None`
                 // (resolved by name, table-independent, through
-                // `resolve_exception_tag`); the 16-member `OSError` family
-                // gets a fixed `Some(index)` tag stored directly on the
-                // `HirClassDef`, since it has no such name-based fallback.
+                // `resolve_exception_tag`); every builtin past the flat seven
+                // (array index `>= FIRST_OSERROR_FAMILY_TAG`) gets a fixed
+                // `Some(index)` tag stored directly on the `HirClassDef`,
+                // since it has no such name-based fallback.
                 exception_type_tag: (index >= FIRST_OSERROR_FAMILY_TAG).then_some(index as u8),
                 name: (*name).to_string(),
                 bases,
@@ -340,12 +357,12 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// resolution (`class MyError(ValueError):`), `class::expect_class` behind a
 /// `Ty::Instance` (`except ValueError as e: e.args`), `annotation_to_ty`
 /// projection (`e: ValueError`), and `isinstance`/`issubclass`. Each of them
-/// requires one of the 26 to be spelled in the module, so *this* gate
+/// requires a builtin exception name to be spelled in the module, so *this* gate
 /// never withholds a definition from a module that could have reached one:
 /// a module it refuses to seed cannot name a builtin exception at all.
 ///
 /// That is a property of this gate alone, not of the pair. The
-/// all-or-nothing shadow gate below can still withhold all 26 from a
+/// all-or-nothing shadow gate below can still withhold every builtin from a
 /// module that spells one of them, whenever the module's top level binds a
 /// *different* one -- and `class Exception: ...` plus
 /// `except ValueError as e: print(e.args)` still reaches
@@ -392,8 +409,8 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
     scan.found
 }
 
-/// Whether `module`'s own top level binds any of the 26 names in
-/// [`BUILTIN_EXCEPTION_CLASSES`] (Part 1 of #541).
+/// Whether `module`'s own top level binds any
+/// [`BUILTIN_EXCEPTION_CLASSES`] name (Part 1 of #541).
 ///
 /// This is the second of lowering's two seeding gates: a module is seeded
 /// only when [`module_references_builtin_exception_name`] holds *and* this
@@ -403,7 +420,7 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// shadows nothing at module scope), while a reference counts at any depth.
 ///
 /// The seeding is all-or-nothing: when this returns `true`, *no* synthetic
-/// class is seeded, and the 26 names keep exactly the pre-#541 behavior
+/// class is seeded, and the builtin exception names keep exactly the pre-#541 behavior
 /// of being recognized by name alone. Two reasons for all-or-nothing rather
 /// than per-name:
 ///
@@ -413,16 +430,16 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 ///   against the wrong class.
 /// * It makes `HirModule::seeded_builtin_exception_classes` -- the single
 ///   flag `module::lower_all` records when it seeds -- an exact provenance
-///   record. Because a module containing a user binding of any of the 25
-///   names carries no synthetic definitions at all, "the flag is set and the
-///   name is one of the 25" identifies precisely the compiler-produced
+///   record. Because a module containing a user binding of any builtin
+///   exception name carries no synthetic definitions at all, "the flag is set
+///   and the name is a builtin exception name" identifies precisely the compiler-produced
 ///   entries, with no user class among them. Provenance is never re-derived
 ///   from a definition's shape: a user can author a class structurally
 ///   identical to a synthetic one (see D-188).
 ///
 /// The scan is deliberately conservative: it reports `true` for any
 /// top-level `class`/`def`/`type`-alias/annotated-assignment/assignment/
-/// augmented-assignment target spelling one of the 26 names (`ValueError += 1`
+/// augmented-assignment target spelling a builtin exception name (`ValueError += 1`
 /// binds the name as surely as `ValueError = ...` does, #1209), whether or not that particular
 /// spelling would go on to collide with a seeded definition. Over-reporting
 /// only costs the module its synthetic classes; under-reporting would let a
@@ -430,10 +447,10 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// spurious `C0001`.
 ///
 /// `import`/`from ... import ...` are not scanned: D-136/D-137 resolve every
-/// import against `pycc_std`'s registry, which contains none of the 26
-/// names, so an `import ValueError` is rejected as an unresolvable module
+/// import against `pycc_std`'s registry, which contains none of the builtin
+/// exception names, so an `import ValueError` is rejected as an unresolvable module
 /// before any class-table collision could be reached.
-/// The first of the 26 builtin exception names the module's top level
+/// The first builtin exception name the module's top level
 /// binds, in source order, or `None` when it binds none -- the same scan
 /// that used to answer only "does the module shadow one", but naming it so
 /// `program::link` can report which name a module defines when it cannot
@@ -457,12 +474,12 @@ fn builtin_exception_name(name: &str) -> Option<String> {
     is_builtin_exception_class(name).then(|| name.to_string())
 }
 
-/// The first of the 26 builtin exception names `expr`, used as an
+/// The first builtin exception name `expr`, used as an
 /// assignment target, binds. Recurses through the unpacking-target shapes
 /// (`a, b = ...`, `[a, b] = ...`, `*rest`) so a name buried in one is still
 /// seen. Any other target shape (an attribute, a subscript) rebinds
-/// something other than a bare module-level name, so it cannot shadow one
-/// of the 25.
+/// something other than a bare module-level name, so it cannot shadow a
+/// builtin exception name.
 fn expr_bound_builtin_exception_name(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Name(name) => builtin_exception_name(name.id.as_str()),
@@ -678,7 +695,7 @@ mod tests {
         ] {
             assert_eq!(tag_of(name), None, "`{name}` must carry no assigned tag");
         }
-        // The OSError family's tags are pinned to the array order declared
+        // Every tag past the flat seven is pinned to the array order declared
         // in `BUILTIN_EXCEPTION_CLASSES`.
         for (name, tag) in [
             ("OSError", 7),
@@ -699,6 +716,9 @@ mod tests {
             ("ConnectionResetError", 22),
             ("BaseExceptionGroup", 23),
             ("ExceptionGroup", 24),
+            ("OverflowError", 25),
+            ("ImportError", 26),
+            ("ModuleNotFoundError", 27),
         ] {
             assert_eq!(tag_of(name), Some(tag), "`{name}` must carry tag {tag}");
         }

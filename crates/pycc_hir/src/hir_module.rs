@@ -508,12 +508,12 @@ pub struct HirModule {
     /// the reasoning for not adding a dedicated `HirItem::ClassDef` variant).
     pub class_defs: Vec<(String, HirClassDef)>,
     /// Provenance for the builtin exception hierarchy (Part 1 of #541,
-    /// D-188): `true` exactly when *this* lowering pass seeded the 26
-    /// `BUILTIN_EXCEPTION_CLASSES` entries into `class_defs`, and `false`
+    /// D-188): `true` exactly when *this* lowering pass seeded every
+    /// `BUILTIN_EXCEPTION_CLASSES` entry into `class_defs`, and `false`
     /// for every module whose classes are all user-authored.
     ///
     /// Seeding is all-or-nothing and its shadow gate guarantees no user
-    /// top-level binding of any of the 26 names survives alongside it,
+    /// top-level binding of any builtin exception name survives alongside it,
     /// so this single flag plus `is_builtin_exception_class` identifies the
     /// synthetic entries exactly -- see `pycc_types`'s `bind_classes`.
     /// Provenance is recorded here rather than re-derived downstream

@@ -129,8 +129,8 @@ only a `@dataclass` instance or a caught builtin exception`` (with a help line
 naming the `@dataclass` alternative, and `an f-string interpolation` at the
 other site) and ``string conversion of a value typed as protocol `P` as an
 f-string interpolation is not supported yet; the concrete class is not known
-at the conversion site``. A user class declared under any of the 26 builtin
-exception names is rejected there whatever its shape, because the MIR
+at the conversion site``. A user class declared under any builtin
+exception name is rejected there whatever its shape, because the MIR
 rewrites resolve those names before the shape.
 An import failure
 CPython itself would raise on is `T0021`, not `C0001`. A `from __future__

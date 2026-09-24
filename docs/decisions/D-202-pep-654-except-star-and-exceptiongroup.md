@@ -7,6 +7,7 @@ status: accepted
 ## D-202: PEP 654 `except*`/ExceptionGroup: six deliberate simplifications
 - Status: accepted
 - Amendment (2026-09-13): rule 1's parenthetical "`BUILTIN_EXCEPTION_CLASSES` (now 25 entries, tags `0..=24`)" counted the array as it stood at #542. Part A of #1038 (#1063) appends `OverflowError` at index 25, so the array is now 26 entries with tags `0..=25`; `BaseExceptionGroup`/`ExceptionGroup` keep tags 23 and 24 unchanged, which is the property the append was chosen to preserve. Nothing else in this decision changes: `OverflowError` parents to `Exception` for the same reason rule 1 gives for `BaseExceptionGroup` -- pycc models no `ArithmeticError` intermediate -- and the six simplifications stand as written.
+- Amendment (2026-09-24): #1292 (Part 2 of #1282) appends `ImportError` and `ModuleNotFoundError` at indices 26 and 27, so the array is now 28 entries with tags `0..=27`; `BaseExceptionGroup`/`ExceptionGroup` again keep tags 23 and 24 unchanged. Unlike `OverflowError`, both new classes carry CPython's real parentage (`ModuleNotFoundError` -> `ImportError` -> `Exception`, exactly `ModuleNotFoundError.__mro__` minus `BaseException`/`object`), so rule 1's set of hierarchy simplifications is unchanged and the six simplifications stand as written.
 - Context: Part 3 of #382 (#542) adds PEP 654's `except*` clauses and the
   `ExceptionGroup`/`BaseExceptionGroup` builtin exception types on top of
   pycc's D-173 check-and-branch exception model (no platform unwinding;
