@@ -262,7 +262,8 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 // Unix only: the tests spell host paths with `/`, and a Windows host
-// never reaches this walk (it scans no image until #1297).
+// never reaches this walk (it scans PE images with `native_windows`
+// instead).
 #[cfg(all(test, unix))]
 #[path = "macho_host_tests.rs"]
 mod tests;

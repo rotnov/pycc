@@ -453,8 +453,8 @@ fn candidate(path: &Path, machine: u16) -> Option<ElfImage> {
 }
 
 // Unix only: the fixtures put host paths in `DT_RUNPATH`, which splits on
-// `:`, and a Windows host never reaches this walk (it scans no image until
-// #1297).
+// `:`, and a Windows host never reaches this walk (it scans PE images with
+// `native_windows` instead).
 #[cfg(all(test, unix))]
 #[path = "native_linux_tests.rs"]
 mod tests;

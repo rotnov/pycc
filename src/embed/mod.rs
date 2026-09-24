@@ -469,7 +469,9 @@ pub(crate) struct EmbedPlan {
 ///
 /// A Windows build (D-253) refuses a static libpython before the probe,
 /// refuses a locked closure that holds a PE image once the payload is
-/// planned (#1296, until #1297 scans them), compiles without `-fPIC`,
+/// planned (#1296, until #1297 scans them), then refuses an interpreter
+/// image whose imports would not resolve once moved (#1305), all before
+/// anything is written; it compiles without `-fPIC`,
 /// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
 /// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
 pub(crate) fn plan_embed(

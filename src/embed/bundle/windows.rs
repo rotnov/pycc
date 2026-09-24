@@ -2,8 +2,10 @@
 //! `python3.dll` and the VC runtime DLLs at the sidecar root, a filtered
 //! `Lib\` and `DLLs\`, the locked pure-Python closure in `closure\`
 //! (#1296), and the marker. There is no `lib\` and no relocation: the
-//! stub loads the program DLL with the sidecar as its DLL search root, and
-//! a closure holding a PE image was refused before staging (#1297).
+//! stub loads the program DLL with the sidecar as its DLL search root and
+//! the launcher adds the sidecar as a DLL directory, every interpreter
+//! image copied here was scanned before staging (#1305), and a closure
+//! holding a PE image was refused before staging (#1297).
 
 use super::{EmbedProbe, bundle_library, copy_stdlib, io_error};
 use crate::embed::closure;
