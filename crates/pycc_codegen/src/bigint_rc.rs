@@ -198,11 +198,13 @@ pub(super) fn release_optional_int_slot_before_store<'ctx>(
 /// attribute, a call argument, and -- since D-182 -- a `Ty::Tuple`
 /// literal's element field.
 ///
-/// The predicate itself extends `str_value_is_a_duplicate_reference`'s:
-/// a bare `Name` or `AttrGet` read yields a *second* reference to a word
-/// something else already owns, whereas every other int-producing
-/// expression (`IntLiteral`, arithmetic, a call result) freshly constructs
-/// its value already owning exactly one reference.
+/// The predicate shares its first two shapes with
+/// `str_value_is_a_duplicate_reference` (whose doc comment is the canonical
+/// list of borrowed `str` reads, including `str`-only ones such as
+/// `ExceptionMessage`): a bare `Name` or `AttrGet` read yields a *second*
+/// reference to a word something else already owns, whereas every other
+/// int-producing expression (`IntLiteral`, arithmetic, a call result)
+/// freshly constructs its value already owning exactly one reference.
 ///
 /// A `Ty::Int` element read out of a *tuple* is the third borrowed shape,
 /// and is matched here in addition to those two. Under D-182 a
