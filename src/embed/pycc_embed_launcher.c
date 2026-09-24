@@ -32,6 +32,8 @@
 #else
 #include <unistd.h>
 #endif
+#else
+#include <windows.h>
 #endif
 
 /* Defines PYCC_EMBED_SIDECAR: the sidecar directory's file name, fixed at
@@ -96,6 +98,15 @@ __declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_
     }
     closure[size - 1] = L'\0';
 #endif
+    /* The root DLLs resolve for every later extension load's static
+     * imports: CPython loads extensions and `ctypes` libraries with
+     * LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, which includes this directory
+     * before System32 (#1305), as `os.add_dll_directory` would. */
+    if (AddDllDirectory(sidecar) == NULL) {
+        fwprintf(stderr, L"error: pycc could not add the DLL directory %ls (error %lu)\n",
+                 sidecar, GetLastError());
+        return 1;
+    }
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
     config.site_import = 0;

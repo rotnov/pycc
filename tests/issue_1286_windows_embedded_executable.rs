@@ -392,8 +392,8 @@ fn a_windows_embedded_build_bundles_the_interpreter_dlls() {
     }
 }
 
-/// The COFF import DLL names `llvm-readobj --coff-imports` lists for `path`.
-fn coff_imports(path: &Path) -> Vec<String> {
+/// `llvm-readobj --coff-imports`'s output for `path`.
+fn readobj_imports(path: &Path) -> String {
     let prefix = std::env::var_os("LLVM_SYS_221_PREFIX")
         .map(PathBuf::from)
         .expect("LLVM_SYS_221_PREFIX names the LLVM 22 install");
@@ -405,10 +405,37 @@ fn coff_imports(path: &Path) -> Vec<String> {
         .unwrap_or_else(|e| panic!("{} runs: {e}", tool.display()));
     assert!(output.status.success(), "{}", stderr_of(&output));
     stdout_of(&output)
+}
+
+/// The COFF import DLL names `llvm-readobj --coff-imports` lists for `path`:
+/// one `Name:` per import descriptor, then one per delay-import descriptor
+/// (a per-symbol entry carries no `Name:`).
+fn coff_imports(path: &Path) -> Vec<String> {
+    readobj_imports(path)
         .lines()
         .filter_map(|line| line.trim().strip_prefix("Name: "))
         .map(str::to_owned)
         .collect()
+}
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("read the directory") {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            out.extend(files_under(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Whether `path` is named like a PE image a Windows build loads.
+fn image_named(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pyd") || ext.eq_ignore_ascii_case("dll"))
 }
 
 #[test]
@@ -431,6 +458,9 @@ fn the_windows_stub_imports_only_system_dlls() {
             }),
         "{stub:?}"
     );
+    // The program DLL imports `python314.dll` statically, so it is loaded
+    // before any extension: the premise of the interpreter scan's rule that
+    // an extension may delay-load the interpreter's DLL (#1305).
     let program = coff_imports(&sidecar.join("pycc_program.dll"));
     println!("pycc_program.dll imports: {program:?}");
     assert!(
@@ -439,6 +469,60 @@ fn the_windows_stub_imports_only_system_dlls() {
             .any(|name| name.eq_ignore_ascii_case("python314.dll")),
         "{program:?}"
     );
+}
+
+/// pycc's PE reader (#1305) against `llvm-readobj` over every image a real
+/// Windows sidecar bundles at its root and in `DLLs\`, recursively: the
+/// import names then the delay-import names, in order, and one delay
+/// descriptor per `DelayImport {` block (LLVM sizes that list by the
+/// directory size, the reader by its terminator). `Lib\` holds no image by
+/// name, the real counterpart of the scan's `Lib\` refusal.
+#[test]
+#[ignore = "needs CPython 3.14.7 as python3.14.exe or PYCC_PYTHON on Windows; run with --include-ignored"]
+fn the_pe_scanner_reads_the_bundled_images_as_llvm_readobj_does() {
+    if !hosted() {
+        return;
+    }
+    let dir = ScratchDir::new("win_embed_pe_oracle").expect("scratch");
+    let sidecar = build_embedded(&dir, "import json\n\nprint(str(json.dumps(1)))\n");
+    let mut images: Vec<PathBuf> = std::fs::read_dir(&sidecar)
+        .expect("read the sidecar")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| path.is_file() && image_named(path))
+        .collect();
+    images.extend(
+        files_under(&sidecar.join("DLLs"))
+            .into_iter()
+            .filter(|path| {
+                image_named(path) || std::fs::read(path).is_ok_and(|bytes| bytes.starts_with(b"MZ"))
+            }),
+    );
+    assert!(images.len() > 3, "{images:?}");
+    for image in &images {
+        let bytes = std::fs::read(image).expect("read the image");
+        let parsed = pe::parse_pe(&bytes)
+            .unwrap_or_else(|e| panic!("{}: {e}", image.display()))
+            .unwrap_or_else(|| panic!("{} is not a PE image", image.display()));
+        let mut ours = parsed.imports.clone();
+        ours.extend(parsed.delay_imports.iter().cloned());
+        let output = readobj_imports(image);
+        assert_eq!(ours, coff_imports(image), "{}", image.display());
+        let delay_blocks = output
+            .lines()
+            .filter(|line| line.trim() == "DelayImport {")
+            .count();
+        assert_eq!(
+            delay_blocks,
+            parsed.delay_imports.len(),
+            "{}",
+            image.display()
+        );
+    }
+    let lib_images: Vec<PathBuf> = files_under(&sidecar.join("Lib"))
+        .into_iter()
+        .filter(|path| image_named(path))
+        .collect();
+    assert!(lib_images.is_empty(), "{lib_images:?}");
 }
 
 /// A root outside the standard library with no `pycc.lock` is refused on a

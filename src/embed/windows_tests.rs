@@ -161,6 +161,24 @@ fn the_windows_launcher_appends_the_closure_after_lib_and_dlls() {
     assert!(appends[0] < appends[1] && appends[1] < appends[2]);
 }
 
+/// The launcher's Windows arm adds the sidecar as a DLL directory before
+/// the interpreter initializes, and fails with exit 1 when it cannot
+/// (#1305); `<windows.h>` comes from an outer arm of the POSIX-only
+/// includes, not a second `#ifdef _WIN32` block.
+#[test]
+fn the_windows_launcher_adds_the_sidecar_dll_directory_first() {
+    let launcher = super::super::LAUNCHER_C.replace("\r\n", "\n");
+    assert!(launcher.contains("#endif\n#else\n#include <windows.h>\n#endif\n"));
+    let main = &launcher[launcher.find("int pycc_embed_main(").expect("the entry")..];
+    let add = main.find("AddDllDirectory(sidecar)").expect("the call");
+    let init = main.find("PyConfig_InitIsolatedConfig").expect("the init");
+    assert!(add < init);
+    let message = "error: pycc could not add the DLL directory %ls (error %lu)";
+    let failure = main.find(message).expect("the message");
+    let exit = main[failure..].find("return 1;").expect("the exit") + failure;
+    assert!(add < failure && exit < init);
+}
+
 /// A static libpython request on a Windows host is refused before any
 /// interpreter is probed: the interpreter here does not exist.
 #[test]
