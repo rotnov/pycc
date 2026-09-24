@@ -24,6 +24,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// pycc's own PE import reader, checked against `llvm-readobj` over the
+/// real images a Windows sidecar bundles (#1305).
+#[allow(dead_code)]
+#[path = "../src/embed/pe.rs"]
+mod pe;
+
 fn pycc() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pycc"))
 }

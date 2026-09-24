@@ -19,6 +19,7 @@ mod macho;
 mod macho_host;
 pub(crate) mod native;
 pub(crate) mod native_linux;
+mod pe;
 pub(crate) mod sha256;
 pub(crate) mod static_lib;
 pub(crate) mod stdlib_roots;
