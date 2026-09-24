@@ -365,3 +365,89 @@ fn a_local_name_append_is_not_an_attribute_producer_nor_the_reverse() {
     ));
     assert_eq!(slot(&hir, "B", "xs"), list_of(Ty::Int));
 }
+
+/// The value of the first plain `Assign` to local `target` in function `func`.
+fn assigned_value<'a>(hir: &'a HirModule, func: &str, target: &str) -> &'a HirExpr {
+    hir.items
+        .iter()
+        .find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == func => Some(body),
+            _ => None,
+        })
+        .expect("function exists")
+        .iter()
+        .find_map(|stmt| match stmt {
+            HirStmt::Assign {
+                target: bound,
+                value,
+            } if bound == target => Some(value),
+            _ => None,
+        })
+        .expect("local assignment exists")
+}
+
+#[test]
+fn a_producer_nested_in_a_for_and_a_try_resolves_the_slot() {
+    let in_for = resolve(&format!(
+        "{INIT}    def add(self, n: int) -> None:\n        for i in range(n):\n            \
+         self.xs.append(i)\n"
+    ));
+    assert_eq!(slot(&in_for, "B", "xs"), list_of(Ty::Int));
+    let in_try = resolve(&format!(
+        "{INIT}    def add(self, v: str) -> None:\n        try:\n            \
+         self.xs.append(v)\n        except ValueError:\n            pass\n"
+    ));
+    assert_eq!(slot(&in_try, "B", "xs"), list_of(Ty::Str));
+}
+
+#[test]
+fn the_receiver_dispatched_form_is_a_producer() {
+    // Another class defining `append` turns `self.xs.append(v)` into #1188's
+    // receiver-dispatched call; its admitted container reading still counts.
+    let source = format!(
+        "class Sink:\n    def append(self, v: int) -> None:\n        pass\n\
+         {INIT}    def add(self, v: int) -> None:\n        self.xs.append(v)\n"
+    );
+    let dispatched = lower(&source).items.iter().any(|item| {
+        matches!(item, HirItem::Function { name, body, .. } if name == "B.add"
+            && matches!(body.first(), Some(HirStmt::ExprStmt(HirExpr::ReceiverDispatchedCall { .. }))))
+    });
+    assert!(dispatched, "the fixture must lower to the dispatched form");
+    let hir = resolve(&source);
+    assert_eq!(slot(&hir, "B", "xs"), list_of(Ty::Int));
+    assert!(matches!(
+        stored_value(&hir, "B.__init__", "xs"),
+        HirExpr::EmptyList(Ty::Int)
+    ));
+}
+
+#[test]
+fn a_later_method_local_reading_the_slot_resolves_after_the_class_phase() {
+    let hir = resolve(&format!(
+        "{INIT}    def add(self, v: int) -> None:\n        self.xs.append(v)\n    \
+         def firsts(self) -> None:\n        ys = []\n        ys.append(self.xs[0])\n"
+    ));
+    assert!(matches!(
+        assigned_value(&hir, "B.firsts", "ys"),
+        HirExpr::EmptyList(Ty::Int)
+    ));
+}
+
+#[test]
+fn a_producer_only_in_a_subclass_method_leaves_the_base_slot_refused() {
+    let hir = resolve(&format!(
+        "{INIT}class D(B):\n    def add(self, v: int) -> None:\n        self.xs.append(v)\n"
+    ));
+    assert_eq!(slot(&hir, "B", "xs"), provisional());
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    assert!(errors[0].1.message.contains("`self.xs` in class `B`"));
+}
+
+#[test]
+fn a_producer_only_in_a_free_function_leaves_the_slot_refused() {
+    let hir = resolve(&format!(
+        "{INIT}def fill(b: B) -> None:\n    b.xs.append(1)\n"
+    ));
+    assert_eq!(slot(&hir, "B", "xs"), provisional());
+    assert!(reject_unresolved_attr_slots(&hir).is_err());
+}

@@ -236,3 +236,110 @@ fn an_unannotated_empty_dict_stays_refused() {
     assert!(text.contains("`self.d: dict[str, int] = {}`"), "{text}");
     assert!(text.contains("#891"), "{text}");
 }
+
+const SLOT: &str = "class B:\n    def __init__(self) -> None:\n        self.xs = []\n\n";
+
+/// A `str` producer resolves the slot to `list[str]`, which D-105's
+/// element gate refuses as `T0034`, not the unresolved-slot `T0003`.
+#[test]
+fn a_str_producer_resolves_the_slot_and_meets_the_element_gate() {
+    let text = fails(
+        "e2e_1265_str",
+        "check",
+        &format!(
+            "{SLOT}    def add(self, v: str) -> None:\n        self.xs.append(v)\n\n\n\
+             print(len(B().xs))\n"
+        ),
+    );
+    assert!(text.contains("error[T0034]: list[str]"), "{text}");
+    assert!(!text.contains("T0003"), "{text}");
+}
+
+/// The first producer wins across methods; a later conflicting append is
+/// the ordinary element mismatch.
+#[test]
+fn a_later_conflicting_producer_is_an_element_mismatch() {
+    let text = fails(
+        "e2e_1265_conflict",
+        "check",
+        &format!(
+            "{SLOT}    def a(self) -> None:\n        self.xs.append(1)\n\n    \
+             def b(self) -> None:\n        self.xs.append(\"a\")\n\n\nprint(len(B().xs))\n"
+        ),
+    );
+    assert!(
+        text.contains("error[T0021]: cannot append `str` to a list of `int`"),
+        "{text}"
+    );
+}
+
+/// A reset of another shape is not rewritten and stays an untyped literal.
+#[test]
+fn a_shape_mismatched_reset_is_refused() {
+    let text = fails(
+        "e2e_1265_mismatched_reset",
+        "check",
+        &format!(
+            "{SLOT}    def add(self, v: int) -> None:\n        self.xs.append(v)\n\n    \
+             def clear(self) -> None:\n        self.xs = {{}}\n\n\nprint(len(B().xs))\n"
+        ),
+    );
+    assert!(text.contains("error[T0003]"), "{text}");
+}
+
+/// A producer after `self` is rebound to another class does not yield a
+/// program that builds.
+#[test]
+fn a_rebound_receiver_does_not_build() {
+    fails(
+        "e2e_1265_rebound",
+        "build",
+        &format!(
+            "class O:\n    def __init__(self) -> None:\n        self.xs: list[int] = []\n\n\n\
+             {SLOT}    def m(self) -> None:\n        self = O()\n        \
+             self.xs.append(1.5)\n\n\nprint(len(B().xs))\n"
+        ),
+    );
+}
+
+/// A static method's `str` append ahead of the real `int` producer does not
+/// type the slot: the slot is `list[int]` and the static append mismatches.
+#[test]
+fn a_static_method_append_ahead_of_the_real_producer_does_not_type_the_slot() {
+    let text = fails(
+        "e2e_1265_static_first",
+        "check",
+        &format!(
+            "{SLOT}    @staticmethod\n    def tag(self: B, v: str) -> None:\n        \
+             self.xs.append(v)\n\n    def add(self, v: int) -> None:\n        \
+             self.xs.append(v)\n\n\nprint(len(B().xs))\n"
+        ),
+    );
+    assert!(
+        text.contains("error[T0021]: cannot append `str` to a list of `int`"),
+        "{text}"
+    );
+    assert!(!text.contains("T0034"), "{text}");
+}
+
+/// On the private-helper solver path the gate's `T0003` still wins.
+#[test]
+fn the_solver_path_reports_the_gate_t0003() {
+    for subcommand in ["check", "build"] {
+        let text = fails(
+            "e2e_1265_solver_refused",
+            subcommand,
+            &format!(
+                "{SLOT}    def size(self) -> int:\n        return len(self.xs)\n\n\n\
+                 def _twice(n):\n    return n * 2\n\n\nprint(B().size(), _twice(2))\n"
+            ),
+        );
+        assert!(
+            text.contains(
+                "error[T0003]: an empty list literal has no inferable element type for \
+                 `self.xs` in class `B`"
+            ),
+            "{text}"
+        );
+    }
+}
