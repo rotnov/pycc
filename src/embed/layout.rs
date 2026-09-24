@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 /// The object format an embedded build links for. Injected rather than
 /// read from `cfg!` so the macOS coverage host also drives the Linux arm's
 /// lines (the `ExtLinkPlatform` precedent). Windows embeds through a stub
-/// `OUT` that loads a program DLL from `OUT.pycc\` (D-253), for
-/// standard-library roots only until #1287.
+/// `OUT` that loads a program DLL from `OUT.pycc\` (D-253), with a
+/// locked pure-Python closure (#1296).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbedPlatform {
     MacOs,
@@ -24,8 +24,7 @@ pub(crate) enum EmbedPlatform {
 impl EmbedPlatform {
     /// The platform of a host whose `std::env::consts::OS` is `os`, among
     /// the hosts an embedded build or `pycc lock` runs on. Any other host
-    /// folds into Linux here; `pycc lock` refuses Windows before it gets
-    /// this far (#1287).
+    /// folds into Linux here.
     pub(crate) fn for_os(os: &str) -> Self {
         match os {
             "macos" => Self::MacOs,

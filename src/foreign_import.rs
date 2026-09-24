@@ -8,13 +8,13 @@
 //! interpreter only by *embedding* one (D-128's `auto` default, realized for
 //! the standard library by Part 1 of #1028): the executable starts a bundled
 //! CPython and runs the compiled module as its `__main__`. Embedding is
-//! possible on a macOS, Linux or Windows host with no `--target` (on
-//! Windows, standard-library roots only until #1287), for every root
-//! except a standard-library one the bundle excludes (Tcl/Tk); on macOS
-//! and Linux a root outside the standard library is bundled from the
-//! program's `pycc.lock` closure, which the build checks and refuses there,
-//! naming `pycc lock` (#1242). Every other foreign import is refused here with `I0403` rather
-//! than compiled into a call that could only fail at run time.
+//! possible on a macOS, Linux or Windows host with no `--target`, for
+//! every root except a standard-library one the bundle excludes (Tcl/Tk);
+//! a root outside the standard library is bundled from the program's
+//! `pycc.lock` closure, which the build checks and refuses there, naming
+//! `pycc lock` (#1242, on Windows #1296). Every other foreign import is
+//! refused here with `I0403` rather than compiled into a call that could
+//! only fail at run time.
 //!
 //! The interop policy (D-128, #1224) is evaluated first, per import: an
 //! import the effective policy rejects is `I0402` on every host and
@@ -25,7 +25,7 @@
 //! of asserting: an embedded build compiles with `options.ext` set, and this
 //! gate has refused every other program that could reach it.
 
-use crate::embed::stdlib_roots::{is_embeddable_stdlib_root, is_excluded_stdlib_root};
+use crate::embed::stdlib_roots::is_excluded_stdlib_root;
 use crate::interop_policy::{self, EffectivePolicy};
 use pycc_diag::Diagnostic;
 use pycc_hir::{HirModule, ImportBinding};
@@ -34,29 +34,20 @@ use pycc_hir::{HirModule, ImportBinding};
 /// individual import is looked at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbedHost {
-    /// A macOS or Linux host building for itself.
+    /// A macOS, Linux or Windows host building for itself.
     Available,
     /// `--target` was given: the bundled interpreter is the build host's,
     /// so it cannot serve another target.
     CrossTarget,
-    /// A Windows host, which embeds standard-library roots only (#1286,
-    /// D-253): a root outside the standard library is Part 2 of #1226
-    /// (#1287).
-    WindowsHost,
 }
 
 impl EmbedHost {
-    /// Resolves the host from the build's `--target` and the host family.
-    ///
-    /// Pure, and the host family is a parameter rather than a `cfg!` read,
-    /// so every arm is unit-tested on every host (the `ExtLinkPlatform`
-    /// precedent). `--target` wins over a Windows host, so a `--target`
-    /// build reports the same reason on every Tier-1 leg.
-    pub(crate) fn resolve(target: Option<&str>, host_is_windows: bool) -> Self {
+    /// Resolves the host from the build's `--target`, which reports the
+    /// same reason on every Tier-1 leg. Every Tier-1 host embeds for
+    /// itself: Windows since #1296 no longer narrows the roots it embeds.
+    pub(crate) fn resolve(target: Option<&str>) -> Self {
         if target.is_some() {
             EmbedHost::CrossTarget
-        } else if host_is_windows {
-            EmbedHost::WindowsHost
         } else {
             EmbedHost::Available
         }
@@ -71,13 +62,10 @@ pub(crate) struct NeedsInterpreter(pub(crate) bool);
 
 /// Why one foreign import cannot be embedded, in precedence order:
 /// `CrossTarget` is host-level, applying to every foreign import in the
-/// program and winning over the per-root ones; `ExcludedStdlibRoot` then
-/// wins over `WindowsHost`, which is per-root too -- a root outside the
-/// standard library on a Windows host (#1287).
+/// program and winning over the per-root `ExcludedStdlibRoot`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum I0403Reason {
     CrossTarget,
-    WindowsHost,
     ExcludedStdlibRoot,
 }
 
@@ -92,11 +80,6 @@ pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
             "`import {module_path}` imports a CPython module, which requires \
              `pycc build --ext` in a `--target` build: an embedded executable \
              bundles the build host's own interpreter, which cannot serve another target"
-        ),
-        I0403Reason::WindowsHost => format!(
-            "`import {module_path}` imports a module from outside the standard library, \
-             which requires `pycc build --ext` on a Windows host: an embedded Windows \
-             executable bundles only the standard library until #1287"
         ),
         I0403Reason::ExcludedStdlibRoot => format!(
             "`import {module_path}` imports a standard-library module that needs \
@@ -113,15 +96,10 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
         return Some(I0403Reason::CrossTarget);
     }
     let root = module_path.split('.').next().unwrap_or(module_path);
-    if is_excluded_stdlib_root(root) {
-        return Some(I0403Reason::ExcludedStdlibRoot);
-    }
-    // Elsewhere a root outside the standard library is embeddable too: the
-    // build bundles it from the program's `pycc.lock` closure, and refuses
-    // there, naming `pycc lock`, when the lock is missing or stale (#1242).
-    // A Windows host bundles the standard library only (#1287).
-    let windows_only_stdlib = host == EmbedHost::WindowsHost && !is_embeddable_stdlib_root(root);
-    windows_only_stdlib.then_some(I0403Reason::WindowsHost)
+    // A root outside the standard library is embeddable too: the build
+    // bundles it from the program's `pycc.lock` closure, and refuses there,
+    // naming `pycc lock`, when the lock is missing or stale (#1242, #1296).
+    is_excluded_stdlib_root(root).then_some(I0403Reason::ExcludedStdlibRoot)
 }
 
 /// Classifies a program for a build without `--ext`: `Ok(NeedsInterpreter(
@@ -235,22 +213,13 @@ mod tests {
 
     const AUTO: EffectivePolicy = EffectivePolicy::Auto;
 
-    const ALL_HOSTS: [EmbedHost; 3] = [
-        EmbedHost::Available,
-        EmbedHost::CrossTarget,
-        EmbedHost::WindowsHost,
-    ];
+    const ALL_HOSTS: [EmbedHost; 2] = [EmbedHost::Available, EmbedHost::CrossTarget];
 
     #[test]
-    fn the_host_resolves_with_target_winning_over_windows() {
-        assert_eq!(EmbedHost::resolve(None, false), EmbedHost::Available);
-        assert_eq!(EmbedHost::resolve(None, true), EmbedHost::WindowsHost);
+    fn the_host_resolves_from_the_target_alone() {
+        assert_eq!(EmbedHost::resolve(None), EmbedHost::Available);
         assert_eq!(
-            EmbedHost::resolve(Some("x86_64-apple-darwin"), false),
-            EmbedHost::CrossTarget
-        );
-        assert_eq!(
-            EmbedHost::resolve(Some("x86_64-apple-darwin"), true),
+            EmbedHost::resolve(Some("x86_64-apple-darwin")),
             EmbedHost::CrossTarget
         );
     }
@@ -304,32 +273,6 @@ mod tests {
                 (0, i0403_message("json", reason)),
                 (2, i0403_message("numpy", reason)),
             ]
-        );
-    }
-
-    /// A Windows host embeds the standard library (#1286) and refuses a
-    /// root outside it (#1287); an excluded root keeps its Tcl/Tk reason.
-    #[test]
-    fn a_windows_host_refuses_only_a_root_outside_the_standard_library() {
-        let gaps = messages(
-            EmbedHost::WindowsHost,
-            vec![foreign("json"), project(), foreign("numpy")],
-        );
-        assert_eq!(
-            gaps,
-            vec![(2, i0403_message("numpy", I0403Reason::WindowsHost))]
-        );
-        assert_eq!(
-            messages(EmbedHost::WindowsHost, vec![foreign("tkinter.ttk")]),
-            vec![(
-                0,
-                i0403_message("tkinter.ttk", I0403Reason::ExcludedStdlibRoot)
-            )]
-        );
-        let stdlib = hir(vec![foreign("json"), foreign("xml.etree")]);
-        assert_eq!(
-            classify_for_native_build(&stdlib, EmbedHost::WindowsHost, &AUTO),
-            Ok(NeedsInterpreter(true))
         );
     }
 
@@ -401,7 +344,6 @@ mod tests {
     fn every_reason_names_the_import_and_the_ext_alternative() {
         for (reason, detail) in [
             (I0403Reason::CrossTarget, "`--target` build"),
-            (I0403Reason::WindowsHost, "Windows host"),
             (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
         ] {
             let message = i0403_message("numpy", reason);

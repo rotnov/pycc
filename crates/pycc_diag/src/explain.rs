@@ -1306,9 +1306,9 @@ the program's `pycc.lock` (a missing or stale lock fails the build with exit \
 2, naming `pycc lock`). The remaining cases are refused, with the reason in \
 the message: a standard-library module that needs Tcl/Tk (`tkinter`, \
 `turtle`, `idlelib`), a `--target` build (the bundled interpreter is the \
-build host's own), or a module outside the standard library on a Windows \
-host, where the embedded executable bundles only the standard library until \
-#1287. Rebuild with `--ext`, or drop the import.",
+build host's own). A Windows host bundles a module outside the standard \
+library from `pycc.lock` too since #1296. Rebuild with `--ext`, or drop the \
+import.",
         example: "\
 import json     # fine under `pycc build`: builds an embedded executable
 import tkinter  # error[I0403] under `pycc build`; fine under `pycc build --ext`

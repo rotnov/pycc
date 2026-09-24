@@ -336,7 +336,8 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     let check = crate::lock::build::plan_closure(&env.entry, &hir, HOST)
         .unwrap()
         .unwrap();
-    let closure = crate::lock::build::payload(&check, &env.lock_probe).unwrap();
+    let closure =
+        crate::lock::build::payload(&check, &env.lock_probe, EmbedPlatform::MacOs).unwrap();
     let probe = &env.layout.probe;
     let assemble = |plan: &native::NativePlan| {
         let platform = EmbedPlatform::MacOs;

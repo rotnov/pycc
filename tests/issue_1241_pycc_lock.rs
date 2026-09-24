@@ -8,15 +8,15 @@
 //! a fake interpreter prefix and a fake `site-packages` the test writes.
 //! Every distribution is written by the test itself, METADATA and RECORD
 //! with hashes computed here, so nothing downloads anything and no test
-//! calls `pip`, `uv` or an index. They are `cfg(not(windows))` one by one:
-//! `pycc lock` refuses a Windows host until #1287, which the one
-//! `cfg(windows)` test pins.
+//! calls `pip`, `uv` or an index. They are `cfg(not(windows))` one by one
+//! because their fixture interpreter is a `sh` script; `pycc lock` on a
+//! Windows host is `tests/issue_1296_windows_locked_closure.rs` (#1296).
 //!
 //! The `#[ignore]`d test locks a real `python3.14 -m venv --without-pip`
 //! environment (`PYCC_PYTHON`, default `python3.14`, must be CPython
 //! 3.14.7 with a shared libpython); `venv --without-pip` is offline.
 
-#![cfg_attr(windows, allow(dead_code))]
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 
 use pycc_scratch::ScratchDir;
 use std::path::{Path, PathBuf};
@@ -600,25 +600,6 @@ fn the_lock_sits_beside_the_nearest_pycc_toml() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(!project.join("pycc.lock").exists());
     assert!(!src.join("pycc.lock").exists());
-}
-
-#[cfg(windows)]
-#[test]
-fn a_windows_host_is_refused() {
-    let dir = ScratchDir::new("lock_windows").expect("scratch");
-    std::fs::write(dir.join("m.py"), "import json\n").expect("write");
-    let output = Command::new(env!("CARGO_BIN_EXE_pycc"))
-        .args(["lock", "m.py"])
-        .current_dir(&*dir)
-        .output()
-        .expect("pycc should spawn");
-    assert_eq!(output.status.code(), Some(2), "{}", stderr_of(&output));
-    assert!(
-        stderr_of(&output).contains("#1287"),
-        "{}",
-        stderr_of(&output)
-    );
-    assert!(!dir.join("pycc.lock").exists());
 }
 
 /// A real `venv --without-pip` of the build host's CPython 3.14.7 passes

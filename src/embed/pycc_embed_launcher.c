@@ -74,8 +74,9 @@ static int pycc_embed_run(void) {
 #ifdef _WIN32
 /* The program DLL's entry point, called by the stub `OUT` with its own
  * argv and the sidecar directory's full path (D-253). The search path is
- * explicit -- `<sidecar>\Lib`, then `<sidecar>\DLLs` -- so nothing is
- * inherited from `getpath`, the registry or the environment. */
+ * explicit -- `<sidecar>\Lib`, then `<sidecar>\DLLs`, then the locked
+ * closure `<sidecar>\closure` when the sidecar holds one (#1296) -- so
+ * nothing is inherited from `getpath`, the registry or the environment. */
 __declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_t *sidecar) {
     static wchar_t lib[32768];
     static wchar_t dlls[32768];
@@ -87,6 +88,14 @@ __declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_
     }
     lib[size - 1] = L'\0';
     dlls[size - 1] = L'\0';
+#ifdef PYCC_EMBED_CLOSURE
+    static wchar_t closure[32768];
+    if (_snwprintf(closure, size, L"%ls\\closure", sidecar) < 0) {
+        fwprintf(stderr, L"error: pycc could not form the search path under %ls\n", sidecar);
+        return 1;
+    }
+    closure[size - 1] = L'\0';
+#endif
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
     config.site_import = 0;
@@ -101,6 +110,11 @@ __declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_
     if (!PyStatus_Exception(status)) {
         status = PyWideStringList_Append(&config.module_search_paths, dlls);
     }
+#ifdef PYCC_EMBED_CLOSURE
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, closure);
+    }
+#endif
     if (!PyStatus_Exception(status)) {
         status = PyConfig_SetArgv(&config, argc, argv);
     }

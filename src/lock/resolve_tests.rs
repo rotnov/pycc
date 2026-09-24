@@ -23,10 +23,19 @@ impl Env {
         }
     }
 
+    /// Resolves for a POSIX host, whatever host the test runs on.
     fn resolve(&self, roots: &[&str]) -> Result<Vec<ResolvedPackage>, String> {
+        self.resolve_on(roots, EmbedPlatform::Linux)
+    }
+
+    fn resolve_on(
+        &self,
+        roots: &[&str],
+        platform: EmbedPlatform,
+    ) -> Result<Vec<ResolvedPackage>, String> {
         let sites = scanned_sites(&self.pure, &self.plat)?;
         let roots = roots.iter().map(|r| r.to_string()).collect();
-        resolve(&sites, &roots, &env())
+        resolve(&sites, &roots, &env(), platform)
     }
 
     fn names(&self, roots: &[&str]) -> Vec<String> {
@@ -476,4 +485,96 @@ fn missing_site_directories_are_refused_naming_them() {
         err.contains("purelib site directory") && err.contains("absent"),
         "{err}"
     );
+}
+
+/// A Windows lock owns and walks a top-level `.pyd` import root (#1296):
+/// recorded, it locks, where a POSIX lock finds no owner; unrecorded
+/// beside a package root, it is refused by name, where a POSIX walk never
+/// visits it.
+#[test]
+fn a_windows_lock_owns_and_walks_a_top_level_pyd() {
+    let windows = EmbedPlatform::Windows;
+    let pyd = "fast.cp314-win_amd64.pyd";
+    let env = Env::new("lock_resolve_windows_pyd");
+    write_dist(&env.pure, "fast", "1.0", &[(pyd, b"MZ")], &[]);
+    let packages = env.resolve_on(&["fast"], windows).unwrap();
+    assert_eq!(packages[0].name, "fast");
+    assert_eq!(packages[0].files, 2);
+    let err = env.resolve(&["fast"]).unwrap_err();
+    assert!(err.contains("no installed distribution owns"), "{err}");
+
+    let env = Env::new("lock_resolve_windows_pyd_stray");
+    write_dist(&env.pure, "fast", "1.0", &[("fast/__init__.py", b"")], &[]);
+    std::fs::write(env.pure.join(pyd), b"MZ").unwrap();
+    let err = env.resolve_on(&["fast"], windows).unwrap_err();
+    assert!(err.contains(pyd) && err.contains("no RECORD"), "{err}");
+    assert_eq!(env.names(&["fast"]), ["fast"]);
+}
+
+/// The Windows RECORD path screen (#1296), as a pure function.
+#[test]
+fn the_windows_record_path_screen_names_each_defect() {
+    for (path, defect) in [
+        ("pkg\\..\\x.py", "`\\`"),
+        ("C:/x.py", "`:`"),
+        ("pkg/x.pyd::$DATA", "`:`"),
+        ("pkg/x.pyd.", "strips"),
+        ("pkg /x.py", "strips"),
+        ("pkg/NUL.py", "device"),
+        ("con/x.py", "device"),
+        ("pkg/lpt9", "device"),
+        ("Com1.tar.gz", "device"),
+    ] {
+        let found = windows_record_path_defect(path).unwrap_or_else(|| panic!("{path}"));
+        assert!(found.contains(defect), "{path}: {found}");
+    }
+    for path in [
+        "pkg/x.py",
+        "pkg/./x.py",
+        "pkg/../x.py",
+        ".hidden/x.py",
+        "console.py",
+        "pkg/COM10.py",
+        "nul_x.py",
+    ] {
+        assert_eq!(windows_record_path_defect(path), None, "{path}");
+    }
+}
+
+/// A Windows lock refuses what the screen names, after the `..` refusal
+/// and before anything is read, while a POSIX lock is unchanged; `.`
+/// components stay admitted on both.
+#[test]
+fn a_windows_lock_refuses_a_record_path_windows_would_reinterpret() {
+    let windows = EmbedPlatform::Windows;
+    for (line, why, tag) in [
+        (
+            "tinypkg\\..\\x.py,sha256=AA,1",
+            "contains `\\`",
+            "backslash",
+        ),
+        ("tinypkg/x.pyd::$DATA,sha256=AA,1", "contains `:`", "stream"),
+        ("tinypkg/x.pyd.,sha256=AA,1", "strips", "dot"),
+        ("tinypkg/NUL.py,sha256=AA,1", "reserves", "device"),
+        ("tinypkg/../x.py,sha256=AA,1", "contains `..`", "dotdot"),
+    ] {
+        let env = Env::new(&format!("lock_resolve_windows_{tag}"));
+        let dist = tiny(&env.pure, &[]);
+        append_record(&dist, line);
+        let err = env.resolve_on(&["tinypkg"], windows).unwrap_err();
+        assert!(err.contains(why), "{line}: {err}");
+        if tag == "device" {
+            // POSIX has no reserved names: it reaches the hash check.
+            let err = env.refusal(&["tinypkg"]);
+            assert!(err.contains("malformed sha256"), "{err}");
+        }
+    }
+    let env = Env::new("lock_resolve_windows_curdir");
+    let dist = tiny(&env.pure, &[]);
+    append_record(
+        &dist,
+        &format!("tinypkg/./sub.py,{},6", record_hash(b"Y = 2\n")),
+    );
+    assert_eq!(env.resolve_on(&["tinypkg"], windows).unwrap()[0].files, 4);
+    assert_eq!(env.names(&["tinypkg"]), ["tinypkg"]);
 }

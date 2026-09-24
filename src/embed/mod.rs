@@ -286,11 +286,15 @@ impl EmbedToolchain {
     }
 
     /// The file whose sha256 `pycc lock` records as `libpython-sha256` for
-    /// the interpreter `probe` ([`static_lib::identity_library`]). The
-    /// static probe runs only for an interpreter without a shared
-    /// libpython.
-    pub(crate) fn identity_library(&self, probe: &EmbedProbe) -> Result<PathBuf, String> {
-        static_lib::identity_library(probe, || {
+    /// the interpreter `probe` on `platform`
+    /// ([`static_lib::identity_library`]). The static probe runs only for
+    /// a POSIX interpreter without a shared libpython.
+    pub(crate) fn identity_library(
+        &self,
+        probe: &EmbedProbe,
+        platform: EmbedPlatform,
+    ) -> Result<PathBuf, String> {
+        static_lib::identity_library(probe, platform, || {
             let usage = static_lib::ArchiveUse::Identify {
                 described: probe.describe(),
             };
@@ -442,10 +446,11 @@ pub(crate) struct EmbedPlan {
 /// and checks a consumed lock section's `libpython-sha256` against the
 /// file that identifies the interpreter (#1272), not the archive it links.
 ///
-/// A Windows build (D-253) refuses a static libpython and then a consumed
-/// lock section before the probe, compiles without `-fPIC`, links the
-/// program DLL into the sidecar as [`EmbedPlan::artifact`], and describes
-/// the stub `OUT` linked after it as [`EmbedPlan::stub`].
+/// A Windows build (D-253) refuses a static libpython before the probe,
+/// refuses a locked closure that holds a PE image once the payload is
+/// planned (#1296, until #1297 scans them), compiles without `-fPIC`,
+/// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
+/// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
@@ -459,7 +464,7 @@ pub(crate) fn plan_embed(
     let parent = layout::sidecar_parent(out);
     let replace_existing = bundle::check_existing(&parent.join(&sidecar_name))?;
     let check = crate::lock::build::plan_closure(entry, typed_hir, host)?;
-    windows::check_windows_request(platform, toolchain.link, check.is_some())?;
+    windows::check_windows_request(platform, toolchain.link)?;
     let probe = toolchain.probe(platform)?;
     let static_lib = match toolchain.link {
         LibpythonLink::Static => Some(toolchain.static_probe()?),
@@ -469,10 +474,11 @@ pub(crate) fn plan_embed(
         Some(check) => {
             let lock_probe = toolchain.lock_probe()?;
             crate::lock::build::verify_interpreter(check, &probe, &lock_probe)?;
-            Some(crate::lock::build::payload(check, &lock_probe)?)
+            Some(crate::lock::build::payload(check, &lock_probe, platform)?)
         }
         None => None,
     };
+    windows::check_closure_images(platform, locked.as_ref())?;
     let natives = plan_natives(
         platform,
         &probe,

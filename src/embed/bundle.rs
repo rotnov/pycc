@@ -142,7 +142,7 @@ fn populate(
     static_lib: Option<&StaticProbe>,
 ) -> Result<(), String> {
     if platform == EmbedPlatform::Windows {
-        return windows::populate(probe, staging);
+        return windows::populate(probe, staging, locked);
     }
     let lib_dir = staging.join("lib");
     std::fs::create_dir(&lib_dir).map_err(|e| io_error("create", &lib_dir, &e))?;
@@ -155,7 +155,8 @@ fn populate(
             if let Some(locked) = locked {
                 // The lock names the interpreter by the file it identifies
                 // it by, whichever way this build links it (#1272).
-                let identity = static_lib::identity_library(probe, || Ok(archive.clone()))?;
+                let identity =
+                    static_lib::identity_library(probe, platform, || Ok(archive.clone()))?;
                 let identity_digest = if identity == *archive {
                     digest.clone()
                 } else {

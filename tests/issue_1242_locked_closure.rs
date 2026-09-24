@@ -10,8 +10,9 @@
 //! `site-packages` the test writes (as `tests/issue_1241_pycc_lock.rs`
 //! does); every distribution is written by the test itself, so nothing
 //! downloads anything and no test calls `pip`, `uv` or an index. They are
-//! `cfg(not(windows))`: a locked closure is not available on a Windows host
-//! (#1287).
+//! `cfg(not(windows))` because their fixture interpreter is a `sh` script;
+//! the Windows closure is `tests/issue_1296_windows_locked_closure.rs`
+//! (#1296).
 //!
 //! The `#[ignore]`d oracle test builds a real embedded executable from a
 //! `python3.14 -m venv --without-pip` environment (`PYCC_PYTHON`, default
