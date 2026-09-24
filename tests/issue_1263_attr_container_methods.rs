@@ -288,11 +288,15 @@ fn an_unannotated_private_helper_needs_a_return_annotation() {
 /// a generic class's constructor, and around generic calls, plus a bare-name
 /// `.pop()` statement in an unannotated private helper: the walkers that
 /// reject, rewrite and collect generic calls and instantiations, and the
-/// private-helper solver's walrus pre-pass, all reach the receiver.
+/// private-helper solver's walrus pre-pass, all reach the receiver. The
+/// expected output is CPython 3.14.7's, recorded rather than re-run: the
+/// `python3` of an unpinned CI job may predate PEP 695's `class Box[T]`.
 #[test]
 fn attribute_receivers_in_generic_code_and_private_helpers_match_cpython() {
-    let out = matches_cpython(
-        "e2e_1263_generic",
+    let dir = ScratchDir::new("e2e_1263_generic").expect("scratch");
+    let source = dir.join("a.py");
+    std::fs::write(
+        &source,
         "class C:\n    def __init__(self, xs: list[int], d: dict[str, int]) -> None:\n        \
          self.xs = xs\n        self.d = d\n\n\n\
          class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n\n\
@@ -304,6 +308,7 @@ fn attribute_receivers_in_generic_code_and_private_helpers_match_cpython() {
          _drop(ys)\n    print(poke(c, 3), c.xs.pop(), len(ys))\n    \
          c.xs.append(ident(7))\n    b = Box[int](c.xs.pop())\n    \
          print(b.v, c.d.get(\"a\", ident(0)))\n\n\nmain()\n",
-    );
-    assert_eq!(out, "2 1\n3 4 1\n7 2\n");
+    )
+    .expect("write the subject");
+    assert_eq!(build_and_run(&dir, &source), "2 1\n3 4 1\n7 2\n");
 }
