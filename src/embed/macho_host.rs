@@ -74,8 +74,9 @@ pub(crate) struct HostContext {
 ///    rewritten to the bundled one;
 /// 4. a locked payload file is kept when the spelling resolves to the
 ///    same file in the sidecar (rule K: a closure image, every candidate
-///    up to the match `@loader_path`-relative and inside the image's own
-///    site directory, the match at its payload path, and no earlier
+///    up to the match `@loader_path`-relative and spelled without ever
+///    leaving the image's own site directory, the match at its payload
+///    path, and no earlier
 ///    candidate at a payload path), and otherwise rebound to its closure
 ///    copy by an explicit `@loader_path` path;
 /// 5. a system library named relatively is rebound to its absolute path;
@@ -174,14 +175,17 @@ fn resolve(
     let mut keep = site.is_some();
     let mut searched = Vec::new();
     for candidate in candidates {
-        let (path, relative) = match candidate? {
-            Candidate::Loader(dir) => (normalize(&image.source_dir.join(dir).join(tail)), true),
-            Candidate::Absolute(dir) => (normalize(&dir.join(tail)), false),
+        let (path, spelled) = match candidate? {
+            Candidate::Loader(dir) => {
+                let spelled = Path::new(&dir).join(tail);
+                (normalize(&image.source_dir.join(&spelled)), Some(spelled))
+            }
+            Candidate::Absolute(dir) => (normalize(&dir.join(tail)), None),
         };
-        let site_rel = site
-            .and_then(|site| path.strip_prefix(site).ok())
-            .filter(|_| relative)
-            .map(|rel| rel.to_string_lossy().into_owned());
+        let site_rel = site.zip(spelled).and_then(|(site, spelled)| {
+            let start = image.source_dir.strip_prefix(site).ok()?;
+            within_site(start, &spelled)
+        });
         keep = keep && site_rel.is_some();
         if let Some(found) = probe(&path) {
             return Ok((found, site_rel.filter(|_| keep)));
@@ -220,6 +224,26 @@ fn rpath_candidate(rpath: &str) -> Result<Candidate, String> {
     Err(format!(
         "is searched through the `LC_RPATH` entry `{rpath}`, which {why}"
     ))
+}
+
+/// The site-relative path that `spelled`, walked from the site-relative
+/// directory `start`, reaches, or `None` when the walk climbs above the
+/// site directory at any step: the sidecar renames that directory to
+/// `closure/`, so a spelling that leaves it and comes back in would not
+/// resolve there as it does on the host (rule K).
+fn within_site(start: &Path, spelled: &Path) -> Option<String> {
+    let mut walk: Vec<&std::ffi::OsStr> = Vec::new();
+    for component in start.components().chain(spelled.components()) {
+        match component {
+            Component::ParentDir => {
+                walk.pop()?;
+            }
+            Component::Normal(name) => walk.push(name),
+            _ => {}
+        }
+    }
+    let rel: PathBuf = walk.iter().collect();
+    Some(rel.to_string_lossy().into_owned())
 }
 
 /// `path` with `.` and `..` removed lexically.

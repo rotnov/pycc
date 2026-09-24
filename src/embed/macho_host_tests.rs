@@ -130,6 +130,13 @@ fn a_loader_relative_reference_to_its_payload_path_is_kept() {
         closure("@rpath/.dylibs/libx.dylib", &["@loader_path"]),
         MachoDep::Keep
     );
+    // `..` that stays inside the site directory keeps too.
+    assert_eq!(
+        closure("@loader_path/../pkg/.dylibs/libx.dylib", &[]),
+        MachoDep::Keep
+    );
+    let rpaths = ["@loader_path/../pkg/./.dylibs"];
+    assert_eq!(closure("@rpath/libx.dylib", &rpaths), MachoDep::Keep);
 }
 
 /// Each of rule K's conditions, failing alone, rebinds the payload hit to
@@ -145,6 +152,15 @@ fn a_payload_hit_that_rule_k_does_not_keep_is_rebound() {
     assert_eq!(closure("@rpath/libx.dylib", &rpaths), libx);
     // A match found under another name than its payload path.
     assert_eq!(closure("@loader_path/link.dylib", &[]), libx);
+    // A match whose spelling climbs above the site directory and comes
+    // back in: `closure/` replaces the site's name, so the spelling would
+    // not resolve in the sidecar, in the reference or in an rpath entry.
+    let climbing = "@loader_path/../../plat/pkg/.dylibs/libx.dylib";
+    assert_eq!(closure(climbing, &[]), libx);
+    let rpaths = ["@loader_path/../../plat/pkg/.dylibs"];
+    assert_eq!(closure("@rpath/libx.dylib", &rpaths), libx);
+    let climbing_tail = "@rpath/../../plat/pkg/.dylibs/libx.dylib";
+    assert_eq!(closure(climbing_tail, &["@loader_path"]), libx);
     // An earlier candidate at another site directory's payload path,
     // which `closure/` would hold and dyld would load first.
     let rpaths = ["@loader_path/../other", "@loader_path/.dylibs"];
