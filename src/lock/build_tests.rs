@@ -200,8 +200,10 @@ fn a_section_whose_roots_differ_from_the_program_is_stale() {
     );
 }
 
+/// Native libraries no longer stop the plan: the embedded build re-derives
+/// them after the probe and compares them with the section (#1243).
 #[test]
-fn a_section_with_native_libraries_is_refused_naming_1243() {
+fn a_section_with_native_libraries_is_planned() {
     let env = Env::with_tiny("build_native", "import tinypkg\n");
     env.lock();
     let mut lock = schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
@@ -211,9 +213,8 @@ fn a_section_with_native_libraries_is_refused_naming_1243() {
         required_by: vec!["tinypkg".to_string()],
     });
     std::fs::write(env.lock_path(), schema::render(&lock)).unwrap();
-    let err = env.plan().unwrap_err();
-    assert!(err.contains("[[target.native]]"), "{err}");
-    assert!(err.contains("#1243"), "{err}");
+    let check = env.plan().expect("planned").expect("a section");
+    assert_eq!(check.section.native.len(), 1);
 }
 
 #[test]

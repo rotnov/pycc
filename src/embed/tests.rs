@@ -406,6 +406,7 @@ fn a_failed_assembly_removes_its_staging_directory() {
         "app.pycc",
         false,
         None,
+        &native::NativePlan::default(),
     )
     .expect_err("no library");
     assert!(message.contains("could not read"), "{message}");
@@ -430,6 +431,7 @@ fn a_failed_replacement_removes_its_staging_directory() {
         "app.pycc",
         true,
         None,
+        &native::NativePlan::default(),
     )
     .expect_err("nothing to move aside");
     assert!(message.contains("could not move aside"), "{message}");

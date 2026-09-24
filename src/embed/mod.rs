@@ -11,16 +11,21 @@
 
 mod bundle;
 mod closure;
+mod elf;
 #[cfg(test)]
 pub(crate) mod fake_layout;
 pub(crate) mod layout;
 mod macho;
+pub(crate) mod native;
+pub(crate) mod native_linux;
 pub(crate) mod sha256;
 pub(crate) mod stdlib_roots;
 
 use crate::ext_build;
 use crate::lock::probe::LockProbe;
 use layout::EmbedPlatform;
+pub(crate) use native::plan_natives;
+pub(crate) use native_linux::LinuxEnv;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -93,6 +98,7 @@ pub(crate) struct EmbedToolchain {
     interpreter: OsString,
     probe_override: Option<EmbedProbe>,
     lock_probe_override: Option<LockProbe>,
+    linux_env_override: Option<LinuxEnv>,
 }
 
 impl EmbedToolchain {
@@ -105,6 +111,7 @@ impl EmbedToolchain {
                 .unwrap_or_else(|| OsString::from("python3.14")),
             probe_override: None,
             lock_probe_override: None,
+            linux_env_override: None,
         }
     }
 
@@ -115,6 +122,7 @@ impl EmbedToolchain {
             interpreter: interpreter.into(),
             probe_override: Some(probe),
             lock_probe_override: None,
+            linux_env_override: None,
         }
     }
 
@@ -130,7 +138,23 @@ impl EmbedToolchain {
             interpreter: interpreter.into(),
             probe_override: Some(probe),
             lock_probe_override: Some(lock_probe),
+            linux_env_override: None,
         }
+    }
+
+    /// The same toolchain, scanning Linux images against `env` instead of
+    /// the build host's library directories.
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_linux_env(mut self, env: LinuxEnv) -> Self {
+        self.linux_env_override = Some(env);
+        self
+    }
+
+    /// Where a Linux build's dependency scan looks for libraries.
+    pub(crate) fn linux_env(&self) -> LinuxEnv {
+        self.linux_env_override
+            .clone()
+            .unwrap_or_else(LinuxEnv::host)
     }
 
     /// A toolchain that really runs `interpreter`.
@@ -140,6 +164,7 @@ impl EmbedToolchain {
             interpreter: interpreter.into(),
             probe_override: None,
             lock_probe_override: None,
+            linux_env_override: None,
         }
     }
 
@@ -295,7 +320,8 @@ pub(crate) struct EmbedPlan {
 /// Prepares everything an embedded build links, in order: the sidecar
 /// name, the check of an existing sidecar (before anything is probed), the
 /// `pycc.lock` checks that need no interpreter (#1242), the probe, the
-/// lock's interpreter comparison and payload plan, the C sources in the
+/// lock's interpreter comparison and payload plan, the native libraries
+/// (re-derived and compared with the section's, #1243), the C sources in the
 /// scratch directory beside `obj_path`, and the sidecar itself (with the
 /// locked closure copied into it), swapped into place before the link so
 /// the executable links against the final bundled library. `host` is the
@@ -322,6 +348,19 @@ pub(crate) fn plan_embed(
         }
         None => None,
     };
+    let natives = plan_natives(
+        platform,
+        &probe,
+        locked.as_ref(),
+        &toolchain.linux_env(),
+        true,
+    )?;
+    if let Some(check) = &check {
+        let difference = crate::lock::native_difference(&check.section.native, &natives.locked());
+        if let Some(difference) = difference {
+            return Err(check.stale(&difference));
+        }
+    }
     let has_closure = locked
         .as_ref()
         .is_some_and(|locked| !locked.files.is_empty());
@@ -343,11 +382,19 @@ pub(crate) fn plan_embed(
         &sidecar_name,
         replace_existing,
         locked.as_ref(),
+        &natives,
     )?;
     let mut compile_args = vec![OsString::from("-I"), probe.include.into_os_string()];
     compile_args.extend([OsString::from("-fPIC"), shim.into(), launcher.into()]);
     let mut link_args = vec![library.into_os_string()];
     link_args.extend(layout::rpath_args(platform, &sidecar_name));
+    let lib_dir = parent.join(&sidecar_name).join("lib");
+    let names: Vec<String> = natives
+        .linux_vendor
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    link_args.extend(layout::preload_args(platform, &lib_dir, &names));
     Ok(EmbedPlan {
         compile_args,
         link_args,
