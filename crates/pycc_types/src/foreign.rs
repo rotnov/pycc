@@ -357,5 +357,15 @@ pub(crate) fn bind_foreign_objects_at(
     }
 }
 
+/// Binds each local name of a `HirStmt::ForeignImport` (a foreign import
+/// nested in a module-level `if`/`try` block, #1291) to `Ty::Object` at the
+/// statement's own position. The enclosing `if`/`try` join then decides
+/// whether a read after the block is definitely assigned.
+pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, String)]) {
+    for (local_name, _) in bindings {
+        env.bind(local_name.clone(), Ty::Object);
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -586,7 +586,13 @@ pub(crate) fn lower_stmt(
             };
             HirStmt::Raise { exc, cause }
         }
-        other => return Err(unsupported::unsupported_statement(other)),
+        // #1291: a CPython-backed `import` nested in a module-level
+        // `if`/`try` block, whose bindings `module::lower_top_level_item`
+        // recorded before lowering the block.
+        other => match crate::import::nested_foreign_import(other, imports) {
+            Some(lowered) if !in_function => lowered,
+            _ => return Err(unsupported::unsupported_statement(other, in_function)),
+        },
     };
     // PEP 572 (#774): reject a walrus lowered anywhere other than the three
     // placements the issue permits -- an `if`/`while` test (that arm's own
@@ -687,7 +693,11 @@ pub(crate) fn lower_stmt(
         // block's own doc comment above).
         // `del` never reaches here (`lower_stmt_expanded` lowers it) and
         // holds no expression.
-        HirStmt::Try { .. } | HirStmt::TryStar { .. } | HirStmt::Delete { .. } => false,
+        // A nested foreign import (#1291) holds only names.
+        HirStmt::Try { .. }
+        | HirStmt::TryStar { .. }
+        | HirStmt::Delete { .. }
+        | HirStmt::ForeignImport { .. } => false,
         HirStmt::Raise { exc, cause } => {
             exc.as_ref().is_some_and(contains_named_expr)
                 || cause.as_ref().is_some_and(contains_named_expr)

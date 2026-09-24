@@ -1262,6 +1262,16 @@ pub enum MirStmt {
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
+    /// A foreign (CPython-object) import nested in a module-level `if`/`try`
+    /// block (#1291), the statement counterpart of
+    /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
+    /// order, stores the module object `pycc_ext_obj_import(module_path)`
+    /// returns into the module global `local_name`, where the statement
+    /// runs. A failed import returns `-1` from `Py_mod_exec` directly
+    /// (#1096), so it is not a pycc raise.
+    ForeignImport {
+        bindings: Vec<(String, String)>,
+    },
 }
 
 /// A comprehension's already-resolved iterable source (PR-12, D-117) --
@@ -1644,6 +1654,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::Return(_)
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
+            | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}
         }
     }

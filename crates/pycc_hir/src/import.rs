@@ -8,15 +8,18 @@
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #547, Part 2), and split further for #1291: the driver-request scan
 //! lives in [`request`], the foreign-import shadowing rule in [`shadow`],
-//! and the two type-alias lowerings in [`type_alias`]. The project-import
+//! and the two type-alias lowerings in [`type_alias`]. [`block`] lowers a
+//! foreign import nested in a module-level `if`/`try` block. The project-import
 //! request/answer types (`ProjectImportRequest`, `ResolvedImports`, #898)
 //! are this module's public surface: the driver's `src/modules.rs` fills
 //! them in. Everything else is `pub(crate)`, re-exported through `lib.rs`.
 
+mod block;
 mod request;
 mod shadow;
 mod type_alias;
 
+pub(crate) use block::{lower_block_imports, nested_foreign_import};
 pub use request::{ProjectImportRequest, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};
@@ -192,10 +195,11 @@ pub enum ResolvedImport<'a> {
     NotFound { code: &'static str, message: String },
     /// `import X`: `X` is neither a project module nor a `pycc_std` one,
     /// so Part 1 of #1026 binds it as an opaque CPython object
-    /// ([`ImportBinding::Foreign`]). Recorded only for the bare, undotted,
-    /// unaliased `import X` shape, or one such name of `import X, Y`
-    /// (#1280) -- see `src/modules.rs`'s own `missing` for why every other
-    /// foreign shape stays unanswered.
+    /// ([`ImportBinding::Foreign`]). Recorded only for an undotted
+    /// `import X` or `import X as Y` (#1291), or one such name of
+    /// `import X, Y` (#1280), at top level or nested in a module-level
+    /// `if`/`try` block (#1291) -- see `src/modules.rs`'s own `missing` for
+    /// why every other foreign shape stays unanswered.
     Foreign,
 }
 
@@ -439,26 +443,40 @@ fn lower_import_alias(
     let answer = resolved.get(statement_span(alias.range));
     // `Found` is the driver's answer to a bare `import m` of a project
     // file. It is unreachable for a name `pycc_std` resolves
-    // (`project_import_request` never asks the driver about one) and
-    // unreachable for an aliased `import m as n` (it never asks about those
-    // either -- project-module aliasing is Part 3 of #883, #964), so an
-    // aliased project import falls through to the "not supported yet" arm
-    // below.
+    // (`project_import_request` never asks the driver about one). An
+    // aliased `import m as n` is asked about since #1291, so the foreign
+    // arm below can admit it, but an aliased project import keeps the
+    // "not supported yet" text below: project-module aliasing is Part 3 of
+    // #883, #964.
     if matches!(answer, Some(ResolvedImport::Found)) {
-        return Err(unsupported(
-            format!("module namespace bindings (`import {module_name}`) are not supported yet"),
-            statement.start..statement.end,
-        ));
+        let message = if alias.asname.is_some() {
+            format!("import of module `{module_name}` is not supported yet")
+        } else {
+            format!("module namespace bindings (`import {module_name}`) are not supported yet")
+        };
+        return Err(unsupported(message, statement.start..statement.end));
     }
     // Part 1 of #1026: a foreign root binds an opaque CPython object rather
     // than failing. `site` is where the import runs: for a top-level
     // statement, the number of `HirItem`s the statements before this one
     // produced, which is where `pycc_mir` splices the import back into the
     // module body so the generated `pycc_ext_obj_import` call runs in
-    // source order rather than hoisted (see `MirItem::ForeignImport`).
+    // source order rather than hoisted (see `MirItem::ForeignImport`); for
+    // one nested in a module-level block, `Block` (#1291). `import X as Y`
+    // binds `Y` (#1291).
     if matches!(answer, Some(ResolvedImport::Foreign)) {
+        let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
+        if alias.asname.is_some() && shadows_a_resolved_spelling(local_name) {
+            return Err(unsupported(
+                format!(
+                    "binding the CPython module `{module_name}` to `{local_name}`, a name pycc \
+                     resolves as its own stdlib module or `TYPE_CHECKING`, is not supported yet"
+                ),
+                statement.start..statement.end,
+            ));
+        }
         return Ok(ImportBinding::Foreign {
-            local_name: module_name.to_string(),
+            local_name: local_name.to_string(),
             module_path: module_name.to_string(),
             site,
             span: statement,
@@ -480,6 +498,21 @@ fn lower_import_alias(
         local_name: local_name.to_string(),
         module,
     })
+}
+
+/// Whether a foreign alias binding `local_name` would be read as something
+/// else (#1291). `TYPE_CHECKING` and a name `pycc_std::resolve_module`
+/// answers (`typing`, `math`, ...) are resolved by their spelling --
+/// `stmt::is_type_checking_guard` and `expr::std_receiver`'s textual
+/// fallback -- so `import foo as typing` followed by
+/// `if typing.TYPE_CHECKING:` would fold a live body away. `range` is also
+/// resolved by its spelling, with no shadowing check, so
+/// `import foo as range` would silently call the builtin. The unaliased
+/// shapes (`import TYPE_CHECKING`, `import range`) predate #1291 and are
+/// not covered here.
+fn shadows_a_resolved_spelling(local_name: &str) -> bool {
+    matches!(local_name, "TYPE_CHECKING" | "range")
+        || pycc_std::resolve_module(local_name).is_some()
 }
 
 /// `C0001` for `from ... import *` -- shared by the stdlib and project

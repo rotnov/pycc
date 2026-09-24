@@ -1,1 +1,1 @@
-import cgi as c
+from cgi import escape

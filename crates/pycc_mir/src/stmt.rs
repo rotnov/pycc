@@ -939,6 +939,9 @@ pub(super) fn lower_stmt(
         // demoted the name's binding state, and under D-124's leak-only
         // model there is no reference to release, so nothing runs.
         HirStmt::Delete { .. } => MirStmt::NoOp,
+        HirStmt::ForeignImport { bindings, .. } => MirStmt::ForeignImport {
+            bindings: bindings.clone(),
+        },
     }
 }
 

@@ -1238,7 +1238,7 @@ fn a_lowering_error_in_the_else_after_an_if_type_checking_guard_propagates() {
     // success path every other test above exercises.
     assert_capability_error_message(
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
-        "statement kind not supported yet",
+        "import of module `some_module_that_does_not_exist_at_runtime_or_compile_time` is not supported yet",
     );
 }
 
@@ -1250,7 +1250,7 @@ fn a_lowering_error_after_an_elif_type_checking_guard_propagates() {
     // branch is already live).
     assert_capability_error_message(
         "from typing import TYPE_CHECKING\nif False:\n    pass\nelif TYPE_CHECKING:\n    pass\nelse:\n    import some_module_that_does_not_exist_at_runtime_or_compile_time\n",
-        "statement kind not supported yet",
+        "import of module `some_module_that_does_not_exist_at_runtime_or_compile_time` is not supported yet",
     );
 }
 
@@ -1384,7 +1384,7 @@ fn a_lowering_failure_inside_a_for_object_iterable_propagates() {
 fn a_lowering_failure_inside_a_for_object_body_propagates() {
     assert_capability_error_message(
         "for x in a.b:\n    import os\n",
-        "an `import` inside a function or block body",
+        "an `import` inside a block body",
     );
 }
 

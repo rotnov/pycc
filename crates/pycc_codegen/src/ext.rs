@@ -617,6 +617,7 @@ pub fn body_returns_buffer_slice(body: &[pycc_mir::MirStmt]) -> bool {
         | MirStmt::AttrSet { .. }
         | MirStmt::Raise { .. }
         | MirStmt::RaiseFrom { .. }
+        | MirStmt::ForeignImport { .. }
         | MirStmt::Reraise => false,
     })
 }

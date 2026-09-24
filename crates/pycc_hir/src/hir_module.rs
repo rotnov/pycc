@@ -161,10 +161,16 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             // #1244: a `del` unbinds a name rather than binding it, so it is
             // not a kill -- it narrows nothing and adds no definition. The
             // type checker tracks it separately (`deleted_names`).
+            // #1291: a nested foreign import's name lives in
+            // `HirModule::imports`, not `definition_spans`, exactly like a
+            // top-level foreign import, so it is not a kill either;
+            // recording it would make `reject_shadowed_foreign_imports`
+            // report the import as shadowing itself.
             HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
             | HirStmt::Return(_)
             | HirStmt::Delete { .. }
+            | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }
     }

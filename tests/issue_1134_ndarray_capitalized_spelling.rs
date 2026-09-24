@@ -10,12 +10,15 @@
 //! no new refusal arm and no new diagnostic family.
 //!
 //! **What this does not do, stated here so the file cannot be read as more
-//! than it is:** it makes none of those 19 occurrences compile. Every one of
-//! them also needs a name binding that does not exist yet — `from
-//! numpy.typing import NDArray` is refused by the *foreign-import* path,
-//! `import numpy as np` is #883, and an attribute-form base `np.ndarray` is
-//! #889. Registering the name is necessary, not sufficient, and no
-//! numerator in the census moves.
+//! than it is:** at #1134 it made none of those 19 occurrences compile.
+//! Every one of them also needed a name binding that did not exist yet —
+//! `from numpy.typing import NDArray` is refused by the *foreign-import*
+//! path, `import numpy as np` was #883, and an attribute-form base
+//! `np.ndarray` is #889. Registering the name is necessary, not sufficient.
+//! Since #1291 `import numpy as np` binds a CPython module object, so that
+//! one binding is no longer missing; the census itself was not re-measured
+//! for #1291 (its corpus is not available to the change), so no count is
+//! claimed here.
 //!
 //! Scope, against the two predecessors. The run-time half — the widened
 //! `PyObject_CheckBuffer` admission predicate and the four wrapper arms — is
@@ -326,6 +329,19 @@ fn every_non_parameter_ndarray_capitalized_position_is_refused() {
     assert!(err.contains("parameter `b: memoryview`"), "{err}");
 }
 
+/// #1291 admits an undotted `import X as Y` of a CPython module on the terms
+/// of a plain `import X`, so the aliased binding the census's `np.`
+/// occurrences need no longer stops the check. This is the flip the #1134
+/// amendment on D-244 anticipates, pinned as an acceptance.
+#[test]
+fn import_numpy_as_np_binds_a_cpython_module_since_1291() {
+    let (ok, text) = check(
+        "import numpy as np\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
+        "1291_import_as",
+    );
+    assert!(ok, "`import numpy as np` should check cleanly: {text}");
+}
+
 /// `pycc explain I0405` names the third spelling.
 ///
 /// D-244's #1129 review-rounds-6-and-7 amendment, statement (j): `explain`
@@ -344,11 +360,12 @@ fn explain_i0405_names_the_capitalized_spelling() {
     assert!(text.contains("NDArray"), "{text}");
 }
 
-/// The gap this issue does *not* close, pinned so the disclosure above is
+/// The gaps this issue does *not* close, pinned so the disclosure above is
 /// checked rather than merely asserted in prose.
 ///
-/// Each of the three bindings the census's occurrences actually need is
-/// still refused, and each arm pins the *cause* and not only the exit
+/// Each of the two bindings still refused is pinned here (the third,
+/// `import numpy as np`, compiles since #1291 and is pinned by
+/// `import_numpy_as_np_binds_a_cpython_module_since_1291`), and each arm pins the *cause* and not only the exit
 /// status: a refusal that migrated to a different reason would leave the
 /// module doc's "makes none of the 19 compile" claim true by accident and
 /// unmeasured. If one of these ever starts passing, or starts failing for
@@ -364,12 +381,6 @@ fn registering_the_name_does_not_make_the_census_bindings_compile() {
             "1134_gap_from_import",
             "from numpy.typing import NDArray\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
             "import of module `numpy.typing` is not supported yet",
-        ),
-        // Import aliasing, #883.
-        (
-            "1134_gap_import_as",
-            "import numpy as np\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
-            "import of module `numpy` is not supported yet",
         ),
         // An attribute-form annotation base, #889.
         (

@@ -103,7 +103,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     // rejected as well. Same-module shadowing (`import json` then `def
     // json()` in one file) is deliberately excluded: `lower_module`
     // already reports it (`I0404`/`T0023`) with a more specific message.
-    let foreign_locals: Vec<(&str, usize)> = inputs
+    let foreign_locals: Vec<(&str, &str, Span, usize)> = inputs
         .iter()
         .enumerate()
         .flat_map(|(index, input)| {
@@ -113,16 +113,48 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                 .imports
                 .iter()
                 .filter_map(move |binding| match binding {
-                    ImportBinding::Foreign { local_name, .. } => Some((local_name.as_str(), index)),
+                    ImportBinding::Foreign {
+                        local_name,
+                        module_path,
+                        span,
+                        ..
+                    } => Some((local_name.as_str(), module_path.as_str(), *span, index)),
                     _ => None,
                 })
         })
         .collect();
+    // #1291: with `import X as Y` one foreign local name no longer implies
+    // one module, so two modules binding the same name to different
+    // CPython modules would share one global slot. Refused at the later
+    // module's import. An identical pair across modules stays admitted:
+    // both store the same module object.
+    for (name, path, span, index) in &foreign_locals {
+        if let Some((_, owner_path, _, owner)) =
+            foreign_locals
+                .iter()
+                .find(|(other_name, other_path, _, owner)| {
+                    other_name == name && other_path != path && owner < index
+                })
+        {
+            return Err(vec![(
+                *index,
+                unsupported(
+                    format!(
+                        "module `{}` binds `{name}` to the CPython module `{path}`, which `{}` \
+                         binds to `{owner_path}`; shadowing a foreign import across modules is \
+                         not supported yet",
+                        inputs[*index].display_path, inputs[*owner].display_path
+                    ),
+                    span_range(*span),
+                ),
+            )]);
+        }
+    }
     for (index, input) in inputs.iter().enumerate() {
         for (name, span) in &input.module.definition_spans {
-            if let Some((_, owner)) = foreign_locals
+            if let Some((_, _, _, owner)) = foreign_locals
                 .iter()
-                .find(|(local_name, owner)| local_name == name && *owner != index)
+                .find(|(local_name, _, _, owner)| local_name == name && *owner != index)
             {
                 return Err(vec![(
                     index,

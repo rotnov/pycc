@@ -792,6 +792,15 @@ fn lower_top_level_item<'a>(
         state.items.push(item);
         return Ok(());
     }
+    // #1291: the foreign imports nested in a module-level `if`/`try` go
+    // into the import table before the block is lowered, because
+    // `lower_stmt` reads them there to produce `HirStmt::ForeignImport`.
+    // A block that then fails to lower leaves none of them behind, so an
+    // import that never runs is never a lock root, a policy (I0402) or a
+    // native-build (I0403) finding.
+    let block_imports = crate::import::lower_block_imports(stmt, resolved, &state.imports);
+    let imports_before_block = state.imports.len();
+    state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.
     let lowered = stmt::lower_stmt_expanded(
@@ -807,7 +816,13 @@ fn lower_top_level_item<'a>(
         &class_name_defs,
         &state.imports,
         &state.signatures,
-    )?;
+    )
+    .map_err(|error| {
+        state.imports.truncate(imports_before_block);
+        // A nested import that failed to lower reports what the same line
+        // reports at top level, when it is the block's first failure.
+        block_imports.substitute(error)
+    })?;
     // A synthesized name -- a chained-assignment temporary (`0chain_<offset>`,
     // #1213) or a comprehension loop variable (`0comp_<offset>_<name>`,
     // D-117, #1237) -- is not a definition the source wrote, so it never

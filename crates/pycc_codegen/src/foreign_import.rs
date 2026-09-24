@@ -1,4 +1,6 @@
-//! Emission for `MirItem::ForeignImport` (Part 1 of #1026, PR 1c of #1080).
+//! Emission for `MirItem::ForeignImport` (Part 1 of #1026, PR 1c of #1080)
+//! and for `MirStmt::ForeignImport`, a foreign import nested in a
+//! module-level `if`/`try` block (#1291).
 //!
 //! Cohesion-driven carve out of `lib.rs` under AGENTS.md's decomposability
 //! rule: everything that knows how a foreign `import numpy` becomes machine
@@ -13,7 +15,10 @@
 //! `print(...)` written above an `import` runs first, and D-244 rule 3 binds
 //! the artifact to CPython's observable behaviour. `MirItem::ForeignImport`
 //! exists precisely so that ordering is structural rather than a convention
-//! this file would have to re-derive.
+//! this file would have to re-derive. A nested import is a statement, so
+//! `emit_stmt` emits it where its block runs; its failure edge returns from
+//! the same entry point, skipping any enclosing `except`/`finally` (the
+//! #1096 edge, `docs/RUNTIME.md`).
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The module object is imported exactly
 //! once, during `pycc_ext_module_exec`, into a module-level global, and is
@@ -59,8 +64,12 @@ fn obj_import_fn<'ctx>(
     )
 }
 
-/// Emits the import call for one [`MirItem::ForeignImport`] and stores the
-/// resulting module object into `local_name`'s module global.
+/// Emits the import call for one foreign import binding (a
+/// [`MirItem::ForeignImport`], or one pair of a `MirStmt::ForeignImport`)
+/// and stores the resulting module object into `slot`, `local_name`'s
+/// module global. `local_name` also names the module-path string global;
+/// two imports binding the same name get two strings, which LLVM names
+/// apart by emission order.
 ///
 /// A `NULL` return means CPython raised (`ModuleNotFoundError` being the
 /// expected one): the exception is already set by the shim, so the entry
@@ -72,7 +81,7 @@ pub(super) fn emit<'ctx>(
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     entry_fn: FunctionValue<'ctx>,
-    globals: &BTreeMap<String, StorageSlot<'ctx>>,
+    slot: &StorageSlot<'ctx>,
     local_name: &str,
     module_path: &str,
 ) {
@@ -104,7 +113,6 @@ pub(super) fn emit<'ctx>(
         ))
         .expect("build_return should not fail");
     builder.position_at_end(cont_bb);
-    let slot = &globals[local_name];
     builder
         .build_store(slot.ptr, imported)
         .expect("build_store should not fail for a foreign module global");
@@ -115,6 +123,32 @@ pub(super) fn emit<'ctx>(
         builder
             .build_store(initialized, context.i8_type().const_int(1, false))
             .expect("build_store should not fail for a foreign module init flag");
+    }
+}
+
+/// Emits a [`pycc_mir::MirStmt::ForeignImport`]: one import per binding,
+/// in order, into the module-exec entry point `builder` is emitting into.
+/// No `options.ext` guard is needed: a foreign binding reaches codegen only
+/// in an `ext` build, because the driver refuses every other build with
+/// `I0403`, and `expect_module_exec_entry` pins the entry point.
+pub(super) fn emit_stmt<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    bindings: &[(String, String)],
+) {
+    let entry_fn = crate::foreign_attr::expect_module_exec_entry(builder);
+    for (local_name, module_path) in bindings {
+        emit(
+            context,
+            builder,
+            module,
+            entry_fn,
+            &locals[local_name],
+            local_name,
+            module_path,
+        );
     }
 }
 

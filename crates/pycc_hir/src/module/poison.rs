@@ -41,14 +41,15 @@ use pycc_diag::Diagnostic;
 /// independent gap that must stay reported.
 ///
 /// Recorded divergence (Part 1 of #1026): `lower_import_stmt` has a third
-/// success condition this mirror deliberately does not model. A bare,
-/// unaliased, undotted name that is neither a `pycc_std` module nor a
-/// project module lowers to an `ImportBinding::Foreign` when -- and only
+/// success condition this mirror deliberately does not model. An
+/// undotted name, optionally aliased (#1291), that is neither a `pycc_std`
+/// module nor a project module lowers to an `ImportBinding::Foreign` when -- and only
 /// when -- the driver's `ResolvedImports` table answers
 /// `ResolvedImport::Foreign` for that alias's span (#1280 keys a plain
 /// `import`'s answers per alias). That answer is not derivable from the
 /// statement alone, which is all this function sees, so `import numpy` --
-/// and `import sys, re`, alias by alias -- is still classified here as a
+/// `import numpy as np` (`[np]`, #1291), and `import sys, re`, alias by
+/// alias -- is still classified here as a
 /// poisoning shape even in a build where it lowers. What keeps the stale prediction harmless is the
 /// *asymmetry* in `lower_module`'s loop, not a surviving biconditional: the
 /// loop consults `poisonable_names` on both arms, but on `Ok` it only
