@@ -251,7 +251,7 @@ fn an_absent_optional_root_locks_and_builds_with_no_files() {
     assert!(
         err.contains(
             "its section's `optional-roots` lists `absentpkg` but the program imports \
-             `otherpkg` from outside the standard library only under an `ImportError` handler"
+             `otherpkg` from outside the standard library only under a handler that catches a failed import"
         ),
         "{err}"
     );

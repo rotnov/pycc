@@ -651,6 +651,17 @@ fn an_unowned_optional_root_with_files_on_disk_is_refused() {
         "{err}"
     );
 
+    // A directory holding no file (only an empty `__pycache__`) is a
+    // namespace package CPython would import, so it is refused too.
+    let env = Env::new("lock_resolve_optional_namespace");
+    std::fs::create_dir_all(env.pure.join("nsopt/__pycache__")).unwrap();
+    let err = env.resolve_split(&[], &["nsopt"]).unwrap_err();
+    assert!(
+        err.contains("is a directory for optional import root `nsopt`")
+            && err.contains("namespace package"),
+        "{err}"
+    );
+
     #[cfg(unix)]
     {
         let env = Env::new("lock_resolve_optional_link");

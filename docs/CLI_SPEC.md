@@ -510,8 +510,8 @@ The TOML parser still accepts and ignores other unmodeled sections such as
 then builds is bounded by the embedding (D-248): a standard-library root
 builds an embedded executable with no lock, and any other admitted root
 builds one bundling its closure from `pycc.lock` (#1242). A root imported
-only inside a `try` whose handler catches `ImportError` is optional
-(#1290): it still needs the lock, but when it is absent the lock records no
+only inside a `try` whose handler catches a failed import is optional
+(#1290, the **Source** rule below): it still needs the lock, but when it is absent the lock records no
 package for it and the program's handler runs.
 
 - omitting `[interop]` selects `policy = "auto"`, which admits every
@@ -592,7 +592,8 @@ references outside a distribution's payload.
   no RECORD lists refuses the lock (exit 2, naming the file). Each package
   records a `tree-sha256` over its payload. An *unowned optional* root is
   not refused: it is recorded with no package, and its on-disk files are
-  still checked, so an unrecorded file or a symlink under it refuses the
+  still checked, so an unrecorded file, a symlink, or a directory holding
+  no file (a namespace package CPython would import) under it refuses the
   lock. An optional root reachable only through a `.pth` file or an
   editable finder is not detected (D-249 rule 1).
 - **Location and key.** The file is `pycc.lock` beside the nearest

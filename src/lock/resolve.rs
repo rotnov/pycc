@@ -224,7 +224,8 @@ pub(crate) fn resolve(
 /// Checks every on-disk file under `root` in every scanned site is a
 /// location one of its owners' RECORDs lists. `owners` is empty only for an
 /// optional root no distribution owns (#1290), where any file is
-/// unrecorded.
+/// unrecorded and any site entry at all -- even a directory holding no
+/// file, which CPython imports as a namespace package -- is refused.
 fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(), String> {
     let mut recorded = BTreeSet::new();
     for owner in owners {
@@ -233,6 +234,7 @@ fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(),
         }
     }
     let mut found = Vec::new();
+    let mut entries_on_disk = Vec::new();
     for site in &index.sites {
         let entries = std::fs::read_dir(&site.path)
             .map_err(|e| format!("cannot read `{}`: {e}", site.path.display()))?;
@@ -243,10 +245,25 @@ fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(),
             .collect();
         names.sort();
         for name in names {
-            walk(&site.path.join(name), root, &mut found)?;
+            let entry = site.path.join(name);
+            walk(&entry, root, &mut found)?;
+            entries_on_disk.push(entry);
         }
     }
     found.sort();
+    if owners.is_empty()
+        && found.is_empty()
+        && let Some(entry) = entries_on_disk.first()
+    {
+        // A directory holding no file is still a namespace package to
+        // CPython, so the guarded import would succeed on this host.
+        return Err(format!(
+            "`{}` is a directory for optional import root `{root}`, which no installed \
+             distribution owns; CPython would import it as a namespace package, but an \
+             embedded build bundles only files a RECORD lists -- remove the directory",
+            entry.display()
+        ));
+    }
     match found.into_iter().find(|path| !recorded.contains(path)) {
         None => Ok(()),
         Some(path) if owners.is_empty() => Err(format!(

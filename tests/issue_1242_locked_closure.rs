@@ -356,9 +356,11 @@ fn an_optional_root_is_locked_and_accepted_whether_installed_or_absent() {
             "{text}"
         );
         assert_eq!(text.contains("name = \"tinypkg\""), installed, "{text}");
+        std::fs::remove_file(&python.sentinel).expect("reset the sentinel");
         let output = build(&dir, &python.script);
         let rendered = stderr_of(&output);
         assert!(!output.status.success(), "the fake library cannot link");
+        assert!(python.sentinel.exists(), "the interpreter was probed");
         assert!(!rendered.contains("pycc lock"), "{rendered}");
     }
 
