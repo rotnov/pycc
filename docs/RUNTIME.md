@@ -1212,8 +1212,8 @@ Supporting either order is later work under #1026.
 imports produces an embedded executable (see "Embedded executables" below),
 which compiles the module exactly as `--ext` does; a root outside the
 standard library bundles its closure from `pycc.lock` (#1242), and a missing
-or stale lock is exit 2 naming `pycc lock`. A root imported only inside a
-`try` whose handler catches a failed import is optional (#1290; D-249's
+or stale lock is exit 2 naming `pycc lock`. A root imported only inside the
+body of a `try` whose handler catches a failed import is optional (#1290; D-249's
 #1290 amendment (a) and CLI_SPEC's `pycc lock` **Source** rule state which handlers qualify): it is locked
 like any other root, but when no installed distribution owns it the lock
 records no package, the build bundles nothing for it, and at run time the

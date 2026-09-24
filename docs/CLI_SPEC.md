@@ -514,7 +514,7 @@ The TOML parser still accepts and ignores other unmodeled sections such as
 then builds is bounded by the embedding (D-248): a standard-library root
 builds an embedded executable with no lock, and any other admitted root
 builds one bundling its closure from `pycc.lock` (#1242). A root imported
-only inside a `try` whose handler catches a failed import is optional
+only inside the body of a `try` whose handler catches a failed import is optional
 (#1290, the **Source** rule below): it still needs the lock, but when it is absent the lock records no
 package for it and the program's handler runs.
 
