@@ -1,7 +1,7 @@
 //! Part 1 of #1226 (#1286): on a Windows host a plain `pycc build` of a
 //! program whose CPython imports are all standard-library roots produces an
-//! embedded executable -- a stub `OUT` that imports only `KERNEL32` and
-//! loads `OUT.pycc\pycc_program.dll`, which links `python314.dll` (D-253).
+//! embedded executable -- a stub `OUT` that imports only the system DLLs
+//! `KERNEL32` and `ntdll` and loads `OUT.pycc\pycc_program.dll`, which links `python314.dll` (D-253).
 //!
 //! The file compiles on every host; every test returns at once off Windows.
 //! Two refusal tests need no interpreter. The `#[ignore]`d tests build and
@@ -407,15 +407,22 @@ fn coff_imports(path: &Path) -> Vec<String> {
 
 #[test]
 #[ignore = "needs CPython 3.14.7 as python3.14.exe or PYCC_PYTHON on Windows; run with --include-ignored"]
-fn the_windows_stub_imports_only_kernel32() {
+fn the_windows_stub_imports_only_system_dlls() {
     if !hosted() {
         return;
     }
     let dir = ScratchDir::new("win_embed_imports").expect("scratch");
     let sidecar = build_embedded(&dir, "import json\n\nprint(str(json.dumps(1)))\n");
     let stub = coff_imports(&dir.join("app"));
+    // The static CRT also references `ntdll.dll`; both are system DLLs the
+    // loader always finds in System32, so nothing the stub imports can come
+    // from `PATH` or the sidecar.
     assert!(
-        stub.len() == 1 && stub[0].eq_ignore_ascii_case("kernel32.dll"),
+        stub.iter()
+            .any(|name| name.eq_ignore_ascii_case("kernel32.dll"))
+            && stub.iter().all(|name| {
+                name.eq_ignore_ascii_case("kernel32.dll") || name.eq_ignore_ascii_case("ntdll.dll")
+            }),
         "{stub:?}"
     );
     let program = coff_imports(&sidecar.join("pycc_program.dll"));

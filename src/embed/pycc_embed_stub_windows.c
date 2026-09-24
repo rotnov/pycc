@@ -4,8 +4,8 @@
  * Windows has no rpath: an executable's static imports resolve from its own
  * directory, System32 and PATH before any of its code runs, so the
  * executable `OUT` cannot import `python314.dll` from `OUT.pycc\`. This
- * stub is `OUT` instead. It imports KERNEL32.dll only (it is linked with the
- * static C runtime), finds `<its own directory>\<sidecar>\pycc_program.dll`,
+ * stub is `OUT` instead. It imports only the system DLLs KERNEL32.dll and
+ * ntdll.dll (it is linked with the static C runtime), finds `<its own directory>\<sidecar>\pycc_program.dll`,
  * loads it so that the DLL's own imports (`python314.dll`, `python3.dll`,
  * the VC runtime) resolve from the sidecar, and returns what the DLL's
  * `pycc_embed_main` returns as the process exit status.
@@ -57,10 +57,15 @@ int wmain(int argc, wchar_t **argv) {
     if (widened == 0) {
         return pycc_stub_fail(sidecar, GetLastError());
     }
-    if (_snwprintf(program, capacity, L"%ls\\%ls", sidecar, PYCC_PROGRAM_DLL) < 0) {
+    /* `<sidecar>\pycc_program.dll`, built with no deprecated CRT call. */
+    size_t sidecar_len = wcslen(sidecar);
+    size_t name_len = wcslen(PYCC_PROGRAM_DLL);
+    if (sidecar_len + 1 + name_len >= capacity) {
         return pycc_stub_fail(sidecar, ERROR_FILENAME_EXCED_RANGE);
     }
-    program[capacity - 1] = L'\0';
+    wmemcpy(program, sidecar, sidecar_len);
+    program[sidecar_len] = L'\\';
+    wmemcpy(program + sidecar_len + 1, PYCC_PROGRAM_DLL, name_len + 1);
     /* No loader dialog: a missing DLL must fail the process, not block it. */
     SetErrorMode(SEM_FAILCRITICALERRORS);
     HMODULE module = LoadLibraryExW(

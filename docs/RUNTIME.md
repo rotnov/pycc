@@ -1227,7 +1227,7 @@ owns the contract; this is the runtime view of it.
   program builds on a Windows host as a stub `OUT` plus `OUT.pycc\`
   ([D-253](./decisions/D-253-windows-embedded-executable-a-stub-out-loading-a.md)).
   The stub (`src/embed/pycc_embed_stub_windows.c`, static CRT, importing
-  only `KERNEL32`) loads `OUT.pycc\pycc_program.dll` with
+  only the system DLLs `KERNEL32` and `ntdll`) loads `OUT.pycc\pycc_program.dll` with
   `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`, so
   the DLL's own imports resolve from the sidecar root and never from `PATH`,
   and calls its `pycc_embed_main`. The program DLL holds the launcher, the

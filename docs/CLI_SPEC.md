@@ -452,7 +452,8 @@ Windows reports none), but its `libs\python314.lib` and `libs\python3.lib`
 import libraries, its `python314.dll` and `python3.dll`, and its `DLLs\`
 directory must exist, each missing one an exit-2 failure naming the path. The
 build links a program DLL (`OUT.pycc\pycc_program.dll`) against
-`python314.dll`, and a stub `OUT` that imports only `KERNEL32` and loads that
+`python314.dll`, and a stub `OUT` that imports only the system DLLs `KERNEL32`
+and `ntdll` and loads that
 DLL from its own sidecar; the sidecar holds `python314.dll`, `python3.dll`,
 the interpreter's `vcruntime140.dll` and `vcruntime140_1.dll` when present,
 and the filtered `Lib\` and `DLLs\`. `--static-libpython`, `[build] static =

@@ -460,7 +460,7 @@ achieve.
   `llvm-readobj` fails them instead of skipping, and cover the oracle
   program, relocation under a scrubbed `PATH`, the `DLLs\` extension
   modules, `pycc run`, `sys.exit(3)`, the missing-DLL exit 121, the sidecar's
-  file set and the stub's `KERNEL32`-only imports. Each takes its CPython
+  file set and the stub's system-DLL-only imports (`KERNEL32`, `ntdll`). Each takes its CPython
   oracle from the bundle's `PYCC-BUNDLE` marker and asserts it is 3.14.7.
   They cover the synthetic oracle program, relocation, `PYTHONPATH`
   isolation, `pycc run`, `sys.exit(3)`, and the freshness of
