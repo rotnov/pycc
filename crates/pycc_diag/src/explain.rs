@@ -281,9 +281,12 @@ the same name, or the first later use that *produces* an element type \
 (`x.append(1)`, `d[\"k\"] = 1`). T0003 is what remains once all three fail -- \
 including every position that binds no name at all, where there is nothing \
 to scan forward from: a call argument (`f([])`), a `return []`, a nested \
-literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An attribute \
-target (`self.x = []`) and a tuple-unpacking target (`L, R = [], []`) never \
-reach this check: both are rejected earlier with `C0001`. Where a binding \
+literal (`[[]]`, `{\"k\": []}`), or a module-level assignment. An \
+unannotated `self.xs = []` in `__init__` reports it too when no source types \
+the slot: annotate the attribute (`self.xs: list[int] = []`) or append a value \
+to it in one of the class's own methods (`self.xs.append(1)`). The unannotated \
+`self.d = {}` and a tuple-unpacking target (`L, R = [], []`) never reach this \
+check: both are rejected earlier with `C0001`. Where a binding \
 name *is* available at a function-scope assignment it is named in the \
 message; a module-level assignment keeps the generic wording, because the \
 substitution is wired into the function-scope seams only. Inside a function \

@@ -1326,6 +1326,22 @@ fn t0003_unresolved_local_dict() {
     assert_diagnostic_matches_fixture("t0003_unresolved_local_dict");
 }
 
+/// #1265: an unannotated `self.xs = []` in `__init__` whose slot no source
+/// types -- no inherited slot and no `self.xs.append(v)` in the class's own
+/// methods -- names the attribute and the class (the span-less `1:1` every
+/// container `T0003` renders at).
+#[test]
+fn t0003_unresolved_attribute_list() {
+    assert_diagnostic_matches_fixture("t0003_unresolved_attribute_list");
+}
+
+/// #1265: the unannotated `self.d = {}` stays `C0001`, naming the annotated
+/// spelling and the #891 producer it waits for.
+#[test]
+fn c0001_unannotated_attribute_empty_dict() {
+    assert_diagnostic_matches_fixture("c0001_unannotated_attribute_empty_dict");
+}
+
 /// A non-binding position. `infer_expr_in` has no expected type and there is
 /// no name to scan forward from, so the message keeps its generic " here"
 /// wording rather than naming a binding.

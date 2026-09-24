@@ -78,6 +78,19 @@
 //! ordinary mangled `HirItem::Function` items). Module-level statements keep
 //! failing, now with `T0003`.
 //!
+//! **Instance attributes (#1265).** An attribute store is not a function
+//! local, so the three sources above never type one. `pycc_hir` lowers an
+//! unannotated `self.xs = []` at the top level of `__init__` to a
+//! *provisional* `list[<Ty::Infer>]` slot, and a class phase ([`attr_slot`])
+//! runs ahead of the per-function phase: it resolves each provisional slot
+//! from an inherited concrete slot or from the first `self.xs.append(v)` in
+//! the class's own methods, then types every `self.<attr> = []`/`{}` in those
+//! methods from the class's slot layout. A provisional slot it cannot
+//! resolve is refused with `T0003` by [`attr_slot::reject_unresolved_attr_slots`].
+//! The unannotated `self.d = {}` stays `C0001` in `pycc_hir`: its producer,
+//! `self.d[k] = v`, is not lowerable yet (#891). D-245's 2026-09-24
+//! amendment for #1265 is the canonical statement.
+//!
 //! Within a function body the pass walks *every* block statement this HIR has
 //! -- `if`/`else`, `while`, both `for` forms, every `match` case body, and
 //! every `try`/`except`/`except*`/`else`/`finally` suite (see
@@ -109,6 +122,7 @@
 
 use super::*;
 
+pub(crate) mod attr_slot;
 mod producer;
 
 use producer::find_producer;
@@ -159,19 +173,29 @@ fn empty_literal(expr: &HirExpr) -> Option<EmptyLiteral> {
 
 /// Rewrites every resolvable empty container in `hir`, returning `None` when
 /// the module contains no empty container literal in a function body at all
-/// -- which is the overwhelmingly common case, and which keeps this pass
-/// from adding a whole-module clone to `check_all_keyed`, a path that does
-/// not otherwise clone.
+/// and no provisional attribute slot (#1265) -- which is the overwhelmingly
+/// common case, and which keeps this pass from adding a whole-module clone to
+/// `check_all_keyed`, a path that does not otherwise clone.
 pub(crate) fn resolve_empty_containers(hir: &HirModule) -> Option<HirModule> {
-    if !hir.items.iter().any(|item| match item {
-        HirItem::Function { body, .. } => body_has_empty_literal(body),
-        HirItem::TopLevelStmt(_) => false,
-    }) {
+    let class_phase = attr_slot::needs_class_phase(hir);
+    if !class_phase
+        && !hir.items.iter().any(|item| match item {
+            HirItem::Function { body, .. } => body_has_empty_literal(body),
+            HirItem::TopLevelStmt(_) => false,
+        })
+    {
         return None;
     }
-    let module_env = module_environment(hir);
     let local_names = crate::module::module_function_local_names(hir);
     let mut resolved = hir.clone();
+    // #1265: the class phase runs first, so the per-function phase below
+    // builds its module scope from the class-resolved module -- a local
+    // producer reading `self.xs` then sees the resolved `list[int]` rather
+    // than the provisional `list[<inferred>]`, which `concrete` would discard.
+    if class_phase {
+        attr_slot::resolve_class_slots(hir, &mut resolved, &local_names);
+    }
+    let module_env = module_environment(&resolved);
     for (index, item) in resolved.items.iter_mut().enumerate() {
         let HirItem::Function {
             name, params, body, ..
@@ -523,18 +547,22 @@ fn scoped_for_body(
 }
 
 fn body_has_empty_literal(body: &[HirStmt]) -> bool {
-    body.iter().any(|stmt| {
-        let own = match stmt {
-            HirStmt::Assign { value, .. } => empty_literal(value).is_some(),
-            HirStmt::AnnAssign { value, .. } => {
-                value.as_ref().is_some_and(|v| empty_literal(v).is_some())
-            }
-            _ => false,
-        };
-        own || nested_bodies(stmt)
-            .iter()
-            .any(|b| body_has_empty_literal(b))
+    any_stmt(body, &|stmt| match stmt {
+        HirStmt::Assign { value, .. } => empty_literal(value).is_some(),
+        HirStmt::AnnAssign { value, .. } => {
+            value.as_ref().is_some_and(|v| empty_literal(v).is_some())
+        }
+        _ => false,
     })
+}
+
+/// Whether `found` holds for any statement of `body`, at any block depth
+/// [`nested_bodies`] reaches. The one traversal both fast-path triggers
+/// share: the local-binding one above and #1265's attribute-reset one
+/// (`attr_slot::needs_class_phase`).
+fn any_stmt(body: &[HirStmt], found: &dyn Fn(&HirStmt) -> bool) -> bool {
+    body.iter()
+        .any(|stmt| found(stmt) || nested_bodies(stmt).iter().any(|b| any_stmt(b, found)))
 }
 
 /// Every nested statement sequence of a block statement, for every block
@@ -545,8 +573,8 @@ fn body_has_empty_literal(body: &[HirStmt]) -> bool {
 /// annotation source needs no environment at all (#1021 bot review round).
 /// `Try` and `TryStar` share one arm because their field shapes are
 /// identical; a future block form must be added here and in
-/// [`rewrite_body`]'s own match, which cannot share this borrow because it
-/// needs `&mut`.
+/// [`for_each_stmt_mut`]'s own match, which cannot share this borrow because
+/// it needs `&mut`.
 fn nested_bodies(stmt: &HirStmt) -> Vec<&[HirStmt]> {
     match stmt {
         HirStmt::If { body, orelse, .. } => vec![body, orelse],
@@ -586,29 +614,43 @@ fn rewrite_body(
     env: &Environment,
     local_names: &[&str],
 ) {
+    for_each_stmt_mut(body, &mut |stmt| match stmt {
+        HirStmt::Assign { target, value } => {
+            rewrite_value(value, target, None, producers, env, local_names);
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value: Some(value),
+            ..
+        } => {
+            rewrite_value(value, target, Some(annotation), producers, env, local_names);
+        }
+        _ => {}
+    });
+}
+
+/// Visits every statement of `body` and then every statement of each of its
+/// nested block bodies, mutably. This is [`nested_bodies`]' `&mut` twin (it
+/// cannot share that borrow), and the one traversal both rewrites share: the
+/// local-binding one in [`rewrite_body`] and #1265's attribute-reset one in
+/// `attr_slot`. `visit` only ever rewrites an expression inside the
+/// statement, never its nested bodies, so recursing after the visit sees the
+/// same statement list it would have seen before.
+fn for_each_stmt_mut(body: &mut [HirStmt], visit: &mut dyn FnMut(&mut HirStmt)) {
     for stmt in body.iter_mut() {
+        visit(stmt);
         match stmt {
-            HirStmt::Assign { target, value } => {
-                rewrite_value(value, target, None, producers, env, local_names);
-            }
-            HirStmt::AnnAssign {
-                target,
-                annotation,
-                value: Some(value),
-                ..
-            } => {
-                rewrite_value(value, target, Some(annotation), producers, env, local_names);
-            }
             HirStmt::If { body, orelse, .. } => {
-                rewrite_body(body, producers, env, local_names);
-                rewrite_body(orelse, producers, env, local_names);
+                for_each_stmt_mut(body, visit);
+                for_each_stmt_mut(orelse, visit);
             }
-            HirStmt::While { body, .. } => rewrite_body(body, producers, env, local_names),
-            HirStmt::ForRange { body, .. } => rewrite_body(body, producers, env, local_names),
-            HirStmt::ForList { body, .. } => rewrite_body(body, producers, env, local_names),
+            HirStmt::While { body, .. } => for_each_stmt_mut(body, visit),
+            HirStmt::ForRange { body, .. } => for_each_stmt_mut(body, visit),
+            HirStmt::ForList { body, .. } => for_each_stmt_mut(body, visit),
             HirStmt::Match { cases, .. } => {
                 for case in cases.iter_mut() {
-                    rewrite_body(&mut case.body, producers, env, local_names);
+                    for_each_stmt_mut(&mut case.body, visit);
                 }
             }
             HirStmt::Try {
@@ -623,12 +665,12 @@ fn rewrite_body(
                 orelse,
                 finalbody,
             } => {
-                rewrite_body(body, producers, env, local_names);
+                for_each_stmt_mut(body, visit);
                 for handler in handlers.iter_mut() {
-                    rewrite_body(&mut handler.body, producers, env, local_names);
+                    for_each_stmt_mut(&mut handler.body, visit);
                 }
-                rewrite_body(orelse, producers, env, local_names);
-                rewrite_body(finalbody, producers, env, local_names);
+                for_each_stmt_mut(orelse, visit);
+                for_each_stmt_mut(finalbody, visit);
             }
             _ => {}
         }

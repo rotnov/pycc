@@ -46,12 +46,57 @@ pub(super) fn find_producer(
     env: &Environment,
     local_names: &[&str],
 ) -> Option<Resolution> {
-    let mut sites: Vec<&str> = Vec::new();
-    collect_binding_sites(body, &mut sites);
-    match scan_for_producer(body, target, env, local_names, &sites) {
+    match scan_body(body, ProducerTarget::Name(target), env, local_names) {
         ProducerScan::Resolved(resolution) => Some(resolution),
         ProducerScan::Matched | ProducerScan::NotFound => None,
     }
+}
+
+/// What a producer scan looks for: a local name (`xs.append(v)`,
+/// `d[k] = v`), or -- #1265 -- an instance attribute on the method's own
+/// receiver (`self.xs.append(v)`). `receivers` is every spelling the
+/// receiver has in the scanned body: the canonical `self`, plus the source
+/// spelling a renamed receiver is aliased under (#1181; see
+/// `attr_slot::receiver_spellings`).
+#[derive(Clone, Copy)]
+pub(super) enum ProducerTarget<'a> {
+    Name(&'a str),
+    SelfAttr {
+        receivers: &'a [&'a str],
+        attr: &'a str,
+    },
+}
+
+/// Whether a container method's `receiver` is `target`. The one predicate
+/// both `append` arms of [`scan_for_producer`] share -- the direct
+/// `HirExpr::ListAppend` and #1188's dispatched form -- so the two can never
+/// disagree about which receivers count.
+fn receiver_matches(receiver: &ContainerReceiver, target: ProducerTarget<'_>) -> bool {
+    match (receiver, target) {
+        (ContainerReceiver::Name(name), ProducerTarget::Name(wanted)) => name == wanted,
+        (ContainerReceiver::Attr(read), ProducerTarget::SelfAttr { receivers, attr }) => {
+            matches!(read.as_ref(), HirExpr::AttrGet { base, attr: read_attr }
+                if read_attr == attr
+                    && matches!(base.as_ref(), HirExpr::Name(base) if receivers.contains(&base.as_str())))
+        }
+        _ => false,
+    }
+}
+
+/// The three-outcome scan of one function body for `target`'s first
+/// producer. [`find_producer`] collapses it to an `Option`; #1265's class
+/// phase keeps the `Matched` outcome, because the first-syntactic-producer
+/// rule carries across method boundaries: a `Matched` in one method ends the
+/// whole class's scan.
+pub(super) fn scan_body(
+    body: &[HirStmt],
+    target: ProducerTarget<'_>,
+    env: &Environment,
+    local_names: &[&str],
+) -> ProducerScan {
+    let mut sites: Vec<&str> = Vec::new();
+    collect_binding_sites(body, &mut sites);
+    scan_for_producer(body, target, env, local_names, &sites)
 }
 
 /// The outcome of scanning one statement list for `target`'s first producer.
@@ -62,7 +107,7 @@ pub(super) fn find_producer(
 /// environment never bound, such as one assigned inside a `try` suite --
 /// ends the scan with a miss instead of falling through to a later producer
 /// that might carry an entirely different element type.
-enum ProducerScan {
+pub(super) enum ProducerScan {
     /// No statement in this list, or in any body nested inside it, names
     /// `target` in producer position.
     NotFound,
@@ -75,7 +120,7 @@ enum ProducerScan {
 
 fn scan_for_producer<'a>(
     body: &'a [HirStmt],
-    target: &str,
+    target: ProducerTarget<'_>,
     env: &Environment,
     local_names: &[&str],
     sites: &[&'a str],
@@ -91,11 +136,8 @@ fn scan_for_producer<'a>(
             }) => call.container_form(),
             _ => None,
         };
-        if let Some(HirExpr::ListAppend {
-            list: ContainerReceiver::Name(list),
-            value,
-        }) = &dispatched
-            && list == target
+        if let Some(HirExpr::ListAppend { list, value }) = &dispatched
+            && receiver_matches(list, target)
         {
             return match crate::infer_expr_in(env, local_names, value) {
                 Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
@@ -103,19 +145,22 @@ fn scan_for_producer<'a>(
             };
         }
         match stmt {
-            // #1263: only a bare-name receiver can be `target`; an
-            // attribute receiver (`self.xs.append(v)`) is never a producer
-            // for a local name.
-            HirStmt::ExprStmt(HirExpr::ListAppend {
-                list: ContainerReceiver::Name(list),
-                value,
-            }) if list == target => {
+            // #1263 added the attribute receiver (`self.xs.append(v)`),
+            // which is never a producer for a local name; #1265 makes it the
+            // producer for a `ProducerTarget::SelfAttr`.
+            HirStmt::ExprStmt(HirExpr::ListAppend { list, value })
+                if receiver_matches(list, target) =>
+            {
                 return match crate::infer_expr_in(env, local_names, value) {
                     Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
                     Err(_) => ProducerScan::Matched,
                 };
             }
-            HirStmt::DictSet { dict, key, value } if dict == target => {
+            // A dict producer is keyed by a bare name only: a subscript
+            // store on an attribute receiver (`self.d[k] = v`) is refused in
+            // `pycc_hir` until #891, so no attribute dict producer exists.
+            HirStmt::DictSet { dict, key, value } if matches!(target, ProducerTarget::Name(wanted) if dict == wanted) =>
+            {
                 return match (
                     crate::infer_expr_in(env, local_names, key),
                     crate::infer_expr_in(env, local_names, value),
