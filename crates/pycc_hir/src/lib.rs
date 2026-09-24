@@ -39,7 +39,8 @@ pub(crate) use func::{
     with_bare_container_advice,
 };
 pub use hir_module::{
-    ForeignImportSite, HirModule, ImportBinding, ProjectBindingKind, killed_names,
+    ForeignImportSite, FromImport, HirModule, ImportBinding, ProjectBindingKind,
+    foreign_bound_object, foreign_import_statement, killed_names, opens_foreign_statement,
     top_level_bound_names,
 };
 pub use import::{

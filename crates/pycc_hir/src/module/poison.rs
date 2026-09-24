@@ -50,7 +50,10 @@ use pycc_diag::Diagnostic;
 /// statement alone, which is all this function sees, so `import numpy` --
 /// `import numpy as np` (`[np]`, #1291), and `import sys, re`, alias by
 /// alias -- is still classified here as a
-/// poisoning shape even in a build where it lowers. What keeps the stale prediction harmless is the
+/// poisoning shape even in a build where it lowers. The same holds for
+/// `from itertools import product, chain` (#1278): the `ImportFrom` arm
+/// poisons every name the statement would bind, and a foreign answer for
+/// the statement's span makes it lower instead. What keeps the stale prediction harmless is the
 /// *asymmetry* in `lower_module`'s loop, not a surviving biconditional: the
 /// loop consults `poisonable_names` on both arms, but on `Ok` it only
 /// `retain`s -- un-poisoning what the statement actually bound -- so a name

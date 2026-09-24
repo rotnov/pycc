@@ -15,9 +15,9 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, ForeignImportSite, HirModule, ImportBinding,
+    FIRST_USER_EXCEPTION_TYPE_TAG, ForeignImportSite, FromImport, HirModule, ImportBinding,
     MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs, builtin_exception_init_item,
-    is_builtin_exception_class, unsupported,
+    foreign_bound_object, is_builtin_exception_class, unsupported,
 };
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
@@ -29,6 +29,31 @@ use std::collections::{HashMap, HashSet};
 pub struct LinkInput {
     pub display_path: String,
     pub module: LoweredModule,
+}
+
+/// One foreign binding of one linked input, as the cross-module foreign
+/// checks in [`link`] compare it: the object is identified by the module
+/// and, for `from X import n` (#1278), the attribute name.
+struct ForeignLocal<'a> {
+    name: &'a str,
+    module_path: &'a str,
+    from: Option<&'a FromImport>,
+    span: Span,
+    index: usize,
+}
+
+impl ForeignLocal<'_> {
+    fn attr(&self) -> Option<&str> {
+        self.from.map(|from| from.name.as_str())
+    }
+
+    /// `numpy`, or `itertools.product` for a from-import.
+    fn dotted(&self) -> String {
+        match self.attr() {
+            None => self.module_path.to_string(),
+            Some(attr) => format!("{}.{attr}", self.module_path),
+        }
+    }
 }
 
 /// Links `inputs` (in dependency order, entry last) into one program.
@@ -103,7 +128,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     // rejected as well. Same-module shadowing (`import json` then `def
     // json()` in one file) is deliberately excluded: `lower_module`
     // already reports it (`I0404`/`T0023`) with a more specific message.
-    let foreign_locals: Vec<(&str, &str, Span, usize)> = inputs
+    let foreign_locals: Vec<ForeignLocal<'_>> = inputs
         .iter()
         .enumerate()
         .flat_map(|(index, input)| {
@@ -116,9 +141,16 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                     ImportBinding::Foreign {
                         local_name,
                         module_path,
+                        from,
                         span,
                         ..
-                    } => Some((local_name.as_str(), module_path.as_str(), *span, index)),
+                    } => Some(ForeignLocal {
+                        name: local_name,
+                        module_path,
+                        from: from.as_ref(),
+                        span: *span,
+                        index,
+                    }),
                     _ => None,
                 })
         })
@@ -127,43 +159,50 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     // one module, so two modules binding the same name to different
     // CPython modules would share one global slot. Refused at the later
     // module's import. An identical pair across modules stays admitted:
-    // both store the same module object.
-    for (name, path, span, index) in &foreign_locals {
-        if let Some((_, owner_path, _, owner)) =
-            foreign_locals
-                .iter()
-                .find(|(other_name, other_path, _, owner)| {
-                    other_name == name && other_path != path && owner < index
-                })
-        {
+    // both store the same object. #1278: the object is the module *and*,
+    // for `from X import n`, the attribute, so `import copy` in one module
+    // and `from copy import copy` in another are two objects.
+    for local in &foreign_locals {
+        if let Some(owner) = foreign_locals.iter().find(|other| {
+            other.name == local.name
+                && (other.module_path, other.attr()) != (local.module_path, local.attr())
+                && other.index < local.index
+        }) {
             return Err(vec![(
-                *index,
+                local.index,
                 unsupported(
                     format!(
-                        "module `{}` binds `{name}` to the CPython module `{path}`, which `{}` \
-                         binds to `{owner_path}`; shadowing a foreign import across modules is \
-                         not supported yet",
-                        inputs[*index].display_path, inputs[*owner].display_path
+                        "module `{}` binds `{}` to {}, which `{}` binds to `{}`; shadowing a \
+                         foreign import across modules is not supported yet",
+                        inputs[local.index].display_path,
+                        local.name,
+                        foreign_bound_object(local.module_path, local.from),
+                        inputs[owner.index].display_path,
+                        owner.dotted()
                     ),
-                    span_range(*span),
+                    span_range(local.span),
                 ),
             )]);
         }
     }
     for (index, input) in inputs.iter().enumerate() {
         for (name, span) in &input.module.definition_spans {
-            if let Some((_, _, _, owner)) = foreign_locals
+            if let Some(owner) = foreign_locals
                 .iter()
-                .find(|(local_name, _, _, owner)| local_name == name && *owner != index)
+                .find(|local| local.name == name && local.index != index)
             {
                 return Err(vec![(
                     index,
                     unsupported(
                         format!(
-                            "module `{}` defines `{name}`, which `{}` binds to a CPython \
-                             module object; shadowing a foreign import across modules is \
-                             not supported yet",
-                            input.display_path, inputs[*owner].display_path
+                            "module `{}` defines `{name}`, which `{}` binds to {}; shadowing a \
+                             foreign import across modules is not supported yet",
+                            input.display_path,
+                            inputs[owner.index].display_path,
+                            match owner.from {
+                                None => "a CPython module object".to_string(),
+                                Some(_) => foreign_bound_object(owner.module_path, owner.from),
+                            }
                         ),
                         span_range(*span),
                     ),
@@ -262,16 +301,18 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             ImportBinding::Foreign {
                 local_name,
                 module_path,
+                from,
                 site,
                 span,
             } => ImportBinding::Foreign {
                 local_name,
                 module_path,
+                from,
                 // A block import runs inside its own statement, so it has
                 // no item position to rebase (#1291).
                 site: match site {
                     ForeignImportSite::Item(index) => ForeignImportSite::Item(index + item_offset),
-                    ForeignImportSite::Block => ForeignImportSite::Block,
+                    site @ ForeignImportSite::Block { .. } => site,
                 },
                 span,
             },

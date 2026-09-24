@@ -26,8 +26,9 @@ pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};
 
 use crate::{
-    ForeignImportSite, HirClassDef, HirItem, HirModule, ImportBinding, ProjectBindingKind, Ty,
-    is_builtin_exception_class, top_level_bound_names, unresolved_symbol, unsupported,
+    ForeignImportSite, FromImport, HirClassDef, HirItem, HirModule, ImportBinding,
+    ProjectBindingKind, Ty, is_builtin_exception_class, top_level_bound_names, unresolved_symbol,
+    unsupported,
 };
 use pycc_ast::{Expr, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
@@ -199,8 +200,10 @@ pub enum ResolvedImport<'a> {
     /// ([`ImportBinding::Foreign`]). Recorded only for an undotted
     /// `import X` or `import X as Y` (#1291), or one such name of
     /// `import X, Y` (#1280), at top level or nested in a module-level
-    /// `if`/`try` block (#1291) -- see `src/modules.rs`'s own `missing` for
-    /// why every other foreign shape stays unanswered.
+    /// `if`/`try` block (#1291), and for a top-level `from X import a, b`
+    /// with an undotted `X` (#1278), whose names bind the module's
+    /// attributes -- see `src/modules.rs`'s own `missing` for why every
+    /// other foreign shape stays unanswered.
     Foreign,
 }
 
@@ -357,10 +360,15 @@ pub(crate) fn lower_import_stmt(
                         statement_span(import.range),
                     ));
                 }
-                // `Found` and `Foreign` are only ever the answer to a bare
-                // `import m`; an unanswered `from` import lowers as a
-                // single-file compilation would.
-                Some(ResolvedImport::Found | ResolvedImport::Foreign) | None => {}
+                // #1278: an undotted foreign module's names bind CPython
+                // objects.
+                Some(ResolvedImport::Foreign) => {
+                    return lower_foreign_from_import(import, site).map(Some);
+                }
+                // `Found` is only ever the answer to a bare `import m`; an
+                // unanswered `from` import lowers as a single-file
+                // compilation would.
+                Some(ResolvedImport::Found) | None => {}
             }
             // No answer is ever recorded for a future import
             // (`project_import_request` skips it), so this always runs
@@ -480,6 +488,7 @@ fn lower_import_alias(
         return Ok(ImportBinding::Foreign {
             local_name: local_name.to_string(),
             module_path: module_name.to_string(),
+            from: None,
             site,
             span: statement,
         });
@@ -499,6 +508,72 @@ fn lower_import_alias(
     Ok(ImportBinding::Module {
         local_name: local_name.to_string(),
         module,
+    })
+}
+
+/// The foreign arm of [`lower_import_stmt`] (#1278): `from X import a, b`
+/// where the driver answered the undotted `X` as a CPython module. Each name
+/// binds, in source order, the opaque CPython object `X.<name>` that
+/// `pycc_ext_obj_import_from` fetches with CPython's own `IMPORT_FROM`
+/// semantics when the statement runs, spliced at `site` like `import X`.
+///
+/// The wildcard and `as` aliasing keep their shared `C0001`s (#963/#883).
+/// A name pycc resolves by its spelling -- a builtin, a `pycc_std` module,
+/// a typing, decorator or base-class marker -- is refused for every name,
+/// aliased or not, because the unaliased form binds that very spelling:
+/// `from builtins import range` would otherwise make `range` a CPython
+/// object in some passes and the builtin in others, and `from numpy import
+/// ndarray` would silently stop meaning the registered annotation spelling
+/// (#1138 keeps that half). The first refused name fails the whole
+/// statement, as every other import arm does.
+fn lower_foreign_from_import(
+    import: &StmtImportFrom,
+    site: ForeignImportSite,
+) -> Result<LoweredImport, Diagnostic> {
+    check_from_import_shape(import)?;
+    let module_path = import
+        .module
+        .as_ref()
+        .expect("the driver answers `Foreign` only for an absolute, named module")
+        .to_string();
+    for alias in &import.names {
+        check_alias_shape(import, alias)?;
+        let name = alias.name.as_str();
+        if spelling::shadows_a_resolved_spelling(name) {
+            return Err(unsupported(
+                format!(
+                    "binding the CPython object `{module_path}.{name}` to `{name}`, a name pycc \
+                     resolves by its spelling (a Python builtin, a stdlib module, or a typing, \
+                     decorator or base-class marker), is not supported yet"
+                ),
+                import.range,
+            ));
+        }
+    }
+    let fromlist: Vec<String> = import
+        .names
+        .iter()
+        .map(|alias| alias.name.to_string())
+        .collect();
+    let span = statement_span(import.range);
+    let bindings = fromlist
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ImportBinding::Foreign {
+            local_name: name.clone(),
+            module_path: module_path.clone(),
+            from: Some(FromImport {
+                name: name.clone(),
+                fromlist: fromlist.clone(),
+                index,
+            }),
+            site,
+            span,
+        })
+        .collect();
+    Ok(LoweredImport {
+        bindings,
+        ..LoweredImport::default()
     })
 }
 
@@ -649,7 +724,10 @@ fn bind_project_name(
                 ProjectBindingKind::Function | ProjectBindingKind::Variable => {}
             }
         }
-        if let ImportBinding::Foreign { module_path, .. } = binding {
+        if let ImportBinding::Foreign {
+            module_path, from, ..
+        } = binding
+        {
             // Part 1 of #1026 binds a foreign import at its own source
             // position in its own module: its item index counts the items
             // *that* module's preceding statements produced, and
@@ -664,10 +742,13 @@ fn bind_project_name(
             // later part's work.
             return Err(unsupported(
                 format!(
-                    "`{}` binds `{name}` to the CPython module object `{module_path}`; \
-                     re-exporting a foreign import across project modules is not \
-                     supported yet",
-                    module.display_path
+                    "`{}` binds `{name}` to {}; re-exporting a foreign import across \
+                     project modules is not supported yet",
+                    module.display_path,
+                    match from {
+                        None => format!("the CPython module object `{module_path}`"),
+                        Some(_) => crate::foreign_bound_object(module_path, from.as_ref()),
+                    }
                 ),
                 span.start..span.end,
             ));

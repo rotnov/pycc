@@ -5,7 +5,8 @@
 //! is lowered. It lowers each `import` statement nested in the block
 //! exactly as a top-level one would be lowered, and keeps a statement's
 //! bindings only when every alias is foreign. `module::lower_top_level_item`
-//! pushes those bindings, with [`ForeignImportSite::Block`], onto the
+//! pushes those bindings, with [`ForeignImportSite::Block`] (optional when a
+//! `try` whose handler catches a failed import guards it, #1290), onto the
 //! module's import table before lowering the block, so the driver's lock,
 //! policy and native-build gates see them. `lower_stmt` then turns the
 //! statement into [`HirStmt::ForeignImport`] through
@@ -68,24 +69,29 @@ pub(crate) fn lower_block_imports(
 ) -> BlockImports {
     let mut found = BlockImports::default();
     if matches!(stmt, Stmt::If(_) | Stmt::Try(_)) {
-        walk_stmt(stmt, resolved, imports, &mut found);
+        walk_stmt(stmt, false, resolved, imports, &mut found);
     }
     found
 }
 
+/// Walks `body`. `guarded` is true when an enclosing `try` body has a
+/// handler that catches a failed import ([`handlers_catch_import_error`]),
+/// which makes every `import` reached from here optional (#1290).
 fn walk_body(
     body: &[Stmt],
+    guarded: bool,
     resolved: &ResolvedImports<'_>,
     imports: &[ImportBinding],
     found: &mut BlockImports,
 ) {
     for stmt in body {
-        walk_stmt(stmt, resolved, imports, found);
+        walk_stmt(stmt, guarded, resolved, imports, found);
     }
 }
 
 fn walk_stmt(
     stmt: &Stmt,
+    guarded: bool,
     resolved: &ResolvedImports<'_>,
     imports: &[ImportBinding],
     found: &mut BlockImports,
@@ -98,7 +104,7 @@ fn walk_stmt(
                 stmt,
                 resolved,
                 FuturePosition::Body,
-                ForeignImportSite::Block,
+                ForeignImportSite::Block { optional: guarded },
             ) {
                 Ok(lowered) => {
                     let bindings = lowered.map(|l| l.bindings).unwrap_or_default();
@@ -120,7 +126,7 @@ fn walk_stmt(
         }
         Stmt::If(if_stmt) => {
             if !is_type_checking_guard(&if_stmt.test, imports) {
-                walk_body(&if_stmt.body, resolved, imports, found);
+                walk_body(&if_stmt.body, guarded, resolved, imports, found);
             }
             for clause in &if_stmt.elif_else_clauses {
                 if clause
@@ -130,20 +136,50 @@ fn walk_stmt(
                 {
                     continue;
                 }
-                walk_body(&clause.body, resolved, imports, found);
+                walk_body(&clause.body, guarded, resolved, imports, found);
             }
         }
         Stmt::Try(try_stmt) => {
-            walk_body(&try_stmt.body, resolved, imports, found);
+            // Only the `try` body is guarded by its own handlers; a handler,
+            // `else` or `finally` body runs outside them and inherits the
+            // enclosing guard.
+            let body_guarded = guarded || handlers_catch_import_error(&try_stmt.handlers);
+            walk_body(&try_stmt.body, body_guarded, resolved, imports, found);
             for handler in &try_stmt.handlers {
                 let pycc_ast::ExceptHandler::ExceptHandler(handler) = handler;
-                walk_body(&handler.body, resolved, imports, found);
+                walk_body(&handler.body, guarded, resolved, imports, found);
             }
-            walk_body(&try_stmt.orelse, resolved, imports, found);
-            walk_body(&try_stmt.finalbody, resolved, imports, found);
+            walk_body(&try_stmt.orelse, guarded, resolved, imports, found);
+            walk_body(&try_stmt.finalbody, guarded, resolved, imports, found);
         }
         _ => {}
     }
+}
+
+/// The exception names whose handler catches a failed `import`: the
+/// `ModuleNotFoundError` pycc raises, its base `ImportError`, and
+/// `Exception`. `BaseException` is refused by type checking (`T0021`), and a
+/// module-level rebinding of any of these names is refused too, so matching
+/// by spelling is sound.
+const IMPORT_ERROR_CATCHERS: [&str; 3] = ["ImportError", "ModuleNotFoundError", "Exception"];
+
+/// Whether any of `handlers` catches a failed `import` (#1290): a bare
+/// `except:`, or a handler whose type is one of [`IMPORT_ERROR_CATCHERS`]
+/// by name, alone or as an element of a tuple. Any other type expression
+/// (an attribute such as `builtins.ImportError`, a call) answers false,
+/// which keeps the import required.
+pub(crate) fn handlers_catch_import_error(handlers: &[pycc_ast::ExceptHandler]) -> bool {
+    fn catches(expr: &pycc_ast::Expr) -> bool {
+        match expr {
+            pycc_ast::Expr::Name(name) => IMPORT_ERROR_CATCHERS.contains(&name.id.as_str()),
+            pycc_ast::Expr::Tuple(tuple) => tuple.elts.iter().any(catches),
+            _ => false,
+        }
+    }
+    handlers.iter().any(|handler| {
+        let pycc_ast::ExceptHandler::ExceptHandler(handler) = handler;
+        handler.type_.as_deref().is_none_or(catches)
+    })
 }
 
 /// The [`HirStmt::ForeignImport`] for `stmt` when it is an `import`
@@ -160,7 +196,8 @@ pub(crate) fn nested_foreign_import(stmt: &Stmt, imports: &[ImportBinding]) -> O
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                site: ForeignImportSite::Block,
+                from: None,
+                site: ForeignImportSite::Block { .. },
                 span: binding_span,
             } if *binding_span == span => Some((local_name.clone(), module_path.clone())),
             _ => None,

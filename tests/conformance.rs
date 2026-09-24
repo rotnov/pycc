@@ -722,14 +722,17 @@ fn pep_0594_dead_battery_matches_cpython_3_14_7_byte_for_byte() {
 // with the same line, and which
 // `tests/issue_1080_foreign_object.rs` pins directly. The aliased form
 // `import cgi as c` then carried the fixture until #1291 admitted an
-// undotted alias on the same terms as the plain form.
+// undotted alias on the same terms as the plain form, and
+// `from cgi import escape` carried it until #1278 admitted an unaliased
+// from-import of an undotted foreign module.
 //
-// The fixture is now `from cgi import escape`. Stated honestly, it no
-// longer pins a dead-battery property: every non-`pycc_std` root reaches
-// the host's `ModuleNotFoundError` when it is missing, as in CPython.
-// What it pins is narrower -- a `from` import of a module outside
-// `pycc_std` is refused with `C0001`, so `cgi` is never silently treated
-// as a *pycc_std* module. See the dated amendments on D-137 and D-138.
+// The fixture is now `from cgi import escape as esc`. Stated honestly, it
+// no longer pins a dead-battery property: every non-`pycc_std` root
+// reaches the host's `ModuleNotFoundError` when it is missing, as in
+// CPython. What it pins is narrower -- an aliased `from` import of a
+// module outside `pycc_std` is refused with `C0001`, so `cgi` is never
+// silently treated as a *pycc_std* module. See the dated amendments on
+// D-137 and D-138.
 //
 // No
 // CPython oracle involved (per D-138's own Context: CPython 3.14 raises

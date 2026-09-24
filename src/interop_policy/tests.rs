@@ -249,6 +249,7 @@ fn foreign(path: &str, start: u32) -> ImportBinding {
     ImportBinding::Foreign {
         local_name: path.to_string(),
         module_path: path.to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(start, start + 1),
     }
@@ -366,6 +367,7 @@ fn a_rejection_is_reported_at_the_import_span() {
             source: PolicySource::Pure,
         },
         "numpy",
+        None,
         Span::new(3, 9),
     )
     .expect("deny rejects");
@@ -378,7 +380,8 @@ fn a_block_foreign_import_is_judged_at_its_own_span() {
     let nested = ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        site: pycc_hir::ForeignImportSite::Block,
+        from: None,
+        site: pycc_hir::ForeignImportSite::Block { optional: false },
         span: Span::new(10, 22),
     };
     let found = policy_gaps(
@@ -391,4 +394,56 @@ fn a_block_foreign_import_is_judged_at_its_own_span() {
     assert_eq!(found[0].0, 0);
     assert_eq!(found[0].1.code, "I0402");
     assert_eq!(found[0].1.span, Some(Span::new(10, 22)));
+}
+
+/// The binding `from {module} import {names}` makes for `names[index]`.
+fn from_foreign(module: &str, names: &[&str], index: usize) -> ImportBinding {
+    ImportBinding::Foreign {
+        local_name: names[index].to_string(),
+        module_path: module.to_string(),
+        from: Some(pycc_hir::FromImport {
+            name: names[index].to_string(),
+            fromlist: names.iter().map(ToString::to_string).collect(),
+            index,
+        }),
+        site: pycc_hir::ForeignImportSite::Item(0),
+        span: Span::new(0, 29),
+    }
+}
+
+/// #1278: one statement, one `I0402`, quoting the statement as written --
+/// under both rejecting policies.
+#[test]
+fn a_multi_name_from_import_is_rejected_once_quoting_the_statement() {
+    let statement = || {
+        vec![
+            from_foreign("tkinter", &["Tk", "Label"], 0),
+            from_foreign("tkinter", &["Tk", "Label"], 1),
+        ]
+    };
+    for policy in [
+        EffectivePolicy::Deny {
+            source: PolicySource::CliFlag,
+        },
+        EffectivePolicy::Allowlist {
+            allow: vec!["json".to_string()],
+            source: PolicySource::CliFlag,
+        },
+    ] {
+        let found = gaps(&policy, statement());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, 0);
+        assert!(
+            found[0]
+                .1
+                .starts_with("`from tkinter import Tk, Label` is a CPython-backed import"),
+            "{}",
+            found[0].1
+        );
+    }
+    let allowed = EffectivePolicy::Allowlist {
+        allow: vec!["tkinter".to_string()],
+        source: PolicySource::CliFlag,
+    };
+    assert!(gaps(&allowed, statement()).is_empty());
 }

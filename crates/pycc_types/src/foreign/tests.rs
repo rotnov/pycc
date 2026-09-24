@@ -25,6 +25,7 @@ fn lists_only_the_foreign_bindings() {
         ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         },
@@ -53,6 +54,7 @@ fn with_foreign_import(mut hir: pycc_hir::HirModule) -> pycc_hir::HirModule {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(0, 0),
     });
@@ -91,6 +93,7 @@ fn with_foreign_import_at(mut hir: pycc_hir::HirModule, item_index: usize) -> py
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
@@ -204,6 +207,7 @@ fn with_foreign_import_named(
     hir.imports.push(ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
@@ -353,6 +357,7 @@ fn a_module_body_read_above_the_import_is_unbound() {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
+        from: None,
         site: pycc_hir::ForeignImportSite::Item(1),
         span: Span::new(0, 0),
     });
@@ -1032,7 +1037,8 @@ fn a_block_binding_is_not_bound_by_item_position() {
     let imports = vec![ImportBinding::Foreign {
         local_name: "colorsys".to_string(),
         module_path: "colorsys".to_string(),
-        site: pycc_hir::ForeignImportSite::Block,
+        from: None,
+        site: pycc_hir::ForeignImportSite::Block { optional: false },
         span: Span::new(0, 0),
     }];
     bind_foreign_objects_at(&mut env, &imports, 0);
@@ -1083,7 +1089,8 @@ fn a_block_site_survives_both_item_remapping_passes_unchanged() {
         hir.imports.push(ImportBinding::Foreign {
             local_name: "colorsys".to_string(),
             module_path: "colorsys".to_string(),
-            site: pycc_hir::ForeignImportSite::Block,
+            from: None,
+            site: pycc_hir::ForeignImportSite::Block { optional: true },
             span: Span::new(0, 0),
         });
         let resolved = crate::check_and_resolve_all_keyed(&hir)
@@ -1093,7 +1100,7 @@ fn a_block_site_survives_both_item_remapping_passes_unchanged() {
             matches!(
                 resolved.imports.as_slice(),
                 [ImportBinding::Foreign {
-                    site: pycc_hir::ForeignImportSite::Block,
+                    site: pycc_hir::ForeignImportSite::Block { optional: true },
                     ..
                 }]
             ),

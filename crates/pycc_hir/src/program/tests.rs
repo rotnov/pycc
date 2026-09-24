@@ -356,6 +356,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: crate::ForeignImportSite::Item(1),
             // `import numpy` follows `d = 4\n`, so the recorded span is
             // the import statement's own range, not the module's start.
@@ -371,6 +372,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
+            from: None,
             site: crate::ForeignImportSite::Item(4),
             span: Span::new(6, 18),
         }]
@@ -427,6 +429,7 @@ fn a_foreign_import_no_other_module_shadows_still_links() {
         vec![ImportBinding::Foreign {
             local_name: "json".to_string(),
             module_path: "json".to_string(),
+            from: None,
             site: crate::ForeignImportSite::Item(1),
             span: Span::new(0, "import json".len() as u32),
         }],
@@ -496,7 +499,10 @@ fn one_name_bound_to_two_cpython_modules_across_modules_is_rejected() {
 fn an_identical_foreign_pair_across_modules_links() {
     let linked = link_and_finalize(vec![
         all_foreign_input("dep.py", "import json\n"),
-        all_foreign_input("main.py", "if c:\n    import json\n"),
+        all_foreign_input(
+            "main.py",
+            "try:\n    import json\nexcept ImportError:\n    pass\n",
+        ),
     ])
     .expect("the same module bound to the same name in two modules must link");
     let sites: Vec<crate::ForeignImportSite> = linked
@@ -507,12 +513,115 @@ fn an_identical_foreign_pair_across_modules_links() {
             _ => None,
         })
         .collect();
-    // The nested import keeps its `Block` site through the rebase.
+    // The nested import keeps its `Block` site, and its #1290 `optional`
+    // flag, through the rebase.
     assert_eq!(
         sites,
         vec![
             crate::ForeignImportSite::Item(0),
-            crate::ForeignImportSite::Block
+            crate::ForeignImportSite::Block { optional: true }
+        ]
+    );
+}
+
+/// #1278: a foreign from-import's identity is the module *and* the name, so
+/// the same local name taken from two modules is refused across modules.
+#[test]
+fn one_name_from_two_cpython_modules_across_modules_is_rejected() {
+    let (index, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "from json import dumps\n"),
+        all_foreign_input("main.py", "from pickle import dumps\n"),
+    ]);
+    assert_eq!(index, 1);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `dumps` to the CPython object `pickle.dumps`, which `dep.py` \
+         binds to `json.dumps`; shadowing a foreign import across modules is not supported yet"
+    );
+}
+
+/// `import copy` in one module and `from copy import copy` in another bind
+/// `copy` to two different objects of one module.
+#[test]
+fn a_module_import_and_a_from_import_of_one_name_across_modules_are_rejected() {
+    let (_, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "import copy\n"),
+        all_foreign_input("main.py", "from copy import copy\n"),
+    ]);
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `copy` to the CPython object `copy.copy`, which `dep.py` binds \
+         to `copy`; shadowing a foreign import across modules is not supported yet"
+    );
+    let (_, reversed) = first_error(vec![
+        all_foreign_input("dep.py", "from copy import copy\n"),
+        all_foreign_input("main.py", "import copy\n"),
+    ]);
+    assert_eq!(
+        reversed.message,
+        "module `main.py` binds `copy` to the CPython module `copy`, which `dep.py` binds to \
+         `copy.copy`; shadowing a foreign import across modules is not supported yet"
+    );
+}
+
+#[test]
+fn a_definition_shadowing_another_module_s_foreign_from_import_is_rejected() {
+    let (index, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "from itertools import product\n"),
+        input("main.py", "product = 1\n"),
+    ]);
+    assert_eq!(index, 1);
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` defines `product`, which `dep.py` binds to the CPython object \
+         `itertools.product`; shadowing a foreign import across modules is not supported yet"
+    );
+}
+
+/// The same object in two modules links, and the rebase keeps each
+/// binding's from-import unchanged.
+#[test]
+fn an_identical_foreign_from_pair_across_modules_links_and_keeps_its_from() {
+    let linked = link_and_finalize(vec![
+        all_foreign_input("dep.py", "from itertools import product\n"),
+        all_foreign_input("main.py", "x = 1\nfrom itertools import chain, product\n"),
+    ])
+    .expect("the same object bound to the same name in two modules must link");
+    let froms: Vec<(String, Option<usize>, crate::ForeignImportSite)> = linked
+        .imports
+        .iter()
+        .filter_map(|binding| match binding {
+            ImportBinding::Foreign { from, site, .. } => Some((
+                from.as_ref()
+                    .map(|from| from.name.clone())
+                    .unwrap_or_default(),
+                from.as_ref().map(|from| from.index),
+                *site,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        froms,
+        vec![
+            (
+                "product".to_string(),
+                Some(0),
+                crate::ForeignImportSite::Item(0)
+            ),
+            // `dep.py` contributes no item, so `main.py`'s local index 1
+            // (after `x = 1`) is also its program index.
+            (
+                "chain".to_string(),
+                Some(0),
+                crate::ForeignImportSite::Item(1)
+            ),
+            (
+                "product".to_string(),
+                Some(1),
+                crate::ForeignImportSite::Item(1)
+            ),
         ]
     );
 }

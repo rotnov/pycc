@@ -197,6 +197,7 @@ mod tests {
             MirItem::ForeignImport {
                 local_name: module.to_string(),
                 module_path: module.to_string(),
+                from: None,
             },
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjAttrGet {
                 base: Box::new(MirExpr::Name {

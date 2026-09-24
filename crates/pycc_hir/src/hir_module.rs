@@ -418,6 +418,14 @@ pub enum ImportBinding {
     /// runtime value, a `PyObject *` the generated `Py_mod_exec` slot
     /// obtains from `pycc_ext_obj_import(module_path)`.
     ///
+    /// `from` is `None` for that `import` form. For one name of an
+    /// unaliased top-level `from itertools import product` (#1278) it is
+    /// `Some`, and the bound object is the module's attribute of that name,
+    /// fetched with CPython's own `IMPORT_FROM` semantics by
+    /// `pycc_ext_obj_import_from`; `local_name` is the name, and
+    /// `module_path` stays the module, so every gate that classifies by the
+    /// module root (the lock, the interop policy, `I0403`) keeps reading it.
+    ///
     /// `site` says where the import runs; see [`ForeignImportSite`].
     ///
     /// `span` is the `import` statement's own source range. Every other
@@ -431,9 +439,68 @@ pub enum ImportBinding {
     Foreign {
         local_name: String,
         module_path: String,
+        from: Option<FromImport>,
         site: ForeignImportSite,
         span: Span,
     },
+}
+
+/// The `from` half of an [`ImportBinding::Foreign`] (#1278): one name of an
+/// unaliased, top-level `from <foreign module> import a, b` statement.
+///
+/// Every binding of one statement carries the same `fromlist`, the
+/// statement's whole name list in source order, because CPython's
+/// `IMPORT_NAME` receives all of it before any `IMPORT_FROM` runs, and
+/// `index` is this binding's own position in it. Codegen needs the list for
+/// the import call; the driver's per-statement diagnostics (`I0402`,
+/// `I0403`) render it and report once per statement, on the binding whose
+/// `index` is `0` (see [`FromImport::opens_statement`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FromImport {
+    pub name: String,
+    pub fromlist: Vec<String>,
+    pub index: usize,
+}
+
+impl FromImport {
+    /// Whether this is the first name of its statement.
+    ///
+    /// A statement-level diagnostic about a foreign import is reported on
+    /// that binding alone, so `from tkinter import Tk, Label` gives one
+    /// `I0403` rather than two. The index is the binding's own, not a
+    /// comparison with its neighbour: the linked program's import table
+    /// concatenates every file's, and two files can hold byte-identical
+    /// statements at the same span, each owed its own diagnostic.
+    pub fn opens_statement(&self) -> bool {
+        self.index == 0
+    }
+}
+
+/// Whether a foreign binding is the one a statement-level diagnostic about
+/// its import statement is reported on: every `import X` binding (each
+/// alias of `import a, b` is its own import, #1280), and the first name of
+/// a `from X import a, b` (#1278).
+pub fn opens_foreign_statement(from: Option<&FromImport>) -> bool {
+    from.is_none_or(FromImport::opens_statement)
+}
+
+/// The source form of a foreign import as diagnostics quote it:
+/// `import numpy`, or `from tkinter import Tk, Label` (#1278).
+pub fn foreign_import_statement(module_path: &str, from: Option<&FromImport>) -> String {
+    match from {
+        None => format!("import {module_path}"),
+        Some(from) => format!("from {module_path} import {}", from.fromlist.join(", ")),
+    }
+}
+
+/// What a foreign binding binds, as diagnostics name it: `the CPython module
+/// `numpy`` for `import numpy`, `the CPython object `itertools.product``
+/// for `from itertools import product` (#1278).
+pub fn foreign_bound_object(module_path: &str, from: Option<&FromImport>) -> String {
+    match from {
+        None => format!("the CPython module `{module_path}`"),
+        Some(from) => format!("the CPython object `{module_path}.{}`", from.name),
+    }
 }
 
 /// Where an [`ImportBinding::Foreign`] import runs in its module body.
@@ -458,7 +525,20 @@ pub enum ForeignImportSite {
     /// policy (`I0402`) and native-build (`I0403`) gates, and the
     /// position-blind passes that seed every foreign name as a
     /// `Ty::Object` module global.
-    Block,
+    ///
+    /// `optional` is true when the import is *optional* (#1290): it sits,
+    /// at any depth, in the body of a `try` (or `try`/`except*`) that is
+    /// at module level or nested only in module-level `if`/`try` blocks,
+    /// with a handler that catches a failed import -- a bare
+    /// `except:`, or a handler naming `ImportError`, `ModuleNotFoundError`
+    /// or `Exception`, alone or in a tuple. A handler, `else` or `finally`
+    /// body inherits the enclosing guard rather than creating one. The lock
+    /// records an optional root under `optional-roots` and does not refuse
+    /// it when no installed distribution owns it (D-249, amended by #1290).
+    Block {
+        /// Whether a qualifying `try` guards this import (see above).
+        optional: bool,
+    },
 }
 
 /// Which kind of top-level definition an [`ImportBinding::Project`] names
