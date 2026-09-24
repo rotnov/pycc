@@ -290,3 +290,35 @@ fn a_duplicated_import_binds_the_same_module_in_the_host() {
     assert_ok(&run);
     assert_eq!(stdout_of(&run), "(0.5, 0.5, 0.5)\n");
 }
+
+/// A plain (embedded) build compiles its module with `ext` set, so a block
+/// import runs there exactly as under `--ext`, and the output matches
+/// CPython's own. Both roots are standard library, because a non-standard
+/// root needs a `pycc.lock` in an embedded build (#1242).
+#[cfg(not(windows))]
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_embedded_build_runs_a_block_import_like_cpython() {
+    let dir = ScratchDir::new("block_import_embedded").expect("scratch");
+    let body = "if True:\n    import colorsys as c\n    print(str(c.hls_to_rgb(0.0, 0.5, 0.0)))\n\
+                if False:\n    import json\nprint('done')\n";
+    let build = pycc()
+        .arg("build")
+        .arg(source(&dir, body))
+        .arg("-o")
+        .arg(dir.join("app"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let embedded = Command::new(dir.join("app"))
+        .output()
+        .expect("the embedded binary runs");
+    assert_ok(&embedded);
+    let oracle = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg(dir.join("m.py"))
+        .output()
+        .expect("python3 should spawn");
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
+    assert_eq!(stdout_of(&embedded), "(0.5, 0.5, 0.5)\ndone\n");
+}

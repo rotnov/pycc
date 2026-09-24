@@ -1198,7 +1198,10 @@ one diagnostic per such import, each at its own `import` statement in the file
 that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
 rule 1) — and `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
 `MirItem::ForeignImport` when `!options.ext`, which then only happens in a
-build with no foreign import at all.
+build with no foreign import at all. A block-level `MirStmt::ForeignImport`
+(#1291) needs no such guard: the same driver refusal means it reaches codegen
+only in a build compiled with `ext` set, `--ext` or embedded, and an embedded
+build runs it exactly as `--ext` does (`tests/issue_1291_block_import.rs`).
 
 #### Embedded executables (Part 1 of #1028)
 
