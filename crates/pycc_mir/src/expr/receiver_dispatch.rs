@@ -7,9 +7,10 @@
 //! - a [`ContainerFallback::Refused`] call was accepted only through its
 //!   method reading, since the container reading's own diagnostic would
 //!   have rejected it;
-//! - an [`ContainerFallback::Admitted`] call always has a bare-name
-//!   receiver. A class name takes the method reading, as it does in the
-//!   `MethodCall` arm; any other name's recorded type decides through
+//! - an [`ContainerFallback::Admitted`] call has a bare-name receiver or
+//!   (#1263) an attribute-read receiver. A class name takes the method
+//!   reading, as it does in the `MethodCall` arm; any other name's recorded
+//!   type, or the attribute read's lowered type, decides through
 //!   [`receiver_takes_method_path`], the rule `pycc_types` also uses.
 
 use super::lower_expr;
@@ -40,13 +41,24 @@ pub(super) fn lower_receiver_dispatched_call(
     current_class: Option<&str>,
 ) -> MirExpr {
     if let ContainerFallback::Admitted = container {
-        let receiver = call
-            .bare_receiver_name()
-            .expect("an admitted container reading has a bare-name receiver");
-        let takes_method_path = is_unshadowed_class_name(receiver, scopes, classes)
-            || receiver_takes_method_path(
-                &narrowed_ty(scopes, receiver).unwrap_or_else(|| lookup(scopes, receiver)),
-            );
+        let (receiver, _) = call
+            .method_receiver()
+            .expect("a receiver-dispatched call is always a method call");
+        let takes_method_path = match receiver {
+            HirExpr::Name(name) => {
+                is_unshadowed_class_name(name, scopes, classes)
+                    || receiver_takes_method_path(
+                        &narrowed_ty(scopes, name).unwrap_or_else(|| lookup(scopes, name)),
+                    )
+            }
+            // #1263: an admitted attribute receiver (`self.xs.append(v)`)
+            // is typed by its own lowered read -- a slot's declared type or
+            // a `@property` getter's return type -- the same type
+            // `pycc_types` inferred for it. Lowering it here is pure.
+            attr => {
+                receiver_takes_method_path(&lower_expr(attr, scopes, classes, current_class).ty())
+            }
+        };
         if !takes_method_path {
             let form = call
                 .container_form()

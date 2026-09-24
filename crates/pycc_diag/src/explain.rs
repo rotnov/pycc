@@ -1342,7 +1342,10 @@ by their own pre-existing diagnostics rather than by this code -- `C0001` \
 and `T0033` respectively. A method named `append`, `pop`, \
 `get` or `add` is also still refused: container lowering claims those four \
 spellings before the foreign path sees them, so they do not reach it even \
-with admitted arguments. Every supported operation is \
+with admitted arguments. Since #1263 container lowering admits an \
+attribute receiver for `append`, `pop` and `get`, so one of those called on \
+an attribute of the object (`o.attr.append(v)`) is refused by this code; \
+`add` is still refused by `C0001`. Every supported operation is \
 admitted only in a *module body below the import*: inside a function body \
 the read is this same error, because the compiler cannot prove the import \
 has already run. The refusal narrows as the later parts of #1026 land -- \

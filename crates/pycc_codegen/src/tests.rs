@@ -4677,7 +4677,7 @@ fn appending_to_a_non_list_local_is_an_internal_error() {
             value: MirExpr::IntLiteral(1),
         },
         MirStmt::ExprStmt(MirExpr::ListAppend {
-            list: "n".to_string(),
+            list: pycc_mir::MirContainerReceiver::Name("n".to_string()),
             value: Box::new(MirExpr::IntLiteral(2)),
         }),
     ]);
@@ -8249,7 +8249,7 @@ fn a_for_list_loop_keeps_its_per_iteration_length_read_under_release_optimizatio
                         ty: Ty::Bool,
                     },
                     body: vec![MirStmt::ExprStmt(MirExpr::ListAppend {
-                        list: "xs".to_string(),
+                        list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
                         value: Box::new(MirExpr::BinOp {
                             op: BinOpKind::Add,
                             left: Box::new(MirExpr::Name {
@@ -8294,7 +8294,7 @@ fn appending_to_a_list_validates_and_preserves_the_encoded_value() {
     let mir = list_fixture_module(vec![
         assign_list_literal("xs"),
         MirStmt::ExprStmt(MirExpr::ListAppend {
-            list: "xs".to_string(),
+            list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
             value: Box::new(MirExpr::IntLiteral(4)),
         }),
         MirStmt::ExprStmt(MirExpr::Call {
@@ -11308,7 +11308,7 @@ fn an_empty_range_sourced_list_comprehension_produces_a_genuinely_valid_empty_li
                 ty: Ty::None,
             })),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
-                list: "zs".to_string(),
+                list: pycc_mir::MirContainerReceiver::Name("zs".to_string()),
                 value: Box::new(MirExpr::IntLiteral(9)),
             })),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
@@ -12367,11 +12367,11 @@ fn a_sliced_list_is_a_genuinely_independent_allocation_from_its_base() {
                 },
             }),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
-                list: "xs".to_string(),
+                list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
                 value: Box::new(MirExpr::IntLiteral(99)),
             })),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
-                list: "ys".to_string(),
+                list: pycc_mir::MirContainerReceiver::Name("ys".to_string()),
                 value: Box::new(MirExpr::IntLiteral(77)),
             })),
             MirItem::TopLevelStmt(print_each_int("xs")),
@@ -12448,7 +12448,7 @@ fn list_pop_removes_and_returns_the_last_element_and_shrinks_len() {
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "y".to_string(),
                 value: MirExpr::ListPop {
-                    list: "xs".to_string(),
+                    list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
                     ty: Ty::Int,
                 },
             }),
@@ -12498,11 +12498,11 @@ fn pop_twice_on_the_same_list_in_one_statement_removes_in_order() {
                 target: "ys".to_string(),
                 value: MirExpr::ListLiteral(vec![
                     MirExpr::ListPop {
-                        list: "xs".to_string(),
+                        list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
                         ty: Ty::Int,
                     },
                     MirExpr::ListPop {
-                        list: "xs".to_string(),
+                        list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
                         ty: Ty::Int,
                     },
                 ]),
@@ -12537,7 +12537,7 @@ fn dict_get_or_default_on_a_present_key_returns_the_stored_value_codegens_and_ru
                 )]),
             }),
             MirItem::TopLevelStmt(print_expr(MirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_mir::MirContainerReceiver::Name("d".to_string()),
                 key: Box::new(MirExpr::StringLiteral("a".to_string())),
                 default: Box::new(MirExpr::IntLiteral(-1)),
                 ty: Ty::Int,
@@ -12571,7 +12571,7 @@ fn dict_get_or_default_on_a_missing_key_returns_the_default_codegens_and_runs() 
                 )]),
             }),
             MirItem::TopLevelStmt(print_expr(MirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_mir::MirContainerReceiver::Name("d".to_string()),
                 key: Box::new(MirExpr::StringLiteral("z".to_string())),
                 default: Box::new(MirExpr::IntLiteral(-1)),
                 ty: Ty::Int,
@@ -12613,10 +12613,10 @@ fn dict_get_or_default_nested_in_its_own_default_argument_resolves_correctly() {
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "y".to_string(),
                 value: MirExpr::DictGetOrDefault {
-                    dict: "d".to_string(),
+                    dict: pycc_mir::MirContainerReceiver::Name("d".to_string()),
                     key: Box::new(MirExpr::StringLiteral("k".to_string())),
                     default: Box::new(MirExpr::DictGetOrDefault {
-                        dict: "d".to_string(),
+                        dict: pycc_mir::MirContainerReceiver::Name("d".to_string()),
                         key: Box::new(MirExpr::StringLiteral("a".to_string())),
                         default: Box::new(MirExpr::IntLiteral(-1)),
                         ty: Ty::Int,
@@ -12659,7 +12659,7 @@ fn a_dict_get_or_default_with_a_non_str_key_is_an_internal_error() {
                 )]),
             }),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_mir::MirContainerReceiver::Name("d".to_string()),
                 key: Box::new(MirExpr::IntLiteral(1)),
                 default: Box::new(MirExpr::IntLiteral(0)),
                 ty: Ty::Int,

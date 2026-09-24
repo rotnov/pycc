@@ -77,8 +77,8 @@ use crate::{
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    BinOpKind, CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt, Ty, UnaryOpKind,
-    bool_op_result_ty,
+    BinOpKind, CompIter, ContainerReceiver, FStringPart, HirExpr, HirItem, HirModule, HirStmt, Ty,
+    UnaryOpKind, bool_op_result_ty,
 };
 
 type TypeTerm = Result<Ty, usize>;
@@ -1673,8 +1673,12 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(None)
         }
-        HirExpr::ListAppend { list: _, value } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+        // #1263: an attribute receiver is collected first (CPython's
+        // order), only to propagate its own genuine errors.
+        HirExpr::ListAppend { list, value } => {
+            for sub in list.attr_expr().into_iter().chain([value.as_ref()]) {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, sub)?;
+            }
             Ok(None)
         }
         // Same reasoning as `ListLiteral` above (PR-11 Task 3): dict
@@ -1717,20 +1721,35 @@ pub(crate) fn collect_expr_constraints(
         // the `ListLiteral` arm above or a `Ty::List`-typed parameter),
         // extract the scalar element type -- the carrier is destructured,
         // never unified. Otherwise keep the historical `Ok(None)` behavior.
-        HirExpr::ListPop { list } => {
+        //
+        // #1263: an attribute receiver (`self.xs.pop()`) gives no term, the
+        // same as this solver's `AttrGet` arm gives an instance attribute
+        // read in any other position (`self.xs[i]`): an unannotated private
+        // helper returning it asks for an annotation (`T0021`), and the
+        // check phase still types the node against the real slot type.
+        HirExpr::ListPop {
+            list: ContainerReceiver::Name(list),
+        } => {
             if let Some(Ok(Ty::List(element_ty))) = env.bindings.get(list).cloned() {
                 Ok(Some(Ok(*element_ty)))
             } else {
                 Ok(None)
             }
         }
-        HirExpr::DictGetOrDefault {
-            dict: _,
-            key,
-            default,
+        HirExpr::ListPop {
+            list: ContainerReceiver::Attr(receiver),
         } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
-            collect_expr_constraints(signatures, parents, concrete, binops, env, default)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, env, receiver)?;
+            Ok(None)
+        }
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            for sub in dict
+                .attr_expr()
+                .into_iter()
+                .chain([key.as_ref(), default.as_ref()])
+            {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, sub)?;
+            }
             Ok(None)
         }
         HirExpr::SetAdd { set: _, value } => {
@@ -1942,8 +1961,13 @@ fn bind_named_expr_targets(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => Ok(()),
+        HirExpr::ListPop { list } => {
+            if let Some(receiver) = list.attr_expr() {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, receiver)?;
+            }
+            Ok(())
+        }
         // #1254 (D-250): lowering refuses a walrus inside a comprehension.
         HirExpr::Comprehension(_) => Ok(()),
         HirExpr::Call { args, .. } => {
@@ -1997,7 +2021,13 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            for sub in list.attr_expr().into_iter().chain([value.as_ref()]) {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, sub)?;
+            }
+            Ok(())
+        }
+        HirExpr::SetAdd { value, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, value)
         }
         HirExpr::DictLiteral(pairs) => {
@@ -2007,9 +2037,15 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, key)?;
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, default)
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            for sub in dict
+                .attr_expr()
+                .into_iter()
+                .chain([key.as_ref(), default.as_ref()])
+            {
+                bind_named_expr_targets(signatures, parents, concrete, binops, env, sub)?;
+            }
+            Ok(())
         }
         HirExpr::AttrGet { base, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, binops, env, base)

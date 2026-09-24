@@ -7,11 +7,11 @@ use super::class::{
     rewrite_exception_to_message, rewrite_instance_to_repr, self_expr,
 };
 use super::{
-    HirClassDef, InstantiateExpr, MirCompElt, MirComprehension, MirExpr, MirFStringPart,
-    binop_result_ty, lookup, mro_class_def, try_lower_enum_member_attr,
+    HirClassDef, InstantiateExpr, MirCompElt, MirComprehension, MirContainerReceiver, MirExpr,
+    MirFStringPart, binop_result_ty, lookup, mro_class_def, try_lower_enum_member_attr,
 };
 use pycc_hir::{
-    BinOpKind, ClassAttrValue, CompElt, FStringPart, HirExpr, Ty, UnaryOpKind,
+    BinOpKind, ClassAttrValue, CompElt, ContainerReceiver, FStringPart, HirExpr, Ty, UnaryOpKind,
     declares_name_outside_class_attrs,
 };
 use std::collections::HashMap;
@@ -627,7 +627,7 @@ pub(super) fn lower_expr(
             }
         }
         HirExpr::ListAppend { list, value } => MirExpr::ListAppend {
-            list: list.clone(),
+            list: lower_container_receiver(list, scopes, classes, current_class).0,
             value: Box::new(lower_expr(value, scopes, classes, current_class)),
         },
         HirExpr::DictLiteral(pairs) => MirExpr::DictLiteral(
@@ -680,25 +680,25 @@ pub(super) fn lower_expr(
         // PR-12 Task 11 (D-119): `list`'s element type is resolved via the
         // same `lookup` mechanism every other name reference in this crate
         // uses, mirroring `HirExpr::Subscript`'s own base-type lookup above.
+        // #1263: an attribute receiver's type is its lowered read's own.
         HirExpr::ListPop { list } => {
-            let Ty::List(elem_ty) = lookup(scopes, list) else {
+            let (list, list_ty) = lower_container_receiver(list, scopes, classes, current_class);
+            let Ty::List(elem_ty) = list_ty else {
                 panic!(
-                    "pycc_mir: internal error: `{list}` is not list-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    "pycc_mir: internal error: `.pop()` receiver {list:?} is not list-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
                 )
             };
-            MirExpr::ListPop {
-                list: list.clone(),
-                ty: *elem_ty,
-            }
+            MirExpr::ListPop { list, ty: *elem_ty }
         }
         HirExpr::DictGetOrDefault { dict, key, default } => {
-            let Ty::Dict(kv) = lookup(scopes, dict) else {
+            let (dict, dict_ty) = lower_container_receiver(dict, scopes, classes, current_class);
+            let Ty::Dict(kv) = dict_ty else {
                 panic!(
-                    "pycc_mir: internal error: `{dict}` is not dict-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    "pycc_mir: internal error: `.get()` receiver {dict:?} is not dict-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
                 )
             };
             MirExpr::DictGetOrDefault {
-                dict: dict.clone(),
+                dict,
                 key: Box::new(lower_expr(key, scopes, classes, current_class)),
                 default: Box::new(lower_expr(default, scopes, classes, current_class)),
                 ty: kv.1,
@@ -1372,8 +1372,12 @@ pub(super) fn pre_bind_named_expr_targets(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
+        HirExpr::ListPop { list } => {
+            if let Some(receiver) = list.attr_expr() {
+                pre_bind_named_expr_targets(receiver, scopes, classes, current_class);
+            }
+        }
         // #1254 (D-250): `pycc_hir` refuses a walrus inside a comprehension.
         HirExpr::Comprehension(_) => {}
         HirExpr::Call { args, .. } => {
@@ -1422,7 +1426,13 @@ pub(super) fn pre_bind_named_expr_targets(
                 pre_bind_named_expr_targets(bound, scopes, classes, current_class);
             }
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            if let Some(receiver) = list.attr_expr() {
+                pre_bind_named_expr_targets(receiver, scopes, classes, current_class);
+            }
+            pre_bind_named_expr_targets(value, scopes, classes, current_class);
+        }
+        HirExpr::SetAdd { value, .. } => {
             pre_bind_named_expr_targets(value, scopes, classes, current_class);
         }
         HirExpr::DictLiteral(pairs) => {
@@ -1431,7 +1441,10 @@ pub(super) fn pre_bind_named_expr_targets(
                 pre_bind_named_expr_targets(v, scopes, classes, current_class);
             }
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            if let Some(receiver) = dict.attr_expr() {
+                pre_bind_named_expr_targets(receiver, scopes, classes, current_class);
+            }
             pre_bind_named_expr_targets(key, scopes, classes, current_class);
             pre_bind_named_expr_targets(default, scopes, classes, current_class);
         }
@@ -1473,4 +1486,28 @@ fn fold_class_attr(class_def: &HirClassDef, attr: &str) -> Option<MirExpr> {
         ClassAttrValue::Bool(b) => MirExpr::BoolLiteral(*b),
         ClassAttrValue::Str(s) => MirExpr::StringLiteral(s.clone()),
     })
+}
+
+/// Lowers the receiver of a `ListAppend`/`ListPop`/`DictGetOrDefault` node
+/// together with its static type (#1263): a bare name keeps the plain name
+/// and its scope type, exactly as before; an attribute receiver is lowered
+/// like any other expression (a slot read, or a `@property` getter call)
+/// and typed by that lowered read.
+fn lower_container_receiver(
+    receiver: &ContainerReceiver,
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
+) -> (MirContainerReceiver, Ty) {
+    match receiver {
+        ContainerReceiver::Name(name) => (
+            MirContainerReceiver::Name(name.clone()),
+            lookup(scopes, name),
+        ),
+        ContainerReceiver::Attr(read) => {
+            let lowered = lower_expr(read, scopes, classes, current_class);
+            let ty = lowered.ty();
+            (MirContainerReceiver::Attr(Box::new(lowered)), ty)
+        }
+    }
 }

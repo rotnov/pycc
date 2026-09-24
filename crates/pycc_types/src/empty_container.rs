@@ -104,6 +104,7 @@
 //! container at all) and is untouched here; it is tracked as issue #1046.
 
 use super::*;
+use pycc_hir::ContainerReceiver;
 
 /// What a resolution produced: the *element* type of a list, or the
 /// key/value pair of a dict.
@@ -849,7 +850,10 @@ fn scan_for_producer<'a>(
             }) => call.container_form(),
             _ => None,
         };
-        if let Some(HirExpr::ListAppend { list, value }) = &dispatched
+        if let Some(HirExpr::ListAppend {
+            list: ContainerReceiver::Name(list),
+            value,
+        }) = &dispatched
             && list == target
         {
             return match crate::infer_expr_in(env, local_names, value) {
@@ -858,7 +862,13 @@ fn scan_for_producer<'a>(
             };
         }
         match stmt {
-            HirStmt::ExprStmt(HirExpr::ListAppend { list, value }) if list == target => {
+            // #1263: only a bare-name receiver can be `target`; an
+            // attribute receiver (`self.xs.append(v)`) is never a producer
+            // for a local name.
+            HirStmt::ExprStmt(HirExpr::ListAppend {
+                list: ContainerReceiver::Name(list),
+                value,
+            }) if list == target => {
                 return match crate::infer_expr_in(env, local_names, value) {
                     Ok(element) => ProducerScan::Resolved(Resolution::List(element)),
                     Err(_) => ProducerScan::Matched,

@@ -1007,7 +1007,7 @@ fn collect_named_expr_bindings_walks_into_dict_get_dict_and_key() {
 #[test]
 fn collect_named_expr_bindings_walks_into_dict_get_or_default_key_and_default() {
     let mir = MirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: crate::MirContainerReceiver::Name("d".to_string()),
         key: Box::new(MirExpr::NamedExpr {
             name: "k".to_string(),
             value: Box::new(MirExpr::StringLiteral("k".to_string())),

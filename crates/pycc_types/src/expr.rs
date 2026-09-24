@@ -31,7 +31,7 @@ use crate::{
 
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::Ty;
-use pycc_hir::{FStringPart, HirExpr};
+use pycc_hir::{ContainerReceiver, FStringPart, HirExpr};
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
     infer_expr_in(env, &[], expr)
@@ -117,6 +117,37 @@ pub(crate) fn class_name_dispatch(
         Span::new(0, 0),
     )
     .with_help("give the value binding a name of its own"))
+}
+
+/// The static type of a container method node's receiver (#1263, Part 2 of
+/// #1218). A bare name keeps `lookup_bound_name`, so its diagnostics are
+/// exactly D-105's; an attribute read is inferred like any other
+/// expression, and the node's own arm then applies the same `T0033`/`T0021`
+/// checks to the result.
+///
+/// An attribute of a CPython object (`gc.garbage.append(1)`) infers as
+/// `Ty::Object`. The node's `T0033` ("`object` does not support
+/// `.append()`") would misstate that as a type error, when CPython runs the
+/// call and pycc merely does not implement it, so this refuses it with the
+/// #1026 `I0404` family instead.
+fn infer_container_receiver(
+    env: &Environment,
+    local_names: &[&str],
+    receiver: &ContainerReceiver,
+    method: &str,
+) -> Result<Ty, Diagnostic> {
+    match receiver {
+        ContainerReceiver::Name(name) => lookup_bound_name(env, local_names, name),
+        ContainerReceiver::Attr(receiver) => {
+            let receiver_ty = infer_expr_in(env, local_names, receiver)?;
+            if receiver_ty == Ty::Object {
+                return Err(crate::foreign::object_operation_unsupported(&format!(
+                    "calling `{method}` on a CPython object's attribute"
+                )));
+            }
+            Ok(receiver_ty)
+        }
+    }
 }
 
 pub(crate) fn infer_expr_in(
@@ -1248,7 +1279,7 @@ pub(crate) fn infer_expr_in(
             Ok(base_ty.clone())
         }
         HirExpr::ListAppend { list, value } => {
-            let list_ty = lookup_bound_name(env, local_names, list)?;
+            let list_ty = infer_container_receiver(env, local_names, list, ".append()")?;
             let Ty::List(elem_ty) = &list_ty else {
                 return Err(Diagnostic::error(
                     "T0033",
@@ -1288,7 +1319,7 @@ pub(crate) fn infer_expr_in(
         // arm's result is the list's own element type, not `Ty::None` --
         // `.pop()` is meant to be used for its value.
         HirExpr::ListPop { list } => {
-            let list_ty = lookup_bound_name(env, local_names, list)?;
+            let list_ty = infer_container_receiver(env, local_names, list, ".pop()")?;
             let Ty::List(elem_ty) = &list_ty else {
                 return Err(Diagnostic::error(
                     "T0033",
@@ -1310,7 +1341,7 @@ pub(crate) fn infer_expr_in(
         // dict's *value* type, never `Ty::None`, since a missing key still
         // yields the (same-typed) default rather than `None`.
         HirExpr::DictGetOrDefault { dict, key, default } => {
-            let dict_ty = lookup_bound_name(env, local_names, dict)?;
+            let dict_ty = infer_container_receiver(env, local_names, dict, ".get()")?;
             let Ty::Dict(kv) = &dict_ty else {
                 return Err(Diagnostic::error(
                     "T0033",

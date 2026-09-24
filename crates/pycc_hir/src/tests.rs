@@ -2366,7 +2366,7 @@ fn lowers_append_as_a_dedicated_hir_node_not_a_generic_call() {
     assert_eq!(
         hir.items[1],
         HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListAppend {
-            list: "x".to_string(),
+            list: crate::ContainerReceiver::Name("x".to_string()),
             value: Box::new(HirExpr::IntLiteral(2)),
         }))
     );
@@ -2390,7 +2390,7 @@ fn list_append_used_as_a_value_lowers_successfully_today() {
         HirItem::TopLevelStmt(HirStmt::Assign {
             target: "y".to_string(),
             value: HirExpr::ListAppend {
-                list: "x".to_string(),
+                list: crate::ContainerReceiver::Name("x".to_string()),
                 value: Box::new(HirExpr::IntLiteral(2)),
             },
         })
@@ -2690,12 +2690,12 @@ fn an_empty_list_literal_lowers_to_an_empty_vec() {
 
 #[test]
 fn appending_to_a_non_bare_name_base_is_unsupported() {
-    // `.append()` recognition is restricted to a bare-name list (D-105);
-    // `a.b.append(1)` has a non-name `attr.value` (itself an attribute
-    // access), so it must be rejected rather than silently accepted.
+    // `.append()` recognition is restricted to a bare name (D-105) or, since
+    // #1263, an instance attribute read; `f().append(1)` has a call as its
+    // `attr.value`, so it must be rejected rather than silently accepted.
     assert_capability_error_message(
-        "a.b.append(1)\n",
-        "`.append()` is only supported on a bare-name list so far",
+        "f().append(1)\n",
+        "`.append()` is only supported on a name or an instance attribute so far",
     );
 }
 
@@ -2807,7 +2807,7 @@ fn lowers_pop_as_a_dedicated_hir_node_not_a_generic_call() {
     assert_eq!(
         hir.items[1],
         HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListPop {
-            list: "x".to_string(),
+            list: crate::ContainerReceiver::Name("x".to_string()),
         }))
     );
 }
@@ -2824,7 +2824,7 @@ fn list_pop_used_as_a_value_lowers_successfully() {
         HirItem::TopLevelStmt(HirStmt::Assign {
             target: "y".to_string(),
             value: HirExpr::ListPop {
-                list: "x".to_string(),
+                list: crate::ContainerReceiver::Name("x".to_string()),
             },
         })
     );
@@ -2833,8 +2833,8 @@ fn list_pop_used_as_a_value_lowers_successfully() {
 #[test]
 fn popping_from_a_non_bare_name_base_is_unsupported() {
     assert_capability_error_message(
-        "a.b.pop()\n",
-        "`.pop()` is only supported on a bare-name list so far",
+        "f().pop()\n",
+        "`.pop()` is only supported on a name or an instance attribute so far",
     );
 }
 
@@ -2850,7 +2850,7 @@ fn lowers_get_as_a_dedicated_hir_node_not_a_generic_call() {
     assert_eq!(
         hir.items[1],
         HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: crate::ContainerReceiver::Name("d".to_string()),
             key: Box::new(HirExpr::StringLiteral("a".to_string())),
             default: Box::new(HirExpr::IntLiteral(0)),
         }))
@@ -2866,7 +2866,7 @@ fn dict_get_used_as_a_value_lowers_successfully() {
         HirItem::TopLevelStmt(HirStmt::Assign {
             target: "y".to_string(),
             value: HirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: crate::ContainerReceiver::Name("d".to_string()),
                 key: Box::new(HirExpr::StringLiteral("a".to_string())),
                 default: Box::new(HirExpr::IntLiteral(0)),
             },
@@ -2877,8 +2877,8 @@ fn dict_get_used_as_a_value_lowers_successfully() {
 #[test]
 fn getting_from_a_non_bare_name_base_is_unsupported() {
     assert_capability_error_message(
-        "a.b.get(\"a\", 0)\n",
-        "`.get()` is only supported on a bare-name dict so far",
+        "f().get(\"a\", 0)\n",
+        "`.get()` is only supported on a name or an instance attribute so far",
     );
 }
 
@@ -3805,28 +3805,28 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
     assert_eq!(
         rename_name_in_expr(
             HirExpr::ListAppend {
-                list: "old".to_string(),
+                list: crate::ContainerReceiver::Name("old".to_string()),
                 value: Box::new(HirExpr::Name("old".to_string())),
             },
             "old",
             "new",
         ),
         HirExpr::ListAppend {
-            list: "new".to_string(),
+            list: crate::ContainerReceiver::Name("new".to_string()),
             value: Box::new(HirExpr::Name("new".to_string())),
         }
     );
     assert_eq!(
         rename_name_in_expr(
             HirExpr::ListAppend {
-                list: "other".to_string(),
+                list: crate::ContainerReceiver::Name("other".to_string()),
                 value: Box::new(HirExpr::Name("old".to_string())),
             },
             "old",
             "new",
         ),
         HirExpr::ListAppend {
-            list: "other".to_string(),
+            list: crate::ContainerReceiver::Name("other".to_string()),
             value: Box::new(HirExpr::Name("new".to_string())),
         }
     );
@@ -3872,25 +3872,25 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
     assert_eq!(
         rename_name_in_expr(
             HirExpr::ListPop {
-                list: "old".to_string(),
+                list: crate::ContainerReceiver::Name("old".to_string()),
             },
             "old",
             "new",
         ),
         HirExpr::ListPop {
-            list: "new".to_string(),
+            list: crate::ContainerReceiver::Name("new".to_string()),
         }
     );
     assert_eq!(
         rename_name_in_expr(
             HirExpr::ListPop {
-                list: "other".to_string(),
+                list: crate::ContainerReceiver::Name("other".to_string()),
             },
             "old",
             "new",
         ),
         HirExpr::ListPop {
-            list: "other".to_string(),
+            list: crate::ContainerReceiver::Name("other".to_string()),
         }
     );
 
@@ -3899,7 +3899,7 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
     assert_eq!(
         rename_name_in_expr(
             HirExpr::DictGetOrDefault {
-                dict: "old".to_string(),
+                dict: crate::ContainerReceiver::Name("old".to_string()),
                 key: Box::new(HirExpr::Name("old".to_string())),
                 default: Box::new(HirExpr::Name("old".to_string())),
             },
@@ -3907,7 +3907,7 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
             "new",
         ),
         HirExpr::DictGetOrDefault {
-            dict: "new".to_string(),
+            dict: crate::ContainerReceiver::Name("new".to_string()),
             key: Box::new(HirExpr::Name("new".to_string())),
             default: Box::new(HirExpr::Name("new".to_string())),
         }
@@ -3915,7 +3915,7 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
     assert_eq!(
         rename_name_in_expr(
             HirExpr::DictGetOrDefault {
-                dict: "other".to_string(),
+                dict: crate::ContainerReceiver::Name("other".to_string()),
                 key: Box::new(HirExpr::Name("old".to_string())),
                 default: Box::new(HirExpr::Name("old".to_string())),
             },
@@ -3923,7 +3923,7 @@ fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
             "new",
         ),
         HirExpr::DictGetOrDefault {
-            dict: "other".to_string(),
+            dict: crate::ContainerReceiver::Name("other".to_string()),
             key: Box::new(HirExpr::Name("new".to_string())),
             default: Box::new(HirExpr::Name("new".to_string())),
         }
@@ -6248,7 +6248,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
                 step: Some(Box::new(walrus("slice_step"))),
             },
             HirExpr::ListAppend {
-                list: "xs".to_string(),
+                list: crate::ContainerReceiver::Name("xs".to_string()),
                 value: Box::new(walrus("list_append")),
             },
             HirExpr::SetAdd {
@@ -6257,7 +6257,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
             },
             HirExpr::DictLiteral(vec![(walrus("dict_key"), walrus("dict_value"))]),
             HirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: crate::ContainerReceiver::Name("d".to_string()),
                 key: Box::new(walrus("dict_get_key")),
                 default: Box::new(walrus("dict_get_default")),
             },
@@ -6284,7 +6284,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
             HirExpr::NoneLiteral,
             HirExpr::Name("plain_name".to_string()),
             HirExpr::ListPop {
-                list: "xs".to_string(),
+                list: crate::ContainerReceiver::Name("xs".to_string()),
             },
             HirExpr::Super,
         ],

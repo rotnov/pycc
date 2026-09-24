@@ -997,15 +997,18 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
                     .flatten()
                     .any(|b| contains_named_expr(b))
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
-            contains_named_expr(value)
+        HirExpr::ListAppend { list, value } => {
+            list.attr_expr().is_some_and(contains_named_expr) || contains_named_expr(value)
         }
+        HirExpr::SetAdd { value, .. } => contains_named_expr(value),
         HirExpr::DictLiteral(pairs) => pairs
             .iter()
             .any(|(k, v)| contains_named_expr(k) || contains_named_expr(v)),
-        HirExpr::ListPop { .. } => false,
-        HirExpr::DictGetOrDefault { key, default, .. } => {
-            contains_named_expr(key) || contains_named_expr(default)
+        HirExpr::ListPop { list } => list.attr_expr().is_some_and(contains_named_expr),
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            dict.attr_expr().is_some_and(contains_named_expr)
+                || contains_named_expr(key)
+                || contains_named_expr(default)
         }
         HirExpr::AttrGet { base, .. } => contains_named_expr(base),
         HirExpr::MethodCall { base, args, .. } => {

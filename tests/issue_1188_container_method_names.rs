@@ -720,8 +720,8 @@ fn container_diagnostics_are_unchanged_through_check_and_run() {
         (
             "non_name",
             "def f() -> list[int]:\n    return [1]\n\n\nf().append(1)\n",
-            "error[C0001]: `.append()` is only supported on a bare-name list so far\n \
-             --> main.py:19:1",
+            "error[C0001]: `.append()` is only supported on a name or an instance attribute \
+             so far\n --> main.py:19:1",
         ),
         (
             "not_a_list",
