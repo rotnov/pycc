@@ -1777,11 +1777,12 @@ fn a_possibly_unbound_owned_buffer_is_refused_at_the_egress_return() {
 /// which is what leaves the pre-existing `Definitely` binding in place across
 /// the join.
 ///
-/// A `try` body has no admitted twin, and that is a property of the language
-/// rather than of this admission: the `try` join reports every body binding
-/// back as `Maybe` whatever the handlers do, because a raise can interrupt
-/// the body at any point. The last arm pins that the buffer program and the
-/// equivalent `int` program get the same answer, so the refusal above is the
+/// #1289 gave the `try` form its admitted twin: a name bound by the body and
+/// by every handler that can fall through the statement is definitely bound
+/// after it, so a buffer allocated on both paths is returned. The last arm
+/// pins the refusing side of that rule on the equivalent `int` program -- a
+/// handler that falls through without binding the name still leaves it
+/// possibly unbound -- so the `try body` refusal above is the
 /// definite-assignment contract and not a buffer-specific one.
 #[test]
 fn a_definitely_assigned_owned_buffer_is_still_admitted_on_every_join_form() {
@@ -1823,6 +1824,10 @@ fn a_definitely_assigned_owned_buffer_is_still_admitted_on_every_join_form() {
             vec![match_bool(alloc(), vec![alloc_four("NDArray")])],
         ),
         (
+            "try body and its only handler both binding",
+            vec![try_except(alloc(), vec![alloc_four("NDArray")])],
+        ),
+        (
             "unconditional rebinding after a one-armed join",
             vec![
                 HirStmt::If {
@@ -1841,8 +1846,8 @@ fn a_definitely_assigned_owned_buffer_is_still_admitted_on_every_join_form() {
         );
     }
 
-    // The `try` body's absence from that list is the language's answer, not
-    // this admission's: the same program with an `int` is refused too.
+    // A handler that falls through binding only another name leaves `a`
+    // possibly unbound: the same program with an `int` is refused too.
     let scalar = func(
         vec![("c".to_string(), Ty::Bool)],
         Ty::Int,
@@ -1853,7 +1858,7 @@ fn a_definitely_assigned_owned_buffer_is_still_admitted_on_every_join_form() {
                     value: HirExpr::IntLiteral(1),
                 }],
                 vec![HirStmt::Assign {
-                    target: "a".to_string(),
+                    target: "b".to_string(),
                     value: HirExpr::IntLiteral(2),
                 }],
             ),
