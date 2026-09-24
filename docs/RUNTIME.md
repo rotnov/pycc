@@ -1321,9 +1321,9 @@ owns the contract; this is the runtime view of it.
   API set, a root DLL, a kept image in its own directory, or a file in the
   build host's System32 (a delay import must be an API set, a System32 file
   or `python314.dll`); a kept `Lib\` file that is a PE image is refused, and
-  `DLLs\` images of another ABI (`.cp3NNt-`, `_d.pyd`) are not copied. The
-  launcher calls `AddDllDirectory(<sidecar>)` before starting the
-  interpreter, so a `.pyd` importing a root DLL finds it in the sidecar.
+  `DLLs\` images of another ABI (`.cp3NNt-`, `_d.pyd`, `_d.dll`) are not
+  copied. The launcher calls `AddDllDirectory(<sidecar>)` before starting
+  the interpreter, so a `.pyd` importing a root DLL finds it in the sidecar.
   A locked closure holding a file Windows would load as a PE image (a `.pyd`
   or `.dll` suffix, or an `MZ` header on any suffix other than `.exe`) is
   refused at exit 2 naming #1297 and `pycc build --ext`, and a static

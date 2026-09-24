@@ -464,7 +464,7 @@ suffix, or an `MZ` header on any suffix other than `.exe`), naming #1297 and
 `pycc build --ext`. Before staging, the build also refuses at exit 2 an
 interpreter image it would bundle (a root DLL or a kept `DLLs\` image) that is
 not an x86-64 PE32+ DLL or whose import would not resolve once the pair is
-moved, naming the image and the import, and a kept `Lib\` file that is a PE
+moved, naming the image (and the import that does not resolve), and a kept `Lib\` file that is a PE
 image (#1305, D-253).
 
 `pycc lock` reads `PYCC_PYTHON` the same way and refuses the interpreters an
