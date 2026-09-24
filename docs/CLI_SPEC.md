@@ -619,6 +619,9 @@ references outside a distribution's payload.
   gets the interpreter fields and `roots = []`, without a site scan.
   `optional-roots` is written only when the program has an optional root,
   so a lock without one is unchanged; an older pycc refuses the field.
+  An optional package installed after `pycc lock` is not bundled until the
+  lock is rerun; `pycc lock --check` reports it (D-249's #1290 amendment
+  (e)).
 - **Native libraries.** Each `[[target.native]]` entry is a library a
   closure image needs, directly or through another such library, that lies
   outside the system library directories and the interpreter's prefix and
