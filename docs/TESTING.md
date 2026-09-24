@@ -559,6 +559,15 @@ rule 6); only numbers are published.
   `scripts/check_roadmap_evidence.rb` refuse a `null`, so registering it is that
   run's first action, in a stage commit of its own, and no roadmap box can cite
   this protocol's evidence before then.
+  **Annotation-only additions (2026-09-24,
+  [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)).**
+  On the owner's directive, the kill criterion's subject may carry type
+  annotations *added* where none existed -- on a parameter, a return or a local
+  -- and nothing else: no statement, expression, default, import or existing
+  annotation changes. The addition is published as an exact diff with both
+  module digests, `subject_sha256` is the digest of the annotated bytes that all
+  three arms then share, and the result is labelled "annotated", never
+  "unchanged". The **compile-unchanged count** below is not affected by this.
 - **Workload admissibility.** The Subject bullet fixes *which* function is the
   subject once a workload is chosen, but it presumes such a function exists.
   [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
@@ -786,12 +795,101 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the replacement workload is selected and the criterion is recorded as not met
+### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps
 
 This subsection was titled "the protocol has no admissible subject" until
 2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
+From 2026-09-23 to 2026-09-24 it was titled "the replacement workload is
+selected and the criterion is recorded as not met".
 
-**Current state (2026-09-23).** The replacement-workload selection that
+**Current state (2026-09-24).** On 2026-09-24 the repository owner directed
+that the row (b) outcome below is a chicken-and-egg result and that the missing
+annotation should be added.
+[D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
+records that directive: a kill-criterion subject may carry annotation-only
+additions, published as a diff, and the result is labelled "annotated". For
+`lark` the whole addition is one annotation, applied to a copy of the pinned
+`f79772cd` tree:
+
+```diff
+--- lark/parsers/lalr_parser_state.py
++++ lark/parsers/lalr_parser_state.py
+@@ -64,7 +64,7 @@
+             deepcopy(self.value_stack) if deepcopy_values else copy(self.value_stack),
+         )
+ 
+-    def feed_token(self, token: Token, is_end=False) -> Any:
++    def feed_token(self, token: Token, is_end: bool = False) -> Any:
+         state_stack = self.state_stack
+         value_stack = self.value_stack
+         states = self.parse_conf.states
+```
+
+The module's SHA-256 is
+`419d76a780adbdcbc5008288aa4783049620114de7b509650490d85dbe35f65b` before the
+addition and `4335a1995da91fa264b3f16ebbb0c882863d0aba5d7d219205752fbf8a8680d9`
+after it. With the subject fully annotated, row (b) no longer governs and row
+(c) does: compiler gaps are worked until 2026-10-22, and any still open then
+are the recorded miss. Row (c) is not yet discharged, because it also requires
+each gap to be filed in `product-sprint-1`, and that has not been done yet.
+
+The annotated module was compiled with `pycc build <module> -o <out>.abi3.so
+--ext` at pycc `20c2c76d` (release build, `PYCC_PYTHON` the uv CPython
+3.14.7). The build exits 1. The same command on the unedited module fails with
+the same diagnostics: the two outputs are identical apart from the directory
+name. The annotation was not the binding constraint. A row (a) shim entry
+module that only imports `ParserState` fails identically too. pycc stops at the
+first failing module of the subject's import closure. That module is
+`lark/utils.py`, which `lark/lexer.py` imports, and it carries 18 errors. The
+first is
+
+```
+error[C0001]: import of module `itertools` is not supported yet
+ --> lark/utils.py:3:1
+```
+
+Only two of the 18 (`T0001` on the unannotated parameters of
+`combine_alternatives` and `bfs_all_unique`) could be fixed by annotation-only
+additions. The rest cannot, so no further edit was made:
+
+| Diagnostic in `lark/utils.py` | Count | Nearest open issue |
+|---|---|---|
+| `C0001` import of `itertools` / `collections` not supported yet | 1 each | #882 lists `collections`; none names `itertools` |
+| `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
+| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | none found |
+| `C0001` `import` inside a function or block body | 3 | none found |
+| `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
+| `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
+| `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
+| `C0001` attribute-form base class | 1 | #886 (v0.4) |
+| `C0001` class inherits from `frozenset` | 1 | none found |
+| `C0001` class attribute initialised with a non-literal | 1 | none found |
+| `T0002` `Any` outside a declared interop boundary | 2 | none: a D-244 boundary rule, not a missing feature |
+| `T0001` unannotated public parameter | 2 | annotation-fixable |
+
+This list is a lower bound. `lark/lexer.py`, `lark/common.py`,
+`lark/parsers/lalr_analysis.py`, `lark/exceptions.py` and the subject module
+itself were never reached. A separate probe compiled only the subject module's
+own first two lines, `from copy import deepcopy, copy` and `from typing import
+Dict, Any, Generic, List`. That probe is not the workload. It was refused with
+``C0001 import of module `copy` is not supported yet`` and ``C0002 module
+`typing` has no importable symbol named `Dict` ``. The subject's own `-> Any`
+return would also meet `T0002`. Replacing it is not an addition, so D-252 does
+not admit that edit.
+
+No timing was taken, and none can be until the subject compiles. The
+pre-registration commit and the protocol report remain unwritten. Two points
+bear on the ≥ 5× expectation even once every gap closes:
+
+- Nearly every operation in the loop body is on an object pycc does not own.
+  The body subscripts a `dict` of `dict`s keyed by the generic `StateT` and the
+  foreign `Token.type`. It calls arbitrary Python callbacks from a `dict`, tests
+  `action is Shift`, appends to untyped stacks and returns `Any`.
+- The `ext` boundary admits only scalars and small tuples. A row (a) shim would
+  therefore have to build the `ParserState` and `Token` inside the timed call.
+
+**State on 2026-09-23 (row (b); superseded 2026-09-24 by D-252).**
+The replacement-workload selection that
 [#1207](https://github.com/rotnov/pycc/issues/1207) pre-registered under
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
 ran on 2026-09-23, and [its result comment](https://github.com/rotnov/pycc/issues/1207#issuecomment-5791727061) is the outcome record. Step 0
