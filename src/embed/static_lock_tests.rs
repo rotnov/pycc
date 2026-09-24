@@ -142,12 +142,26 @@ fn a_static_only_interpreter_is_locked_by_its_archive() {
     let env = Env::new("embed_static_only_lock", "import tinypkg\n");
     let probe = static_only(&env);
     let archive = archive(&env);
-    let toolchain = static_toolchain(&env, probe, &archive);
+    let toolchain = static_toolchain(&env, probe.clone(), &archive);
     lock_with(&env, &toolchain).expect("locked");
     let digest = sha256::sha256_hex(b"!<arch>\nfake members");
     assert_eq!(locked_digest(&env), digest);
     env.embed_with(&toolchain).expect("embedded");
     assert!(env.sidecar().join("closure/tinypkg/__init__.py").is_file());
+    // The marker's digest is the lock's: the archive both links and
+    // identifies the interpreter.
+    let marker = marker(&env);
+    assert!(
+        marker.ends_with(&format!(
+            "libpython-sha256 {digest}\nlibpython-link static\n"
+        )),
+        "{marker}"
+    );
+
+    // A shared build of the same interpreter is still refused.
+    let shared = EmbedToolchain::with_probes("pyfake", probe.clone(), env.lock_probe.clone());
+    let err = env.embed_with(&shared).unwrap_err();
+    assert!(err.contains("no shared libpython"), "{err}");
 
     std::fs::remove_dir_all(env.sidecar()).unwrap();
     env.previous_sidecar();

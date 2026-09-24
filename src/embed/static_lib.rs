@@ -149,7 +149,10 @@ pub(crate) fn check_archive(
 /// of build pick the same one; a configured shared library that is missing
 /// is refused, not replaced by the archive. The file identifies the
 /// interpreter whichever way a build links it, so one lock serves a shared
-/// and a static build alike.
+/// and a static build alike. That refusal names the interpreter by the
+/// executable its probe reports, since a build that populates the sidecar
+/// holds only the probe, not the `PYCC_PYTHON` spelling the shared probe's
+/// own refusal names.
 pub(crate) fn identity_library(
     probe: &EmbedProbe,
     archive: impl FnOnce() -> Result<PathBuf, String>,

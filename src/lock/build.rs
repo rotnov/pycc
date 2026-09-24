@@ -233,8 +233,9 @@ fn describe_roots(roots: &[String]) -> String {
 }
 
 /// Compares the section's interpreter fields with the interpreter being
-/// bundled (step 2). `libpython-sha256` is compared by the bundle, which
-/// already reads the library (or, in a static build, the archive).
+/// bundled (step 2). `libpython-sha256` is compared by the bundle against
+/// the file [`crate::embed::static_lib::identity_library`] names, which it
+/// already reads.
 pub(crate) fn verify_interpreter(
     check: &ClosureCheck,
     probe: &EmbedProbe,
