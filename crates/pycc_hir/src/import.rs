@@ -25,8 +25,10 @@ use pycc_ast::{Expr, ModModule, Stmt, StmtImportFrom};
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{BTreeSet, HashMap};
 
-/// One module-level import statement that `pycc_std`'s registry does not
-/// answer, so the driver must resolve it on the filesystem before
+/// One project-import request -- a whole module-level `from ... import`
+/// statement, or one qualifying alias of a plain `import` (#1280) -- that
+/// `pycc_std`'s registry does not answer, so the driver must resolve it on
+/// the filesystem before
 /// `module::lower_module` runs (#898, D-222). `pycc_hir` itself never
 /// touches the filesystem: this is the request half of the contract, and
 /// [`ResolvedImports`] is the answer half.
@@ -35,7 +37,10 @@ use std::collections::{BTreeSet, HashMap};
 /// namespace, a shape Part 1 only recognizes) and lists every imported
 /// name, in source order, for `from ... import a, b`. `module` is `None`
 /// only for a relative `from . import x` with no module segment. `span` is
-/// the whole statement's span and is the key the driver answers under.
+/// the key the driver answers under: the whole statement's span for a
+/// `from ... import`, and the one alias's own span for a plain `import`,
+/// which yields one request per qualifying alias so `import sys, re` gets
+/// an answer for each module (#1280).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectImportRequest {
     pub level: u32,
@@ -47,7 +52,9 @@ pub struct ProjectImportRequest {
 /// Scans a parsed module's top-level statements for the imports the driver
 /// must resolve: every relative `from` import, and every absolute
 /// `import`/`from ... import` naming a module `pycc_std::resolve_module`
-/// rejects. Everything else (stdlib imports, multi-name `import a, b`,
+/// rejects. A plain `import` contributes one request per alias that has no
+/// `as` and that `pycc_std` does not resolve, so each name of `import a, b`
+/// is asked about on its own (#1280). Everything else (stdlib imports,
 /// `import ... as ...`, non-import statements) is left to
 /// [`lower_import_stmt`]'s own single-file dispatch, so a module with no
 /// project import yields an empty list and lowers exactly as before.
@@ -55,33 +62,32 @@ pub fn project_import_requests(module: &ModModule) -> Vec<ProjectImportRequest> 
     module
         .body
         .iter()
-        .filter_map(project_import_request)
+        .flat_map(project_import_request)
         .collect()
 }
 
-fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
+fn project_import_request(stmt: &Stmt) -> Vec<ProjectImportRequest> {
     match stmt {
-        Stmt::Import(import) => {
-            let [alias] = import.names.as_slice() else {
-                return None;
-            };
-            if alias.asname.is_some() || pycc_std::resolve_module(alias.name.as_str()).is_some() {
-                return None;
-            }
-            Some(ProjectImportRequest {
+        Stmt::Import(import) => import
+            .names
+            .iter()
+            .filter(|alias| {
+                alias.asname.is_none() && pycc_std::resolve_module(alias.name.as_str()).is_none()
+            })
+            .map(|alias| ProjectImportRequest {
                 level: 0,
                 module: Some(alias.name.to_string()),
                 names: Vec::new(),
-                span: statement_span(import.range),
+                span: statement_span(alias.range),
             })
-        }
+            .collect(),
         Stmt::ImportFrom(import) => {
             // A `from __future__ import ...` is a compiler directive, not a
             // module (D-229): the driver must never probe the project for a
             // sibling `__future__.py`, which CPython would only reach at
             // run time, *after* applying the directive.
             if is_future_import(import) {
-                return None;
+                return Vec::new();
             }
             let module = import.module.as_ref().map(ToString::to_string);
             if import.level == 0
@@ -89,9 +95,9 @@ fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
                     .as_deref()
                     .is_some_and(|name| pycc_std::resolve_module(name).is_some())
             {
-                return None;
+                return Vec::new();
             }
-            Some(ProjectImportRequest {
+            vec![ProjectImportRequest {
                 level: import.level,
                 module,
                 names: import
@@ -100,9 +106,9 @@ fn project_import_request(stmt: &Stmt) -> Option<ProjectImportRequest> {
                     .map(|alias| alias.name.to_string())
                     .collect(),
                 span: statement_span(import.range),
-            })
+            }]
         }
-        _ => None,
+        _ => Vec::new(),
     }
 }
 
@@ -270,13 +276,16 @@ pub enum ResolvedImport<'a> {
     /// `import X`: `X` is neither a project module nor a `pycc_std` one,
     /// so Part 1 of #1026 binds it as an opaque CPython object
     /// ([`ImportBinding::Foreign`]). Recorded only for the bare, undotted,
-    /// unaliased `import X` shape -- see `src/modules.rs`'s own `missing`
-    /// for why every other foreign shape stays unanswered.
+    /// unaliased `import X` shape, or one such name of `import X, Y`
+    /// (#1280) -- see `src/modules.rs`'s own `missing` for why every other
+    /// foreign shape stays unanswered.
     Foreign,
 }
 
 /// The driver's answers for every [`ProjectImportRequest`] of one module,
-/// keyed by statement span, plus every already-lowered module by display
+/// keyed by the request's own span (an alias's span for a plain `import`,
+/// the statement's span for a `from ... import`; see
+/// [`ProjectImportRequest`]), plus every already-lowered module by display
 /// path so a re-export (`from pkg import Point` where `pkg/__init__.py`
 /// itself did `from .geometry import Point`) can be followed to the module
 /// that defines the name. A request absent from the map lowers exactly as
@@ -358,9 +367,9 @@ pub(crate) struct LoweredImport {
 /// caller's own dispatch -- mirroring `lower_type_alias_stmt`'s shape
 /// exactly.
 ///
-/// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
-/// names in one `import` statement, an `as` alias on the `from` form, a
-/// relative import the driver did not resolve, an unresolvable module) is
+/// D-137 is fail-closed: every recognized-but-out-of-scope shape (an `as`
+/// alias on the `from` form, a relative import the driver did not resolve,
+/// an unresolvable module) is
 /// `C0001`, the same
 /// generic "statement kind not supported yet" diagnostic the crate already
 /// uses for every other unimplemented statement kind -- matching the plan's
@@ -397,68 +406,20 @@ pub(crate) fn lower_import_stmt(
 ) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
-            let [alias] = import.names.as_slice() else {
-                return Err(unsupported(
-                    "only a single module per `import` statement is supported so far",
-                    import.range,
-                ));
-            };
-            let module_name = alias.name.as_str();
-            // `Found` is the driver's answer to a bare `import m` of a
-            // project file. It is unreachable for a name `pycc_std`
-            // resolves (`project_import_request` never asks the driver
-            // about one) and unreachable for an aliased `import m as n`
-            // (it never asks about those either -- project-module
-            // aliasing is Part 3 of #883, #964), so an aliased project
-            // import falls through to the "not supported yet" arm below.
-            if matches!(
-                resolved.get(statement_span(import.range)),
-                Some(ResolvedImport::Found)
-            ) {
-                return Err(unsupported(
-                    format!(
-                        "module namespace bindings (`import {module_name}`) are not supported yet"
-                    ),
-                    import.range,
-                ));
-            }
-            // Part 1 of #1026: a foreign root binds an opaque CPython
-            // object rather than failing. `item_index` is the number of
-            // `HirItem`s the statements before this one produced, which is
-            // where `pycc_mir` splices the import back into the module
-            // body so the generated `pycc_ext_obj_import` call runs in
-            // source order rather than hoisted (see `MirItem::ForeignImport`).
-            if matches!(
-                resolved.get(statement_span(import.range)),
-                Some(ResolvedImport::Foreign)
-            ) {
-                return Ok(Some(LoweredImport {
-                    bindings: vec![ImportBinding::Foreign {
-                        local_name: module_name.to_string(),
-                        module_path: module_name.to_string(),
-                        item_index,
-                        span: statement_span(import.range),
-                    }],
-                    ..LoweredImport::default()
-                }));
-            }
-            let Some(module) = pycc_std::resolve_module(module_name) else {
-                return Err(unsupported(
-                    format!("import of module `{module_name}` is not supported yet"),
-                    import.range,
-                ));
-            };
-            // Part 1 of #883 (#962): `import math as m` binds the alias the
-            // user wrote; every later `m.<attr>` receiver resolves through
-            // this binding (see `expr::std_receiver`), so the alias is
-            // visible to items lowered after this statement, in source
-            // order, exactly like a class or a type alias.
-            let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
+            // #1280: `import a, b` is `import a` followed by `import b`, so
+            // each alias lowers on its own, in source order. The first
+            // alias that fails fails the whole statement with its one
+            // diagnostic, and no binding of that statement survives --
+            // D-219/D-222's one-diagnostic-per-failing-statement contract,
+            // which `poisonable_names` mirrors.
+            let statement = statement_span(import.range);
+            let bindings = import
+                .names
+                .iter()
+                .map(|alias| lower_import_alias(statement, alias, resolved, item_index))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(Some(LoweredImport {
-                bindings: vec![ImportBinding::Module {
-                    local_name: local_name.to_string(),
-                    module,
-                }],
+                bindings,
                 ..LoweredImport::default()
             }))
         }
@@ -539,6 +500,69 @@ pub(crate) fn lower_import_stmt(
         }
         _ => Ok(None),
     }
+}
+
+/// One alias of a plain `import` statement (#1280): the binding it
+/// contributes, or the diagnostic that fails the whole statement.
+///
+/// The driver's answer is looked up under the alias's own span (the key
+/// [`project_import_request`] records); every diagnostic, and a foreign
+/// binding's `span`, stay at the whole `statement`, so a single-alias
+/// statement reports byte-for-byte what it did before #1280. Every alias of
+/// one statement shares its `item_index`: `pycc_mir`'s
+/// `splice_foreign_imports` inserts equal positions in binding order, so
+/// the foreign imports of `import a, b` run `a` first, as CPython does.
+fn lower_import_alias(
+    statement: Span,
+    alias: &pycc_ast::Alias,
+    resolved: &ResolvedImports<'_>,
+    item_index: usize,
+) -> Result<ImportBinding, Diagnostic> {
+    let module_name = alias.name.as_str();
+    let answer = resolved.get(statement_span(alias.range));
+    // `Found` is the driver's answer to a bare `import m` of a project
+    // file. It is unreachable for a name `pycc_std` resolves
+    // (`project_import_request` never asks the driver about one) and
+    // unreachable for an aliased `import m as n` (it never asks about those
+    // either -- project-module aliasing is Part 3 of #883, #964), so an
+    // aliased project import falls through to the "not supported yet" arm
+    // below.
+    if matches!(answer, Some(ResolvedImport::Found)) {
+        return Err(unsupported(
+            format!("module namespace bindings (`import {module_name}`) are not supported yet"),
+            statement.start..statement.end,
+        ));
+    }
+    // Part 1 of #1026: a foreign root binds an opaque CPython object rather
+    // than failing. `item_index` is the number of `HirItem`s the statements
+    // before this one produced, which is where `pycc_mir` splices the
+    // import back into the module body so the generated
+    // `pycc_ext_obj_import` call runs in source order rather than hoisted
+    // (see `MirItem::ForeignImport`).
+    if matches!(answer, Some(ResolvedImport::Foreign)) {
+        return Ok(ImportBinding::Foreign {
+            local_name: module_name.to_string(),
+            module_path: module_name.to_string(),
+            item_index,
+            span: statement,
+        });
+    }
+    let Some(module) = pycc_std::resolve_module(module_name) else {
+        return Err(unsupported(
+            format!("import of module `{module_name}` is not supported yet"),
+            statement.start..statement.end,
+        ));
+    };
+    // Part 1 of #883 (#962): `import math as m` binds the alias the user
+    // wrote; every later `m.<attr>` receiver resolves through this binding
+    // (see `expr::std_receiver`), so the alias is visible to items lowered
+    // after this statement, in source order, exactly like a class or a type
+    // alias.
+    let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
+    Ok(ImportBinding::Module {
+        local_name: local_name.to_string(),
+        module,
+    })
 }
 
 /// `C0001` for `from ... import *` -- shared by the stdlib and project
