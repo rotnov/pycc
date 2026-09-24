@@ -129,7 +129,9 @@ pub(crate) fn io_error(action: &str, path: &Path, e: &std::io::Error) -> String 
 /// locked closure, the Linux vendored libraries or the macOS relocation,
 /// and last the marker. The library's digest is taken once, before
 /// relocation, for the marker and for the lock's `libpython-sha256`. A
-/// static build writes no library and records the archive's digest.
+/// static build writes no library, records the archive's digest, and
+/// checks a consumed lock against the file that identifies the
+/// interpreter (#1272) before anything else is copied.
 fn populate(
     probe: &EmbedProbe,
     platform: EmbedPlatform,
@@ -146,6 +148,17 @@ fn populate(
         Some(static_lib) => {
             let archive = &static_lib.archive;
             let digest = sha256_file(archive).map_err(|e| io_error("read", archive, &e))?;
+            if let Some(locked) = locked {
+                // The lock names the interpreter by the file it identifies
+                // it by, whichever way this build links it (#1272).
+                let identity = static_lib::identity_library(probe, || Ok(archive.clone()))?;
+                let identity_digest = if identity == *archive {
+                    digest.clone()
+                } else {
+                    sha256_file(&identity).map_err(|e| io_error("read", &identity, &e))?
+                };
+                check_locked_digest(locked, &identity_digest)?;
+            }
             (digest, layout::LibpythonLink::Static)
         }
         None => {
@@ -182,17 +195,21 @@ fn bundle_library(
     let bytes = std::fs::read(source).map_err(|e| io_error("read", source, &e))?;
     let digest = sha256_hex(&bytes);
     if let Some(locked) = locked {
-        let fields = [(
-            "libpython-sha256",
-            locked.libpython_sha256.as_str(),
-            digest.as_str(),
-        )];
-        if let Some(difference) = crate::lock::field_difference(&fields) {
-            return Err(locked.stale(&difference));
-        }
+        check_locked_digest(locked, &digest)?;
     }
     std::fs::write(bundled, &bytes).map_err(|e| io_error("write", bundled, &e))?;
     Ok(digest)
+}
+
+/// Refuses as stale when `digest`, the interpreter's identifying library's
+/// ([`static_lib::identity_library`]), is not the lock's
+/// `libpython-sha256`.
+fn check_locked_digest(locked: &LockedClosure, digest: &str) -> Result<(), String> {
+    let fields = [("libpython-sha256", locked.libpython_sha256.as_str(), digest)];
+    match crate::lock::field_difference(&fields) {
+        Some(difference) => Err(locked.stale(&difference)),
+        None => Ok(()),
+    }
 }
 
 /// Copies `from/rel` into `to/rel`, recursively, skipping what
@@ -302,11 +319,9 @@ fn relocate_macho(
             id: Some(bundled_id),
         });
         bundle_lib.to_vec()
-    } else if source.is_file() && macho::is_macho_header(&native::read_head(source)?) {
-        // A static build's interpreter may also ship the shared library.
-        native::macho_bundle_lib(source, source)?.to_vec()
     } else {
-        Vec::new()
+        // A static build's interpreter may also ship the shared library.
+        native::source_bundle_lib(source)?
     };
     let dynload = PathBuf::from(layout::stdlib_dir_name(probe)).join("lib-dynload");
     // An interpreter without a `lib-dynload` directory contributes no

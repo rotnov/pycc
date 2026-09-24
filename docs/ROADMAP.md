@@ -260,7 +260,7 @@ Multi-file, imports, namespace packages (420), incremental cache, parallel codeg
 
 ## product-sprint-1 — annotated code callable from CPython
 
-A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core: the hosted `ext` artifact, foreign imports (#1026), a buffer-protocol bridge and an embedded executable, as #1025-#1028 under parent #1014, with #1017 and #1018 also in the sprint as blockers of the first acceptance item; `docs/DELIVERY_PLAN.md` owns the six-issue closure condition. #1027 is complete: the `memoryview` carrier is oracle-checked against numpy (closing #1142); its cost measurement is in `docs/TESTING.md` (3.41x versus CPython). Neither Accept box moves on that number: both require a D-244 rule 6 protocol run. The replacement workload [#1207 selected under D-247](https://github.com/rotnov/pycc/issues/1207#issuecomment-5791727061) (`lark` 1.3.1) had one unannotated parameter; [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) admits annotation additions; row (c) now governs: import gaps and its `-> Any` (T0002). The corpus metric stays a report, not the contract.
+A time-boxed bet due 2026-10-22, redirected 2026-09-12 ([D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)) from stdin/stdout programs to the v0.7 interop core: the hosted `ext` artifact, foreign imports (#1026), a buffer-protocol bridge and an embedded executable, as #1025-#1028 under parent #1014, with #1017 and #1018 also in the sprint as blockers of the first acceptance item; `docs/DELIVERY_PLAN.md` owns the six-issue closure condition. #1027 is complete: the `memoryview` carrier is oracle-checked against numpy (closing #1142); its cost measurement is in `docs/TESTING.md` (3.41x versus CPython). Neither Accept box moves on that number: both require a D-244 rule 6 protocol run. The replacement workload [#1207 selected under D-247](https://github.com/rotnov/pycc/issues/1207#issuecomment-5791727061) (`lark` 1.3.1) had one unannotated parameter; [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) admits added annotations; row (c) governs: import gaps and its `-> Any`. The corpus metric stays a report, not the contract.
 
 **Accept:**
 
@@ -281,7 +281,7 @@ Generators/`yield from` as state machines, iterator protocol, `itertools`/`funct
 
 ## v0.7 — transparent CPython interop
 
-This milestone is **mostly not implemented**: #1223 (D-248) embeds stdlib; #1224 adds policies; #1241 locks, #1242 embeds closures, #1243/#1259 natives; #1271 links libpython statically.
+This milestone is **mostly not implemented**: #1223 (D-248) embeds stdlib; #1224 adds policies; #1241 locks, #1242 embeds closures, #1243/#1259 natives; #1271 links libpython statically, #1272 with a lock.
 Ordinary standard-Python imports such as `import numpy as np` are classified
 without pycc-specific source rewrites. The **embedded** mode bundles a pinned
 CPython 3.14/package/native dependency closure under the `auto` (default),

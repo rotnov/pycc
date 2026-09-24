@@ -830,8 +830,11 @@ The module's SHA-256 is
 addition and `4335a1995da91fa264b3f16ebbb0c882863d0aba5d7d219205752fbf8a8680d9`
 after it. With the subject fully annotated, row (b) no longer governs and row
 (c) does: compiler gaps are worked until 2026-10-22, and any still open then
-are the recorded miss. Row (c) is not yet discharged, because it also requires
-each gap to be filed in `product-sprint-1`, and that has not been done yet.
+are the recorded miss. Row (c) also requires each gap to be filed in
+`product-sprint-1`. The gaps that had no open issue were filed there on
+2026-09-24 as #1278, #1279, #1280, #1282, #1283 and #1284. Four gaps are
+covered by existing issues in the `v0.4` milestone (#884, #886, #887, #889),
+as the table below shows.
 
 The annotated module was compiled with `pycc build <module> -o <out>.abi3.so
 --ext` at pycc `20c2c76d` (release build, `PYCC_PYTHON` the uv CPython
@@ -854,16 +857,16 @@ additions. The rest cannot, so no further edit was made:
 
 | Diagnostic in `lark/utils.py` | Count | Nearest open issue |
 |---|---|---|
-| `C0001` import of `itertools` / `collections` not supported yet | 1 each | #882 lists `collections`; none names `itertools` |
+| `C0001` import of `itertools` / `collections` not supported yet | 1 each | #1278 (`itertools`); #882 (`collections`) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
-| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | none found |
-| `C0001` `import` inside a function or block body | 3 | none found |
+| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280 |
+| `C0001` `import` inside a block body (module-level `try`/`if`) | 3 | #1282 |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
 | `C0001` attribute-form base class | 1 | #886 (v0.4) |
-| `C0001` class inherits from `frozenset` | 1 | none found |
-| `C0001` class attribute initialised with a non-literal | 1 | none found |
+| `C0001` class inherits from `frozenset` | 1 | #1283 |
+| `C0001` class attribute initialised with a non-literal | 1 | #1284 |
 | `T0002` `Any` outside a declared interop boundary | 2 | none: a D-244 boundary rule, not a missing feature |
 | `T0001` unannotated public parameter | 2 | annotation-fixable |
 
@@ -872,7 +875,7 @@ This list is a lower bound. `lark/lexer.py`, `lark/common.py`,
 itself were never reached. A separate probe compiled only the subject module's
 own first two lines, `from copy import deepcopy, copy` and `from typing import
 Dict, Any, Generic, List`. That probe is not the workload. It was refused with
-``C0001 import of module `copy` is not supported yet`` and ``C0002 module
+``C0001 import of module `copy` is not supported yet`` (#1279) and ``C0002 module
 `typing` has no importable symbol named `Dict` ``. The subject's own `-> Any`
 return would also meet `T0002`. Replacing it is not an addition, so D-252 does
 not admit that edit. That makes it a second blocker, independent of the

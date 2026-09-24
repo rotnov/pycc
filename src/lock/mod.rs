@@ -259,9 +259,16 @@ fn derive(
     toolchain: &EmbedToolchain,
     (located, entry_path, platform): (&Located, &Path, embed::layout::EmbedPlatform),
 ) -> Result<LockTarget, LockFailure> {
-    let probe = toolchain.probe().map_err(LockFailure::Env)?;
+    // A lock serves a shared and a static build alike (#1272), so it needs
+    // no shared library: it records the one that identifies the
+    // interpreter, which is the `LIBPL` archive when there is none.
+    let probe = toolchain
+        .probe_as(embed::LibpythonLink::Static)
+        .map_err(LockFailure::Env)?;
     let env = toolchain.lock_probe().map_err(LockFailure::Env)?;
-    let library = embed::layout::source_library(&probe);
+    let library = toolchain
+        .identity_library(&probe)
+        .map_err(LockFailure::Env)?;
     let libpython_sha256 = embed::sha256::sha256_file(&library)
         .map_err(|e| LockFailure::Env(format!("cannot read `{}`: {e}", library.display())))?;
     let packages = if direct.is_empty() {
