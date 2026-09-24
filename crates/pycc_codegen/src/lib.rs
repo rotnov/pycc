@@ -6255,6 +6255,7 @@ fn compile_to_object_with_observer(
                         &module_globals[local_name],
                         local_name,
                         module_path,
+                        foreign_import::FailureEdge::ReturnFailed,
                     );
                 }
             }
@@ -7280,7 +7281,7 @@ fn emit_stmt<'ctx>(
         }
         MirStmt::NoOp => Ok(()),
         MirStmt::ForeignImport { bindings } => {
-            foreign_import::emit_stmt(context, builder, module, locals, bindings);
+            foreign_import::emit_stmt(context, builder, module, rt, locals, bindings);
             Ok(())
         }
         MirStmt::Unreachable => {

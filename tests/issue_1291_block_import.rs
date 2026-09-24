@@ -4,7 +4,8 @@
 //! nothing, and a missing module raises `ModuleNotFoundError` from the
 //! statement that names it.
 //!
-//! Catching that error with `except ImportError` is #1293, and the
+//! Catching that error with `except ImportError` is #1293
+//! (`tests/issue_1293_import_bridge.rs`), and the
 //! `ImportError`/`ModuleNotFoundError` builtins are #1292; neither is here.
 //!
 //! The hosted tests at the bottom are `#[ignore]`d and contribute no line
@@ -217,22 +218,23 @@ fn a_taken_branch_with_a_missing_module_raises_in_the_host() {
     assert_ok(&run);
 }
 
-/// Inside `try`, the failure still propagates out of module init: pycc does
-/// not yet run a handler or `finally` body for a raised foreign exception
-/// (the #1096 deviation). Catching it with `except ImportError` is #1293.
-/// Neither print runs.
+/// Inside `try`, a handler that does not match lets the failure propagate
+/// out of module init after `finally` runs, and the host still sees
+/// CPython's original `ModuleNotFoundError`: since #1293 the failure is
+/// bridged to a pycc exception inside the module body, and the shim
+/// re-raises the original object when that exception escapes.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_missing_module_in_a_try_body_propagates_in_the_host() {
     let run = run_hosted(
         "block_import_try_missing",
         "pycc_block_try_missing_mod",
-        "try:\n    import pycc_nosuch_1291\nexcept Exception:\n    print('handled')\n\
+        "try:\n    import pycc_nosuch_1291\nexcept ValueError:\n    print('handled')\n\
          finally:\n    print('finally')\n",
         &expect_missing("pycc_block_try_missing_mod"),
     );
     assert_ok(&run);
-    assert_eq!(stdout_of(&run), "");
+    assert_eq!(stdout_of(&run), "finally\n");
 }
 
 #[test]

@@ -100,6 +100,104 @@ extern long long pycc_ext_module_exec(void);
 static PyObject *pycc_ext_user_exception_class(unsigned char tag);
 
 /*
+ * The failed-import bridge (#1293, Part 3 of #1282). A foreign import nested
+ * in a module-level `if`/`try` block whose `PyImport_ImportModule` raised an
+ * `ImportError` is translated into a pending pycc exception, so the block's
+ * own `except`/`finally` runs as CPython would run it. `pycc_rt` keeps no
+ * CPython dependency (D-244 rule 2): the translation lives here.
+ *
+ * The pycc exception object is allocated with the same entry points a
+ * compiled `raise ModuleNotFoundError("...")` uses. `PyExceptionObj` is an
+ * opaque `void *` on this side, as `PyStrObj` is. The tag is the Rust `u8`.
+ */
+extern void *pycc_rt_exception_value(void);
+extern void *pycc_rt_exception_alloc(unsigned char type_tag,
+                                     const unsigned char *name,
+                                     size_t name_len,
+                                     void *message);
+extern void pycc_rt_exception_raise(void *obj);
+
+/*
+ * The two builtin tags the bridge raises, with the class name each one's
+ * pycc exception object carries. Named constants rather than `case` labels
+ * on purpose: `ext_build_tests`' tag-table drift guard parses the raising
+ * switch's `case N:` / `exc_type = PyExc_...;` lines, and its sibling
+ * `the_c_shims_import_error_bridge_tags_still_name_their_classes` parses
+ * these four `#define`s against `pycc_hir::BUILTIN_EXCEPTION_CLASSES`.
+ */
+#define PYCC_EXT_TAG_IMPORT_ERROR 26
+#define PYCC_EXT_TAG_MODULE_NOT_FOUND_ERROR 27
+#define PYCC_EXT_NAME_IMPORT_ERROR "ImportError"
+#define PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR "ModuleNotFoundError"
+
+/*
+ * The bridge table: each bridged pycc exception object paired with a strong
+ * reference to the CPython exception it was translated from. When the pycc
+ * exception escapes the module body unchanged (unmatched, re-raised with a
+ * bare `raise`, or re-raised after `finally`), `pycc_ext_raise_pending`
+ * finds its pointer here and re-raises the *original*, so the host still
+ * sees `.name`, `.path`, the exact class and the traceback.
+ *
+ * Pointer identity is sound because a `PyExceptionObj` is never freed
+ * (`pycc_rt::exception`'s leak-only rule), so no other exception can ever
+ * reuse a bridged one's address. A table rather than one slot because a
+ * handler can bridge a second failed import (`try: import b` inside
+ * `except ImportError:`) before re-raising the first. It stays small: a
+ * nested foreign import is admitted only at a module-level `if`/`try` site,
+ * never in a loop, so one exec adds at most one entry per static import
+ * site. Populated only during `pycc_ext_module_exec`, and emptied by
+ * `pycc_ext_bridge_table_clear` on both of `pycc_ext_exec_module`'s exits.
+ */
+typedef struct {
+    void *pycc;
+    PyObject *orig;
+} pycc_ext_bridge_entry;
+
+static pycc_ext_bridge_entry *pycc_ext_bridge_entries = NULL;
+static Py_ssize_t pycc_ext_bridge_len = 0;
+static Py_ssize_t pycc_ext_bridge_cap = 0;
+
+/*
+ * Releases every remaining bridge entry. Called only after the entries can
+ * no longer be looked up. The caller may hold a set CPython error, which a
+ * finalizer run by a released original must not clobber, so it is set aside
+ * across the releases and restored afterwards (a NULL round-trips).
+ */
+static void pycc_ext_bridge_table_clear(void)
+{
+    PyObject *saved = PyErr_GetRaisedException();
+    Py_ssize_t i;
+
+    for (i = 0; i < pycc_ext_bridge_len; i++) {
+        Py_XDECREF(pycc_ext_bridge_entries[i].orig);
+    }
+    pycc_ext_bridge_len = 0;
+    PyErr_SetRaisedException(saved);
+}
+
+/*
+ * Moves the original CPython exception for the pending pycc exception `obj`
+ * back into CPython's error indicator and removes its entry. Returns 1 on a
+ * hit, 0 when `obj` was never bridged. `PyErr_SetRaisedException` steals
+ * the table's reference, so the removed entry is not released again.
+ */
+static int pycc_ext_bridge_restore(void *obj)
+{
+    Py_ssize_t i;
+
+    for (i = 0; i < pycc_ext_bridge_len; i++) {
+        if (pycc_ext_bridge_entries[i].pycc == obj) {
+            PyObject *orig = pycc_ext_bridge_entries[i].orig;
+            pycc_ext_bridge_len--;
+            pycc_ext_bridge_entries[i] = pycc_ext_bridge_entries[pycc_ext_bridge_len];
+            PyErr_SetRaisedException(orig);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
  * Translates a pending pycc exception into a CPython one and clears it.
  * Returns 1 when it raised, 0 when nothing was pending.
  *
@@ -133,6 +231,16 @@ static int pycc_ext_raise_pending(void)
 
     if (tag < 0) {
         return 0;
+    }
+    /*
+     * #1293: a pending exception the failed-import bridge produced, escaping
+     * unchanged, re-raises CPython's own original object rather than a
+     * rebuilt one. A miss -- anything pycc raised itself, including an
+     * `except*` remainder's freshly allocated group -- takes the switch.
+     */
+    if (pycc_ext_bridge_restore(pycc_rt_exception_value())) {
+        pycc_rt_exception_clear();
+        return 1;
     }
     switch (tag) {
     case 1:
@@ -851,6 +959,99 @@ static int pycc_ext_unpack_memoryview(PyObject *obj, const char *fn_name, Py_ssi
 PyObject *pycc_ext_obj_import(const char *name)
 {
     return PyImport_ImportModule(name);
+}
+
+/*
+ * #1293 (Part 3 of #1282): the failure edge of a foreign import nested in a
+ * module-level `if`/`try` block, called only after `pycc_ext_obj_import`
+ * returned NULL with CPython's exception set.
+ *
+ * An `ImportError` (a `ModuleNotFoundError` or a subclass of it becomes
+ * pycc's tag 27, any other `ImportError` tag 26) is translated into a
+ * pending pycc exception whose message is CPython's own `str(exc)`, and the
+ * original is kept in the bridge table (see `pycc_ext_bridge_restore`).
+ * Returns 1 with CPython's error indicator clear, and the generated code
+ * branches to the enclosing handler exactly as an explicit `raise` does.
+ *
+ * Anything else -- a module body's own `ValueError`, a `SyntaxError`, a
+ * `BaseException` -- is left exactly as CPython set it, and so is an
+ * `ImportError` this function cannot translate (the table cannot grow, or
+ * `str(exc)` fails): it returns 0, and the generated code keeps the direct
+ * `-1` edge out of `Py_mod_exec` (the #1096 residual). Every fallible step
+ * runs before any pycc state is touched, so a 0 never leaves a pycc
+ * exception pending, and a 1 never leaves a CPython one set.
+ *
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_IMPORT_ERROR_BRIDGE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ */
+int pycc_ext_import_error_bridge(void)
+{
+    PyObject *exc = PyErr_GetRaisedException();
+    PyObject *text;
+    const char *utf8;
+    Py_ssize_t utf8_len = 0;
+    void *message;
+    void *obj;
+    unsigned char tag;
+    const char *class_name;
+    size_t class_name_len;
+
+    if (exc == NULL) {
+        return 0;
+    }
+    if (!PyErr_GivenExceptionMatches(exc, PyExc_ImportError)) {
+        PyErr_SetRaisedException(exc);
+        return 0;
+    }
+    if (pycc_ext_bridge_len == pycc_ext_bridge_cap) {
+        Py_ssize_t cap = pycc_ext_bridge_cap == 0 ? 4 : pycc_ext_bridge_cap * 2;
+        pycc_ext_bridge_entry *grown = PyMem_Realloc(
+            pycc_ext_bridge_entries, (size_t)cap * sizeof(pycc_ext_bridge_entry));
+        if (grown == NULL) {
+            PyErr_SetRaisedException(exc);
+            return 0;
+        }
+        pycc_ext_bridge_entries = grown;
+        pycc_ext_bridge_cap = cap;
+    }
+    text = PyObject_Str(exc);
+    if (text == NULL) {
+        PyErr_Clear();
+        PyErr_SetRaisedException(exc);
+        return 0;
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(text, &utf8_len);
+    if (utf8 == NULL) {
+        Py_DECREF(text);
+        PyErr_Clear();
+        PyErr_SetRaisedException(exc);
+        return 0;
+    }
+    /* The copy completes before `text`, whose buffer `utf8` points into, is
+     * released -- the order `pycc_ext_obj_to_str` documents. The fresh +1
+     * is the message's owning reference, exactly as a string literal's is
+     * in a compiled `raise ImportError("...")`. */
+    message = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)utf8_len);
+    Py_DECREF(text);
+    if (PyErr_GivenExceptionMatches(exc, PyExc_ModuleNotFoundError)) {
+        tag = PYCC_EXT_TAG_MODULE_NOT_FOUND_ERROR;
+        class_name = PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR;
+        class_name_len = sizeof(PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR) - 1;
+    } else {
+        tag = PYCC_EXT_TAG_IMPORT_ERROR;
+        class_name = PYCC_EXT_NAME_IMPORT_ERROR;
+        class_name_len = sizeof(PYCC_EXT_NAME_IMPORT_ERROR) - 1;
+    }
+    /* `class_name` is a string literal, so it outlives the object as
+     * `pycc_rt_exception_alloc` requires. */
+    obj = pycc_rt_exception_alloc(tag, (const unsigned char *)class_name, class_name_len, message);
+    pycc_rt_exception_raise(obj);
+    /* The slot was reserved above, so this store cannot fail; the table
+     * takes over `exc`'s strong reference. */
+    pycc_ext_bridge_entries[pycc_ext_bridge_len].pycc = obj;
+    pycc_ext_bridge_entries[pycc_ext_bridge_len].orig = exc;
+    pycc_ext_bridge_len++;
+    return 1;
 }
 
 /*
@@ -2027,7 +2228,10 @@ static int pycc_ext_exec_module(PyObject *module)
          * thread-local pending state, which `pycc_ext_raise_pending` turns
          * into a live CPython exception, or -- for a body that called into
          * CPython directly -- an exception CPython already set, with no
-         * pycc pending state at all. `pycc_ext_raise_pending` returns 0 in
+         * pycc pending state at all. The first channel has a third case
+         * since #1293: a pending exception the failed-import bridge made
+         * from a CPython one, which `pycc_ext_raise_pending` finds in the
+         * bridge table and re-raises as that original object. `pycc_ext_raise_pending` returns 0 in
          * that second case, so raising unconditionally here would replace
          * the real exception (a `ModuleNotFoundError` from a failed host
          * import, say) with a message that names neither the cause nor the
@@ -2038,8 +2242,12 @@ static int pycc_ext_exec_module(PyObject *module)
         if (!pycc_ext_raise_pending() && !PyErr_Occurred()) {
             PyErr_SetString(PyExc_ImportError, "pycc module body failed");
         }
+        /* Only after the lookup above: any entry still here belongs to a
+         * bridged exception that was caught, or replaced by another. */
+        pycc_ext_bridge_table_clear();
         return -1;
     }
+    pycc_ext_bridge_table_clear();
     return 0;
 }
 
