@@ -336,3 +336,32 @@ fn receiver_spellings_adds_only_an_exact_alias_of_self() {
     assert_eq!(receiver_spellings(&[other]), vec!["self"]);
     assert_eq!(receiver_spellings(&[]), vec!["self"]);
 }
+
+#[test]
+fn container_ty_maps_both_shapes() {
+    assert_eq!(container_ty(Resolution::List(Ty::Int)), list_of(Ty::Int));
+    assert_eq!(
+        container_ty(Resolution::Dict(Ty::Str, Ty::Int)),
+        Ty::Dict(Box::new((Ty::Str, Ty::Int)))
+    );
+}
+
+#[test]
+fn a_scalar_slot_beside_a_provisional_one_is_left_as_declared() {
+    let hir = resolve(
+        "class B:\n    def __init__(self) -> None:\n        self.n = 0\n        \
+         self.xs = []\n    def add(self, v: int) -> None:\n        self.xs.append(v)\n",
+    );
+    assert_eq!(slot(&hir, "B", "n"), Ty::Int);
+    assert_eq!(slot(&hir, "B", "xs"), list_of(Ty::Int));
+}
+
+#[test]
+fn a_local_name_append_is_not_an_attribute_producer_nor_the_reverse() {
+    let hir = resolve(&format!(
+        "{INIT}    def add(self, v: int) -> None:\n        ys = []\n        \
+         ys.append(v)\n        self.xs.append(v)\n        zs = []\n        \
+         self.xs.append(v)\n        zs.append(v)\n"
+    ));
+    assert_eq!(slot(&hir, "B", "xs"), list_of(Ty::Int));
+}

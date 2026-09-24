@@ -143,15 +143,20 @@ fn produced_slot(
         match scan_body(body, target, env, &local_names[item]) {
             ProducerScan::NotFound => {}
             ProducerScan::Matched => return None,
-            ProducerScan::Resolved(resolution) => {
-                return match inferred(resolution)? {
-                    Resolution::List(element) => Some(Ty::List(Box::new(element))),
-                    Resolution::Dict(key, value) => Some(Ty::Dict(Box::new((key, value)))),
-                };
-            }
+            ProducerScan::Resolved(resolution) => return inferred(resolution).map(container_ty),
         }
     }
     None
+}
+
+/// The slot type a resolution stands for -- the inverse of
+/// `from_container_ty`. An attribute scan only ever resolves a list today
+/// (no attribute dict producer exists until #891), but the mapping is total.
+fn container_ty(resolution: Resolution) -> Ty {
+    match resolution {
+        Resolution::List(element) => Ty::List(Box::new(element)),
+        Resolution::Dict(key, value) => Ty::Dict(Box::new((key, value))),
+    }
 }
 
 /// `class`'s own instance methods in `hir.items` order (which is source
