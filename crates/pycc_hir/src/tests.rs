@@ -2267,14 +2267,14 @@ fn lowers_an_annotated_assignment_with_no_value() {
 
 #[test]
 fn rejects_an_annotated_assignment_to_a_non_name_target() {
-    // Unlike `Stmt::Assign` (which now accepts an `Expr::Attribute`
-    // target -- `obj.attr = 1` -- as of D-154 Part 1 of #375, see
-    // `stmt.rs`'s own comment on that arm), `Stmt::AnnAssign` still only
-    // accepts a bare-name target: `obj.attr: int = 1` has no
-    // attribute-annotated-assignment support anywhere in the compiler.
+    // `Stmt::AnnAssign` admits an attribute target only inside a function
+    // body, and only as `list[int] = []`/`dict[str, int] = {}` (#1264,
+    // `stmt/ann_assign.rs`); at module level `obj.attr: int = 1` is refused
+    // with a message naming the admitted form.
     assert_capability_error_message(
         "obj.attr: int = 1\n",
-        "only assigning to a bare name is supported so far",
+        "an annotated attribute target at module level is not supported yet -- only \
+         `<obj>.<attr>: list[int] = []` or `<obj>.<attr>: dict[str, int] = {}`",
     );
 }
 
@@ -6376,10 +6376,10 @@ fn a_list_assignment_target_names_its_kind() {
 }
 
 #[test]
-fn an_annotated_attribute_target_names_its_kind() {
+fn an_annotated_scalar_attribute_target_is_refused_naming_its_annotation() {
     assert_capability_error_message(
         "class C:\n    def __init__(self) -> None:\n        self.x: int = 1\n",
-        "only assigning to a bare name is supported so far, got an attribute expression (`obj.attr`)",
+        "an annotated attribute target annotated `int` with this value is not supported yet",
     );
 }
 
