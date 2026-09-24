@@ -91,7 +91,10 @@ const SLOTS: &str = "class C:\n    def __init__(self, xs: list[int], d: dict[str
 /// bodies, module scope, a function mutating a global instance, aliasing,
 /// receiver-before-argument evaluation order (a rebinding argument and a
 /// printing property getter), a property chain, `.pop()` in value position
-/// and in a comprehension, and a caught empty-list `IndexError`.
+/// and in a comprehension, and an empty-list `IndexError` caught at module
+/// scope (a function-body `try` around `return self.xs.pop()` is the
+/// accepted D-173 sentinel residual D-244's 2026-09-13 amendment records,
+/// closing with #1031).
 #[test]
 fn the_fixture_matches_its_recorded_cpython_output() {
     let dir = ScratchDir::new("e2e_1263_fixture").expect("scratch");
@@ -99,8 +102,8 @@ fn the_fixture_matches_its_recorded_cpython_output() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/attr_container_methods.py");
     assert_eq!(
         build_and_run(&dir, &fixture),
-        "4 1 40 2\n3 3\n3 2\n1 -1\n3 9\n10 9\n3 0\nempty\n-1\nempty\n-1\n8\n1 7 1 100\n\
-         1 100\n0 50\nitems\nnoisy\n2 5\n11 3\n1 100\n"
+        "4 1 40 2\n3 3\n3 2\n1 -1\n3 9\n10 9\n3 0\n8\n1 7 1 100\n1 100\n0 50\n\
+         items\nnoisy\n2 5\n11 3\n1 100\npop from empty list\n"
     );
 }
 

@@ -182,7 +182,7 @@ fn lowers_list_pop_to_mir_deriving_its_element_type_from_the_list_binding() {
 }
 
 #[test]
-#[should_panic(expected = "`xs` is not list-typed")]
+#[should_panic(expected = "`.pop()` receiver Name(\"xs\") is not list-typed")]
 fn list_pop_over_a_non_list_binding_panics_with_an_internal_error() {
     // `pycc_types` already rejects `.pop()` on a non-list base (T0033)
     // before HIR reaches `pycc_mir`, but the defensive panic path in
@@ -251,7 +251,7 @@ fn lowers_dict_get_or_default_to_mir_recursively_deriving_its_value_type() {
 }
 
 #[test]
-#[should_panic(expected = "`d` is not dict-typed")]
+#[should_panic(expected = "`.get()` receiver Name(\"d\") is not dict-typed")]
 fn dict_get_or_default_over_a_non_dict_binding_panics_with_an_internal_error() {
     // Same reasoning as `list_pop_over_a_non_list_binding_panics_with_an_internal_error`
     // above, for `HirExpr::DictGetOrDefault`'s own defensive panic path.

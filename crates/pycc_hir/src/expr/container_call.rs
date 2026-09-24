@@ -80,9 +80,11 @@ pub(super) fn lower_container_method_call(
 /// name keeps D-105's `Name` shape; anything else is lowered generically
 /// and admitted only when it is an attribute read (`HirExpr::AttrGet`,
 /// including a chain through a `@property`). A call, a subscript, and a
-/// stdlib module constant such as `sys.argv` (which lowers to
-/// `HirExpr::Name("sys.argv")`, not `AttrGet`) keep a `C0001` refusal
-/// whose wording names both accepted forms.
+/// `pycc_std`-resolved module constant such as `math.pi` (which lowers to
+/// `HirExpr::Name("math.pi")`, not `AttrGet`) keep a `C0001` refusal whose
+/// wording names both accepted forms. An attribute of a foreign module
+/// (`sys.argv`) *is* an `AttrGet` and is admitted here; `pycc_types`
+/// refuses it as `I0404` because its type is `object`.
 fn lower_container_receiver(
     attr: &pycc_ast::ExprAttribute,
     refusal: &str,

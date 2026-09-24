@@ -450,8 +450,8 @@ fn instance_container_slots_matches_cpython_3_14_7_byte_for_byte() {
 }
 
 // #1263 (Part 2 of #1218): `.append()`, `.pop()` and `.get(k, default)` on
-// an instance-attribute receiver, including evaluation order and a caught
-// empty-list `IndexError` in a method body.
+// an instance-attribute receiver, including evaluation order and an
+// empty-list `IndexError` caught at module scope.
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
 fn attr_container_methods_matches_cpython_3_14_7_byte_for_byte() {

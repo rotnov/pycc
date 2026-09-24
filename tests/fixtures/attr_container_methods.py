@@ -33,13 +33,6 @@ class Stack:
             acc = acc + self.xs.pop()
         return acc
 
-    def safe_take(self) -> int:
-        try:
-            return self.xs.pop()
-        except IndexError:
-            print("empty")
-            return -1
-
 
 class Holder:
     def __init__(self, xs: list[int]) -> None:
@@ -61,17 +54,6 @@ class Holder:
         return 5
 
 
-def safe_pop(xs: list[int]) -> int:
-    # The bare-name form of `Stack.safe_take`: an empty-list `IndexError`
-    # is catchable inside a function body too.
-    try:
-        v = xs.pop()
-        return v
-    except IndexError:
-        print("empty")
-        return -1
-
-
 def mutate_global() -> None:
     g.xs.append(g.counts.get("z", 40))
 
@@ -88,10 +70,8 @@ def main() -> None:
     ys.append(10)
     print(s.xs.pop(), s.xs.pop())
     print(s.drain(), len(s.xs))
-    print(s.safe_take())
-    print(safe_pop(s.xs))
     s.xs.append(8)
-    print(s.safe_take())
+    print(s.xs.pop())
     # Evaluation order: the receiver is read before `swap()` rebinds it.
     old = s.xs
     s.xs.append(s.swap())
@@ -116,3 +96,10 @@ mutate_global()
 mutate_global()
 print(len(g.xs), g.xs[1], g.xs.pop(), g.counts.get("y", 0))
 main()
+# An empty attribute receiver raises a catchable `IndexError`.
+e = Stack([5], {"a": 1})
+e.xs.pop()
+try:
+    e.xs.pop()
+except IndexError as err:
+    print(err)

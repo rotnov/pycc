@@ -103,13 +103,6 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // a documented no-op on it, so a refused allocation leaves nothing
         // for the unwind path to release.
         | MirExpr::BufferAlloc { .. }
-        // #1263: `ListPop` joins `BufferGet` on the identical, live
-        // argument -- `pycc_rt_int_list_pop` sets pycc's own D-173 pending
-        // `IndexError` and returns a sentinel on an empty list, and its
-        // documented contract is that the caller checks the flag after the
-        // call. Classified infallible before, so the `IndexError` escaped a
-        // function-body `try` that should have caught it.
-        | MirExpr::ListPop { .. }
         // #1254 (D-250): a comprehension expression runs a whole loop whose
         // iterable, condition and elements may each raise -- a `range` step
         // of `0` or a `1 // 0` element -- so it is always fallible, exactly
@@ -144,6 +137,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::SetLiteral(_)
         | MirExpr::TupleLiteral(_)
         | MirExpr::Slice { .. }
+        | MirExpr::ListPop { .. }
         | MirExpr::DictGetOrDefault { .. }
         | MirExpr::SetAdd { .. }
         | MirExpr::AttrGet { .. }
@@ -1754,12 +1748,6 @@ mod tests {
                 ty: pycc_mir::Ty::MemoryView,
             }),
             index: Box::new(MirExpr::IntLiteral(0)),
-        }));
-        // #1263: an empty-list `.pop()` raises `IndexError` through the
-        // pending state, whatever its receiver.
-        assert!(expression_can_set_exception(&MirExpr::ListPop {
-            list: pycc_mir::MirContainerReceiver::Name("xs".to_string()),
-            ty: pycc_mir::Ty::Int,
         }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }
