@@ -86,8 +86,8 @@ pub(super) fn lower_expr(
             // way a name typed `object` here is one the checker admitted as
             // such. Checked
             // first, mirroring `pycc_types`' callee-first gate, so no
-            // builtin interception below can claim a foreign name that
-            // happens to spell one. The probe is non-panicking (`lookup`
+            // builtin interception below can claim an object-typed name
+            // that happens to spell one. The probe is non-panicking (`lookup`
             // panics on an unbound name, which every ordinary function
             // callee is), and the reverse scan finds a function-local that
             // spells a foreign name first, with its own non-`object` type.

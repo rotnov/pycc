@@ -112,7 +112,8 @@ fn a_direct_call_can_set_an_exception() {
 
 /// The defensive arm in `foreign_attr::expect_object_pointer`, reached
 /// through a direct call: `pycc_mir` builds `ObjCall` only over a
-/// `Ty::Object` callee, and the panic text names that node.
+/// `Ty::Object` callee. The panic text is shared by every foreign-object
+/// operation and deliberately names no node.
 #[test]
 #[should_panic(expected = "did not evaluate to a CPython object")]
 fn a_non_object_callee_is_an_internal_error() {

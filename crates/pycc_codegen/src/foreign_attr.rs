@@ -43,9 +43,11 @@ fn obj_getattr_fn<'ctx>(
     )
 }
 
-/// The object operand of a foreign-object operation -- an attribute load's
-/// or method call's base, a direct call's callee, a subscript's base, or a
-/// `for` loop's iterable -- as a `PyObject *`.
+/// The object operand of a foreign-object operation -- for example an
+/// attribute load's or method call's base, a direct call's callee, a
+/// subscript's base, a `for` loop's iterable, or the operand of `len`, a
+/// truth test, a conversion or a tuple unpack (`foreign_len`) -- as a
+/// `PyObject *`.
 ///
 /// `pycc_mir`'s lowering builds each of those nodes only where the
 /// operand's inferred type is `Ty::Object` (for example `pycc_mir::expr`'s
