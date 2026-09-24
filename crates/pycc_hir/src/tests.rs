@@ -22,6 +22,9 @@ use crate::expr::{lower_comprehension_header, rename_name_in_expr};
 // private helpers through `use super::*`.
 mod subscript_annotations;
 
+// Comprehensions in expression position (#1254, D-250).
+mod comprehension_expr;
+
 // `ClassVar` in a `@dataclass` body (#913, D-235) likewise lives in its own
 // child module for the same reason.
 mod dataclass_class_vars;
@@ -3123,7 +3126,7 @@ fn lowers_a_set_comprehension_with_an_if_filter() {
     // `SetCompAssign`'s own `cond` field needs a dedicated if-filter
     // test distinct from the plain set-comprehension test above: the
     // `cond.map(|c| rename_name_in_expr(...))` closure inside
-    // `lower_set_comp_assign` is only reached when `cond.is_some()`.
+    // `lower_set_comp` is only reached when `cond.is_some()`.
     let module = pycc_parser_test_helper::parse("y = {i for i in range(5) if i}\n");
     let hir = lower_checked(&module).unwrap();
     assert_eq!(
@@ -3145,7 +3148,7 @@ fn lowers_a_set_comprehension_with_an_if_filter() {
 #[test]
 fn lowers_a_dict_comprehension_with_an_if_filter() {
     // Same reasoning as `lowers_a_set_comprehension_with_an_if_filter`
-    // above, for `lower_dict_comp_assign`'s own `cond.map(...)` closure.
+    // above, for `lower_dict_comp`'s own `cond.map(...)` closure.
     let module = pycc_parser_test_helper::parse("y = {i: i for i in range(5) if i}\n");
     let hir = lower_checked(&module).unwrap();
     assert_eq!(
@@ -3198,14 +3201,13 @@ fn an_async_for_comprehension_is_unsupported() {
 }
 
 #[test]
-fn a_comprehension_used_as_a_call_argument_is_not_specially_recognized() {
-    // Pins the "only `Stmt::Assign`-RHS position" restriction (D-117): a
-    // comprehension anywhere else still falls through to `lower_expr`'s
-    // existing generic catch-all, not a new comprehension-specific
-    // error path.
+fn an_async_comprehension_in_expression_position_is_unsupported() {
+    // #1254 (D-250) lifted D-117's "only `Stmt::Assign`-RHS position"
+    // restriction; the expression form shares the header checks, so its
+    // refusals match the statement form's.
     assert_capability_error_message(
-        "print([i for i in range(3)])\n",
-        "expression kind not supported yet",
+        "print([i async for i in xs])\n",
+        "async comprehensions are not supported yet",
     );
 }
 
@@ -3322,17 +3324,17 @@ fn a_comprehension_range_call_with_keyword_arguments_is_unsupported() {
 // The eight tests below each exercise one `?`-propagation region on its
 // own `?` operator's specific call site (mirroring this file's existing
 // "the five tests below exercise each new arm's own `?`-propagation
-// path specifically" precedent above): `lower_set_comp_assign` and
-// `lower_dict_comp_assign` are structurally near-identical to
-// `lower_list_comp_assign`, but each function's own `?` is a distinct
+// path specifically" precedent above): `lower_set_comp` and
+// `lower_dict_comp` are structurally near-identical to
+// `lower_list_comp`, but each function's own `?` is a distinct
 // coverage region, so an error test against one function's call site
 // does not also cover its sibling's.
 
 #[test]
 fn a_set_comprehension_with_an_unsupported_header_propagates_the_header_error() {
     // Exercises both `Stmt::Assign`'s own `Expr::SetComp(comp) =>
-    // lower_set_comp_assign(...)?` call site and
-    // `lower_set_comp_assign`'s own internal
+    // lower_set_comp(...)?` call site and
+    // `lower_set_comp`'s own internal
     // `lower_comprehension_header(&comp.generators)?` call site in one
     // test, since the header error propagates through both in the same
     // nested call.
@@ -3412,7 +3414,7 @@ fn dict_comp_key_unpacking_parses_successfully_and_is_rejected_at_lowering() {
     // `ruff_python_parser`: it parses this successfully as
     // `ExprDictComp { key: None, value: Name("x"), .. }`, silently
     // dropping the `**` rather than erroring -- so `pycc_parser::parse`
-    // itself succeeds here, and `lower_dict_comp_assign` is the one
+    // itself succeeds here, and `lower_dict_comp` is the one
     // that must reject it, with an ordinary `C0001` capability
     // diagnostic instead of a panic.
     assert!(pycc_parser::parse("y = {**x for k in z}\n").is_ok());
@@ -7034,8 +7036,9 @@ fn a_user_defined_class_named_list_still_wins_over_the_builtin_container() {
 fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
     // The protocol-attribute `AnnAssign` branch ran no type gate at all
     // before #918, because no annotation syntax could produce a container
-    // `Ty` there. A container-typed protocol attribute is unsatisfiable --
-    // no class can declare a container-typed attribute slot at all -- so it
+    // `Ty` there. A container-typed protocol attribute is not supported
+    // yet -- conformance checking for one is its own seam, even though
+    // #1262 lets a class hold a `list[int]`/`dict[str, int]` slot -- so it
     // is rejected, while every non-container attribute type keeps working
     // exactly as before. The asymmetry with a protocol *method*'s
     // parameter, which does lower, is deliberate and pinned by
@@ -7046,7 +7049,7 @@ fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
     assert_eq!(diagnostic.code, "C0001");
     assert_eq!(
         diagnostic.message,
-        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet -- no class could satisfy it, because every class attribute slot is restricted to a scalar type (`int`, `float`, `bool`, `str`); a container type in a protocol method's parameter is supported"
+        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet as a protocol attribute; a container type in a protocol method's parameter is supported"
     );
     let module = pycc_parser_test_helper::parse(
         "from typing import Protocol\n\n\nclass P(Protocol):\n    n: int\n",
@@ -7059,8 +7062,7 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
     // The counterpart to the test above, pinning the deliberate asymmetry of
     // D-228 decision 10. The gate lives only in the protocol body's
     // `AnnAssign` arm, so it rejects a container-typed protocol *attribute*
-    // (which no class could ever satisfy -- every class attribute slot is
-    // restricted to `is_scalar_slot_type`). A protocol *method*'s parameter
+    // (not supported yet as a protocol attribute). A protocol *method*'s parameter
     // is an ordinary parameter position: it routes through
     // `crate::lower_arg_list` -> `annotation_to_ty` with no container gate,
     // and the resulting program builds and runs (pinned end to end by

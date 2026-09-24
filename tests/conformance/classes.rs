@@ -426,3 +426,46 @@ fn del_name_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/del_name.py"
     );
 }
+
+// #1262 (Part 1 of #1218): `list[int]`/`dict[str, int]` instance attributes
+// seeded from an `__init__` parameter, read, mutated through an alias,
+// reassigned in a method and inherited by a subclass.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn instance_container_slots_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/instance_container_slots.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("instance_container_slots_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/instance_container_slots.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("instance_container_slots_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/instance_container_slots.py"
+    );
+}
+
+// #1254 (Part 1 of #1214, D-250): list, set and dict comprehensions in any
+// expression position, including nested ones and ones inside `try`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn comprehension_expr_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/comprehension_expr.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("comprehension_expr_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/comprehension_expr.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("comprehension_expr_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/comprehension_expr.py"
+    );
+}

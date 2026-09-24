@@ -281,3 +281,114 @@ fn a_comprehension_over_a_non_list_non_dict_non_set_binding_panics_with_an_inter
     };
     build(&hir);
 }
+
+// -- #1254 (D-250): comprehensions in expression position --
+
+fn module_of(items: Vec<HirStmt>) -> HirModule {
+    HirModule {
+        seeded_builtin_exception_classes: false,
+        items: items.into_iter().map(HirItem::TopLevelStmt).collect(),
+        type_aliases: Vec::new(),
+        imports: Vec::new(),
+        class_defs: Vec::new(),
+    }
+}
+
+fn comp(var: &str, iter: CompIter, cond: Option<HirExpr>, elt: pycc_hir::CompElt) -> HirExpr {
+    HirExpr::Comprehension(Box::new(pycc_hir::HirComprehension {
+        var: var.to_string(),
+        iter,
+        cond,
+        elt,
+    }))
+}
+
+fn int_name(name: &str) -> MirExpr {
+    MirExpr::Name {
+        name: name.to_string(),
+        ty: Ty::Int,
+    }
+}
+
+#[test]
+fn an_expression_list_comprehension_lowers_its_filter_and_element_against_the_loop_variable() {
+    let hir = module_of(vec![HirStmt::ExprStmt(HirExpr::Call {
+        callee: "len".to_string(),
+        args: vec![comp(
+            "0comp_i",
+            CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            Some(HirExpr::Name("0comp_i".to_string())),
+            pycc_hir::CompElt::List(HirExpr::Name("0comp_i".to_string())),
+        )],
+    })]);
+    let mir = build(&hir);
+    let MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call { args, .. })) = &mir.items[0] else {
+        panic!("expected a `len` call statement, got {:?}", mir.items[0]);
+    };
+    let expected = MirExpr::Comprehension(Box::new(MirComprehension {
+        var: "0comp_i".to_string(),
+        var_ty: Ty::Int,
+        source: CompSource::Range {
+            start: MirExpr::IntLiteral(0),
+            stop: MirExpr::IntLiteral(3),
+            step: MirExpr::IntLiteral(1),
+        },
+        cond: Some(int_name("0comp_i")),
+        elt: MirCompElt::List(int_name("0comp_i")),
+    }));
+    assert_eq!(args[0], expected);
+    assert_eq!(expected.ty(), Ty::List(Box::new(Ty::Int)));
+    // The loop variable is node-scoped: there is nothing to predeclare.
+    let mut found = Vec::new();
+    expected.collect_named_expr_bindings(&mut found);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn expression_set_and_dict_comprehensions_over_a_dict_bind_the_key_type() {
+    let dict = HirStmt::Assign {
+        target: "d".to_string(),
+        value: HirExpr::DictLiteral(vec![(
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::IntLiteral(1),
+        )]),
+    };
+    let set_comp = comp(
+        "0comp_k",
+        CompIter::Name("d".to_string()),
+        None,
+        pycc_hir::CompElt::Set(HirExpr::IntLiteral(7)),
+    );
+    let dict_comp = comp(
+        "0comp_k",
+        CompIter::Name("d".to_string()),
+        None,
+        pycc_hir::CompElt::Dict {
+            key: HirExpr::Name("0comp_k".to_string()),
+            value: HirExpr::IntLiteral(2),
+        },
+    );
+    let mir = build(&module_of(vec![
+        dict,
+        HirStmt::ExprStmt(set_comp),
+        HirStmt::ExprStmt(dict_comp),
+    ]));
+    let MirItem::TopLevelStmt(MirStmt::ExprStmt(set_mir)) = &mir.items[1] else {
+        panic!("expected an expression statement, got {:?}", mir.items[1]);
+    };
+    let MirItem::TopLevelStmt(MirStmt::ExprStmt(dict_mir)) = &mir.items[2] else {
+        panic!("expected an expression statement, got {:?}", mir.items[2]);
+    };
+    assert_eq!(set_mir.ty(), Ty::Set(Box::new(Ty::Int)));
+    assert_eq!(dict_mir.ty(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+    let MirExpr::Comprehension(dict_comp) = dict_mir else {
+        panic!("expected a comprehension, got {dict_mir:?}");
+    };
+    assert_eq!(dict_comp.var_ty, Ty::Str);
+    assert_eq!(dict_comp.source, CompSource::Dict("d".to_string()));
+    assert_eq!(dict_comp.cond, None);
+}

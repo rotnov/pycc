@@ -34,12 +34,6 @@ fn synthesize_chain_temp_name(offset: u32) -> String {
     format!("{CHAIN_TEMP_PREFIX}{offset}")
 }
 
-/// Whether `name` is a chained-assignment temporary rather than a name the
-/// program's source wrote.
-pub(crate) fn is_chain_temp_name(name: &str) -> bool {
-    name.starts_with(CHAIN_TEMP_PREFIX)
-}
-
 /// Lowers `stmt` into the statements it means: one for every statement
 /// except a chained assignment (`a = b = e`, #1213), which
 /// [`desugar_chain_assign`] expands into one single-target
@@ -235,9 +229,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_temporary_name_is_recognized_as_one() {
-        assert!(is_chain_temp_name(&synthesize_chain_temp_name(17)));
-        assert!(!is_chain_temp_name("chain_17"));
-        assert!(!is_chain_temp_name("0comp_17_x"));
+    fn only_a_synthesized_name_is_recognized_as_one() {
+        use crate::module::is_synthesized_name;
+        assert!(is_synthesized_name(&synthesize_chain_temp_name(17)));
+        assert!(is_synthesized_name("0comp_17_x"));
+        assert!(!is_synthesized_name("chain_17"));
+        assert!(!is_synthesized_name("_0comp"));
+        assert!(!is_synthesized_name(""));
     }
 }

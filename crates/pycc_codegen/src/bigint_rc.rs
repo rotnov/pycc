@@ -548,6 +548,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // match -- a permanently-unreachable-for-Int case grouped here
         // purely so the match stays exhaustive.
         | MirExpr::NamedExpr { .. }
+        // #1254 (D-250): a comprehension's `.ty()` is always a container,
+        // never `Ty::Int`, so like `Not` below it can never reach this
+        // function; it joins the combined answer for the same reason.
+        | MirExpr::Comprehension(_)
         // `Not`'s own `.ty()` is always `Ty::Bool` (#604, Part 3 of #573),
         // never `Ty::Int`, so like `OptionalWrap`/`ExceptionMessage` above
         // it can never reach this function as the `Ty::Int`-classified

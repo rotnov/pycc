@@ -669,6 +669,75 @@ pub enum HirExpr {
         name: String,
         value: Box<HirExpr>,
     },
+    /// A list, set or dict comprehension in expression position (#1254,
+    /// D-250): a call argument, a `return` value, an operand, an `if`/
+    /// `while` test, an f-string interpolation. Its loop variable is scoped
+    /// to this node -- `var` is the D-117 synthesized name, bound only while
+    /// `cond` and the element expressions are checked and evaluated, and
+    /// never a binding of the enclosing scope. `name = <comp>` keeps lowering
+    /// to the statement forms (`HirStmt::ListCompAssign` and its siblings).
+    /// Boxed: the node is large and rare.
+    Comprehension(Box<HirComprehension>),
+}
+
+/// The parts of a [`HirExpr::Comprehension`] (#1254, D-250). `var` is the
+/// synthesized loop-variable name, already substituted for the source name
+/// throughout `cond` and `elt` (and in a nested comprehension's own
+/// iterable); `iter` is evaluated in the enclosing scope and is not renamed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirComprehension {
+    pub var: String,
+    pub iter: CompIter,
+    pub cond: Option<HirExpr>,
+    pub elt: CompElt,
+}
+
+impl HirComprehension {
+    /// Every sub-expression, in evaluation order: the range operands (in
+    /// the enclosing scope), then `cond`, then the element expressions (a
+    /// dict's key before its value). For walkers that only need to visit
+    /// each sub-expression once, whatever scope it is evaluated in.
+    pub fn sub_exprs(&self) -> Vec<&HirExpr> {
+        let mut out = Vec::new();
+        if let CompIter::Range { start, stop, step } = &self.iter {
+            out.extend([start, stop, step]);
+        }
+        out.extend(self.body_exprs());
+        out
+    }
+
+    /// The per-iteration sub-expressions, in evaluation order: `cond`, then
+    /// the element expressions. These are the ones evaluated with `var`
+    /// bound.
+    pub fn body_exprs(&self) -> Vec<&HirExpr> {
+        let mut out: Vec<&HirExpr> = self.cond.iter().collect();
+        match &self.elt {
+            CompElt::List(e) | CompElt::Set(e) => out.push(e),
+            CompElt::Dict { key, value } => out.extend([key, value]),
+        }
+        out
+    }
+
+    /// [`HirComprehension::body_exprs`], mutably, for rewriting passes.
+    pub fn body_exprs_mut(&mut self) -> Vec<&mut HirExpr> {
+        let mut out: Vec<&mut HirExpr> = self.cond.iter_mut().collect();
+        match &mut self.elt {
+            CompElt::List(e) | CompElt::Set(e) => out.push(e),
+            CompElt::Dict { key, value } => out.extend([key, value]),
+        }
+        out
+    }
+}
+
+/// A comprehension's element expressions, by kind (#1254).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompElt {
+    /// `[elt for ...]`, producing `list[int]`.
+    List(HirExpr),
+    /// `{elt for ...}`, producing `set[int]`.
+    Set(HirExpr),
+    /// `{key: value for ...}`, producing `dict[str, int]`.
+    Dict { key: HirExpr, value: HirExpr },
 }
 
 /// What the container reading of a [`HirExpr::ReceiverDispatchedCall`] is
@@ -694,7 +763,8 @@ pub enum FStringPart {
 /// `HirStmt::ForList`'s own iterable polymorphism verbatim (a bare name is
 /// resolved to `Ty::List`/`Ty::Dict`/`Ty::Set` downstream by
 /// `pycc_types`/`pycc_mir`, exactly like a plain `for` loop) rather than
-/// inventing a narrower, comprehension-specific iterable gate.
+/// inventing a narrower, comprehension-specific iterable gate. Shared by
+/// the `*CompAssign` statements and [`HirComprehension`] (#1254).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompIter {
     Range {
@@ -792,10 +862,10 @@ pub enum HirStmt {
     /// `target = [elt for var in iter [if cond]]` (PR-12, D-117). Scoped to
     /// exactly one `for` clause and at most one `if` filter; only lowered
     /// when the comprehension is the direct RHS of a bare-name
-    /// `Stmt::Assign` (see that arm's own handling below) -- anywhere else
-    /// a comprehension expression appears, `lower_expr` has no arm for it
-    /// and it falls through to that function's existing generic
-    /// "expression kind not supported yet" catch-all. `var` is already the
+    /// `Stmt::Assign` (see that arm's own handling below). Anywhere else a
+    /// comprehension appears it lowers to [`HirExpr::Comprehension`] (#1254,
+    /// D-250); this statement form is built from that same
+    /// [`HirComprehension`] by `comp_assign_stmt`. `var` is already the
     /// D-117 synthesized internal name, not the source spelling -- every
     /// occurrence of the source name inside `cond`/`elt` has already been
     /// rewritten by `rename_name_in_expr` before this node is constructed,

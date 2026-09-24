@@ -1658,6 +1658,9 @@ pub(crate) fn infer_expr_in(
             }
             Ok(ty)
         }
+        HirExpr::Comprehension(comp) => {
+            crate::comprehension::infer_comprehension(env, local_names, comp)
+        }
     }
 }
 
@@ -1721,7 +1724,7 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
 /// Python this compiler version does not implement yet" spelling.
 ///
 /// "Every read" is two seams, not one. `HirStmt::ForList` and
-/// `HirExpr::ListComp` hold their iterable as a plain `String` rather than a
+/// `HirExpr::Comprehension` hold their iterable as a plain `String` rather than a
 /// `HirExpr::Name` (D-105's HIR shape), so `for x in v` never reaches
 /// `infer_expr_in`'s `Name` arm; `lib.rs`'s `lookup_bound_name` is the other
 /// caller, and it calls this for the same reason it calls
