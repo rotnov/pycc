@@ -19,6 +19,10 @@ status: accepted
   simply that class-level attribute assignments did not exist at all. Landing them
   removes that reason, so the deferral needs a new, explicitly-implemented
   precondition rather than an accidental one.
+- Amendment (2026-09-24): the D-154 paraphrase in the context above predates #1262 (Part 1
+  of #1218), after which an instance attribute slot can also hold a leak-only `list[int]` or
+  `dict[str, int]` pointer seeded from an `__init__` parameter (D-154's 2026-09-24 amendment).
+  This decision is unaffected: a class-level attribute is a compile-time constant with no slot.
 - Decision: a class-level attribute is a **compile-time constant**, not a storage
   location. Its annotation must resolve to a scalar slot type — `int`, `float`,
   `bool`, or `str` — and its initializer must be a literal of that type (an `int`
