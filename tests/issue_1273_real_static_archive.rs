@@ -131,6 +131,7 @@ fn archive_or_refusal(dir: &Path, python: &Path) -> Option<PathBuf> {
         "{rendered}"
     );
     assert!(!dir.join("app").exists());
+    assert!(!dir.join("app.pycc").exists());
     None
 }
 
@@ -382,6 +383,7 @@ fn a_real_static_libpython_bundles_a_locked_closure_and_matches_cpython_3_14_7()
         ])
         .output()
         .expect("spawn the venv interpreter");
+    assert!(site.status.success(), "{}", stderr_of(&site));
     let site = PathBuf::from(stdout_of(&site).trim());
     write_dist(
         &site,
