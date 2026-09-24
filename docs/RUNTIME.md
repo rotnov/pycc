@@ -765,8 +765,9 @@ listed name to the CPython object `<name>.<a>`, typed `object` like the module
 binding, so `from itertools import product` holds CPython's own
 `itertools.product`. Only that shape is admitted. An aliased name
 (`from X import a as b`), the wildcard, a dotted module (`from X.Y import a`,
-[#1138](https://github.com/rotnov/pycc/issues/1138)), a relative import and a
-from-import inside a block body keep their `C0001`, and so does a name pycc
+[#1138](https://github.com/rotnov/pycc/issues/1138)) and a from-import inside a
+block body keep their `C0001` (a relative import never reaches this channel and
+keeps its own `T0021`), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
 `from numpy import ndarray`), because binding it to a CPython object would
 change what every later use of that spelling means. Each name is its own
@@ -859,8 +860,8 @@ CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
    name, as CPython sets them. The message, `.name` and the fallback key come
    from the module object's `__name__`, not from the requested string.
 
-`tests/issue_1278_from_foreign_import.rs` compares the success path, the
-submodule fallback (`from xml import dom`) and the missing-name `ImportError`
+`tests/issue_1278_from_foreign_import.rs` compares the success path (in the
+entry module and in a linked dependency module), the submodule fallback (`from xml import dom`) and the missing-name `ImportError`
 (its message, `.name`, `.path` and `.name_from`) against the host
 interpreter's own run of the same source; the missing-`__import__` branch and
 a non-`AttributeError` lookup failure are not exercised by a test. Like `pycc_ext_obj_import`, the

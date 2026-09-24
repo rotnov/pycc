@@ -312,6 +312,34 @@ fn a_from_import_binds_the_cpython_object_in_the_host() {
     );
 }
 
+/// A dependency module's from-import runs when the linked program executes
+/// the dependency's body, as in CPython: `dep.py` is lark's own shape
+/// (`lark/utils.py` is a dependency module), and the entry observes the
+/// foreign object only through a native `str` the dependency exports.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_dependency_module_s_from_import_runs_in_the_host() {
+    let dir = ScratchDir::new("from_foreign_two_modules_hosted").expect("scratch");
+    write(
+        &dir,
+        "dep.py",
+        "from itertools import product\n\
+         nm = str(product.__name__)\n\n\n\
+         def name() -> str:\n    return nm\n",
+    );
+    build_ext(
+        &dir,
+        "pycc_from_two_modules_mod",
+        "from dep import name\nprint(name())\n",
+    );
+    let compiled = python(&dir, &raised_report("import pycc_from_two_modules_mod"));
+    assert_ok(&compiled);
+    let oracle = python(&dir, &raised_report("runpy.run_path('m.py')"));
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&compiled), stdout_of(&oracle));
+    assert_eq!(stdout_of(&compiled), "product\nno error\n");
+}
+
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_from_import_of_functions_binds_each_in_the_host() {
