@@ -612,10 +612,11 @@ T0041 fires when a local name is assigned on only some of the control-flow \
 paths that can reach a later read of it -- e.g. inside an `if` with no \
 `else`, or inside a `while`/`for` body that might run zero times -- rather \
 than on every path (issue #118 Part 1). After a `try`, a name is bound \
-when the body and every `except` handler that can fall through the \
-statement bind it (#1289); a handler that binds nothing (`except E: pass`), a read inside \
-`finally`, or a read of an `except ... as` name after its handler is still \
-T0041. This is pycc's strict AOT \
+when every path that completes the statement binds it (#1289): the `else` \
+path after a completed body, plus every handler whose body does not always \
+return or raise. A handler that binds nothing (`except E: pass`), a read \
+inside `finally`, or a read after the statement of any name some handler \
+binds with `except ... as` is still T0041. This is pycc's strict AOT \
 equivalent of CPython's `UnboundLocalError`, but caught at compile time via \
 a three-state binding model (definitely bound / maybe bound / unbound) \
 tracked across `if`/`while`/`for`/`try` control-flow joins, instead of at \

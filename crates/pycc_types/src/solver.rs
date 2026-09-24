@@ -233,16 +233,17 @@ pub(crate) fn join_loop_body_solver(
 ///
 /// `paths` holds the `else` path (present only when neither the body nor
 /// `else` always terminates) and every handler whose body does not always
-/// terminate, each with its own `as` name already marked maybe-bound. A name
-/// is definite in a path when it has a term or an opaque marker there and is
-/// not maybe-bound. With no fall-through path nothing is promoted: control
-/// never reaches the code after the statement. Names in `pre_existing` are
-/// never promoted, matching [`join_if_branches_solver`]'s own restriction to
-/// names the branches introduce; their state is left to the joins.
+/// terminate. A name is definite in a path when it has a term or an opaque
+/// marker there and is not maybe-bound. With no fall-through path nothing is
+/// promoted: control never reaches the code after the statement. Names in
+/// `excluded` are never promoted and their state is left to the joins: the
+/// names bound before the statement, matching [`join_if_branches_solver`]'s
+/// own restriction to names the branches introduce, and every handler's `as`
+/// name, whose slot codegen cannot share with a later read.
 pub(crate) fn promote_try_fallthrough(
     env: &mut ConstraintEnvironment,
     paths: &[ConstraintEnvironment],
-    pre_existing: &HashSet<String>,
+    excluded: &HashSet<String>,
 ) {
     let definite = |path: &ConstraintEnvironment, name: &String| {
         (path.bindings.contains_key(name) || path.opaque_bindings.contains(name))
@@ -255,7 +256,7 @@ pub(crate) fn promote_try_fallthrough(
         .bindings
         .keys()
         .chain(first.opaque_bindings.iter())
-        .filter(|name| !pre_existing.contains(*name))
+        .filter(|name| !excluded.contains(*name))
         .filter(|name| definite(first, name) && rest.iter().all(|path| definite(path, name)))
         .cloned()
         .collect();

@@ -198,6 +198,45 @@ print(x)
     assert_eq!(code_of(src), "T0041");
 }
 
+/// A name any handler binds with `as` is never promoted by the try join,
+/// even when the handler always terminates and every fall-through path binds
+/// the name: its slot holds the exception instance on that handler's path,
+/// and codegen cannot share it with a later read of an `int`. pycc refuses
+/// what CPython accepts, rather than miscompiling it.
+#[test]
+fn an_as_name_is_never_promoted_even_when_its_handler_terminates() {
+    let function = "\
+def f(d: int) -> int:
+    try:
+        e = 10 // d
+    except ZeroDivisionError as e:
+        raise
+    return e
+print(f(5))
+";
+    assert_eq!(code_of(function), "T0041");
+    let module = "\
+d = 5
+try:
+    e = 10 // d
+except ZeroDivisionError as e:
+    raise
+print(e)
+";
+    assert_eq!(code_of(module), "T0041");
+    let other_handler_binds = "\
+def f(d: int) -> int:
+    try:
+        e = 10 // d
+    except ZeroDivisionError as e:
+        raise
+    except ValueError:
+        e = 0
+    return e
+";
+    assert_eq!(code_of(other_handler_binds), "T0041");
+}
+
 // -- The check phase: the type walk --
 
 /// Two `as` handlers binding the same spelling to different exception
@@ -497,6 +536,25 @@ def _h(d):
 
 
 print(_h(0))
+";
+    assert_eq!(code_of(src), "T0021");
+}
+
+/// The solver mirrors the check phase: a name any handler binds with `as`
+/// is not promoted even when its handler terminates, so the helper's return
+/// type is not inferable from it.
+#[test]
+fn the_solver_never_promotes_an_as_name() {
+    let src = "\
+def _h(d):
+    try:
+        e = 10 // d
+    except ZeroDivisionError as e:
+        raise
+    return e
+
+
+print(_h(5))
 ";
     assert_eq!(code_of(src), "T0021");
 }

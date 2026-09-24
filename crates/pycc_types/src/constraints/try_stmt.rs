@@ -31,9 +31,9 @@ pub(super) struct TryShape<'a> {
 /// such as `try: r = 10 // d / except ZeroDivisionError: r = -1 / return r`
 /// failed with `T0021`. The paths that fall through the statement -- the
 /// `else` path after a completed body, and every handler whose body does not
-/// always terminate, with its `as` name unbound on exit (CPython's implicit
-/// `del`) -- are collected and handed to
-/// [`solver::promote_try_fallthrough`], mirroring the check phase's
+/// always terminate -- are collected and handed to
+/// [`solver::promote_try_fallthrough`], with every handler's `as` name
+/// excluded from promotion, mirroring the check phase's
 /// `exception::try_join::join_try_outcome`.
 pub(super) fn collect_try_constraints(
     signatures: &HashMap<String, SignatureTerms>,
@@ -104,9 +104,6 @@ pub(super) fn collect_try_constraints(
         )?;
         solver::join_loop_body_solver(env, &henv, &pre_existing);
         if !crate::block_always_returns(&handler.body) {
-            if let Some(name) = &handler.name {
-                henv.maybe_bindings.insert(name.clone());
-            }
             fallthrough.push(henv);
         }
     }
@@ -126,7 +123,12 @@ pub(super) fn collect_try_constraints(
     if !crate::block_always_returns(shape.body) && !crate::block_always_returns(shape.orelse) {
         fallthrough.push(else_env);
     }
-    solver::promote_try_fallthrough(env, &fallthrough, &pre_existing);
+    // A name any handler binds with `as` is never promoted: its slot holds
+    // an exception instance on that handler's path, and codegen cannot
+    // represent a later read of it (see `promote_try_fallthrough`).
+    let mut excluded = pre_existing;
+    excluded.extend(shape.handlers.iter().filter_map(|h| h.name.clone()));
+    solver::promote_try_fallthrough(env, &fallthrough, &excluded);
     // The finally body always runs — collect in-place.
     collect_block_constraints(
         signatures,

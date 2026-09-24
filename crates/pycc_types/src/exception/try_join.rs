@@ -6,6 +6,7 @@
 //! delete prescan moved with it because the join is its only caller.
 
 use super::*;
+use std::collections::HashSet;
 
 /// A checked `try`/`try*` statement's parts together with the environment
 /// each of its paths ended in, which is everything [`join_try_outcome`]
@@ -38,10 +39,10 @@ pub(super) struct TryPaths<'a> {
 /// same spelling, an ordinary binding included, because codegen already
 /// stores differing exception instances in one slot. So `try: e = 10 // d /
 /// except ZeroDivisionError as e: ...` is accepted, as it was before #1289.
-/// The exemption is safe because the handler's exit demotes that name to
-/// `Maybe`, so it is possibly unbound after the statement and every read of
-/// it there is `T0041`. The first-established type becomes the type after the
-/// statement of every other name.
+/// The exemption is safe because such a name is never made definite by this
+/// join (below), so every read of it after the statement stays under the
+/// pre-#1289 conservative handling and is `T0041`. The first-established type
+/// becomes the type after the statement of every other name.
 ///
 /// `join_if_branches` is deliberately not used to fold the paths: it checks
 /// `is_assignable(first, later)`, the reverse direction, and keeps the first
@@ -52,10 +53,16 @@ pub(super) struct TryPaths<'a> {
 ///
 /// **Definiteness, over the paths that fall through the statement only.**
 /// Those are the `else` path (when neither the body nor `else` always
-/// terminates) and every handler whose body does not always terminate, with
-/// the handler's `as` name demoted to `Maybe` on its exit: CPython unbinds it
-/// there with an implicit `del`. A name is `Definitely` bound after the
-/// statement when it is `Definitely` bound on every such path.
+/// terminates) and every handler whose body does not always terminate. A
+/// name is `Definitely` bound after the statement when it is `Definitely`
+/// bound on every such path. A name that any handler of the statement binds
+/// with `as` is never promoted this way and keeps its conservative state:
+/// CPython unbinds it on that handler's exit with an implicit `del`, and even
+/// when that handler always terminates, codegen gives the name one slot typed
+/// for the exception instance, which a later read of the body's `int` cannot
+/// share. So `try: e = 10 // d / except ZeroDivisionError as e: raise /
+/// return e` is `T0041` although CPython runs it: a documented limitation
+/// that refuses rather than miscompiles.
 ///
 /// The pre-#1289 conservative join (the body joined like a loop body, then every
 /// handler and `else` like `if` branches) is still computed, with the
@@ -104,20 +111,25 @@ pub(super) fn join_try_outcome(
             continue;
         }
         let mut exit = handler_env.clone();
-        if let Some(name) = &handler.name
-            && let Some(state) = exit.bindings.get_mut(name)
-        {
-            *state = BindingState::Maybe(state.ty().clone());
+        if let Some(name) = &handler.name {
             exit.narrowed.remove(name);
         }
         exits.push(exit);
     }
+    let as_names: HashSet<&str> = paths
+        .handlers
+        .iter()
+        .filter_map(|handler| handler.name.as_deref())
+        .collect();
     let fallthrough = exits.split_first().map(|(first, rest)| {
         let mut joined = env.clone();
         joined.bindings = conservative
             .bindings
             .iter()
             .map(|(name, state)| {
+                if as_names.contains(name.as_str()) {
+                    return (name.clone(), state.clone());
+                }
                 let ty = state.ty().clone();
                 let definite = exits.iter().all(|exit| {
                     matches!(exit.bindings.get(name), Some(BindingState::Definitely(_)))
