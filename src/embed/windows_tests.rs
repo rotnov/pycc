@@ -306,3 +306,25 @@ fn a_windows_build_under_a_plain_file_fails_at_staging() {
     assert!(!out.exists());
     assert!(!file.join("app.pycc").exists());
 }
+
+/// A closure file the image screen cannot open is an environment failure
+/// naming the path, not a silent pass; any other host skips the screen.
+#[test]
+fn the_closure_image_screen_reports_an_unreadable_file() {
+    let dir = ScratchDir::new("windows_image_screen_unreadable").unwrap();
+    let missing = dir.join("gone.py");
+    let closure =
+        crate::lock::build::LockedClosure::of_files(vec![crate::lock::build::ClosureFile {
+            rel: "pkg/gone.py".into(),
+            source: missing.clone(),
+            digest: String::new(),
+            package: "pkg".into(),
+        }]);
+    let err = check_closure_images(EmbedPlatform::Windows, Some(&closure)).unwrap_err();
+    assert!(err.contains(&missing.display().to_string()), "{err}");
+    assert_eq!(
+        check_closure_images(EmbedPlatform::Linux, Some(&closure)),
+        Ok(())
+    );
+    assert_eq!(check_closure_images(EmbedPlatform::Windows, None), Ok(()));
+}

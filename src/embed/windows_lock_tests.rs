@@ -169,10 +169,11 @@ fn a_windows_build_refuses_a_closure_holding_a_pe_image() {
     );
 }
 
-/// A locked file that vanished before the build is an environment failure
-/// of the image screen, which leaves the previous sidecar untouched.
+/// A locked file that vanished before the build is refused by the
+/// payload's own missing-file check, which runs ahead of the image screen
+/// and leaves the previous sidecar untouched.
 #[test]
-fn a_windows_build_reports_an_unreadable_closure_file() {
+fn a_windows_build_reports_a_vanished_closure_file() {
     let env = windows_env("embed_windows_lock_vanished", "import tinypkg\n", &[]);
     env.lock_windows();
     std::fs::remove_file(env.pure.join("tinydep/__init__.py")).unwrap();
