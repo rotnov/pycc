@@ -2,7 +2,8 @@
 //! the probe, the sidecar, the plan and the refusals, run on every host,
 //! so the coverage host drives every Windows arm.
 
-use super::super::fake_layout::{FakeLayout, fake_windows_layout};
+use super::super::fake_layout::{FakeLayout, fake_windows_env, fake_windows_layout};
+use super::super::pe::fixture::PeSpec;
 use super::super::*;
 use super::*;
 use pycc_scratch::ScratchDir;
@@ -15,6 +16,7 @@ fn layout(dir: &Path) -> FakeLayout {
 
 fn toolchain(layout: &FakeLayout) -> EmbedToolchain {
     EmbedToolchain::with_probe("python3.14.exe", layout.probe.clone())
+        .with_windows_env(fake_windows_env(layout))
 }
 
 fn typed(dir: &Path) -> pycc_hir::HirModule {
@@ -208,6 +210,7 @@ fn a_windows_plan_bundles_the_dlls_and_links_a_program_dll_and_a_stub() {
         [
             "DLLs/_ssl.pyd",
             "DLLs/libssl-3.dll",
+            "DLLs/py.ico",
             "Lib/json/__init__.py",
             "Lib/os.py",
             "PYCC-BUNDLE",
@@ -216,7 +219,8 @@ fn a_windows_plan_bundles_the_dlls_and_links_a_program_dll_and_a_stub() {
             "vcruntime140.dll",
         ]
     );
-    let digest = sha256::sha256_hex(b"python314");
+    let dll = std::fs::read(layout.prefix.join("python314.dll")).expect("read");
+    let digest = sha256::sha256_hex(&dll);
     let marker = std::fs::read_to_string(sidecar.join(layout::MARKER_NAME)).expect("marker");
     assert_eq!(
         marker,
@@ -251,6 +255,35 @@ fn a_windows_plan_bundles_the_dlls_and_links_a_program_dll_and_a_stub() {
     assert!(root.join(EMBED_CONFIG_INC_NAME).is_file());
 }
 
+/// The interpreter scan (#1305) runs in the plan before anything is
+/// written: an interpreter image whose import would not resolve once moved
+/// is refused, and no sidecar appears.
+#[test]
+fn a_windows_plan_refuses_an_unrelocatable_interpreter_image_before_staging() {
+    let dir = ScratchDir::new("embed_windows_scan_refusal").expect("scratch");
+    let root = std::fs::canonicalize(&*dir).expect("canonicalize");
+    std::fs::create_dir(root.join("py")).expect("layout root");
+    let layout = layout(&root.join("py"));
+    let ssl = PeSpec::dll(&["python314.dll", "libcrypto-3.dll"]).bytes();
+    std::fs::write(layout.prefix.join("DLLs").join("_ssl.pyd"), ssl).expect("write");
+    let err = plan_embed(
+        &root.join("app"),
+        &root.join("m.py"),
+        &typed(&root),
+        &toolchain(&layout),
+        EmbedPlatform::Windows,
+        HOST,
+        &root.join("main.o"),
+    )
+    .expect_err("refused");
+    assert!(
+        err.contains("is not relocatable: `DLLs\\_ssl.pyd` imports `libcrypto-3.dll`"),
+        "{err}"
+    );
+    assert!(!root.join("app.pycc").exists());
+    assert!(!root.join(STUB_C_NAME).exists());
+}
+
 /// The stub hard-codes the program DLL's name and includes the generated
 /// sidecar header; both must stay in step with the Rust side.
 #[test]
@@ -261,7 +294,8 @@ fn the_stub_source_loads_the_program_dll_through_the_sidecar_header() {
     assert!(!STUB_C.contains("Python.h"));
 }
 
-/// A Windows build vendors no native library: `DLLs\` is copied whole.
+/// A Windows build vendors no native library: the interpreter's images are
+/// scanned (#1305) and `DLLs\` is bundled as it is.
 #[test]
 fn a_windows_build_plans_no_native_libraries() {
     let dir = ScratchDir::new("embed_windows_natives").expect("scratch");
@@ -271,6 +305,7 @@ fn a_windows_build_plans_no_native_libraries() {
         &layout.probe,
         None,
         &LinuxEnv::host(),
+        &fake_windows_env(&layout),
         true,
         LibpythonLink::Shared,
     )
