@@ -530,9 +530,9 @@ impl Loader {
             // names out of the module rather than the module itself, and
             // a dotted `import X.Y` binds `X` while importing `X.Y` --
             // both keep `pycc_hir`'s existing `C0001` until a later part
-            // implements them. (`import X as Y` never reaches here at
-            // all: `project_import_request` records no request for an
-            // aliased name, so no answer is ever looked up for it.)
+            // implements them. An aliased `import X as Y` is requested
+            // under its alias's span like any other name since #1291, and
+            // is answered here on the same terms: `pycc_hir` binds `Y`.
             if request.names.is_empty()
                 && request
                     .module

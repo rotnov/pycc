@@ -42,7 +42,7 @@
 use crate::narrow;
 use crate::{BindingState, Environment};
 use pycc_diag::Diagnostic;
-use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, ImportBinding, Ty};
+use pycc_hir::{ForeignImportSite, HirExpr, HirItem, HirModule, HirStmt, ImportBinding, Ty};
 use std::collections::HashMap;
 
 use super::{check_assignment, join_loop_body};
@@ -204,7 +204,7 @@ pub(crate) fn unroll_enum_loops(mut hir: HirModule) -> Result<HirModule, Diagnos
 /// Recomputes each foreign import's recorded item position against a list
 /// this pass rewrote, where original item `i` became `produced[i]` items.
 ///
-/// `ImportBinding::Foreign::item_index` is a position in the item list as it
+/// A `ForeignImportSite::Item` index is a position in the item list as it
 /// stood when the `import` lowered, and `pycc_mir::splice_foreign_imports`
 /// reads it as a position in the final list. Unrolling a top-level
 /// `for c in Color:` replaces one item with one per member, so every
@@ -229,12 +229,18 @@ fn remap_foreign_import_positions(
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index,
+                site,
                 span,
             } => ImportBinding::Foreign {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
-                item_index: produced[..(*item_index).min(produced.len())].iter().sum(),
+                // A block import has no item position (#1291).
+                site: match site {
+                    ForeignImportSite::Item(index) => ForeignImportSite::Item(
+                        produced[..(*index).min(produced.len())].iter().sum(),
+                    ),
+                    ForeignImportSite::Block => ForeignImportSite::Block,
+                },
                 span: *span,
             },
             other => other.clone(),

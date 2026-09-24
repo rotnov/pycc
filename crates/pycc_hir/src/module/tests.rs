@@ -862,11 +862,37 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 0,
+            site: crate::ForeignImportSite::Item(0),
             span: Span::new(0, "import numpy".len() as u32),
         }]
     );
     assert_eq!(poisonable_names(statement), vec!["numpy"]);
+}
+
+/// The aliased counterpart (#1291): `import numpy as np` lowers to a
+/// foreign binding of `np`, and the mirror still predicts `[np]`.
+#[test]
+fn an_aliased_foreign_import_lowers_and_still_poisons_its_alias() {
+    let source = "import numpy as np\n";
+    let module = parse(source);
+    let statement = &module.body[0];
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        span_of(source, "numpy as np", 0),
+        crate::ResolvedImport::Foreign,
+    );
+
+    let lowered = lower_module(&module, &resolved, None).expect("a foreign import must lower");
+    assert_eq!(
+        lowered.hir.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "np".to_string(),
+            module_path: "numpy".to_string(),
+            site: crate::ForeignImportSite::Item(0),
+            span: Span::new(0, "import numpy as np".len() as u32),
+        }]
+    );
+    assert_eq!(poisonable_names(statement), vec!["np"]);
 }
 
 // ---------------------------------------------------------------------------

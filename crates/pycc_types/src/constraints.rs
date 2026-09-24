@@ -2372,7 +2372,12 @@ pub(crate) fn collect_block_constraints(
             // coverage of this gap is wanted later.
             // #1244: a `del` binds nothing to infer; the checker owns its
             // binding-state rule.
-            HirStmt::AnnAssign { value: None, .. } | HirStmt::Delete { .. } => {}
+            // A nested foreign import (#1291) needs no constraint: its names
+            // are seeded as `Ty::Object` globals position-blind, like a
+            // top-level foreign import's (`constraints/signatures.rs`).
+            HirStmt::AnnAssign { value: None, .. }
+            | HirStmt::Delete { .. }
+            | HirStmt::ForeignImport { .. } => {}
             HirStmt::ExprStmt(expr) => {
                 // PEP 572 (#774), deep-review follow-up (round 4): bind
                 // before unifying -- see `bind_named_expr_targets`'s own
@@ -3417,6 +3422,7 @@ pub(crate) fn contains_return(body: &[HirStmt]) -> bool {
         | HirStmt::SetCompAssign { .. }
         | HirStmt::DictCompAssign { .. }
         | HirStmt::Delete { .. }
+        | HirStmt::ForeignImport { .. }
         | HirStmt::Raise { .. } => false,
         HirStmt::Try {
             body,
@@ -3454,6 +3460,8 @@ pub(crate) fn introduces_bindings(body: &[HirStmt]) -> bool {
         // #1244: a `del` changes a binding state, so the in-place fast
         // paths that assume an unchanged environment must not be taken.
         | HirStmt::Delete { .. }
+        // #1291: a nested foreign import binds its names.
+        | HirStmt::ForeignImport { .. }
         | HirStmt::DictCompAssign { .. } => true,
         HirStmt::If { body, orelse, .. } => {
             introduces_bindings(body) || introduces_bindings(orelse)

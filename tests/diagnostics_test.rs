@@ -165,7 +165,7 @@ fn c0001_issue_864_repro() {
     assert_json_diagnostic_matches_fixture("c0001_issue_864_repro");
 }
 
-// #867 (D-219) cascade suppression: an unsupported `import os as o`, a
+// #867 (D-219) cascade suppression: an unsupported `import os.path as o`, a
 // `class A`, and a later genuine `*args` gap are the three reported
 // `C0001`s; `class B(A)` (unknown base) and `def g(a: A)` (unknown
 // annotation) name the skipped `A` and are skipped silently -- no render
@@ -174,7 +174,10 @@ fn c0001_issue_864_repro() {
 // The import carries an `as` alias only since Part 1 of #1026: a plain
 // `import os` now binds a CPython module object instead of reaching the
 // `C0001` catch-all, and this fixture needs a rejected first item for the
-// cascade to be a cascade at all.
+// cascade to be a cascade at all. #1291 then admitted the undotted
+// `import os as o` as a CPython module bound to `o`, so the rejected
+// first item is the dotted `import os.path as o`, which no part of #1026
+// or #1291 admits.
 #[test]
 fn c0001_hir_cascade_suppressed() {
     assert_diagnostic_matches_fixture("c0001_hir_cascade_suppressed");
@@ -797,7 +800,9 @@ fn c0001_dict_comprehension_unpacking() {
 //
 // Part 1 of #1026 narrowed which shapes reach that catch-all: a plain
 // `import cgi` binds a CPython module object now, so what is pinned here
-// is the aliased `import cgi as c`, which still falls through. The plain
+// was the aliased `import cgi as c` until #1291 admitted an undotted
+// alias on the same terms; what is pinned now is the dotted
+// `import cgi.x as c`, which still falls through. The plain
 // form is accepted by `pycc check` and, since `cgi` left the standard
 // library in 3.13, built by a plain `pycc build` like any
 // non-standard-library root only from the program's `pycc.lock` closure,
@@ -1287,9 +1292,13 @@ fn c0001_import_alias_unregistered_symbol() {
     assert_diagnostic_matches_fixture("c0001_import_alias_unregistered_symbol");
 }
 
+/// The fixture sits beside a real `geometry.py`, so `import geometry as g`
+/// resolves to a project module and keeps #964's C0001. Without that
+/// sibling the name is answered as a CPython module, which #1291 admits
+/// under an alias.
 #[test]
 fn c0001_import_alias_project_module() {
-    assert_diagnostic_matches_fixture("c0001_import_alias_project_module");
+    assert_diagnostic_matches_fixture("alias_project_module/c0001_import_alias_project_module");
 }
 
 /// #921/#944: calling an enum class with no arguments is `C0001` at the

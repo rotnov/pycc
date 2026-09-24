@@ -39,7 +39,8 @@ pub(crate) use func::{
     with_bare_container_advice,
 };
 pub use hir_module::{
-    HirModule, ImportBinding, ProjectBindingKind, killed_names, top_level_bound_names,
+    ForeignImportSite, HirModule, ImportBinding, ProjectBindingKind, killed_names,
+    top_level_bound_names,
 };
 pub use import::{
     ProjectImportRequest, ResolvedImport, ResolvedImports, ResolvedModule, project_import_requests,
@@ -1034,6 +1035,23 @@ pub enum HirStmt {
     /// statement of the rule.
     Delete {
         name: String,
+    },
+    /// A CPython-backed `import X` or `import X as Y` nested in a
+    /// module-level `if`/`try` block (Part 1 of #1282, #1291). Each
+    /// `(local_name, module_path)` pair, in alias order, binds `local_name`
+    /// to the opaque CPython module object `pycc_ext_obj_import` returns for
+    /// `module_path`, at this statement's own position, so the import runs
+    /// only when control reaches it. Produced only when every alias of the
+    /// statement is foreign: each pair also sits in [`HirModule::imports`]
+    /// as an [`ImportBinding::Foreign`] with [`ForeignImportSite::Block`]
+    /// and this statement's `span`, which is how the driver's lock, policy
+    /// and native-build gates see it. A top-level foreign import is never
+    /// this node: it stays an [`ImportBinding::Foreign`] with
+    /// [`ForeignImportSite::Item`], spliced into the module body by
+    /// `pycc_mir`.
+    ForeignImport {
+        bindings: Vec<(String, String)>,
+        span: Span,
     },
 }
 

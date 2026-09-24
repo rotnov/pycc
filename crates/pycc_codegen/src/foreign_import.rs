@@ -1,4 +1,6 @@
-//! Emission for `MirItem::ForeignImport` (Part 1 of #1026, PR 1c of #1080).
+//! Emission for `MirItem::ForeignImport` (Part 1 of #1026, PR 1c of #1080)
+//! and for `MirStmt::ForeignImport`, a foreign import nested in a
+//! module-level `if`/`try` block (#1291).
 //!
 //! Cohesion-driven carve out of `lib.rs` under AGENTS.md's decomposability
 //! rule: everything that knows how a foreign `import numpy` becomes machine
@@ -13,7 +15,10 @@
 //! `print(...)` written above an `import` runs first, and D-244 rule 3 binds
 //! the artifact to CPython's observable behaviour. `MirItem::ForeignImport`
 //! exists precisely so that ordering is structural rather than a convention
-//! this file would have to re-derive.
+//! this file would have to re-derive. A nested import is a statement, so
+//! `emit_stmt` emits it where its block runs; its failure edge returns from
+//! the same entry point, skipping any enclosing `except`/`finally` (the
+//! #1096 edge, `docs/RUNTIME.md`).
 //!
 //! **Ownership** (`docs/RUNTIME.md`). The module object is imported exactly
 //! once, during `pycc_ext_module_exec`, into a module-level global, and is
@@ -59,8 +64,12 @@ fn obj_import_fn<'ctx>(
     )
 }
 
-/// Emits the import call for one [`MirItem::ForeignImport`] and stores the
-/// resulting module object into `local_name`'s module global.
+/// Emits the import call for one foreign import binding (a
+/// [`MirItem::ForeignImport`], or one pair of a `MirStmt::ForeignImport`)
+/// and stores the resulting module object into `slot`, `local_name`'s
+/// module global. `local_name` also names the module-path string global;
+/// two imports binding the same name get two strings, which LLVM names
+/// apart by emission order.
 ///
 /// A `NULL` return means CPython raised (`ModuleNotFoundError` being the
 /// expected one): the exception is already set by the shim, so the entry
@@ -72,7 +81,7 @@ pub(super) fn emit<'ctx>(
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     entry_fn: FunctionValue<'ctx>,
-    globals: &BTreeMap<String, StorageSlot<'ctx>>,
+    slot: &StorageSlot<'ctx>,
     local_name: &str,
     module_path: &str,
 ) {
@@ -104,7 +113,6 @@ pub(super) fn emit<'ctx>(
         ))
         .expect("build_return should not fail");
     builder.position_at_end(cont_bb);
-    let slot = &globals[local_name];
     builder
         .build_store(slot.ptr, imported)
         .expect("build_store should not fail for a foreign module global");
@@ -115,6 +123,32 @@ pub(super) fn emit<'ctx>(
         builder
             .build_store(initialized, context.i8_type().const_int(1, false))
             .expect("build_store should not fail for a foreign module init flag");
+    }
+}
+
+/// Emits a [`pycc_mir::MirStmt::ForeignImport`]: one import per binding,
+/// in order, into the module-exec entry point `builder` is emitting into.
+/// No `options.ext` guard is needed: a foreign binding reaches codegen only
+/// in an `ext` build, because the driver refuses every other build with
+/// `I0403`, and `expect_module_exec_entry` pins the entry point.
+pub(super) fn emit_stmt<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    bindings: &[(String, String)],
+) {
+    let entry_fn = crate::foreign_attr::expect_module_exec_entry(builder);
+    for (local_name, module_path) in bindings {
+        emit(
+            context,
+            builder,
+            module,
+            entry_fn,
+            &locals[local_name],
+            local_name,
+            module_path,
+        );
     }
 }
 
@@ -244,6 +278,116 @@ mod tests {
         let numpy = ir.find("numpy").expect("the first module name");
         let scipy = ir.find("scipy").expect("the second module name");
         assert!(numpy < scipy, "{ir}");
+    }
+
+    /// `if <test>:` wrapping a block foreign import (#1291) of `bindings`.
+    fn if_block_import(bindings: &[(&str, &str)]) -> MirItem {
+        MirItem::TopLevelStmt(MirStmt::If {
+            test: MirExpr::BoolLiteral(true),
+            body: vec![MirStmt::ForeignImport {
+                bindings: bindings
+                    .iter()
+                    .map(|(local, module)| ((*local).to_string(), (*module).to_string()))
+                    .collect(),
+            }],
+            orelse: vec![],
+        })
+    }
+
+    /// #1291: a foreign import nested in a module-level `if` is emitted in
+    /// the branch that runs it, with the same failure edge as a top-level
+    /// one, and its name is stored to a module global that
+    /// `collect_module_bindings` declared.
+    #[test]
+    fn a_block_foreign_import_is_emitted_inside_its_branch() {
+        let ir = entry_ir(
+            "foreign_import_block",
+            vec![
+                print_int(111),
+                if_block_import(&[("colorsys", "colorsys")]),
+                print_int(222),
+            ],
+        );
+        let import = ir.find(EXT_OBJ_IMPORT_SYMBOL).expect("the import call");
+        let then_block = ir.find("if_then:").expect("the `if` branch block");
+        assert!(then_block < import, "{ir}");
+        assert!(ir.contains("foreign_import_fail"), "{ir}");
+        assert!(ir.contains("ret i64 -1"), "{ir}");
+        assert!(
+            ir.contains("store ptr %foreign_import, ptr @pyglobal_colorsys"),
+            "the module global is stored: {ir}"
+        );
+    }
+
+    /// Two bindings of one node are emitted in source order, one call each.
+    #[test]
+    fn two_bindings_of_one_block_import_are_emitted_in_order() {
+        let ir = entry_ir(
+            "foreign_import_block_two",
+            vec![if_block_import(&[("sys", "sys"), ("re", "re")])],
+        );
+        assert_eq!(ir.matches(EXT_OBJ_IMPORT_SYMBOL).count(), 2, "{ir}");
+        let sys = ir.find("@pyglobal_sys").expect("the first global");
+        let re = ir.find("@pyglobal_re").expect("the second global");
+        assert!(sys < re, "{ir}");
+    }
+
+    /// The identical pair #1291 admits (`import numpy` in both arms of an
+    /// `if`/`else`) requests the module-path global
+    /// `pycc_foreign_module_numpy` twice. LLVM uniquifies the second name,
+    /// so each emission must still pass a global holding its own path
+    /// string: both calls are emitted, and every module-path global the
+    /// module declares holds `numpy`.
+    #[test]
+    fn an_identical_pair_in_both_arms_emits_two_imports_of_its_own_path() {
+        let import = || MirStmt::ForeignImport {
+            bindings: vec![("numpy".to_string(), "numpy".to_string())],
+        };
+        let dir = pycc_scratch::ScratchDir::new("foreign_import_block_pair").expect("scratch");
+        let mut ir = String::new();
+        let mut observer = |module: &inkwell::module::Module<'_>, _: Option<&'static str>| {
+            if module.get_function(EXT_MODULE_EXEC_SYMBOL).is_some() {
+                ir = crate::llvm_string_to_owned(module.print_to_string());
+            }
+        };
+        compile_to_object_with_observer(
+            &MirModule {
+                items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::BoolLiteral(true),
+                    body: vec![import()],
+                    orelse: vec![import()],
+                })],
+                ..Default::default()
+            },
+            &dir.join("pair.o"),
+            &CompileOptions {
+                ext: true,
+                ..CompileOptions::default()
+            },
+            Some(&mut observer),
+        )
+        .expect("ext codegen should succeed");
+        let calls: Vec<&str> = ir
+            .lines()
+            .filter(|line| line.contains(&format!("call ptr @{EXT_OBJ_IMPORT_SYMBOL}(")))
+            .collect();
+        assert_eq!(calls.len(), 2, "{ir}");
+        assert!(
+            calls[0].ends_with("(ptr @pycc_foreign_module_numpy)"),
+            "{ir}"
+        );
+        assert!(
+            calls[1].ends_with("(ptr @pycc_foreign_module_numpy.1)"),
+            "{ir}"
+        );
+        let globals: Vec<&str> = ir
+            .lines()
+            .filter(|line| line.starts_with("@pycc_foreign_module_numpy"))
+            .collect();
+        assert_eq!(globals.len(), 2, "{ir}");
+        for global in globals {
+            assert!(global.contains("c\"numpy\\00\""), "{global}");
+        }
     }
 
     /// The gate `src/foreign_import.rs` exists to make coverable: a build

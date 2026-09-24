@@ -5540,6 +5540,13 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         }
         // #382: raise/raise-from/reraise introduce no new bindings.
         MirStmt::Raise { .. } | MirStmt::RaiseFrom { .. } | MirStmt::Reraise => {}
+        // #1291: a foreign import nested in a module-level block binds each
+        // name to a module global holding the imported CPython object.
+        MirStmt::ForeignImport { bindings: imports } => {
+            for (local_name, _) in imports {
+                bindings.insert(local_name.clone(), pycc_mir::Ty::Object);
+            }
+        }
     }
 }
 
@@ -6245,7 +6252,7 @@ fn compile_to_object_with_observer(
                         &builder,
                         &module,
                         entry_fn,
-                        &module_globals,
+                        &module_globals[local_name],
                         local_name,
                         module_path,
                     );
@@ -7272,6 +7279,10 @@ fn emit_stmt<'ctx>(
             Ok(())
         }
         MirStmt::NoOp => Ok(()),
+        MirStmt::ForeignImport { bindings } => {
+            foreign_import::emit_stmt(context, builder, module, locals, bindings);
+            Ok(())
+        }
         MirStmt::Unreachable => {
             builder
                 .build_unreachable()

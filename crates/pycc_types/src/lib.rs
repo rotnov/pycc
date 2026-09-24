@@ -671,6 +671,15 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     names.push(target);
                 }
             }
+            // An `import` binds its local names as an assignment does
+            // (#1291; `pycc_hir` produces this node only at module level).
+            HirStmt::ForeignImport { bindings, .. } => {
+                for (target, _) in bindings {
+                    if !is_local(names, target) {
+                        names.push(target);
+                    }
+                }
+            }
             HirStmt::If { test, body, orelse } => {
                 collect_named_expr_names_in_expr(test, names);
                 collect_local_names(body, names);
@@ -2518,6 +2527,10 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => check_try_star_stmt(env, &[], body, handlers, orelse, finalbody, None),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        HirStmt::ForeignImport { bindings, .. } => {
+            foreign::bind_block_import(env, bindings);
+            Ok(())
+        }
     }
 }
 
@@ -2783,6 +2796,9 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::AttrSet { .. }
             // #1244: a `del` neither returns nor raises.
             | HirStmt::Delete { .. }
+            // #1291: a failed nested foreign import leaves `Py_mod_exec`
+            // directly; it is not a pycc raise.
+            | HirStmt::ForeignImport { .. }
             // PR-12 Task 3 (D-117): a comprehension statement never contains a
             // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
             // statements), so it can never make a block always return, exactly
@@ -3450,6 +3466,12 @@ fn check_stmt_in_function(
         ),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        // `pycc_hir` never produces this node in a function body; binding
+        // it here keeps the two statement checkers in step (#1291).
+        HirStmt::ForeignImport { bindings, .. } => {
+            foreign::bind_block_import(env, bindings);
+            Ok(())
+        }
     }
 }
 
@@ -3671,7 +3693,7 @@ fn reject_generic_calls_in_stmt(
         HirStmt::ExprStmt(expr) | HirStmt::Assign { value: expr, .. } => exprs.push(expr),
         HirStmt::AnnAssign { value, .. } => exprs.extend(value.iter()),
         HirStmt::Return(value) => exprs.extend(value.iter()),
-        HirStmt::Delete { .. } => {}
+        HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
         HirStmt::If { test, body, orelse } => {
             exprs.push(test);
             blocks.push(body);

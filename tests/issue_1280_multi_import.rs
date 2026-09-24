@@ -53,24 +53,15 @@ fn check_accepts_a_multi_name_foreign_import() {
     assert_eq!(stdout_of(&output), "");
 }
 
-/// The same name twice in one statement binds it foreign twice, which the
-/// shadowing rule refuses exactly as it refuses two separate `import numpy`
-/// statements: once, not once per alias.
+/// The same name twice in one statement binds it foreign twice to the same
+/// module, which #1291 admits exactly as it admits two separate
+/// `import numpy` statements: both bindings produce the same module object.
 #[test]
-fn a_name_repeated_in_one_foreign_import_is_refused_once() {
+fn a_name_repeated_in_one_foreign_import_is_admitted() {
     let dir = ScratchDir::new("multi_import_duplicate").expect("scratch");
     let output = check(&dir, "import numpy, numpy\n");
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let rendered = stdout_of(&output);
-    assert_eq!(
-        rendered
-            .matches("shadowing a foreign import is not supported yet")
-            .count(),
-        // Twice per diagnostic: `render_human` prints the message on the
-        // `error[...]` line and again under the source caret.
-        2,
-        "{rendered}"
-    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert_eq!(stdout_of(&output), "");
 }
 
 /// A project module among the names fails the statement with the module

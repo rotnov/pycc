@@ -749,9 +749,10 @@ rejecting that second instance and allocating state per instance.
 ### Foreign imports in the module body
 
 Part 1 of [#1026](https://github.com/rotnov/pycc/issues/1026) makes a plain,
-unaliased, undotted `import <name>` a *foreign* import when `<name>` is neither
-a project module nor a `pycc_std` registration: it binds the CPython module
-object itself, typed `object` (see
+undotted `import <name>` a *foreign* import when `<name>` is neither
+a project module nor a `pycc_std` registration, and [#1291](https://github.com/rotnov/pycc/issues/1291) extends that to the
+aliased `import <name> as <alias>`: it binds the CPython module
+object itself (to `<alias>` when there is one), typed `object` (see
 [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). Part 2 of the same
 issue adds a second producer — an attribute load on such a value, `numpy.pi`,
 which is itself an `object` — but the admissibility table above is still why one
@@ -768,6 +769,18 @@ raises, exactly as under CPython. Each qualifying name of a multi-name
 `import a, b` is its own foreign import (#1280), and the names run in source
 order at the statement's position, so the first missing one raises and the
 names after it are never imported (`tests/issue_1280_multi_import.rs`).
+Since [#1291](https://github.com/rotnov/pycc/issues/1291) a foreign import may also stand inside a module-level `if` or `try`
+block (including `elif`, `else`, `except`, `except*` and `finally` bodies, at
+any nesting depth of those blocks, but not inside a function, a loop, a
+`with` or a `match`). It lowers to a `MirStmt::ForeignImport` in place in that block rather
+than to a spliced `MirItem`, so it runs only if control reaches it: a branch
+that is not taken imports nothing, and a missing module in a taken one raises
+from that statement (`tests/issue_1291_block_import.rs`). The failure edge
+below is the same one, and so is its bound: `Py_mod_exec` returns `-1`
+directly, so an enclosing `except` or `finally` body does **not** run for a
+failed foreign import (the [#1096](https://github.com/rotnov/pycc/issues/1096)
+deviation), and `except ImportError` cannot catch it yet
+([#1293](https://github.com/rotnov/pycc/issues/1293)).
 `tests/issue_1080_foreign_object.rs` asserts
 that against a real host interpreter, and
 `crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
@@ -1120,10 +1133,11 @@ overwritten reference, would be an optimization of an already-correct
 program, and belongs with the release protocol described above.
 
 **The bound name does not cross a module boundary yet.** The binding is
-positional — `ImportBinding::Foreign` carries the index of the item the
-import sits at in *its own* module's item list, which `program::link`
-rebases onto the linked program — so it is meaningful only in the module
-that wrote the `import`. Two consequences are refused rather than
+positional — a top-level `ImportBinding::Foreign` carries the index of the
+item the import sits at in *its own* module's item list, which
+`program::link` rebases onto the linked program, and a block one
+([#1291](https://github.com/rotnov/pycc/issues/1291)) carries no index at all, its position being the block statement
+itself — so it is meaningful only in the module that wrote the `import`. Two consequences are refused rather than
 approximated, both `C0001` while lowering, so `pycc check` reports them and
 neither build path is reached:
 
@@ -1148,8 +1162,15 @@ a `class`, a `type` alias, a plain assignment, or a second `import`, written
 above or below the import -- is refused with `C0001` while lowering, at the
 shadowing statement, or at the import itself when the shadowing binding is
 another import and so has no statement span of its own. Two foreign imports
-of the same local name are refused on the same rule rather than exempted as
-benign, and a name is reported once however many statements bind it.
+that bind one local name to the *same* module (`import numpy` twice, or in
+both arms of an `if`/`else`) are exempt since [#1291](https://github.com/rotnov/pycc/issues/1291): each produces the same
+module object at the same type, so no read depends on which one ran last, and
+the second store simply overwrites the slot with a new reference, as the
+duplicate paragraph above describes for linked modules. Two foreign imports
+that bind one local name to *different* modules (`import a as x`, then
+`import b as x`) are refused like any other shadow, within one module and,
+since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. A name is reported once however many
+statements bind it.
 The positional binding above is what makes the artifact honest about *when*
 the import runs; it is not enough to make the compiler honest about *which*
 binding a name has, because every pass that walks the module would have to
@@ -1176,7 +1197,10 @@ one diagnostic per such import, each at its own `import` statement in the file
 that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
 rule 1) — and `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
 `MirItem::ForeignImport` when `!options.ext`, which then only happens in a
-build with no foreign import at all.
+build with no foreign import at all. A block-level `MirStmt::ForeignImport`
+(#1291) needs no such guard: the same driver refusal means it reaches codegen
+only in a build compiled with `ext` set, `--ext` or embedded, and an embedded
+build runs it exactly as `--ext` does (`tests/issue_1291_block_import.rs`).
 
 #### Embedded executables (Part 1 of #1028)
 

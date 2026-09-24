@@ -39,8 +39,8 @@ use crate::{
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    CompElt, CompIter, FStringPart, HirClassDef, HirComprehension, HirExpr, HirItem, HirModule,
-    HirStmt, ImportBinding, PropertyDef, Ty,
+    CompElt, CompIter, FStringPart, ForeignImportSite, HirClassDef, HirComprehension, HirExpr,
+    HirItem, HirModule, HirStmt, ImportBinding, PropertyDef, Ty,
 };
 
 /// One successful D-134 call-site monomorphization: the concrete return
@@ -1087,7 +1087,7 @@ fn rewrite_generic_calls_in_stmt(
             }
             Ok(())
         }
-        HirStmt::Delete { .. } => Ok(()),
+        HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => Ok(()),
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1508,7 +1508,7 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
                 collect_generic_class_instantiations_from_expr(c, out);
             }
         }
-        HirStmt::Return(None) | HirStmt::Delete { .. } => {}
+        HirStmt::Return(None) | HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
@@ -2125,7 +2125,7 @@ pub(crate) fn rewrite_generic_calls_in_instantiation(
 ///
 /// The second return value is parallel to `items`: `kept[i]` says whether
 /// input item `i` survived into the returned list. Dropping an item shifts
-/// every later item's position, and `ImportBinding::Foreign::item_index`
+/// every later item's position, and the `ForeignImportSite::Item` index of each `ImportBinding::Foreign`
 /// records a position in this very list, so the caller needs the mask to
 /// recompute those positions (PR 1c of #1080 review finding 1).
 fn monomorphize_protocol_params(
@@ -2261,8 +2261,9 @@ fn monomorphize_protocol_params(
 /// an item list monomorphization has rewritten (PR 1c of #1080 review
 /// finding 1).
 ///
-/// `item_index` is the item *count* at the moment the `import` lowered, so
-/// the import belongs immediately before original item `item_index` --
+/// A `ForeignImportSite::Item` index is the item *count* at the moment the
+/// `import` lowered, so the import belongs immediately before that original
+/// item --
 /// which means the new position is simply how many of the original items
 /// strictly before it still exist. `survives[j]` says whether original
 /// item `j` reached the returned list; a trailing import records
@@ -2282,15 +2283,21 @@ fn remap_foreign_import_positions(
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index,
+                site,
                 span,
             } => ImportBinding::Foreign {
                 local_name: local_name.clone(),
                 module_path: module_path.clone(),
-                item_index: survives[..(*item_index).min(survives.len())]
-                    .iter()
-                    .filter(|kept| **kept)
-                    .count(),
+                // A block import has no item position (#1291).
+                site: match site {
+                    ForeignImportSite::Item(index) => ForeignImportSite::Item(
+                        survives[..(*index).min(survives.len())]
+                            .iter()
+                            .filter(|kept| **kept)
+                            .count(),
+                    ),
+                    ForeignImportSite::Block => ForeignImportSite::Block,
+                },
                 span: *span,
             },
             other => other.clone(),
@@ -3041,7 +3048,7 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
             // reading an empty list, so an `import numpy` compiled to an
             // artifact that never imported anything. This exit returns
             // `hir.items` unchanged, so each binding's recorded
-            // `item_index` still addresses the item it was recorded
+            // item index still addresses the item it was recorded
             // against; the monomorphized exit below has to recompute them.
             imports: hir.imports.clone(),
             // `class_defs` is likewise actively consumed after this point: `check`'s
@@ -3186,7 +3193,7 @@ pub(crate) fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // originals survive before the shape that carried the information is
     // gone; `monomorphize_protocol_params` below drops items a second time
     // and reports its own mask, and the two compose into one remap of
-    // `ImportBinding::Foreign::item_index`.
+    // the `ForeignImportSite::Item` index of each `ImportBinding::Foreign`.
     let kept_after_rewrite: Vec<bool> = rewritten.iter().map(Option::is_some).collect();
     let mut items = rewritten.into_iter().flatten().collect::<Vec<_>>();
     // PEP 695 (#387): Pass 2b — rewrite any `GenericClassInstantiate`

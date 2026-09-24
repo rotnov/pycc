@@ -9,6 +9,7 @@ use super::*;
 use crate::pycc_parser_test_helper::parse;
 use crate::{LoweredModule, lower_module};
 
+mod block;
 mod multi;
 
 const DEP: &str = "dep.py";
@@ -358,6 +359,10 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
             // qualifying alias, each keyed by that alias's own span.
             (0, Some("a"), 0),
             (0, Some("b"), 0),
+            // #1291: an aliased `import geometry as g` is requested too, so
+            // the driver can answer it (a project module is still refused by
+            // lowering until #964; a CPython-backed one binds `g`).
+            (0, Some("geometry"), 0),
             (1, Some("rel"), 1),
             (0, Some("pkg.sub"), 1),
         ]
@@ -366,18 +371,10 @@ fn project_import_requests_skips_everything_the_stdlib_registry_answers() {
     let alias = |offset: u32| Span::new(statement + offset, statement + offset + 1);
     assert_eq!(requests[1].span, alias("import ".len() as u32));
     assert_eq!(requests[2].span, alias("import a, ".len() as u32));
-    // Part 1 of #883 (#962) keeps the driver contract unchanged: an
-    // aliased `import geometry as g` is still never requested (project
-    // module aliasing is Part 3, #964), so the driver never sees one --
-    // the single `geometry` request above is the bare `import geometry`.
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.module.as_deref() == Some("geometry"))
-            .count(),
-        1,
-        "an aliased project import must not be requested: {requests:#?}"
-    );
+    // #1291: the aliased request is keyed by its own alias span.
+    let aliased = "import math\nfrom math import sqrt\nimport geometry\nimport a, b\n".len() as u32
+        + "import ".len() as u32;
+    assert_eq!(requests[3].span.start, aliased);
 }
 
 #[test]
@@ -556,7 +553,7 @@ fn foreign_dependency(source: &str, import_stmt: &str) -> HirModule {
 #[test]
 fn re_exporting_a_dependency_s_foreign_import_is_refused() {
     // Finding A of the #1087 review: cloning the `Foreign` binding would
-    // carry the dependency's own `item_index` into the importer, where
+    // carry the dependency's own item index into the importer, where
     // `program::link` rebases it as though it were the importer's -- an
     // out-of-range splice in `pycc_mir` -- and would also run a second
     // CPython import for the one `import json` statement in `dep.py`.

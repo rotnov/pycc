@@ -43,9 +43,10 @@ pub(crate) use poison::{
 use crate::expr::keyword_bind::SignatureTable;
 use crate::import::{FuturePosition, ResolvedImports, future_prologue_len};
 use crate::{
-    HirClassDef, HirItem, HirModule, ImportBinding, Ty, builtin_exception_class_defs, class,
-    dunder_name, exception, import_local_name, killed_names, lower_function, lower_import_stmt,
-    lower_legacy_type_alias_ann_assign, lower_type_alias_stmt, program, stmt, unsupported,
+    ForeignImportSite, HirClassDef, HirItem, HirModule, ImportBinding, Ty,
+    builtin_exception_class_defs, class, dunder_name, exception, import_local_name, killed_names,
+    lower_function, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
+    program, stmt, unsupported,
 };
 use pycc_ast::{ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -550,32 +551,21 @@ fn lower_top_level_item<'a>(
     // Part 1 of #1026: `state.items.len()` at this exact point is the
     // number of `HirItem`s the preceding module statements produced, which
     // is the interleaving position an `ImportBinding::Foreign` records.
-    if let Some(mut lowered) = lower_import_stmt(stmt, resolved, position, state.items.len())? {
+    if let Some(mut lowered) = lower_import_stmt(
+        stmt,
+        resolved,
+        position,
+        ForeignImportSite::Item(state.items.len()),
+    )? {
         // Same reverse-direction check as the two type-alias arms above,
         // for `import ...`/`from ... import ...` (a single statement can
         // bind more than one local name, e.g. `from math import sqrt,
         // pi`, so every bound name is checked, not just the first). A
         // class this module imported earlier is exempt: `from a import
         // Point` twice binds the same definition twice, not a collision.
-        if let Some(colliding) = lowered
-            .bindings
-            .iter()
-            .map(import_local_name)
-            .find(|local_name| {
-                state
-                    .class_defs
-                    .iter()
-                    .enumerate()
-                    .any(|(index, (class_name, _))| {
-                        class_name == local_name && !state.imported_class_indices.contains(&index)
-                    })
-            })
-        {
-            return Err(unsupported(
-                format!(
-                    "import `{colliding}` collides with a class of the same name \
-                     already defined in this module"
-                ),
+        if let Some(index) = colliding_class_import(state, &lowered.bindings) {
+            return Err(class_collision(
+                import_local_name(&lowered.bindings[index]),
                 pycc_ast::stmt_range(stmt),
             ));
         }
@@ -786,6 +776,25 @@ fn lower_top_level_item<'a>(
         state.items.push(item);
         return Ok(());
     }
+    // #1291: the foreign imports nested in a module-level `if`/`try` go
+    // into the import table before the block is lowered, because
+    // `lower_stmt` reads them there to produce `HirStmt::ForeignImport`.
+    // A block that then fails to lower leaves none of them behind, so an
+    // import that never runs is never a lock root, a policy (I0402) or a
+    // native-build (I0403) finding.
+    let block_imports = crate::import::lower_block_imports(stmt, resolved, &state.imports);
+    // The same class-name collision the top-level arm refuses above: a
+    // nested `import numpy as ValueError` would otherwise bind a name the
+    // module (or its seeded builtin exception classes) already defines.
+    if let Some(index) = colliding_class_import(state, &block_imports.bindings) {
+        let span = block_imports.spans[index];
+        return Err(class_collision(
+            import_local_name(&block_imports.bindings[index]),
+            span.start..span.end,
+        ));
+    }
+    let imports_before_block = state.imports.len();
+    state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
     // lowered before any is recorded, so an `Err` still records nothing.
     let lowered = stmt::lower_stmt_expanded(
@@ -801,7 +810,13 @@ fn lower_top_level_item<'a>(
         &class_name_defs,
         &state.imports,
         &state.signatures,
-    )?;
+    )
+    .map_err(|error| {
+        state.imports.truncate(imports_before_block);
+        // A nested import that failed to lower reports what the same line
+        // reports at top level, when it is the block's first failure.
+        block_imports.substitute(error)
+    })?;
     // A synthesized name -- a chained-assignment temporary (`0chain_<offset>`,
     // #1213) or a comprehension loop variable (`0comp_<offset>_<name>`,
     // D-117, #1237) -- is not a definition the source wrote, so it never
@@ -835,3 +850,33 @@ fn statement_span(stmt: &Stmt) -> Span {
 
 #[cfg(test)]
 mod tests;
+
+/// The index of the first of `bindings` whose local name is a class this module defines
+/// (or seeded, like the builtin exception classes) rather than imported --
+/// the reverse-direction class-name collision both the top-level import arm
+/// and a module-level block's nested foreign imports (#1291) refuse. A
+/// class this module imported earlier is exempt: `from a import Point`
+/// twice binds the same definition twice, not a collision.
+fn colliding_class_import(state: &ModuleState<'_>, bindings: &[ImportBinding]) -> Option<usize> {
+    bindings.iter().position(|binding| {
+        let local_name = import_local_name(binding);
+        state
+            .class_defs
+            .iter()
+            .enumerate()
+            .any(|(index, (class_name, _))| {
+                class_name == local_name && !state.imported_class_indices.contains(&index)
+            })
+    })
+}
+
+/// The `C0001` for [`colliding_class_import`]'s finding.
+fn class_collision(colliding: &str, range: std::ops::Range<u32>) -> Diagnostic {
+    unsupported(
+        format!(
+            "import `{colliding}` collides with a class of the same name \
+             already defined in this module"
+        ),
+        range,
+    )
+}

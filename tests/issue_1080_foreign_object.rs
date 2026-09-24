@@ -517,17 +517,29 @@ fn a_second_import_rebinding_a_foreign_name_is_refused() {
     }
 }
 
-/// Two foreign imports of the same name are refused on the same rule rather
-/// than exempted as benign: admitting them would mean asking which of two
-/// `Ty::Object` producers a read resolves to, which is the positional
-/// question the refusal exists to avoid. One diagnostic, not one per import.
+/// Two foreign imports of the same name bound to the same module are
+/// admitted since #1291: both producers yield the same CPython module
+/// object, so which one a read resolves to cannot change what it reads.
+/// (#1291 needs this for an `if`/`else` that imports the module in each
+/// arm.) Binding the same name to two *different* modules stays refused on
+/// the shadowing rule, once.
 #[test]
-fn a_duplicated_foreign_import_is_refused_once() {
+fn a_duplicated_foreign_import_is_admitted() {
     let dir = ScratchDir::new("foreign_duplicate_import").expect("scratch");
     let output = check(
         &dir,
         "import numpy
 import numpy
+",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert_eq!(stdout_of(&output), "");
+
+    let dir = ScratchDir::new("foreign_duplicate_import_other").expect("scratch");
+    let output = check(
+        &dir,
+        "import numpy
+import colorsys as numpy
 ",
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
@@ -828,7 +840,7 @@ fn check_project(tag: &str, dep: &str, entry: &str) -> (pycc_scratch::ScratchDir
 
 /// Finding A of the #1087 review: `from dep import json`, where `json` is
 /// `dep.py`'s own foreign import, used to clone the `Foreign` binding with
-/// its dependency-local `item_index` into the entry module. `link` then
+/// its dependency-local item index into the entry module. `link` then
 /// rebased that index as though it belonged to the entry, so `--ext` built
 /// either an out-of-range splice (a `pycc_mir` panic) or a second
 /// `pycc_ext_obj_import` for one source statement. It is now refused while

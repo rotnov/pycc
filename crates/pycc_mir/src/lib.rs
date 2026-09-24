@@ -18,7 +18,7 @@ mod matching;
 use matching::nest_match_alternatives;
 use matching::try_lower_enum_member_attr;
 mod stmt;
-use pycc_hir::{CompIter, HirItem, HirModule, HirStmt, ImportBinding};
+use pycc_hir::{CompIter, ForeignImportSite, HirItem, HirModule, HirStmt, ImportBinding};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use stmt::lower_stmt;
@@ -1262,6 +1262,16 @@ pub enum MirStmt {
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
+    /// A foreign (CPython-object) import nested in a module-level `if`/`try`
+    /// block (#1291), the statement counterpart of
+    /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
+    /// order, stores the module object `pycc_ext_obj_import(module_path)`
+    /// returns into the module global `local_name`, where the statement
+    /// runs. A failed import returns `-1` from `Py_mod_exec` directly
+    /// (#1096), so it is not a pycc raise.
+    ForeignImport {
+        bindings: Vec<(String, String)>,
+    },
 }
 
 /// A comprehension's already-resolved iterable source (PR-12, D-117) --
@@ -1419,8 +1429,10 @@ pub fn build(hir: &HirModule) -> MirModule {
 
 /// Part 1 of #1026: inserts a [`MirItem::ForeignImport`] into `items` for
 /// every foreign binding, each at the position it occupied among the module
-/// statements (`ImportBinding::Foreign::item_index`, rebased onto the linked
-/// program by `pycc_hir::program::link`).
+/// statements (its `ForeignImportSite::Item` index, rebased onto the linked
+/// program by `pycc_hir::program::link`). A `ForeignImportSite::Block`
+/// import is skipped: it runs as the `MirStmt::ForeignImport` statement its
+/// block lowers to (#1291).
 ///
 /// Insertion is by ascending index with a running offset, so two imports
 /// recorded at the same or at increasing positions both land in source
@@ -1447,7 +1459,7 @@ fn splice_foreign_imports(items: &mut Vec<MirItem>, imports: &[ImportBinding]) {
         let ImportBinding::Foreign {
             local_name,
             module_path,
-            item_index,
+            site: ForeignImportSite::Item(item_index),
             ..
         } = binding
         else {
@@ -1642,6 +1654,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::Return(_)
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
+            | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}
         }
     }

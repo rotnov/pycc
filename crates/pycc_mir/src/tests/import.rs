@@ -43,7 +43,7 @@ fn foreign(local_name: &str, item_index: usize) -> ImportBinding {
     ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     }
 }
@@ -129,6 +129,40 @@ fn two_foreign_imports_straddling_a_statement_keep_their_order() {
         vec![(0, "a".to_string()), (2, "b".to_string())]
     );
     assert!(matches!(mir.items[1], MirItem::TopLevelStmt(_)));
+}
+
+/// #1291: a foreign import nested in a module-level `if` is not spliced as
+/// an item; it lowers to a `MirStmt::ForeignImport` inside the `if` body,
+/// where it runs only when the branch does.
+#[test]
+fn a_block_foreign_import_lowers_in_place_and_is_not_spliced() {
+    let bindings = vec![("colorsys".to_string(), "colorsys".to_string())];
+    let hir = HirModule {
+        items: vec![HirItem::TopLevelStmt(pycc_hir::HirStmt::If {
+            test: pycc_hir::HirExpr::BoolLiteral(true),
+            body: vec![pycc_hir::HirStmt::ForeignImport {
+                bindings: bindings.clone(),
+                span: Span::new(0, 0),
+            }],
+            orelse: vec![],
+        })],
+        ..module_with_imports(vec![ImportBinding::Foreign {
+            local_name: "colorsys".to_string(),
+            module_path: "colorsys".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: Span::new(0, 0),
+        }])
+    };
+    let mir = build(&hir);
+    assert!(foreign_items(&mir).is_empty());
+    assert_eq!(mir.items.len(), 1);
+    let MirItem::TopLevelStmt(MirStmt::If { body, .. }) = &mir.items[0] else {
+        panic!("the `if` stays the only item: {:?}", mir.items);
+    };
+    assert!(
+        matches!(body.as_slice(), [MirStmt::ForeignImport { bindings: lowered }] if *lowered == bindings),
+        "{body:?}"
+    );
 }
 
 // ---------------------------------------------------------------------
