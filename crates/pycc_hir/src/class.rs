@@ -1,6 +1,6 @@
 //! Class-definition lowering (D-154, Part 1 of #375): `lower_class`, its
-//! per-method helper `lower_method`, and the `__init__`-body attribute-slot
-//! pre-scan (`collect_init_attrs`/`slot_ty_from_init_rhs`).
+//! per-method helper `lower_method`; the `__init__`-body attribute-slot
+//! pre-scan lives in [`init_slot`].
 //!
 //! A single, non-generic, non-inheriting class is represented with **no**
 //! `HirItem` footprint of its own -- unlike a top-level `def`, `class Foo:
@@ -55,7 +55,7 @@
 //! zero-argument constructor (#912, D-225), so the class is instantiable as
 //! `C()` exactly as CPython's inherited `object.__init__` makes it. The
 //! attribute-slot pre-scan
-//! below only looks at `__init__`'s own top-level body statements (no
+//! ([`init_slot`]) only looks at `__init__`'s own top-level body statements (no
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
@@ -64,6 +64,7 @@ mod body;
 pub(crate) mod enum_call;
 mod enum_class;
 mod init;
+mod init_slot;
 mod mro;
 pub use mro::flat_attr_layout;
 mod protocol;
@@ -83,9 +84,10 @@ use attrs::{
 use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
+use init_slot::collect_init_attrs;
 use mro::{resolve_mro, validate_bases, validate_mro_slot_layout};
 use protocol::lower_protocol_class;
-use pycc_ast::{Decorator, Expr, Number, Stmt};
+use pycc_ast::{Decorator, Expr, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
 /// PEP 435 (#892): the value assigned to one enum member. Members may be
@@ -1382,7 +1384,7 @@ pub(crate) fn lower_class(
 /// an explicit type annotation, regardless of the ordinary "only a public
 /// name requires one" rule (D-038) every other function/method follows --
 /// a deliberate, narrower rule than D-038's, not an oversight: those
-/// parameter types are the only source `collect_init_attrs` below has for
+/// parameter types are the only source `init_slot::collect_init_attrs` has for
 /// deriving an attribute slot's `Ty` structurally, at HIR-lowering time,
 /// with no type-inference pass of its own (this crate never runs one --
 /// see `Ty::Infer`'s own doc comment). An unannotated `__init__` parameter
@@ -1657,10 +1659,13 @@ fn lower_method(
 
 /// #378 (PR-18): Returns `true` if `ty` is a scalar slot type -- one that
 /// fits in the single `i64` word per attribute slot that D-154's class-
-/// instance layout uses. This is the same set `slot_ty_from_init_rhs`
-/// accepts for hand-written `__init__` bodies (`int`/`float`/`bool`/`str`,
-/// plus `Ty::Param` for PEP 695 generic classes, where the type parameter
-/// is substituted with a concrete scalar at monomorphization time). A
+/// instance layout uses: `int`/`float`/`bool`/`str`, plus `Ty::Param` for
+/// PEP 695 generic classes, where the type parameter is substituted with a
+/// concrete scalar at monomorphization time. A hand-written `__init__`
+/// admits a wider set -- `init_slot::slot_ty_from_init_rhs` also accepts a
+/// `list[int]`/`dict[str, int]` parameter (#1262), stored as a pointer
+/// word -- but this narrower predicate still governs dataclass fields and
+/// class-body attributes. A
 /// dataclass field with a non-scalar type (`list[T]`, `dict[K, V]`,
 /// `set[T]`, `tuple[...]`, `None`, or a class instance including a self-
 /// referential `next: Node`/`next: Self`) is rejected at HIR-lowering
@@ -1761,61 +1766,6 @@ fn synthesize_dataclass_repr(class_name: &str, fields: &[(String, Ty)]) -> HirIt
     }
 }
 
-/// Scans `__init__`'s own top-level body statements (no recursion into a
-/// nested `if`/`while`/`for` -- see this module's own doc comment) for
-/// `self.<attr> = <value>` assignments, building the attribute-slot list in
-/// first-assignment source order. Only the *first* assignment to a given
-/// attribute name establishes its slot and `Ty`; a later `self.<attr> =
-/// ...` reassignment further down `__init__`'s own body is structurally
-/// ignored here (it is still lowered normally by `stmt::lower_body` into an
-/// ordinary `HirStmt::AttrSet`, and `pycc_types` checks its value against
-/// the already-established slot type -- this pre-scan's only job is
-/// deciding *which* attributes exist and their *first-assignment* type).
-///
-/// `params` is `lower_method`'s own full parameter list (whose first entry
-/// is always the *canonical* receiver name, `self`, whatever the source
-/// spelled -- see `class::receiver`) -- used to resolve a
-/// bare-parameter-name RHS's `Ty`.
-///
-/// #1181: `receiver_name` is the receiver's *source* spelling, which is what
-/// the body actually writes. Comparing against the literal `self` instead
-/// would make `def __init__(this): this.v = 1` establish zero attribute
-/// slots, and every later read of `c.v` would fail with `T0044`.
-fn collect_init_attrs(
-    init_body: &[Stmt],
-    params: &[(String, Ty)],
-    receiver_name: &str,
-) -> Result<Vec<(String, Ty)>, Diagnostic> {
-    let mut attrs: Vec<(String, Ty)> = Vec::new();
-    for stmt in init_body {
-        let Stmt::Assign(assign) = stmt else {
-            continue;
-        };
-        // #1213: a chained assignment (`self.x = self.y = 0`) declares
-        // every receiver attribute among its targets, each typed from the
-        // one shared right-hand side, exactly as the single-target
-        // assignments `stmt::lower_stmt_expanded` expands it into would.
-        for target in &assign.targets {
-            let Expr::Attribute(attr) = target else {
-                continue;
-            };
-            let Expr::Name(receiver) = attr.value.as_ref() else {
-                continue;
-            };
-            if receiver.id.as_str() != receiver_name {
-                continue;
-            }
-            let attr_name = attr.attr.to_string();
-            if attrs.iter().any(|(name, _)| *name == attr_name) {
-                continue;
-            }
-            let ty = slot_ty_from_init_rhs(&assign.value, params, receiver_name)?;
-            attrs.push((attr_name, ty));
-        }
-    }
-    Ok(attrs)
-}
-
 /// #435 (Part B), extended by #585 and unified by #854: Validates that an
 /// `__init_subclass__` method body is statically evaluable — only a `pass`
 /// body, an empty body, or a body consisting solely of a docstring (a bare
@@ -1865,129 +1815,6 @@ fn validate_init_subclass_body(
     Ok(())
 }
 
-/// Resolves an instance attribute's slot `Ty` from its first-assignment RHS
-/// inside `__init__`, structurally -- see this module's own doc comment and
-/// `lower_method`'s doc comment for why this must not require a real
-/// type-inference pass: only a bare reference to one of `__init__`'s own
-/// (always-annotated) parameters, or a scalar literal, is accepted. Every
-/// other RHS shape -- including an arithmetic expression, a call, or a
-/// reference to `self` itself -- is `C0001`, matching the plan's own
-/// explicit authorization ("any class-body statement kind other than a
-/// `def` or a `self.<attr> = ...` inside `__init__` is `C0001` for this
-/// PR").
-fn slot_ty_from_init_rhs(
-    value: &Expr,
-    params: &[(String, Ty)],
-    receiver_name: &str,
-) -> Result<Ty, Diagnostic> {
-    match value {
-        // Two guarded arms of the same top-level `match`, deliberately
-        // *asymmetric* rather than two structurally identical `matches!`
-        // checks (`Number::Int(_)` / `Number::Float(_)`): every symmetric
-        // shape tried for this Int/Float split -- two standalone `if let
-        // ... && matches!(..)` chains, a nested `match &lit.value { .. }`
-        // behind one outer `if let`, an `Option`-valued intermediate
-        // `match`, a single outer `if let` wrapping two independent bare
-        // `if matches!(..)` checks, and even two guarded arms of this same
-        // trailing `match` when both guards called `matches!` against a
-        // distinct `Number` variant -- reported the *second* of the two as
-        // an uncovered region under `cargo llvm-cov`, regardless of which
-        // variant it checked or what control-flow shape wrapped it, even
-        // though it demonstrably executes (both
-        // `an_init_attr_assigned_an_int_literal_establishes_an_int_slot`
-        // and `an_init_attr_assigned_a_float_literal_establishes_a_float_slot`
-        // below pass, each asserting the exact `Ty` this arm resolves to).
-        // The common factor was always two source-adjacent regions with
-        // byte-for-byte identical `matches!(lit.value, Number::<Variant>(_))`
-        // shapes differing only in the variant name -- consistent with an
-        // LLVM coverage-mapping counter getting deduplicated/shared across
-        // two structurally-identical-looking regions, so only the first is
-        // ever marked hit. Writing the second guard as a negation of the
-        // first (`!matches!(.., Number::Int(_))`, rather than its own
-        // positive `matches!(.., Number::Float(_))`) breaks that structural
-        // symmetry and resolves it -- confirmed clean at 100% region
-        // coverage for this file with this exact shape, after every
-        // symmetric alternative above reproduced the identical artifact.
-        Expr::NumberLiteral(lit) if matches!(lit.value, Number::Int(_)) => Ok(Ty::Int),
-        Expr::NumberLiteral(lit) if !matches!(lit.value, Number::Int(_)) => Ok(Ty::Float),
-        // The second arm's negation also correctly subsumes
-        // `Number::Complex` (`1j`), which can never actually reach this
-        // function: `expr::lower_expr`'s own `NumberLiteral` arm has no
-        // case for `Number::Complex`, so `stmt::lower_body` (called before
-        // this pre-scan ever runs, see `lower_class`) always rejects
-        // `self.x = 1j` with `C0001` first, confirmed directly by running
-        // this exact snippet through `lower_checked` rather than assumed.
-        // A provably-unreachable `Number::Complex` value being classified
-        // as `Ty::Float` by the negation above is therefore never
-        // observable from any real parsed source.
-        Expr::Name(name) => {
-            // #1181: `params[0].0` is the *canonical* receiver name, so an
-            // RHS naming the receiver has to be resolved through the
-            // source spelling -- otherwise `def __init__(this, v: int):
-            // this.x = this` takes the unresolvable-name path below instead
-            // of its `self`-spelled twin's `Ty::Instance` path.
-            let lookup = if name.id.as_str() == receiver_name {
-                receiver::CANONICAL_RECEIVER
-            } else {
-                name.id.as_str()
-            };
-            let resolved = params
-                .iter()
-                .find(|(param_name, _)| param_name == lookup)
-                .map(|(_, ty)| ty.clone());
-            match resolved {
-                // Only a scalar-typed parameter (int/float/bool/str) may
-                // seed an attribute slot -- `pycc_rt::instance`'s slot
-                // storage is a single `i64` word per slot (D-154's own
-                // class-instance-layout ADR), which has no representation
-                // for a heap-object-typed attribute (`list[T]`, `dict[K,
-                // V]`, `set[T]`) or a by-value `tuple[...]` yet, and a
-                // self-referential `Ty::Instance` attribute (`self.other =
-                // some_other_instance_param`) is likewise out of this PR's
-                // scope (no class currently has more than one instance
-                // reachable this way to exercise it against). Rejecting
-                // here, structurally, keeps every attribute type this PR's
-                // own `pycc_codegen`/`pycc_rt` slices actually implement.
-                //
-                // PEP 695 (#387): `Ty::Param` is also accepted — a generic
-                // class's `__init__` parameter typed `T` seeds a slot with
-                // `Ty::Param("T")`, which is substituted with a concrete
-                // scalar type at monomorphization time (reusing PR-13's
-                // D-133/D-134 call-site-substitution mechanism). At runtime
-                // the slot is still a single `i64` word, so the type
-                // parameter is purely compile-time.
-                Some(ty @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))) => Ok(ty),
-                Some(other) => Err(unsupported(
-                    format!(
-                        "`{receiver_name}.<attr> = {}` cannot establish an attribute of type \
-                         `{}` yet -- only a scalar (int/float/bool/str) parameter is supported",
-                        name.id,
-                        other.name()
-                    ),
-                    pycc_ast::expr_range(value),
-                )),
-                None => Err(unsupported(
-                    format!(
-                        "`{receiver_name}.<attr> = {}` must reference one of `__init__`'s own \
-                         parameters to establish the attribute's type, or use a scalar \
-                         literal",
-                        name.id
-                    ),
-                    pycc_ast::expr_range(value),
-                )),
-            }
-        }
-        Expr::BooleanLiteral(_) => Ok(Ty::Bool),
-        Expr::StringLiteral(_) => Ok(Ty::Str),
-        other => Err(unsupported(
-            "an instance attribute's first assignment inside `__init__` must be a bare \
-             parameter name or a scalar literal (int/float/bool/str) so its type is known \
-             at compile time",
-            pycc_ast::expr_range(other),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{HirClassDef, HirExpr, HirItem, HirStmt, Ty, lower_checked};
@@ -2003,8 +1830,8 @@ mod tests {
         // latter's closure body is its own hand-written region, never
         // executed on this helper's own happy path (every call site
         // expects success) -- this crate's own established coverage-gate
-        // convention (see `slot_ty_from_init_rhs`'s own doc comment,
-        // immediately above in this file) is `.expect()`, whose panic path
+        // convention (see `init_slot::slot_ty_from_init_rhs`'s own doc
+        // comment) is `.expect()`, whose panic path
         // lives in libcore, outside this crate's instrumented regions.
         let module = crate::pycc_parser_test_helper::parse(source);
         lower_checked(&module).expect("test fixture should lower successfully")
@@ -2986,136 +2813,7 @@ mod tests {
         );
     }
 
-    // -- collect_init_attrs / slot_ty_from_init_rhs -------------------------
-
-    #[test]
-    fn an_init_attr_assigned_from_an_unrelated_name_is_unsupported() {
-        assert_c0001("class C:\n    def __init__(self, x: int) -> None:\n        self.y = z\n");
-    }
-
-    #[test]
-    fn an_init_attr_assigned_from_self_is_unsupported() {
-        // `pycc_rt::instance`'s slot storage (D-154's own class-instance-
-        // layout ADR) is a single `i64` word per slot -- a heap-object-typed
-        // attribute other than `str` (another class instance, or a
-        // `list[T]`/`dict[K, V]`/`set[T]` value) has no representation this
-        // PR's `pycc_codegen`/`pycc_rt` slices implement. `self` is the one
-        // reachable way to produce a non-scalar-typed *parameter* under
-        // `slot_ty_from_init_rhs`'s own lookup today: `annotation_to_ty` has
-        // no arm for a subscripted annotation like `list[int]` at all (any
-        // such parameter fails to lower with `C0001` before this pre-scan
-        // ever runs -- confirmed directly, not assumed), so `self` (typed
-        // `Ty::Instance` directly by `lower_method`, bypassing
-        // `annotation_to_ty` entirely) is the only non-scalar entry
-        // `params` can ever actually contain.
-        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
-    }
-
-    #[test]
-    fn an_init_attr_assigned_an_int_literal_establishes_an_int_slot() {
-        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = 5\n");
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Int)]);
-    }
-
-    #[test]
-    fn an_init_attr_assigned_a_float_literal_establishes_a_float_slot() {
-        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = 1.5\n");
-        assert_eq!(
-            hir.class_defs[0].1.attrs,
-            vec![("x".to_string(), Ty::Float)]
-        );
-    }
-
-    #[test]
-    fn an_init_attr_assigned_a_complex_literal_is_unsupported() {
-        // `1j` fails to lower long before `collect_init_attrs`'s own
-        // pre-scan ever runs -- see `slot_ty_from_init_rhs`'s own comment
-        // on its guarded `NumberLiteral` arms for why.
-        assert_c0001("class C:\n    def __init__(self) -> None:\n        self.x = 1j\n");
-    }
-
-    #[test]
-    fn an_init_attr_assigned_a_bool_literal_establishes_a_bool_slot() {
-        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = True\n");
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Bool)]);
-    }
-
-    #[test]
-    fn an_init_attr_assigned_a_string_literal_establishes_a_str_slot() {
-        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x = \"hi\"\n");
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Str)]);
-    }
-
-    #[test]
-    fn an_init_attr_assigned_an_arithmetic_expression_is_unsupported() {
-        assert_c0001("class C:\n    def __init__(self, x: int) -> None:\n        self.y = x + 1\n");
-    }
-
-    #[test]
-    fn a_second_assignment_to_the_same_init_attr_does_not_change_its_slot_type() {
-        // The pre-scan only records the *first* assignment to a given
-        // attribute name; a later `self.x = ...` inside `__init__` itself
-        // is still lowered normally (as a second `HirStmt::AttrSet`), but
-        // does not add a second slot or change the recorded type.
-        let hir = lower_ok(
-            "class C:\n    def __init__(self, x: int) -> None:\n        self.x = x\n        self.x = 0\n",
-        );
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Int)]);
-    }
-
-    #[test]
-    fn non_attribute_statements_inside_init_are_ignored_by_the_pre_scan() {
-        // Exercises every early-`continue` guard in `collect_init_attrs`
-        // that a non-`self.<attr> = <value>` statement can reach without
-        // itself being rejected by the rest of the pipeline: a plain local
-        // assignment (not an `Expr::Attribute` target) and an attribute
-        // assignment on a receiver other than `self` are both simply
-        // skipped by the pre-scan -- none of them contributes an attribute
-        // slot, and none of them is rejected by this pass (later lowering
-        // of the method body may still reject some of them for other
-        // reasons; this pre-scan's own job is only to skip them, not judge
-        // them).
-        let hir = lower_ok(
-            "class C:\n    def __init__(self, x: int) -> None:\n        y = 1\n        other.z = 1\n        self.x = x\n",
-        );
-        assert_eq!(hir.class_defs[0].1.attrs, vec![("x".to_string(), Ty::Int)]);
-    }
-
-    #[test]
-    fn a_chained_assignment_inside_init_declares_every_receiver_attribute_it_targets() {
-        // #1213: `self.x = self.y = 0` declares both `x` and `y`, each typed
-        // from the one shared right-hand side; a non-receiver target in the
-        // same chain (`n`) and a repeat of an already-declared attribute add
-        // no slot.
-        let hir = lower_ok(
-            "class C:\n    def __init__(self, v: int) -> None:\n        self.x = self.y = 0\n        n = self.y = self.z = v\n",
-        );
-        assert_eq!(
-            hir.class_defs[0].1.attrs,
-            vec![
-                ("x".to_string(), Ty::Int),
-                ("y".to_string(), Ty::Int),
-                ("z".to_string(), Ty::Int),
-            ]
-        );
-    }
-
-    #[test]
-    fn an_attribute_assignment_on_a_nested_attribute_base_inside_init_is_ignored_by_the_pre_scan() {
-        // `self.x.y = 0` -- the outer `Attribute`'s own `.value` is itself
-        // an `Attribute` (`self.x`), not a bare `Expr::Name`, so the `let
-        // Expr::Name(receiver) = attr.value.as_ref() else { continue }`
-        // guard's own early-exit fires and this statement contributes no
-        // attribute slot. Structurally this still lowers successfully at
-        // the HIR level (attribute access/assignment is generic over any
-        // base expression, D-154's own `HirExpr::AttrGet`/`HirStmt::AttrSet`
-        // doc comments) -- `pycc_types` is what would reject `self.x.y = 0`
-        // once `x` turns out not to be a declared attribute of any
-        // instance type, which is out of this crate's own scope to assert
-        // on here.
-        let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x.y = 0\n");
-        assert_eq!(hir.class_defs[0].1.attrs, Vec::<(String, Ty)>::new());
-    }
+    // -- Self / generic / override / init_subclass -------------------------
 
     // PEP 673 (#387 Part 1): `Self` as a method return-type annotation
     // resolves to the class's own instance type at HIR-lowering time.

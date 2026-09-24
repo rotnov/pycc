@@ -15,6 +15,11 @@ use exception::{
     ExceptionCodegenState, emit_exception_set_frame, emit_exception_value,
     expression_can_set_exception, guard_statement_effects,
 };
+mod attr_slot;
+use attr_slot::{
+    decref_str_attr_slot_before_store, release_int_attr_slot_before_store, scalar_to_slot_word,
+    slot_word_to_scalar,
+};
 mod bigint_rc;
 /// `<< >> & | ^` operand encoding and the `bool`-result arm (#1210).
 mod binop;
@@ -843,111 +848,6 @@ fn expect_instance_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerVal
         )
     };
     ptr
-}
-
-/// Reinterprets a raw `i64` slot word read from `pycc_rt_instance_get_slot`
-/// as the `Scalar` its declared attribute `ty` names (D-154, Part 1 of
-/// #375; see `pycc_rt::instance`'s own doc comment for the slot
-/// representation this mirrors exactly): `int` passes through unchanged;
-/// `bool` truncates to `pycc_codegen`'s own `i8` `Scalar::Bool` carrier;
-/// `float` bit-reinterprets the same 8 bytes as `f64` (never a numeric
-/// conversion -- the word *is* a float's bit pattern, written by
-/// `scalar_to_slot_word`'s own mirror-image `float` arm); `str` reinterprets
-/// the word as a `*mut PyStrObj` pointer. Only these four `Ty`s can ever
-/// reach here: `pycc_hir::class::slot_ty_from_init_rhs` structurally
-/// restricts every attribute slot to a scalar (int/float/bool/str)
-/// parameter or literal at `__init__`'s own first-assignment pre-scan, so a
-/// `List`/`Dict`/`Set`/`Tuple`/`Instance`/`Param`/`Infer`-typed attribute
-/// can never be constructed from real, type-checked source.
-fn slot_word_to_scalar<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    raw: IntValue<'ctx>,
-    ty: &pycc_mir::Ty,
-) -> Scalar<'ctx> {
-    match ty {
-        pycc_mir::Ty::Int => Scalar::Int(raw),
-        pycc_mir::Ty::Bool => Scalar::Bool(
-            builder
-                .build_int_truncate(raw, context.i8_type(), "attr_bool_trunc")
-                .expect("build_int_truncate should not fail truncating i64 to i8"),
-        ),
-        pycc_mir::Ty::Float => Scalar::Float(
-            builder
-                .build_bit_cast(raw, context.f64_type(), "attr_float_bitcast")
-                .expect("build_bit_cast should not fail reinterpreting i64 bits as f64")
-                .into_float_value(),
-        ),
-        pycc_mir::Ty::Str => Scalar::Str(
-            builder
-                .build_int_to_ptr(
-                    raw,
-                    context.ptr_type(inkwell::AddressSpace::default()),
-                    "attr_str_inttoptr",
-                )
-                .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer"),
-        ),
-        other => panic!(
-            "pycc_codegen: internal error: an instance attribute of type `{}` is not \
-             supported yet -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
-             this before codegen",
-            other.name()
-        ),
-    }
-}
-
-/// Mirror image of [`slot_word_to_scalar`]: encodes a `Scalar` as the raw
-/// `i64` word `pycc_rt_instance_set_slot` stores. See that function's own
-/// doc comment for why only `Int`/`Bool`/`Float`/`Str` are ever reachable
-/// here.
-fn scalar_to_slot_word<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    scalar: Scalar<'ctx>,
-) -> IntValue<'ctx> {
-    match scalar {
-        Scalar::Int(v) => v,
-        Scalar::Bool(v) => builder
-            .build_int_z_extend(v, context.i64_type(), "attr_bool_zext")
-            .expect("build_int_z_extend should not fail widening i8 to i64"),
-        Scalar::Float(v) => builder
-            .build_bit_cast(v, context.i64_type(), "attr_float_bitcast")
-            .expect("build_bit_cast should not fail reinterpreting f64 bits as i64")
-            .into_int_value(),
-        Scalar::Str(v) => builder
-            .build_ptr_to_int(v, context.i64_type(), "attr_str_ptrtoint")
-            .expect("build_ptr_to_int should not fail reinterpreting a pointer as i64"),
-        Scalar::List(_)
-        | Scalar::Dict(_)
-        | Scalar::Set(_)
-        | Scalar::Tuple(_)
-        | Scalar::Instance(_)
-        // D-197, #763, Part 1 of #747: an `Optional[int]`-typed instance
-        // attribute joins the same defensive arm as every other
-        // multi-word/aggregate `Scalar` above -- this raw-`i64`-word slot
-        // encoding has no room for the `{ i64, i8 }` struct's extra
-        // present/absent byte, and this PR ships no class-attribute use of
-        // `Optional[int]` for `slot_ty_from_init_rhs` to have exercised.
-        | Scalar::Optional(_)
-        // D-244, Part 2 of #1026: a foreign CPython object joins the same
-        // or-pattern for the identical reason the aggregate variants above
-        // do -- `slot_ty_from_init_rhs` admits only `int`/`bool`/`float`/
-        // `str` slots, so a `Ty::Object` attribute is never built. Folded
-        // into the existing group rather than given its own arm so it adds
-        // no separate, permanently-unexecutable region.
-        // Part 2 of #1027: a `memoryview` joins the same or-pattern for
-        // the identical reason -- `slot_ty_from_init_rhs` admits only
-        // `int`/`bool`/`float`/`str` slots. Part 2a of #1142 (#1165) gave
-        // the type its one storable position, a *local* slot bound by
-        // `a = ndarray(n)`; an instance attribute is not that position and
-        // stays refused, so no such attribute is ever built.
-        | Scalar::MemoryView(_)
-        | Scalar::Object(_) => panic!(
-            "pycc_codegen: internal error: cannot store this value into an instance \
-             attribute slot -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
-             this before codegen"
-        ),
-    }
 }
 
 /// Calls D-141's runtime-owned classifier/decoder. Container-value ingress
@@ -5203,85 +5103,6 @@ fn free_buffer_slot_before_store<'ctx>(
     builder
         .build_call(rt.buffer_f64_free, &[release.into()], "buffer_free_old")
         .expect("build_call should not fail for a well-formed buffer free");
-}
-
-/// Mirror of [`decref_str_slot_before_store`] for an instance attribute slot
-/// rather than a local's own alloca (D-154, Part 1 of #375): only
-/// meaningful for a `Ty::Str` attribute -- reads the slot's *current* raw
-/// word through the same opaque `pycc_rt_instance_get_slot` accessor
-/// `MirExpr::AttrGet` itself uses, reinterprets it as a `str` pointer, and
-/// decrefs it before the new value overwrites the slot. A freshly allocated
-/// instance's slots start zero-initialized (`pycc_rt::instance::new_instance`),
-/// which decodes to a null pointer whose runtime decref is a documented
-/// no-op (`pycc_rt_str_decref`'s own null check) -- exactly like a local's
-/// null-initialized string slot -- so the same call is correct for both
-/// `__init__`'s first assignment and any later reassignment.
-///
-/// Unlike `decref_str_slot_before_store`, this function has no runtime
-/// assertion that the target slot's own declared type is actually
-/// `Ty::Str` -- its one caller (`MirStmt::AttrSet`'s own codegen) only
-/// invokes it when `value`'s type is `Ty::Str`, and `pycc_types::class::
-/// check_attr_set`'s `is_assignable(value_ty, attr_ty)` gate (`T0021`)
-/// already rejects a `str` value targeting a non-`str` attribute before
-/// codegen ever runs -- so this slot's declared type is `Ty::Str` too on
-/// every reachable call, by construction, not merely by convention left
-/// unchecked (D-068 review finding, PR #385).
-fn decref_str_attr_slot_before_store<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    base_ptr: PointerValue<'ctx>,
-    slot_index: IntValue<'ctx>,
-) {
-    let raw = builder
-        .build_call(
-            rt.instance_get_slot,
-            &[base_ptr.into(), slot_index.into()],
-            "instance_get_slot_old",
-        )
-        .expect("build_call should not fail for a well-formed attribute read")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
-        .into_int_value();
-    let old = builder
-        .build_int_to_ptr(
-            raw,
-            context.ptr_type(inkwell::AddressSpace::default()),
-            "attr_str_inttoptr_old",
-        )
-        .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer");
-    builder
-        .build_call(rt.str_decref, &[old.into()], "str_decref_old_attr")
-        .expect("build_call should not fail for a well-formed decref");
-}
-
-/// [`release_int_slot_before_store`]'s counterpart for an instance
-/// attribute slot, and the exact `int` mirror of
-/// [`decref_str_attr_slot_before_store`] directly above: reads the slot's
-/// current raw word through `pycc_rt_instance_get_slot` and releases it
-/// before the new value overwrites it. A freshly allocated instance's slots
-/// are zero-initialized (`pycc_rt::instance::new_instance`), and `0` is the
-/// word `pycc_rt_bigint_release` returns on without classifying, so the
-/// same call is correct for `__init__`'s first assignment and every later
-/// reassignment.
-fn release_int_attr_slot_before_store<'ctx>(
-    context: &'ctx Context,
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    base_ptr: PointerValue<'ctx>,
-    slot_index: IntValue<'ctx>,
-) {
-    let old = builder
-        .build_call(
-            rt.instance_get_slot,
-            &[base_ptr.into(), slot_index.into()],
-            "instance_get_slot_old_int",
-        )
-        .expect("build_call should not fail for a well-formed attribute read")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
-        .into_int_value();
-    emit_bigint_refcount_call(context, builder, rt, old, BigIntRefcount::Release);
 }
 
 /// Emits every statement in `body` in order, stopping early the moment the

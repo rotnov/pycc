@@ -23,7 +23,8 @@
 //! `f64::to_bits()` bit pattern (`pycc_codegen` bitcasts around the call,
 //! there is no separate float-typed accessor pair to keep this module's own
 //! FFI surface minimal); a heap-object-typed attribute (`str`, or another
-//! class instance) stores its pointer, reinterpreted as an `i64` (valid on
+//! class instance, or a leak-only `list[int]`/`dict[str, int]` container
+//! since #1262) stores its pointer, reinterpreted as an `i64` (valid on
 //! every target this workspace compiles for, where a pointer and `i64` are
 //! both 8 bytes) -- `pycc_codegen` handles the `inttoptr`/`ptrtoint`
 //! conversion around the call, mirroring the float bitcast.

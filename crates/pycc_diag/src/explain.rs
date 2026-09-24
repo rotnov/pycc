@@ -55,10 +55,9 @@ covers every annotation more complex than a bare name; what it still covers \
 there is the bare, unparameterized `list`/`set`/`dict`/`tuple` spelling \
 (whose message names the parameterized form to write instead in exactly \
 those positions, and stays generic where that form is rejected too) and a \
-protocol *attribute* whose type is a container, which no \
-class could ever satisfy because every class attribute slot is restricted to a \
-scalar type (a container type in a protocol *method*'s parameter or return \
-type does lower). A protocol class in return-annotation position \
+protocol *attribute* whose type is a container, which is not supported yet \
+as a protocol attribute (a container type in a protocol *method*'s parameter \
+or return type does lower). A protocol class in return-annotation position \
 (`def make() -> P:`, issue #934) is also C0001, on a function, a method, and \
 a protocol member declaration alike: a protocol is a compile-time-only \
 interface, so a call to such a function has no concrete type to bind, and \

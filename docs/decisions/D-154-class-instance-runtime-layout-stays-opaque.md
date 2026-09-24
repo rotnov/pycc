@@ -39,6 +39,11 @@ status: accepted
   resolution happens entirely at compile time, from the `HirModule`-level `class_defs` side
   table (`crates/pycc_hir/src/class.rs`'s `HirClassDef.attrs`) — there is no runtime
   string-keyed lookup anywhere in this path.
+- Amendment (2026-09-24): #1262 (Part 1 of #1218) widens the slot encoding to a `list[int]` or
+  `dict[str, int]` attribute seeded from an `__init__` parameter: the slot word holds the
+  container's pointer through the same `inttoptr`/`ptrtoint` reinterpretation as `str`, with no
+  reference-count calls because both containers are leak-only (D-107, D-124). The slot stays
+  one `i64` word; nothing else in this decision changes.
 - Decision (method dispatch): a method call resolves to a compile-time-known function pointer —
   static dispatch per D-006's framing for ordinary classes, with the method name mangled as
   `<ClassName>.<method_name>` (a `.` separator, which can never appear in a real Python

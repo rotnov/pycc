@@ -291,24 +291,29 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             // type (int/float/bool/str, or a generic type parameter `T`
             // that is substituted with a scalar at monomorphization time).
             // The instance attribute-slot storage is a single `i64` word
-            // per slot (D-154), which has no representation for a heap-
-            // object-typed attribute (`list[T]`, `dict[K, V]`, `set[T]`),
-            // a by-value `tuple[...]`, `None`, or a class instance
+            // per slot (D-154). A container-typed field (`list[T]`,
+            // `dict[K, V]`, `set[T]`) is not admitted as a dataclass field,
+            // and there is no slot representation at all for a by-value
+            // `tuple[...]`, `None`, or a class instance
             // (`Ty::Instance`, including a self-referential field like
             // `next: Node` or `next: Self`, which `annotation_to_ty`
             // resolves to `Ty::Instance` -- see its self-referential class
             // name and `Self` arms). Rejecting here, structurally, keeps
             // every field type this PR's own `pycc_codegen`/`pycc_rt` slices
-            // actually implement -- matching `slot_ty_from_init_rhs`'s own
-            // scalar-only restriction for hand-written `__init__` bodies.
+            // actually implement. A hand-written `__init__` may seed a
+            // `list[int]`/`dict[str, int]` slot from a parameter (#1262,
+            // `init_slot::slot_ty_from_init_rhs`); a container dataclass
+            // field is a separate follow-up (synthesized `__eq__`/`__repr__`
+            // over containers), so it stays refused here.
             if !is_scalar_slot_type(&field_ty) {
                 return Err(unsupported(
                     format!(
                         "dataclass field `{field_name}` has type `{}`, which is not a scalar \
                          slot type -- only `int`, `float`, `bool`, `str`, or a generic type \
                          parameter is supported as a dataclass field in this version (the \
-                         instance attribute-slot storage is a single word per slot, with no \
-                         representation for a heap object, tuple, `None`, or class instance)",
+                         instance attribute-slot storage is a single word per slot; a \
+                         container-typed dataclass field is not supported yet, and a tuple, \
+                         `None`, or class instance has no slot representation)",
                         field_ty.name()
                     ),
                     ann.range,
