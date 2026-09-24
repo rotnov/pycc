@@ -3,8 +3,8 @@
 //! `list`/`set`/`dict`/`tuple` into a message naming the parameterized form
 //! to write, in the positions that lower one. Extracted from `func.rs` per
 //! AGENTS.md's file-decomposition rule when #1264 added
-//! [`with_bare_list_or_dict_advice`]; the items are moved verbatim apart
-//! from their visibility and that one addition.
+//! [`with_bare_list_or_dict_advice`]. The moved items keep their code
+//! verbatim; only their visibility and doc comments changed.
 
 use crate::unsupported;
 use pycc_ast::Expr;

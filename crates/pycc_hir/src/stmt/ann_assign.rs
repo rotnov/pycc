@@ -14,8 +14,11 @@
 //! exactly as it checks any other stored value. `docs/TYPE_SYSTEM.md`'s class
 //! "Current state" paragraph is the contract; D-245's 2026-09-24 amendment
 //! records why this is the one `pycc_hir` construction site of those two
-//! variants. Every other annotated attribute target keeps a `C0001` that
-//! names the admitted form; the general form is #891's.
+//! variants. Every other annotated attribute target is refused, with the
+//! diagnostics that paragraph enumerates: a shape refusal ends in
+//! [`ADMITTED_FORM`], while a `super()` base and an annotation
+//! `annotation_to_ty` rejects keep their existing diagnostics. The general
+//! form is #891's.
 
 use super::lower_expr;
 use crate::class::ClassAnnotationInfo;
@@ -118,8 +121,10 @@ fn is_final_annotation(annotation: &Expr) -> bool {
 
 /// #1264: `<base>.<attr>: list[int] = []` / `<base>.<attr>: dict[str, int]
 /// = {}` inside a function body lowers to `HirStmt::AttrSet` with a typed
-/// empty-container value built from the annotation. Everything else is a
-/// `C0001` ending in [`ADMITTED_FORM`].
+/// empty-container value built from the annotation. A `super()` base keeps
+/// #448's refusal, and an annotation `annotation_to_ty` rejects keeps a
+/// local's diagnostic (bare `list`/`dict` advice aside). Every other shape is
+/// a `C0001` ending in [`ADMITTED_FORM`].
 #[allow(clippy::too_many_arguments)]
 fn lower_attribute_target(
     ann: &StmtAnnAssign,
