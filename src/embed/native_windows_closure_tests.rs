@@ -203,6 +203,23 @@ fn natives_chain_and_are_shared_by_their_owners() {
 }
 
 #[test]
+fn a_native_import_cycle_is_scanned_once_per_owner() {
+    let mut fx = Fixture::new("nwc_cycle");
+    fx.lock("pkg", "pkg/_x.pyd", dll(&["a.dll", "c.dll"]));
+    fx.put("pkg/a.dll", dll(&["b.dll", "c.dll"]));
+    fx.put("pkg/b.dll", dll(&["a.dll"]));
+    fx.put("pkg/c.dll", dll(&[]));
+    assert_eq!(
+        fx.natives(),
+        owned(&[
+            ("a.dll", &["pkg"]),
+            ("b.dll", &["pkg"]),
+            ("c.dll", &["pkg"])
+        ])
+    );
+}
+
+#[test]
 fn the_one_locked_image_of_a_name_anywhere_is_payload() {
     let mut fx = Fixture::new("nwc_r5");
     fx.lock("pkg", "pkg/core/_x.pyd", dll(&["shared.dll"]));
