@@ -875,7 +875,11 @@ Dict, Any, Generic, List`. That probe is not the workload. It was refused with
 ``C0001 import of module `copy` is not supported yet`` and ``C0002 module
 `typing` has no importable symbol named `Dict` ``. The subject's own `-> Any`
 return would also meet `T0002`. Replacing it is not an addition, so D-252 does
-not admit that edit.
+not admit that edit. That makes it a second blocker, independent of the
+import-closure gaps: closing every gap in the table would still leave the
+subject refused, unless pycc comes to admit an `Any` return on a method that
+the host reaches only through a shim. That is a D-244 boundary question, not a
+missing feature.
 
 No timing was taken, and none can be until the subject compiles. The
 pre-registration commit and the protocol report remain unwritten. Two points
@@ -927,7 +931,10 @@ amended exactly once since it was committed: the **Workload admissibility**
 bullet, added on 2026-09-22 by
 [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md),
 which supplies a predicate the protocol presumed rather than revising how a
-chosen subject is measured. `subject_sha256` is still `null`; the record's
+chosen subject is measured. (That count held until 2026-09-24, when
+[D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
+added the Subject bullet's **Annotation-only additions** paragraph, a second
+amendment.) `subject_sha256` is still `null`; the record's
 only amended field is `machine.os`, re-pinned on 2026-09-21 and recorded there
 as `machine_os_amendment` (prerequisite 3 below), and no other field has
 changed.
@@ -1328,9 +1335,12 @@ their own pre-registration commit when an admissible workload is adopted, ahead
 of any run. `subject_sha256` is not part of that commit: it keeps the **Subject**
 bullet's own rule, registered as the scoring run's first action in a stage
 commit of its own. Until then nothing here is reshaped by an obstacle. The
-workload #1207 adopted never reached that commit: its row (b) outcome is
+workload #1207 adopted never reached that commit: its row (b) outcome was
 recorded without a run, so these fields still describe the refused reference
-workload.
+workload. Since 2026-09-24 row (c) governs that workload instead
+([D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)),
+and its annotated subject does not compile yet, so the commit has still not
+happened.
 
 #### What the boundary costs, measured (not part of the protocol)
 

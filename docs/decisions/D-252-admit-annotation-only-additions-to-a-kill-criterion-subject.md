@@ -39,7 +39,10 @@ status: accepted
      annotated by one addition, `is_end: bool = False`. The outcome that applies is row (c), under which
      compiler gaps are worked until 2026-10-22 and whatever is still open at the deadline is recorded as
      the miss. `docs/TESTING.md`'s #1207 status subsection carries the diff, the compile result and the
-     current gap list. The row-(b) record stays there as history.
+     current gap list. The row-(b) record stays there as history. Two kinds of blocker stand under row
+     (c). The first is the capability gaps in the subject's import closure. The second is the subject's
+     own `-> Any` return, which pycc refuses with `T0002` outside a declared interop boundary. Rule 1
+     does not admit replacing that annotation, so closing the capability gaps alone is not sufficient.
 - Alternatives:
   - *Keep row (b) as the final outcome.* Rejected by the owner's directive. It would record a
     workload's missing annotation on one defaulted `bool` flag as a verdict on the compiler, which is
