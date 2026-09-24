@@ -478,3 +478,16 @@ fn a_whole_attribute_rebinding_is_not_a_source() {
     assert_eq!(slot(&hir, "B", "xs"), provisional());
     assert!(reject_unresolved_attr_slots(&hir).is_err());
 }
+
+#[test]
+fn the_gate_keys_an_init_that_is_not_the_first_item() {
+    let hir = resolve(&format!("def first() -> None:\n    pass\n{INIT}"));
+    let init = hir
+        .items
+        .iter()
+        .position(|item| matches!(item, HirItem::Function { name, .. } if name == "B.__init__"))
+        .expect("init item");
+    assert_ne!(init, 0);
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    assert_eq!(errors[0].0, DiagnosticKey::Function(init));
+}
