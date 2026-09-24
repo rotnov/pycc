@@ -265,10 +265,8 @@ fn the_payload_plans_every_locked_file_once() {
     assert_eq!(data.digest, crate::embed::sha256::sha256_hex(b"d"));
     assert_eq!(closure.owner_of("tinydep/data.txt"), "tinydep");
     assert_eq!(closure.owner_of("absent"), "");
-    let own = closure.payload_of("tinydep/data.txt");
-    assert!(own.contains("tinydep/__init__.py"), "{own:?}");
-    assert!(!own.contains("tinypkg/__init__.py"), "{own:?}");
-    assert!(closure.payload_of("absent").is_empty());
+    let canonical = |path: &PathBuf| std::fs::canonicalize(path).unwrap();
+    assert_eq!(closure.sites, [canonical(&env.pure), canonical(&env.plat)]);
     assert_eq!(closure.libpython_sha256, check.section.libpython_sha256);
     let copied: BTreeMap<String, String> = closure
         .files
@@ -409,11 +407,6 @@ fn a_shared_path_is_planned_once_and_counted_for_every_claimant() {
         .map(|file| (file.rel.clone(), file.digest.clone()))
         .collect();
     assert_eq!(closure.verify_copied(&copied), Ok(()));
-    let both = closure.payload_of("ns/__init__.py");
-    assert!(
-        both.contains("ns/a.py") && both.contains("ns/b.py"),
-        "{both:?}"
-    );
 
     // The second claim names a different RECORD digest.
     let record = env.pure.join("ns-b-1.dist-info").join("RECORD");

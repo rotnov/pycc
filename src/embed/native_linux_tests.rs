@@ -518,3 +518,46 @@ fn a_copied_library_with_an_unresolved_dependency_is_refused() {
     let err = fx.plan(true).expect_err("refused");
     assert!(err.contains("`libz.so.1` needs `libnope.so.1`"), "{err}");
 }
+
+/// A library of an unlocked distribution in a site directory inside the
+/// prefix (a scanned one, or `<stdlib>/site-packages`) is a recorded
+/// native when a closure image needs it, and stays a prefix vendor when an
+/// interpreter image needs it (#1259).
+#[test]
+fn a_site_directory_library_inside_the_prefix_is_a_native_for_closure_images() {
+    let mut fx = Fixture::new("native_linux_site");
+    let stdlib_site = fx.layout.stdlib().join("site-packages").join("u");
+    let scanned = fx.layout.prefix.join("lib").join("scanned");
+    fx.write(
+        "prefix/lib/python3.14/site-packages/u/libu.so.1",
+        &ElfSpec::library("libu.so.1", &[]),
+    );
+    fx.write(
+        "prefix/lib/scanned/libs.so.1",
+        &ElfSpec::library("libs.so.1", &[]),
+    );
+    let search = format!("{}:{}", stdlib_site.display(), scanned.display());
+    let module = ElfSpec::module(&["libu.so.1", "libs.so.1"]).runpath(&search);
+    fx.image("pa/_a.so", "pa", &module);
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![scanned];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libs.so.1", "libu.so.1"]);
+
+    let fx = Fixture::new("native_linux_site_interpreter");
+    fx.write(
+        "prefix/lib/python3.14/site-packages/u/libu.so.1",
+        &ElfSpec::library("libu.so.1", &[]),
+    );
+    let search = fx.layout.stdlib().join("site-packages/u");
+    let search = search.display().to_string();
+    let module = ElfSpec::module(&["libu.so.1"]).runpath(&search);
+    let extension = fx
+        .layout
+        .dynload()
+        .join("_u.cpython-314-x86_64-linux-gnu.so");
+    std::fs::write(extension, elf_bytes(&module)).unwrap();
+    let planned = fx.plan(true).expect("planned");
+    assert_eq!(vendor_names(&planned), ["libu.so.1"]);
+    assert!(planned.natives.is_empty());
+}

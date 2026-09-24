@@ -269,6 +269,28 @@ pub(crate) fn loader_relative(image: &Path, name: &str) -> String {
     path
 }
 
+/// The `@loader_path` reference from the image at `from` to the file at
+/// `to`, both relative to the sidecar root and `/`-separated (#1259): one
+/// `../` per directory of `from` that `to` does not share, then the rest of
+/// `to`. It serves a closure image rebound to another payload file and a
+/// native in `lib/` rebound to one in `closure/`.
+pub(crate) fn sidecar_loader_relative(from: &str, to: &str) -> String {
+    let from_dirs: Vec<&str> = from.split('/').collect();
+    let from_dirs = &from_dirs[..from_dirs.len() - 1];
+    let to_parts: Vec<&str> = to.split('/').collect();
+    let shared = from_dirs
+        .iter()
+        .zip(&to_parts[..to_parts.len() - 1])
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut path = String::from("@loader_path/");
+    for _ in shared..from_dirs.len() {
+        path.push_str("../");
+    }
+    path.push_str(&to_parts[shared..].join("/"));
+    path
+}
+
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod tests;

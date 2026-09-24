@@ -1205,8 +1205,15 @@ owns the contract; this is the runtime view of it.
   and refused when a copied library needs it, since the executable loads
   those at start-up. On Linux a closure image's dependency that resolves
   through `$ORIGIN` to another image of the closure's payload is kept.
-  macOS refuses a relative reference outside a closure image's own payload
-  (#1259).
+  On macOS a closure image's or a native's `@rpath`/`@loader_path`
+  dependency is resolved the same way from the image's source directory and
+  its own `LC_RPATH` entries (#1259): a locked payload file is kept or
+  rewritten to an explicit `@loader_path` path to its `closure/` copy, and
+  anything outside the payload, the prefix and the system directories is a
+  native; `@executable_path`, an unresolvable reference and an unknown `@`
+  form are refused. On both hosts a closure image's or a native's dependency
+  under a site-packages directory is a native unless it is kept or rebound
+  as a payload file, even when that directory lies inside the prefix.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

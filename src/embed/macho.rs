@@ -1,9 +1,10 @@
 //! Pure Mach-O relocation rules for an embedded executable's sidecar on
 //! macOS (§3.4 of the #1028 plan): parsing `otool -L`, classifying each
-//! dependency, and the `install_name_tool`/`codesign` argument lists.
+//! dependency of an interpreter image, and the
+//! `install_name_tool`/`codesign` argument lists. A closure image's or a
+//! native's dependencies are classified by `macho_host.rs` (#1259).
 //! `bundle.rs` runs the tools; nothing here spawns anything.
 
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -21,15 +22,26 @@ pub(crate) enum MachoDep {
     /// and referenced relative to the loading image. Carries the resolved
     /// source path.
     Vendor(PathBuf),
-    /// A native library (the pycc.lock decision entry, rule 8; #1243): an
-    /// absolute dependency of a closure image, or of another native, that
-    /// lies outside the system directories and the interpreter's prefix.
-    /// Copied into the sidecar, like [`MachoDep::Vendor`], but only when
-    /// the lock lists it. Carries the resolved source path.
+    /// A native library (the pycc.lock decision entry, rule 8; #1243 and
+    /// #1259): a dependency of a closure image, or of another native, that
+    /// resolves outside the system directories, the locked payload and the
+    /// interpreter's prefix, or to an unlocked distribution's file in a
+    /// site directory. Copied into the sidecar, like [`MachoDep::Vendor`],
+    /// but only when the lock lists it. Carries the resolved source path.
     VendorNative(PathBuf),
-    /// Anything else. The build stops rather than ship a bundle that only
-    /// runs on the build host (D-128 rule 1).
+    /// A dependency that resolves to a file already in the sidecar (a
+    /// locked payload file, or a system library named relatively):
+    /// rewritten to the carried install name, and nothing is copied
+    /// (#1259).
+    Rebind(String),
+    /// An interpreter image's dependency outside the interpreter and the
+    /// system directories. The build stops rather than ship a bundle that
+    /// only runs on the build host (D-128 rule 1).
     Refuse,
+    /// A closure image's or a native's dependency that pycc cannot bundle,
+    /// with the reason, which completes "depends on `<dep>`, which ..."
+    /// (#1259).
+    RefuseWith(String),
 }
 
 /// The install names in `otool -L`'s output, in order. The first line is
@@ -85,7 +97,7 @@ pub(crate) fn classify_macho_dep(
     MachoDep::Refuse
 }
 
-fn is_system(dep: &str) -> bool {
+pub(super) fn is_system(dep: &str) -> bool {
     dep.starts_with("/usr/lib/") || dep.starts_with("/System/Library/")
 }
 
@@ -93,51 +105,6 @@ fn is_bundled(dep: &str, resolved: &Path, bundle_lib: &[PathBuf]) -> bool {
     bundle_lib
         .iter()
         .any(|lib| lib.as_path() == Path::new(dep) || lib.as_path() == resolved)
-}
-
-/// Classifies an absolute dependency `dep` of a closure image or a native
-/// library (#1243), in precedence order: a system library is kept; the
-/// source libpython is rewritten to the bundled one; a library under the
-/// interpreter's `prefix` is vendored; anything else is a native. The
-/// caller passes only absolute dependencies, or one that names the bundled
-/// library by a relative id. `resolved`, `prefix` and `bundle_lib` are as
-/// for [`classify_macho_dep`].
-pub(crate) fn classify_absolute(
-    dep: &str,
-    resolved: &Path,
-    prefix: &Path,
-    bundle_lib: &[PathBuf],
-) -> MachoDep {
-    if is_system(dep) {
-        return MachoDep::Keep;
-    }
-    if is_bundled(dep, resolved, bundle_lib) {
-        return MachoDep::RewriteToBundled;
-    }
-    if resolved.starts_with(prefix) {
-        return MachoDep::Vendor(resolved.to_path_buf());
-    }
-    MachoDep::VendorNative(resolved.to_path_buf())
-}
-
-/// Classifies one dependency of a vendored native library whose own id is
-/// `own_id`: the id is kept, an absolute dependency (or the bundled library
-/// by any id) goes through [`classify_absolute`], so a whole chain of
-/// natives is vendored, and a relative reference is refused (#1259).
-pub(crate) fn classify_native_dep(
-    dep: &str,
-    resolved: &Path,
-    own_id: &str,
-    prefix: &Path,
-    bundle_lib: &[PathBuf],
-) -> MachoDep {
-    if dep == own_id {
-        return MachoDep::Keep;
-    }
-    if dep.starts_with('/') || is_bundled(dep, resolved, bundle_lib) {
-        return classify_absolute(dep, resolved, prefix, bundle_lib);
-    }
-    MachoDep::Refuse
 }
 
 /// Whether `bytes` starts like a Mach-O image: a thin header in either
@@ -200,104 +167,6 @@ pub(crate) fn parse_otool_rpaths(stdout: &str) -> Vec<String> {
         in_rpath = false;
     }
     rpaths
-}
-
-/// What [`classify_closure_dep`] knows about one closure image, all of it
-/// computed by the caller so the classifier stays pure.
-pub(crate) struct ClosureImage<'a> {
-    /// The image's path under `<sidecar>/closure`, `/`-separated.
-    pub(crate) rel: &'a str,
-    /// Its install name (`otool -D`), if it is a dylib.
-    pub(crate) own_id: Option<&'a str>,
-    /// Its `LC_RPATH` entries, in load-command order.
-    pub(crate) rpaths: &'a [String],
-    /// The payload paths (under `closure/`) of the distribution(s) that
-    /// own it.
-    pub(crate) own_payload: &'a BTreeSet<String>,
-    /// Every file in the staged sidecar, relative to its root
-    /// (`closure/...` and `lib/...`).
-    pub(crate) sidecar: &'a BTreeSet<String>,
-}
-
-/// Classifies one dependency `dep` of a closure image (the pycc.lock
-/// decision entry, rule 8), in precedence order: the image's own id and a
-/// system library are kept; the source libpython is rewritten to the
-/// bundled one; an `@loader_path` reference into the image's own payload
-/// is kept; an `@rpath` reference is resolved in dyld's order over the
-/// image's `LC_RPATH` entries and kept only when its first match is in the
-/// image's own payload; any other absolute dependency is vendored, from
-/// the prefix or as a native, per [`classify_absolute`] (#1243); a relative
-/// reference that misses the payload is refused (#1259). `resolved`,
-/// `prefix` and `bundle_lib` are as for [`classify_macho_dep`].
-pub(crate) fn classify_closure_dep(
-    dep: &str,
-    resolved: &Path,
-    image: &ClosureImage<'_>,
-    prefix: &Path,
-    bundle_lib: &[PathBuf],
-) -> MachoDep {
-    if image.own_id == Some(dep) {
-        return MachoDep::Keep;
-    }
-    if dep.starts_with('/') || is_bundled(dep, resolved, bundle_lib) {
-        return classify_absolute(dep, resolved, prefix, bundle_lib);
-    }
-    let image_dir = format!("closure/{}/..", image.rel);
-    if let Some(rest) = dep.strip_prefix("@loader_path/") {
-        let target = normalize_under_root(&format!("{image_dir}/{rest}"));
-        return match target.as_deref().and_then(|t| t.strip_prefix("closure/")) {
-            Some(rel) if image.own_payload.contains(rel) => MachoDep::Keep,
-            _ => MachoDep::Refuse,
-        };
-    }
-    if let Some(rest) = dep.strip_prefix("@rpath/") {
-        return resolve_rpath(rest, &image_dir, image);
-    }
-    MachoDep::Refuse
-}
-
-/// dyld's `@rpath/<rest>` search over `image.rpaths`: the first candidate
-/// that is not relative to the image (an absolute or `@executable_path`
-/// rpath, or one that climbs out of the sidecar) is refused, because on the
-/// machine that runs the program it may exist and win; the first relative
-/// candidate that names a sidecar file decides.
-fn resolve_rpath(rest: &str, image_dir: &str, image: &ClosureImage<'_>) -> MachoDep {
-    for rpath in image.rpaths {
-        let Some(relative) = rpath
-            .strip_prefix("@loader_path")
-            .filter(|tail| tail.is_empty() || tail.starts_with('/'))
-        else {
-            return MachoDep::Refuse;
-        };
-        let Some(candidate) = normalize_under_root(&format!("{image_dir}{relative}/{rest}")) else {
-            return MachoDep::Refuse;
-        };
-        if let Some(rel) = candidate.strip_prefix("closure/")
-            && image.own_payload.contains(rel)
-        {
-            return MachoDep::Keep;
-        }
-        if image.sidecar.contains(&candidate) {
-            return MachoDep::Refuse;
-        }
-    }
-    MachoDep::Refuse
-}
-
-/// Normalizes a `/`-separated path relative to the sidecar root, or `None`
-/// when it climbs above that root.
-fn normalize_under_root(path: &str) -> Option<String> {
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            part => parts.push(part),
-        }
-    }
-    Some(parts.join("/"))
 }
 
 /// `install_name_tool -id <id> <image>`.
