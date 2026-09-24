@@ -9,6 +9,7 @@ use super::dist::{
 };
 use super::marker::MarkerEnv;
 use super::requirement::parse_requirement;
+use crate::embed::layout::EmbedPlatform;
 use crate::embed::sha256::{Sha256, sha256_file};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -79,12 +80,15 @@ fn has_component(path: &str, component: &str) -> bool {
 
 struct Index {
     sites: Vec<Site>,
+    /// The host the lock is for, which decides the import suffixes an
+    /// import root is owned through ([`names_root`]).
+    platform: EmbedPlatform,
     by_name: BTreeMap<String, Vec<DistInfo>>,
     records: BTreeMap<PathBuf, Option<Vec<RecordEntry>>>,
 }
 
 impl Index {
-    fn build(sites: &[Site]) -> Result<Self, String> {
+    fn build(sites: &[Site], platform: EmbedPlatform) -> Result<Self, String> {
         let mut by_name: BTreeMap<String, Vec<DistInfo>> = BTreeMap::new();
         let mut records = BTreeMap::new();
         for site in sites {
@@ -95,6 +99,7 @@ impl Index {
         }
         Ok(Self {
             sites: sites.to_vec(),
+            platform,
             by_name,
             records,
         })
@@ -128,7 +133,7 @@ impl Index {
             .filter(|dist| {
                 self.record(dist).is_some_and(|record| {
                     record.iter().any(|entry| {
-                        names_root(&entry.path, root)
+                        names_root(&entry.path, root, self.platform)
                             && !has_component(&entry.path, "__pycache__")
                             && !has_component(&entry.path, "..")
                     })
@@ -139,13 +144,14 @@ impl Index {
 }
 
 /// Resolves the closure of `roots` over the installed environment in
-/// `sites`, evaluated under `env`.
+/// `sites`, evaluated under `env`, for a lock on `platform`.
 pub(crate) fn resolve(
     sites: &[Site],
     roots: &BTreeSet<String>,
     env: &MarkerEnv,
+    platform: EmbedPlatform,
 ) -> Result<Vec<ResolvedPackage>, String> {
-    let index = Index::build(sites)?;
+    let index = Index::build(sites, platform)?;
     let mut requested: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for root in roots {
         let owners = index.owners(root);
@@ -169,7 +175,8 @@ pub(crate) fn resolve(
     let mut claimed: BTreeMap<String, (String, PathBuf, String)> = BTreeMap::new();
     let mut packages = Vec::new();
     for (name, member) in &members {
-        let payload = classify_payload(&index.sites, member.dist, &member.record, true)?;
+        let payload =
+            classify_payload(&index.sites, member.dist, &member.record, (true, platform))?;
         for (path, (location, digest)) in &payload {
             if let Some((other, other_location, other_digest)) = claimed.get(path) {
                 if other_location != location || other_digest != digest {
@@ -214,7 +221,7 @@ fn check_coverage(index: &Index, root: &str, owners: &[&DistInfo]) -> Result<(),
         let mut names: Vec<String> = entries
             .flatten()
             .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-            .filter(|name| name == root || names_root(name, root))
+            .filter(|name| name == root || names_root(name, root, index.platform))
             .collect();
         names.sort();
         for name in names {
@@ -386,6 +393,10 @@ fn closure<'a>(
 /// Classifies one distribution's RECORD entries (rule 4): RECORD path to
 /// (location, sha256 hex). `sites` are every scanned site directory.
 ///
+/// On a Windows `platform` a path inside the distribution's site must also
+/// pass [`windows_record_path_defect`] (#1296), so every `/`-based screen
+/// here sees the name Windows actually opens.
+///
 /// With `verify`, each payload file is hashed and must match its RECORD
 /// digest, and the value is that digest (`pycc lock`). Without it nothing
 /// is read beyond each path's `symlink_metadata`, and the value is the
@@ -395,7 +406,7 @@ pub(crate) fn classify_payload(
     sites: &[Site],
     dist: &DistInfo,
     record: &[RecordEntry],
-    verify: bool,
+    (verify, platform): (bool, EmbedPlatform),
 ) -> Result<BTreeMap<String, (PathBuf, String)>, String> {
     let own = &dist.site.path;
     let refuse = |path: &str, why: &str| {
@@ -431,6 +442,11 @@ pub(crate) fn classify_payload(
         }
         if has_component(path, "..") {
             return Err(refuse(path, "contains `..`"));
+        }
+        if platform == EmbedPlatform::Windows {
+            if let Some(defect) = windows_record_path_defect(path) {
+                return Err(refuse(path, defect));
+            }
         }
         let Some(encoded) = entry.hash.strip_prefix("sha256=") else {
             return Err(refuse(path, "has no sha256 hash"));
@@ -481,6 +497,45 @@ pub(crate) fn classify_payload(
         payload.insert(path.to_string(), (target, actual));
     }
     Ok(payload)
+}
+
+/// The device names Win32 reserves in every directory, whatever the
+/// extension: `NUL.py` opens the null device, not a file.
+const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Why a `/`-separated RECORD path is unsafe to lock on a Windows host
+/// (#1296), or `None`: a `\`, which Windows also splits on, so the
+/// `/`-based screens would not see its components; a `:`, a drive or an
+/// alternate data stream (`x.pyd::$DATA` writes `x.pyd`); a component
+/// other than `.` and `..` ending in `.` or a space, which Win32 strips
+/// (`x.pyd.` is `x.pyd`); or a component whose stem before its first `.`
+/// is a reserved device name. Pure.
+pub(crate) fn windows_record_path_defect(path: &str) -> Option<&'static str> {
+    if path.contains('\\') {
+        return Some("contains `\\`, which a Windows host also splits paths on");
+    }
+    if path.contains(':') {
+        return Some("contains `:`, a drive or an alternate data stream on a Windows host");
+    }
+    for component in path.split('/') {
+        if matches!(component, "." | "..") {
+            continue;
+        }
+        if component.ends_with(['.', ' ']) {
+            return Some("has a component ending in `.` or a space, which a Windows host strips");
+        }
+        let stem = component.split('.').next().unwrap_or(component);
+        if WINDOWS_DEVICE_NAMES
+            .iter()
+            .any(|device| device.eq_ignore_ascii_case(stem))
+        {
+            return Some("names a device a Windows host reserves (`CON`, `NUL`, `COM1`, ...)");
+        }
+    }
+    None
 }
 
 /// The tree digest: sha256 over `"<path>\0<sha256-hex>\n"` per payload

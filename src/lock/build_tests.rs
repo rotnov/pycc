@@ -247,7 +247,7 @@ fn the_payload_plans_every_locked_file_once() {
     let env = Env::with_tiny("build_payload", "import tinypkg\n");
     env.lock();
     let check = env.check();
-    let closure = payload(&check, &env.lock_probe).unwrap();
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
     let rels: Vec<&str> = closure.files.iter().map(|file| file.rel.as_str()).collect();
     assert!(rels.contains(&"tinypkg/__init__.py"), "{rels:?}");
     assert!(rels.contains(&"tinydep/data.txt"), "{rels:?}");
@@ -282,7 +282,7 @@ fn a_stdlib_only_section_plans_no_files() {
     env.lock();
     let check = env.check();
     assert!(check.section.roots.is_empty());
-    let closure = payload(&check, &env.lock_probe).unwrap();
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
     assert!(closure.files.is_empty());
     assert_eq!(closure.verify_copied(&BTreeMap::new()), Ok(()));
 }
@@ -293,7 +293,7 @@ fn a_copied_payload_that_does_not_add_up_to_the_lock_is_stale() {
     env.lock();
     let mut check = env.check();
     check.section.package[0].files += 1;
-    let closure = payload(&check, &env.lock_probe).unwrap();
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
     let copied: BTreeMap<String, String> = closure
         .files
         .iter()
@@ -306,7 +306,7 @@ fn a_copied_payload_that_does_not_add_up_to_the_lock_is_stale() {
     );
     let mut check = env.check();
     check.section.package[1].tree_sha256 = "00".repeat(32);
-    let closure = payload(&check, &env.lock_probe).unwrap();
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
     let err = closure.verify_copied(&copied).unwrap_err();
     assert!(err.contains("`tinypkg` differs: `tree-sha256`"), "{err}");
 }
@@ -318,7 +318,7 @@ fn a_locked_distribution_must_be_installed_exactly_once_at_its_version() {
 
     let mut check = env.check();
     check.section.package[0].site = "elsewhere".to_string();
-    let err = payload(&check, &env.lock_probe).unwrap_err();
+    let err = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(
         err.contains("locked in the elsewhere site directory"),
         "{err}"
@@ -326,14 +326,14 @@ fn a_locked_distribution_must_be_installed_exactly_once_at_its_version() {
 
     let mut check = env.check();
     check.section.package[0].version = "9.9".to_string();
-    let err = payload(&check, &env.lock_probe).unwrap_err();
+    let err = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(
         err.contains("`tinydep` is locked at version `9.9` but `2.0` is installed"),
         "{err}"
     );
 
     write_dist(&env.pure, "TinyDep", "3.0", &[], &[]);
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(
         err.contains("`tinydep` is installed more than once"),
         "{err}"
@@ -341,7 +341,7 @@ fn a_locked_distribution_must_be_installed_exactly_once_at_its_version() {
     std::fs::remove_dir_all(env.pure.join("TinyDep-3.0.dist-info")).unwrap();
 
     std::fs::remove_dir_all(env.pure.join("tinydep-2.0.dist-info")).unwrap();
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("`tinydep` is not installed in"), "{err}");
 }
 
@@ -352,16 +352,16 @@ fn an_unreadable_metadata_or_record_is_refused() {
     let dist_info = env.pure.join("tinydep-2.0.dist-info");
     let record = std::fs::read_to_string(dist_info.join("RECORD")).unwrap();
     std::fs::remove_file(dist_info.join("RECORD")).unwrap();
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("RECORD"), "{err}");
     std::fs::write(dist_info.join("RECORD"), record).unwrap();
 
     std::fs::write(dist_info.join("METADATA"), "Metadata-Version: 2.1\n").unwrap();
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("cannot read `"), "{err}");
     assert!(err.contains("METADATA"), "{err}");
     std::fs::remove_file(dist_info.join("METADATA")).unwrap();
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("METADATA"), "{err}");
 }
 
@@ -370,7 +370,7 @@ fn the_shared_record_classifier_refuses_a_missing_payload_file() {
     let env = Env::with_tiny("build_classifier", "import tinypkg\n");
     env.lock();
     std::fs::remove_file(env.pure.join("tinydep/data.txt")).unwrap();
-    let err = payload(&env.check(), &env.lock_probe).unwrap_err();
+    let err = payload(&env.check(), &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("tinydep/data.txt"), "{err}");
 }
 
@@ -393,7 +393,7 @@ fn a_shared_path_is_planned_once_and_counted_for_every_claimant() {
     );
     env.lock();
     let check = env.check();
-    let closure = payload(&check, &env.lock_probe).unwrap();
+    let closure = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap();
     let shared: Vec<&ClosureFile> = closure
         .files
         .iter()
@@ -416,7 +416,7 @@ fn a_shared_path_is_planned_once_and_counted_for_every_claimant() {
         &crate::lock::fixture::record_hash(b"other"),
     );
     std::fs::write(&record, edited).unwrap();
-    let err = payload(&check, &env.lock_probe).unwrap_err();
+    let err = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(
         err.contains(
             "distributions `ns-a` and `ns-b` both install `ns/__init__.py` with different contents"
@@ -436,6 +436,6 @@ fn a_shared_path_claimed_from_two_site_directories_is_stale() {
     write_dist(&env.plat, "ns-b", "1", &[("ns/__init__.py", b"s")], &[]);
     let mut check = env.check();
     check.section.package[1].site = "platlib".to_string();
-    let err = payload(&check, &env.lock_probe).unwrap_err();
+    let err = payload(&check, &env.lock_probe, EmbedPlatform::Linux).unwrap_err();
     assert!(err.contains("both install `ns/__init__.py`"), "{err}");
 }

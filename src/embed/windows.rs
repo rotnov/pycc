@@ -1,11 +1,14 @@
 //! The Windows embedded executable (D-253, Part 1 of #1226): a stub `OUT`
-//! that loads a program DLL from `OUT.pycc\`, for standard-library roots
-//! only until #1287. Pure functions, compiled and unit-tested on every
-//! host; only the stub's link spawn in `src/build_pipeline.rs` is
-//! `cfg(windows)`.
+//! that loads a program DLL from `OUT.pycc\`, with a locked pure-Python
+//! closure in `OUT.pycc\closure\` (#1296); a closure holding a native
+//! image is refused until its PE dependencies are scanned (#1297). Pure
+//! functions, compiled and unit-tested on every host; only the stub's link
+//! spawn in `src/build_pipeline.rs` is `cfg(windows)`.
 
 use super::layout::{self, EmbedPlatform, LibpythonLink};
+use super::native::read_head;
 use super::{EmbedProbe, write_source};
+use crate::lock::build::LockedClosure;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -27,24 +30,15 @@ pub(crate) struct StubLink {
     pub(crate) output: PathBuf,
 }
 
-/// Refuses what a Windows embedded build cannot do yet, before the
+/// Refuses what a Windows embedded build cannot do, before the
 /// interpreter is probed: a static libpython (CPython for Windows ships no
-/// static library, D-251), then a consumed `pycc.lock` section (#1287).
-/// The static refusal wins because it needs no lock content. `Ok` on every
-/// other platform.
+/// static library, D-251). `Ok` on every other platform.
 pub(crate) fn check_windows_request(
     platform: EmbedPlatform,
     link: LibpythonLink,
-    locked: bool,
 ) -> Result<(), String> {
-    if platform != EmbedPlatform::Windows {
-        return Ok(());
-    }
-    if link == LibpythonLink::Static {
+    if platform == EmbedPlatform::Windows && link == LibpythonLink::Static {
         return Err(STATIC_REFUSAL.to_string());
-    }
-    if locked {
-        return Err(LOCK_REFUSAL.to_string());
     }
     Ok(())
 }
@@ -53,9 +47,46 @@ pub(crate) fn check_windows_request(
 pub(crate) const STATIC_REFUSAL: &str = "a static libpython is not available for a Windows \
      embed interpreter: CPython for Windows ships no static library (D-251, D-253)";
 
-/// Why a Windows embedded build refuses a consumed `pycc.lock` section.
-pub(crate) const LOCK_REFUSAL: &str =
-    "an embedded Windows build does not consume `pycc.lock` yet (#1287)";
+/// Whether the closure file `rel`, whose first bytes are `head`, is a PE
+/// image a Windows build would load (#1296): its name ends in `.pyd` or
+/// `.dll`, which the import system and `LoadLibrary` load by name, or it
+/// starts with the PE `MZ` magic, which `ctypes` loads under any name,
+/// unless its name ends in `.exe` (a launcher Python never loads). Every
+/// suffix is compared ASCII case-insensitively. Pure.
+pub(crate) fn is_windows_image(rel: &str, head: &[u8]) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    if lower.ends_with(".pyd") || lower.ends_with(".dll") {
+        return true;
+    }
+    head.starts_with(b"MZ") && !lower.ends_with(".exe")
+}
+
+/// Refuses a Windows build whose locked closure holds a PE image
+/// ([`is_windows_image`]), naming the first in `files` order: Part 1 of
+/// #1287 has no PE import scan, so it cannot know what such an image
+/// loads, and relocation stays fail-closed until #1297. Runs after the
+/// payload is planned and before anything is staged. `Ok` on every other
+/// platform, and for no closure.
+pub(crate) fn check_closure_images(
+    platform: EmbedPlatform,
+    locked: Option<&LockedClosure>,
+) -> Result<(), String> {
+    let Some(locked) = locked.filter(|_| platform == EmbedPlatform::Windows) else {
+        return Ok(());
+    };
+    for file in &locked.files {
+        let head = read_head(&file.source)?;
+        if is_windows_image(&file.rel, &head) {
+            return Err(format!(
+                "the locked closure holds the native image `{}` of distribution `{}`; an \
+                 embedded Windows build does not bundle a `.pyd` or DLL until its PE \
+                 dependencies are scanned (#1297) -- use `pycc build --ext`",
+                file.rel, file.package
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// The Windows half of the embed probe (D-253): the import libraries in
 /// `LIBDIR` (`libs\python314.lib`, and `libs\python3.lib`, which the

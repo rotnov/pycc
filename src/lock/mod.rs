@@ -77,13 +77,6 @@ pub(crate) fn run_lock_on(
     toolchain: &EmbedToolchain,
     (arch, os): (&str, &str),
 ) -> Result<(), LockFailure> {
-    if os == "windows" {
-        return Err(LockFailure::Env(
-            "`pycc lock` does not run on a Windows host yet: it locks the closure an embedded \
-             build carries, and pycc does not lock a Windows embed interpreter yet (#1287)"
-                .to_string(),
-        ));
-    }
     let triple = schema::host_triple(arch, os).map_err(LockFailure::Env)?;
     let hir = frontend::lock_frontend(path, interop)?;
     let roots = import_roots(&hir);
@@ -267,7 +260,7 @@ fn derive(
         .map_err(LockFailure::Env)?;
     let env = toolchain.lock_probe().map_err(LockFailure::Env)?;
     let library = toolchain
-        .identity_library(&probe)
+        .identity_library(&probe, platform)
         .map_err(LockFailure::Env)?;
     let libpython_sha256 = embed::sha256::sha256_file(&library)
         .map_err(|e| LockFailure::Env(format!("cannot read `{}`: {e}", library.display())))?;
@@ -275,7 +268,7 @@ fn derive(
         Vec::new()
     } else {
         let sites = resolve::scanned_sites(&env.purelib, &env.platlib).map_err(LockFailure::Env)?;
-        resolve::resolve(&sites, direct, &env.markers).map_err(LockFailure::Env)?
+        resolve::resolve(&sites, direct, &env.markers, platform).map_err(LockFailure::Env)?
     };
     let (major, minor, micro) = probe.version;
     let mut section = LockTarget {
@@ -303,7 +296,7 @@ fn derive(
         // The natives are derived from the payload the build will copy, by
         // the derivation the build repeats, so the two cannot disagree.
         let check = build::ClosureCheck::for_section(section.clone(), located, entry_path);
-        let closure = build::payload(&check, &env).map_err(LockFailure::Env)?;
+        let closure = build::payload(&check, &env, platform).map_err(LockFailure::Env)?;
         let linux_env = toolchain.linux_env();
         let natives = embed::plan_natives(
             platform,

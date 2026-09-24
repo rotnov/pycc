@@ -52,18 +52,12 @@ fn section(entry: &str) -> LockTarget {
     }
 }
 
+/// A host with no Tier-1 triple is refused before the program is read. A
+/// Windows host locks (#1296): `src/embed/windows_lock_tests.rs`.
 #[test]
-fn a_windows_or_non_tier_1_host_is_refused_before_the_program_is_read() {
+fn a_non_tier_1_host_is_refused_before_the_program_is_read() {
     let dir = ScratchDir::new("lock_hosts").unwrap();
     let missing = dir.join("missing.py");
-    let windows = run_lock_on(
-        &missing,
-        false,
-        InteropCli::default(),
-        &absent(&dir),
-        ("x86_64", "windows"),
-    );
-    assert!(env_message(windows).contains("#1287"));
     let other = run_lock_on(
         &missing,
         false,

@@ -421,21 +421,20 @@ mod macos_relative_tests;
 #[path = "static_lock_tests.rs"]
 mod static_lock_tests;
 
-/// A Windows embedded build does not consume `pycc.lock` yet (#1287): a
-/// section for the build's host is refused before the interpreter is
-/// probed, and a static libpython request is refused ahead of it (D-253).
+/// A static libpython request on Windows is refused before a lock is read
+/// or the interpreter probed (D-253): the lock here is a macOS one, and
+/// the interpreter does not exist.
 #[test]
-fn a_windows_build_refuses_a_lock_section_and_a_static_request_first() {
-    let env = Env::new("embed_lock_windows", "import json\n");
+fn a_windows_static_request_is_refused_before_the_lock_is_read() {
+    let env = Env::new("embed_lock_windows_static", "import json\n");
     env.lock();
     env.previous_sidecar();
-    let missing = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python");
+    let missing = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python")
+        .with_link(LibpythonLink::Static);
     let err = env.embed_on(&missing, EmbedPlatform::Windows).unwrap_err();
-    assert_eq!(err, windows::LOCK_REFUSAL);
-    let static_link = missing.with_link(LibpythonLink::Static);
-    let err = env
-        .embed_on(&static_link, EmbedPlatform::Windows)
-        .unwrap_err();
     assert_eq!(err, windows::STATIC_REFUSAL);
     env.assert_previous_sidecar_intact();
 }
+
+#[path = "windows_lock_tests.rs"]
+mod windows_lock_tests;
