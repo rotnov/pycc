@@ -1333,8 +1333,8 @@ only a run of the protocol above can be that.
 
 D-128's transparent interop contract is partly implemented: the embedded
 executable for standard-library roots (#1223, D-248) and the policy surface
-(#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242)
-its native libraries outside the interpreter (#1243) and macOS relative
+(#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242),
+its native libraries outside the interpreter (#1243), and macOS relative
 references outside a closure payload (#1259) exist; Windows embedding
 (#1226) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the

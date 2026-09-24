@@ -1210,8 +1210,9 @@ owns the contract; this is the runtime view of it.
   its own `LC_RPATH` entries (#1259): a locked payload file is kept or
   rewritten to an explicit `@loader_path` path to its `closure/` copy, and
   anything outside the payload, the prefix and the system directories is a
-  native; `@executable_path`, an unresolvable reference and an unknown `@`
-  form are refused. On both hosts a closure image's or a native's dependency
+  native; `@executable_path`, an unresolvable reference and any other form
+  (neither absolute nor `@rpath`/`@loader_path`, such as a bare relative
+  name) are refused. On both hosts a closure image's or a native's dependency
   under a site-packages directory is a native unless it is kept or rebound
   as a payload file, even when that directory lies inside the prefix or
   (on Linux) under a system library directory.

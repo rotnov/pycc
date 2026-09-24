@@ -562,6 +562,24 @@ fn a_site_directory_library_inside_the_prefix_is_a_native_for_closure_images() {
     assert!(planned.natives.is_empty());
 }
 
+/// A closure image that reaches a locked payload file through an absolute
+/// `DT_RUNPATH` rather than `$ORIGIN` gets a native copy of it in `lib/`:
+/// Linux has no rebind, so only an `$ORIGIN` payload match is kept (#1259).
+#[test]
+fn a_payload_file_reached_through_an_absolute_runpath_is_a_native() {
+    let mut fx = Fixture::new("native_linux_payload_runpath");
+    let search = fx.root.join("site/pq").display().to_string();
+    let module = ElfSpec::module(&["libq.so.1"]).runpath(&search);
+    fx.image("pq/_q.so", "pq", &module);
+    fx.image("pq/libq.so.1", "pq", &ElfSpec::library("libq.so.1", &[]));
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![fx.root.join("site")];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libq.so.1"]);
+    assert_eq!(planned.natives[0].locked.required_by, ["pq"]);
+    assert_eq!(vendor_names(&planned), ["libq.so.1"]);
+}
+
 /// A distribution Python's site directory lies under a system directory
 /// (`/usr/lib/python3/dist-packages`): an unlocked distribution's library
 /// there is still a native, not a kept system library, while the image's

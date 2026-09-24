@@ -582,8 +582,9 @@ references outside a distribution's payload.
   else outside the prefix is a native. Refused with exit 2, naming the
   image and the reason: an `@executable_path` reference or an
   `@executable_path` rpath the search reaches before a match; a reference
-  that resolves nowhere from the image's own rpaths; and any other `@`
-  form. `pycc check` never reads the lock.
+  that resolves nowhere from the image's own rpaths; and any other form
+  (neither absolute nor `@rpath`, `@loader_path` or `@executable_path`,
+  such as a bare relative name). `pycc check` never reads the lock.
 
 ## Exit codes
 
