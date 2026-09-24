@@ -187,8 +187,8 @@ Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
 the wildcard, a dotted `X` (`from xml.dom import minidom`,
 [#1138](https://github.com/rotnov/pycc/issues/1138)), and a from-import inside
-a block body. (A relative import never reaches the foreign channel; it keeps
-its own `T0021`.) A foreign import's identity for the shadowing
+a block body. (A relative import is a project import (D-222) and never reaches
+the foreign channel; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
 rules is its module *and* its name, so `import copy` followed by
 `from copy import copy` is the same C0001 as any other rebinding of a foreign
 name. `I0402` and `I0403` are reported once per statement, not once per name:

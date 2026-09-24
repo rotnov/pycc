@@ -766,8 +766,8 @@ binding, so `from itertools import product` holds CPython's own
 `itertools.product`. Only that shape is admitted. An aliased name
 (`from X import a as b`), the wildcard, a dotted module (`from X.Y import a`,
 [#1138](https://github.com/rotnov/pycc/issues/1138)) and a from-import inside a
-block body keep their `C0001` (a relative import never reaches this channel and
-keeps its own `T0021`), and so does a name pycc
+block body keep their `C0001` (a relative import is a project import, D-222,
+and never reaches this channel), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
 `from numpy import ndarray`), because binding it to a CPython object would
 change what every later use of that spelling means. Each name is its own
