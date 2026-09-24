@@ -10,6 +10,8 @@
 //!
 //! The `#[ignore]`d `*_matches_cpython_3_14_7_byte_for_byte` tests build and
 //! run a real embedded executable. They run on every non-Windows Tier-1 leg
+//! (they read the POSIX sidecar layout, such as `lib/python3.14`; the
+//! Windows counterpart is `tests/issue_1286_windows_embedded_executable.rs`)
 //! under `cargo test --workspace -- --include-ignored`, where `python3.14`
 //! on `PATH` is CPython 3.14.7 (the build's default embed interpreter;
 //! `PYCC_PYTHON` overrides it). Each takes its CPython oracle from the
@@ -64,7 +66,6 @@ fn a_standard_library_import_in_a_target_build_is_refused_with_the_cross_target_
 
 /// A Tcl/Tk-backed standard-library root is excluded from the bundle and
 /// keeps its own reason.
-#[cfg(not(windows))]
 #[test]
 fn an_excluded_standard_library_root_is_refused_with_its_own_reason() {
     let dir = ScratchDir::new("embed_tkinter").expect("scratch");
@@ -75,22 +76,9 @@ fn an_excluded_standard_library_root_is_refused_with_its_own_reason() {
     assert!(rendered.contains("needs Tcl/Tk libraries"), "{rendered}");
 }
 
-/// On Windows the host reason wins over the per-root one (#1226).
-#[cfg(windows)]
-#[test]
-fn a_standard_library_import_on_a_windows_host_is_refused_with_the_host_reason() {
-    let dir = ScratchDir::new("embed_windows").expect("scratch");
-    let output = build(&dir, "import json\n", &[]);
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let rendered = stderr_of(&output);
-    assert!(rendered.contains("error[I0403]"), "{rendered}");
-    assert!(rendered.contains("on a Windows host"), "{rendered}");
-}
-
 /// A directory at `OUT.pycc` that pycc did not write is never replaced:
 /// the build stops with an environment failure and leaves it intact,
 /// before it looks for an interpreter.
-#[cfg(not(windows))]
 #[test]
 fn an_unmarked_sidecar_directory_is_refused_and_left_intact() {
     let dir = ScratchDir::new("embed_unmarked").expect("scratch");
@@ -120,7 +108,6 @@ fn an_unmarked_sidecar_directory_is_refused_and_left_intact() {
 
 /// With no usable interpreter the build is an environment failure that
 /// names the variable to set.
-#[cfg(not(windows))]
 #[test]
 fn a_missing_embed_interpreter_is_an_environment_failure_naming_pycc_python() {
     let dir = ScratchDir::new("embed_no_python").expect("scratch");

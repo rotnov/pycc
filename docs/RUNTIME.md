@@ -1151,7 +1151,8 @@ standard library bundles its closure from `pycc.lock` (#1242), and a missing
 or stale lock is exit 2 naming `pycc lock`. The effective interop policy is
 decided first, per import: a root it rejects is `I0402` on every host (see
 "Interop policy" below). An import the build cannot embed (an excluded
-Tcl/Tk root, a `--target` build, or a Windows host) leaves a plain build with
+Tcl/Tk root, a `--target` build, or a root outside the standard library on a
+Windows host, #1287) leaves a plain build with
 no interpreter to import into, so the driver refuses the program with `I0403`
 before codegen —
 one diagnostic per such import, each at its own `import` statement in the file
@@ -1187,7 +1188,9 @@ owns the contract; this is the runtime view of it.
   after `Py_InitializeFromConfig`); `PYTHONPATH` and ambient
   `site-packages` are ignored.
 - **Exit status.** An uncaught exception prints through `PyErr_Print` and
-  exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120.
+  exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120; on a
+  Windows host, a stub that cannot load its program DLL prints
+  `pycc: cannot load <path> (error N)` to stderr and exits 121 (D-253).
 - **Deviations from CPython.** `sys.flags.isolated` and `sys.flags.no_site`
   are 1, `sys.platlibdir` is `lib`, `sys.executable` and `sys.argv[0]` are the executable, and an
   uncaught pycc exception prints only its final `Type: message` line where a
@@ -1220,6 +1223,33 @@ owns the contract; this is the runtime view of it.
   under a site-packages directory is a native unless it is kept or rebound
   as a payload file, even when that directory lies inside the prefix or
   (on Linux) under a system library directory.
+- **Windows host (Part 1 of #1226, #1286).** A standard-library-only
+  program builds on a Windows host as a stub `OUT` plus `OUT.pycc\`
+  ([D-253](./decisions/D-253-windows-embedded-executable-a-stub-out-loading-a.md)).
+  The stub (`src/embed/pycc_embed_stub_windows.c`, static CRT, importing
+  only the system DLLs `KERNEL32` and `ntdll`) loads `OUT.pycc\pycc_program.dll` with
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`, so
+  the DLL's own imports resolve from the sidecar root and never from `PATH`,
+  and calls its `pycc_embed_main`. The program DLL holds the launcher, the
+  shim, the compiled module and `pycc_rt`, linked against `python314.dll`.
+  The sidecar holds `python314.dll`, `python3.dll`, the interpreter's
+  `vcruntime140.dll` and `vcruntime140_1.dll` when present, the filtered
+  `Lib\` and `DLLs\` (without `site-packages`, `__pycache__`, `test` and the
+  Tcl/Tk files), the program DLL and the marker; there is no `lib\`. The
+  launcher sets `sys.path` explicitly to `<sidecar>\Lib` then
+  `<sidecar>\DLLs` and leaves `platlibdir` at its default. The build links
+  the program DLL into the swapped sidecar first and the stub at `OUT`
+  second: a failed program-DLL link leaves a sidecar without the DLL (a
+  stale `OUT` then exits 121), a failed stub link leaves a complete sidecar
+  beside a stale or missing `OUT`; both are exit 1. Deviations and limits:
+  the stub does not resolve symlinks; `sys.executable` and `sys.argv[0]` are
+  the stub's path as spawned; Windows 10 or later is required; whether the
+  artifact runs without the VC++ redistributable is not proven by CI (the
+  runners install it); and relocation is not fail-closed -- `DLLs\` is
+  copied wholesale with no PE import scan, so a `.pyd` depending on a library
+  outside the sidecar and System32 fails only after the move, until #1287.
+  A root outside the standard library, a `pycc.lock` section and a static
+  libpython are refused there (#1287; D-251).
 - **Static libpython (Part 1 of #1227).** `pycc build --static-libpython`, or
   `[build] static = true` in a neighboring `pycc.toml`, links the embed
   interpreter's `LIBPL` archive into the executable whole (macOS

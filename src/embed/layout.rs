@@ -11,30 +11,34 @@ use std::path::{Path, PathBuf};
 
 /// The object format an embedded build links for. Injected rather than
 /// read from `cfg!` so the macOS coverage host also drives the Linux arm's
-/// lines (the `ExtLinkPlatform` precedent). Windows never reaches here:
-/// `EmbedHost::WindowsHost` refuses the build first (#1226).
+/// lines (the `ExtLinkPlatform` precedent). Windows embeds through a stub
+/// `OUT` that loads a program DLL from `OUT.pycc\` (D-253), for
+/// standard-library roots only until #1287.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbedPlatform {
     MacOs,
     Linux,
+    Windows,
 }
 
 impl EmbedPlatform {
     /// The platform of a host whose `std::env::consts::OS` is `os`, among
     /// the hosts an embedded build or `pycc lock` runs on. Any other host
-    /// (Windows included) folds into Linux here; the embedded build and
-    /// `pycc lock` both refuse Windows before they get this far (#1226).
+    /// folds into Linux here; `pycc lock` refuses Windows before it gets
+    /// this far (#1287).
     pub(crate) fn for_os(os: &str) -> Self {
-        if os == "macos" {
-            Self::MacOs
-        } else {
-            Self::Linux
+        match os {
+            "macos" => Self::MacOs,
+            "windows" => Self::Windows,
+            _ => Self::Linux,
         }
     }
 
     /// The build host's own platform.
     pub(crate) const HOST: Self = if cfg!(target_os = "macos") {
         Self::MacOs
+    } else if cfg!(windows) {
+        Self::Windows
     } else {
         Self::Linux
     };
@@ -89,10 +93,13 @@ pub(crate) fn sidecar_parent(out: &Path) -> &Path {
 /// The linker arguments that make the executable find `<sidecar>/lib`
 /// relative to itself. `-Xlinker` rather than `-Wl,`, which splits on
 /// commas; `$ORIGIN` is a literal argument because no shell is involved.
+/// Empty on Windows, which has no rpath: the stub loads the program DLL
+/// by its full path instead (D-253).
 pub(crate) fn rpath_args(platform: EmbedPlatform, sidecar: &str) -> Vec<OsString> {
     let origin = match platform {
         EmbedPlatform::MacOs => "@executable_path",
         EmbedPlatform::Linux => "$ORIGIN",
+        EmbedPlatform::Windows => return Vec::new(),
     };
     ["-Xlinker", "-rpath", "-Xlinker"]
         .into_iter()
@@ -107,9 +114,10 @@ pub(crate) fn rpath_args(platform: EmbedPlatform, sidecar: &str) -> Vec<OsString
 /// extension module that needs one is opened (#1243). `--no-as-needed`
 /// keeps an entry nothing in the executable itself references, and
 /// `-rpath-link` lets the link resolve their own dependencies among them.
-/// Empty on macOS, which rewrites the images' install names instead.
+/// Empty on macOS, which rewrites the images' install names instead, and
+/// on Windows, which vendors nothing into `lib/` (D-253).
 pub(crate) fn preload_args(platform: EmbedPlatform, dir: &Path, names: &[String]) -> Vec<OsString> {
-    if platform == EmbedPlatform::MacOs || names.is_empty() {
+    if platform != EmbedPlatform::Linux || names.is_empty() {
         return Vec::new();
     }
     let mut args: Vec<OsString> = ["-Xlinker", "--push-state", "-Xlinker", "--no-as-needed"]
@@ -140,6 +148,10 @@ pub(crate) fn preload_args(platform: EmbedPlatform, dir: &Path, names: &[String]
 /// (`.../Versions/3.14/Python`), otherwise `LIBDIR/LDLIBRARY` with symlinks
 /// resolved. An unresolvable path is returned as is, for the caller's
 /// existence check to report.
+///
+/// This is the macOS and Linux interpretation of the probe: on Windows
+/// `LIBDIR` is the import-library directory, and the DLL is
+/// [`windows_interpreter_dll`] instead. No Windows build reaches this.
 pub(crate) fn source_library(probe: &EmbedProbe) -> PathBuf {
     if !probe.framework.is_empty() {
         let root = probe.libdir.parent().unwrap_or(&probe.libdir);
@@ -149,9 +161,30 @@ pub(crate) fn source_library(probe: &EmbedProbe) -> PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
+/// The interpreter's DLL on a Windows host: `<base_prefix>\<LDLIBRARY>`,
+/// beside `python.exe` (`python314.dll`). The Windows interpretation of
+/// the probe, which [`source_library`] is not.
+pub(crate) fn windows_interpreter_dll(probe: &EmbedProbe) -> PathBuf {
+    probe.base_prefix.join(&probe.ldlibrary)
+}
+
+/// The program DLL's file name in a Windows sidecar: it holds the
+/// launcher, the shim, the compiled module and `pycc_rt`, and the stub
+/// `OUT` loads it by this fixed name (D-253). The stub's C source spells
+/// the same name.
+pub(crate) const PROGRAM_DLL_NAME: &str = "pycc_program.dll";
+
+/// The Visual C++ runtime DLLs a Windows sidecar carries when the
+/// interpreter's `base_prefix` has them, each copied only if it exists
+/// (D-253). `python3.dll` is not listed: the probe requires it.
+pub(crate) fn windows_runtime_dlls() -> [&'static str; 2] {
+    ["vcruntime140.dll", "vcruntime140_1.dll"]
+}
+
 /// The library's file name inside `<sidecar>/lib`. macOS renames it to a
 /// plain dylib whose id the build rewrites to `@rpath/<name>`; Linux keeps
-/// the SONAME the executable will record as `DT_NEEDED`.
+/// the SONAME the executable will record as `DT_NEEDED`. Windows keeps the
+/// DLL's own name, in the sidecar root ([`bundled_library_path`]).
 pub(crate) fn bundled_library_name(platform: EmbedPlatform, probe: &EmbedProbe) -> String {
     match platform {
         EmbedPlatform::MacOs => {
@@ -159,6 +192,32 @@ pub(crate) fn bundled_library_name(platform: EmbedPlatform, probe: &EmbedProbe) 
         }
         EmbedPlatform::Linux if probe.instsoname.is_empty() => probe.ldlibrary.clone(),
         EmbedPlatform::Linux => probe.instsoname.clone(),
+        EmbedPlatform::Windows => probe.ldlibrary.clone(),
+    }
+}
+
+/// The bundled library's final path in `sidecar`: `<sidecar>\python314.dll`
+/// on Windows, which has no `lib\`, and `<sidecar>/lib/<name>` elsewhere.
+pub(crate) fn bundled_library_path(
+    platform: EmbedPlatform,
+    sidecar: &Path,
+    probe: &EmbedProbe,
+) -> PathBuf {
+    let name = bundled_library_name(platform, probe);
+    match platform {
+        EmbedPlatform::Windows => sidecar.join(name),
+        EmbedPlatform::MacOs | EmbedPlatform::Linux => sidecar.join("lib").join(name),
+    }
+}
+
+/// The position-independence flag the C sources compile with: `-fPIC` for
+/// an ELF or Mach-O image, nothing on Windows, where a PE/COFF image is
+/// position-independent by construction (the same fact
+/// `ext_build::ext_compile_args` encodes for `--ext`).
+pub(crate) fn pic_args(platform: EmbedPlatform) -> Vec<OsString> {
+    match platform {
+        EmbedPlatform::MacOs | EmbedPlatform::Linux => vec![OsString::from("-fPIC")],
+        EmbedPlatform::Windows => Vec::new(),
     }
 }
 
@@ -195,7 +254,9 @@ pub(crate) enum LibpythonLink {
 
 /// The linker arguments that pull every member of the static `archive`
 /// into the executable, so an extension module's C-API reference resolves
-/// even to a function the executable itself never calls.
+/// even to a function the executable itself never calls. Empty on
+/// Windows, which never links statically: `plan_embed` refuses a static
+/// libpython there first (D-253).
 pub(crate) fn archive_load_args(platform: EmbedPlatform, archive: &Path) -> Vec<OsString> {
     let archive = archive.as_os_str().to_os_string();
     match platform {
@@ -212,16 +273,19 @@ pub(crate) fn archive_load_args(platform: EmbedPlatform, archive: &Path) -> Vec<
             "-Xlinker".into(),
             "--no-whole-archive".into(),
         ],
+        EmbedPlatform::Windows => Vec::new(),
     }
 }
 
 /// The linker arguments that export the executable's global symbols to
 /// the modules it opens: on Linux an executable exports none by default,
 /// and on macOS `-export_dynamic` keeps them through dead stripping.
+/// Empty on Windows, which never links statically (D-253).
 pub(crate) fn export_args(platform: EmbedPlatform) -> Vec<OsString> {
     let flag = match platform {
         EmbedPlatform::MacOs => "-export_dynamic",
         EmbedPlatform::Linux => "--export-dynamic",
+        EmbedPlatform::Windows => return Vec::new(),
     };
     vec!["-Xlinker".into(), flag.into()]
 }
@@ -270,6 +334,40 @@ pub(crate) fn skip_in_stdlib_copy(rel: &Path) -> bool {
                 && parts
                     .get(1)
                     .is_some_and(|file| file.starts_with(&format!("{root}."))))
+    })
+}
+
+/// The Windows twin of [`skip_in_stdlib_copy`], applied to both copies a
+/// Windows sidecar makes (`Lib` and `DLLs`), with `rel` relative to the
+/// copy's root: every `__pycache__`, a first component of `site-packages`
+/// or `test`, each excluded root as a package, as `<root>.py` or as a
+/// first component starting with `<root>.` (`_tkinter.pyd`), and the
+/// Tcl/Tk DLLs (`tcl86t.dll`, `tk86t.dll`). Case-insensitive, as NTFS is.
+pub(crate) fn skip_in_windows_stdlib_copy(rel: &Path) -> bool {
+    let parts: Vec<String> = rel
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect();
+    if parts.iter().any(|part| part == "__pycache__") {
+        return true;
+    }
+    let Some(first) = parts.first() else {
+        return false;
+    };
+    if matches!(first.as_str(), "site-packages" | "test") || is_tcl_tk_dll(first) {
+        return true;
+    }
+    EXCLUDED_STDLIB_ROOTS
+        .iter()
+        .any(|root| first == root || first.starts_with(&format!("{root}.")))
+}
+
+/// Whether the lowercased file name `name` is a Tcl/Tk DLL:
+/// `(tcl|tk)<digit>...dll`.
+fn is_tcl_tk_dll(name: &str) -> bool {
+    let rest = name.strip_prefix("tcl").or_else(|| name.strip_prefix("tk"));
+    rest.is_some_and(|rest| {
+        rest.starts_with(|c: char| c.is_ascii_digit()) && rest.ends_with(".dll")
     })
 }
 

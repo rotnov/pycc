@@ -86,7 +86,7 @@ fn keep_mode(source: &Path, dest: &Path) -> Result<(), String> {
     std::fs::set_permissions(dest, mode).map_err(|e| io_error("set the mode of", dest, &e))
 }
 
-/// Embedding is refused on Windows before any closure is copied (#1226).
+/// A Windows embedded build refuses a locked closure before copying (#1287).
 #[cfg(not(unix))]
 fn keep_mode(_source: &Path, _dest: &Path) -> Result<(), String> {
     Ok(())

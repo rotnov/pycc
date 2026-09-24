@@ -11,7 +11,7 @@
 //! libpython: a build that gets past the lock check fails in the compiler
 //! on the fake prefix's one-line `Python.h` (exit 1). A real archive's
 //! end-to-end evidence belongs to #1273. `cfg(not(windows))`: `pycc lock`
-//! and an embedded build refuse a Windows host (#1226).
+//! and a static libpython are not available on a Windows host (#1287, D-251).
 
 #![cfg_attr(windows, allow(dead_code, unused_imports))]
 

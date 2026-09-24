@@ -9,7 +9,7 @@
 //! Every distribution is written by the test itself, METADATA and RECORD
 //! with hashes computed here, so nothing downloads anything and no test
 //! calls `pip`, `uv` or an index. They are `cfg(not(windows))` one by one:
-//! `pycc lock` refuses a Windows host (#1226), which the one
+//! `pycc lock` refuses a Windows host until #1287, which the one
 //! `cfg(windows)` test pins.
 //!
 //! The `#[ignore]`d test locks a real `python3.14 -m venv --without-pip`
@@ -614,7 +614,7 @@ fn a_windows_host_is_refused() {
         .expect("pycc should spawn");
     assert_eq!(output.status.code(), Some(2), "{}", stderr_of(&output));
     assert!(
-        stderr_of(&output).contains("#1226"),
+        stderr_of(&output).contains("#1287"),
         "{}",
         stderr_of(&output)
     );
