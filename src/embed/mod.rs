@@ -19,6 +19,8 @@ mod macho;
 mod macho_host;
 pub(crate) mod native;
 pub(crate) mod native_linux;
+mod native_windows;
+mod pe;
 pub(crate) mod sha256;
 pub(crate) mod static_lib;
 pub(crate) mod stdlib_roots;
@@ -30,6 +32,7 @@ use layout::EmbedPlatform;
 pub(crate) use layout::LibpythonLink;
 pub(crate) use native::plan_natives;
 pub(crate) use native_linux::LinuxEnv;
+pub(crate) use native_windows::WindowsEnv;
 use static_lib::StaticProbe;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -110,6 +113,7 @@ pub(crate) struct EmbedToolchain {
     static_probe_override: Option<StaticProbe>,
     lock_probe_override: Option<LockProbe>,
     linux_env_override: Option<LinuxEnv>,
+    windows_env_override: Option<WindowsEnv>,
 }
 
 impl EmbedToolchain {
@@ -123,6 +127,7 @@ impl EmbedToolchain {
             static_probe_override: None,
             lock_probe_override: None,
             linux_env_override: None,
+            windows_env_override: None,
         }
     }
 
@@ -183,6 +188,22 @@ impl EmbedToolchain {
         self.linux_env_override
             .clone()
             .unwrap_or_else(LinuxEnv::host)
+    }
+
+    /// The same toolchain, scanning Windows images against `env` instead
+    /// of the build host's system directory. Not unix-only, unlike
+    /// [`Self::with_linux_env`]: the Windows scan's tests run on every host.
+    #[cfg(test)]
+    pub(crate) fn with_windows_env(mut self, env: WindowsEnv) -> Self {
+        self.windows_env_override = Some(env);
+        self
+    }
+
+    /// Where a Windows build's interpreter scan looks for system DLLs.
+    pub(crate) fn windows_env(&self) -> WindowsEnv {
+        self.windows_env_override
+            .clone()
+            .unwrap_or_else(WindowsEnv::host)
     }
 
     /// A toolchain that really runs `interpreter`.
@@ -448,7 +469,9 @@ pub(crate) struct EmbedPlan {
 ///
 /// A Windows build (D-253) refuses a static libpython before the probe,
 /// refuses a locked closure that holds a PE image once the payload is
-/// planned (#1296, until #1297 scans them), compiles without `-fPIC`,
+/// planned (#1296, until #1297 scans them), then refuses an interpreter
+/// image whose imports would not resolve once moved (#1305), all before
+/// anything is written; it compiles without `-fPIC`,
 /// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
 /// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
 pub(crate) fn plan_embed(
@@ -484,6 +507,7 @@ pub(crate) fn plan_embed(
         &probe,
         locked.as_ref(),
         &toolchain.linux_env(),
+        &toolchain.windows_env(),
         true,
         toolchain.link,
     )?;

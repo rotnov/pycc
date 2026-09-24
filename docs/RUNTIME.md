@@ -1312,11 +1312,18 @@ owns the contract; this is the runtime view of it.
   stale `OUT` then exits 121), a failed stub link leaves a complete sidecar
   beside a stale or missing `OUT`; both are exit 1. Deviations and limits:
   the stub does not resolve symlinks; `sys.executable` and `sys.argv[0]` are
-  the stub's path as spawned; Windows 10 or later is required; whether the
+  the stub's path as spawned; Windows 10 or later is required; and whether the
   artifact runs without the VC++ redistributable is not proven by CI (the
-  runners install it); and relocation is not fail-closed -- `DLLs\` is
-  copied wholesale with no PE import scan, so a `.pyd` depending on a library
-  outside the sidecar and System32 fails only after the move, until #1297.
+  runners install it). Relocation is fail-closed for the interpreter's
+  images (#1305): after the probe and before staging, every root DLL and
+  every kept `DLLs\` image is parsed, and the build is refused at exit 2
+  when one is not an x86-64 PE32+ DLL or imports a DLL that is none of an
+  API set, a root DLL, a kept image in its own directory, or a file in the
+  build host's System32 (a delay import must be an API set, a System32 file
+  or `python314.dll`); a kept `Lib\` file that is a PE image is refused, and
+  `DLLs\` images of another ABI (`.cp3NNt-`, `_d.pyd`, `_d.dll`) are not
+  copied. The launcher calls `AddDllDirectory(<sidecar>)` before starting
+  the interpreter, so a `.pyd` importing a root DLL finds it in the sidecar.
   A locked closure holding a file Windows would load as a PE image (a `.pyd`
   or `.dll` suffix, or an `MZ` header on any suffix other than `.exe`) is
   refused at exit 2 naming #1297 and `pycc build --ext`, and a static

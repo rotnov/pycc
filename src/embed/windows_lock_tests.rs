@@ -88,7 +88,8 @@ fn a_windows_build_bundles_the_locked_closure() {
     env.lock_windows();
     let text = env.lock_text();
     assert!(text.contains("x86_64-pc-windows-msvc"), "{text}");
-    let digest = sha256::sha256_hex(b"python314");
+    let dll = std::fs::read(env.layout.prefix.join("python314.dll")).unwrap();
+    let digest = sha256::sha256_hex(&dll);
     assert!(
         text.contains(&format!("libpython-sha256 = \"{digest}\"")),
         "{text}"
@@ -199,7 +200,11 @@ fn a_windows_build_refuses_a_stale_closure_or_interpreter() {
 
     let env = windows_env("embed_windows_lock_stale_dll", "import tinypkg\n", &[]);
     env.lock_windows();
-    std::fs::write(env.layout.prefix.join("python314.dll"), "rebuilt").unwrap();
+    // Still an image the scan accepts, so the digest check refuses it.
+    let dll = env.layout.prefix.join("python314.dll");
+    let mut rebuilt = std::fs::read(&dll).unwrap();
+    rebuilt.push(0);
+    std::fs::write(&dll, rebuilt).unwrap();
     env.previous_sidecar();
     let err = env.embed_windows().expect_err("stale DLL");
     assert!(err.contains("libpython-sha256"), "{err}");

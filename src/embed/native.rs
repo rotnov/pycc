@@ -20,6 +20,7 @@ use super::layout::{self, EmbedPlatform, LibpythonLink};
 use super::macho::{self, MachoDep};
 use super::macho_host::{HostContext, HostImage, HostKind, classify_on_host};
 use super::native_linux::{self, LinuxEnv};
+use super::native_windows::{self, WindowsEnv};
 use super::sha256::sha256_file;
 use crate::lock::build::{ClosureFile, LockedClosure};
 use crate::lock::schema::LockedNative;
@@ -68,8 +69,11 @@ impl NativePlan {
 /// Derives the natives of `closure` for `platform`. `interpreter` also
 /// walks the interpreter's own images on Linux (libpython and
 /// `lib-dynload`), which the build needs for their prefix-vendored
-/// libraries and refusals; `pycc lock` walks the closure alone, as on
-/// macOS, where the relocation walks the interpreter's images. `link` is
+/// libraries and refusals, and on Windows scans the images the sidecar
+/// bundles from the interpreter against `windows_env` (#1305), refusing
+/// one that would not load once moved; `pycc lock` walks the closure
+/// alone, as on macOS, where the relocation walks the interpreter's
+/// images. `link` is
 /// how the executable links libpython (D-251): a static build walks no
 /// libpython and refuses an image that needs one.
 pub(crate) fn plan_natives(
@@ -77,6 +81,7 @@ pub(crate) fn plan_natives(
     probe: &EmbedProbe,
     closure: Option<&LockedClosure>,
     env: &LinuxEnv,
+    windows_env: &WindowsEnv,
     interpreter: bool,
     link: LibpythonLink,
 ) -> Result<NativePlan, String> {
@@ -89,9 +94,15 @@ pub(crate) fn plan_natives(
             linux_vendor: Vec::new(),
         }),
         EmbedPlatform::Linux => native_linux::plan(probe, closure, env, interpreter, link),
-        // Windows: nothing to vendor; `DLLs\` is copied wholesale, and a
-        // closure holding a PE image is refused (`plan_embed`) until #1297.
-        EmbedPlatform::Windows => Ok(NativePlan::default()),
+        // Windows: nothing to vendor. The interpreter's images are scanned
+        // and bundled as they are; a closure holding a PE image is refused
+        // (`plan_embed`) until #1306.
+        EmbedPlatform::Windows => {
+            if interpreter {
+                native_windows::scan_interpreter(probe, windows_env)?;
+            }
+            Ok(NativePlan::default())
+        }
     }
 }
 

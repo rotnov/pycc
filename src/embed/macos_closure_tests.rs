@@ -365,6 +365,7 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
         probe,
         Some(&closure),
         &linux,
+        &WindowsEnv::host(),
         false,
         LibpythonLink::Shared,
     )

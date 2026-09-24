@@ -297,12 +297,13 @@ fn derive(
         // the derivation the build repeats, so the two cannot disagree.
         let check = build::ClosureCheck::for_section(section.clone(), located, entry_path);
         let closure = build::payload(&check, &env, platform).map_err(LockFailure::Env)?;
-        let linux_env = toolchain.linux_env();
+        let (linux_env, windows_env) = (toolchain.linux_env(), toolchain.windows_env());
         let natives = embed::plan_natives(
             platform,
             &probe,
             Some(&closure),
             &linux_env,
+            &windows_env,
             false,
             embed::LibpythonLink::Shared,
         );

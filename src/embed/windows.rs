@@ -62,9 +62,10 @@ pub(crate) fn is_windows_image(rel: &str, head: &[u8]) -> bool {
 }
 
 /// Refuses a Windows build whose locked closure holds a PE image
-/// ([`is_windows_image`]), naming the first in `files` order: Part 1 of
-/// #1287 has no PE import scan, so it cannot know what such an image
-/// loads, and relocation stays fail-closed until #1297. Runs after the
+/// ([`is_windows_image`]), naming the first in `files` order: the build
+/// scans the interpreter's images (#1305) but no closure image, so it
+/// cannot know what such an image loads, and relocation stays fail-closed
+/// until #1297. Runs after the
 /// payload is planned and before anything is staged. `Ok` on every other
 /// platform, and for no closure.
 pub(crate) fn check_closure_images(
