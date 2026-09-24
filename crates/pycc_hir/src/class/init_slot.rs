@@ -6,7 +6,9 @@
 //! derives each attribute slot's `Ty` structurally from the first
 //! assignment's right-hand side. #1262 (Part 1 of #1218) admits a
 //! `list[int]`/`dict[str, int]` parameter there, stored as a pointer word
-//! (D-154's slot layout, leak-only per D-107/D-124).
+//! (D-154's slot layout, leak-only per D-107/D-124). #1264 (Part 3) adds
+//! the annotated `<receiver>.<attr>: list[int] = []` / `dict[str, int] = {}`
+//! form, whose slot `Ty` is its written annotation's.
 
 use crate::{Ty, unsupported};
 use pycc_ast::{Expr, Number, Stmt};
@@ -14,8 +16,9 @@ use pycc_diag::Diagnostic;
 
 /// Scans `__init__`'s own top-level body statements (no recursion into a
 /// nested `if`/`while`/`for` -- see `super`'s own module doc comment) for
-/// `self.<attr> = <value>` assignments, building the attribute-slot list in
-/// first-assignment source order. Only the *first* assignment to a given
+/// `self.<attr> = <value>` assignments and annotated `self.<attr>: <T> =
+/// <value>` ones (#1264), building the attribute-slot list in
+/// first-assignment source order across both statement kinds. Only the *first* assignment to a given
 /// attribute name establishes its slot and `Ty`; a later `self.<attr> =
 /// ...` reassignment further down `__init__`'s own body is structurally
 /// ignored here (it is still lowered normally by `stmt::lower_body` into an
@@ -27,6 +30,11 @@ use pycc_diag::Diagnostic;
 /// is always the *canonical* receiver name, `self`, whatever the source
 /// spelled -- see `super::receiver`) -- used to resolve a
 /// bare-parameter-name RHS's `Ty`.
+///
+/// `annotation_ty` resolves an annotated assignment's annotation to its
+/// `Ty`. The caller passes the same `annotation_to_ty` call, in the same
+/// context, that `stmt::ann_assign` used when it lowered and accepted this
+/// body, so the slot type is exactly the type of the value it built.
 ///
 /// #1181: `receiver_name` is the receiver's *source* spelling, which is what
 /// the body actually writes. Comparing against the literal `self` instead

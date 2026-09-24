@@ -30,7 +30,7 @@ pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Upgrades [`annotation_to_ty`]'s generic unknown-name `C0001` into the
+/// Upgrades [`crate::annotation_to_ty`]'s generic unknown-name `C0001` into the
 /// bare-container message that names the parameterized form (D-228, issue
 /// #918) -- for the callers whose annotation position actually lowers a
 /// container.

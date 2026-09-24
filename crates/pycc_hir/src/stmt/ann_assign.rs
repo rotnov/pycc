@@ -70,7 +70,8 @@ pub(super) fn lower_ann_assign(
         }
     };
     // `ann.simple` is false either when the target isn't a bare name
-    // (already rejected above) or when a bare name target is itself
+    // (already handled above: lowered as an attribute target, or rejected
+    // as any other non-name shape) or when a bare name target is itself
     // parenthesized, e.g. `(x): int = 1` -- upstream's own parser
     // sets `simple = target.is_name_expr() && !target.is_parenthesized`
     // (verified against the pinned ruff_python_parser = "0.0.6"
