@@ -180,6 +180,23 @@ pub(crate) fn windows_runtime_dlls() -> [&'static str; 2] {
     ["vcruntime140.dll", "vcruntime140_1.dll"]
 }
 
+/// The DLLs at a Windows sidecar's root, in copy order: the interpreter's
+/// DLL (`probe.ldlibrary`), `python{major}.dll`, and each of
+/// [`windows_runtime_dlls`] that exists in `base_prefix`. The copy and the
+/// import scan both read this list, so the scan's root set is exactly what
+/// the sidecar carries.
+pub(crate) fn windows_root_dlls(probe: &EmbedProbe) -> Vec<String> {
+    let mut names = vec![
+        probe.ldlibrary.clone(),
+        format!("python{}.dll", probe.version.0),
+    ];
+    let present = windows_runtime_dlls()
+        .into_iter()
+        .filter(|name| probe.base_prefix.join(name).is_file());
+    names.extend(present.map(str::to_string));
+    names
+}
+
 /// The library's file name inside `<sidecar>/lib`. macOS renames it to a
 /// plain dylib whose id the build rewrites to `@rpath/<name>`; Linux keeps
 /// the SONAME the executable will record as `DT_NEEDED`. Windows keeps the
@@ -340,14 +357,18 @@ pub(crate) fn skip_in_stdlib_copy(rel: &Path) -> bool {
 /// Windows sidecar makes (`Lib` and `DLLs`), with `rel` relative to the
 /// copy's root: every `__pycache__`, a first component of `site-packages`
 /// or `test`, each excluded root as a package, as `<root>.py` or as a
-/// first component starting with `<root>.` (`_tkinter.pyd`), and the
-/// Tcl/Tk DLLs (`tcl86t.dll`, `tk86t.dll`). Case-insensitive, as NTFS is.
+/// first component starting with `<root>.` (`_tkinter.pyd`), the
+/// Tcl/Tk DLLs (`tcl86t.dll`, `tk86t.dll`), and the extension images of
+/// another ABI ([`is_other_abi_image`]). Case-insensitive, as NTFS is.
 pub(crate) fn skip_in_windows_stdlib_copy(rel: &Path) -> bool {
     let parts: Vec<String> = rel
         .components()
         .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect();
     if parts.iter().any(|part| part == "__pycache__") {
+        return true;
+    }
+    if parts.last().is_some_and(|name| is_other_abi_image(name)) {
         return true;
     }
     let Some(first) = parts.first() else {
@@ -359,6 +380,20 @@ pub(crate) fn skip_in_windows_stdlib_copy(rel: &Path) -> bool {
     EXCLUDED_STDLIB_ROOTS
         .iter()
         .any(|root| first == root || first.starts_with(&format!("{root}.")))
+}
+
+/// Whether the lowercased file name `name` is an extension image the
+/// release, non-free-threaded interpreter pycc embeds never imports (#1305):
+/// a free-threaded one (`.cp3NNt-` in the name, importing `python3NNt.dll`)
+/// or a debug one (`*_d.pyd`, `*_d.dll`, importing `python3NN_d.dll`). The
+/// python.org installer's optional components put both in the same `DLLs\`.
+fn is_other_abi_image(name: &str) -> bool {
+    let free_threaded = name.match_indices(".cp3").any(|(at, tag)| {
+        let rest = &name[at + tag.len()..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        digits > 0 && rest[digits..].starts_with("t-")
+    });
+    free_threaded || name.ends_with("_d.pyd") || name.ends_with("_d.dll")
 }
 
 /// Whether the lowercased file name `name` is a Tcl/Tk DLL:

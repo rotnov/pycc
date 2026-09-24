@@ -5,7 +5,7 @@
 //! directories, and the Linux arm runs no Mach-O tool, so no python3.14 and
 //! no `otool` run.
 
-use super::super::fake_layout::{FakeLayout, fake_layout};
+use super::super::fake_layout::{FakeLayout, fake_layout, fake_windows_env};
 use super::super::*;
 use super::relative_files;
 use crate::interop_policy::InteropCli;
@@ -93,6 +93,7 @@ impl Env {
 
     fn toolchain(&self) -> EmbedToolchain {
         EmbedToolchain::with_probes("pyfake", self.layout.probe.clone(), self.lock_probe.clone())
+            .with_windows_env(fake_windows_env(&self.layout))
     }
 
     fn lock(&self) {

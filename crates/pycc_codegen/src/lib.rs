@@ -7281,7 +7281,7 @@ fn emit_stmt<'ctx>(
         }
         MirStmt::NoOp => Ok(()),
         MirStmt::ForeignImport { bindings } => {
-            foreign_import::emit_stmt(context, builder, module, locals, bindings);
+            foreign_import::emit_stmt(context, builder, module, rt, locals, bindings);
             Ok(())
         }
         MirStmt::Unreachable => {

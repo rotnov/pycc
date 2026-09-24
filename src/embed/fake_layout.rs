@@ -8,8 +8,10 @@
 //!
 //! [`fake_windows_layout`] is the python.org Windows installation's shape
 //! (D-253): the interpreter DLLs beside `python.exe`, the import libraries
-//! in `libs\`, `Lib\`, `DLLs\` and `Include\`. It is plain files, so the
-//! Windows probe, bundle and plan run on every host.
+//! in `libs\`, `Lib\`, `DLLs\` and `Include\`, and a system directory
+//! beside it ([`fake_windows_env`]). The DLLs are synthetic PE images
+//! ([`super::pe::fixture`]) and the rest plain files, so the Windows probe,
+//! import scan, bundle and plan run on every host.
 //!
 //! The tests that build a real Mach-O library or run the POSIX embed
 //! wiring are gated off on Windows, so part of this module has no caller
@@ -17,6 +19,8 @@
 #![cfg_attr(windows, allow(dead_code))]
 
 use super::EmbedProbe;
+use super::WindowsEnv;
+use super::pe::fixture::PeSpec;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -41,7 +45,7 @@ impl FakeLayout {
     }
 }
 
-fn write(path: &Path, contents: &str) {
+fn write(path: &Path, contents: impl AsRef<[u8]>) {
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("create the parent");
     std::fs::write(path, contents).expect("write a fake-layout file");
 }
@@ -143,7 +147,10 @@ pub(crate) fn macho_library(layout: &FakeLayout) {
 /// `python3.dll` and `vcruntime140.dll` (no `vcruntime140_1.dll`, so the
 /// optional-copy skip runs), `libs\python314.lib` and `python3.lib`, a
 /// `Lib\` and a `DLLs\` holding one file of every kind the Windows copy
-/// filter keeps or skips, and a stub `Include\Python.h`.
+/// filter keeps or skips, a stub `Include\Python.h`, and `System32\`
+/// beside `base\` with `KERNEL32.dll`, `ADVAPI32.dll` and `WS2_32.dll`.
+/// Every kept DLL is a PE32+ image whose imports resolve, with the case
+/// mismatches (`VCRUNTIME140.dll`) and API sets a real install has.
 pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
     let root = std::fs::canonicalize(root).expect("canonicalize the scratch root");
     let prefix = root.join("base");
@@ -152,10 +159,38 @@ pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
         &include.join("Python.h"),
         "#error pycc test fixture: not a real Python.h\n",
     );
+    let crt = "api-ms-win-crt-runtime-l1-1-0.dll";
+    for (rel, imports, delay) in [
+        (
+            "python314.dll",
+            &["KERNEL32.dll", "VCRUNTIME140.dll", crt][..],
+            &[][..],
+        ),
+        ("python3.dll", &["python314.dll"], &[]),
+        ("vcruntime140.dll", &["KERNEL32.dll", crt], &[]),
+        (
+            "DLLs/_ssl.pyd",
+            &[
+                "python314.dll",
+                "libssl-3.dll",
+                "KERNEL32.dll",
+                "VCRUNTIME140.dll",
+                crt,
+            ],
+            &[],
+        ),
+        (
+            "DLLs/libssl-3.dll",
+            &["KERNEL32.dll", "ADVAPI32.dll"],
+            &["WS2_32.dll"],
+        ),
+    ] {
+        write(&prefix.join(rel), PeSpec::dll(imports).delay(delay).bytes());
+    }
+    for name in ["KERNEL32.dll", "ADVAPI32.dll", "WS2_32.dll"] {
+        write(&root.join("System32").join(name), PeSpec::dll(&[]).bytes());
+    }
     for (rel, text) in [
-        ("python314.dll", "python314"),
-        ("python3.dll", "python3"),
-        ("vcruntime140.dll", "vcruntime140"),
         ("libs/python314.lib", "import library"),
         ("libs/python3.lib", "import library"),
         ("Lib/os.py", "# os\n"),
@@ -163,8 +198,7 @@ pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
         ("Lib/json/__pycache__/__init__.cpython-314.pyc", "junk"),
         ("Lib/site-packages/x/__init__.py", "# x\n"),
         ("Lib/tkinter/__init__.py", "# tkinter\n"),
-        ("DLLs/_ssl.pyd", "ssl"),
-        ("DLLs/libssl-3.dll", "libssl"),
+        ("DLLs/py.ico", "icon"),
         ("DLLs/_tkinter.pyd", "tkinter"),
         ("DLLs/tcl86t.dll", "tcl"),
     ] {
@@ -184,4 +218,12 @@ pub(crate) fn fake_windows_layout(root: &Path) -> FakeLayout {
         gil_disabled: false,
     };
     FakeLayout { prefix, probe }
+}
+
+/// The system directory [`fake_windows_layout`] writes beside `base\`.
+pub(crate) fn fake_windows_env(layout: &FakeLayout) -> WindowsEnv {
+    let root = layout.prefix.parent().expect("the layout root");
+    WindowsEnv {
+        system_dirs: vec![root.join("System32")],
+    }
 }

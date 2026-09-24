@@ -460,7 +460,9 @@ achieve.
   `llvm-readobj` fails them instead of skipping, and cover the oracle
   program, relocation under a scrubbed `PATH`, the `DLLs\` extension
   modules, `pycc run`, `sys.exit(3)`, the missing-DLL exit 121, the sidecar's
-  file set and the stub's system-DLL-only imports (`KERNEL32`, `ntdll`). Each takes its CPython
+  file set, the stub's system-DLL-only imports (`KERNEL32`, `ntdll`), and
+  the in-tree PE import reader's agreement with `llvm-readobj --coff-imports`
+  on every bundled image (#1305). Each takes its CPython
   oracle from the bundle's `PYCC-BUNDLE` marker and asserts it is 3.14.7.
   They cover the synthetic oracle program, relocation, `PYTHONPATH`
   isolation, `pycc run`, `sys.exit(3)`, and the freshness of
@@ -891,7 +893,7 @@ edit was made:
 | `C0001` import of `itertools` / `collections` not supported yet | 0 (was 1 each) | #1278 admits an unaliased, top-level `from X import a, b` of an undotted foreign module, so `from itertools import product` (line 3) and `from collections import deque` (line 4) now compile, each binding CPython's own object; #882 still tracks a native `collections`. The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1278 change on top of `main` at `17189dde`, on the unedited subject module) reports 13 errors, all still in `lark/utils.py`; the first is now the `C0002` for `typing.Callable` (line 5) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
 | `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
-| `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. That is compile-time only: both sit in `try: ... except ImportError:`, and when the module is absent the handler does not run yet (the #1096 deviation; catching it is #1293). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
+| `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. Both sit in `try: ... except ImportError:`; that is compile-time only for this workload, since lark still stops at `lark/utils.py`, but since #1293 such a handler runs when the module is absent, as in CPython (`tests/issue_1293_import_bridge.rs`). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
 | `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 1 | #1138 (dotted foreign submodules) and #1282, whose third occurrence this is: before #1291 it was the block-body `C0001`, and the dotted name now fails on its own |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |

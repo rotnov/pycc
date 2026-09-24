@@ -173,7 +173,7 @@ fn populate(
     };
     let stdlib = lib_dir.join(layout::stdlib_dir_name(probe));
     let skip = layout::skip_in_stdlib_copy;
-    copy_stdlib(&probe.stdlib, &stdlib, Path::new(""), skip)?;
+    copy_stdlib(&probe.stdlib, &stdlib, skip)?;
     let images = match locked {
         Some(locked) if !locked.files.is_empty() => closure::copy_closure(locked, staging)?,
         _ => Vec::new(),
@@ -218,15 +218,36 @@ fn check_locked_digest(locked: &LockedClosure, digest: &str) -> Result<(), Strin
     }
 }
 
-/// Copies `from/rel` into `to/rel`, recursively, skipping what `skip`
-/// names ([`layout::skip_in_stdlib_copy`], or on Windows
-/// [`layout::skip_in_windows_stdlib_copy`]). Files are copied by reading and
-/// writing their bytes, so every copy is writable by the build for the
-/// relocation step regardless of the source's mode.
-fn copy_stdlib(from: &Path, to: &Path, rel: &Path, skip: fn(&Path) -> bool) -> Result<(), String> {
-    let dest = to.join(rel);
-    std::fs::create_dir(&dest).map_err(|e| io_error("create", &dest, &e))?;
-    let source = from.join(rel);
+/// One entry the stdlib copy keeps, relative to the copied root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Kept {
+    /// A directory to create; the first entry is the root itself, `""`.
+    Dir(PathBuf),
+    /// A file to copy.
+    File(PathBuf),
+}
+
+/// Every entry under `root` the stdlib copy keeps, in walk order, relative
+/// to `root`: each directory (including an empty one) before its contents,
+/// skipping what `skip` names ([`layout::skip_in_stdlib_copy`], or on
+/// Windows [`layout::skip_in_windows_stdlib_copy`]) before recursing. A
+/// real directory is recursed into; a path whose followed metadata is a
+/// file is kept; anything else is ignored. The copy and the Windows import
+/// scan share this walk, so the scanned set is the copied set.
+pub(crate) fn kept_entries(root: &Path, skip: fn(&Path) -> bool) -> Result<Vec<Kept>, String> {
+    let mut kept = Vec::new();
+    walk_kept(root, Path::new(""), skip, &mut kept)?;
+    Ok(kept)
+}
+
+fn walk_kept(
+    root: &Path,
+    rel: &Path,
+    skip: fn(&Path) -> bool,
+    kept: &mut Vec<Kept>,
+) -> Result<(), String> {
+    kept.push(Kept::Dir(rel.to_path_buf()));
+    let source = root.join(rel);
     let entries = std::fs::read_dir(&source).map_err(|e| io_error("read", &source, &e))?;
     for entry in entries {
         let entry = entry.map_err(|e| io_error("read", &source, &e))?;
@@ -237,11 +258,30 @@ fn copy_stdlib(from: &Path, to: &Path, rel: &Path, skip: fn(&Path) -> bool) -> R
         let path = entry.path();
         let kind = std::fs::symlink_metadata(&path).map_err(|e| io_error("inspect", &path, &e))?;
         if kind.is_dir() {
-            copy_stdlib(from, to, &child, skip)?;
+            walk_kept(root, &child, skip, kept)?;
         } else if std::fs::metadata(&path).is_ok_and(|target| target.is_file()) {
-            let bytes = std::fs::read(&path).map_err(|e| io_error("read", &path, &e))?;
-            let out = to.join(&child);
-            std::fs::write(&out, bytes).map_err(|e| io_error("write", &out, &e))?;
+            kept.push(Kept::File(child));
+        }
+    }
+    Ok(())
+}
+
+/// Copies what [`kept_entries`] keeps under `from` into `to`. Files are
+/// copied by reading and writing their bytes, so every copy is writable by
+/// the build for the relocation step regardless of the source's mode.
+fn copy_stdlib(from: &Path, to: &Path, skip: fn(&Path) -> bool) -> Result<(), String> {
+    for entry in kept_entries(from, skip)? {
+        match entry {
+            Kept::Dir(rel) => {
+                let dest = to.join(rel);
+                std::fs::create_dir(&dest).map_err(|e| io_error("create", &dest, &e))?;
+            }
+            Kept::File(rel) => {
+                let path = from.join(&rel);
+                let bytes = std::fs::read(&path).map_err(|e| io_error("read", &path, &e))?;
+                let out = to.join(rel);
+                std::fs::write(&out, bytes).map_err(|e| io_error("write", &out, &e))?;
+            }
         }
     }
     Ok(())
@@ -551,3 +591,7 @@ fn copy_library(
     file.write_all(&bytes)
         .map_err(|e| io_error("write", &to, &e))
 }
+
+#[cfg(test)]
+#[path = "bundle_tests.rs"]
+mod tests;
