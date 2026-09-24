@@ -276,9 +276,12 @@ directory once project mode exists.
                     or a file that is not an archive (such as a
                     `libpython3.14.a` symlink to the shared library) is
                     exit 2 -- and a bundled image that needs a shared
-                    libpython is refused (exit 2). A build that consumes a
-                    `pycc.lock` section is refused at exit 2 until #1272.
-                    The sidecar keeps the standard library, and its marker
+                    libpython, a locked closure's included, is refused
+                    (exit 2). A `pycc.lock` section is consumed as in a
+                    shared build (Part 2 of #1227, #1272): its
+                    `libpython-sha256` is checked against the interpreter's
+                    shared library, or against the archive when it has
+                    none. The sidecar keeps the standard library, and its marker
                     records the archive's digest and `libpython-link
                     static`. No explicit flag falls back to a neighboring
                     pycc.toml's `[build] static = true`. A build that
@@ -438,8 +441,10 @@ prefix (on Linux, too, since #1243); each failure is an environment failure
 at exit 2 naming the reason (D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
 and neither variable affects it.
 
-`pycc lock` reads `PYCC_PYTHON` the same way and refuses exactly the
-interpreters an embedded build refuses; it then reads that interpreter's own
+`pycc lock` reads `PYCC_PYTHON` the same way and refuses the interpreters an
+embedded build refuses, except that it accepts one without a shared library
+as a `--static-libpython` build does, since one lock serves either kind of
+build (#1272); it then reads that interpreter's own
 `sysconfig` `purelib` and `platlib` directories, typically a project venv's
 (see "`pycc.lock`" below). `PYCC_PYTHON_INCLUDE` has no effect on it.
 
@@ -592,7 +597,11 @@ references outside a distribution's payload.
   library reads its (entry, host triple) section before probing the
   interpreter: a missing lock or section, or different `roots`, is exit 2
   naming `pycc lock`, as is a malformed lock in any embedded build. After the probe, `python`, `cache-tag`,
-  `platform` and `libpython-sha256` must equal the embed interpreter's, and
+  `platform` and `libpython-sha256` must equal the embed interpreter's (the
+  digest is of its shared library, or of its `LIBPL` archive when it is
+  configured without one -- by `Py_ENABLE_SHARED` and `PYTHONFRAMEWORK`,
+  never by which files exist -- so a shared and a `--static-libpython` build
+  check one lock alike, #1272), and
   each package's version, file set and every copied file's digest must match
   the lock and the installed RECORD (exit 2 otherwise, leaving an existing
   `OUT.pycc` untouched). The payload is copied to `OUT.pycc/closure/`, which

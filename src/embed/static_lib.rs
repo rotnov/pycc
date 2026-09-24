@@ -1,10 +1,13 @@
 //! The static-libpython variant of an embedded build (Part 1 of #1227;
 //! the static-libpython decision entry under `docs/decisions/`): the
 //! separate probe that finds the interpreter's `LIBPL` archive, the checks
-//! that the archive is one the linker can force-load, and the refusals the
-//! variant adds. The link arguments themselves are pure layout rules in
-//! `layout.rs`.
+//! that the archive is one the linker can force-load, the refusals the
+//! variant adds, and the file that identifies an interpreter in
+//! `pycc.lock` whichever way a build links it (Part 2, #1272). The link
+//! arguments themselves are pure layout rules in `layout.rs`.
 
+use super::EmbedProbe;
+use super::layout;
 use super::native::read_head;
 use std::path::{Path, PathBuf};
 
@@ -51,23 +54,61 @@ const AR_MAGIC: &[u8] = b"!<arch>\n";
 /// files, so the archive cannot travel on its own.
 const THIN_AR_MAGIC: &[u8] = b"!<thin>\n";
 
-/// Checks that `archive` (the interpreter `name`'s `LIBPL/LIBRARY`) is a
-/// regular file, after resolving symlinks, whose first bytes are an ar
-/// archive's, and returns its resolved path. A path that exists is not
-/// enough: several installers ship `LIBPL/libpython3.14.a` as a symlink to
-/// the shared library. The message for a wrong magic never guesses what
-/// the file is, because a universal (fat) archive and a universal dylib
-/// share their `0xcafebabe` header; a fat archive is refused too.
-pub(crate) fn check_archive(name: &str, archive: &Path) -> Result<PathBuf, String> {
-    let wanted = format!(
-        "a static libpython was requested ({STATIC_REQUEST}), which links the embed \
-         interpreter `{name}`'s `LIBPL` archive into the executable"
-    );
+/// Why an archive is being checked, which decides how a refusal opens
+/// and what it suggests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArchiveUse {
+    /// A static build links it (the static-libpython decision entry).
+    Link,
+    /// `pycc lock` identifies an interpreter configured without a shared
+    /// libpython (`described`, its configuration values) by its digest.
+    Identify { described: String },
+}
+
+impl ArchiveUse {
+    /// The opening of a refusal for the interpreter `name`.
+    fn wanted(&self, name: &str) -> String {
+        match self {
+            Self::Link => format!(
+                "a static libpython was requested ({STATIC_REQUEST}), which links the embed \
+                 interpreter `{name}`'s `LIBPL` archive into the executable"
+            ),
+            Self::Identify { described } => format!(
+                "the embed interpreter `{name}` has no shared libpython ({described}), so \
+                 `pycc.lock` identifies it by the digest of its `LIBPL` archive"
+            ),
+        }
+    }
+
+    /// What a missing archive's refusal suggests.
+    fn remedy(&self) -> &'static str {
+        match self {
+            Self::Link => "or drop the request",
+            Self::Identify { .. } => "or one built with a shared libpython",
+        }
+    }
+}
+
+/// Checks that `archive` (the interpreter `name`'s `LIBPL/LIBRARY`, used
+/// as `usage` says) is a regular file, after resolving symlinks, whose
+/// first bytes are an ar archive's, and returns its resolved path. A path
+/// that exists is not enough: several installers ship
+/// `LIBPL/libpython3.14.a` as a symlink to the shared library. The message
+/// for a wrong magic never guesses what the file is, because a universal
+/// (fat) archive and a universal dylib share their `0xcafebabe` header; a
+/// fat archive is refused too.
+pub(crate) fn check_archive(
+    name: &str,
+    archive: &Path,
+    usage: &ArchiveUse,
+) -> Result<PathBuf, String> {
+    let wanted = usage.wanted(name);
     let resolved = std::fs::canonicalize(archive).map_err(|e| {
         format!(
             "{wanted}, but `{}` does not exist ({e}); use a CPython 3.14 whose `LIBPL` holds \
-             its static library, or drop the request",
-            archive.display()
+             its static library, {}",
+            archive.display(),
+            usage.remedy()
         )
     })?;
     if !resolved.is_file() {
@@ -100,27 +141,45 @@ pub(crate) fn check_archive(name: &str, archive: &Path) -> Result<PathBuf, Strin
     ))
 }
 
-/// The refusal of a static build that consumes a `pycc.lock` section: the
-/// lock's `libpython-sha256` and the closure's native references assume a
-/// bundled shared library, which #1272 settles for the static variant.
-pub(crate) fn closure_refusal() -> String {
-    format!(
-        "a static libpython ({STATIC_REQUEST}) cannot be combined with `pycc.lock` yet, and \
-         this build consumes a `pycc.lock` section; see \
-         https://github.com/rotnov/pycc/issues/1272 -- build without the request, or \
-         without `pycc.lock`"
-    )
+/// The file whose sha256 is `pycc.lock`'s `libpython-sha256` for the
+/// interpreter `probe` (Part 2 of #1227, #1272): its shared library when
+/// it is configured with one ([`super::check_shared`]), otherwise its
+/// `LIBPL` archive, which `archive` finds and checks. The arm follows the
+/// configuration, never which files exist, so `pycc lock` and either kind
+/// of build pick the same one; a configured shared library that is missing
+/// is refused, not replaced by the archive. The file identifies the
+/// interpreter whichever way a build links it, so one lock serves a shared
+/// and a static build alike.
+pub(crate) fn identity_library(
+    probe: &EmbedProbe,
+    archive: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if !super::check_shared(probe.enable_shared, &probe.framework) {
+        return archive();
+    }
+    let library = layout::source_library(probe);
+    if library.is_file() {
+        return Ok(library);
+    }
+    Err(format!(
+        "the embed interpreter `{}` reports a shared library `{}` that does not exist ({}); \
+         `pycc.lock` identifies the interpreter by that library's digest",
+        probe.executable.display(),
+        library.display(),
+        probe.describe()
+    ))
 }
 
-/// Whether the dependency `dep` names a shared libpython of the `version`
-/// line: a file name that starts with `libpython<major>.<minor>` (any
-/// suffix, so `.so.1.0`, `.dylib` and a debug `d` build all count), or a
-/// framework's `Python` binary. By name, not by the shared build's bundled
-/// name: a static-only interpreter may have no shared library to compare
-/// with.
+/// Whether the dependency `dep` names a shared libpython of the `version`'s
+/// major line: a file name that starts with `libpython<major>.` (any minor
+/// and suffix, so `.so.1.0`, `.dylib`, a debug `d` build, another minor's
+/// library and Linux's stable-ABI shim `libpython3.so`, which itself needs
+/// the full library, all count), or a framework's `Python` binary. By
+/// name, not by the shared build's bundled name: a static-only interpreter
+/// may have no shared library to compare with.
 pub(crate) fn names_libpython(dep: &str, version: (u32, u32, u32)) -> bool {
     let file = dep.rsplit('/').next().unwrap_or(dep);
-    let stem = format!("libpython{}.{}", version.0, version.1);
+    let stem = format!("libpython{}.", version.0);
     file.starts_with(&stem) || (file == "Python" && dep.contains("Python.framework/"))
 }
 

@@ -1226,12 +1226,16 @@ owns the contract; this is the runtime view of it.
   ([D-251](./decisions/D-251-static-libpython-link-for-embedded-executables.md)).
   The sidecar then holds no libpython; its marker records the archive's
   digest as `libpython-sha256` and adds `libpython-link static`. Any bundled
-  image that needs a shared libpython -- by a `libpython3.14` file name, a
-  `Python.framework` binary, or a name that resolves to the interpreter's
-  own library -- is refused at exit 2, since it would load a second
-  interpreter into the process. A build that consumes a `pycc.lock`
-  section is refused at exit 2 until #1272 settles the lock's
-  `libpython-sha256` for this link.
+  image that needs a shared libpython -- by a `libpython3.` file name of any
+  minor (so the stable-ABI `libpython3.so` too), a `Python.framework`
+  binary, or a name that resolves to the interpreter's own library -- is
+  refused at exit 2, since it would load a second interpreter into the
+  process; a locked closure's extensions and natives included. A build
+  that consumes a `pycc.lock` section checks the section's
+  `libpython-sha256` against the file that identifies the interpreter, not
+  the archive it links: the shared library when the interpreter is
+  configured with one, else the archive, which is also what `pycc lock`
+  records for it (Part 2 of #1227, #1272).
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

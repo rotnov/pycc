@@ -102,8 +102,10 @@ pub enum Command {
         /// export its C-API symbols so a standard-library extension loads
         /// against them (D-251). Needs a CPython 3.14 whose `LIBPL` holds
         /// `libpython3.14.a`; a missing, thin or non-archive file is
-        /// refused, and so is a build that consumes a `pycc.lock` section
-        /// (#1272). Omit to use a neighboring `pycc.toml`'s `[build]
+        /// refused. A `pycc.lock` section is consumed as for a shared
+        /// build, checked against the interpreter's shared library, or its
+        /// archive when it has none (#1272). Omit to use a neighboring
+        /// `pycc.toml`'s `[build]
         /// static = true` when one is present, or the shared library
         /// otherwise. Only an embedded build uses it: a native, `--pure`
         /// or `--target` build ignores it, and `--ext` rejects it.

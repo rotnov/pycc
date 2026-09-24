@@ -196,9 +196,17 @@ impl EmbedToolchain {
         }
     }
 
-    /// Probes the interpreter and checks it can be bundled, or returns an
-    /// environment-failure message for exit 2.
+    /// Probes the interpreter and checks it can be bundled the way this
+    /// toolchain links it, or returns an environment-failure message for
+    /// exit 2.
     pub(crate) fn probe(&self) -> Result<EmbedProbe, String> {
+        self.probe_as(self.link)
+    }
+
+    /// [`Self::probe`] for an executable that links libpython as `link`
+    /// says: a static link needs no shared library. `pycc lock` probes as
+    /// static, because a lock serves either kind of build (#1272).
+    pub(crate) fn probe_as(&self, link: LibpythonLink) -> Result<EmbedProbe, String> {
         let probe = match &self.probe_override {
             Some(probe) => probe.clone(),
             None => self.run_probe()?,
@@ -212,7 +220,7 @@ impl EmbedToolchain {
                 probe.describe()
             ));
         }
-        let shared = self.link == LibpythonLink::Shared;
+        let shared = link == LibpythonLink::Shared;
         if shared && !check_shared(probe.enable_shared, &probe.framework) {
             return Err(format!(
                 "the embed interpreter `{name}` has no shared libpython ({}); an embedded \
@@ -254,6 +262,24 @@ impl EmbedToolchain {
     /// environment-failure message for exit 2. Runs only for a static
     /// build, after [`Self::probe`] accepted the interpreter.
     pub(crate) fn static_probe(&self) -> Result<StaticProbe, String> {
+        self.static_probe_for(&static_lib::ArchiveUse::Link)
+    }
+
+    /// The file whose sha256 `pycc lock` records as `libpython-sha256` for
+    /// the interpreter `probe` ([`static_lib::identity_library`]). The
+    /// static probe runs only for an interpreter without a shared
+    /// libpython.
+    pub(crate) fn identity_library(&self, probe: &EmbedProbe) -> Result<PathBuf, String> {
+        static_lib::identity_library(probe, || {
+            let usage = static_lib::ArchiveUse::Identify {
+                described: probe.describe(),
+            };
+            Ok(self.static_probe_for(&usage)?.archive)
+        })
+    }
+
+    /// [`Self::static_probe`], with its refusals worded for `usage`.
+    fn static_probe_for(&self, usage: &static_lib::ArchiveUse) -> Result<StaticProbe, String> {
         let probe = match &self.static_probe_override {
             Some(probe) => probe.clone(),
             None => self.run_script(
@@ -262,7 +288,7 @@ impl EmbedToolchain {
             )?,
         };
         let name = self.interpreter.to_string_lossy();
-        let archive = static_lib::check_archive(&name, &probe.archive)?;
+        let archive = static_lib::check_archive(&name, &probe.archive, usage)?;
         Ok(StaticProbe {
             archive,
             libs: probe.libs,
@@ -373,9 +399,10 @@ pub(crate) struct EmbedPlan {
 /// the executable links against the final bundled library. `host` is the
 /// `(arch, os)` pair the lock section is selected by.
 ///
-/// A static build (D-251) refuses a consumed lock section before the
-/// probe (#1272), runs the static probe after it, bundles no libpython,
-/// and links the archive whole in the bundled library's place.
+/// A static build (D-251) runs the static probe after the probe, bundles
+/// no libpython, links the archive whole in the bundled library's place,
+/// and checks a consumed lock section's `libpython-sha256` against the
+/// file that identifies the interpreter (#1272), not the archive it links.
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
@@ -389,9 +416,6 @@ pub(crate) fn plan_embed(
     let parent = layout::sidecar_parent(out);
     let replace_existing = bundle::check_existing(&parent.join(&sidecar_name))?;
     let check = crate::lock::build::plan_closure(entry, typed_hir, host)?;
-    if toolchain.link == LibpythonLink::Static && check.is_some() {
-        return Err(static_lib::closure_refusal());
-    }
     let probe = toolchain.probe()?;
     let static_lib = match toolchain.link {
         LibpythonLink::Static => Some(toolchain.static_probe()?),

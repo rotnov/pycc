@@ -27,7 +27,7 @@ fn the_static_probe_output_parses_into_the_archive_and_the_libs() {
 
 /// The refusal message of `check_archive` for `archive`, which must fail.
 fn refusal(archive: &Path) -> String {
-    let err = check_archive("pyfake", archive).expect_err("refused");
+    let err = check_archive("pyfake", archive, &ArchiveUse::Link).expect_err("refused");
     assert!(
         err.starts_with(
             "a static libpython was requested (`--static-libpython` or `[build] static = true` \
@@ -45,7 +45,10 @@ fn only_a_regular_ar_archive_passes_the_archive_check() {
     let root = std::fs::canonicalize(&*dir).expect("canonicalize");
     let archive = root.join("libpython3.14.a");
     std::fs::write(&archive, b"!<arch>\nmembers").expect("write");
-    assert_eq!(check_archive("pyfake", &archive), Ok(archive.clone()));
+    assert_eq!(
+        check_archive("pyfake", &archive, &ArchiveUse::Link),
+        Ok(archive.clone())
+    );
 
     let missing = refusal(&root.join("missing.a"));
     assert!(missing.contains("missing.a` does not exist ("), "{missing}");
@@ -74,6 +77,80 @@ fn only_a_regular_ar_archive_passes_the_archive_check() {
     ));
 }
 
+/// `pycc lock` checks the archive of an interpreter without a shared
+/// libpython too, and says why it wants one without mentioning a request.
+#[test]
+fn the_identity_check_words_its_refusals_for_pycc_lock() {
+    let dir = ScratchDir::new("static_lib_identify").expect("scratch");
+    let root = std::fs::canonicalize(&*dir).expect("canonicalize");
+    let usage = ArchiveUse::Identify {
+        described: "Py_ENABLE_SHARED=0".to_string(),
+    };
+    let opening = "the embed interpreter `pyfake` has no shared libpython (Py_ENABLE_SHARED=0), \
+                   so `pycc.lock` identifies it by the digest of its `LIBPL` archive, but `";
+    let missing = check_archive("pyfake", &root.join("missing.a"), &usage).expect_err("missing");
+    assert!(missing.starts_with(opening), "{missing}");
+    assert!(
+        missing.ends_with(
+            "; use a CPython 3.14 whose `LIBPL` holds its static library, or one built with a \
+             shared libpython"
+        ),
+        "{missing}"
+    );
+    let text = root.join("text.a");
+    std::fs::write(&text, b"not ar").expect("write");
+    let wrong = check_archive("pyfake", &text, &usage).expect_err("not ar");
+    assert!(wrong.starts_with(opening), "{wrong}");
+    assert!(!wrong.contains("requested"), "{wrong}");
+}
+
+/// The file `pycc.lock` digests follows the interpreter's configuration:
+/// the shared library when it has one (the archive is never asked for),
+/// the archive otherwise, and a missing configured library is refused
+/// rather than replaced by the archive.
+#[test]
+fn the_identity_library_follows_the_configuration() {
+    let dir = ScratchDir::new("static_lib_identity").expect("scratch");
+    let layout = super::super::fake_layout::fake_layout(&dir);
+    let unused = || -> Result<PathBuf, String> { panic!("the archive is not asked for") };
+    assert_eq!(
+        identity_library(&layout.probe, unused),
+        Ok(layout.library())
+    );
+    let mut framework = layout.probe.clone();
+    framework.enable_shared = false;
+    framework.framework = "Python".to_string();
+    let framework_binary = layout::source_library(&framework);
+    std::fs::write(&framework_binary, "framework").expect("write");
+    assert_eq!(identity_library(&framework, unused), Ok(framework_binary));
+
+    let archive = || Ok(PathBuf::from("/lib/config/libpython3.14.a"));
+    let mut static_only = layout.probe.clone();
+    static_only.enable_shared = false;
+    assert_eq!(
+        identity_library(&static_only, archive),
+        Ok(PathBuf::from("/lib/config/libpython3.14.a"))
+    );
+    let failing = || Err("no archive".to_string());
+    assert_eq!(
+        identity_library(&static_only, failing),
+        Err("no archive".to_string())
+    );
+
+    std::fs::remove_file(layout.library()).expect("remove the library");
+    let err = identity_library(&layout.probe, archive).expect_err("missing library");
+    assert_eq!(
+        err,
+        format!(
+            "the embed interpreter `{}` reports a shared library `{}` that does not exist ({}); \
+             `pycc.lock` identifies the interpreter by that library's digest",
+            layout.probe.executable.display(),
+            layout.library().display(),
+            layout.probe.describe()
+        )
+    );
+}
+
 /// Several installers ship `LIBPL/libpython3.14.a` as a symlink to the
 /// shared library: the link is resolved, and the target's bytes decide.
 #[cfg(unix)]
@@ -97,7 +174,10 @@ fn a_symlink_to_a_shared_library_is_refused_by_its_resolved_bytes() {
     std::fs::write(&archive, b"!<arch>\n").expect("write");
     let alias = root.join("alias.a");
     std::os::unix::fs::symlink(&archive, &alias).expect("symlink");
-    assert_eq!(check_archive("pyfake", &alias), Ok(archive));
+    assert_eq!(
+        check_archive("pyfake", &alias, &ArchiveUse::Link),
+        Ok(archive)
+    );
 }
 
 #[test]
@@ -108,14 +188,19 @@ fn a_shared_libpython_is_recognized_by_its_name() {
         "/usr/lib/x86_64-linux-gnu/libpython3.14.so",
         "@rpath/libpython3.14.dylib",
         "/opt/py/lib/libpython3.14d.dylib",
+        "libpython3.13.so.1.0",
+        "libpython3.so",
+        "/usr/lib/libpython3.15.dylib",
         "/Library/Frameworks/Python.framework/Versions/3.14/Python",
         "@rpath/Python.framework/Versions/3.14/Python",
     ] {
         assert!(names_libpython(dep, version), "{dep}");
     }
     for dep in [
-        "libpython3.13.so.1.0",
         "/usr/lib/libSystem.B.dylib",
+        "libpythonfoo.so",
+        "libpython.so",
+        "libpython2.7.so.1.0",
         "/opt/Python",
         "libpythonx.so",
         "/opt/libs/libc.so.6",
@@ -126,13 +211,6 @@ fn a_shared_libpython_is_recognized_by_its_name() {
 
 #[test]
 fn the_static_refusals_name_the_request() {
-    assert_eq!(
-        closure_refusal(),
-        "a static libpython (`--static-libpython` or `[build] static = true` in `pycc.toml`) \
-         cannot be combined with `pycc.lock` yet, and this build consumes a `pycc.lock` \
-         section; see https://github.com/rotnov/pycc/issues/1272 -- build without the \
-         request, or without `pycc.lock`"
-    );
     assert_eq!(
         second_libpython("`_json.so`", "libpython3.14.so.1.0"),
         "`_json.so` depends on `libpython3.14.so.1.0`, a shared libpython; the executable \
