@@ -69,6 +69,27 @@ pub(super) fn lower_expr(
             ty: lookup(scopes, name),
         },
         HirExpr::Call { callee, args } => {
+            // #1313: a direct call of a foreign CPython binding. Checked
+            // first, mirroring `pycc_types`' callee-first gate, so no
+            // builtin interception below can claim a foreign name that
+            // happens to spell one. The probe is non-panicking (`lookup`
+            // panics on an unbound name, which every ordinary function
+            // callee is), and the reverse scan finds a function-local that
+            // spells a foreign name first, with its own non-`object` type.
+            if scopes.iter().rev().find_map(|scope| scope.get(callee)) == Some(&Ty::Object) {
+                return MirExpr::ObjCall {
+                    callee: Box::new(lower_expr(
+                        &HirExpr::Name(callee.clone()),
+                        scopes,
+                        classes,
+                        current_class,
+                    )),
+                    args: args
+                        .iter()
+                        .map(|a| lower_expr(a, scopes, classes, current_class))
+                        .collect(),
+                };
+            }
             // #435: `isinstance`/`issubclass` are compile-time-evaluated
             // builtins. They must be intercepted BEFORE the generic arg
             // lowering below, because the class arguments are class names

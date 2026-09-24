@@ -321,11 +321,24 @@ pub(crate) fn infer_expr_in(
             if let Some(ty) = env.lookup(callee)
                 && !env.def_rebound.contains(callee)
             {
-                // Part 1 of #1026, choke point 3: a foreign object is not
-                // callable *yet*, which is a different claim from D-110's
-                // "this name is bound to a value, and no value in the
-                // current subset is callable" -- say so with `I0404`
-                // rather than the generic `T0021`.
+                // #1313: a direct call of a foreign binding in a module
+                // body is an `object` producer under the method call's
+                // positional-scalar argument rule (`crate::foreign`'s module
+                // doc). `lookup` answers `None` for a maybe-bound name, so a
+                // one-arm-`if` import falls through to the `T0041` below.
+                if matches!(ty, Ty::Object) && !env.in_function_body {
+                    let arg_tys = args
+                        .iter()
+                        .map(|arg| infer_expr_in(env, local_names, arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    crate::foreign::check_object_call_args(&arg_tys, "call")?;
+                    return Ok(Ty::Object);
+                }
+                // Part 1 of #1026, choke point 3: inside a function body a
+                // foreign object is not callable *yet* (#1316), which is a
+                // different claim from D-110's "this name is bound to a
+                // value, and no value in the current subset is callable" --
+                // say so with `I0404` rather than the generic `T0021`.
                 crate::foreign::reject_object_read(callee, &ty)?;
                 return Err(non_callable_binding(callee));
             }
@@ -1582,14 +1595,7 @@ pub(crate) fn infer_expr_in(
             // has no boundary representation yet and is refused here rather
             // than reaching codegen.
             if matches!(base_ty, Ty::Object) {
-                for arg_ty in &arg_tys {
-                    if !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
-                        return Err(crate::foreign::object_operation_unsupported(&format!(
-                            "passing a `{}` argument to a CPython object's method",
-                            arg_ty.name()
-                        )));
-                    }
-                }
+                crate::foreign::check_object_call_args(&arg_tys, "method")?;
                 return Ok(Ty::Object);
             }
             // #436: static and class methods can also be called on an

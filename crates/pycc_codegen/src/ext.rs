@@ -161,6 +161,17 @@ pub const EXT_OBJ_GETATTR_SYMBOL: &str = "pycc_ext_obj_getattr";
 /// exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
 pub const EXT_OBJ_CALL_SYMBOL: &str = "pycc_ext_obj_call";
 
+/// The fixed C shim's direct-call helper (#1313): `f(args)` where `f` is
+/// itself a foreign binding, such as `from itertools import product`
+/// followed by `product("ab", "cd")`. Same argument contract as
+/// [`EXT_OBJ_CALL_SYMBOL`] -- `nargs` *owned* argument references, each
+/// consumed on every path -- but the callee is *borrowed*: it is the
+/// module global the artifact retains, so the helper takes its own
+/// reference before delegating to `pycc_ext_obj_call`, which releases one.
+/// Returns a new reference or `NULL` with the CPython exception set.
+/// Spelled once here for exactly the reason [`EXT_OBJ_IMPORT_SYMBOL`] is.
+pub const EXT_OBJ_CALL_BORROWED_SYMBOL: &str = "pycc_ext_obj_call_borrowed";
+
 /// The shim's `int` argument packer: a D-141 encoded int word in, a new
 /// `PyObject *` reference out, or `NULL` with an `OverflowError` set for a
 /// bigint (#1040). Borrows its argument -- see the C side's own comment.

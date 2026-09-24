@@ -358,11 +358,12 @@ fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");
     let bodies = [
         // An expression-position read: assignment, argument, attribute,
-        // call, f-string interpolation.
+        // f-string interpolation. A module-body direct call (`numpy(1)`)
+        // is admitted since #1313 and raises CPython's own `TypeError` at
+        // run time; `tests/issue_1313_foreign_direct_call.rs` pins it.
         "import numpy\n\nx = numpy\n",
         "import numpy\n\nprint(numpy)\n",
         "import numpy\n\nnumpy.append(1)\n",
-        "import numpy\n\nnumpy(1)\n",
         "import numpy\n\nprint(f\"{numpy}\")\n",
         // The iterable of a `for` and of a comprehension.
         "import numpy\n\nfor x in numpy:\n    pass\n",

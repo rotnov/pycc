@@ -401,6 +401,25 @@ pub enum MirExpr {
         method: String,
         args: Vec<MirExpr>,
     },
+    /// `callee(args)` where `callee` is itself a foreign CPython binding
+    /// (#1313) -- `product("ab", "cd")` after `from itertools import
+    /// product` -- the direct-call sibling of [`MirExpr::ObjMethodCall`]
+    /// directly above. `callee` is a plain [`MirExpr::Name`] read of the
+    /// foreign module global, which codegen loads as a *borrow*; the shim's
+    /// `pycc_ext_obj_call_borrowed` therefore takes its own reference before
+    /// the vectorcall rather than consuming the global's.
+    ///
+    /// `args` are already-checked scalars under the method call's rule
+    /// (`pycc_types`' `check_object_call_args`). The call can fail -- the
+    /// object is not callable, or the call raises -- which is why
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for this node. Like `ObjMethodCall` it carries **no `ty`
+    /// field**, for the same size reason; [`MirExpr::ty`] answers
+    /// [`Ty::Object`] unconditionally.
+    ObjCall {
+        callee: Box<MirExpr>,
+        args: Vec<MirExpr>,
+    },
     /// `len(base)` where `base` is a foreign CPython object (D-244, Part 3
     /// of #1026, PR 3a of #1082). The result is always [`Ty::Int`], so the
     /// variant carries no `ty` field -- the same size argument
@@ -796,7 +815,7 @@ impl MirExpr {
             // opaque by construction (see the variant's own documentation,
             // which also records why it carries no field where `ObjAttrGet`
             // does).
-            MirExpr::ObjMethodCall { .. } => Ty::Object,
+            MirExpr::ObjMethodCall { .. } | MirExpr::ObjCall { .. } => Ty::Object,
             // Likewise hardcoded: `len` is an `int` for every operand the
             // shim can answer for. See the variant's own documentation.
             MirExpr::ObjLen { .. } => Ty::Int,
@@ -978,7 +997,10 @@ impl MirExpr {
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never
             // allocates storage for.
-            MirExpr::ObjMethodCall { base, args, .. } => {
+            // #1313: a direct call's callee is a plain `Name`, but its
+            // arguments can hide a walrus exactly as a method call's can.
+            MirExpr::ObjMethodCall { base, args, .. }
+            | MirExpr::ObjCall { callee: base, args } => {
                 base.collect_named_expr_bindings(out);
                 for arg in args {
                     arg.collect_named_expr_bindings(out);

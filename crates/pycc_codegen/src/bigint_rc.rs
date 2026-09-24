@@ -580,6 +580,8 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // on the identical argument -- its own `.ty()` is always
         // `Ty::Object`, never `Ty::Int`.
         | MirExpr::ObjMethodCall { .. }
+        // #1313: `ObjCall`'s `.ty()` is always `Ty::Object` too.
+        | MirExpr::ObjCall { .. }
         // PR 3a of #1082: `ObjLen`'s own `.ty()` *is* `Ty::Int`, so unlike
         // the two nodes above it really can reach this function. It joins
         // the "owning" answer on the scalar `len`'s own argument, restated

@@ -913,6 +913,19 @@ bridge at all: the one function a call can appear in is the one function with a
 `-1` edge. Lifting the bound is what would require the bridge, alongside the
 ordering-aware name resolution TYPE_SYSTEM.md describes.
 
+**A direct call of the object fails on that same edge, and borrows its
+callee.** [#1313](https://github.com/rotnov/pycc/issues/1313) added
+`MirExpr::ObjCall` for a module-body call of a name bound to an `object`
+(`product("ab")` after `from itertools import product`). There is no method
+to resolve, so codegen loads the module global and hands it, with the packed
+arguments, to `pycc_ext_obj_call_borrowed`. That helper takes one extra
+reference on the callee and delegates to `pycc_ext_obj_call`, which consumes
+it — so the module global keeps its own reference across any number of calls,
+where passing the global straight to the consuming helper would release it
+once per call. Its result, its argument slots and its `NULL` failure edge are
+exactly the method call's, and it inherits the same module-body-only bound
+([#1316](https://github.com/rotnov/pycc/issues/1316) tracks function bodies).
+
 **`len` and a truth test fail on that same edge, and inherit that same bound.**
 PR 3a of [#1082](https://github.com/rotnov/pycc/issues/1082) added two more shim
 helpers, and each reports failure as `-1` rather than as `NULL`, because each
@@ -1053,7 +1066,8 @@ attribute load produces: `pycc_ext_obj_getattr` wraps `PyObject_GetAttrString`,
 whose result is also a new reference, and it too is never released. A method
 call's *result* is governed by the same rule for the same reason:
 `PyObject_Vectorcall` hands back a new reference and `pycc_ext_obj_call`
-returns it to compiled code unreleased. So is a subscript load's:
+returns it to compiled code unreleased, as does `pycc_ext_obj_call_borrowed`
+for a direct call. So is a subscript load's:
 `PyObject_GetItem` hands back a new reference and `pycc_ext_obj_getitem`
 returns it unreleased. Iteration adds two producers on the same terms:
 `PyObject_GetIter` hands back a new reference to the iterator, leaked once per

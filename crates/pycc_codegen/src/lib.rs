@@ -72,8 +72,9 @@ pub use ext::{
     mangle_ext_name,
 };
 use ext::{
-    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
-    EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
+    EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
+    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
+    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
     EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
@@ -3731,6 +3732,20 @@ fn emit_expr_unchecked<'ctx>(
                 .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
                 .collect();
             foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
+        }
+        // #1313: `callee(args)` on a foreign binding. CPython's order --
+        // the callee, then each argument left to right -- and no lookup
+        // step: the callee is the module global itself, read as a borrow,
+        // which is why `foreign_call::emit_call_borrowed` hands it to the
+        // shim helper that takes its own reference.
+        MirExpr::ObjCall { callee, args } => {
+            let callee_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, callee);
+            let arg_scalars: Vec<Scalar<'ctx>> = args
+                .iter()
+                .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
+                .collect();
+            foreign_call::emit_call_borrowed(context, builder, module, callee_scalar, &arg_scalars)
         }
         // Part 3 of #1026 (PR 3a of #1082): `len(o)`. `foreign_len` carries
         // the contract -- why the D-141 encode happens inside the shim

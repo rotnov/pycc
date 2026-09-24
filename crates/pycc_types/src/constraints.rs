@@ -923,8 +923,8 @@ pub(crate) fn collect_expr_constraints(
                 //
                 // The names still deliberately stay out of `bindings`: the
                 // `Call` arm below refuses any bound non-`def` callee with
-                // `non_callable_binding`, which would pre-empt `numpy(1)`'s
-                // `I0404` with a `T0021`.
+                // `non_callable_binding`, which would pre-empt the `Call`
+                // arm's own foreign branch (#1313) with a `T0021`.
                 None if env.opaque_bindings.contains(name.as_str()) => {
                     if env.foreign_objects.contains(name.as_str()) {
                         Ok(Some(Ok(Ty::Object)))
@@ -1113,18 +1113,24 @@ pub(crate) fn collect_expr_constraints(
                 }
                 return Err(non_callable_binding(callee));
             }
-            // Part 1 of #1026: a foreign import binds its name to a
-            // CPython module object, and the name deliberately stays out of
-            // `bindings` (see the `Name` arm), so the gate above cannot see
-            // it. Without this one, a call of the module object inside an
-            // unannotated private helper leaves the helper's return variable
-            // unresolved and signature materialization reports `T0021: ...
-            // add an annotation` -- advice no annotation can satisfy, since
-            // the foreign object type is deliberately unspellable -- before
-            // the check phase's documented `I0404` could fire. This is the
-            // solver-side half of `foreign`'s third choke point.
+            // #1313: a foreign import binds its name to a CPython object,
+            // and the name deliberately stays out of `bindings` (see the
+            // `Name` arm), so the gate above cannot see it. A call of it is
+            // an `object` producer, exactly like the `MethodCall` arm's
+            // `o.method(...)`: the arguments are collected as ordinary
+            // expressions and the call answers the concrete `object` term.
+            // Position is the check phase's job, as for the `Name` arm's
+            // read: a call inside an unannotated private helper resolves
+            // the helper's return to `object` here -- rather than leaving
+            // it unresolved, which signature materialization would report
+            // as a `T0021` asking for an annotation the type cannot be
+            // spelled in -- and the check phase then reports the
+            // in-function `I0404`.
             if env.foreign_objects.contains(callee.as_str()) {
-                return Err(crate::foreign::object_operation_unsupported(callee));
+                for arg in args {
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, arg)?;
+                }
+                return Ok(Some(Ok(Ty::Object)));
             }
             if is_local(env.local_names, callee) {
                 return Err(unbound_local(callee));

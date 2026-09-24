@@ -1338,9 +1338,10 @@ def scale(x: float) -> float:
 I0404 reports an unsupported operation on a value whose type is the opaque \
 CPython object type `object` -- a module bound by a CPython `import` under \
 `--ext`, or an attribute loaded from one. Reading such a value is not \
-itself an error, and #1026 implements six operations on it: loading a \
+itself an error, and #1026 implements seven operations on it: loading a \
 further attribute, calling a method with positional \
-`int`/`float`/`bool`/`str` arguments, `len`, using it as an \
+`int`/`float`/`bool`/`str` arguments, calling the object itself with \
+such arguments (#1313), `len`, using it as an \
 `if`/`while` condition or comprehension guard, *loading* a subscript \
 `o[k]` whose key is an `int`, `float`, `bool` or `str`, and iterating it \
 with `for` -- the last only when the iterable is written as an attribute \
@@ -1349,8 +1350,8 @@ the two shapes that can produce an object. Everything else is \
 still refused, including printing or f-string interpolation, binding the \
 value to a name, `isinstance`, a `match` subject, iterating over a bare \
 imported module or over a subscript load (`for x in o[k]:`), \
-calling the object itself, passing an argument of any other type to one of \
-its methods, and indexing with a key of any other type. Storing through a \
+passing an argument of any other type to one of its methods or to the \
+object itself, and indexing with a key of any other type. Storing through a \
 subscript (`o[k] = v`) and slicing (`o[a:b]`) are still refused too, but \
 by their own pre-existing diagnostics rather than by this code -- `C0001` \
 and `T0033` respectively. A method named `append`, `pop`, \

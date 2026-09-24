@@ -1416,6 +1416,30 @@ PyObject *pycc_ext_obj_call(PyObject *bound, PyObject **args, long long nargs)
 }
 
 /*
+ * #1313: call `callee` itself -- `product(1, 2)` where `product` is a
+ * foreign binding -- rather than a method looked up on it
+ * (`EXT_OBJ_CALL_BORROWED_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `callee` is BORROWED: it is a module global the artifact retains for its
+ * whole lifetime, not a fresh reference like the bound method
+ * `pycc_ext_obj_call` consumes, so handing it to that helper directly would
+ * drop the global's only reference on the first call. The extra reference
+ * taken here is the one `pycc_ext_obj_call` then releases, which keeps a
+ * single implementation of the packed-argument scan and the vectorcall.
+ *
+ * Every `args[i]` is CONSUMED on every path, exactly as for
+ * `pycc_ext_obj_call`. Returns a new reference (never released, #1092) or
+ * NULL with a Python exception set; the caller routes NULL to the
+ * module-exec failure edge (#1096).
+ */
+PyObject *pycc_ext_obj_call_borrowed(PyObject *callee, PyObject **args,
+                                     long long nargs)
+{
+    Py_XINCREF(callee);
+    return pycc_ext_obj_call(callee, args, nargs);
+}
+
+/*
  * Part 3 of #1026 (PR 3a of #1082): `len(o)` on a CPython object value
  * (`EXT_OBJ_LEN_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *
