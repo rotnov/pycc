@@ -556,7 +556,7 @@ fn foreign_dependency(source: &str, import_stmt: &str) -> HirModule {
 #[test]
 fn re_exporting_a_dependency_s_foreign_import_is_refused() {
     // Finding A of the #1087 review: cloning the `Foreign` binding would
-    // carry the dependency's own `item_index` into the importer, where
+    // carry the dependency's own item index into the importer, where
     // `program::link` rebases it as though it were the importer's -- an
     // out-of-range splice in `pycc_mir` -- and would also run a second
     // CPython import for the one `import json` statement in `dep.py`.

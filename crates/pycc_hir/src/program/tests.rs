@@ -356,7 +356,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 1,
+            site: crate::ForeignImportSite::Item(1),
             // `import numpy` follows `d = 4\n`, so the recorded span is
             // the import statement's own range, not the module's start.
             span: Span::new(6, 18),
@@ -371,7 +371,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 4,
+            site: crate::ForeignImportSite::Item(4),
             span: Span::new(6, 18),
         }]
     );
@@ -427,7 +427,7 @@ fn a_foreign_import_no_other_module_shadows_still_links() {
         vec![ImportBinding::Foreign {
             local_name: "json".to_string(),
             module_path: "json".to_string(),
-            item_index: 1,
+            site: crate::ForeignImportSite::Item(1),
             span: Span::new(0, "import json".len() as u32),
         }],
         "the dependency-local index 0 is rebased past `a.py`'s one item"

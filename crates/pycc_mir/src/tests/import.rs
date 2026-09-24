@@ -43,7 +43,7 @@ fn foreign(local_name: &str, item_index: usize) -> ImportBinding {
     ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     }
 }

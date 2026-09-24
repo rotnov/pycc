@@ -15,9 +15,9 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES,
-    builtin_exception_class_defs, builtin_exception_init_item, is_builtin_exception_class,
-    unsupported,
+    FIRST_USER_EXCEPTION_TYPE_TAG, ForeignImportSite, HirModule, ImportBinding,
+    MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs, builtin_exception_init_item,
+    is_builtin_exception_class, unsupported,
 };
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
@@ -217,7 +217,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
         for name in own {
             owners.insert(name.to_string(), index);
         }
-        // Part 1 of #1026: `ImportBinding::Foreign::item_index` is the
+        // Part 1 of #1026: a `ForeignImportSite::Item` index is the
         // position of the import in its *own* module's item list, so it
         // has to be rebased onto the concatenated program the moment that
         // list is appended after the preceding modules' items. Captured
@@ -230,12 +230,17 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index,
+                site,
                 span,
             } => ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index: item_index + item_offset,
+                // A block import runs inside its own statement, so it has
+                // no item position to rebase (#1291).
+                site: match site {
+                    ForeignImportSite::Item(index) => ForeignImportSite::Item(index + item_offset),
+                    ForeignImportSite::Block => ForeignImportSite::Block,
+                },
                 span,
             },
             other => other,

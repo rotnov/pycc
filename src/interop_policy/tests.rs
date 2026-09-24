@@ -249,7 +249,7 @@ fn foreign(path: &str, start: u32) -> ImportBinding {
     ImportBinding::Foreign {
         local_name: path.to_string(),
         module_path: path.to_string(),
-        item_index: 0,
+        site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(start, start + 1),
     }
 }

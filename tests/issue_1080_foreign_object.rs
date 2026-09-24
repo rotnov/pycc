@@ -828,7 +828,7 @@ fn check_project(tag: &str, dep: &str, entry: &str) -> (pycc_scratch::ScratchDir
 
 /// Finding A of the #1087 review: `from dep import json`, where `json` is
 /// `dep.py`'s own foreign import, used to clone the `Foreign` binding with
-/// its dependency-local `item_index` into the entry module. `link` then
+/// its dependency-local item index into the entry module. `link` then
 /// rebased that index as though it belonged to the entry, so `--ext` built
 /// either an out-of-range splice (a `pycc_mir` panic) or a second
 /// `pycc_ext_obj_import` for one source statement. It is now refused while

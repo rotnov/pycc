@@ -412,15 +412,7 @@ pub enum ImportBinding {
     /// runtime value, a `PyObject *` the generated `Py_mod_exec` slot
     /// obtains from `pycc_ext_obj_import(module_path)`.
     ///
-    /// `item_index` is the number of `HirItem`s the module statements
-    /// *preceding* this import produced. `HirModule::imports` is a side
-    /// table with no span and no position of its own, and an `import`
-    /// statement produces no `HirItem`, so without this field the import's
-    /// place in the module body would be lost and the generated import
-    /// call would have to be hoisted ahead of every statement -- which
-    /// CPython does not do and which D-244 rule 3 does not permit. The
-    /// index is module-local when `module::lower_module` records it and is
-    /// rebased onto the linked program's item list by `program::link`.
+    /// `site` says where the import runs; see [`ForeignImportSite`].
     ///
     /// `span` is the `import` statement's own source range. Every other
     /// variant is compile-time-only and is never the subject of a
@@ -428,14 +420,39 @@ pub enum ImportBinding {
     /// it (`I0403`), and a module that binds the same local name twice
     /// refuses that too (`C0001`). Both diagnostics must point at the
     /// import statement, and the import side table carries no position
-    /// otherwise -- `item_index` counts items, not bytes, so it cannot
+    /// otherwise -- an item position counts items, not bytes, so it cannot
     /// stand in for one (PR 1c of #1080 review round 4).
     Foreign {
         local_name: String,
         module_path: String,
-        item_index: usize,
+        site: ForeignImportSite,
         span: Span,
     },
+}
+
+/// Where an [`ImportBinding::Foreign`] import runs in its module body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignImportSite {
+    /// A module-level `import` statement. The payload is the number of
+    /// `HirItem`s the module statements *preceding* this import produced.
+    /// `HirModule::imports` is a side table with no position of its own,
+    /// and a top-level `import` statement produces no `HirItem`, so without
+    /// this index the import's place in the module body would be lost and
+    /// the generated import call would have to be hoisted ahead of every
+    /// statement -- which CPython does not do and which D-244 rule 3 does
+    /// not permit. The index is module-local when `module::lower_module`
+    /// records it, is rebased onto the linked program's item list by
+    /// `program::link`, and is where `pycc_mir`'s `splice_foreign_imports`
+    /// inserts a `MirItem::ForeignImport`.
+    Item(usize),
+    /// An `import` statement nested in a module-level `if`/`try` block
+    /// (#1291). It runs as the `HirStmt::ForeignImport` statement lowered
+    /// at its own position inside the block, so it is never spliced; the
+    /// table entry exists so the name reaches the driver's lock, interop
+    /// policy (`I0402`) and native-build (`I0403`) gates, and the
+    /// position-blind passes that seed every foreign name as a
+    /// `Ty::Object` module global.
+    Block,
 }
 
 /// Which kind of top-level definition an [`ImportBinding::Project`] names
@@ -487,15 +504,14 @@ pub struct HirModule {
     /// field exists purely so a later annotation naming the alias resolves
     /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
     pub type_aliases: Vec<(String, Ty)>,
-    /// Compile-time-only stdlib and project import bindings (D-136/D-137,
-    /// and #898 for `ImportBinding::Project`), populated in source order by
-    /// `module::lower_module` exactly like `type_aliases`. Only a
-    /// module-level `import`/`from ... import ...` statement is recognized
-    /// here -- one nested inside a function body or any other block still
-    /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
-    /// `Stmt::ImportFrom` and falls through to the generic `C0001`
-    /// catch-all, exactly like every other statement kind this compiler
-    /// does not support inside a nested block.
+    /// Import bindings (D-136/D-137, #898 for `ImportBinding::Project`, and
+    /// Part 1 of #1026 for `ImportBinding::Foreign`), populated in source
+    /// order by `module::lower_module` exactly like `type_aliases`. A
+    /// module-level `import`/`from ... import ...` statement records its
+    /// bindings here, and so does a foreign `import` nested in a
+    /// module-level `if`/`try` block ([`ForeignImportSite::Block`], #1291).
+    /// Every other nested import still reaches `lower_stmt`'s `C0001`
+    /// catch-all.
     pub imports: Vec<ImportBinding>,
     /// Class name -> declared shape (attribute slots in first-`__init__`-
     /// assignment order, method table) (D-154, Part 1 of #375). Populated by

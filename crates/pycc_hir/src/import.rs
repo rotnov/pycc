@@ -22,7 +22,7 @@ pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};
 
 use crate::{
-    HirClassDef, HirItem, HirModule, ImportBinding, ProjectBindingKind, Ty,
+    ForeignImportSite, HirClassDef, HirItem, HirModule, ImportBinding, ProjectBindingKind, Ty,
     is_builtin_exception_class, top_level_bound_names, unresolved_symbol, unsupported,
 };
 use pycc_ast::{Expr, Stmt, StmtImportFrom};
@@ -319,7 +319,7 @@ pub(crate) fn lower_import_stmt(
     stmt: &Stmt,
     resolved: &ResolvedImports<'_>,
     position: FuturePosition,
-    item_index: usize,
+    site: ForeignImportSite,
 ) -> Result<Option<LoweredImport>, Diagnostic> {
     match stmt {
         Stmt::Import(import) => {
@@ -333,7 +333,7 @@ pub(crate) fn lower_import_stmt(
             let bindings = import
                 .names
                 .iter()
-                .map(|alias| lower_import_alias(statement, alias, resolved, item_index))
+                .map(|alias| lower_import_alias(statement, alias, resolved, site))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Some(LoweredImport {
                 bindings,
@@ -426,14 +426,14 @@ pub(crate) fn lower_import_stmt(
 /// [`project_import_request`] records); every diagnostic, and a foreign
 /// binding's `span`, stay at the whole `statement`, so a single-alias
 /// statement reports byte-for-byte what it did before #1280. Every alias of
-/// one statement shares its `item_index`: `pycc_mir`'s
+/// one statement shares its `site`: `pycc_mir`'s
 /// `splice_foreign_imports` inserts equal positions in binding order, so
 /// the foreign imports of `import a, b` run `a` first, as CPython does.
 fn lower_import_alias(
     statement: Span,
     alias: &pycc_ast::Alias,
     resolved: &ResolvedImports<'_>,
-    item_index: usize,
+    site: ForeignImportSite,
 ) -> Result<ImportBinding, Diagnostic> {
     let module_name = alias.name.as_str();
     let answer = resolved.get(statement_span(alias.range));
@@ -451,16 +451,16 @@ fn lower_import_alias(
         ));
     }
     // Part 1 of #1026: a foreign root binds an opaque CPython object rather
-    // than failing. `item_index` is the number of `HirItem`s the statements
-    // before this one produced, which is where `pycc_mir` splices the
-    // import back into the module body so the generated
-    // `pycc_ext_obj_import` call runs in source order rather than hoisted
-    // (see `MirItem::ForeignImport`).
+    // than failing. `site` is where the import runs: for a top-level
+    // statement, the number of `HirItem`s the statements before this one
+    // produced, which is where `pycc_mir` splices the import back into the
+    // module body so the generated `pycc_ext_obj_import` call runs in
+    // source order rather than hoisted (see `MirItem::ForeignImport`).
     if matches!(answer, Some(ResolvedImport::Foreign)) {
         return Ok(ImportBinding::Foreign {
             local_name: module_name.to_string(),
             module_path: module_name.to_string(),
-            item_index,
+            site,
             span: statement,
         });
     }
@@ -631,7 +631,7 @@ fn bind_project_name(
         }
         if let ImportBinding::Foreign { module_path, .. } = binding {
             // Part 1 of #1026 binds a foreign import at its own source
-            // position in its own module: `item_index` counts the items
+            // position in its own module: its item index counts the items
             // *that* module's preceding statements produced, and
             // `program::link` rebases it onto the linked program as though
             // it belonged to the module that recorded it. Cloning the

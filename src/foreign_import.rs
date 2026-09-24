@@ -144,7 +144,7 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
 /// file's path and source instead of being attributed wholesale to the
 /// entry (PR 1c of #1080 review finding 2).
 ///
-/// The position, not `item_index`: an import's recorded item index is the
+/// The position, not the item index: an import's recorded item index is the
 /// item count at the moment it lowered, so a *trailing* import in one file
 /// and a *leading* import in the next record the same linked index and no
 /// arithmetic on the per-file item bounds can tell them apart. The import
@@ -215,7 +215,7 @@ mod tests {
         ImportBinding::Foreign {
             local_name: name.to_string(),
             module_path: name.to_string(),
-            item_index: 0,
+            site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         }
     }

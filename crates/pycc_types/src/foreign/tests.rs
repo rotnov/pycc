@@ -25,7 +25,7 @@ fn lists_only_the_foreign_bindings() {
         ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 0,
+            site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         },
     ];
@@ -53,7 +53,7 @@ fn with_foreign_import(mut hir: pycc_hir::HirModule) -> pycc_hir::HirModule {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index: 0,
+        site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(0, 0),
     });
     hir
@@ -91,7 +91,7 @@ fn with_foreign_import_at(mut hir: pycc_hir::HirModule, item_index: usize) -> py
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
     hir
@@ -102,7 +102,10 @@ fn foreign_position(imports: &[ImportBinding]) -> usize {
     imports
         .iter()
         .find_map(|binding| match binding {
-            ImportBinding::Foreign { item_index, .. } => Some(*item_index),
+            ImportBinding::Foreign {
+                site: pycc_hir::ForeignImportSite::Item(item_index),
+                ..
+            } => Some(*item_index),
             _ => None,
         })
         .expect("the fixture records exactly one foreign binding")
@@ -201,7 +204,7 @@ fn with_foreign_import_named(
     hir.imports.push(ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
     hir
@@ -350,7 +353,7 @@ fn a_module_body_read_above_the_import_is_unbound() {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index: 1,
+        site: pycc_hir::ForeignImportSite::Item(1),
         span: Span::new(0, 0),
     });
     let diagnostics = crate::check_all(&hir).expect_err("a read above the import is refused");

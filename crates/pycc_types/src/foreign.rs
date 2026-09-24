@@ -197,7 +197,7 @@
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{ImportBinding, Ty};
+use pycc_hir::{ForeignImportSite, ImportBinding, Ty};
 
 /// Whether a declared annotation is a fixed-arity tuple whose every
 /// element is `float` -- the one annotation a [`Ty::Object`] initializer
@@ -328,7 +328,7 @@ pub(crate) fn bind_foreign_objects(env: &mut Environment, imports: &[ImportBindi
 /// Applies every foreign import recorded at `position` in the item list,
 /// at the point the source-order pass reaches that position.
 ///
-/// `ImportBinding::Foreign::item_index` is the item count at the moment the
+/// A `ForeignImportSite::Item` index is the item count at the moment the
 /// `import` lowered, so the statement runs immediately *before* item
 /// `position`; a trailing import records the item count itself, which the
 /// caller applies once the loop is done. `Environment::bind` clears the
@@ -336,6 +336,9 @@ pub(crate) fn bind_foreign_objects(env: &mut Environment, imports: &[ImportBindi
 /// reach the `I0404` refusal instead of the stale function pointer -- and,
 /// symmetrically, a `def` *below* the import re-marks the name and keeps
 /// working, matching CPython's own last-binding-wins order.
+///
+/// A [`ForeignImportSite::Block`] import is never bound here: its own
+/// `HirStmt::ForeignImport` statement binds it where it runs (#1291).
 pub(crate) fn bind_foreign_objects_at(
     env: &mut Environment,
     imports: &[ImportBinding],
@@ -344,10 +347,10 @@ pub(crate) fn bind_foreign_objects_at(
     for binding in imports {
         if let ImportBinding::Foreign {
             local_name,
-            item_index,
+            site: ForeignImportSite::Item(index),
             ..
         } = binding
-            && *item_index == position
+            && *index == position
         {
             env.bind(local_name.clone(), Ty::Object);
         }

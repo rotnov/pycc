@@ -862,7 +862,7 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 0,
+            site: crate::ForeignImportSite::Item(0),
             span: Span::new(0, "import numpy".len() as u32),
         }]
     );

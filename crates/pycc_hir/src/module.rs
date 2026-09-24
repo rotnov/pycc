@@ -43,9 +43,10 @@ pub(crate) use poison::{
 use crate::expr::keyword_bind::SignatureTable;
 use crate::import::{FuturePosition, ResolvedImports, future_prologue_len};
 use crate::{
-    HirClassDef, HirItem, HirModule, ImportBinding, Ty, builtin_exception_class_defs, class,
-    dunder_name, exception, import_local_name, killed_names, lower_function, lower_import_stmt,
-    lower_legacy_type_alias_ann_assign, lower_type_alias_stmt, program, stmt, unsupported,
+    ForeignImportSite, HirClassDef, HirItem, HirModule, ImportBinding, Ty,
+    builtin_exception_class_defs, class, dunder_name, exception, import_local_name, killed_names,
+    lower_function, lower_import_stmt, lower_legacy_type_alias_ann_assign, lower_type_alias_stmt,
+    program, stmt, unsupported,
 };
 use pycc_ast::{ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
@@ -550,7 +551,12 @@ fn lower_top_level_item<'a>(
     // Part 1 of #1026: `state.items.len()` at this exact point is the
     // number of `HirItem`s the preceding module statements produced, which
     // is the interleaving position an `ImportBinding::Foreign` records.
-    if let Some(mut lowered) = lower_import_stmt(stmt, resolved, position, state.items.len())? {
+    if let Some(mut lowered) = lower_import_stmt(
+        stmt,
+        resolved,
+        position,
+        ForeignImportSite::Item(state.items.len()),
+    )? {
         // Same reverse-direction check as the two type-alias arms above,
         // for `import ...`/`from ... import ...` (a single statement can
         // bind more than one local name, e.g. `from math import sqrt,
