@@ -41,7 +41,8 @@ status: accepted
      the miss. `docs/TESTING.md`'s #1207 status subsection carries the diff, the compile result and the
      current gap list. The row-(b) record stays there as history. Two kinds of blocker stand under row
      (c). The first is the capability gaps in the subject's import closure. The second is the subject's
-     own `-> Any` return, which pycc refuses with `T0002` outside a declared interop boundary. Rule 1
+     own `-> Any` return. pycc is inferred (not observed: compilation never reached the subject) to
+     refuse it with `T0002` outside a declared interop boundary, and this is tracked as #1285. Rule 1
      does not admit replacing that annotation, so closing the capability gaps alone is not sufficient.
 - Alternatives:
   - *Keep row (b) as the final outcome.* Rejected by the owner's directive. It would record a
@@ -56,11 +57,11 @@ status: accepted
     type the code does not honor, and choosing it is a judgment an evaluator could bias.
   - *Select another workload.* Rejected. #1207's stop rule forbids it, and every row of its outcome
     table says a failure after admission never moves to the next candidate.
-- Consequences: the kill criterion is again decided by a measurement or by named compiler gaps, rather
-  than by one missing annotation. The first compile under this rule, on pycc `20c2c76d` on 2026-09-24,
+- Consequences: the kill criterion is again decided by a measurement or by named blockers, meaning
+  compiler gaps and the `-> Any` boundary question (#1285), rather than by one missing annotation. The first compile under this rule, on pycc `20c2c76d` on 2026-09-24,
   shows that the annotation was not the binding constraint. The diagnostics with and without the
   annotation are identical apart from the directory name. The first module in the subject's import
   closure to fail is `lark/utils.py`, with 18 errors whose first is `C0001` ("import of module
-  `itertools` is not supported yet"). So row (c)'s gap list is what the 2026-10-22 decision now rests
-  on. Results under this rule can never be reported as "compiled unchanged". A later workload may use
+  `itertools` is not supported yet"). So what the 2026-10-22 decision now rests on is row (c)'s
+  blocker list: the import-closure gaps plus #1285. Results under this rule can never be reported as "compiled unchanged". A later workload may use
   the same rule, provided it publishes the diff before any timed run.

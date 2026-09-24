@@ -795,7 +795,7 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps
+### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps and a boundary question
 
 This subsection was titled "the protocol has no admissible subject" until
 2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
@@ -829,12 +829,25 @@ The module's SHA-256 is
 `419d76a780adbdcbc5008288aa4783049620114de7b509650490d85dbe35f65b` before the
 addition and `4335a1995da91fa264b3f16ebbb0c882863d0aba5d7d219205752fbf8a8680d9`
 after it. With the subject fully annotated, row (b) no longer governs and row
-(c) does: compiler gaps are worked until 2026-10-22, and any still open then
-are the recorded miss. Row (c) also requires each gap to be filed in
-`product-sprint-1`. The gaps that had no open issue were filed there on
-2026-09-24 as #1278, #1279, #1280, #1282, #1283 and #1284. Four gaps are
-covered by existing issues in the `v0.4` milestone (#884, #886, #887, #889),
-as the table below shows.
+(c) does: what blocks the subject is worked until 2026-10-22, and whatever is
+still open then is the recorded miss. Two kinds of blocker stand. The first is
+the compiler gaps in the subject's import closure. The second is a boundary
+question: the subject's own `-> Any` return, which is inferred (not observed)
+to meet `T0002`, as explained below.
+
+Row (c) also requires each gap to be filed in `product-sprint-1`. Here is how
+that stands:
+
+- The gaps that had no open issue were filed there on 2026-09-24 as #1278,
+  #1279, #1280, #1282, #1283 and #1284.
+- #882, already in `product-sprint-1`, covers `collections` and the `typing`
+  symbols.
+- The boundary question is #1285, also in `product-sprint-1`.
+- Four gaps are covered by pre-existing issues in the `v0.4` milestone (#884,
+  #886, #887, #889). They are therefore **not** filed in `product-sprint-1` as
+  row (c) literally requires. They are cross-referenced here rather than
+  re-milestoned, because each of them is broader than this workload's use.
+  Whether they count as worked for this deadline is recorded at the deadline.
 
 The annotated module was compiled with `pycc build <module> -o <out>.abi3.so
 --ext` at pycc `20c2c76d` (release build, `PYCC_PYTHON` the uv CPython
@@ -877,7 +890,8 @@ own first two lines, `from copy import deepcopy, copy` and `from typing import
 Dict, Any, Generic, List`. That probe is not the workload. It was refused with
 ``C0001 import of module `copy` is not supported yet`` (#1279) and ``C0002 module
 `typing` has no importable symbol named `Dict` ``. The subject's own `-> Any`
-return would also meet `T0002`. Replacing it is not an addition, so D-252 does
+return would also meet `T0002` (#1285); that is an inference, since
+compilation never reached the subject. Replacing it is not an addition, so D-252 does
 not admit that edit. That makes it a second blocker, independent of the
 import-closure gaps: closing every gap in the table would still leave the
 subject refused, unless pycc comes to admit an `Any` return on a method that
