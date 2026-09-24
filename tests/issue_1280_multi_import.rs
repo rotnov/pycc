@@ -106,12 +106,10 @@ fn a_native_build_refuses_the_unembeddable_alias_at_the_statement() {
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stderr_of(&output);
     assert!(rendered.contains("`import tkinter`"), "{rendered}");
-    // `sys` embeds, so it is not refused -- except on a Windows host, where
-    // every CPython-backed root is `I0403` (D-248 rule 1, #1226).
-    if !cfg!(windows) {
-        assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
-        assert!(!rendered.contains("`import sys`"), "{rendered}");
-    }
+    // `sys` embeds on every host (a Windows host since #1286), so it is not
+    // refused.
+    assert_eq!(rendered.matches("error[I0403]").count(), 1, "{rendered}");
+    assert!(!rendered.contains("`import sys`"), "{rendered}");
     assert!(rendered.contains("m.py:4:1"), "{rendered}");
     assert!(rendered.contains("4 | import sys, tkinter"), "{rendered}");
 }
