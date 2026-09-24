@@ -168,13 +168,76 @@ pub(crate) fn stdlib_dir_name(probe: &EmbedProbe) -> String {
     format!("python{}.{}", probe.version.0, probe.version.1)
 }
 
-/// The `PYCC-BUNDLE` marker's text.
-pub(crate) fn marker_text(probe: &EmbedProbe, library_sha256: &str) -> String {
+/// The `PYCC-BUNDLE` marker's text. A static build's `library_sha256` is
+/// the archive's digest, and one line naming the mode follows it (D-251);
+/// a shared build's text is the one D-248 defines, unchanged.
+pub(crate) fn marker_text(probe: &EmbedProbe, library_sha256: &str, link: LibpythonLink) -> String {
     let (major, minor, micro) = probe.version;
+    let mode = match link {
+        LibpythonLink::Shared => "",
+        LibpythonLink::Static => "libpython-link static\n",
+    };
     format!(
-        "{MARKER_HEADER}\npython {major}.{minor}.{micro}\nexecutable {}\nlibpython-sha256 {library_sha256}\n",
+        "{MARKER_HEADER}\npython {major}.{minor}.{micro}\nexecutable {}\nlibpython-sha256 {library_sha256}\n{mode}",
         probe.executable.display()
     )
+}
+
+/// How an embedded executable links libpython (D-251): against the bundled
+/// shared library (D-248, the default), or statically, from the
+/// interpreter's `LIBPL` archive, with nothing bundled in its place.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum LibpythonLink {
+    #[default]
+    Shared,
+    Static,
+}
+
+/// The linker arguments that pull every member of the static `archive`
+/// into the executable, so an extension module's C-API reference resolves
+/// even to a function the executable itself never calls.
+pub(crate) fn archive_load_args(platform: EmbedPlatform, archive: &Path) -> Vec<OsString> {
+    let archive = archive.as_os_str().to_os_string();
+    match platform {
+        EmbedPlatform::MacOs => vec![
+            "-Xlinker".into(),
+            "-force_load".into(),
+            "-Xlinker".into(),
+            archive,
+        ],
+        EmbedPlatform::Linux => vec![
+            "-Xlinker".into(),
+            "--whole-archive".into(),
+            archive,
+            "-Xlinker".into(),
+            "--no-whole-archive".into(),
+        ],
+    }
+}
+
+/// The linker arguments that export the executable's global symbols to
+/// the modules it opens: on Linux an executable exports none by default,
+/// and on macOS `-export_dynamic` keeps them through dead stripping.
+pub(crate) fn export_args(platform: EmbedPlatform) -> Vec<OsString> {
+    let flag = match platform {
+        EmbedPlatform::MacOs => "-export_dynamic",
+        EmbedPlatform::Linux => "--export-dynamic",
+    };
+    vec!["-Xlinker".into(), flag.into()]
+}
+
+/// A static build's link arguments in place of the bundled library: the
+/// whole archive, the export flag, then the interpreter's own `LIBS` and
+/// `SYSLIBS` tokens (`libs`), which the archive's members need (D-251).
+pub(crate) fn static_link_args(
+    platform: EmbedPlatform,
+    archive: &Path,
+    libs: &[String],
+) -> Vec<OsString> {
+    let mut args = archive_load_args(platform, archive);
+    args.extend(export_args(platform));
+    args.extend(libs.iter().map(OsString::from));
+    args
 }
 
 /// Whether `text` is a marker this build knows how to replace.

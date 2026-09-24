@@ -348,6 +348,7 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
             false,
             Some(&closure),
             plan,
+            None,
         )
     };
     let err = assemble(&native::NativePlan::default()).expect_err("unplanned");
@@ -358,7 +359,15 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     assert!(err.contains("do not list"), "{err}");
     let linux = env.toolchain().linux_env();
     let platform = EmbedPlatform::MacOs;
-    let mut plan = plan_natives(platform, probe, Some(&closure), &linux, false).unwrap();
+    let mut plan = plan_natives(
+        platform,
+        probe,
+        Some(&closure),
+        &linux,
+        false,
+        LibpythonLink::Shared,
+    )
+    .unwrap();
     plan.natives[0].locked.sha256 = "00".repeat(32);
     let err = assemble(&plan).expect_err("changed bytes");
     assert!(

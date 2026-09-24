@@ -97,6 +97,18 @@ pub enum Command {
         /// rule 3).
         #[arg(long, conflicts_with_all = ["interop_policy", "pure"])]
         ext: bool,
+        /// Link libpython into the executable from the embed interpreter's
+        /// static archive instead of bundling its shared library, and
+        /// export its C-API symbols so a standard-library extension loads
+        /// against them (D-251). Needs a CPython 3.14 whose `LIBPL` holds
+        /// `libpython3.14.a`; a missing, thin or non-archive file is
+        /// refused, and so is a build that consumes a `pycc.lock` section
+        /// (#1272). Omit to use a neighboring `pycc.toml`'s `[build]
+        /// static = true` when one is present, or the shared library
+        /// otherwise. Only an embedded build uses it: a native, `--pure`
+        /// or `--target` build ignores it, and `--ext` rejects it.
+        #[arg(long, conflicts_with = "ext")]
+        static_libpython: bool,
         #[command(flatten)]
         interop: InteropFlags,
     },
@@ -559,6 +571,48 @@ mod tests {
                 "{argv:?}"
             );
         }
+    }
+
+    #[test]
+    fn build_accepts_static_libpython_and_rejects_it_with_ext() {
+        let cli =
+            Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out", "--static-libpython"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Build {
+                static_libpython: true,
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Build {
+                static_libpython: false,
+                ..
+            }
+        ));
+        for order in [
+            ["--ext", "--static-libpython"],
+            ["--static-libpython", "--ext"],
+        ] {
+            let argv: Vec<&str> = ["pycc", "build", "in.py", "-o", "out.so"]
+                .into_iter()
+                .chain(order)
+                .collect();
+            let error = Cli::try_parse_from(&argv).err().expect("a usage error");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+            assert_eq!(error.exit_code(), 2, "{argv:?}");
+        }
+        let error = Cli::try_parse_from(["pycc", "run", "--static-libpython", "in.py"])
+            .err()
+            .expect("run has no such flag");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

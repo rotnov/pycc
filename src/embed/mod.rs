@@ -20,13 +20,16 @@ mod macho_host;
 pub(crate) mod native;
 pub(crate) mod native_linux;
 pub(crate) mod sha256;
+pub(crate) mod static_lib;
 pub(crate) mod stdlib_roots;
 
 use crate::ext_build;
 use crate::lock::probe::LockProbe;
 use layout::EmbedPlatform;
+pub(crate) use layout::LibpythonLink;
 pub(crate) use native::plan_natives;
 pub(crate) use native_linux::LinuxEnv;
+use static_lib::StaticProbe;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -97,34 +100,56 @@ pub(crate) const EMBED_PROBE_SCRIPT: &str = "import sys,sysconfig\n\
 #[derive(Debug, Clone)]
 pub(crate) struct EmbedToolchain {
     interpreter: OsString,
+    /// How the executable links libpython (D-251); shared unless the build
+    /// asked for a static libpython.
+    link: LibpythonLink,
     probe_override: Option<EmbedProbe>,
+    static_probe_override: Option<StaticProbe>,
     lock_probe_override: Option<LockProbe>,
     linux_env_override: Option<LinuxEnv>,
 }
 
 impl EmbedToolchain {
-    /// The production constructor: `PYCC_PYTHON` names the interpreter to
-    /// bundle, default `python3.14` (not `--ext`'s `python3`, because an
-    /// embedded build pins the 3.14 line). Reads the variable only.
-    pub(crate) fn from_env() -> Self {
+    /// A toolchain for `interpreter` that runs every probe for real and
+    /// links libpython shared.
+    fn new(interpreter: OsString) -> Self {
         Self {
-            interpreter: std::env::var_os("PYCC_PYTHON")
-                .unwrap_or_else(|| OsString::from("python3.14")),
+            interpreter,
+            link: LibpythonLink::Shared,
             probe_override: None,
+            static_probe_override: None,
             lock_probe_override: None,
             linux_env_override: None,
         }
     }
 
+    /// The production constructor: `PYCC_PYTHON` names the interpreter to
+    /// bundle, default `python3.14` (not `--ext`'s `python3`, because an
+    /// embedded build pins the 3.14 line). Reads the variable only.
+    pub(crate) fn from_env() -> Self {
+        Self::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| OsString::from("python3.14")))
+    }
+
+    /// The same toolchain, linking libpython as `link` says (D-251).
+    pub(crate) fn with_link(mut self, link: LibpythonLink) -> Self {
+        self.link = link;
+        self
+    }
+
     /// A toolchain that answers from `probe` instead of running anything.
     #[cfg(test)]
     pub(crate) fn with_probe(interpreter: impl Into<OsString>, probe: EmbedProbe) -> Self {
-        Self {
-            interpreter: interpreter.into(),
-            probe_override: Some(probe),
-            lock_probe_override: None,
-            linux_env_override: None,
-        }
+        let mut toolchain = Self::new(interpreter.into());
+        toolchain.probe_override = Some(probe);
+        toolchain
+    }
+
+    /// The same toolchain, answering the static probe from `probe` instead
+    /// of running anything.
+    #[cfg(test)]
+    pub(crate) fn with_static_probe(mut self, probe: StaticProbe) -> Self {
+        self.static_probe_override = Some(probe);
+        self
     }
 
     /// A toolchain that answers both the embed probe and the lock probe
@@ -135,12 +160,9 @@ impl EmbedToolchain {
         probe: EmbedProbe,
         lock_probe: LockProbe,
     ) -> Self {
-        Self {
-            interpreter: interpreter.into(),
-            probe_override: Some(probe),
-            lock_probe_override: Some(lock_probe),
-            linux_env_override: None,
-        }
+        let mut toolchain = Self::with_probe(interpreter, probe);
+        toolchain.lock_probe_override = Some(lock_probe);
+        toolchain
     }
 
     /// The same toolchain, scanning Linux images against `env` instead of
@@ -161,12 +183,7 @@ impl EmbedToolchain {
     /// A toolchain that really runs `interpreter`.
     #[cfg(test)]
     pub(crate) fn with_interpreter(interpreter: impl Into<OsString>) -> Self {
-        Self {
-            interpreter: interpreter.into(),
-            probe_override: None,
-            lock_probe_override: None,
-            linux_env_override: None,
-        }
+        Self::new(interpreter.into())
     }
 
     /// The interpreter's site directories, tags and marker environment
@@ -195,7 +212,8 @@ impl EmbedToolchain {
                 probe.describe()
             ));
         }
-        if !check_shared(probe.enable_shared, &probe.framework) {
+        let shared = self.link == LibpythonLink::Shared;
+        if shared && !check_shared(probe.enable_shared, &probe.framework) {
             return Err(format!(
                 "the embed interpreter `{name}` has no shared libpython ({}); an embedded \
                  executable links against one -- set PYCC_PYTHON to a CPython 3.14 built \
@@ -211,8 +229,9 @@ impl EmbedToolchain {
                 probe.include.display()
             ));
         }
+        // A static build links the archive the static probe checks instead.
         let library = layout::source_library(&probe);
-        if !library.is_file() {
+        if shared && !library.is_file() {
             return Err(format!(
                 "the embed interpreter `{name}` reports a shared library `{}` that does not \
                  exist ({})",
@@ -230,9 +249,34 @@ impl EmbedToolchain {
         Ok(probe)
     }
 
-    fn run_probe(&self) -> Result<EmbedProbe, String> {
+    /// The interpreter's static libpython and the system libraries its
+    /// members need, checked as [`static_lib::check_archive`] says, or an
+    /// environment-failure message for exit 2. Runs only for a static
+    /// build, after [`Self::probe`] accepted the interpreter.
+    pub(crate) fn static_probe(&self) -> Result<StaticProbe, String> {
+        let probe = match &self.static_probe_override {
+            Some(probe) => probe.clone(),
+            None => self.run_script(
+                static_lib::STATIC_PROBE_SCRIPT,
+                static_lib::parse_static_probe,
+            )?,
+        };
         let name = self.interpreter.to_string_lossy();
-        let output = ext_build::probe_command(&self.interpreter, EMBED_PROBE_SCRIPT)
+        let archive = static_lib::check_archive(&name, &probe.archive)?;
+        Ok(StaticProbe {
+            archive,
+            libs: probe.libs,
+        })
+    }
+
+    fn run_probe(&self) -> Result<EmbedProbe, String> {
+        self.run_script(EMBED_PROBE_SCRIPT, parse_embed_probe)
+    }
+
+    /// Runs `script` under the interpreter and parses its output.
+    fn run_script<T>(&self, script: &str, parse: fn(&str) -> Option<T>) -> Result<T, String> {
+        let name = self.interpreter.to_string_lossy();
+        let output = ext_build::probe_command(&self.interpreter, script)
             .output()
             .map_err(|e| {
                 format!(
@@ -242,7 +286,7 @@ impl EmbedToolchain {
                 )
             })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed = output.status.success().then(|| parse_embed_probe(&stdout));
+        let parsed = output.status.success().then(|| parse(&stdout));
         parsed.flatten().ok_or_else(|| {
             format!(
                 "the embed interpreter `{name}` did not report a configuration this build \
@@ -314,7 +358,8 @@ pub(crate) fn check_shared(enable_shared: bool, framework: &str) -> bool {
 pub(crate) struct EmbedPlan {
     /// `-I <include> -fPIC <shim> <launcher>`, before the pycc object.
     pub(crate) compile_args: Vec<OsString>,
-    /// The bundled library by path, then the rpath, after the runtime.
+    /// The bundled library by path (or, for a static build, the archive
+    /// and its system libraries), then the rpath, after the runtime.
     pub(crate) link_args: Vec<OsString>,
 }
 
@@ -327,6 +372,10 @@ pub(crate) struct EmbedPlan {
 /// locked closure copied into it), swapped into place before the link so
 /// the executable links against the final bundled library. `host` is the
 /// `(arch, os)` pair the lock section is selected by.
+///
+/// A static build (D-251) refuses a consumed lock section before the
+/// probe (#1272), runs the static probe after it, bundles no libpython,
+/// and links the archive whole in the bundled library's place.
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
@@ -340,7 +389,14 @@ pub(crate) fn plan_embed(
     let parent = layout::sidecar_parent(out);
     let replace_existing = bundle::check_existing(&parent.join(&sidecar_name))?;
     let check = crate::lock::build::plan_closure(entry, typed_hir, host)?;
+    if toolchain.link == LibpythonLink::Static && check.is_some() {
+        return Err(static_lib::closure_refusal());
+    }
     let probe = toolchain.probe()?;
+    let static_lib = match toolchain.link {
+        LibpythonLink::Static => Some(toolchain.static_probe()?),
+        LibpythonLink::Shared => None,
+    };
     let locked = match &check {
         Some(check) => {
             let lock_probe = toolchain.lock_probe()?;
@@ -355,6 +411,7 @@ pub(crate) fn plan_embed(
         locked.as_ref(),
         &toolchain.linux_env(),
         true,
+        toolchain.link,
     )?;
     if let Some(check) = &check {
         let difference = crate::lock::native_difference(&check.section.native, &natives.locked());
@@ -384,10 +441,14 @@ pub(crate) fn plan_embed(
         replace_existing,
         locked.as_ref(),
         &natives,
+        static_lib.as_ref(),
     )?;
     let mut compile_args = vec![OsString::from("-I"), probe.include.into_os_string()];
     compile_args.extend([OsString::from("-fPIC"), shim.into(), launcher.into()]);
-    let mut link_args = vec![library.into_os_string()];
+    let mut link_args = match &static_lib {
+        Some(archive) => layout::static_link_args(platform, &archive.archive, &archive.libs),
+        None => vec![library.into_os_string()],
+    };
     link_args.extend(layout::rpath_args(platform, &sidecar_name));
     let lib_dir = parent.join(&sidecar_name).join("lib");
     let names: Vec<String> = natives

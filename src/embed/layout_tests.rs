@@ -157,7 +157,7 @@ fn the_bundled_library_name_depends_on_the_platform() {
 
 #[test]
 fn the_marker_records_the_version_the_interpreter_and_the_digest() {
-    let text = marker_text(&probe(), "abc123");
+    let text = marker_text(&probe(), "abc123", LibpythonLink::Shared);
     assert_eq!(
         text,
         "pycc-bundle 1\npython 3.14.7\nexecutable /opt/py/bin/python3.14\nlibpython-sha256 abc123\n"
@@ -165,6 +165,64 @@ fn the_marker_records_the_version_the_interpreter_and_the_digest() {
     assert!(marker_is_current(&text));
     assert!(!marker_is_current("pycc-bundle 2\n"));
     assert!(!marker_is_current(""));
+}
+
+#[test]
+fn a_static_marker_names_the_archive_digest_and_the_link_mode() {
+    let text = marker_text(&probe(), "def456", LibpythonLink::Static);
+    assert_eq!(
+        text,
+        "pycc-bundle 1\npython 3.14.7\nexecutable /opt/py/bin/python3.14\n\
+         libpython-sha256 def456\nlibpython-link static\n"
+    );
+    assert!(marker_is_current(&text));
+    assert_eq!(LibpythonLink::default(), LibpythonLink::Shared);
+}
+
+#[test]
+fn a_static_link_loads_the_whole_archive_exports_and_appends_the_libs() {
+    let archive = Path::new("/opt/py/lib/python3.14/config-3.14-darwin/libpython3.14.a");
+    let libs = [
+        "-ldl".to_string(),
+        "-framework".to_string(),
+        "CoreFoundation".to_string(),
+    ];
+    let args = |platform| -> Vec<String> {
+        static_link_args(platform, archive, &libs)
+            .into_iter()
+            .map(|arg| arg.into_string().expect("utf-8"))
+            .collect()
+    };
+    let archive = archive.display().to_string();
+    assert_eq!(
+        args(EmbedPlatform::MacOs),
+        [
+            "-Xlinker",
+            "-force_load",
+            "-Xlinker",
+            &archive,
+            "-Xlinker",
+            "-export_dynamic",
+            "-ldl",
+            "-framework",
+            "CoreFoundation",
+        ]
+    );
+    assert_eq!(
+        args(EmbedPlatform::Linux),
+        [
+            "-Xlinker",
+            "--whole-archive",
+            &archive,
+            "-Xlinker",
+            "--no-whole-archive",
+            "-Xlinker",
+            "--export-dynamic",
+            "-ldl",
+            "-framework",
+            "CoreFoundation",
+        ]
+    );
 }
 
 #[test]

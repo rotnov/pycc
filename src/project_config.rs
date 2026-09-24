@@ -28,6 +28,9 @@ pub struct ProjectSection {
 pub struct BuildSection {
     pub opt: Option<String>,
     pub targets: Option<Vec<String>>,
+    /// `static = true` links an embedded build's libpython statically, as
+    /// `pycc build --static-libpython` does (D-251); read only by `pycc
+    /// build`, and ignored by `--ext` and `pycc run`.
     #[serde(rename = "static")]
     pub static_: Option<bool>,
 }
