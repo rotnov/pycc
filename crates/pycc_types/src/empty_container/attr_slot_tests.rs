@@ -517,3 +517,53 @@ fn establishing_receiver_skips_other_statements() {
     assert_eq!(establishing_receiver(&body, "xs"), Some("self"));
     assert_eq!(establishing_receiver(&body, "ys"), None);
 }
+
+#[test]
+fn the_gate_never_names_a_foreign_base_storing_the_same_attribute() {
+    let hir = resolve(
+        "class A:\n    def __init__(self) -> None:\n        self.xs = 0\n\
+         class B:\n    def __init__(self) -> None:\n        a = A()\n        a.xs = 1\n        \
+         self.xs = []\n",
+    );
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    let diagnostic = &errors[0].1;
+    let help = diagnostic.help.as_deref().expect("help");
+    assert!(diagnostic.message.contains("`self.xs` in class `B`"));
+    assert!(help.contains("`self.xs: list[int] = []`"), "{help}");
+    assert!(!diagnostic.message.contains("a.xs") && !help.contains("`a.xs"));
+}
+
+#[test]
+fn the_gate_names_a_renamed_receiver_past_a_foreign_base_store() {
+    let hir = resolve(
+        "class A:\n    def __init__(this) -> None:\n        this.xs = 0\n\
+         class B:\n    def __init__(this) -> None:\n        a = A()\n        a.xs = 1\n        \
+         this.xs = []\n",
+    );
+    let errors = reject_unresolved_attr_slots(&hir).expect_err("provisional slot is refused");
+    let diagnostic = &errors[0].1;
+    assert!(diagnostic.message.contains("`this.xs` in class `B`"));
+    assert!(!diagnostic.message.contains("a.xs"));
+}
+
+#[test]
+fn establishing_receiver_returns_only_a_receiver_spelling() {
+    let store = |base: &str| HirStmt::AttrSet {
+        base: HirExpr::Name(base.to_string()),
+        attr: "xs".to_string(),
+        value: HirExpr::IntLiteral(0),
+    };
+    let alias = HirStmt::Assign {
+        target: "this".to_string(),
+        value: HirExpr::Name("self".to_string()),
+    };
+    assert_eq!(
+        establishing_receiver(&[alias.clone(), store("a"), store("this")], "xs"),
+        Some("this")
+    );
+    assert_eq!(
+        establishing_receiver(&[store("a"), store("self")], "xs"),
+        Some("self")
+    );
+    assert_eq!(establishing_receiver(&[store("a")], "xs"), None);
+}

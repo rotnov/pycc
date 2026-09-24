@@ -318,17 +318,29 @@ pub(crate) fn reject_unresolved_attr_slots(hir: &HirModule) -> Result<(), KeyedD
     Err(vec![(key, diagnostic)])
 }
 
-/// The receiver spelling of the first top-level `<name>.<attr> = ...` in an
-/// `__init__` body -- the statement that established the slot.
+/// The receiver spelling of the `<receiver>.<attr> = ...` that established
+/// the slot in an `__init__` body. Only a spelling in the receiver set is
+/// ever returned, so a same-named store on a foreign base (`a.xs = 1`) or a
+/// local alias the source wrote (`me = self`) is never named.
+///
+/// `self` wins whenever a top-level store through `self` exists. Otherwise
+/// the #1181 renamed-receiver alias (`receiver_spellings`' prepended
+/// `<spelling> = self`) is returned if a store goes through it. The two cannot
+/// both apply: #1181's `check_renamed_receiver` refuses a method with a
+/// renamed receiver that mentions `self` at all.
 fn establishing_receiver<'a>(body: &'a [HirStmt], attr: &str) -> Option<&'a str> {
-    body.iter().find_map(|stmt| match stmt {
-        HirStmt::AttrSet {
-            base: HirExpr::Name(receiver),
-            attr: stored,
-            ..
-        } if stored == attr => Some(receiver.as_str()),
-        _ => None,
-    })
+    let stores_through = |receiver: &str| {
+        body.iter().any(|stmt| {
+            matches!(stmt, HirStmt::AttrSet {
+                base: HirExpr::Name(base),
+                attr: stored,
+                ..
+            } if stored == attr && base == receiver)
+        })
+    };
+    receiver_spellings(body)
+        .into_iter()
+        .find(|receiver| stores_through(receiver))
 }
 
 #[cfg(test)]
