@@ -33,7 +33,8 @@ than an accident of those two files.
 
 The harness's own Rust sources are a different thing from that fixture tree.
 `tests/conformance.rs` is the crate root, and its cohort submodules live at
-`tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `numeric.rs`),
+`tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `imports.rs`,
+`numeric.rs`),
 `#[path]`-declared from the root's `harness_modules!` block; a new fixture's
 test goes in the cohort that owns its semantics. Per
 [D-221](./decisions/D-221-the-conformance-harness-is-the-root-file-plus-its.md),
@@ -882,7 +883,7 @@ edit was made:
 |---|---|---|
 | `C0001` import of `itertools` / `collections` not supported yet | 1 each | #1278 (`itertools`); #882 (`collections`) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
-| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted, and a re-run of the same build reports 17 errors, all still in `lark/utils.py` |
+| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
 | `C0001` `import` inside a block body (module-level `try`/`if`) | 3 | #1282 |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
