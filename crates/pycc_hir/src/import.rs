@@ -470,7 +470,8 @@ fn lower_import_alias(
             return Err(unsupported(
                 format!(
                     "binding the CPython module `{module_name}` to `{local_name}`, a name pycc \
-                     resolves as its own stdlib module or `TYPE_CHECKING`, is not supported yet"
+                     resolves by its spelling (a stdlib module, `range` or `TYPE_CHECKING`), \
+                     is not supported yet"
                 ),
                 statement.start..statement.end,
             ));

@@ -269,7 +269,8 @@ fn an_alias_shadowing_a_resolved_spelling_is_refused() {
                 message,
                 format!(
                     "binding the CPython module `colorsys` to `{alias}`, a name pycc resolves \
-                     as its own stdlib module or `TYPE_CHECKING`, is not supported yet"
+                     by its spelling (a stdlib module, `range` or `TYPE_CHECKING`), \
+                     is not supported yet"
                 ),
                 "{source:?}"
             );

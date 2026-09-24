@@ -89,7 +89,8 @@ slice is implemented; the code remains reserved so older compiler output keeps
 an unambiguous meaning. HIR lowering uses it for valid Python outside the
 currently implemented frontend subset, with the unsupported AST node as the
 primary span and a message that names the rejected construct in Python terms
-(`a tuple`, ``an `import` inside a function or block body``, `a call whose
+(`a tuple`, ``an `import` inside a function or block body`` in a function,
+``an `import` inside a block body`` in a module-level block, `a call whose
 callee is a call expression`); a message never renders an AST node's Rust
 `Debug` form, and `tests/diagnostics_test.rs` scans every `.expected.txt`
 fixture for the `NodeIndex(` marker such a dump would carry (issue #890).
@@ -151,10 +152,18 @@ same ``is a local name here, not the stdlib `math` module`` C0001 a local
 named `math` gets -- and, because the HIR keeps only the canonical spelling,
 a local named `math` while the module only ever writes `m.sqrt` is rejected
 as well (a recorded fail-closed residual, closed by
-[#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project or
-unregistered module (`import numpy as np`) keeps the plain-`import` C0001
-(``import of module `numpy` is not supported yet``,
-[#964](https://github.com/rotnov/pycc/issues/964) for project modules).
+[#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project
+module keeps the plain-`import` C0001 (``import of module `geometry` is not
+supported yet``, [#964](https://github.com/rotnov/pycc/issues/964)), as does
+a dotted one. Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
+alias on an undotted module that is neither a project module nor a
+`pycc_std` registration (`import numpy as np`) is a foreign import instead,
+binding the CPython module object. An alias pycc resolves by its spelling
+(`TYPE_CHECKING`, `range` or a `pycc_std` module name such as `typing`) is
+refused with its own C0001 (``binding the CPython module `foo` to `range`, a
+name pycc resolves by its spelling (a stdlib module, `range` or
+`TYPE_CHECKING`), is not supported yet``), because the alias would otherwise
+be read as that other meaning.
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.
