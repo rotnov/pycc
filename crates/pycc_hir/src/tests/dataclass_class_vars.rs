@@ -47,8 +47,8 @@ fn a_class_var_in_a_dataclass_body_lowers_to_a_class_attribute() {
 /// synthesizes and rewrites unconditionally, so the spelling is rejected.
 /// Every one of `body::DATACLASS_IMPLICIT_DUNDERS` is exercised
 /// individually -- a single or-pattern arm (or one `contains` hit) is not
-/// reliable evidence that the whole set is honoured (see `class.rs`'s own
-/// note on the `slot_ty_from_init_rhs` match).
+/// reliable evidence that the whole set is honoured (see
+/// `class/init_slot.rs`'s own note on the `slot_ty_from_init_rhs` match).
 #[test]
 fn a_class_var_named_after_an_implicit_dataclass_dunder_is_rejected() {
     for name in [
