@@ -83,14 +83,11 @@ pub(super) fn join_try_outcome(
     let previous = conservative.clone();
     join_if_branches(&mut conservative, &previous, paths.else_env)?;
     for (name, ty) in first_established_types(env, &paths)? {
-        let state = conservative
+        let (BindingState::Definitely(slot) | BindingState::Maybe(slot)) = conservative
             .bindings
             .get_mut(&name)
             .expect("a name bound on a path is in the conservative join");
-        *state = match state {
-            BindingState::Definitely(_) => BindingState::Definitely(ty),
-            BindingState::Maybe(_) => BindingState::Maybe(ty),
-        };
+        *slot = ty;
     }
 
     let mut exits: Vec<Environment> = Vec::new();

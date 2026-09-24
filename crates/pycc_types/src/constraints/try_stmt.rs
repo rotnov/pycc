@@ -34,7 +34,7 @@ pub(super) struct TryShape<'a> {
 /// always terminate, with its `as` name unbound on exit (CPython's implicit
 /// `del`) -- are collected and handed to
 /// [`solver::promote_try_fallthrough`], mirroring the check phase's
-/// `exception::join_try_outcome`.
+/// `exception::try_join::join_try_outcome`.
 pub(super) fn collect_try_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
