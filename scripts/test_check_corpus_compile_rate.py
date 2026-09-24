@@ -733,6 +733,20 @@ class HelperTests(unittest.TestCase):
             ],
         )
 
+    def test_class_subject_elided_but_builtin_base_kept(self) -> None:
+        text = (
+            "error[C0001]: class `fzset` inherits from builtin type `frozenset` -- subclassing a builtin type is not supported yet\n"
+            "error[C0001]: class `FrozenSet` inherits from builtin type `frozenset` -- subclassing a builtin type is not supported yet\n"
+            "error[C0001]: class `Row` inherits from builtin type `list` -- subclassing a builtin type is not supported yet\n"
+        )
+        self.assertEqual(
+            sorted(set(METRIC.diagnostic_classes(text))),
+            [
+                "C0001 class X inherits from builtin type `frozenset` -- subclassing a builtin type is not supported yet",
+                "C0001 class X inherits from builtin type `list` -- subclassing a builtin type is not supported yet",
+            ],
+        )
+
     def test_construct_naming_backticks_are_never_elided(self) -> None:
         text = (
             "error[C0001]: import of module `sys` is not supported yet\n"
