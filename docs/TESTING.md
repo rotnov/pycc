@@ -469,6 +469,14 @@ achieve.
   relocation arm on `cc`-built images. Its `#[ignore]`d oracle locks a
   `venv --without-pip` holding the test-authored `tinypkg`/`tinydep`,
   builds, moves the venv away, and compares the run with CPython 3.14.7.
+- **Real static archive (#1273).** `tests/issue_1273_real_static_archive.rs`'s
+  `#[ignore]`d tests probe the interpreter's `LIBPL/LIBRARY`. When it is a
+  genuine ar archive, they build `--static-libpython` executables and
+  compare them with CPython 3.14.7: `_json`, `math`, `_random` and `_ssl`
+  loaded from `lib-dynload`, and a locked closure. When it is not, they
+  assert D-251's refusal instead; on a Linux GitHub Actions leg, whose
+  `actions/setup-python` interpreter ships the archive, a missing archive
+  fails the test.
 - **Bounds.** Every spawn of a built embedded executable uses
   `Command::output()`, whose stdin is null; a manual run should be
   time-bounded with stdin closed, e.g.

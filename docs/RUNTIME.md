@@ -1235,7 +1235,15 @@ owns the contract; this is the runtime view of it.
   `libpython-sha256` against the file that identifies the interpreter, not
   the archive it links: the shared library when the interpreter is
   configured with one, else the archive, which is also what `pycc lock`
-  records for it (Part 2 of #1227, #1272).
+  records for it (Part 2 of #1227, #1272). A real archive is exercised
+  end to end by `tests/issue_1273_real_static_archive.rs` (Part 3 of
+  #1227, #1273) on the Linux CI legs, whose `actions/setup-python` CPython
+  3.14.7 is built `--enable-shared` and still installs `LIBPL/libpython3.14.a`:
+  the executables start CPython with no libpython in their sidecar or their
+  dynamic dependencies and load `_json`, `math`, `_random` and `_ssl` from
+  the bundled `lib-dynload`; one also bundles a locked closure. Their output
+  matches that interpreter's, except the closure's file path. A host whose `LIBPL` holds no genuine archive gets
+  the refusal instead.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local
