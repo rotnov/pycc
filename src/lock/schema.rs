@@ -36,7 +36,8 @@ pub(crate) struct LockTarget {
     /// The program's required direct roots (rule 2).
     pub(crate) roots: Vec<String>,
     /// The program's optional direct roots (#1290): roots imported only
-    /// inside the body of a `try` whose handler catches `ImportError`, and
+    /// inside the body of a `try` whose handler catches a failed import
+    /// (see [`pycc_hir::ForeignImportSite::Block`]), and
     /// not required elsewhere. An optional root no installed distribution
     /// owns is recorded here with no package. Rendered only when non-empty,
     /// so a lock with no optional root is byte-identical to one written

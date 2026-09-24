@@ -6,7 +6,7 @@
 //! exactly as a top-level one would be lowered, and keeps a statement's
 //! bindings only when every alias is foreign. `module::lower_top_level_item`
 //! pushes those bindings, with [`ForeignImportSite::Block`] (optional when a
-//! `try` whose handler catches `ImportError` guards the import, #1290), onto the
+//! `try` whose handler catches a failed import guards it, #1290), onto the
 //! module's import table before lowering the block, so the driver's lock,
 //! policy and native-build gates see them. `lower_stmt` then turns the
 //! statement into [`HirStmt::ForeignImport`] through

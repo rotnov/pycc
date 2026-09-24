@@ -149,7 +149,7 @@ impl Index {
 ///
 /// An optional root (#1290) with an owner is resolved exactly like a
 /// required one. An optional root no installed distribution owns is not a
-/// refusal -- the program's `ImportError` handler takes over at run time
+/// refusal -- the program's handler for the failed import takes over at run time
 /// -- but its site entries are still checked, so an unrecorded file or
 /// link under it (which CPython would import) refuses the lock.
 pub(crate) fn resolve(

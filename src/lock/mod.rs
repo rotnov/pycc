@@ -197,7 +197,7 @@ pub(crate) fn direct_roots(hir: &HirModule) -> BTreeSet<String> {
 /// The program's direct roots split into required and optional (#1290).
 /// A root is optional when every import of it is
 /// [`ForeignImportSite::Block`] with `optional` set -- inside the body of a
-/// `try` whose handler catches `ImportError` -- and required as soon as one
+/// `try` whose handler catches a failed import -- and required as soon as one
 /// import of it is not. Together they are [`direct_roots`].
 pub(crate) struct SplitRoots {
     required: BTreeSet<String>,
@@ -220,16 +220,13 @@ impl SplitRoots {
 pub(crate) fn split_roots(hir: &HirModule) -> SplitRoots {
     let mut required = BTreeSet::new();
     let mut guarded = BTreeSet::new();
-    for binding in &hir.imports {
-        let ImportBinding::Foreign {
+    let foreign = hir.imports.iter().filter_map(|binding| match binding {
+        ImportBinding::Foreign {
             module_path, site, ..
-        } = binding
-        else {
-            continue;
-        };
-        let Some(root) = module_path.split('.').next() else {
-            continue;
-        };
+        } => module_path.split('.').next().map(|root| (root, site)),
+        _ => None,
+    });
+    for (root, site) in foreign {
         if is_embeddable_stdlib_root(root) || is_excluded_stdlib_root(root) {
             continue;
         }
