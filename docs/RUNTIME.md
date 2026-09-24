@@ -82,7 +82,7 @@ earlier tag keeps its value, and it parents to `Exception` rather than
 CPython's own `ArithmeticError`, which pycc does not model -- the same
 deliberate hierarchy simplification D-202 records for `BaseExceptionGroup`.
 `except Exception:` therefore catches it, and `except OverflowError:` resolves
-by name.
+through its fixed class-table tag.
 
 **[#1292](https://github.com/rotnov/pycc/issues/1292) (Part 2 of #1282)**
 appends `ImportError` (26) and `ModuleNotFoundError` (27) after
