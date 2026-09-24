@@ -539,7 +539,9 @@ a distribution's payload are Part 4 (#1259).
   distributions that need it. macOS follows absolute install names; Linux
   resolves each `DT_NEEDED` as `ld.so` would on the build host
   (`DT_RPATH`/`DT_RUNPATH` with `$ORIGIN`, the `ldconfig -p` cache, then the
-  default directories), and leaves one it cannot find to the loader.
+  default directories). A dependency it cannot find is left to the loader
+  when an image loaded on import needs it, and refused when a library the
+  build copies into `lib/` needs it.
 - **`--check`.** Exits 0 only when the file's bytes equal what `pycc lock`
   would write, where a standard-library-only program with no section counts
   as current; otherwise it exits 1 naming the first difference and writes
@@ -565,8 +567,10 @@ a distribution's payload are Part 4 (#1259).
   loader finds it already loaded. Refused with exit 2: two libraries needing
   one name in `lib/` (compared case-folded), and on Linux a library whose
   `DT_SONAME` differs from the name it is needed by, a `DT_NEEDED` given as
-  a path, a closure program image that needs a copied library, and a copied
-  library that would also answer a dependency kept on the system. On macOS
+  a path, a closure program image that needs a copied library, a copied
+  library that would also answer a dependency kept on the system, a copied
+  library with a dependency that resolves nowhere, and a dependency on the
+  interpreter's libpython under a name other than the bundled one. On macOS
   a relative reference outside a closure image's own payload stays refused
   naming #1259. `pycc check` never reads the lock.
 
