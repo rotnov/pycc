@@ -262,7 +262,7 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 // Unix only: the tests spell host paths with `/`, and a Windows host
-// never reaches this walk (no closure until #1287).
+// never reaches this walk (it scans no image until #1297).
 #[cfg(all(test, unix))]
 #[path = "macho_host_tests.rs"]
 mod tests;

@@ -114,7 +114,7 @@ fn the_identity_library_follows_the_configuration() {
     let layout = super::super::fake_layout::fake_layout(&dir);
     let unused = || -> Result<PathBuf, String> { panic!("the archive is not asked for") };
     assert_eq!(
-        identity_library(&layout.probe, unused),
+        identity_library(&layout.probe, EmbedPlatform::MacOs, unused),
         Ok(layout.library())
     );
     let mut framework = layout.probe.clone();
@@ -122,23 +122,27 @@ fn the_identity_library_follows_the_configuration() {
     framework.framework = "Python".to_string();
     let framework_binary = layout::source_library(&framework);
     std::fs::write(&framework_binary, "framework").expect("write");
-    assert_eq!(identity_library(&framework, unused), Ok(framework_binary));
+    assert_eq!(
+        identity_library(&framework, EmbedPlatform::MacOs, unused),
+        Ok(framework_binary)
+    );
 
     let archive = || Ok(PathBuf::from("/lib/config/libpython3.14.a"));
     let mut static_only = layout.probe.clone();
     static_only.enable_shared = false;
     assert_eq!(
-        identity_library(&static_only, archive),
+        identity_library(&static_only, EmbedPlatform::MacOs, archive),
         Ok(PathBuf::from("/lib/config/libpython3.14.a"))
     );
     let failing = || Err("no archive".to_string());
     assert_eq!(
-        identity_library(&static_only, failing),
+        identity_library(&static_only, EmbedPlatform::MacOs, failing),
         Err("no archive".to_string())
     );
 
     std::fs::remove_file(layout.library()).expect("remove the library");
-    let err = identity_library(&layout.probe, archive).expect_err("missing library");
+    let err = identity_library(&layout.probe, EmbedPlatform::MacOs, archive)
+        .expect_err("missing library");
     assert_eq!(
         err,
         format!(
@@ -149,6 +153,26 @@ fn the_identity_library_follows_the_configuration() {
             layout.probe.describe()
         )
     );
+}
+
+/// On Windows the identity is always `python314.dll` beside `python.exe`
+/// (#1296): the interpreter reports no `Py_ENABLE_SHARED`, yet the static
+/// probe never runs, and a missing DLL is refused.
+#[test]
+fn the_windows_identity_library_is_the_interpreter_dll() {
+    let dir = ScratchDir::new("static_lib_identity_windows").expect("scratch");
+    let layout = super::super::fake_layout::fake_windows_layout(&dir);
+    let windows = EmbedPlatform::Windows;
+    let unused = || -> Result<PathBuf, String> { panic!("the static probe does not run") };
+    let dll = layout.prefix.join("python314.dll");
+    assert_eq!(
+        identity_library(&layout.probe, windows, unused),
+        Ok(dll.clone())
+    );
+    std::fs::remove_file(&dll).expect("remove the DLL");
+    let err = identity_library(&layout.probe, windows, unused).expect_err("missing DLL");
+    assert!(err.contains("reports a shared library"), "{err}");
+    assert!(err.contains(&dll.display().to_string()), "{err}");
 }
 
 /// Several installers ship `LIBPL/libpython3.14.a` as a symlink to the

@@ -3,6 +3,7 @@
 //! pycc.lock decision entry, rules 1-4).
 
 use super::marker::normalize_name;
+use crate::embed::layout::EmbedPlatform;
 use std::path::{Path, PathBuf};
 
 /// Which scanned site directory holds a distribution.
@@ -237,18 +238,28 @@ pub(crate) fn decode_urlsafe_b64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Whether a `/`-separated RECORD path names import root `root`: a path
-/// under `root/`, or exactly `root.py`, `root.pyc`, `root.so` or
-/// `root.<anything>.so`.
-pub(crate) fn names_root(path: &str, root: &str) -> bool {
+/// Whether a `/`-separated RECORD path names import root `root` on
+/// `platform`: a path under `root/`, or exactly `root` plus one of the
+/// platform's import suffixes. POSIX: `root.py`, `root.pyc`, `root.so` or
+/// `root.<anything>.so`. Windows (#1296), whose import system also loads
+/// `.pyw` sources and `.pyd` extensions: `root.py`, `root.pyw`,
+/// `root.pyc`, `root.pyd` or `root.<anything>.pyd`.
+pub(crate) fn names_root(path: &str, root: &str, platform: EmbedPlatform) -> bool {
+    let (sources, extension): (&[&str], &str) = match platform {
+        EmbedPlatform::Windows => (&[".py", ".pyw", ".pyc", ".pyd"], ".pyd"),
+        EmbedPlatform::MacOs | EmbedPlatform::Linux => (&[".py", ".pyc", ".so"], ".so"),
+    };
     if let Some(rest) = path.strip_prefix(root) {
         if rest.starts_with('/') {
             return rest.len() > 1;
         }
-        if matches!(rest, ".py" | ".pyc" | ".so") {
+        if sources.contains(&rest) {
             return true;
         }
-        if let Some(middle) = rest.strip_prefix('.').and_then(|r| r.strip_suffix(".so")) {
+        if let Some(middle) = rest
+            .strip_prefix('.')
+            .and_then(|r| r.strip_suffix(extension))
+        {
             return !middle.is_empty() && !middle.contains('/');
         }
     }

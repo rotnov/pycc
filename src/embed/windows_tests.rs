@@ -104,20 +104,59 @@ fn the_probe_refuses_each_missing_windows_file() {
 }
 
 #[test]
-fn the_windows_request_refuses_a_static_libpython_then_a_lock() {
+fn the_windows_request_refuses_a_static_libpython_only() {
     let windows = EmbedPlatform::Windows;
     let (shared, stat) = (LibpythonLink::Shared, LibpythonLink::Static);
-    assert_eq!(check_windows_request(windows, shared, false), Ok(()));
+    assert_eq!(check_windows_request(windows, shared), Ok(()));
     let static_refusal = Err(STATIC_REFUSAL.to_string());
-    assert_eq!(check_windows_request(windows, stat, false), static_refusal);
-    assert_eq!(check_windows_request(windows, stat, true), static_refusal);
-    let lock_refusal = Err(LOCK_REFUSAL.to_string());
-    assert_eq!(check_windows_request(windows, shared, true), lock_refusal);
+    assert_eq!(check_windows_request(windows, stat), static_refusal);
     for other in [EmbedPlatform::MacOs, EmbedPlatform::Linux] {
-        assert_eq!(check_windows_request(other, stat, true), Ok(()));
+        assert_eq!(check_windows_request(other, stat), Ok(()));
     }
     assert!(STATIC_REFUSAL.contains("D-251"));
-    assert!(LOCK_REFUSAL.contains("#1287"));
+}
+
+/// The closure-image selector (#1296): a `.pyd` or `.dll` name, or an `MZ`
+/// head under any name but `.exe`, each suffix ASCII case-insensitively.
+#[test]
+fn the_closure_image_selector_matches_what_windows_would_load() {
+    for (rel, head, image) in [
+        ("fast.cp314-win_amd64.pyd", &b"xx"[..], true),
+        ("pkg/FAST.PYD", b"", true),
+        ("pkg/sub/x.dll", b"", true),
+        ("pkg/sub/X.Dll", b"", true),
+        ("pkg/lib/blob.bin", b"MZ\x90\x00", true),
+        ("pkg/lib/blob", b"MZ", true),
+        ("pkg/cli.exe", b"MZ\x90\x00", false),
+        ("pkg/CLI.EXE", b"MZ", false),
+        ("pkg/__init__.py", b"import x", false),
+        ("pkg/data.bin", b"M", false),
+        ("pkg/data.bin", b"", false),
+        ("pkg/pyd", b"", false),
+    ] {
+        assert_eq!(is_windows_image(rel, head), image, "{rel}");
+    }
+}
+
+/// The launcher's Windows arm appends the locked closure as the third
+/// module search path, after `Lib` and `DLLs`, only under the closure
+/// define (#1296).
+#[test]
+fn the_windows_launcher_appends_the_closure_after_lib_and_dlls() {
+    let launcher = super::super::LAUNCHER_C;
+    let windows = &launcher[launcher.find("#ifdef _WIN32").expect("a Windows arm")..];
+    let lib = windows.find(r#"L"%ls\\Lib""#).expect("Lib");
+    let dlls = windows.find(r#"L"%ls\\DLLs""#).expect("DLLs");
+    let closure = windows.find(r#"L"%ls\\closure""#).expect("closure");
+    assert!(lib < dlls && dlls < closure);
+    let guard = windows.find("#ifdef PYCC_EMBED_CLOSURE").expect("a guard");
+    assert!(guard < closure);
+    let append = "PyWideStringList_Append(&config.module_search_paths, ";
+    let appends: Vec<usize> = ["lib);", "dlls);", "closure);"]
+        .iter()
+        .map(|arg| windows.find(&format!("{append}{arg}")).expect(arg))
+        .collect();
+    assert!(appends[0] < appends[1] && appends[1] < appends[2]);
 }
 
 /// A static libpython request on a Windows host is refused before any
@@ -266,4 +305,26 @@ fn a_windows_build_under_a_plain_file_fails_at_staging() {
     assert!(message.contains("could not"), "{message}");
     assert!(!out.exists());
     assert!(!file.join("app.pycc").exists());
+}
+
+/// A closure file the image screen cannot open is an environment failure
+/// naming the path, not a silent pass; any other host skips the screen.
+#[test]
+fn the_closure_image_screen_reports_an_unreadable_file() {
+    let dir = ScratchDir::new("windows_image_screen_unreadable").unwrap();
+    let missing = dir.join("gone.py");
+    let closure =
+        crate::lock::build::LockedClosure::of_files(vec![crate::lock::build::ClosureFile {
+            rel: "pkg/gone.py".into(),
+            source: missing.clone(),
+            digest: String::new(),
+            package: "pkg".into(),
+        }]);
+    let err = check_closure_images(EmbedPlatform::Windows, Some(&closure)).unwrap_err();
+    assert!(err.contains(&missing.display().to_string()), "{err}");
+    assert_eq!(
+        check_closure_images(EmbedPlatform::Linux, Some(&closure)),
+        Ok(())
+    );
+    assert_eq!(check_closure_images(EmbedPlatform::Windows, None), Ok(()));
 }

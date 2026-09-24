@@ -103,7 +103,7 @@ pub(crate) fn try_build(
         Some(_) => Some(resolve_ext_output(out, target)?.module_name),
         None => None,
     };
-    let host = EmbedHost::resolve(target, cfg!(windows));
+    let host = EmbedHost::resolve(target);
     let (typed_hir, NeedsInterpreter(embedded)) = match ext {
         Some(_) => resolve_frontend(path, ext_module_name.as_deref())
             .map(|hir| (hir, NeedsInterpreter(false))),
@@ -922,10 +922,10 @@ mod ext_build_wiring_tests {
 }
 
 /// These tests run on macOS and Linux, whose fake interpreter layout they
-/// use. A Windows host embeds standard-library roots (#1286, D-253) and
-/// refuses a root outside the standard library with `I0403` (#1287), which
-/// `embed_build_windows_tests` below and
-/// `tests/issue_1286_windows_embedded_executable.rs` pin.
+/// use. A Windows host embeds every root the same way (#1286, #1296),
+/// which `embed_build_windows_tests` below,
+/// `tests/issue_1286_windows_embedded_executable.rs` and
+/// `tests/issue_1296_windows_locked_closure.rs` pin.
 #[cfg(all(test, not(windows)))]
 mod embed_build_wiring_tests {
     use super::*;
@@ -996,11 +996,11 @@ mod embed_build_windows_tests {
     use super::*;
     use pycc_scratch::ScratchDir;
 
-    /// An import outside the standard library on a Windows host is refused
-    /// with `I0403` (exit 1, #1287) before the embed tail: no probe, no
-    /// codegen, no sidecar.
+    /// A Windows import outside the standard library reaches the embed tail
+    /// (#1296): with no `pycc.lock` it is refused as on every host (exit 2,
+    /// naming `pycc lock`), before codegen and with no sidecar.
     #[test]
-    fn a_non_standard_library_import_is_refused_before_the_embed_tail() {
+    fn a_non_standard_library_import_without_a_lock_is_an_environment_failure() {
         let dir = ScratchDir::new("embed_windows_refused").expect("scratch");
         let src = dir.join("main.py");
         std::fs::write(&src, "import numpy\n").expect("write source");
@@ -1014,8 +1014,8 @@ mod embed_build_windows_tests {
             &no_python(),
             InteropCli::default(),
         )
-        .expect_err("refused on a Windows host");
-        assert_eq!(code, ExitCode::from(1));
+        .expect_err("no lock");
+        assert_eq!(code, ExitCode::from(2));
         assert!(!dir.join("main.o").exists(), "codegen never ran");
         assert!(!dir.join("app.pycc").exists());
     }
