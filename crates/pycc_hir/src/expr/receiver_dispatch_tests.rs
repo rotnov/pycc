@@ -55,6 +55,10 @@ fn the_derived_container_form_is_the_gate_off_node() {
         "xs = [1]\nxs.pop()\n",
         "d = {'a': 1}\nd.get('a', 3 * 2)\n",
         "s = {1}\ns.add(-4)\n",
+        // #1263: an attribute receiver.
+        "class B:\n    def __init__(self, xs: list[int], d: dict[str, int]) -> None:\n        self.xs = xs\n        self.d = d\nb = B([1], {'a': 1})\nb.xs.append(5)\n",
+        "class B:\n    def __init__(self, xs: list[int]) -> None:\n        self.xs = xs\nb = B([1])\nb.xs.pop()\n",
+        "class B:\n    def __init__(self, d: dict[str, int]) -> None:\n        self.d = d\nb = B({'a': 1})\nb.d.get('a', 0)\n",
     ];
     for call in calls {
         let gate_off = last_expr(call);
@@ -106,7 +110,6 @@ fn the_accessors_answer_none_off_their_shape() {
     let literal = HirExpr::IntLiteral(1);
     assert_eq!(literal.container_form(), None);
     assert_eq!(literal.method_receiver(), None);
-    assert_eq!(literal.bare_receiver_name(), None);
     assert!(literal.clone().method_call_parts_mut().is_none());
 
     // A receiver that is not a bare name, and an arity no container form has.
@@ -119,13 +122,22 @@ fn the_accessors_answer_none_off_their_shape() {
         args: Vec::new(),
     };
     assert_eq!(on_a_call.container_form(), None);
-    assert_eq!(on_a_call.bare_receiver_name(), None);
+    // #1263: `.add()` on an attribute has no container form (no `set`
+    // instance slot exists, so the fast path refuses it).
+    let add_on_an_attribute = HirExpr::MethodCall {
+        base: Box::new(HirExpr::AttrGet {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            attr: "s".to_string(),
+        }),
+        method: "add".to_string(),
+        args: vec![HirExpr::IntLiteral(1)],
+    };
+    assert_eq!(add_on_an_attribute.container_form(), None);
     let wrong_arity = HirExpr::MethodCall {
         base: Box::new(HirExpr::Name("d".to_string())),
         method: "get".to_string(),
         args: vec![HirExpr::IntLiteral(1)],
     };
     assert_eq!(wrong_arity.container_form(), None);
-    assert_eq!(wrong_arity.bare_receiver_name(), Some("d"));
     assert!(wrong_arity.clone().method_call_parts_mut().is_some());
 }

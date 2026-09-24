@@ -5075,7 +5075,7 @@ fn appending_a_matching_value_to_a_list_infers_none() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::IntLiteral(1)),
     };
     assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
@@ -5086,7 +5086,7 @@ fn appending_a_str_to_a_list_of_str_infers_none_proving_append_is_not_int_specif
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::StringLiteral("a".to_string())),
     };
     assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
@@ -5096,7 +5096,7 @@ fn appending_a_str_to_a_list_of_str_infers_none_proving_append_is_not_int_specif
 fn appending_to_an_undefined_name_is_rejected_as_not_defined() {
     let env = Environment::new();
     let expr = HirExpr::ListAppend {
-        list: "undefined".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("undefined".to_string()),
         value: Box::new(HirExpr::IntLiteral(1)),
     };
     let err = infer_expr(&env, &expr).unwrap_err();
@@ -5113,7 +5113,7 @@ fn appending_to_a_local_name_read_before_assignment_is_unbound_local() {
     // `Name` arm.
     let env = Environment::new();
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::IntLiteral(1)),
     };
     let err = infer_expr_in(&env, &["x"], &expr).unwrap_err();
@@ -5126,7 +5126,7 @@ fn appending_to_a_non_list_value_is_rejected_as_t0033() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::Int);
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::IntLiteral(1)),
     };
     let err = infer_expr(&env, &expr).unwrap_err();
@@ -5139,7 +5139,7 @@ fn appending_a_mismatched_value_type_is_rejected_as_t0021() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::StringLiteral("nope".to_string())),
     };
     let err = infer_expr(&env, &expr).unwrap_err();
@@ -5161,7 +5161,7 @@ fn appending_a_bool_to_a_list_of_int_is_accepted_since_bool_is_an_int_subtype() 
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::BoolLiteral(true)),
     };
     assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
@@ -5172,7 +5172,7 @@ fn appending_propagates_an_ill_typed_value_s_error() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
     let expr = HirExpr::ListAppend {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
         value: Box::new(HirExpr::Name("undefined".to_string())),
     };
     assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
@@ -5190,7 +5190,7 @@ fn popping_the_last_element_of_a_list_of_int_infers_int() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
     let expr = HirExpr::ListPop {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
     };
     assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
 }
@@ -5200,7 +5200,7 @@ fn popping_from_a_list_of_str_infers_str_proving_pop_is_not_int_specific() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
     let expr = HirExpr::ListPop {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
     };
     assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
 }
@@ -5209,7 +5209,7 @@ fn popping_from_a_list_of_str_infers_str_proving_pop_is_not_int_specific() {
 fn popping_from_an_undefined_name_is_rejected_as_not_defined() {
     let env = Environment::new();
     let expr = HirExpr::ListPop {
-        list: "undefined".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("undefined".to_string()),
     };
     let err = infer_expr(&env, &expr).unwrap_err();
     assert_eq!(err.code, "T0021");
@@ -5220,7 +5220,7 @@ fn popping_from_an_undefined_name_is_rejected_as_not_defined() {
 fn popping_from_a_local_name_read_before_assignment_is_unbound_local() {
     let env = Environment::new();
     let expr = HirExpr::ListPop {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
     };
     let err = infer_expr_in(&env, &["x"], &expr).unwrap_err();
     assert_eq!(err.code, "T0021");
@@ -5232,7 +5232,7 @@ fn popping_from_a_non_list_value_is_rejected_as_t0033() {
     let mut env = Environment::new();
     env.bind("x".to_string(), Ty::Int);
     let expr = HirExpr::ListPop {
-        list: "x".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("x".to_string()),
     };
     let err = infer_expr(&env, &expr).unwrap_err();
     assert_eq!(err.code, "T0033");
@@ -5244,7 +5244,7 @@ fn getting_a_str_key_with_a_matching_int_default_infers_int() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5259,7 +5259,7 @@ fn getting_a_bool_default_for_a_dict_of_int_values_is_accepted_since_bool_is_an_
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::BoolLiteral(true)),
     };
@@ -5270,7 +5270,7 @@ fn getting_a_bool_default_for_a_dict_of_int_values_is_accepted_since_bool_is_an_
 fn getting_from_an_undefined_dict_is_rejected_as_not_defined() {
     let env = Environment::new();
     let expr = HirExpr::DictGetOrDefault {
-        dict: "undefined".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("undefined".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5283,7 +5283,7 @@ fn getting_from_an_undefined_dict_is_rejected_as_not_defined() {
 fn getting_from_a_local_dict_read_before_assignment_is_unbound_local() {
     let env = Environment::new();
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5297,7 +5297,7 @@ fn getting_from_a_non_dict_value_is_rejected_as_t0033() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Int);
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5311,7 +5311,7 @@ fn getting_with_a_mismatched_key_type_is_rejected_as_t0021() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::IntLiteral(1)),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5325,7 +5325,7 @@ fn getting_with_a_mismatched_default_type_is_rejected_as_t0021() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::StringLiteral("nope".to_string())),
     };
@@ -5339,7 +5339,7 @@ fn getting_propagates_an_ill_typed_key_s_error() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::Name("undefined".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -5351,7 +5351,7 @@ fn getting_propagates_an_ill_typed_default_s_error() {
     let mut env = Environment::new();
     env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::Name("undefined".to_string())),
     };
@@ -5473,7 +5473,7 @@ fn list_pop_type_checks_correctly_when_an_unrelated_private_helper_forces_the_so
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "y".to_string(),
                 value: HirExpr::ListPop {
-                    list: "xs".to_string(),
+                    list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
                 },
             }),
             HirItem::Function {
@@ -5506,7 +5506,7 @@ fn dict_get_or_default_type_checks_correctly_when_an_unrelated_private_helper_fo
             HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "y".to_string(),
                 value: HirExpr::DictGetOrDefault {
-                    dict: "d".to_string(),
+                    dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                     key: Box::new(HirExpr::StringLiteral("a".to_string())),
                     default: Box::new(HirExpr::IntLiteral(0)),
                 },
@@ -5576,7 +5576,7 @@ fn list_pop_on_a_list_typed_parameter_infers_the_scalar_element_type_inside_an_u
                 HirStmt::Assign {
                     target: "y".to_string(),
                     value: HirExpr::ListPop {
-                        list: "xs".to_string(),
+                        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
                     },
                 },
                 HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
@@ -5617,7 +5617,7 @@ fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_reaches_the
                 HirStmt::Assign {
                     target: "y".to_string(),
                     value: HirExpr::DictGetOrDefault {
-                        dict: "d".to_string(),
+                        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                         key: Box::new(HirExpr::StringLiteral("a".to_string())),
                         default: Box::new(HirExpr::IntLiteral(0)),
                     },
@@ -13554,7 +13554,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_list_append_and_set_add() {
                 value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
             },
             HirStmt::ExprStmt(HirExpr::ListAppend {
-                list: "xs".to_string(),
+                list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
                 value: Box::new(HirExpr::Call {
                     callee: "identity".to_string(),
                     args: vec![HirExpr::IntLiteral(2)],
@@ -13599,7 +13599,7 @@ fn check_and_resolve_rewrites_generic_calls_inside_dict_get_or_default() {
             HirStmt::Assign {
                 target: "v".to_string(),
                 value: HirExpr::DictGetOrDefault {
-                    dict: "d".to_string(),
+                    dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                     key: Box::new(HirExpr::Call {
                         callee: "identity".to_string(),
                         args: vec![HirExpr::StringLiteral("a".to_string())],
@@ -13953,7 +13953,7 @@ fn check_and_resolve_leaves_a_list_pop_expression_untouched_as_a_structural_leaf
                 value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
             },
             HirStmt::ExprStmt(HirExpr::ListPop {
-                list: "xs".to_string(),
+                list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
             }),
             HirStmt::ExprStmt(HirExpr::Call {
                 callee: "identity".to_string(),
@@ -14186,12 +14186,12 @@ fn rewrite_generic_calls_in_expr_propagates_errors_from_every_recursive_position
     })]);
     // `ListAppend`/`SetAdd`.
     assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::ListAppend {
-        list: "xs".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
         value: Box::new(bad_generic_call()),
     })]);
     // `DictGetOrDefault`.
     assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(bad_generic_call()),
         default: Box::new(HirExpr::IntLiteral(0)),
     })]);
@@ -14861,7 +14861,7 @@ fn the_generic_recursion_gate_finds_a_self_call_in_every_expression_position() {
             step: Some(Box::new(self_call())),
         },
         HirExpr::ListAppend {
-            list: "xs".to_string(),
+            list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
             value: Box::new(self_call()),
         },
         HirExpr::SetAdd {
@@ -14869,12 +14869,12 @@ fn the_generic_recursion_gate_finds_a_self_call_in_every_expression_position() {
             value: Box::new(self_call()),
         },
         HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
             key: Box::new(self_call()),
             default: Box::new(benign()),
         },
         HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
             key: Box::new(benign()),
             default: Box::new(self_call()),
         },
@@ -14895,7 +14895,7 @@ fn the_generic_recursion_gate_accepts_a_body_with_no_generic_call_anywhere() {
         HirExpr::StringLiteral("s".to_string()),
         HirExpr::Name("x".to_string()),
         HirExpr::ListPop {
-            list: "xs".to_string(),
+            list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
         },
         HirExpr::Call {
             callee: "other".to_string(),
@@ -14930,7 +14930,7 @@ fn the_generic_recursion_gate_accepts_a_body_with_no_generic_call_anywhere() {
             step: None,
         },
         HirExpr::ListAppend {
-            list: "xs".to_string(),
+            list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
             value: Box::new(benign()),
         },
         HirExpr::SetAdd {
@@ -14938,7 +14938,7 @@ fn the_generic_recursion_gate_accepts_a_body_with_no_generic_call_anywhere() {
             value: Box::new(benign()),
         },
         HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
             key: Box::new(benign()),
             default: Box::new(benign()),
         },
@@ -16178,7 +16178,7 @@ fn solver_if_no_else_marks_opaque_body_only_binding_as_maybe() {
         body: vec![HirStmt::Assign {
             target: "y".to_string(),
             value: HirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                 key: Box::new(HirExpr::StringLiteral("a".to_string())),
                 default: Box::new(HirExpr::IntLiteral(0)),
             },
@@ -16227,7 +16227,7 @@ fn solver_if_with_else_marks_both_branch_opaque_binding_as_definite() {
     let opaque_get = || HirStmt::Assign {
         target: "y".to_string(),
         value: HirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
             key: Box::new(HirExpr::StringLiteral("a".to_string())),
             default: Box::new(HirExpr::IntLiteral(0)),
         },
@@ -16459,7 +16459,7 @@ fn solver_while_loop_marks_opaque_body_only_binding_as_maybe() {
         body: vec![HirStmt::Assign {
             target: "y".to_string(),
             value: HirExpr::DictGetOrDefault {
-                dict: "d".to_string(),
+                dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
                 key: Box::new(HirExpr::StringLiteral("a".to_string())),
                 default: Box::new(HirExpr::IntLiteral(0)),
             },
@@ -19787,7 +19787,7 @@ fn walrus_nested_inside_a_dict_get_or_default_key_on_the_solver_path_propagates_
     let mut constraints = SolverConstraints::default();
     let mut env = ConstraintEnvironment::empty(&["m"]);
     let body = vec![HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::NamedExpr {
             name: "m".to_string(),
             value: Box::new(HirExpr::Name("m".to_string())),

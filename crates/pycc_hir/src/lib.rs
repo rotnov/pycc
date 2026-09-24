@@ -306,6 +306,47 @@ impl UnaryOpKind {
     }
 }
 
+/// The receiver of a hand-recognized container method node
+/// (`HirExpr::ListAppend`, `HirExpr::ListPop`, `HirExpr::DictGetOrDefault`).
+///
+/// D-105 point 3 keyed these nodes by a bare variable name. #1263 (Part 2
+/// of #1218) adds an attribute read, so a `list[int]`/`dict[str, int]`
+/// instance slot (#1262) accepts `self.xs.append(v)`, `self.xs.pop()` and
+/// `self.d.get(k, default)`. The `Name` arm keeps the original shape, so
+/// every consumer's bare-name path is unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContainerReceiver {
+    /// `xs.append(v)`: the container is the variable `xs`.
+    Name(String),
+    /// `<base>.<attr>.append(v)`. Always holds an `HirExpr::AttrGet`;
+    /// `pycc_types` types it like any other attribute read and rejects a
+    /// non-container result with the node's own diagnostic.
+    Attr(Box<HirExpr>),
+}
+
+impl ContainerReceiver {
+    /// The attribute-read sub-expression of an `Attr` receiver; `None` for a
+    /// bare name. The expression walkers recurse through this, because an
+    /// attribute receiver is an ordinary sub-expression (it may itself hold
+    /// a walrus, a generic call, ...), while a bare name is a leaf they
+    /// treat exactly as before #1263.
+    #[must_use]
+    pub fn attr_expr(&self) -> Option<&HirExpr> {
+        match self {
+            ContainerReceiver::Name(_) => None,
+            ContainerReceiver::Attr(receiver) => Some(receiver),
+        }
+    }
+
+    /// [`ContainerReceiver::attr_expr`], mutably, for the rewriting passes.
+    pub fn attr_expr_mut(&mut self) -> Option<&mut HirExpr> {
+        match self {
+            ContainerReceiver::Name(_) => None,
+            ContainerReceiver::Attr(receiver) => Some(receiver),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     IntLiteral(i64),
@@ -463,8 +504,12 @@ pub enum HirExpr {
     /// both the side effect and the stored unit value are preserved. D-072
     /// remains narrower: it rejects using `print()` itself as a nested
     /// expression, not materializable `None` results such as `.append()`.
+    ///
+    /// `list` is a [`ContainerReceiver`]: a bare name (D-105 point 3) or,
+    /// since #1263 (Part 2 of #1218), an attribute read such as
+    /// `self.xs.append(v)`.
     ListAppend {
-        list: String,
+        list: ContainerReceiver,
         value: Box<HirExpr>,
     },
     /// `{k1: v1, k2: v2, ...}`. Key/value homogeneity and the `dict[str,
@@ -535,8 +580,10 @@ pub enum HirExpr {
     /// bound, so a genuine downstream diagnostic surfaces instead. The
     /// underlying gap -- no type term for `y` in this solver pass -- is
     /// unchanged; only its misleading consequence is fixed.
+    ///
+    /// `list` is a [`ContainerReceiver`] (#1263), as for `ListAppend`.
     ListPop {
-        list: String,
+        list: ContainerReceiver,
     },
     /// `dict.get(key, default)` (PR-12, D-119): exactly two arguments --
     /// returns `default` if `key` is absent from the dict, else the stored
@@ -551,8 +598,10 @@ pub enum HirExpr {
     /// pre-existing D-116 solver-binding caveat above verbatim (also
     /// `Ok(None)` in the solver, also scalar-valued, also no longer
     /// misleading downstream per issue #771/D-199).
+    ///
+    /// `dict` is a [`ContainerReceiver`] (#1263), as for `ListAppend`.
     DictGetOrDefault {
-        dict: String,
+        dict: ContainerReceiver,
         key: Box<HirExpr>,
         default: Box<HirExpr>,
     },

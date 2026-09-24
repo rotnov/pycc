@@ -754,12 +754,30 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        // #1263: an attribute receiver is an ordinary sub-expression,
+        // rewritten before the node's own arguments (CPython's order).
+        HirExpr::ListAppend { list, value } => {
+            for sub in list.attr_expr_mut().into_iter().chain([value.as_mut()]) {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::SetAdd { value, .. } => {
             rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
             infer_expr_in(env, local_names, expr)
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
-            for sub in [key.as_mut(), default.as_mut()] {
+        HirExpr::ListPop { list } => {
+            if let Some(sub) = list.attr_expr_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            for sub in dict
+                .attr_expr_mut()
+                .into_iter()
+                .chain([key.as_mut(), default.as_mut()])
+            {
                 rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
             }
             infer_expr_in(env, local_names, expr)
@@ -882,7 +900,6 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => infer_expr_in(env, local_names, expr),
     }
 }
@@ -1329,12 +1346,27 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 collect_generic_class_instantiations_from_expr(bound, out);
             }
         }
-        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+        HirExpr::ListAppend { list, value } => {
+            for sub in list.attr_expr().into_iter().chain([value.as_ref()]) {
+                collect_generic_class_instantiations_from_expr(sub, out);
+            }
+        }
+        HirExpr::SetAdd { value, .. } => {
             collect_generic_class_instantiations_from_expr(value, out);
         }
-        HirExpr::DictGetOrDefault { key, default, .. } => {
-            collect_generic_class_instantiations_from_expr(key, out);
-            collect_generic_class_instantiations_from_expr(default, out);
+        HirExpr::ListPop { list } => {
+            if let Some(sub) = list.attr_expr() {
+                collect_generic_class_instantiations_from_expr(sub, out);
+            }
+        }
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            for sub in dict
+                .attr_expr()
+                .into_iter()
+                .chain([key.as_ref(), default.as_ref()])
+            {
+                collect_generic_class_instantiations_from_expr(sub, out);
+            }
         }
         HirExpr::AttrGet { base, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
@@ -1366,7 +1398,6 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         | HirExpr::EmptyDict(_)
         | HirExpr::NoneLiteral
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. }
         | HirExpr::Super => {}
     }
 }

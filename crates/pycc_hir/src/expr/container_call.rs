@@ -13,11 +13,17 @@
 //! readings in a `HirExpr::ReceiverDispatchedCall` and lets the receiver's
 //! static type choose (issue #1188); everywhere else these fast paths run
 //! exactly as they always have.
+//!
+//! The receiver of `.append()`/`.pop()`/`.get()` is a bare name (D-105
+//! point 3) or, since #1263 (Part 2 of #1218), an attribute read such as
+//! `self.xs` -- see [`lower_container_receiver`]. `.add()` stays bare-name
+//! only: no `set` instance slot exists yet (#1262 admits `list[int]` and
+//! `dict[str, int]` slots only).
 
 use super::lower_expr;
 use crate::expr::keyword_bind::SignatureTable;
 use crate::int_boundary::check_boundary_literal;
-use crate::{HirExpr, ImportBinding, unsupported};
+use crate::{ContainerReceiver, HirExpr, ImportBinding, unsupported};
 use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
 
@@ -42,7 +48,14 @@ pub(super) fn lower_container_method_call(
             imports,
             signatures,
         )),
-        "pop" => Some(lower_list_pop(call, attr)),
+        "pop" => Some(lower_list_pop(
+            call,
+            attr,
+            in_function,
+            class_name,
+            imports,
+            signatures,
+        )),
         "get" => Some(lower_dict_get(
             call,
             attr,
@@ -63,6 +76,33 @@ pub(super) fn lower_container_method_call(
     }
 }
 
+/// Lowers the receiver of `.append()`/`.pop()`/`.get()` (#1263): a bare
+/// name keeps D-105's `Name` shape; anything else is lowered generically
+/// and admitted only when it is an attribute read (`HirExpr::AttrGet`,
+/// including a chain through a `@property`). A call, a subscript, and a
+/// `pycc_std`-resolved module constant such as `math.pi` (which lowers to
+/// `HirExpr::Name("math.pi")`, not `AttrGet`) keep a `C0001` refusal whose
+/// wording names both accepted forms. An attribute of a foreign module
+/// (`sys.argv`) *is* an `AttrGet` and is admitted here; `pycc_types`
+/// refuses it as `I0404` because its type is `object`.
+fn lower_container_receiver(
+    attr: &pycc_ast::ExprAttribute,
+    refusal: &str,
+    in_function: bool,
+    class_name: Option<&str>,
+    imports: &[ImportBinding],
+    signatures: &SignatureTable,
+) -> Result<ContainerReceiver, Diagnostic> {
+    if let Expr::Name(name) = attr.value.as_ref() {
+        return Ok(ContainerReceiver::Name(name.id.as_str().to_string()));
+    }
+    let receiver = lower_expr(&attr.value, in_function, class_name, imports, signatures)?;
+    if !matches!(receiver, HirExpr::AttrGet { .. }) {
+        return Err(unsupported(refusal, pycc_ast::expr_range(&attr.value)));
+    }
+    Ok(ContainerReceiver::Attr(Box::new(receiver)))
+}
+
 fn lower_list_append(
     call: &pycc_ast::ExprCall,
     attr: &pycc_ast::ExprAttribute,
@@ -71,12 +111,14 @@ fn lower_list_append(
     imports: &[ImportBinding],
     signatures: &SignatureTable,
 ) -> Result<HirExpr, Diagnostic> {
-    let Expr::Name(list_name) = attr.value.as_ref() else {
-        return Err(unsupported(
-            "`.append()` is only supported on a bare-name list so far",
-            pycc_ast::expr_range(&attr.value),
-        ));
-    };
+    let list = lower_container_receiver(
+        attr,
+        "`.append()` is only supported on a name or an instance attribute so far",
+        in_function,
+        class_name,
+        imports,
+        signatures,
+    )?;
     let [value] = &*call.arguments.args else {
         return Err(unsupported(
             format!(
@@ -90,7 +132,7 @@ fn lower_list_append(
     let value = lower_expr(value, in_function, class_name, imports, signatures)?;
     check_boundary_literal(&value, value_span, "`list.append()` value")?;
     Ok(HirExpr::ListAppend {
-        list: list_name.id.as_str().to_string(),
+        list,
         value: Box::new(value),
     })
 }
@@ -98,13 +140,19 @@ fn lower_list_append(
 fn lower_list_pop(
     call: &pycc_ast::ExprCall,
     attr: &pycc_ast::ExprAttribute,
+    in_function: bool,
+    class_name: Option<&str>,
+    imports: &[ImportBinding],
+    signatures: &SignatureTable,
 ) -> Result<HirExpr, Diagnostic> {
-    let Expr::Name(list_name) = attr.value.as_ref() else {
-        return Err(unsupported(
-            "`.pop()` is only supported on a bare-name list so far",
-            pycc_ast::expr_range(&attr.value),
-        ));
-    };
+    let list = lower_container_receiver(
+        attr,
+        "`.pop()` is only supported on a name or an instance attribute so far",
+        in_function,
+        class_name,
+        imports,
+        signatures,
+    )?;
     let [] = &*call.arguments.args else {
         return Err(unsupported(
             format!(
@@ -114,9 +162,7 @@ fn lower_list_pop(
             call.range,
         ));
     };
-    Ok(HirExpr::ListPop {
-        list: list_name.id.as_str().to_string(),
-    })
+    Ok(HirExpr::ListPop { list })
 }
 
 fn lower_dict_get(
@@ -127,12 +173,14 @@ fn lower_dict_get(
     imports: &[ImportBinding],
     signatures: &SignatureTable,
 ) -> Result<HirExpr, Diagnostic> {
-    let Expr::Name(dict_name) = attr.value.as_ref() else {
-        return Err(unsupported(
-            "`.get()` is only supported on a bare-name dict so far",
-            pycc_ast::expr_range(&attr.value),
-        ));
-    };
+    let dict = lower_container_receiver(
+        attr,
+        "`.get()` is only supported on a name or an instance attribute so far",
+        in_function,
+        class_name,
+        imports,
+        signatures,
+    )?;
     let [key, default] = &*call.arguments.args else {
         // Issue #890: this fast path cannot see the receiver's type, so
         // the message must not assert one. The receiver may be a real
@@ -155,7 +203,7 @@ fn lower_dict_get(
     let default = lower_expr(default, in_function, class_name, imports, signatures)?;
     check_boundary_literal(&default, default_span, "`dict.get()` default")?;
     Ok(HirExpr::DictGetOrDefault {
-        dict: dict_name.id.as_str().to_string(),
+        dict,
         key: Box::new(key),
         default: Box::new(default),
     })

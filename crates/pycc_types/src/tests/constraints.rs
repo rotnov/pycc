@@ -730,7 +730,7 @@ fn constraint_collection_list_pop_on_a_list_typed_bound_name_extracts_the_elemen
         ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListPop {
-        list: "xs".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
     };
 
     let term = collect_expr_constraints(
@@ -756,7 +756,7 @@ fn constraint_collection_list_pop_on_an_unbound_name_keeps_ok_none() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
-        list: "xs".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
     };
 
     let term = collect_expr_constraints(
@@ -785,7 +785,7 @@ fn constraint_collection_list_pop_on_a_non_list_bound_name_keeps_ok_none() {
         ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListPop {
-        list: "xs".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
     };
 
     let term = collect_expr_constraints(
@@ -815,7 +815,7 @@ fn constraint_collection_list_append_after_a_list_binding_still_keeps_ok_none() 
         ..ConstraintEnvironment::empty(&[])
     };
     let expr = HirExpr::ListAppend {
-        list: "xs".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
         value: Box::new(HirExpr::IntLiteral(2)),
     };
 
@@ -975,7 +975,7 @@ fn constraint_collection_treats_a_list_append_as_unconstrained_but_recurses_into
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListAppend {
-        list: "lst".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
         value: Box::new(HirExpr::IntLiteral(1)),
     };
 
@@ -999,7 +999,7 @@ fn constraint_collection_propagates_an_error_from_a_list_append_value() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::ListAppend {
-        list: "lst".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
         value: Box::new(HirExpr::Name("missing".to_string())),
     };
 
@@ -1030,7 +1030,7 @@ fn constraint_collection_treats_a_list_pop_as_unconstrained() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
-        list: "lst".to_string(),
+        list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
     };
 
     let term = collect_expr_constraints(
@@ -1054,7 +1054,7 @@ fn constraint_collection_treats_a_dict_get_or_default_as_unconstrained_but_recur
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -1079,7 +1079,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_key() {
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::Name("missing".to_string())),
         default: Box::new(HirExpr::IntLiteral(0)),
     };
@@ -1104,7 +1104,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_default(
     let mut binops = Vec::new();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
-        dict: "d".to_string(),
+        dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
         key: Box::new(HirExpr::StringLiteral("a".to_string())),
         default: Box::new(HirExpr::Name("missing".to_string())),
     };

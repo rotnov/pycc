@@ -3151,10 +3151,10 @@ fn emit_expr_unchecked<'ctx>(
             }
         }
         // `list.append(value)` (D-105 point 3). Same D-141 validation and
-        // identity-preserving storage as `ListLiteral` above. `list` is a plain
-        // variable name rather than a sub-expression (mirroring
-        // `HirExpr::ListAppend`), so it is read through
-        // `emit_list_name_read` instead of a recursive `emit_expr` call.
+        // identity-preserving storage as `ListLiteral` above. `list` is a
+        // plain variable name or (#1263) an attribute read, resolved through
+        // `emit_list_receiver` *before* `value` is evaluated -- CPython
+        // evaluates the bound method's receiver before its arguments.
         //
         // Python's `list.append` evaluates to `None`; the canonical `i8 0`
         // unit carrier this crate uses for every other `None`-valued
@@ -3162,7 +3162,7 @@ fn emit_expr_unchecked<'ctx>(
         // arm's own `Ty::None` case).
         MirExpr::ListAppend { list, value } => {
             let list_ptr =
-                emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
+                emit_list_receiver(context, builder, module, rt, user_functions, locals, list);
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let encoded = to_encoded_int(context, builder, scalar);
             let _ = build_untag_checked(builder, rt, encoded, "list_validate_appended");
@@ -3546,18 +3546,17 @@ fn emit_expr_unchecked<'ctx>(
         // end-to-end test.
         MirExpr::ListPop { list, .. } => {
             let list_ptr =
-                emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
+                emit_list_receiver(context, builder, module, rt, user_functions, locals, list);
             let encoded = build_int_list_pop(builder, rt, list_ptr);
             Scalar::Int(encoded)
         }
         // `dict.get(key, default)` (PR-12 Task 11, D-119): returns the
         // stored value, or `default` if `key` is absent -- never panics on
         // a missing key, unlike `MirExpr::DictGet`'s own `d[key]`. `dict`
-        // is a plain variable name (mirrors `HirExpr::DictGetOrDefault`),
-        // read through `emit_dict_name_read` exactly like
-        // `MirStmt::DictSet`'s own `dict` field; `key` and `default` are
-        // both arbitrary sub-expressions, evaluated left to right, matching
-        // Python's own left-to-right argument evaluation.
+        // is a plain variable name or (#1263) an attribute read, resolved
+        // through `emit_dict_receiver` first; `key` and `default` are both
+        // arbitrary sub-expressions, evaluated after it and left to right,
+        // matching Python's own receiver-then-arguments evaluation order.
         //
         // `key`'s `Scalar::Str` is extracted with **no**
         // `incref_if_str_duplicate` call, unlike `MirStmt::DictSet`'s own
@@ -3587,7 +3586,7 @@ fn emit_expr_unchecked<'ctx>(
             dict, key, default, ..
         } => {
             let dict_ptr =
-                emit_dict_name_read(context, builder, module, rt, user_functions, locals, dict);
+                emit_dict_receiver(context, builder, module, rt, user_functions, locals, dict);
             let key_scalar = emit_expr(context, builder, module, rt, user_functions, locals, key);
             let Scalar::Str(key_ptr) = key_scalar else {
                 panic!(
@@ -3987,11 +3986,61 @@ fn emit_expr_unchecked<'ctx>(
     }
 }
 
-/// Reads a `list[T]`-typed local by name. `MirExpr::ListAppend`'s `list` and
-/// `MirStmt::ForList`'s `list` both carry their list as a plain variable
-/// name rather than a sub-expression (mirroring `HirExpr::ListAppend`/
-/// `HirStmt::ForList`, D-105), so neither has a `MirExpr` to hand to
-/// `emit_expr` directly.
+/// Resolves the receiver of `MirExpr::ListAppend`/`ListPop` to its list
+/// pointer (#1263): a bare name through [`emit_list_name_read`], exactly as
+/// before, and an attribute receiver (a slot read or a `@property` getter
+/// call) through an ordinary `emit_expr`. Containers are leak-only (D-107,
+/// D-124), so the pointer an attribute read yields needs no retain or
+/// release around the mutation.
+#[allow(clippy::too_many_arguments)]
+fn emit_list_receiver<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    receiver: &pycc_mir::MirContainerReceiver,
+) -> PointerValue<'ctx> {
+    match receiver {
+        pycc_mir::MirContainerReceiver::Name(name) => {
+            emit_list_name_read(context, builder, module, rt, user_functions, locals, name)
+        }
+        pycc_mir::MirContainerReceiver::Attr(read) => {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, read);
+            expect_list_pointer(scalar, "an attribute container receiver")
+        }
+    }
+}
+
+/// The `dict` counterpart of [`emit_list_receiver`], for
+/// `MirExpr::DictGetOrDefault`'s receiver (#1263).
+#[allow(clippy::too_many_arguments)]
+fn emit_dict_receiver<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    receiver: &pycc_mir::MirContainerReceiver,
+) -> PointerValue<'ctx> {
+    match receiver {
+        pycc_mir::MirContainerReceiver::Name(name) => {
+            emit_dict_name_read(context, builder, module, rt, user_functions, locals, name)
+        }
+        pycc_mir::MirContainerReceiver::Attr(read) => {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, read);
+            expect_dict_pointer(scalar, "an attribute container receiver")
+        }
+    }
+}
+
+/// Reads a `list[T]`-typed local by name. A bare-name `MirExpr::ListAppend`/
+/// `ListPop` receiver and `MirStmt::ForList`'s `list` both carry their list
+/// as a plain variable name rather than a sub-expression (mirroring
+/// `HirExpr::ListAppend`/`HirStmt::ForList`, D-105), so neither has a
+/// `MirExpr` to hand to `emit_expr` directly.
 ///
 /// Routes the read through `emit_expr`'s own `Name` arm (via a synthetic
 /// `MirExpr::Name` carrying the slot's own recorded type) rather than
@@ -8373,7 +8422,7 @@ fn emit_stmt<'ctx>(
         // `d[k] = v` (PR-11 Task 5, D-123): insert-or-update --
         // `pycc_rt_dict_set` itself decides which, by whether `key`
         // already compares equal to a stored key. `dict` is read by name
-        // (mirrors `MirExpr::ListAppend`'s own `list` field), `key` crosses
+        // (like a bare-name `MirExpr::ListAppend` receiver), `key` crosses
         // in as a `Ty::Str` expression unchanged, exactly like
         // `MirExpr::DictGet`'s key, and `value` gets D-141 validation plus
         // identity-preserving encoded storage.

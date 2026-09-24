@@ -67,7 +67,7 @@ fn mir_expr_ty_covers_every_variant() {
     );
     assert_eq!(
         MirExpr::ListAppend {
-            list: "x".to_string(),
+            list: crate::MirContainerReceiver::Name("x".to_string()),
             value: Box::new(MirExpr::IntLiteral(1)),
         }
         .ty(),
@@ -115,7 +115,7 @@ fn mir_expr_ty_covers_every_variant() {
     );
     assert_eq!(
         MirExpr::ListPop {
-            list: "x".to_string(),
+            list: crate::MirContainerReceiver::Name("x".to_string()),
             ty: Ty::Int,
         }
         .ty(),
@@ -123,7 +123,7 @@ fn mir_expr_ty_covers_every_variant() {
     );
     assert_eq!(
         MirExpr::DictGetOrDefault {
-            dict: "d".to_string(),
+            dict: crate::MirContainerReceiver::Name("d".to_string()),
             key: Box::new(MirExpr::StringLiteral("a".to_string())),
             default: Box::new(MirExpr::IntLiteral(0)),
             ty: Ty::Int,

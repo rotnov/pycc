@@ -40,6 +40,31 @@ pub use pycc_hir::{BinOpKind, BoolOpKind, CmpOpKind, EXCEPTION_GROUP_TYPE_TAG, T
 /// cause a first-assignment-wins type drift in `bind_variable`).
 static MATCH_SUBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// The receiver of `MirExpr::ListAppend`/`ListPop`/`DictGetOrDefault`
+/// (mirrors `pycc_hir::ContainerReceiver`, #1263).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MirContainerReceiver {
+    /// A bare variable name, read through the codegen's name-read helpers
+    /// exactly as before #1263.
+    Name(String),
+    /// A lowered attribute read (`MirExpr::AttrGet`, or a property getter
+    /// call), whose value is the container pointer. Codegen evaluates it
+    /// before the node's own arguments, matching CPython's order.
+    Attr(Box<MirExpr>),
+}
+
+impl MirContainerReceiver {
+    /// The attribute read of an [`MirContainerReceiver::Attr`] receiver;
+    /// `None` for a bare name, which has no sub-expression to walk.
+    #[must_use]
+    pub fn attr_expr(&self) -> Option<&MirExpr> {
+        match self {
+            MirContainerReceiver::Name(_) => None,
+            MirContainerReceiver::Attr(receiver) => Some(receiver),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirExpr {
     IntLiteral(i64),
@@ -190,11 +215,11 @@ pub enum MirExpr {
         index: Box<MirExpr>,
     },
     /// `list.append(value)` (mirrors `HirExpr::ListAppend`, D-105). `list` is
-    /// carried as the plain variable name, exactly like `HirExpr::ListAppend`
-    /// itself -- there is no sub-expression to recursively lower for it, only
-    /// for `value`.
+    /// a [`MirContainerReceiver`]: the plain variable name, exactly like
+    /// `HirExpr::ListAppend` itself, or (#1263) a lowered attribute read,
+    /// evaluated before `value`.
     ListAppend {
-        list: String,
+        list: MirContainerReceiver,
         value: Box<MirExpr>,
     },
     /// `{k1: v1, k2: v2, ...}` (mirrors `HirExpr::DictLiteral`, PR-11 Task 4).
@@ -275,7 +300,7 @@ pub enum MirExpr {
     /// than hardcoded for the identical reason `ListLiteral`'s own `ty()`
     /// derives (D-105's own precedent).
     ListPop {
-        list: String,
+        list: MirContainerReceiver,
         ty: Ty,
     },
     /// `dict.get(key, default)` (mirrors `HirExpr::DictGetOrDefault`, PR-12,
@@ -283,7 +308,7 @@ pub enum MirExpr {
     /// the `dict` name's binding rather than hardcoded, for the same reason
     /// `ListPop` above derives its element type.
     DictGetOrDefault {
-        dict: String,
+        dict: MirContainerReceiver,
         key: Box<MirExpr>,
         default: Box<MirExpr>,
         ty: Ty,
@@ -840,8 +865,12 @@ impl MirExpr {
             | MirExpr::EmptyDict(_)
             | MirExpr::NoneLiteral
             | MirExpr::Name { .. }
-            | MirExpr::ListPop { .. }
             | MirExpr::NullInstance { .. } => {}
+            MirExpr::ListPop { list, .. } => {
+                if let Some(receiver) = list.attr_expr() {
+                    receiver.collect_named_expr_bindings(out);
+                }
+            }
             MirExpr::IntBoundary(inner) => inner.collect_named_expr_bindings(out),
             MirExpr::OptionalWrap(inner, _) => inner.collect_named_expr_bindings(out),
             // Issue #769 (Part 2 of #747): `OptionalUnwrap` wraps a single
@@ -887,7 +916,13 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
             }
-            MirExpr::ListAppend { value, .. } | MirExpr::SetAdd { value, .. } => {
+            MirExpr::ListAppend { list, value } => {
+                if let Some(receiver) = list.attr_expr() {
+                    receiver.collect_named_expr_bindings(out);
+                }
+                value.collect_named_expr_bindings(out);
+            }
+            MirExpr::SetAdd { value, .. } => {
                 value.collect_named_expr_bindings(out);
             }
             MirExpr::DictLiteral(pairs) => {
@@ -911,7 +946,12 @@ impl MirExpr {
                     bound.collect_named_expr_bindings(out);
                 }
             }
-            MirExpr::DictGetOrDefault { key, default, .. } => {
+            MirExpr::DictGetOrDefault {
+                dict, key, default, ..
+            } => {
+                if let Some(receiver) = dict.attr_expr() {
+                    receiver.collect_named_expr_bindings(out);
+                }
                 key.collect_named_expr_bindings(out);
                 default.collect_named_expr_bindings(out);
             }
@@ -1025,7 +1065,7 @@ pub enum MirStmt {
     },
     /// `d[k] = v` (mirrors `HirStmt::DictSet`, PR-11 Task 4/D-123). `dict` is
     /// carried as the plain variable name, exactly like `ForList`'s `list`
-    /// field and `ListAppend`'s `list` field -- there is no sub-expression to
+    /// field -- there is no sub-expression to
     /// recursively lower for it, only for `key`/`value`.
     DictSet {
         dict: String,
