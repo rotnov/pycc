@@ -208,14 +208,18 @@ fn assert_same(app: &Output, oracle: &Output) {
     assert_eq!(app.stdout, oracle.stdout);
 }
 
-/// `json` imports its `_json` accelerator and `random` imports `math` and
-/// `_random`, each from `lib-dynload` in a shared-configured CPython. pycc
-/// compiles `import math` natively, so `math` is reached through `random`.
+/// `_json` is imported directly, because `json` falls back to pure Python
+/// when its accelerator fails to load; `random` imports `math` and
+/// `_random` unconditionally. All three come from `lib-dynload` in a
+/// shared-configured CPython. pycc compiles `import math` natively, so
+/// `math` is reached through `random`.
 const STDLIB_PROGRAM: &str = "\
+import _json
 import json
 import random
 
 print(\"start\")
+print(str(_json.encode_basestring_ascii(\"h\u{e9}\")))
 print(str(json.dumps(2.5)))
 print(str(json.dumps(\"h\u{e9}\")))
 random.seed(7)
@@ -355,7 +359,8 @@ fn write_dist(site: &Path, name: &str, version: &str, files: &[(&str, &[u8])], r
 /// (requiring `tinydep`) records the interpreter, `lock --check` accepts
 /// it, and the static build bundles the closure. With the environment moved
 /// away, the executable imports both from `app.pycc/closure/` and prints
-/// what CPython 3.14.7 prints for the same line.
+/// CPython 3.14.7's first line; the second, the imported file, differs by
+/// design and is checked to lie in the closure.
 #[cfg(not(windows))]
 #[test]
 #[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
@@ -363,12 +368,12 @@ fn a_real_static_libpython_bundles_a_locked_closure_and_matches_cpython_3_14_7()
     let dir = ScratchDir::new("real_static_lock").expect("scratch");
     let dir = std::fs::canonicalize(&*dir).expect("canonicalize");
     let venv = dir.join("venv");
-    let status = Command::new(base_interpreter())
+    let created = Command::new(base_interpreter())
         .args(["-m", "venv", "--without-pip"])
         .arg(&venv)
-        .status()
+        .output()
         .expect("spawn the base interpreter");
-    assert!(status.success());
+    assert!(created.status.success(), "{}", stderr_of(&created));
     let python = venv.join("bin").join("python");
     let site = Command::new(&python)
         .args([

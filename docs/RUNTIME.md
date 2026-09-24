@@ -1242,7 +1242,7 @@ owns the contract; this is the runtime view of it.
   the executable starts CPython with no libpython in its sidecar or its
   dynamic dependencies, loads `_json`, `math`, `_random` and `_ssl` from the
   bundled `lib-dynload`, bundles a locked closure, and matches that
-  interpreter's output. A host whose `LIBPL` holds no genuine archive gets
+  interpreter's output (except the closure's file path). A host whose `LIBPL` holds no genuine archive gets
   the refusal instead.
 
 A module body that fails reports through one of two channels, and the exec
