@@ -260,6 +260,17 @@ extend <enum 'Color'>`, and when it is a member-less docstring-only enum
 -- a shape CPython does allow extending -- the message reads
 `cannot inherit from member-less enum class \`...\` -- ... not supported
 yet`.
+A class whose base names one of the eleven subclassable builtin types
+CPython accepts as a base (`int`, `float`, `str`, `bytes`, `bytearray`,
+`list`, `tuple`, `dict`, `set`, `frozenset`, `complex`) is rejected from the
+same `validate_bases` arm with `C0001` "class \`X\` inherits from builtin
+type \`T\` -- subclassing a builtin type is not supported yet" (Part 1 of
+issue #1283, #1318); that text is cascade-shaped, so later items naming the
+failed class are silenced as D-219 describes. Every other unresolved base
+name -- including `object`, the four types CPython refuses as a base
+(`bool`, `range`, `slice`, `memoryview`), and any of the eleven names that
+the module rebinds earlier through a type alias, an import, a `def`, or a
+top-level binding -- keeps the `unknown class` text.
 
 ## Quality bar
 

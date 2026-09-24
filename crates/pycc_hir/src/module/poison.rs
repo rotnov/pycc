@@ -225,6 +225,9 @@ const UNKNOWN_ANNOTATION_SUFFIX: &str = "` is not supported yet";
 const UNKNOWN_BASE_PREFIX: &str = "class `";
 const UNKNOWN_BASE_INFIX: &str = "` inherits from unknown class `";
 const UNKNOWN_BASE_SUFFIX: &str = "` -- base classes must be defined earlier in the same module";
+const BUILTIN_BASE_PREFIX: &str = "class `";
+const BUILTIN_BASE_INFIX: &str = "` inherits from builtin type `";
+const BUILTIN_BASE_SUFFIX: &str = "` -- subclassing a builtin type is not supported yet";
 const BARE_CONTAINER_PREFIX: &str = "a bare `";
 const BARE_CONTAINER_INFIX: &str =
     "` type annotation is not supported yet -- write the parameterized form, e.g. `";
@@ -232,8 +235,9 @@ const BARE_CONTAINER_SUFFIX: &str = "`";
 
 /// The `C0001` message for a bare annotation name that is neither a known
 /// class nor a type alias (`func::annotation_to_ty`'s bare-name arm). The
-/// only producer of this message; `cascade_name` parses it back, and a unit
-/// test round-trips the two so the wording cannot drift apart.
+/// only producer of this message; `cascade_name` parses it back, and
+/// `module::tests::cascade_classifier` round-trips every cascade-shaped
+/// message builder so the wording cannot drift apart.
 pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
     format!("{UNKNOWN_ANNOTATION_PREFIX}{name}{UNKNOWN_ANNOTATION_SUFFIX}")
 }
@@ -268,10 +272,26 @@ pub(crate) fn unknown_base_message(class_name: &str, base_name: &str) -> String 
     format!("{UNKNOWN_BASE_PREFIX}{class_name}{UNKNOWN_BASE_INFIX}{base_name}{UNKNOWN_BASE_SUFFIX}")
 }
 
+/// The `C0001` message for a base class that names a CPython builtin type
+/// the module neither defines nor rebinds (`class::mro::validate_bases`,
+/// Part 1 of #1283, #1318): `class fzset(frozenset):` is valid Python that
+/// this version cannot compile yet, so the unknown-class wording would name
+/// the wrong gap. The only producer of this message.
+///
+/// Cascade-shaped like the unknown-base message, and parsed back by
+/// [`cascade_name`] for the same reason [`bare_container_annotation_message`]
+/// is: a module whose own `class frozenset:` fails to lower poisons the name
+/// `frozenset`, and a later `class F(frozenset)` must then be suppressed as
+/// a cascade instead of being reported as a builtin-type gap it is not.
+pub(crate) fn builtin_base_message(class_name: &str, base_name: &str) -> String {
+    format!("{BUILTIN_BASE_PREFIX}{class_name}{BUILTIN_BASE_INFIX}{base_name}{BUILTIN_BASE_SUFFIX}")
+}
+
 /// Classifies a failed item's diagnostic (D-219, P2): `Some(name)` when it
-/// is one of the three cascade-shaped `C0001`s -- the bare-name annotation
-/// message naming `name`, the unknown-base message whose base is `name`, or
-/// the bare-container message naming `name` -- and `None` for every other
+/// is one of the four cascade-shaped `C0001`s -- the bare-name annotation
+/// message naming `name`, the unknown-base message whose base is `name`,
+/// the bare-container message naming `name`, or the builtin-base message
+/// whose base is `name` -- and `None` for every other
 /// diagnostic. Only `lower_module` decides whether `name` is actually
 /// poisoned; a `Some` for an un-poisoned name is an ordinary, reported gap.
 pub(crate) fn cascade_name(diagnostic: &Diagnostic) -> Option<&str> {
@@ -281,6 +301,7 @@ pub(crate) fn cascade_name(diagnostic: &Diagnostic) -> Option<&str> {
     unknown_annotation_name(&diagnostic.message)
         .or_else(|| unknown_base_name(&diagnostic.message))
         .or_else(|| bare_container_name(&diagnostic.message))
+        .or_else(|| builtin_base_name(&diagnostic.message))
 }
 
 fn unknown_annotation_name(message: &str) -> Option<&str> {
@@ -301,4 +322,11 @@ fn unknown_base_name(message: &str) -> Option<&str> {
         .strip_prefix(UNKNOWN_BASE_PREFIX)?
         .split_once(UNKNOWN_BASE_INFIX)?;
     base.strip_suffix(UNKNOWN_BASE_SUFFIX)
+}
+
+fn builtin_base_name(message: &str) -> Option<&str> {
+    let (_, base) = message
+        .strip_prefix(BUILTIN_BASE_PREFIX)?
+        .split_once(BUILTIN_BASE_INFIX)?;
+    base.strip_suffix(BUILTIN_BASE_SUFFIX)
 }

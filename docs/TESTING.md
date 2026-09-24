@@ -903,7 +903,7 @@ edit was made:
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
 | `C0001` attribute-form base class | 1 | #886 (v0.4) |
-| `C0001` class inherits from `frozenset` | 1 | #1283 |
+| `C0001` class inherits from builtin type `frozenset` | 1 | #1319 (Part 2 of #1283) carries support; #1318 (Part 1) only made the message honest -- it now names the builtin type instead of calling `frozenset` an unknown class -- and #1283 stays open. `fzset` is defined only in `lark/utils.py` (line 319) and used in `lark/parsers/grammar_analysis.py` and `lark/parsers/lalr_analysis.py`. The same `pycc build <module> -o <out>.abi3.so --ext` command (release builds of `main` at `d59fde73` and of the #1318 change on top of it, on the unedited subject module from the local 1.3.1 archive) reports 13 errors at both; only this line's text differs |
 | `C0001` class attribute initialised with a non-literal | 1 | #1284 |
 | `T0002` `Any` outside a declared interop boundary | 2 | none: internal `Any` use inside a dependency, refused by design; unlike the subject's own `-> Any` (#1285) it is not at the timed boundary |
 | `T0001` unannotated public parameter | 2 | annotation-fixable, but outside D-252's scope (a closure module) |

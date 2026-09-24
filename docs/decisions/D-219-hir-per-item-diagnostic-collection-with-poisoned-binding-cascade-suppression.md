@@ -131,3 +131,10 @@ status: accepted
     pins an import gap, a rejected class, two silent cascades, and a later
     reported gap. Part 3 (#868) regenerates nothing here: with HIR failing,
     the type checker still does not run.
+- Amendment (2026-09-25): the cascade-shaped `C0001` inventory named above
+  as two is now four, and `cascade_name` parses all four: D-228 added the
+  bare-container annotation message, and Part 1 of #1283 (#1318) added the
+  builtin-type base message ("class X inherits from builtin type T --
+  subclassing a builtin type is not supported yet"), so a class whose base is
+  a subclassable builtin type poisons its name exactly as an unknown base
+  does.

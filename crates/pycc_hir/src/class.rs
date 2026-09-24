@@ -981,7 +981,15 @@ pub(crate) fn lower_class(
             def.range,
         ));
     }
-    validate_bases(&class_name, &bases, defined_classes, def.range.into())?;
+    validate_bases(
+        &class_name,
+        &bases,
+        defined_classes,
+        aliases,
+        imports,
+        module_items,
+        def.range.into(),
+    )?;
     // #380 (PR-20): protocol inheritance detection. A class that inherits
     // from a user-defined protocol (`class Q(P):` where `P` is a protocol)
     // is itself a protocol. This check runs after the `Protocol` marker
