@@ -273,7 +273,8 @@ fn a_later_conflicting_producer_is_an_element_mismatch() {
     );
 }
 
-/// A reset of another shape is not rewritten and stays an untyped literal.
+/// The slot resolves, but a reset of another shape is not rewritten, so the
+/// reset itself (not the slot gate) is the `T0003`.
 #[test]
 fn a_shape_mismatched_reset_is_refused() {
     let text = fails(
@@ -284,7 +285,11 @@ fn a_shape_mismatched_reset_is_refused() {
              def clear(self) -> None:\n        self.xs = {{}}\n\n\nprint(len(B().xs))\n"
         ),
     );
-    assert!(text.contains("error[T0003]"), "{text}");
+    assert!(
+        text.contains("error[T0003]: an empty dict literal has no inferable key/value types here"),
+        "{text}"
+    );
+    assert!(!text.contains("`self.xs` in class `B`"), "{text}");
 }
 
 /// A producer after `self` is rebound to another class does not yield a
