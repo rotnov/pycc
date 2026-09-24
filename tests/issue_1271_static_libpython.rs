@@ -9,7 +9,8 @@
 //! disk) and the static probe (`# pycc-static-probe`) with a `LIBPL` the
 //! test controls. A build that gets past every check fails in the compiler
 //! on the fake prefix's one-line `Python.h`, after the sidecar is written.
-//! `cfg(not(windows))`: an embedded build refuses a Windows host (#1226).
+//! `cfg(not(windows))`: a static libpython is not available on a Windows host
+//! (D-251; D-253 refuses it before the probe).
 
 #![cfg_attr(windows, allow(dead_code, unused_imports))]
 

@@ -636,13 +636,13 @@ fn check_raise_operand(
 /// `pycc_hir::exception::shadowed_builtin_exception_name`'s
 /// all-or-nothing gate) still behaves correctly for them.
 ///
-/// For the 16-member `OSError` family (Part 2 of #543, #739) this is *not*
-/// enough. Those names have no name-based fallback -- deliberately, so that
+/// For every builtin past the flat seven (Part 2 of #543, #739 introduced
+/// the first) this is *not* enough. Those names have no name-based fallback -- deliberately, so that
 /// `pycc_mir::exception::handler_type_tags`'s MRO-containment scan never
 /// needs special-casing -- so a name outside the flat seven must also be
 /// *actually present* in `env.classes` to count as unshadowed. Without this
 /// conjunct, a module shadowing one family member (e.g. `class OSError:
-/// pass`) at top level withholds seeding for *all* 23 names (the shadow
+/// pass`) at top level withholds seeding for *every* builtin exception name (the shadow
 /// gate is all-or-nothing), and a separate, unrelated `except
 /// FileNotFoundError:` would then reach `handler_type_tags`'s `.expect()`
 /// and panic instead of producing the `T0021` this function's `false` result

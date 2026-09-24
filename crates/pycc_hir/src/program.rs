@@ -15,9 +15,9 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES,
-    builtin_exception_class_defs, builtin_exception_init_item, is_builtin_exception_class,
-    unsupported,
+    FIRST_USER_EXCEPTION_TYPE_TAG, ForeignImportSite, HirModule, ImportBinding,
+    MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs, builtin_exception_init_item,
+    is_builtin_exception_class, unsupported,
 };
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
@@ -42,7 +42,7 @@ pub struct LinkInput {
 /// set is appended at the back iff any input seeded, keeping the
 /// single-module invariant (`seeded_builtin_exception_classes` identifies
 /// the trailing entries exactly). That invariant also requires that no
-/// linked module binds one of the 26 names at its top level: un-seeding
+/// linked module binds a builtin exception name at its top level: un-seeding
 /// the program would leave the seeded module's `class MyError(ValueError)`
 /// resolving a base the table no longer holds, and keeping the seed would
 /// let the shadowing module's definition collide with the synthetic one --
@@ -103,7 +103,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     // rejected as well. Same-module shadowing (`import json` then `def
     // json()` in one file) is deliberately excluded: `lower_module`
     // already reports it (`I0404`/`T0023`) with a more specific message.
-    let foreign_locals: Vec<(&str, usize)> = inputs
+    let foreign_locals: Vec<(&str, &str, Span, usize)> = inputs
         .iter()
         .enumerate()
         .flat_map(|(index, input)| {
@@ -113,16 +113,48 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
                 .imports
                 .iter()
                 .filter_map(move |binding| match binding {
-                    ImportBinding::Foreign { local_name, .. } => Some((local_name.as_str(), index)),
+                    ImportBinding::Foreign {
+                        local_name,
+                        module_path,
+                        span,
+                        ..
+                    } => Some((local_name.as_str(), module_path.as_str(), *span, index)),
                     _ => None,
                 })
         })
         .collect();
+    // #1291: with `import X as Y` one foreign local name no longer implies
+    // one module, so two modules binding the same name to different
+    // CPython modules would share one global slot. Refused at the later
+    // module's import. An identical pair across modules stays admitted:
+    // both store the same module object.
+    for (name, path, span, index) in &foreign_locals {
+        if let Some((_, owner_path, _, owner)) =
+            foreign_locals
+                .iter()
+                .find(|(other_name, other_path, _, owner)| {
+                    other_name == name && other_path != path && owner < index
+                })
+        {
+            return Err(vec![(
+                *index,
+                unsupported(
+                    format!(
+                        "module `{}` binds `{name}` to the CPython module `{path}`, which `{}` \
+                         binds to `{owner_path}`; shadowing a foreign import across modules is \
+                         not supported yet",
+                        inputs[*index].display_path, inputs[*owner].display_path
+                    ),
+                    span_range(*span),
+                ),
+            )]);
+        }
+    }
     for (index, input) in inputs.iter().enumerate() {
         for (name, span) in &input.module.definition_spans {
-            if let Some((_, owner)) = foreign_locals
+            if let Some((_, _, _, owner)) = foreign_locals
                 .iter()
-                .find(|(local_name, owner)| local_name == name && *owner != index)
+                .find(|(local_name, _, _, owner)| local_name == name && *owner != index)
             {
                 return Err(vec![(
                     index,
@@ -217,7 +249,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
         for name in own {
             owners.insert(name.to_string(), index);
         }
-        // Part 1 of #1026: `ImportBinding::Foreign::item_index` is the
+        // Part 1 of #1026: a `ForeignImportSite::Item` index is the
         // position of the import in its *own* module's item list, so it
         // has to be rebased onto the concatenated program the moment that
         // list is appended after the preceding modules' items. Captured
@@ -230,12 +262,17 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index,
+                site,
                 span,
             } => ImportBinding::Foreign {
                 local_name,
                 module_path,
-                item_index: item_index + item_offset,
+                // A block import runs inside its own statement, so it has
+                // no item position to rebase (#1291).
+                site: match site {
+                    ForeignImportSite::Item(index) => ForeignImportSite::Item(index + item_offset),
+                    ForeignImportSite::Block => ForeignImportSite::Block,
+                },
                 span,
             },
             other => other,
@@ -294,7 +331,7 @@ pub fn finalize(mut hir: HirModule) -> Result<HirModule, Vec<Diagnostic>> {
         //
         // A class is raisable when its MRO reaches one of the seeded builtin
         // exception classes. The seed's shadow gate guarantees no user class
-        // carries one of the 26 names, so `is_builtin_exception_class` on
+        // carries a builtin exception name, so `is_builtin_exception_class` on
         // the entry's own name identifies the synthetic entries exactly and
         // this loop never mistakes a user class named `Exception` for the
         // builtin one.

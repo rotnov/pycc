@@ -420,3 +420,21 @@ mod macos_relative_tests;
 
 #[path = "static_lock_tests.rs"]
 mod static_lock_tests;
+
+/// A static libpython request on Windows is refused before the interpreter
+/// is probed or the locked closure planned (D-253): the interpreter here
+/// does not exist.
+#[test]
+fn a_windows_static_request_is_refused_before_the_probe() {
+    let env = Env::new("embed_lock_windows_static", "import json\n");
+    env.lock();
+    env.previous_sidecar();
+    let missing = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python")
+        .with_link(LibpythonLink::Static);
+    let err = env.embed_on(&missing, EmbedPlatform::Windows).unwrap_err();
+    assert_eq!(err, windows::STATIC_REFUSAL);
+    env.assert_previous_sidecar_intact();
+}
+
+#[path = "windows_lock_tests.rs"]
+mod windows_lock_tests;

@@ -1,4 +1,4 @@
-import os as o
+import os.path as o
 class A:
     async def m(self) -> None: pass
 class B(A):

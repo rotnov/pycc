@@ -7,7 +7,7 @@
 //! arguments themselves are pure layout rules in `layout.rs`.
 
 use super::EmbedProbe;
-use super::layout;
+use super::layout::{self, EmbedPlatform};
 use super::native::read_head;
 use std::path::{Path, PathBuf};
 
@@ -142,7 +142,11 @@ pub(crate) fn check_archive(
 }
 
 /// The file whose sha256 is `pycc.lock`'s `libpython-sha256` for the
-/// interpreter `probe` (Part 2 of #1227, #1272): its shared library when
+/// interpreter `probe` (Part 2 of #1227, #1272). On a Windows `platform`
+/// (#1296) it is always the interpreter's DLL
+/// ([`layout::windows_interpreter_dll`], `python314.dll`), whatever
+/// `Py_ENABLE_SHARED` reports, and the archive is never asked for.
+/// Elsewhere it is its shared library when
 /// it is configured with one ([`super::check_shared`]), otherwise its
 /// `LIBPL` archive, which `archive` finds and checks. The arm follows the
 /// configuration, never which files exist, so `pycc lock` and either kind
@@ -155,12 +159,18 @@ pub(crate) fn check_archive(
 /// own refusal names.
 pub(crate) fn identity_library(
     probe: &EmbedProbe,
+    platform: EmbedPlatform,
     archive: impl FnOnce() -> Result<PathBuf, String>,
 ) -> Result<PathBuf, String> {
-    if !super::check_shared(probe.enable_shared, &probe.framework) {
+    let windows = platform == EmbedPlatform::Windows;
+    if !windows && !super::check_shared(probe.enable_shared, &probe.framework) {
         return archive();
     }
-    let library = layout::source_library(probe);
+    let library = if windows {
+        layout::windows_interpreter_dll(probe)
+    } else {
+        layout::source_library(probe)
+    };
     if library.is_file() {
         return Ok(library);
     }

@@ -22,6 +22,7 @@ pub(crate) mod native_linux;
 pub(crate) mod sha256;
 pub(crate) mod static_lib;
 pub(crate) mod stdlib_roots;
+mod windows;
 
 use crate::ext_build;
 use crate::lock::probe::LockProbe;
@@ -32,6 +33,8 @@ pub(crate) use native_linux::LinuxEnv;
 use static_lib::StaticProbe;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+pub(crate) use windows::{StubLink, stub_link_args};
 
 /// The launcher's C source, compiled into every embedded executable.
 pub(crate) const LAUNCHER_C: &str = include_str!("pycc_embed_launcher.c");
@@ -124,10 +127,12 @@ impl EmbedToolchain {
     }
 
     /// The production constructor: `PYCC_PYTHON` names the interpreter to
-    /// bundle, default `python3.14` (not `--ext`'s `python3`, because an
-    /// embedded build pins the 3.14 line). Reads the variable only.
+    /// bundle, default [`default_interpreter`] for the build host (not
+    /// `--ext`'s `python3`, because an embedded build pins the 3.14 line).
+    /// Reads the variable only.
     pub(crate) fn from_env() -> Self {
-        Self::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| OsString::from("python3.14")))
+        let default = default_interpreter(EmbedPlatform::HOST);
+        Self::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| OsString::from(default)))
     }
 
     /// The same toolchain, linking libpython as `link` says (D-251).
@@ -196,17 +201,24 @@ impl EmbedToolchain {
         }
     }
 
-    /// Probes the interpreter and checks it can be bundled the way this
-    /// toolchain links it, or returns an environment-failure message for
-    /// exit 2.
-    pub(crate) fn probe(&self) -> Result<EmbedProbe, String> {
-        self.probe_as(self.link)
+    /// Probes the interpreter and checks it can be bundled for `platform`
+    /// the way this toolchain links it, or returns an environment-failure
+    /// message for exit 2.
+    pub(crate) fn probe(&self, platform: EmbedPlatform) -> Result<EmbedProbe, String> {
+        self.probe_as(self.link, platform)
     }
 
     /// [`Self::probe`] for an executable that links libpython as `link`
     /// says: a static link needs no shared library. `pycc lock` probes as
-    /// static, because a lock serves either kind of build (#1272).
-    pub(crate) fn probe_as(&self, link: LibpythonLink) -> Result<EmbedProbe, String> {
+    /// static, because a lock serves either kind of build (#1272). On
+    /// Windows the shared-library checks are replaced by
+    /// [`windows::check_windows_layout`] (D-253): Windows CPython always
+    /// ships a DLL, which it does not report as `Py_ENABLE_SHARED`.
+    pub(crate) fn probe_as(
+        &self,
+        link: LibpythonLink,
+        platform: EmbedPlatform,
+    ) -> Result<EmbedProbe, String> {
         let probe = match &self.probe_override {
             Some(probe) => probe.clone(),
             None => self.run_probe()?,
@@ -220,7 +232,8 @@ impl EmbedToolchain {
                 probe.describe()
             ));
         }
-        let shared = link == LibpythonLink::Shared;
+        let windows = platform == EmbedPlatform::Windows;
+        let shared = link == LibpythonLink::Shared && !windows;
         if shared && !check_shared(probe.enable_shared, &probe.framework) {
             return Err(format!(
                 "the embed interpreter `{name}` has no shared libpython ({}); an embedded \
@@ -237,15 +250,22 @@ impl EmbedToolchain {
                 probe.include.display()
             ));
         }
+        if windows {
+            windows::check_windows_layout(&probe, &name)?;
+        }
         // A static build links the archive the static probe checks instead.
-        let library = layout::source_library(&probe);
-        if shared && !library.is_file() {
-            return Err(format!(
-                "the embed interpreter `{name}` reports a shared library `{}` that does not \
-                 exist ({})",
-                library.display(),
-                probe.describe()
-            ));
+        // Windows never computes it: its `LIBDIR` is the import-library
+        // directory, and `check_windows_layout` checked the DLL instead.
+        if shared {
+            let library = layout::source_library(&probe);
+            if !library.is_file() {
+                return Err(format!(
+                    "the embed interpreter `{name}` reports a shared library `{}` that does \
+                     not exist ({})",
+                    library.display(),
+                    probe.describe()
+                ));
+            }
         }
         if !probe.stdlib.is_dir() {
             return Err(format!(
@@ -266,11 +286,15 @@ impl EmbedToolchain {
     }
 
     /// The file whose sha256 `pycc lock` records as `libpython-sha256` for
-    /// the interpreter `probe` ([`static_lib::identity_library`]). The
-    /// static probe runs only for an interpreter without a shared
-    /// libpython.
-    pub(crate) fn identity_library(&self, probe: &EmbedProbe) -> Result<PathBuf, String> {
-        static_lib::identity_library(probe, || {
+    /// the interpreter `probe` on `platform`
+    /// ([`static_lib::identity_library`]). The static probe runs only for
+    /// a POSIX interpreter without a shared libpython.
+    pub(crate) fn identity_library(
+        &self,
+        probe: &EmbedProbe,
+        platform: EmbedPlatform,
+    ) -> Result<PathBuf, String> {
+        static_lib::identity_library(probe, platform, || {
             let usage = static_lib::ArchiveUse::Identify {
                 described: probe.describe(),
             };
@@ -308,7 +332,8 @@ impl EmbedToolchain {
                 format!(
                     "could not run the embed interpreter `{name}`: {e}; a build that imports \
                      a CPython standard-library module bundles CPython 3.14 -- set \
-                     PYCC_PYTHON to name one (default `python3.14`)"
+                     PYCC_PYTHON to name one (default `{}`)",
+                    default_interpreter(EmbedPlatform::HOST)
                 )
             })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -373,6 +398,15 @@ pub(crate) fn check_embed_version(version: (u32, u32, u32)) -> Result<(), String
     ))
 }
 
+/// The interpreter an embedded build bundles when `PYCC_PYTHON` is unset:
+/// `python3.14.exe` on Windows (D-253), `python3.14` elsewhere.
+pub(crate) fn default_interpreter(platform: EmbedPlatform) -> &'static str {
+    match platform {
+        EmbedPlatform::Windows => "python3.14.exe",
+        EmbedPlatform::MacOs | EmbedPlatform::Linux => "python3.14",
+    }
+}
+
 /// Whether the interpreter has a shared libpython. Measured rule: a
 /// framework build is shared even though it reports `Py_ENABLE_SHARED=0`.
 pub(crate) fn check_shared(enable_shared: bool, framework: &str) -> bool {
@@ -382,11 +416,19 @@ pub(crate) fn check_shared(enable_shared: bool, framework: &str) -> bool {
 /// What `try_build`'s single link site adds for an embedded executable.
 #[derive(Debug)]
 pub(crate) struct EmbedPlan {
-    /// `-I <include> -fPIC <shim> <launcher>`, before the pycc object.
+    /// `-I <include>`, then [`layout::pic_args`] (`-fPIC`, none on
+    /// Windows), then `<shim> <launcher>`, before the pycc object.
     pub(crate) compile_args: Vec<OsString>,
     /// The bundled library by path (or, for a static build, the archive
-    /// and its system libraries), then the rpath, after the runtime.
+    /// and its system libraries), then the rpath, after the runtime. On
+    /// Windows: `-shared`, the import library and `/NOIMPLIB` (D-253).
     pub(crate) link_args: Vec<OsString>,
+    /// What the shared link writes instead of `OUT`: on Windows the program
+    /// DLL `OUT.pycc\pycc_program.dll` (D-253); `None` elsewhere.
+    pub(crate) artifact: Option<PathBuf>,
+    /// On Windows, the stub `OUT` linked after the program DLL (D-253).
+    #[cfg_attr(not(any(windows, test)), expect(dead_code))]
+    pub(crate) stub: Option<windows::StubLink>,
 }
 
 /// Prepares everything an embedded build links, in order: the sidecar
@@ -403,6 +445,12 @@ pub(crate) struct EmbedPlan {
 /// no libpython, links the archive whole in the bundled library's place,
 /// and checks a consumed lock section's `libpython-sha256` against the
 /// file that identifies the interpreter (#1272), not the archive it links.
+///
+/// A Windows build (D-253) refuses a static libpython before the probe,
+/// refuses a locked closure that holds a PE image once the payload is
+/// planned (#1296, until #1297 scans them), compiles without `-fPIC`,
+/// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
+/// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
 pub(crate) fn plan_embed(
     out: &Path,
     entry: &Path,
@@ -416,7 +464,8 @@ pub(crate) fn plan_embed(
     let parent = layout::sidecar_parent(out);
     let replace_existing = bundle::check_existing(&parent.join(&sidecar_name))?;
     let check = crate::lock::build::plan_closure(entry, typed_hir, host)?;
-    let probe = toolchain.probe()?;
+    windows::check_windows_request(platform, toolchain.link)?;
+    let probe = toolchain.probe(platform)?;
     let static_lib = match toolchain.link {
         LibpythonLink::Static => Some(toolchain.static_probe()?),
         LibpythonLink::Shared => None,
@@ -425,10 +474,11 @@ pub(crate) fn plan_embed(
         Some(check) => {
             let lock_probe = toolchain.lock_probe()?;
             crate::lock::build::verify_interpreter(check, &probe, &lock_probe)?;
-            Some(crate::lock::build::payload(check, &lock_probe)?)
+            Some(crate::lock::build::payload(check, &lock_probe, platform)?)
         }
         None => None,
     };
+    windows::check_closure_images(platform, locked.as_ref())?;
     let natives = plan_natives(
         platform,
         &probe,
@@ -467,10 +517,13 @@ pub(crate) fn plan_embed(
         &natives,
         static_lib.as_ref(),
     )?;
-    let mut compile_args = vec![OsString::from("-I"), probe.include.into_os_string()];
-    compile_args.extend([OsString::from("-fPIC"), shim.into(), launcher.into()]);
+    let mut compile_args = vec![OsString::from("-I"), probe.include.clone().into_os_string()];
+    compile_args.extend(layout::pic_args(platform));
+    compile_args.extend([shim.into(), launcher.into()]);
+    let is_windows = platform == EmbedPlatform::Windows;
     let mut link_args = match &static_lib {
         Some(archive) => layout::static_link_args(platform, &archive.archive, &archive.libs),
+        None if is_windows => windows::program_link_args(&probe),
         None => vec![library.into_os_string()],
     };
     link_args.extend(layout::rpath_args(platform, &sidecar_name));
@@ -481,9 +534,16 @@ pub(crate) fn plan_embed(
         .map(|(name, _)| name)
         .collect();
     link_args.extend(layout::preload_args(platform, &lib_dir, &names));
+    let sidecar = parent.join(&sidecar_name);
+    let artifact = is_windows.then(|| sidecar.join(layout::PROGRAM_DLL_NAME));
+    let stub = is_windows
+        .then(|| windows::stub_link(obj_path, out))
+        .transpose()?;
     Ok(EmbedPlan {
         compile_args,
         link_args,
+        artifact,
+        stub,
     })
 }
 

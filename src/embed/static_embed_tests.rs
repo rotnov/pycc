@@ -60,7 +60,7 @@ fn a_static_linux_build_bundles_no_libpython_and_links_the_whole_archive() {
     let shared = EmbedToolchain::with_probe("pyfake", layout.probe.clone());
     assert!(
         shared
-            .probe()
+            .probe(EmbedPlatform::MacOs)
             .expect_err("shared")
             .contains("no shared libpython")
     );

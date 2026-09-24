@@ -16,6 +16,7 @@ use super::probe::LockProbe;
 use super::resolve::{classify_payload, read_record, scanned_sites, tree_digest};
 use super::schema::{self, LockTarget};
 use crate::embed::EmbedProbe;
+use crate::embed::layout::EmbedPlatform;
 use pycc_hir::HirModule;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -257,10 +258,12 @@ pub(crate) fn verify_interpreter(
 
 /// Plans the closure copy (step 3): each locked distribution's payload,
 /// classified from its recorded site's RECORD by the same rules `pycc lock`
-/// applies. Hashes nothing; the copy hashes the bytes it writes.
+/// applies on the build host's `platform` (#1296). Hashes nothing; the
+/// copy hashes the bytes it writes.
 pub(crate) fn payload(
     check: &ClosureCheck,
     lock_probe: &LockProbe,
+    platform: EmbedPlatform,
 ) -> Result<LockedClosure, String> {
     let section = &check.section;
     let mut closure = LockedClosure {
@@ -325,7 +328,7 @@ pub(crate) fn payload(
             )));
         }
         let record = read_record(dist)?;
-        let classified = classify_payload(&sites, dist, &record, false)?;
+        let classified = classify_payload(&sites, dist, &record, (false, platform))?;
         for (rel, (source, digest)) in &classified {
             match claims.get(rel) {
                 Some((other, other_source, other_digest)) => {

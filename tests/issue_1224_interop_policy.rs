@@ -3,10 +3,10 @@
 //! CPython-backed imports a native build admits, and a rejected import is
 //! `I0402`.
 //!
-//! Every assertion that an import is *rejected* holds on every host. Every
-//! assertion that an import is *admitted* is gated `cfg(not(windows))`: an
-//! admitted root is `I0403` on a Windows host (D-248 rule 1, #1226). An
-//! admission is observed without an interpreter: with `PYCC_PYTHON` naming
+//! Every assertion holds on every host. Every admitted root here is in the
+//! standard library, which a Windows host embeds too since #1286 (D-253);
+//! a root outside it is embedded from `pycc.lock` there too since #1296.
+//! An admission is observed without an interpreter: with `PYCC_PYTHON` naming
 //! a missing file, an admitted `build` or `run` reaches the embedding step
 //! and stops with an environment failure (exit 2) that names
 //! `PYCC_PYTHON`, the technique `tests/issue_1223_embedded_executable.rs`
@@ -17,8 +17,6 @@
 //! a message names the manifest as `pycc.toml`. The upward manifest search
 //! assumes no stray `pycc.toml` above the scratch root; none is tracked or
 //! expected there.
-
-#![cfg_attr(windows, allow(dead_code))]
 
 use pycc_scratch::ScratchDir;
 use std::process::{Command, Output};
@@ -92,7 +90,6 @@ fn assert_check_rejects(dir: &ScratchDir, flags: &[&str], fragment: &str) -> Str
 
 /// Asserts a native `build` admitted the program's CPython import: it got
 /// past the policy and stopped only for want of an interpreter.
-#[cfg(not(windows))]
 fn assert_build_admits(dir: &ScratchDir, flags: &[&str]) {
     let output = build(dir, flags);
     let rendered = stderr_of(&output);
@@ -160,7 +157,6 @@ fn a_configured_allowlist_rejects_an_unlisted_standard_library_root() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_configured_allowlist_admits_a_listed_root_and_an_explicit_policy_can_widen_it() {
     let dir = project("1224_listed", Some(&manifest(ALLOW_JSON)), JSON);
@@ -325,7 +321,6 @@ fn a_native_module_import_stays_native_under_pure_and_deny() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn auto_still_admits_a_standard_library_import_with_no_policy_configured() {
     let dir = project("1224_auto", None, JSON);
@@ -478,7 +473,6 @@ fn conflicting_interop_flags_are_usage_errors() {
 
 /// After `--`, `--pure` is the program's argument, so `auto` admits the
 /// import; right after `PATH`, it is pycc's flag and rejects it.
-#[cfg(not(windows))]
 #[test]
 fn run_forwards_pure_after_a_separator_and_consumes_it_after_path() {
     let dir = project("1224_run_window", None, JSON);

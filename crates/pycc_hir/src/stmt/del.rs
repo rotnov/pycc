@@ -141,6 +141,7 @@ fn collect_deleted_names(body: &[HirStmt], deleted: &mut HashSet<String>) {
             | HirStmt::SetCompAssign { .. }
             | HirStmt::Return(_)
             | HirStmt::AttrSet { .. }
+            | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }
     }

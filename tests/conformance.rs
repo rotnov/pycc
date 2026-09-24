@@ -17,6 +17,7 @@ macro_rules! harness_modules {
 harness_modules! {
     classes => "conformance/classes.rs",
     exceptions => "conformance/exceptions.rs",
+    imports => "conformance/imports.rs",
     numeric => "conformance/numeric.rs",
 }
 
@@ -712,7 +713,7 @@ fn pep_0594_dead_battery_matches_cpython_3_14_7_byte_for_byte() {
 // removed-in-3.13 stdlib module, absent from pycc_std's registry) must be
 // cleanly rejected with C0001, not silently accepted or a panic.
 //
-// The fixture spells it `import cgi as c` rather than D-138's original
+// The fixture first spelled it `import cgi as c` rather than D-138's original
 // plain `import cgi`. Part 1 of #1026 gave the plain, unaliased,
 // undotted form a meaning: it binds an opaque CPython module object
 // (`Ty::Object`) for `pycc build --ext`, so it no longer reaches
@@ -720,10 +721,15 @@ fn pep_0594_dead_battery_matches_cpython_3_14_7_byte_for_byte() {
 // the host at module-exec time, which is exactly what CPython 3.14 does
 // with the same line, and which
 // `tests/issue_1080_foreign_object.rs` pins directly. The aliased form
-// is still `C0001` (D-137 leaves aliasing unsupported), so it is the
-// spelling that keeps asserting D-138's actual property -- a removed
-// stdlib module is never silently treated as a *pycc_std* module. See
-// the dated amendments on D-137 and D-138.
+// `import cgi as c` then carried the fixture until #1291 admitted an
+// undotted alias on the same terms as the plain form.
+//
+// The fixture is now `from cgi import escape`. Stated honestly, it no
+// longer pins a dead-battery property: every non-`pycc_std` root reaches
+// the host's `ModuleNotFoundError` when it is missing, as in CPython.
+// What it pins is narrower -- a `from` import of a module outside
+// `pycc_std` is refused with `C0001`, so `cgi` is never silently treated
+// as a *pycc_std* module. See the dated amendments on D-137 and D-138.
 //
 // No
 // CPython oracle involved (per D-138's own Context: CPython 3.14 raises

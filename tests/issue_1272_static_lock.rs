@@ -10,8 +10,10 @@
 //! shared library on disk). The archive is a fixture, not a real static
 //! libpython: a build that gets past the lock check fails in the compiler
 //! on the fake prefix's one-line `Python.h` (exit 1). A real archive's
-//! end-to-end evidence belongs to #1273. `cfg(not(windows))`: `pycc lock`
-//! and an embedded build refuse a Windows host (#1226).
+//! end-to-end evidence belongs to #1273. `cfg(not(windows))`: the fixture
+//! interpreter is a `sh` script, and a static libpython is not available
+//! on a Windows host (D-251); `pycc lock` on Windows is
+//! `tests/issue_1296_windows_locked_closure.rs` (#1296).
 
 #![cfg_attr(windows, allow(dead_code, unused_imports))]
 

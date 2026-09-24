@@ -97,7 +97,7 @@ fn a_complete_layout_passes_every_probe_check() {
     let dir = ScratchDir::new("embed_probe_ok").expect("scratch");
     let layout = fake_layout(&dir);
     let toolchain = EmbedToolchain::with_probe("unused", layout.probe.clone());
-    assert_eq!(toolchain.probe(), Ok(layout.probe));
+    assert_eq!(toolchain.probe(EmbedPlatform::MacOs), Ok(layout.probe));
 }
 
 /// Each refusal the probe makes, one layout defect at a time.
@@ -109,7 +109,7 @@ fn each_probe_refusal_names_its_reason() {
         let mut probe = layout.probe.clone();
         edit(&mut probe);
         EmbedToolchain::with_probe("pyfake", probe)
-            .probe()
+            .probe(EmbedPlatform::MacOs)
             .expect_err("the defect is refused")
     };
     assert!(refusal(&|p| p.version = (3, 13, 1)).contains("CPython 3.13.1"));
@@ -130,7 +130,7 @@ fn each_probe_refusal_names_its_reason() {
 #[test]
 fn an_interpreter_that_cannot_start_is_an_environment_failure() {
     let message = EmbedToolchain::with_interpreter("/nonexistent/pycc-test-python")
-        .probe()
+        .probe(EmbedPlatform::MacOs)
         .expect_err("nothing to run");
     assert!(
         message.contains("could not run the embed interpreter"),
@@ -158,7 +158,7 @@ fn a_spawned_probe_reports_the_layout_and_passes_every_check() {
     let layout = fake_layout(&dir);
     let lines = probe_lines(&layout);
     let script = fake_interpreter(&dir, &format!("cat <<'PYCC'\n{lines}PYCC\n"));
-    let probe = EmbedToolchain::with_interpreter(script).probe();
+    let probe = EmbedToolchain::with_interpreter(script).probe(EmbedPlatform::MacOs);
     assert_eq!(probe, Ok(layout.probe));
 }
 
@@ -168,12 +168,12 @@ fn a_spawned_probe_that_fails_or_prints_garbage_is_refused() {
     let dir = ScratchDir::new("embed_probe_garbage").expect("scratch");
     let garbage = fake_interpreter(&dir, "echo garbage\n");
     let message = EmbedToolchain::with_interpreter(&garbage)
-        .probe()
+        .probe(EmbedPlatform::MacOs)
         .expect_err("garbage");
     assert!(message.contains("did not report a configuration") && message.contains("exit 0"));
     let failing = fake_interpreter(&dir, "exit 3\n");
     let message = EmbedToolchain::with_interpreter(failing)
-        .probe()
+        .probe(EmbedPlatform::MacOs)
         .expect_err("a failed probe");
     assert!(message.contains("exit 3"), "{message}");
 }
@@ -233,9 +233,9 @@ fn an_old_format_marker_and_a_plain_file_are_both_unmarked() {
 
 /// A path that cannot even be inspected (its parent is a plain file) is an
 /// environment failure, not an absent sidecar. POSIX reports `ENOTDIR`
-/// there; Windows reports the path as not found, so it reads as absent --
-/// harmless, because a Windows host never reaches an embedded build
-/// (#1226).
+/// there; Windows reports the path as not found, so it reads as absent and
+/// the build fails one step later, at staging (D-253's
+/// `a_windows_build_under_a_plain_file_fails_at_staging` twin).
 #[cfg(unix)]
 #[test]
 fn a_path_under_a_plain_file_is_an_environment_failure() {

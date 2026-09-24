@@ -25,7 +25,7 @@ fn lists_only_the_foreign_bindings() {
         ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 0,
+            site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         },
     ];
@@ -53,7 +53,7 @@ fn with_foreign_import(mut hir: pycc_hir::HirModule) -> pycc_hir::HirModule {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index: 0,
+        site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(0, 0),
     });
     hir
@@ -91,7 +91,7 @@ fn with_foreign_import_at(mut hir: pycc_hir::HirModule, item_index: usize) -> py
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
     hir
@@ -102,7 +102,10 @@ fn foreign_position(imports: &[ImportBinding]) -> usize {
     imports
         .iter()
         .find_map(|binding| match binding {
-            ImportBinding::Foreign { item_index, .. } => Some(*item_index),
+            ImportBinding::Foreign {
+                site: pycc_hir::ForeignImportSite::Item(item_index),
+                ..
+            } => Some(*item_index),
             _ => None,
         })
         .expect("the fixture records exactly one foreign binding")
@@ -201,7 +204,7 @@ fn with_foreign_import_named(
     hir.imports.push(ImportBinding::Foreign {
         local_name: local_name.to_string(),
         module_path: local_name.to_string(),
-        item_index,
+        site: pycc_hir::ForeignImportSite::Item(item_index),
         span: Span::new(0, 0),
     });
     hir
@@ -350,7 +353,7 @@ fn a_module_body_read_above_the_import_is_unbound() {
     hir.imports.push(ImportBinding::Foreign {
         local_name: "numpy".to_string(),
         module_path: "numpy".to_string(),
-        item_index: 1,
+        site: pycc_hir::ForeignImportSite::Item(1),
         span: Span::new(0, 0),
     });
     let diagnostics = crate::check_all(&hir).expect_err("a read above the import is refused");
@@ -957,4 +960,145 @@ fn a_for_object_target_may_rebind_a_name_already_bound_to_an_object() {
     assert!(
         check_foreign("for x in numpy.pi:\n    pass\n\nfor x in numpy.pi:\n    pass\n").is_none()
     );
+}
+
+// ---------------------------------------------------------------------------
+// A foreign import nested in a module-level `if`/`try` block (#1291).
+// ---------------------------------------------------------------------------
+
+/// Lowers `source` with every plain `import` request answered `Foreign`,
+/// the way the driver answers an undotted non-`pycc_std` root.
+fn lower_all_foreign(source: &str) -> pycc_hir::HirModule {
+    let module = pycc_parser::parse(source).expect("test source must parse");
+    let mut resolved = pycc_hir::ResolvedImports::default();
+    for request in pycc_hir::project_import_requests(&module) {
+        resolved.insert(request.span, pycc_hir::ResolvedImport::Foreign);
+    }
+    pycc_hir::lower_module(&module, &resolved, None)
+        .unwrap_or_else(|diagnostics| panic!("{source:?} must lower: {diagnostics:#?}"))
+        .hir
+}
+
+fn check_block(source: &str) -> Result<(), Vec<pycc_diag::Diagnostic>> {
+    crate::check_all(&lower_all_foreign(source)).map(|_| ())
+}
+
+#[test]
+fn a_read_after_an_if_else_that_imports_in_both_arms_is_admitted() {
+    let source = "if c:\n    import colorsys\nelse:\n    import colorsys\ncolorsys.ONE_THIRD\n";
+    let source = format!("c = True\n{source}");
+    check_block(&source).unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+}
+
+#[test]
+fn a_read_inside_the_importing_arm_is_admitted() {
+    for source in [
+        "c = True\nif c:\n    import colorsys\n    colorsys.ONE_THIRD\n",
+        "try:\n    import colorsys\n    colorsys.ONE_THIRD\nexcept Exception:\n    pass\n",
+    ] {
+        check_block(source).unwrap_or_else(|diagnostics| panic!("{source:?}: {diagnostics:#?}"));
+    }
+}
+
+/// A read after a block that may not have run the import is a
+/// possibly-unbound read. The `try` case is #1289's pre-existing
+/// behaviour (a `try` join does not yet treat the handler as the only
+/// other path), pinned so #1289 flips it deliberately.
+#[test]
+fn a_read_after_a_block_that_may_skip_the_import_is_t0041() {
+    for source in [
+        "c = True\nif c:\n    import colorsys\ncolorsys.ONE_THIRD\n",
+        "try:\n    import colorsys\nexcept Exception:\n    pass\ncolorsys.ONE_THIRD\n",
+    ] {
+        let diagnostics = check_block(source).expect_err("the read may be unbound");
+        assert_eq!(diagnostics.len(), 1, "{source:?}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].code, "T0041", "{source:?}: {diagnostics:#?}");
+    }
+}
+
+/// A read before the block is an unbound name: the nested import binds
+/// only where it runs.
+#[test]
+fn a_read_before_the_block_is_unbound() {
+    let diagnostics = check_block("colorsys.ONE_THIRD\nc = True\nif c:\n    import colorsys\n")
+        .expect_err("a read above the import is refused");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021", "{diagnostics:#?}");
+}
+
+#[test]
+fn a_block_binding_is_not_bound_by_item_position() {
+    let mut env = crate::Environment::new();
+    let imports = vec![ImportBinding::Foreign {
+        local_name: "colorsys".to_string(),
+        module_path: "colorsys".to_string(),
+        site: pycc_hir::ForeignImportSite::Block,
+        span: Span::new(0, 0),
+    }];
+    bind_foreign_objects_at(&mut env, &imports, 0);
+    assert!(env.lookup("colorsys").is_none());
+}
+
+/// `pycc_hir` never lowers a `ForeignImport` inside a function body, but
+/// the function-body statement checker and its local-name prescan handle
+/// the node the same way the module-level checker does, so a hand-built
+/// one binds its name as a function local.
+#[test]
+fn a_hand_built_function_body_foreign_import_binds_a_local() {
+    let mut hir = lower("def f() -> None:\n    pass\n");
+    let Some(pycc_hir::HirItem::Function { body, .. }) = hir.items.first_mut() else {
+        panic!("the fixture is one function");
+    };
+    *body = vec![
+        pycc_hir::HirStmt::ForeignImport {
+            bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+            span: Span::new(0, 0),
+        },
+        pycc_hir::HirStmt::ForeignImport {
+            bindings: vec![("colorsys".to_string(), "colorsys".to_string())],
+            span: Span::new(0, 0),
+        },
+    ];
+    crate::check_all(&hir).unwrap_or_else(|diagnostics| panic!("{diagnostics:#?}"));
+}
+
+/// Both item-count-changing passes -- `monomorphize` dropping generic
+/// originals and `unroll_enum_loops` expanding a top-level `for c in
+/// Color:` -- remap every `ForeignImportSite::Item` position, and must
+/// carry a block site through unchanged: a nested import runs where its
+/// `HirStmt::ForeignImport` stands, so it has no item position to remap.
+#[test]
+fn a_block_site_survives_both_item_remapping_passes_unchanged() {
+    for (source, items) in [
+        (
+            "def _a[T](x: T) -> T:\n    return x\n\n\ndef f() -> int:\n    return 1\n",
+            1,
+        ),
+        (
+            "class Color(Enum):\n    RED = 1\n    GREEN = 2\nfor c in Color:\n    print(c.value)\n",
+            4,
+        ),
+    ] {
+        let mut hir = lower(source);
+        hir.imports.push(ImportBinding::Foreign {
+            local_name: "colorsys".to_string(),
+            module_path: "colorsys".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: Span::new(0, 0),
+        });
+        let resolved = crate::check_and_resolve_all_keyed(&hir)
+            .unwrap_or_else(|diagnostics| panic!("{source:?}: {diagnostics:#?}"));
+        assert_eq!(resolved.items.len(), items, "{:?}", resolved.items);
+        assert!(
+            matches!(
+                resolved.imports.as_slice(),
+                [ImportBinding::Foreign {
+                    site: pycc_hir::ForeignImportSite::Block,
+                    ..
+                }]
+            ),
+            "{source:?}: {:?}",
+            resolved.imports
+        );
+    }
 }

@@ -20,6 +20,8 @@ fn probe() -> EmbedProbe {
 fn the_host_platform_matches_the_build_host() {
     let expected = if cfg!(target_os = "macos") {
         EmbedPlatform::MacOs
+    } else if cfg!(windows) {
+        EmbedPlatform::Windows
     } else {
         EmbedPlatform::Linux
     };
@@ -114,6 +116,8 @@ fn the_linux_preload_links_every_copied_library_by_name() {
 fn the_platform_follows_the_host_os() {
     assert_eq!(EmbedPlatform::for_os("macos"), EmbedPlatform::MacOs);
     assert_eq!(EmbedPlatform::for_os("linux"), EmbedPlatform::Linux);
+    assert_eq!(EmbedPlatform::for_os("windows"), EmbedPlatform::Windows);
+    assert_eq!(EmbedPlatform::for_os("freebsd"), EmbedPlatform::Linux);
 }
 
 #[test]
@@ -325,4 +329,107 @@ fn a_sidecar_loader_relative_reference_climbs_only_past_the_shared_directories()
         sidecar_loader_relative("lib/libout.dylib", "closure/pkg/.dylibs/libx.dylib"),
         "@loader_path/../closure/pkg/.dylibs/libx.dylib"
     );
+}
+
+/// A Windows-shaped probe: the DLL beside `python.exe`, the import
+/// libraries in `libs`.
+fn windows_probe() -> EmbedProbe {
+    EmbedProbe {
+        executable: PathBuf::from("C:/Py/python.exe"),
+        include: PathBuf::from("C:/Py/Include"),
+        stdlib: PathBuf::from("C:/Py/Lib"),
+        base_prefix: PathBuf::from("C:/Py"),
+        enable_shared: false,
+        ldlibrary: "python314.dll".to_string(),
+        libdir: PathBuf::from("C:/Py/libs"),
+        instsoname: String::new(),
+        ..probe()
+    }
+}
+
+/// Every linker-argument helper a Windows embedded build reaches, or
+/// provably does not reach, gives its Windows value (D-253).
+#[test]
+fn the_windows_link_helpers_add_no_rpath_preload_pic_or_static_arguments() {
+    let names = ["libz.so.1".to_string()];
+    assert!(rpath_args(EmbedPlatform::Windows, "app.pycc").is_empty());
+    assert!(preload_args(EmbedPlatform::Windows, Path::new("lib"), &names).is_empty());
+    assert!(pic_args(EmbedPlatform::Windows).is_empty());
+    assert_eq!(pic_args(EmbedPlatform::MacOs), ["-fPIC"]);
+    assert_eq!(pic_args(EmbedPlatform::Linux), ["-fPIC"]);
+    assert!(archive_load_args(EmbedPlatform::Windows, Path::new("python314.lib")).is_empty());
+    assert!(export_args(EmbedPlatform::Windows).is_empty());
+}
+
+/// The Windows interpreter DLL sits beside `python.exe` and keeps its own
+/// name at the sidecar root; the other platforms keep `<sidecar>/lib`.
+#[test]
+fn the_windows_library_is_the_dll_beside_python_at_the_sidecar_root() {
+    let windows = windows_probe();
+    assert_eq!(
+        windows_interpreter_dll(&windows),
+        PathBuf::from("C:/Py/python314.dll")
+    );
+    assert_eq!(
+        bundled_library_name(EmbedPlatform::Windows, &windows),
+        "python314.dll"
+    );
+    let sidecar = Path::new("out/app.pycc");
+    assert_eq!(
+        bundled_library_path(EmbedPlatform::Windows, sidecar, &windows),
+        sidecar.join("python314.dll")
+    );
+    assert_eq!(
+        bundled_library_path(EmbedPlatform::Linux, sidecar, &probe()),
+        sidecar.join("lib").join("libpython3.14.so.1.0")
+    );
+    assert_eq!(PROGRAM_DLL_NAME, "pycc_program.dll");
+    assert_eq!(
+        windows_runtime_dlls(),
+        ["vcruntime140.dll", "vcruntime140_1.dll"]
+    );
+}
+
+#[test]
+fn the_windows_stdlib_copy_skips_exactly_the_filtered_paths() {
+    for skipped in [
+        "__pycache__",
+        "json/__pycache__/decoder.cpython-314.pyc",
+        "site-packages",
+        "Site-Packages/numpy/__init__.py",
+        "test",
+        "test/test_os.py",
+        "tkinter",
+        "TkInter/ttk.py",
+        "turtle.py",
+        "idlelib",
+        "_tkinter.pyd",
+        "_tkinter.pdb",
+        "tcl86t.dll",
+        "TK86T.DLL",
+        "tcl9tk9.0.dll",
+    ] {
+        assert!(
+            skip_in_windows_stdlib_copy(Path::new(skipped)),
+            "{skipped} is skipped"
+        );
+    }
+    for kept in [
+        "os.py",
+        "json",
+        "json/decoder.py",
+        "_ssl.pyd",
+        "libssl-3.dll",
+        "tclsh.exe",
+        "tcl86t.lib",
+        "tk.dll",
+        "unittest/test/__init__.py",
+        "turtledemo_notes.txt",
+        "",
+    ] {
+        assert!(
+            !skip_in_windows_stdlib_copy(Path::new(kept)),
+            "{kept} is kept"
+        );
+    }
 }

@@ -621,9 +621,12 @@ fn a_multi_name_import_poisons_every_name_it_would_have_bound() {
     );
     let diagnostics = lower_all_err(&source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    // #1280: the statement lowers alias by alias and fails on its first
+    // failing alias, yet still poisons every name it would have bound --
+    // so `other` produces no cascade either.
     assert_eq!(
         diagnostics[0].message,
-        "only a single module per `import` statement is supported so far"
+        "import of module `pkg.dep` is not supported yet"
     );
 }
 
@@ -786,11 +789,13 @@ const IMPORT_SHAPES: &[&str] = &[
     "import math\n",
     "import math as m\n", // `asname` on a stdlib module lowers (Part 1 of #883)
     "import enum\n",
-    "import os\n",             // module `pycc_std` does not resolve
-    "import pkg.dep\n",        // dotted, unresolvable
-    "import pkg.dep as d\n",   // `asname`, dotted, unresolvable
-    "import math, enum\n",     // more than one alias
-    "import pkg.dep, other\n", // more than one alias, unresolvable
+    "import os\n",              // module `pycc_std` does not resolve
+    "import pkg.dep\n",         // dotted, unresolvable
+    "import pkg.dep as d\n",    // `asname`, dotted, unresolvable
+    "import math, enum\n",      // several aliases, all resolve (#1280)
+    "import math as m, enum\n", // several aliases, one `asname` (#1280)
+    "import math, os\n",        // several aliases, a later one unresolvable
+    "import pkg.dep, other\n",  // several aliases, the first unresolvable
     // `Stmt::ImportFrom`, stdlib arm: accepted, then its rejection branches.
     "from math import sqrt\n",
     "from math import sqrt, pi\n",
@@ -849,10 +854,7 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
     let module = parse(source);
     let statement = &module.body[0];
     let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        span_of(source, "import numpy", 0),
-        crate::ResolvedImport::Foreign,
-    );
+    resolved.insert(span_of(source, "numpy", 0), crate::ResolvedImport::Foreign);
 
     let lowered = lower_module(&module, &resolved, None).expect("a foreign import must lower");
     assert_eq!(
@@ -860,11 +862,37 @@ fn a_foreign_import_lowers_and_still_poisons_its_name() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 0,
+            site: crate::ForeignImportSite::Item(0),
             span: Span::new(0, "import numpy".len() as u32),
         }]
     );
     assert_eq!(poisonable_names(statement), vec!["numpy"]);
+}
+
+/// The aliased counterpart (#1291): `import numpy as np` lowers to a
+/// foreign binding of `np`, and the mirror still predicts `[np]`.
+#[test]
+fn an_aliased_foreign_import_lowers_and_still_poisons_its_alias() {
+    let source = "import numpy as np\n";
+    let module = parse(source);
+    let statement = &module.body[0];
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(
+        span_of(source, "numpy as np", 0),
+        crate::ResolvedImport::Foreign,
+    );
+
+    let lowered = lower_module(&module, &resolved, None).expect("a foreign import must lower");
+    assert_eq!(
+        lowered.hir.imports,
+        vec![ImportBinding::Foreign {
+            local_name: "np".to_string(),
+            module_path: "numpy".to_string(),
+            site: crate::ForeignImportSite::Item(0),
+            span: Span::new(0, "import numpy as np".len() as u32),
+        }]
+    );
+    assert_eq!(poisonable_names(statement), vec!["np"]);
 }
 
 // ---------------------------------------------------------------------------

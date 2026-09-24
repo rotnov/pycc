@@ -77,23 +77,35 @@ presence gates below, which now differ between the two groups.
 **Part 3 of #382 (#542, PEP 654)** adds `BaseExceptionGroup` (23) and
 `ExceptionGroup` (24), and **Part A of #1038 ([#1063](https://github.com/rotnov/pycc/issues/1063))**
 adds `OverflowError` (25), each by the same fixed-array-index mechanism. The
-append order matters: `OverflowError` goes last so every earlier tag keeps its
-value, and it parents to `Exception` rather than CPython's own
-`ArithmeticError`, which pycc does not model -- the same deliberate hierarchy
-simplification D-202 records for `BaseExceptionGroup`. `except Exception:`
-therefore catches it, and `except OverflowError:` resolves by name.
+append order matters: `OverflowError` was appended after the groups so every
+earlier tag keeps its value, and it parents to `Exception` rather than
+CPython's own `ArithmeticError`, which pycc does not model -- the same
+deliberate hierarchy simplification D-202 records for `BaseExceptionGroup`.
+`except Exception:` therefore catches it, and `except OverflowError:` resolves
+through its fixed class-table tag.
+
+**[#1292](https://github.com/rotnov/pycc/issues/1292) (Part 2 of #1282)**
+appends `ImportError` (26) and `ModuleNotFoundError` (27) after
+`OverflowError` by the same mechanism, so every earlier tag again keeps its
+value. Both carry CPython's real parentage -- `ModuleNotFoundError` ->
+`ImportError` -> `Exception` -- so, unlike `OverflowError`, this is **not** a
+D-202-style simplification: `except ImportError:` catches a
+`ModuleNotFoundError`, `except ModuleNotFoundError:` does not catch a plain
+`ImportError`, and `except Exception:` catches both. Each resolves through its
+fixed class-table tag, and a user `class PluginMissing(ImportError)` is
+raisable and caught by `except ImportError:`. `ImportError`'s `name`/`path`
+keyword arguments and attributes are not supported (a keyword argument is
+`C0001`).
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
-class whose MRO reaches one of those 26 builtins is raisable and catchable.
-HIR lowering assigns it a type tag from `26..=255` in module source order and
-records it on `HirClassDef::exception_type_tag`; the 26 builtins (the
-original 23 plus `ExceptionGroup`/`BaseExceptionGroup`, Part 3 of #382, #542,
-PEP 654, D-202, plus `OverflowError`, Part A of #1038, #1063) keep `0..=25`
-and either carry `None` there (the flat seven,
-resolved by name), their own fixed tag (the 16-member `OSError` family), or a
-fixed tag (`ExceptionGroup`/`BaseExceptionGroup`, always reconstructed with
-that fixed tag regardless of the original raised object's dynamic subclass --
-see D-202). A module declaring more than 230 such classes is rejected with
+class whose MRO reaches a builtin exception class is raisable and catchable.
+HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=255`
+in module source order and records it on `HirClassDef::exception_type_tag`;
+the builtins keep the tags below that and either carry `None` (the flat seven,
+resolved by name) or a fixed tag by array index (every builtin past them; the
+groups are always reconstructed with that fixed tag regardless of the raised
+object's dynamic subclass -- see D-202). A module declaring more than
+`MAX_USER_EXCEPTION_CLASSES` (currently 228) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -134,12 +146,13 @@ apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
 Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202; to all 26 by
-Part A of #1038, #1063, which appended `OverflowError`).** HIR
+Part A of #1038, #1063, which appended `OverflowError`; to all 28 by #1292,
+which appended `ImportError`/`ModuleNotFoundError`).** HIR
 lowering synthesizes a
-real `HirClassDef` for each of those 26 names, seeded before any
+real `HirClassDef` for each builtin exception name, seeded before any
 user statement of a module that references one of them is lowered, so they
 participate in the same class table user-defined classes do. `Exception` carries a synthetic
-`__init__(self, message: str)`; the other six inherit it through their MRO.
+`__init__(self, message: str)`; every other builtin inherits it through its MRO.
 Three consequences:
 
 - `class MyError(ValueError):` resolves its base and linearizes an MRO
@@ -177,9 +190,9 @@ supported surface (`raise ValueError("msg")`) is exactly one `str` message.
 
 Two gates decide whether a module is seeded, and both must pass.
 
-*The module must reference one of the 23 names somewhere.* Every entry in
+*The module must reference a builtin exception name somewhere.* Every entry in
 the class table costs per-item work in lowering and per-function class binding
-in the type checker, and a module that never spells one of the 23 cannot
+in the type checker, and a module that never spells a builtin exception name cannot
 observe the difference -- so it is seeded with none of them. The reference
 scan uses the AST crate's generic visitor, so every position a name can be
 spelled in counts: a base class, a `raise` operand, an `except` type, an
@@ -188,7 +201,7 @@ comprehension, an f-string interpolation, a decorator, at any nesting depth.
 A string forward reference (`x: "ValueError"`) does not count, because
 annotation lowering does not resolve string annotations either.
 
-*The module's own top level must bind none of the 23 names.* That gate is
+*The module's own top level must bind none of the builtin exception names.* That gate is
 all-or-nothing: a module whose top level binds any of them (a `class`, `def`,
 `type` alias, annotated assignment, or assignment target spelling one) is
 seeded with none of them, and that name keeps its ordinary user-defined
@@ -201,22 +214,27 @@ Part 2 of #541 did **not** close it: raisability keys on the MRO reaching a
 builtin exception class, which is orthogonal to a partially shadowed
 hierarchy. It is tracked independently by
 [#704](https://github.com/rotnov/pycc/issues/704).
+Because `ImportError` and `ModuleNotFoundError` joined the seeded set in
+#1292, a module that declares its own `class ImportError(Exception)` now
+withholds seeding and fails with `C0001` "class `ImportError` inherits from
+unknown class `Exception`", exactly as a user `class OverflowError(Exception)`
+already did.
 
 **Absence is not shadowing -- but that statement now splits by name-set (Part
 2 of #543, #739).** For the original flat seven, absence from the class table
 still reads as un-shadowed, exactly its pre-Part-1 meaning: `raise`/`except`
 name-resolve independent of `env.classes`
 (`pycc_mir::exception::resolve_exception_tag`), so a module that never seeded
-them behaves identically to one that did. For the 16-member `OSError` family
-this is **no longer true**. Those 16 names have no name-based fallback --
+them behaves identically to one that did. For every builtin past the flat seven
+this is **no longer true**. Those names have no name-based fallback --
 deliberately, so `pycc_mir::exception::handler_type_tags`'s MRO-containment
 scan never needs special-casing for them -- so `raise FileNotFoundError(...)`
 or `except FileNotFoundError:` for a name outside the flat seven now requires
 *actual class-table presence* to count as unshadowed
 (`pycc_types::exception::is_unshadowed_builtin_exception`'s
-`env.classes.contains_key(name)` conjunct). An occurrence of one of the 16
+`env.classes.contains_key(name)` conjunct). An occurrence of one of those
 names in a module where seeding was withheld by the shadow gate above --
-because the module shadows some *other* member of the same 23-name group,
+because the module shadows some *other* member of the same builtin group,
 possibly one it never itself uses -- therefore behaves as *not recognized*
 (`T0021`, or `C0001` at a `raise`-side call expression that also matches
 `KNOWN_CALLABLE_BUILTINS`, since type inference reaches that fallback before
@@ -652,9 +670,9 @@ raise that was meant to report it. Closing that is runtime-wide and is not
 emitted *ahead* of `pycc_rt_int_set_add`, so a compiled `s.add(v)` with a
 bigint `v` aborts there before reaching the converted guard, which remains as
 defense-in-depth for a direct ABI caller. An exception that
-escapes an export is re-raised as the matching CPython class for the twenty-four
-builtin classes the bridge carries a tag for (the original twenty-three plus
-`OverflowError`, Part A of #1038, #1063). A *user-defined* exception class
+escapes an export is re-raised as the matching CPython class for every
+builtin class the bridge carries a tag for (all of them except the two PEP 654
+groups, which cross as `Exception`). A *user-defined* exception class
 keeps its identity as of Part D of #1038 (#1066): the artifact synthesizes one
 CPython class per such class at import time, parented on the same bases the
 source declares, so `except m.MyError:`, `except ValueError:` for a subclass of
@@ -731,9 +749,10 @@ rejecting that second instance and allocating state per instance.
 ### Foreign imports in the module body
 
 Part 1 of [#1026](https://github.com/rotnov/pycc/issues/1026) makes a plain,
-unaliased, undotted `import <name>` a *foreign* import when `<name>` is neither
-a project module nor a `pycc_std` registration: it binds the CPython module
-object itself, typed `object` (see
+undotted `import <name>` a *foreign* import when `<name>` is neither
+a project module nor a `pycc_std` registration, and [#1291](https://github.com/rotnov/pycc/issues/1291) extends that to the
+aliased `import <name> as <alias>`: it binds the CPython module
+object itself (to `<alias>` when there is one), typed `object` (see
 [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s representations table). Part 2 of the same
 issue adds a second producer — an attribute load on such a value, `numpy.pi`,
 which is itself an `object` — but the admissibility table above is still why one
@@ -746,7 +765,23 @@ written*. `pycc_mir::build` splices one `MirItem::ForeignImport` into the item
 list at the import statement's own recorded position rather than hoisting every
 import to the top of `Py_mod_exec`; a module-level statement with an observable
 effect written above a failing import therefore has already run when the import
-raises, exactly as under CPython. `tests/issue_1080_foreign_object.rs` asserts
+raises, exactly as under CPython. Each qualifying name of a multi-name
+`import a, b` is its own foreign import (#1280), and the names run in source
+order at the statement's position, so the first missing one raises and the
+names after it are never imported (`tests/issue_1280_multi_import.rs`).
+Since [#1291](https://github.com/rotnov/pycc/issues/1291) a foreign import may also stand inside a module-level `if` or `try`
+block (including `elif`, `else`, `except`, `except*` and `finally` bodies, at
+any nesting depth of those blocks, but not inside a function, a loop, a
+`with` or a `match`). It lowers to a `MirStmt::ForeignImport` in place in that block rather
+than to a spliced `MirItem`, so it runs only if control reaches it: a branch
+that is not taken imports nothing, and a missing module in a taken one raises
+from that statement (`tests/issue_1291_block_import.rs`). The failure edge
+below is the same one, and so is its bound: `Py_mod_exec` returns `-1`
+directly, so an enclosing `except` or `finally` body does **not** run for a
+failed foreign import (the [#1096](https://github.com/rotnov/pycc/issues/1096)
+deviation), and `except ImportError` cannot catch it yet
+([#1293](https://github.com/rotnov/pycc/issues/1293)).
+`tests/issue_1080_foreign_object.rs` asserts
 that against a real host interpreter, and
 `crates/pycc_codegen/src/foreign_import.rs`'s own tests assert it at the
 emission layer.
@@ -1098,10 +1133,11 @@ overwritten reference, would be an optimization of an already-correct
 program, and belongs with the release protocol described above.
 
 **The bound name does not cross a module boundary yet.** The binding is
-positional — `ImportBinding::Foreign` carries the index of the item the
-import sits at in *its own* module's item list, which `program::link`
-rebases onto the linked program — so it is meaningful only in the module
-that wrote the `import`. Two consequences are refused rather than
+positional — a top-level `ImportBinding::Foreign` carries the index of the
+item the import sits at in *its own* module's item list, which
+`program::link` rebases onto the linked program, and a block one
+([#1291](https://github.com/rotnov/pycc/issues/1291)) carries no index at all, its position being the block statement
+itself — so it is meaningful only in the module that wrote the `import`. Two consequences are refused rather than
 approximated, both `C0001` while lowering, so `pycc check` reports them and
 neither build path is reached:
 
@@ -1126,8 +1162,15 @@ a `class`, a `type` alias, a plain assignment, or a second `import`, written
 above or below the import -- is refused with `C0001` while lowering, at the
 shadowing statement, or at the import itself when the shadowing binding is
 another import and so has no statement span of its own. Two foreign imports
-of the same local name are refused on the same rule rather than exempted as
-benign, and a name is reported once however many statements bind it.
+that bind one local name to the *same* module (`import numpy` twice, or in
+both arms of an `if`/`else`) are exempt since [#1291](https://github.com/rotnov/pycc/issues/1291): each produces the same
+module object at the same type, so no read depends on which one ran last, and
+the second store simply overwrites the slot with a new reference, as the
+duplicate paragraph above describes for linked modules. Two foreign imports
+that bind one local name to *different* modules (`import a as x`, then
+`import b as x`) are refused like any other shadow, within one module and,
+since [#1291](https://github.com/rotnov/pycc/issues/1291), across linked modules too. A name is reported once however many
+statements bind it.
 The positional binding above is what makes the artifact honest about *when*
 the import runs; it is not enough to make the compiler honest about *which*
 binding a name has, because every pass that walks the module would have to
@@ -1147,14 +1190,17 @@ standard library bundles its closure from `pycc.lock` (#1242), and a missing
 or stale lock is exit 2 naming `pycc lock`. The effective interop policy is
 decided first, per import: a root it rejects is `I0402` on every host (see
 "Interop policy" below). An import the build cannot embed (an excluded
-Tcl/Tk root, a `--target` build, or a Windows host) leaves a plain build with
+Tcl/Tk root or a `--target` build) leaves a plain build with
 no interpreter to import into, so the driver refuses the program with `I0403`
 before codegen —
 one diagnostic per such import, each at its own `import` statement in the file
 that wrote it, with the reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md)
 rule 1) — and `crates/pycc_codegen/src/foreign_import.rs` emits nothing for a
 `MirItem::ForeignImport` when `!options.ext`, which then only happens in a
-build with no foreign import at all.
+build with no foreign import at all. A block-level `MirStmt::ForeignImport`
+(#1291) needs no such guard: the same driver refusal means it reaches codegen
+only in a build compiled with `ext` set, `--ext` or embedded, and an embedded
+build runs it exactly as `--ext` does (`tests/issue_1291_block_import.rs`).
 
 #### Embedded executables (Part 1 of #1028)
 
@@ -1183,7 +1229,9 @@ owns the contract; this is the runtime view of it.
   after `Py_InitializeFromConfig`); `PYTHONPATH` and ambient
   `site-packages` are ignored.
 - **Exit status.** An uncaught exception prints through `PyErr_Print` and
-  exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120.
+  exits 1; `sys.exit(n)` exits `n`; a failed finalization exits 120; on a
+  Windows host, a stub that cannot load its program DLL prints
+  `pycc: cannot load <path> (error N)` to stderr and exits 121 (D-253).
 - **Deviations from CPython.** `sys.flags.isolated` and `sys.flags.no_site`
   are 1, `sys.platlibdir` is `lib`, `sys.executable` and `sys.argv[0]` are the executable, and an
   uncaught pycc exception prints only its final `Type: message` line where a
@@ -1216,6 +1264,38 @@ owns the contract; this is the runtime view of it.
   under a site-packages directory is a native unless it is kept or rebound
   as a payload file, even when that directory lies inside the prefix or
   (on Linux) under a system library directory.
+- **Windows host (Part 1 of #1226, #1286, #1296).** A program
+  builds on a Windows host as a stub `OUT` plus `OUT.pycc\`
+  ([D-253](./decisions/D-253-windows-embedded-executable-a-stub-out-loading-a.md)).
+  The stub (`src/embed/pycc_embed_stub_windows.c`, static CRT, importing
+  only the system DLLs `KERNEL32` and `ntdll`) loads `OUT.pycc\pycc_program.dll` with
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`, so
+  the DLL's own imports resolve from the sidecar root and never from `PATH`,
+  and calls its `pycc_embed_main`. The program DLL holds the launcher, the
+  shim, the compiled module and `pycc_rt`, linked against `python314.dll`.
+  The sidecar holds `python314.dll`, `python3.dll`, the interpreter's
+  `vcruntime140.dll` and `vcruntime140_1.dll` when present, the filtered
+  `Lib\` and `DLLs\` (without `site-packages`, `__pycache__`, `test` and the
+  Tcl/Tk files), the program DLL and the marker, plus `closure\` holding
+  the program's locked pure-Python closure when it imports a root outside
+  the standard library (#1296); there is no `lib\`. The
+  launcher sets `sys.path` explicitly to `<sidecar>\Lib` then
+  `<sidecar>\DLLs`, then `<sidecar>\closure` when a closure is bundled, and
+  leaves `platlibdir` at its default. The build links
+  the program DLL into the swapped sidecar first and the stub at `OUT`
+  second: a failed program-DLL link leaves a sidecar without the DLL (a
+  stale `OUT` then exits 121), a failed stub link leaves a complete sidecar
+  beside a stale or missing `OUT`; both are exit 1. Deviations and limits:
+  the stub does not resolve symlinks; `sys.executable` and `sys.argv[0]` are
+  the stub's path as spawned; Windows 10 or later is required; whether the
+  artifact runs without the VC++ redistributable is not proven by CI (the
+  runners install it); and relocation is not fail-closed -- `DLLs\` is
+  copied wholesale with no PE import scan, so a `.pyd` depending on a library
+  outside the sidecar and System32 fails only after the move, until #1297.
+  A locked closure holding a file Windows would load as a PE image (a `.pyd`
+  or `.dll` suffix, or an `MZ` header on any suffix other than `.exe`) is
+  refused at exit 2 naming #1297 and `pycc build --ext`, and a static
+  libpython is refused there (D-251).
 - **Static libpython (Part 1 of #1227).** `pycc build --static-libpython`, or
   `[build] static = true` in a neighboring `pycc.toml`, links the embed
   interpreter's `LIBPL` archive into the executable whole (macOS
@@ -1235,7 +1315,15 @@ owns the contract; this is the runtime view of it.
   `libpython-sha256` against the file that identifies the interpreter, not
   the archive it links: the shared library when the interpreter is
   configured with one, else the archive, which is also what `pycc lock`
-  records for it (Part 2 of #1227, #1272).
+  records for it (Part 2 of #1227, #1272). A real archive is exercised
+  end to end by `tests/issue_1273_real_static_archive.rs` (Part 3 of
+  #1227, #1273) on the Linux CI legs, whose `actions/setup-python` CPython
+  3.14.7 is built `--enable-shared` and still installs `LIBPL/libpython3.14.a`:
+  the executables start CPython with no libpython in their sidecar or their
+  dynamic dependencies and load `_json`, `math`, `_random` and `_ssl` from
+  the bundled `lib-dynload`; one also bundles a locked closure. Their output
+  matches that interpreter's, except the closure's file path. A host whose `LIBPL` holds no genuine archive gets
+  the refusal instead.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

@@ -70,7 +70,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0108` | error | import cycle in top-level init, reported as the chain of files that closes it (`import cycle: `a.py` -> `b.py` -> `a.py``), emitted by the driver's project-module loader since #898/D-222 |
 | `I0401` | error | untyped value leaks across interop boundary |
 | `I0402` | error | CPython-backed direct import root rejected by the effective `allowlist` or `deny` interop policy (`--pure`, `--interop-policy`, or `[interop]` in `pycc.toml`), reported by `check`, `build` and `run` on every host since #1224 |
-| `I0403` | error | CPython import the effective interop policy admits but this build cannot embed (an excluded Tcl/Tk root, a `--target` build, or a Windows host until #1226; a root outside the standard library embeds from `pycc.lock` since #1242); `pycc build --ext` is required |
+| `I0403` | error | CPython import the effective interop policy admits but this build cannot embed (an excluded Tcl/Tk root or a `--target` build; a root outside the standard library embeds from `pycc.lock` on macOS and Linux since #1242 and on a Windows host since #1296, and a Windows host embeds standard-library roots since #1286); `pycc build --ext` is required |
 | `I0404` | error | operation on a CPython object is not supported yet |
 | `I0405` | error | a buffer-typed signature in native mode, under any source spelling (`memoryview`, `ndarray` or `NDArray`), or a function body that allocates artifact-owned buffer storage with `ndarray(n)`/`NDArray(n)` in native mode (#1165); `pycc build --ext` is required |
 | `W1001` | warning | unreachable code |
@@ -89,7 +89,8 @@ slice is implemented; the code remains reserved so older compiler output keeps
 an unambiguous meaning. HIR lowering uses it for valid Python outside the
 currently implemented frontend subset, with the unsupported AST node as the
 primary span and a message that names the rejected construct in Python terms
-(`a tuple`, ``an `import` inside a function or block body``, `a call whose
+(`a tuple`, ``an `import` inside a function or block body`` in a function,
+``an `import` inside a block body`` in a module-level block, `a call whose
 callee is a call expression`); a message never renders an AST node's Rust
 `Debug` form, and `tests/diagnostics_test.rs` scans every `.expected.txt`
 fixture for the `NodeIndex(` marker such a dump would carry (issue #890).
@@ -129,8 +130,8 @@ only a `@dataclass` instance or a caught builtin exception`` (with a help line
 naming the `@dataclass` alternative, and `an f-string interpolation` at the
 other site) and ``string conversion of a value typed as protocol `P` as an
 f-string interpolation is not supported yet; the concrete class is not known
-at the conversion site``. A user class declared under any of the 26 builtin
-exception names is rejected there whatever its shape, because the MIR
+at the conversion site``. A user class declared under any builtin
+exception name is rejected there whatever its shape, because the MIR
 rewrites resolve those names before the shape.
 An import failure
 CPython itself would raise on is `T0021`, not `C0001`. A `from __future__
@@ -151,10 +152,29 @@ same ``is a local name here, not the stdlib `math` module`` C0001 a local
 named `math` gets -- and, because the HIR keeps only the canonical spelling,
 a local named `math` while the module only ever writes `m.sqrt` is rejected
 as well (a recorded fail-closed residual, closed by
-[#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project or
-unregistered module (`import numpy as np`) keeps the plain-`import` C0001
-(``import of module `numpy` is not supported yet``,
-[#964](https://github.com/rotnov/pycc/issues/964) for project modules).
+[#768](https://github.com/rotnov/pycc/issues/768)). An alias on a project
+module keeps the plain-`import` C0001 (``import of module `geometry` is not
+supported yet``, [#964](https://github.com/rotnov/pycc/issues/964)), as does
+a dotted one. Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
+alias on an undotted module that is neither a project module nor a
+`pycc_std` registration (`import numpy as np`) is a foreign import instead,
+binding the CPython module object. An alias pycc resolves by its spelling
+-- any Python builtin (`range`, `super`, `property`, `ValueError`, ...), a
+`pycc_std` module name such as `typing`, or a marker pycc recognises without
+an import (`TYPE_CHECKING`; the base-class markers `Enum`, `StrEnum`,
+`Protocol`, `ABC`; `auto`, `override`, `abstractmethod`, `dataclass`,
+`runtime_checkable`, `dataclass_transform`, `field`; and the annotation names
+`ClassVar`, `Final`, `Self`, `Annotated`, `Any`, `TypeAlias`, `ndarray`,
+`NDArray`) -- is refused with its own C0001 (``binding the CPython module
+`foo` to `range`, a name pycc resolves by its spelling (a Python builtin, a
+stdlib module, or a typing, decorator or base-class marker), is not supported
+yet``), because the alias would otherwise be read as that other meaning. The
+canonical list is `PYTHON_BUILTINS` and `SPELLING_MARKERS` in
+`crates/pycc_hir/src/import/spelling.rs`. A foreign import nested in a
+module-level block that names a class the module defines, or a seeded builtin
+exception class the module mentions, is refused with the same ``import `X`
+collides with a class of the same name already defined in this module`` C0001
+as the top-level form, at the nested statement.
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.

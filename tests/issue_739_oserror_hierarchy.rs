@@ -366,7 +366,7 @@ fn a_user_class_inheriting_a_deep_family_member_is_caught_by_os_error_directly()
 // -- work item 5: the shadow-gate crash-risk regression test ---------------
 
 /// A module that shadows one `OSError`-family name at top level (which
-/// withholds seeding for *all* 26 builtin exception names, per the
+/// withholds seeding for *every* builtin exception name, per the
 /// all-or-nothing shadow gate) and, unrelated to it, names a different
 /// family member in a bare `except`, must compile to a clean `T0021` --
 /// never a compiler-internal panic. This is the regression test for work

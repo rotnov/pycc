@@ -315,18 +315,29 @@ fn many_exception_classes(prefix: &str, count: usize) -> String {
 /// `ImportBinding::Foreign` (Part 1 of #1026). `input` cannot do this: it
 /// lowers against an empty answer table, which that branch never fires on.
 fn foreign_input(display_path: &str, source: &str, import_stmt: &str) -> LinkInput {
-    let start = source
-        .find(import_stmt)
-        .expect("the fixture must contain its import statement");
-    let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        Span::new(start as u32, (start + import_stmt.len()) as u32),
-        crate::ResolvedImport::Foreign,
-    );
+    let parsed = parse(source);
+    let resolved = foreign_answer(&parsed, import_stmt);
     LinkInput {
         display_path: display_path.to_string(),
-        module: lower_module(&parse(source), &resolved, None).expect("a fixture module must lower"),
+        module: lower_module(&parsed, &resolved, None).expect("a fixture module must lower"),
     }
+}
+
+/// The driver's `ResolvedImport::Foreign` answer for the plain
+/// `import_stmt` (`import <name>`), keyed by the span `pycc_hir` itself
+/// requests it under -- the alias's own span since #1280 -- rather than a
+/// re-derived one.
+fn foreign_answer(parsed: &pycc_ast::ModModule, import_stmt: &str) -> ResolvedImports<'static> {
+    let name = import_stmt
+        .strip_prefix("import ")
+        .expect("a foreign fixture imports with a plain `import <name>`");
+    let request = crate::project_import_requests(parsed)
+        .into_iter()
+        .find(|request| request.module.as_deref() == Some(name) && request.names.is_empty())
+        .expect("the fixture must contain its import statement");
+    let mut resolved = ResolvedImports::default();
+    resolved.insert(request.span, crate::ResolvedImport::Foreign);
+    resolved
 }
 
 #[test]
@@ -345,7 +356,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 1,
+            site: crate::ForeignImportSite::Item(1),
             // `import numpy` follows `d = 4\n`, so the recorded span is
             // the import statement's own range, not the module's start.
             span: Span::new(6, 18),
@@ -360,7 +371,7 @@ fn linking_rebases_a_foreign_import_item_index_onto_the_program() {
         vec![ImportBinding::Foreign {
             local_name: "numpy".to_string(),
             module_path: "numpy".to_string(),
-            item_index: 4,
+            site: crate::ForeignImportSite::Item(4),
             span: Span::new(6, 18),
         }]
     );
@@ -416,7 +427,7 @@ fn a_foreign_import_no_other_module_shadows_still_links() {
         vec![ImportBinding::Foreign {
             local_name: "json".to_string(),
             module_path: "json".to_string(),
-            item_index: 1,
+            site: crate::ForeignImportSite::Item(1),
             span: Span::new(0, "import json".len() as u32),
         }],
         "the dependency-local index 0 is rebased past `a.py`'s one item"
@@ -433,16 +444,10 @@ fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
     // cross-module. Asserted here rather than only at the lowering site so
     // the two rules cannot drift into either a gap or a double report.
     let source = "import json\n\n\ndef json() -> int:\n    return 1\n";
-    let start = source
-        .find("import json")
-        .expect("fixture contains its import");
-    let mut resolved = ResolvedImports::default();
-    resolved.insert(
-        Span::new(start as u32, (start + "import json".len()) as u32),
-        crate::ResolvedImport::Foreign,
-    );
-    let diagnostics = lower_module(&parse(source), &resolved, None)
-        .expect_err("the shadowing module must be refused");
+    let parsed = parse(source);
+    let resolved = foreign_answer(&parsed, "import json");
+    let diagnostics =
+        lower_module(&parsed, &resolved, None).expect_err("the shadowing module must be refused");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].code, "C0001", "{diagnostics:?}");
     assert!(
@@ -450,5 +455,64 @@ fn a_module_shadowing_its_own_foreign_import_never_reaches_this_gate() {
             .message
             .contains("shadowing a foreign import is not supported yet"),
         "{diagnostics:?}"
+    );
+}
+
+/// Every plain `import` request in `source` answered `Foreign`, including
+/// an aliased or a nested one (#1291).
+fn all_foreign_input(display_path: &str, source: &str) -> LinkInput {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in crate::project_import_requests(&parsed) {
+        resolved.insert(request.span, crate::ResolvedImport::Foreign);
+    }
+    LinkInput {
+        display_path: display_path.to_string(),
+        module: lower_module(&parsed, &resolved, None).expect("a fixture module must lower"),
+    }
+}
+
+#[test]
+fn one_name_bound_to_two_cpython_modules_across_modules_is_rejected() {
+    let entry = "import colorsys as json\n";
+    let (index, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "import json\n"),
+        all_foreign_input("main.py", entry),
+    ]);
+    assert_eq!(index, 1, "the diagnostic belongs to the later module");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `json` to the CPython module `colorsys`, which `dep.py` binds \
+         to `json`; shadowing a foreign import across modules is not supported yet"
+    );
+    assert_eq!(
+        diagnostic.span,
+        Some(Span::new(0, entry.trim_end().len() as u32))
+    );
+}
+
+#[test]
+fn an_identical_foreign_pair_across_modules_links() {
+    let linked = link_and_finalize(vec![
+        all_foreign_input("dep.py", "import json\n"),
+        all_foreign_input("main.py", "if c:\n    import json\n"),
+    ])
+    .expect("the same module bound to the same name in two modules must link");
+    let sites: Vec<crate::ForeignImportSite> = linked
+        .imports
+        .iter()
+        .filter_map(|binding| match binding {
+            ImportBinding::Foreign { site, .. } => Some(*site),
+            _ => None,
+        })
+        .collect();
+    // The nested import keeps its `Block` site through the rebase.
+    assert_eq!(
+        sites,
+        vec![
+            crate::ForeignImportSite::Item(0),
+            crate::ForeignImportSite::Block
+        ]
     );
 }

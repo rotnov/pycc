@@ -103,7 +103,7 @@ pub(crate) fn try_build(
         Some(_) => Some(resolve_ext_output(out, target)?.module_name),
         None => None,
     };
-    let host = EmbedHost::resolve(target, cfg!(windows));
+    let host = EmbedHost::resolve(target);
     let (typed_hir, NeedsInterpreter(embedded)) = match ext {
         Some(_) => resolve_frontend(path, ext_module_name.as_deref())
             .map(|hir| (hir, NeedsInterpreter(false))),
@@ -156,9 +156,14 @@ pub(crate) fn try_build(
     // arguments and a different output path, but the spawn, the
     // spawn-failure message and the exit-status mapping below stay shared,
     // so neither mode can drift into its own untested tail.
-    let link_out: &Path = ext_plan
+    let embed_artifact = embed_plan
         .as_ref()
-        .map_or(out, |plan| plan.artifact.as_path());
+        .and_then(|plan| plan.artifact.as_deref());
+    let link_out = link_output(
+        out,
+        ext_plan.as_ref().map(|plan| plan.artifact.as_path()),
+        embed_artifact,
+    );
     let mut cmd = linker_command(target);
     if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
@@ -195,6 +200,44 @@ pub(crate) fn try_build(
         // always one of `linker_command`'s compile-time-fixed values
         // (`cc`, or the D-028 bundled-clang path built from
         // `LLVM_SYS_221_PREFIX`), never user-controlled input.
+        eprintln!(
+            "error: could not run the linker driver `{}`: {e}",
+            cmd.get_program().to_string_lossy()
+        );
+        ExitCode::from(2)
+    })?;
+    #[cfg(windows)]
+    if status.success()
+        && let Some(stub) = embed_plan.as_ref().and_then(|plan| plan.stub.as_ref())
+    {
+        return link_windows_stub(stub, target);
+    }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ExitCode::from(1))
+    }
+}
+
+/// The file the shared link writes: the `--ext` artifact, or on Windows
+/// the embedded build's program DLL in the sidecar (D-253), else `OUT`.
+fn link_output<'a>(out: &'a Path, ext: Option<&'a Path>, embed: Option<&'a Path>) -> &'a Path {
+    ext.or(embed).unwrap_or(out)
+}
+
+/// Links a Windows embedded build's stub `OUT` after its program DLL
+/// (D-253), with the same driver, target and system libraries as the
+/// shared link, and the same exit mapping: a spawn failure is exit 2, a
+/// failed link exit 1. Executed by the Windows integration tests.
+#[cfg(windows)]
+fn link_windows_stub(stub: &embed::StubLink, target: Option<&str>) -> Result<(), ExitCode> {
+    let mut cmd = linker_command(target);
+    if let Some(triple) = effective_link_target(target) {
+        cmd.arg("-target").arg(triple);
+    }
+    cmd.args(embed::stub_link_args(stub));
+    add_windows_system_libs(&mut cmd);
+    let status = cmd.status().map_err(|e| {
         eprintln!(
             "error: could not run the linker driver `{}`: {e}",
             cmd.get_program().to_string_lossy()
@@ -515,6 +558,22 @@ pub(crate) fn find_pycc_rt_lib_dir(
 #[cfg(test)]
 fn no_python() -> embed::EmbedToolchain {
     embed::EmbedToolchain::with_interpreter("pycc-test-no-such-python")
+}
+
+#[cfg(test)]
+mod link_output_tests {
+    use super::link_output;
+    use std::path::Path;
+
+    /// The `--ext` artifact wins, then a Windows embedded build's program
+    /// DLL (D-253), then `OUT`.
+    #[test]
+    fn the_link_writes_the_ext_artifact_then_the_program_dll_then_out() {
+        let (out, ext, dll) = (Path::new("app"), Path::new("m.so"), Path::new("p.dll"));
+        assert_eq!(link_output(out, Some(ext), None), ext);
+        assert_eq!(link_output(out, None, Some(dll)), dll);
+        assert_eq!(link_output(out, None, None), out);
+    }
 }
 
 #[cfg(test)]
@@ -862,10 +921,11 @@ mod ext_build_wiring_tests {
     }
 }
 
-/// Embedded mode exists on macOS and Linux only; on Windows the same
-/// source is refused with `I0403` before any of this runs (#1226), which
-/// `embed_build_windows_tests` below and
-/// `tests/issue_1223_embedded_executable.rs` pin.
+/// These tests run on macOS and Linux, whose fake interpreter layout they
+/// use. A Windows host embeds every root the same way (#1286, #1296),
+/// which `embed_build_windows_tests` below,
+/// `tests/issue_1286_windows_embedded_executable.rs` and
+/// `tests/issue_1296_windows_locked_closure.rs` pin.
 #[cfg(all(test, not(windows)))]
 mod embed_build_wiring_tests {
     use super::*;
@@ -907,7 +967,8 @@ mod embed_build_wiring_tests {
     }
 
     /// A standard-library import with no usable interpreter is an
-    /// environment failure (exit 2), reported before codegen.
+    /// environment failure (exit 2), reported before codegen. The Windows
+    /// twin is in `embed_build_windows_tests`.
     #[test]
     fn an_embedded_build_without_an_interpreter_is_an_environment_failure() {
         let dir = ScratchDir::new("embed_no_python").expect("scratch");
@@ -935,11 +996,35 @@ mod embed_build_windows_tests {
     use super::*;
     use pycc_scratch::ScratchDir;
 
-    /// A standard-library import on a Windows host is refused with `I0403`
-    /// (exit 1) before the embed tail: no probe, no codegen, no sidecar.
+    /// A Windows import outside the standard library reaches the embed tail
+    /// (#1296): with no `pycc.lock` it is refused as on every host (exit 2,
+    /// naming `pycc lock`), before codegen and with no sidecar.
     #[test]
-    fn a_standard_library_import_is_refused_before_the_embed_tail() {
+    fn a_non_standard_library_import_without_a_lock_is_an_environment_failure() {
         let dir = ScratchDir::new("embed_windows_refused").expect("scratch");
+        let src = dir.join("main.py");
+        std::fs::write(&src, "import numpy\n").expect("write source");
+        let code = try_build(
+            &src,
+            &dir.join("app"),
+            None,
+            false,
+            &dir.join("main.o"),
+            None,
+            &no_python(),
+            InteropCli::default(),
+        )
+        .expect_err("no lock");
+        assert_eq!(code, ExitCode::from(2));
+        assert!(!dir.join("main.o").exists(), "codegen never ran");
+        assert!(!dir.join("app.pycc").exists());
+    }
+    /// A standard-library import on a Windows host reaches the embed tail
+    /// (#1286): with no usable interpreter it is an environment failure
+    /// (exit 2), reported before codegen.
+    #[test]
+    fn a_standard_library_import_without_an_interpreter_is_an_environment_failure() {
+        let dir = ScratchDir::new("embed_windows_no_python").expect("scratch");
         let src = dir.join("main.py");
         std::fs::write(&src, "import json\n").expect("write source");
         let code = try_build(
@@ -952,8 +1037,8 @@ mod embed_build_windows_tests {
             &no_python(),
             InteropCli::default(),
         )
-        .expect_err("refused on a Windows host");
-        assert_eq!(code, ExitCode::from(1));
+        .expect_err("no interpreter");
+        assert_eq!(code, ExitCode::from(2));
         assert!(!dir.join("main.o").exists(), "codegen never ran");
         assert!(!dir.join("app.pycc").exists());
     }

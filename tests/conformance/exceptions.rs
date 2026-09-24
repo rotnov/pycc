@@ -147,3 +147,59 @@ fn pep_0654_except_star_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0654_except_star.py"
     );
 }
+
+// #1292 (Part 2 of #1282): the appended `ImportError`/`ModuleNotFoundError`
+// builtins. Each class is caught by its own name, by `ImportError` and by
+// `Exception`; an `except ModuleNotFoundError:` handler lets a plain
+// `ImportError` fall to the next handler; a user `ImportError` subclass is
+// caught by `except ImportError:`; and `issubclass` follows CPython's real
+// `ModuleNotFoundError` -> `ImportError` -> `Exception` hierarchy. Every
+// raise uses a literal message. The first caught exception is printed
+// twice: #1298 fixed the bound exception's message refcount that once
+// limited this fixture to a single print per exception.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn builtin_import_error_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/builtin_import_error.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("builtin_import_error_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/builtin_import_error.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("builtin_import_error_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/builtin_import_error.py"
+    );
+}
+
+// #1298: a caught exception's message survives any number of renderings.
+// `print(e)` and f-string interpolation each borrow the message the
+// exception owns, and a raise whose message is a variable, an attribute or
+// a parameter gives the exception its own reference, so the message
+// outlives its original owner being overwritten or going out of scope.
+// Covers literal, computed, variable, attribute and escaping-local
+// messages; single- and multi-part f-strings; the OSError family; user
+// exception classes; a runtime-raised builtin; a bare re-raise; and
+// rebinding the handler name. Not a PEP-matrix row.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn exception_message_reuse_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exception_message_reuse.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("exception_message_reuse_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/exception_message_reuse.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("exception_message_reuse_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/exception_message_reuse.py"
+    );
+}

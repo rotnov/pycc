@@ -114,7 +114,9 @@ static PyObject *pycc_ext_user_exception_class(unsigned char tag);
  * `BUILTIN_EXCEPTION_CLASSES` array order, which this file cannot see from
  * C: tags 0..=6 are the flat seven, which `pycc_rt::exception` also names as
  * `EXCEPTION_TYPE_*` constants, and tags 7..=22 are the PEP 3151 `OSError`
- * family. Two tests are this switch's drift guard -- `ext_bridge`'s
+ * family; 25..=27 are `OverflowError`, `ImportError` and
+ * `ModuleNotFoundError`, and 23..=24 (the PEP 654 groups) fall to
+ * `default:`. Two tests are this switch's drift guard -- `ext_bridge`'s
  * `exception_type_tags_match_the_c_shims_hardcoded_switch` for the seven
  * constants, and `ext_build_tests`'
  * `every_exception_tag_the_c_shim_switches_on_still_names_that_class` for
@@ -213,11 +215,21 @@ static int pycc_ext_raise_pending(void)
     case 25:
         exc_type = PyExc_OverflowError;
         break;
+    /* #1292 (Part 2 of #1282): `ImportError` and `ModuleNotFoundError`,
+     * appended past `OverflowError` the same way. Both have a `PyExc_*`
+     * object a lone message constructs (`PyExc_ModuleNotFoundError` is
+     * available under this file's limited API since 3.6). */
+    case 26:
+        exc_type = PyExc_ImportError;
+        break;
+    case 27:
+        exc_type = PyExc_ModuleNotFoundError;
+        break;
     default:
         /*
          * Tag 0 is `Exception`. So, deliberately, are the two remaining
          * builtin tags -- a hole in the otherwise contiguous switched range,
-         * since tag 25 above sits past them -- and every user-defined class:
+         * since tags 25..=27 above sit past them -- and every user-defined class:
          *
          *  - tags 23..=24 are `BaseExceptionGroup`/`ExceptionGroup`. The C
          *    API exposes no `PyExc_ExceptionGroup` at all, and the type it

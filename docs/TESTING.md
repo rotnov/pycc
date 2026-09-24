@@ -13,8 +13,8 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
-| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs` and `tests/issue_1142_ext_buffer_store.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
-| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
+| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs`, `tests/issue_1142_ext_buffer_store.rs` and `tests/issue_1292_import_error.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
+| 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, `tests/issue_1286_windows_embedded_executable.rs`, `tests/issue_1296_windows_locked_closure.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; on a Windows host, the stub `OUT` plus the program DLL match CPython 3.14.7 for standard-library programs (D-253) and for a pure-Python locked closure (#1296); a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
 | 10. Interop policy | `tests/issue_1224_interop_policy.rs`, the `i0402_*` snapshots under `tests/diagnostics/`, plus `src/interop_policy/tests.rs` | `--interop-policy`, `--pure` and `[interop]` admit or reject each CPython-backed root alike in `check`, `build` and `run`, a rejection is `I0402` on every host and precedes any `I0403` (D-128) |
 
 Layers 4 and 6 are planned and not yet implemented on current `main`; no
@@ -33,7 +33,8 @@ than an accident of those two files.
 
 The harness's own Rust sources are a different thing from that fixture tree.
 `tests/conformance.rs` is the crate root, and its cohort submodules live at
-`tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `numeric.rs`),
+`tests/conformance/*.rs` (`classes.rs`, `exceptions.rs`, `imports.rs`,
+`numeric.rs`),
 `#[path]`-declared from the root's `harness_modules!` block; a new fixture's
 test goes in the cohort that owns its semantics. Per
 [D-221](./decisions/D-221-the-conformance-harness-is-the-root-file-plus-its.md),
@@ -452,7 +453,14 @@ achieve.
   tests (and `tests/issue_1081_foreign_method_call.rs`'s embedded `gc`
   test) build a real embedded executable, so they need `python3.14` on
   `PATH` to be CPython 3.14.7, or `PYCC_PYTHON` naming one; the Tier-1
-  non-Windows legs run them under `--include-ignored`. Each takes its CPython
+  non-Windows legs run them under `--include-ignored`, and the `gc` test runs
+  on the Windows leg too. `tests/issue_1286_windows_embedded_executable.rs`
+  is their Windows counterpart (D-253): its `#[ignore]`d tests run on the
+  Windows leg against `python3.14.exe`, where a missing CPython 3.14.7 or
+  `llvm-readobj` fails them instead of skipping, and cover the oracle
+  program, relocation under a scrubbed `PATH`, the `DLLs\` extension
+  modules, `pycc run`, `sys.exit(3)`, the missing-DLL exit 121, the sidecar's
+  file set and the stub's system-DLL-only imports (`KERNEL32`, `ntdll`). Each takes its CPython
   oracle from the bundle's `PYCC-BUNDLE` marker and asserts it is 3.14.7.
   They cover the synthetic oracle program, relocation, `PYTHONPATH`
   isolation, `pycc run`, `sys.exit(3)`, and the freshness of
@@ -469,6 +477,14 @@ achieve.
   relocation arm on `cc`-built images. Its `#[ignore]`d oracle locks a
   `venv --without-pip` holding the test-authored `tinypkg`/`tinydep`,
   builds, moves the venv away, and compares the run with CPython 3.14.7.
+- **Real static archive (#1273).** `tests/issue_1273_real_static_archive.rs`'s
+  `#[ignore]`d tests probe the interpreter's `LIBPL/LIBRARY`. When it is a
+  genuine ar archive, they build `--static-libpython` executables and
+  compare them with CPython 3.14.7: `_json`, `math`, `_random` and `_ssl`
+  loaded from `lib-dynload`, and a locked closure. When it is not, they
+  assert D-251's refusal instead; on a Linux GitHub Actions leg, whose
+  `actions/setup-python` interpreter ships the archive, a missing archive
+  fails the test.
 - **Bounds.** Every spawn of a built embedded executable uses
   `Command::output()`, whose stdin is null; a manual run should be
   time-bounded with stdin closed, e.g.
@@ -874,8 +890,9 @@ edit was made:
 |---|---|---|
 | `C0001` import of `itertools` / `collections` not supported yet | 1 each | #1278 (`itertools`); #882 (`collections`) |
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
-| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280 |
-| `C0001` `import` inside a block body (module-level `try`/`if`) | 3 | #1282 |
+| `C0001` only a single module per `import` statement (`import sys, re`) | 1 | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
+| `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. That is compile-time only: both sit in `try: ... except ImportError:`, and when the module is absent the handler does not run yet (the #1096 deviation; catching it is #1293). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
+| `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 1 | #1138 (dotted foreign submodules) and #1282, whose third occurrence this is: before #1291 it was the block-body `C0001`, and the dotted name now fails on its own |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
@@ -1114,7 +1131,9 @@ the sweep and the per-record shapes — and the third is independent of both:
    boundary does not admit the way they spell it. Four separate gaps stand
    between them, each verified against `5e96f065` with a synthetic reproducer
    and each tracked: the aliased import form `import numpy as np` is rejected
-   while the bare `import numpy` is accepted (import aliasing, #883); `from
+   while the bare `import numpy` is accepted (import aliasing, #883; since
+   #1291 `import numpy as np` binds `np` to the CPython module object as a
+   foreign import, and the census was not re-measured); `from
    numpy.typing import NDArray` is rejected (`C0001`, the #882 family); an
    attribute-form annotation `np.ndarray` is rejected (#889), as is a
    subscripted one — `T0044`, the annotated class defining no
@@ -1219,7 +1238,10 @@ the sweep and the per-record shapes — and the third is independent of both:
    occurrences compile. Each of them still needs a name binding that does
    not exist: `from numpy.typing import NDArray` (the foreign-import path,
    per (c) above), `import numpy as np`
-   ([#883](https://github.com/rotnov/pycc/issues/883)), or an attribute-form
+   ([#883](https://github.com/rotnov/pycc/issues/883); since
+   [#1291](https://github.com/rotnov/pycc/issues/1291) this binding exists
+   as a foreign import, but an array parameter still needs a spelling the
+   boundary admits, and the census was not re-measured), or an attribute-form
    base `np.ndarray` ([#889](https://github.com/rotnov/pycc/issues/889)).
    Registering the name is necessary, not sufficient — a reader must not
    infer any progress on this prerequisite from it. The operative
@@ -1462,15 +1484,18 @@ D-128's transparent interop contract is partly implemented: the embedded
 executable for standard-library roots (#1223, D-248) and the policy surface
 (#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242),
 its native libraries outside the interpreter (#1243), and macOS relative
-references outside a closure payload (#1259) exist; Windows embedding
-(#1226) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
+references outside a closure payload (#1259) exist, and so does Windows
+embedding of standard-library roots (#1286, D-253) and of a pure-Python
+locked closure (#1296, `tests/issue_1296_windows_locked_closure.rs`); a
+Windows closure holding a native image (#1297) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
 - unchanged source fixtures containing both `import numpy as np` and
   `from numpy import array` build and run under the default `auto` policy
-  without a separately installed Python. *Pending:* both spellings are
-  `C0001` today; a plain `import numpy` embeds from `pycc.lock` (#1242);
+  without a separately installed Python. *Pending:* `from numpy import
+  array` is `C0001` today; `import numpy as np` binds a foreign module since
+  #1291, and a plain `import numpy` embeds from `pycc.lock` (#1242);
 - the produced `pycc.lock` and deployment bundle select the exact intended
   CPython, package, and native-library artifacts and never consult ambient
   `site-packages` at runtime. *Partly covered:* the lock's closure, integrity
@@ -1534,9 +1559,11 @@ tests that cover it now, or the owner of what is still missing.
 Each negative case requires both human and versioned JSON diagnostic snapshots.
 The automatic and allowlist cases must also exercise target-specific native
 package artifacts rather than passing only with a pure-Python stand-in
-(*pending:* #1225). Admission on a Windows host is *pending* #1226: an
-admitted root is `I0403` there, so every admission test is gated
-`cfg(not(windows))`.
+(*pending:* #1225). Admission on a Windows host is delivered for
+standard-library roots by #1286 (`tests/issue_1224_interop_policy.rs`'s
+admission tests run on every host) and for other roots with a pure-Python
+locked closure by #1296 (`tests/issue_1296_windows_locked_closure.rs`); a
+closure holding a native image is *pending* #1297.
 
 ## The bot (planned)
 

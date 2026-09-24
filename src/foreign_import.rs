@@ -8,12 +8,13 @@
 //! interpreter only by *embedding* one (D-128's `auto` default, realized for
 //! the standard library by Part 1 of #1028): the executable starts a bundled
 //! CPython and runs the compiled module as its `__main__`. Embedding is
-//! possible on a macOS or Linux host, with no `--target`, for every root
-//! except a standard-library one the bundle excludes (Tcl/Tk); a root
-//! outside the standard library is bundled from the program's `pycc.lock`
-//! closure, which the build checks and refuses there, naming `pycc lock`
-//! (#1242). Every other foreign import is refused here with `I0403` rather
-//! than compiled into a call that could only fail at run time.
+//! possible on a macOS, Linux or Windows host with no `--target`, for
+//! every root except a standard-library one the bundle excludes (Tcl/Tk);
+//! a root outside the standard library is bundled from the program's
+//! `pycc.lock` closure, which the build checks and refuses there, naming
+//! `pycc lock` (#1242, on Windows #1296). Every other foreign import is
+//! refused here with `I0403` rather than compiled into a call that could
+//! only fail at run time.
 //!
 //! The interop policy (D-128, #1224) is evaluated first, per import: an
 //! import the effective policy rejects is `I0402` on every host and
@@ -33,27 +34,20 @@ use pycc_hir::{HirModule, ImportBinding};
 /// individual import is looked at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmbedHost {
-    /// A macOS or Linux host building for itself.
+    /// A macOS, Linux or Windows host building for itself.
     Available,
     /// `--target` was given: the bundled interpreter is the build host's,
     /// so it cannot serve another target.
     CrossTarget,
-    /// A Windows host, which Part 4 of #1028 (#1226) adds.
-    WindowsHost,
 }
 
 impl EmbedHost {
-    /// Resolves the host from the build's `--target` and the host family.
-    ///
-    /// Pure, and the host family is a parameter rather than a `cfg!` read,
-    /// so every arm is unit-tested on every host (the `ExtLinkPlatform`
-    /// precedent). `--target` wins over a Windows host, so a `--target`
-    /// build reports the same reason on every Tier-1 leg.
-    pub(crate) fn resolve(target: Option<&str>, host_is_windows: bool) -> Self {
+    /// Resolves the host from the build's `--target`, which reports the
+    /// same reason on every Tier-1 leg. Every Tier-1 host embeds for
+    /// itself: Windows since #1296 no longer narrows the roots it embeds.
+    pub(crate) fn resolve(target: Option<&str>) -> Self {
         if target.is_some() {
             EmbedHost::CrossTarget
-        } else if host_is_windows {
-            EmbedHost::WindowsHost
         } else {
             EmbedHost::Available
         }
@@ -66,13 +60,12 @@ impl EmbedHost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NeedsInterpreter(pub(crate) bool);
 
-/// Why one foreign import cannot be embedded, in precedence order: a
-/// host-level reason applies to every foreign import in the program and
-/// wins over the per-root ones.
+/// Why one foreign import cannot be embedded, in precedence order:
+/// `CrossTarget` is host-level, applying to every foreign import in the
+/// program and winning over the per-root `ExcludedStdlibRoot`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum I0403Reason {
     CrossTarget,
-    WindowsHost,
     ExcludedStdlibRoot,
 }
 
@@ -88,11 +81,6 @@ pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
              `pycc build --ext` in a `--target` build: an embedded executable \
              bundles the build host's own interpreter, which cannot serve another target"
         ),
-        I0403Reason::WindowsHost => format!(
-            "`import {module_path}` imports a CPython module, which requires \
-             `pycc build --ext` on a Windows host: pycc cannot embed a CPython \
-             interpreter into a Windows executable yet (#1226)"
-        ),
         I0403Reason::ExcludedStdlibRoot => format!(
             "`import {module_path}` imports a standard-library module that needs \
              Tcl/Tk libraries from outside the interpreter, which requires \
@@ -104,15 +92,13 @@ pub(crate) fn i0403_message(module_path: &str, reason: I0403Reason) -> String {
 /// The reason `module_path` cannot be embedded on `host`, or `None` when
 /// it can.
 fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
-    match host {
-        EmbedHost::CrossTarget => return Some(I0403Reason::CrossTarget),
-        EmbedHost::WindowsHost => return Some(I0403Reason::WindowsHost),
-        EmbedHost::Available => {}
+    if host == EmbedHost::CrossTarget {
+        return Some(I0403Reason::CrossTarget);
     }
+    let root = module_path.split('.').next().unwrap_or(module_path);
     // A root outside the standard library is embeddable too: the build
     // bundles it from the program's `pycc.lock` closure, and refuses there,
-    // naming `pycc lock`, when the lock is missing or stale (#1242).
-    let root = module_path.split('.').next().unwrap_or(module_path);
+    // naming `pycc lock`, when the lock is missing or stale (#1242, #1296).
     is_excluded_stdlib_root(root).then_some(I0403Reason::ExcludedStdlibRoot)
 }
 
@@ -136,7 +122,7 @@ fn refusal_reason(module_path: &str, host: EmbedHost) -> Option<I0403Reason> {
 /// file's path and source instead of being attributed wholesale to the
 /// entry (PR 1c of #1080 review finding 2).
 ///
-/// The position, not `item_index`: an import's recorded item index is the
+/// The position, not the item index: an import's recorded item index is the
 /// item count at the moment it lowered, so a *trailing* import in one file
 /// and a *leading* import in the next record the same linked index and no
 /// arithmetic on the per-file item bounds can tell them apart. The import
@@ -207,7 +193,7 @@ mod tests {
         ImportBinding::Foreign {
             local_name: name.to_string(),
             module_path: name.to_string(),
-            item_index: 0,
+            site: pycc_hir::ForeignImportSite::Item(0),
             span: Span::new(0, 0),
         }
     }
@@ -227,22 +213,13 @@ mod tests {
 
     const AUTO: EffectivePolicy = EffectivePolicy::Auto;
 
-    const ALL_HOSTS: [EmbedHost; 3] = [
-        EmbedHost::Available,
-        EmbedHost::CrossTarget,
-        EmbedHost::WindowsHost,
-    ];
+    const ALL_HOSTS: [EmbedHost; 2] = [EmbedHost::Available, EmbedHost::CrossTarget];
 
     #[test]
-    fn the_host_resolves_with_target_winning_over_windows() {
-        assert_eq!(EmbedHost::resolve(None, false), EmbedHost::Available);
-        assert_eq!(EmbedHost::resolve(None, true), EmbedHost::WindowsHost);
+    fn the_host_resolves_from_the_target_alone() {
+        assert_eq!(EmbedHost::resolve(None), EmbedHost::Available);
         assert_eq!(
-            EmbedHost::resolve(Some("x86_64-apple-darwin"), false),
-            EmbedHost::CrossTarget
-        );
-        assert_eq!(
-            EmbedHost::resolve(Some("x86_64-apple-darwin"), true),
+            EmbedHost::resolve(Some("x86_64-apple-darwin")),
             EmbedHost::CrossTarget
         );
     }
@@ -285,20 +262,35 @@ mod tests {
 
     #[test]
     fn a_host_level_reason_refuses_every_foreign_import_even_a_standard_library_one() {
-        for (host, reason) in [
-            (EmbedHost::CrossTarget, I0403Reason::CrossTarget),
-            (EmbedHost::WindowsHost, I0403Reason::WindowsHost),
-        ] {
-            let gaps = messages(host, vec![foreign("json"), project(), foreign("numpy")]);
-            assert_eq!(
-                gaps,
-                vec![
-                    (0, i0403_message("json", reason)),
-                    (2, i0403_message("numpy", reason)),
-                ],
-                "{host:?}"
-            );
-        }
+        let reason = I0403Reason::CrossTarget;
+        let gaps = messages(
+            EmbedHost::CrossTarget,
+            vec![foreign("json"), project(), foreign("numpy")],
+        );
+        assert_eq!(
+            gaps,
+            vec![
+                (0, i0403_message("json", reason)),
+                (2, i0403_message("numpy", reason)),
+            ]
+        );
+    }
+
+    /// #1291: a nested import is refused like a top-level one, at its own
+    /// span.
+    #[test]
+    fn a_block_foreign_import_is_refused_at_its_own_span() {
+        let nested = ImportBinding::Foreign {
+            local_name: "json".to_string(),
+            module_path: "json".to_string(),
+            site: pycc_hir::ForeignImportSite::Block,
+            span: Span::new(10, 21),
+        };
+        let gaps = classify_for_native_build(&hir(vec![nested]), EmbedHost::CrossTarget, &AUTO)
+            .expect_err("refused");
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].1.code, "I0403");
+        assert_eq!(gaps[0].1.span, Some(Span::new(10, 21)));
     }
 
     #[test]
@@ -352,7 +344,6 @@ mod tests {
     fn every_reason_names_the_import_and_the_ext_alternative() {
         for (reason, detail) in [
             (I0403Reason::CrossTarget, "`--target` build"),
-            (I0403Reason::WindowsHost, "Windows host"),
             (I0403Reason::ExcludedStdlibRoot, "Tcl/Tk"),
         ] {
             let message = i0403_message("numpy", reason);

@@ -491,8 +491,9 @@ fn a_bigint_int_argument_raises_overflow_error_in_the_host() {
 
 /// Since #1223 a plain `pycc build` of a standard-library method call
 /// builds an embedded executable that really calls into CPython:
-/// `gc.disable()` then `gc.isenabled()` observes the effect.
-#[cfg(not(windows))]
+/// `gc.disable()` then `gc.isenabled()` observes the effect. Since #1286 it
+/// runs on the Windows leg too (a stub `m` plus `m.pycc\`, D-253); the
+/// comparison applies D-082's `\r\n` normalization so either writer passes.
 #[test]
 #[ignore = "needs CPython 3.14.7 as python3.14 or PYCC_PYTHON; run with --include-ignored"]
 fn a_standard_library_method_call_builds_embedded_and_runs() {
@@ -513,5 +514,5 @@ fn a_standard_library_method_call_builds_embedded_and_runs() {
         .output()
         .expect("the embedded binary runs");
     assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
-    assert_eq!(stdout_of(&run), "off\n");
+    assert_eq!(stdout_of(&run).replace("\r\n", "\n"), "off\n");
 }

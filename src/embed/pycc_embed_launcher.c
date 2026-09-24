@@ -13,17 +13,25 @@
  * Unlike the shim, this file uses the non-limited API: `PyConfig_*` is not
  * part of the stable ABI. The two are separate translation units, so the
  * shim's own `Py_LIMITED_API` definition does not reach this one.
+ *
+ * On Windows (D-253) this file is linked into the program DLL
+ * `OUT.pycc\pycc_program.dll` instead of the executable: it exports
+ * `pycc_embed_main`, which the stub `OUT` (`pycc_embed_stub_windows.c`)
+ * calls with the sidecar's path. The POSIX `main` below is not compiled
+ * there. Both entry points share `pycc_embed_run`.
  */
 #include <Python.h>
-#include <limits.h>
-#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <libgen.h>
+#include <limits.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #else
 #include <unistd.h>
+#endif
 #endif
 
 /* Defines PYCC_EMBED_SIDECAR: the sidecar directory's file name, fixed at
@@ -35,6 +43,91 @@
 
 extern PyObject *PyInit___main__(void);
 
+/* Runs the compiled program as `__main__` in the initialized interpreter,
+ * then finalizes it. Returns the process exit status: 0, 1 after an
+ * uncaught exception, or 120 when finalization fails. */
+static int pycc_embed_run(void) {
+    int rc = 1;
+    PyObject *def = PyInit___main__();
+    PyObject *machinery = def ? PyImport_ImportModule("importlib.machinery") : NULL;
+    PyObject *spec =
+        machinery ? PyObject_CallMethod(machinery, "ModuleSpec", "sO", "__main__", Py_None) : NULL;
+    PyObject *module = spec ? PyModule_FromDefAndSpec((PyModuleDef *)def, spec) : NULL;
+    if (module != NULL &&
+        PyDict_SetItemString(PyImport_GetModuleDict(), "__main__", module) == 0 &&
+        PyModule_ExecDef(module, (PyModuleDef *)def) == 0) {
+        rc = 0;
+    }
+    if (rc != 0) {
+        /* A `SystemExit` exits the process here with its own code. */
+        PyErr_Print();
+    }
+    Py_XDECREF(module);
+    Py_XDECREF(spec);
+    Py_XDECREF(machinery);
+    if (Py_FinalizeEx() < 0) {
+        rc = 120;
+    }
+    return rc;
+}
+
+#ifdef _WIN32
+/* The program DLL's entry point, called by the stub `OUT` with its own
+ * argv and the sidecar directory's full path (D-253). The search path is
+ * explicit -- `<sidecar>\Lib`, then `<sidecar>\DLLs`, then the locked
+ * closure `<sidecar>\closure` when the sidecar holds one (#1296) -- so
+ * nothing is inherited from `getpath`, the registry or the environment. */
+__declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_t *sidecar) {
+    static wchar_t lib[32768];
+    static wchar_t dlls[32768];
+    const size_t size = sizeof lib / sizeof lib[0];
+    if (_snwprintf(lib, size, L"%ls\\Lib", sidecar) < 0 ||
+        _snwprintf(dlls, size, L"%ls\\DLLs", sidecar) < 0) {
+        fwprintf(stderr, L"error: pycc could not form the search path under %ls\n", sidecar);
+        return 1;
+    }
+    lib[size - 1] = L'\0';
+    dlls[size - 1] = L'\0';
+#ifdef PYCC_EMBED_CLOSURE
+    static wchar_t closure[32768];
+    if (_snwprintf(closure, size, L"%ls\\closure", sidecar) < 0) {
+        fwprintf(stderr, L"error: pycc could not form the search path under %ls\n", sidecar);
+        return 1;
+    }
+    closure[size - 1] = L'\0';
+#endif
+    PyConfig config;
+    PyConfig_InitIsolatedConfig(&config);
+    config.site_import = 0;
+    config.write_bytecode = 0;
+    /* Unbuffered for the reason the POSIX `main` gives. */
+    config.buffered_stdio = 0;
+    PyStatus status = PyConfig_SetString(&config, &config.home, sidecar);
+    config.module_search_paths_set = 1;
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, lib);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, dlls);
+    }
+#ifdef PYCC_EMBED_CLOSURE
+    if (!PyStatus_Exception(status)) {
+        status = PyWideStringList_Append(&config.module_search_paths, closure);
+    }
+#endif
+    if (!PyStatus_Exception(status)) {
+        status = PyConfig_SetArgv(&config, argc, argv);
+    }
+    if (!PyStatus_Exception(status)) {
+        status = Py_InitializeFromConfig(&config);
+    }
+    PyConfig_Clear(&config);
+    if (PyStatus_Exception(status)) {
+        Py_ExitStatusException(status);
+    }
+    return pycc_embed_run();
+}
+#else
 /* Writes the directory holding the running executable, symlinks resolved,
  * into `dir`. Returns 0 on success. */
 static int pycc_embed_exe_dir(char *dir, size_t size) {
@@ -124,26 +217,6 @@ int main(int argc, char **argv) {
         Py_DECREF(entry);
     }
 #endif
-    int rc = 1;
-    PyObject *def = PyInit___main__();
-    PyObject *machinery = def ? PyImport_ImportModule("importlib.machinery") : NULL;
-    PyObject *spec =
-        machinery ? PyObject_CallMethod(machinery, "ModuleSpec", "sO", "__main__", Py_None) : NULL;
-    PyObject *module = spec ? PyModule_FromDefAndSpec((PyModuleDef *)def, spec) : NULL;
-    if (module != NULL &&
-        PyDict_SetItemString(PyImport_GetModuleDict(), "__main__", module) == 0 &&
-        PyModule_ExecDef(module, (PyModuleDef *)def) == 0) {
-        rc = 0;
-    }
-    if (rc != 0) {
-        /* A `SystemExit` exits the process here with its own code. */
-        PyErr_Print();
-    }
-    Py_XDECREF(module);
-    Py_XDECREF(spec);
-    Py_XDECREF(machinery);
-    if (Py_FinalizeEx() < 0) {
-        rc = 120;
-    }
-    return rc;
+    return pycc_embed_run();
 }
+#endif /* _WIN32 */

@@ -79,29 +79,66 @@ fn urlsafe_base64_decodes_known_vectors_and_refuses_garbage() {
 
 #[test]
 fn names_root_matches_packages_modules_and_extensions_only() {
+    for platform in [EmbedPlatform::MacOs, EmbedPlatform::Linux] {
+        for yes in [
+            "R/x.py",
+            "R/sub/y.py",
+            "R.py",
+            "R.pyc",
+            "R.so",
+            "R.abi3.so",
+            "R.cpython-314-darwin.so",
+            "R.cpython-314-x86_64-linux-gnu.so",
+        ] {
+            assert!(names_root(yes, "R", platform), "{yes}");
+        }
+        for no in [
+            "Rx.py",
+            "R.dist-info/RECORD",
+            "R.pth",
+            "R/",
+            "R..so",
+            "x/R.py",
+            "R.a/b.so",
+            "R",
+            "R.pyw",
+            "R.pyd",
+            "R.cp314-win_amd64.pyd",
+        ] {
+            assert!(!names_root(no, "R", platform), "{no}");
+        }
+    }
+}
+
+/// A Windows host's import suffixes (#1296): `.pyw` sources and `.pyd`
+/// extensions, tagged or not, and never a POSIX `.so`.
+#[test]
+fn names_root_on_windows_matches_the_windows_import_suffixes() {
+    let windows = EmbedPlatform::Windows;
     for yes in [
         "R/x.py",
-        "R/sub/y.py",
+        "R/sub/y.pyd",
         "R.py",
+        "R.pyw",
         "R.pyc",
-        "R.so",
-        "R.abi3.so",
-        "R.cpython-314-darwin.so",
-        "R.cpython-314-x86_64-linux-gnu.so",
+        "R.pyd",
+        "R.cp314-win_amd64.pyd",
     ] {
-        assert!(names_root(yes, "R"), "{yes}");
+        assert!(names_root(yes, "R", windows), "{yes}");
     }
     for no in [
         "Rx.py",
         "R.dist-info/RECORD",
         "R.pth",
         "R/",
-        "R..so",
-        "x/R.py",
-        "R.a/b.so",
+        "R..pyd",
+        "R.x/y.pyd",
+        "R.so",
+        "R.abi3.so",
+        "R.dll",
         "R",
     ] {
-        assert!(!names_root(no, "R"), "{no}");
+        assert!(!names_root(no, "R", windows), "{no}");
     }
 }
 

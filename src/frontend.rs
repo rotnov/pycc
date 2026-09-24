@@ -149,7 +149,7 @@ impl ProgramSources {
     /// table (Part 1 of #1026).
     ///
     /// Same shape as [`Self::owner_of_item`] against the import bounds
-    /// instead of the item bounds. An import's own `item_index` cannot
+    /// instead of the item bounds. An import's own item index cannot
     /// serve here: it is the item count at the moment the `import` lowered,
     /// so a trailing import in one file and a leading import in the next
     /// record the same linked index. The import table has no such boundary

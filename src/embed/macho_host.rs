@@ -262,7 +262,7 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 // Unix only: the tests spell host paths with `/`, and a Windows host
-// refuses an embedded build anyway (#1226).
+// never reaches this walk (it scans no image until #1297).
 #[cfg(all(test, unix))]
 #[path = "macho_host_tests.rs"]
 mod tests;

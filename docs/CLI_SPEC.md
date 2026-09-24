@@ -20,7 +20,9 @@ A program with no CPython-backed import writes a native binary at `OUT`, and
 so does every successful `deny`/`--pure` build, since those policies reject every
 CPython-backed import with `I0402` (#1224). A program with a CPython-backed
 import builds an **embedded executable** on a macOS or Linux host without
-`--target` (Part 1 of #1028, D-128's `auto` default): the executable at `OUT`
+`--target` (Part 1 of #1028, D-128's `auto` default), or on a Windows host
+as a stub `OUT` plus `OUT.pycc\` (#1286, D-253; a pure-Python locked closure
+since #1296; see `PYCC_PYTHON` below): the executable at `OUT`
 plus an `OUT.pycc/` sidecar directory holding the embed interpreter's shared
 library and filtered standard library and, when the program imports a root
 outside the standard library, the dependency closure `pycc.lock` records,
@@ -33,8 +35,8 @@ marker, and the rule that an existing `OUT.pycc` without that marker is never
 replaced (exit 2). An embedded build refuses an `OUT` file name containing `$`
 or `:` (exit 2). The effective interop policy (see `pycc.toml` below) is
 decided first, per import: a root it rejects is `I0402`; an admitted import
-the build cannot embed (an excluded Tcl/Tk root, a `--target` build, a
-Windows host) is `I0403`; and an admitted root outside the standard library
+the build cannot embed (an excluded Tcl/Tk root or a `--target` build) is
+`I0403`; and an admitted root outside the standard library
 without a current `pycc.lock` section is exit 2 naming `pycc lock`. The
 hosted `ext` mode is the exception to both (D-244 rule 1):
 `pycc build PATH -o OUT --ext` writes a CPython extension module at `OUT` and
@@ -287,7 +289,10 @@ directory once project mode exists.
                     pycc.toml's `[build] static = true`. A build that
                     embeds no interpreter (native, `--pure`, `--target`)
                     ignores it; `--ext` rejects it (exit 2); `run` has no
-                    such flag and always links the shared library.
+                    such flag and always links the shared library. A
+                    Windows host refuses it at exit 2 before probing the
+                    interpreter: CPython for Windows ships no static
+                    library (D-251, D-253).
                     Force-loading makes every archive member's own
                     dependencies mandatory: an archive whose built-in
                     modules need libraries outside `LIBS`/`SYSLIBS`, or a
@@ -441,6 +446,23 @@ prefix (on Linux, too, since #1243); each failure is an environment failure
 at exit 2 naming the reason (D-248 rules 4 and 5). A build with no CPython import runs no interpreter,
 and neither variable affects it.
 
+On a **Windows host** (#1286, D-253) `PYCC_PYTHON` defaults to
+`python3.14.exe`. The interpreter needs no shared-library check (CPython for
+Windows reports none), but its `libs\python314.lib` and `libs\python3.lib`
+import libraries, its `python314.dll` and `python3.dll`, and its `DLLs\`
+directory must exist, each missing one an exit-2 failure naming the path. The
+build links a program DLL (`OUT.pycc\pycc_program.dll`) against
+`python314.dll`, and a stub `OUT` that imports only the system DLLs `KERNEL32`
+and `ntdll` and loads that
+DLL from its own sidecar; the sidecar holds `python314.dll`, `python3.dll`,
+the interpreter's `vcruntime140.dll` and `vcruntime140_1.dll` when present,
+and the filtered `Lib\` and `DLLs\`, plus `closure\` when the program's
+`pycc.lock` section records one (#1296, D-249). `--static-libpython` and
+`[build] static = true` are refused at exit 2 (D-251), and so is a locked
+closure holding a file Windows would load as a PE image (a `.pyd` or `.dll`
+suffix, or an `MZ` header on any suffix other than `.exe`), naming #1297 and
+`pycc build --ext`.
+
 `pycc lock` reads `PYCC_PYTHON` the same way and refuses the interpreters an
 embedded build refuses, except that it accepts one configured without a shared
 library as a `--static-libpython` build does, since one lock serves either kind of
@@ -476,7 +498,8 @@ exactly libpython in an embedded `pycc build`, the same as
 an absent key keeps each artifact's own default. `true` makes every embedded
 build need the interpreter's static archive, so a copied manifest that sets it
 turns a missing archive into an exit-2 refusal that names both the key and the
-flag.
+flag. On a Windows host, `static = true` is refused at exit 2 before the probe,
+like `--static-libpython` (D-251, D-253).
 
 The `[interop]` table and both interop CLI flags are implemented (#1224),
 and everything in this section describes the **embedded** mode only: an
@@ -591,8 +614,12 @@ references outside a distribution's payload.
   as current; otherwise it exits 1 naming the first difference and writes
   nothing.
 - **Failures.** An unparsable existing lock, or one with another `version`,
-  is exit 2 for both forms and is never overwritten. A Windows host is exit 2
-  (#1226), as for an embedded build.
+  is exit 2 for both forms and is never overwritten. A Windows host writes a
+  section like any other host (#1296): its ownership suffixes add `.pyw`,
+  `.pyd` and `.<tag>.pyd`; a `RECORD` path inside the site that holds a `\`
+  or a `:`, a component ending in `.` or a space, or a reserved device name
+  (`CON`, `NUL`, `COM1`, ...) is refused; and the section's natives are
+  always empty, since the build refuses a closure PE image until #1297.
 - **Build.** An embedded build of a program with a root outside the standard
   library reads its (entry, host triple) section before probing the
   interpreter: a missing lock or section, or different `roots`, is exit 2
