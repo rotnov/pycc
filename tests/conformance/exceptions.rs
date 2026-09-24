@@ -203,3 +203,32 @@ fn exception_message_reuse_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/exception_message_reuse.py"
     );
 }
+
+// #1289: a name bound in a `try` body and in every handler that can fall
+// through the statement is definitely bound after it, so reading it no
+// longer raises `T0041`; covers `else`, `finally`, `as` handlers, `except*`,
+// terminating handlers, and the unannotated-helper (solver) path.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn try_except_definite_assign_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/try_except_definite_assign.py");
+    let (debug_pycc, debug_cpython) = run_conformance_fixture_with_profile(
+        "try_except_definite_assign_debug",
+        &fixture,
+        false,
+    );
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/try_except_definite_assign.py"
+    );
+    let (release_pycc, release_cpython) = run_conformance_fixture_with_profile(
+        "try_except_definite_assign_release",
+        &fixture,
+        true,
+    );
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/try_except_definite_assign.py"
+    );
+}

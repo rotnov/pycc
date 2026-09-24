@@ -1591,3 +1591,49 @@ fn repeatedly_catching_a_refused_bigint_length_does_not_leak_one_per_call() {
          (a leaked `BigIntObj` per catch reads as ratio ~1.33)"
     );
 }
+
+/// #1289 on a real artifact: a buffer allocated by the `try` body and again
+/// by the handler that catches the body's refused allocation is definitely
+/// bound after the statement, so the checker admits reading it, and the
+/// frame still frees exactly the one view each path leaves live. `n = -1`
+/// takes the handler path (the body's allocation is refused before it
+/// stores anything); `n = 8` takes the body path.
+///
+/// Corroboration on the built module; the admission itself is pinned in CI
+/// by `pycc_types`' `a_definitely_assigned_owned_buffer_is_still_admitted_on_every_join_form`.
+/// Windows is excluded for the reason
+/// `no_allocation_outlives_the_call_that_made_it` states.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_buffer_bound_by_the_try_body_and_its_handler_is_read_and_freed() {
+    let dir = fixture(
+        "1289_hosted_try_handler_alloc",
+        "\
+def try_alloc(n: int) -> float:
+    try:
+        a = ndarray(n)
+    except ValueError:
+        a = ndarray(2)
+    return float(len(a))
+",
+    );
+    let build = build_ext(&dir);
+    assert!(build.status.success(), "{}", stderr_of(&build));
+
+    let run = run_hosted(
+        &dir,
+        "import ctypes, alloc_probe\n\
+         live = ctypes.CDLL(alloc_probe.__file__).pycc_rt_buffer_live_views\n\
+         live.restype = ctypes.c_longlong\n\
+         live.argtypes = []\n\
+         assert live() == 0, live()\n\
+         for _ in range(64):\n\
+         \x20   assert alloc_probe.try_alloc(8) == 8.0\n\
+         \x20   assert alloc_probe.try_alloc(-1) == 2.0\n\
+         assert live() == 0, live()\n\
+         print('ok')\n",
+    );
+    assert!(run.status.success(), "{}", stderr_of(&run));
+    assert_eq!(stdout_of(&run), "ok\n");
+}

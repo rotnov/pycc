@@ -1,6 +1,12 @@
 //! Type checking for builtin exceptions (#382).
 
-use super::{Environment, HirExpr, HirStmt, Ty, infer_expr_in, join_if_branches, join_loop_body};
+use std::collections::HashMap;
+
+use super::env::BindingState;
+use super::{
+    Environment, HirExpr, HirStmt, Ty, block_always_returns, infer_expr_in, join_if_branches,
+    join_loop_body,
+};
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     EXCEPTION_INIT_MANGLED_NAME, HirClassDef, HirExceptHandler, except_handler_binding_type_name,
@@ -118,27 +124,221 @@ pub(super) fn check_try_stmt(
     let mut else_env = body_env.clone();
     check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
-    let mut joined = env.clone();
-    join_loop_body(&mut joined, &body_env);
-    for handler_env in &handler_envs {
-        let previous = joined.clone();
-        join_if_branches(&mut joined, &previous, handler_env)?;
+    join_try_outcome(
+        env,
+        local_names,
+        return_ty,
+        TryPaths {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            body_env: &body_env,
+            handler_envs: &handler_envs,
+            else_env: &else_env,
+        },
+    )
+}
+
+/// A checked `try`/`try*` statement's parts together with the environment
+/// each of its paths ended in, which is everything [`join_try_outcome`]
+/// needs to compute the state after the statement.
+struct TryPaths<'a> {
+    body: &'a [HirStmt],
+    handlers: &'a [HirExceptHandler],
+    orelse: &'a [HirStmt],
+    finalbody: &'a [HirStmt],
+    body_env: &'a Environment,
+    handler_envs: &'a [Environment],
+    else_env: &'a Environment,
+}
+
+/// #1289: joins a checked `try`/`try*` statement's paths into `env` and
+/// checks its `finally` block. Shared by [`check_try_stmt`] and
+/// [`check_try_star_stmt`], whose handler loops differ but whose joins do
+/// not.
+///
+/// Two separate questions are answered over two separate sets of
+/// environments.
+///
+/// **Type consistency, over every environment.** The body, then each
+/// handler in source order, then `else` are walked, and every name that is
+/// not bound before the `try` must keep one representation across all of
+/// them: a later type must be assignable to the first-established one, in
+/// `check_assignment`'s direction. `Maybe` bindings and terminating handlers
+/// count, because every path stores into the same slot. A handler's own `as`
+/// name is skipped in that handler, since codegen already stores differing
+/// exception instances in one slot. The first-established type becomes the
+/// name's type after the statement.
+///
+/// `join_if_branches` is deliberately not used to fold the paths: it checks
+/// `is_assignable(first, later)`, the reverse direction, and keeps the first
+/// path's type. For that reason `if d == 0: x = True / else: x = 1 /
+/// print(x)` prints `True True` where CPython prints `True 1` (an `if`/`else`
+/// defect outside #1289's scope); a `try` fold through it would also refuse
+/// a valid `try: x = 10 // d / except ZeroDivisionError: x = False`.
+///
+/// **Definiteness, over the paths that fall through the statement only.**
+/// Those are the `else` path (when neither the body nor `else` always
+/// terminates) and every handler whose body does not always terminate, with
+/// the handler's `as` name demoted to `Maybe` on its exit: CPython unbinds it
+/// there with an implicit `del`. A name is `Definitely` bound after the
+/// statement when it is `Definitely` bound on every such path.
+///
+/// The pre-#1289 conservative join (the body joined like a loop body, then every
+/// handler and `else` like `if` branches) is still computed. It keeps every
+/// refusal that join raises for a name bound before the `try`, supplies the
+/// name set and buffer provenance, and is the entry state of `finally`,
+/// which can be entered after any partial run. When no path falls through,
+/// it is also the state after the statement. Otherwise `finally` is checked
+/// a second time against the fall-through join to compute that state;
+/// checking twice has no side effect beyond the environment it mutates.
+fn join_try_outcome(
+    env: &mut Environment,
+    local_names: &[&str],
+    return_ty: Option<&Ty>,
+    paths: TryPaths<'_>,
+) -> Result<(), Diagnostic> {
+    let mut conservative = env.clone();
+    join_loop_body(&mut conservative, paths.body_env);
+    for handler_env in paths.handler_envs {
+        let previous = conservative.clone();
+        join_if_branches(&mut conservative, &previous, handler_env)?;
     }
-    let previous = joined.clone();
-    let _ = join_if_branches(&mut joined, &previous, &else_env);
+    let previous = conservative.clone();
+    join_if_branches(&mut conservative, &previous, paths.else_env)?;
+    for (name, ty) in first_established_types(env, &paths)? {
+        let state = conservative
+            .bindings
+            .get_mut(&name)
+            .expect("a name bound on a path is in the conservative join");
+        *state = match state {
+            BindingState::Definitely(_) => BindingState::Definitely(ty),
+            BindingState::Maybe(_) => BindingState::Maybe(ty),
+        };
+    }
+
+    let mut exits: Vec<Environment> = Vec::new();
+    if !block_always_returns(paths.body) && !block_always_returns(paths.orelse) {
+        exits.push(paths.else_env.clone());
+    }
+    for (handler, handler_env) in paths.handlers.iter().zip(paths.handler_envs) {
+        if block_always_returns(&handler.body) {
+            continue;
+        }
+        let mut exit = handler_env.clone();
+        if let Some(name) = &handler.name
+            && let Some(state) = exit.bindings.get_mut(name)
+        {
+            *state = BindingState::Maybe(state.ty().clone());
+            exit.narrowed.remove(name);
+        }
+        exits.push(exit);
+    }
+    let fallthrough = exits.split_first().map(|(first, rest)| {
+        let mut joined = env.clone();
+        joined.bindings = conservative
+            .bindings
+            .iter()
+            .map(|(name, state)| {
+                let ty = state.ty().clone();
+                let definite = exits.iter().all(|exit| {
+                    matches!(exit.bindings.get(name), Some(BindingState::Definitely(_)))
+                });
+                let state = if definite {
+                    BindingState::Definitely(ty)
+                } else {
+                    BindingState::Maybe(ty)
+                };
+                (name.clone(), state)
+            })
+            .collect();
+        let rest: Vec<&HashMap<String, Ty>> = rest.iter().map(|exit| &exit.narrowed).collect();
+        joined.narrowed = super::narrow::join_narrowed(&first.narrowed, &rest);
+        joined.owned_buffers = conservative.owned_buffers.clone();
+        joined
+    });
+
+    let TryPaths {
+        body,
+        handlers,
+        orelse,
+        finalbody,
+        ..
+    } = paths;
+    apply_finally_delete_prescan(&mut conservative, body, handlers, orelse, finalbody);
+    check_stmt_sequence_shared(&mut conservative, local_names, finalbody, return_ty)?;
+    let Some(mut joined) = fallthrough else {
+        *env = conservative;
+        return Ok(());
+    };
+    apply_finally_delete_prescan(&mut joined, body, handlers, orelse, finalbody);
+    check_stmt_sequence_shared(&mut joined, local_names, finalbody, return_ty)?;
     *env = joined;
-    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
-    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
     Ok(())
+}
+
+/// #1289: the type-consistency half of [`join_try_outcome`]. Returns the
+/// first-established type of every name a path binds that `env` (the state
+/// before the `try`) does not, or `T0023` for the first later binding that
+/// cannot be assigned to it. Names are visited in sorted order within each
+/// environment so the reported name does not depend on hash order.
+fn first_established_types(
+    env: &Environment,
+    paths: &TryPaths<'_>,
+) -> Result<HashMap<String, Ty>, Diagnostic> {
+    let handler_paths = paths
+        .handlers
+        .iter()
+        .zip(paths.handler_envs)
+        .map(|(handler, handler_env)| (handler_env, handler.name.as_deref()));
+    let walk = std::iter::once((paths.body_env, None))
+        .chain(handler_paths)
+        .chain(std::iter::once((paths.else_env, None)));
+    let mut first: HashMap<String, Ty> = HashMap::new();
+    for (path_env, own_as_name) in walk {
+        let mut names: Vec<&String> = path_env
+            .bindings
+            .keys()
+            .filter(|name| !env.bindings.contains_key(*name) && own_as_name != Some(name.as_str()))
+            .collect();
+        names.sort();
+        for name in names {
+            let ty = path_env.bindings[name].ty();
+            let Some(previous) = first.get(name) else {
+                first.insert(name.clone(), ty.clone());
+                continue;
+            };
+            if !super::class::is_assignable_env(env, ty, previous) {
+                return Err(Diagnostic::error(
+                    "T0023",
+                    format!(
+                        "cannot assign `{}` to `{name}`, previously inferred as `{}`",
+                        ty.name(),
+                        previous.name()
+                    ),
+                    Span::new(0, 0),
+                )
+                .with_help(format!(
+                    "change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)",
+                    previous.name(),
+                    ty.name()
+                )));
+            }
+        }
+    }
+    Ok(first)
 }
 
 /// #1244: a `finally` block can be entered after only a partial run of the
 /// try body, of any handler, or of the `else` block (an exception escaping
 /// any of them), so every name any of them deletes may be unbound there.
-/// Applied to the joined environment that also flows out of the `try`, so
-/// the post-`try` state is conservative too (`docs/TYPE_SYSTEM.md`'s
-/// "`del` statement" section lists the limitation). A `try` without
-/// `finally` needs no prescan: the join already accounts for every path.
+/// Applied to both environments [`join_try_outcome`] checks `finally`
+/// against -- the conservative entry state and the fall-through join that
+/// also flows out of the `try` -- so the post-`try` state is conservative
+/// too (`docs/TYPE_SYSTEM.md`'s "`del` statement" section lists the
+/// limitation). A `try` without `finally` needs no prescan: the joins
+/// already account for every path.
 fn apply_finally_delete_prescan(
     env: &mut Environment,
     body: &[HirStmt],
@@ -301,18 +501,20 @@ pub(super) fn check_try_star_stmt(
     let mut else_env = body_env.clone();
     check_stmt_sequence_shared(&mut else_env, local_names, orelse, return_ty)?;
 
-    let mut joined = env.clone();
-    join_loop_body(&mut joined, &body_env);
-    for handler_env in &handler_envs {
-        let previous = joined.clone();
-        join_if_branches(&mut joined, &previous, handler_env)?;
-    }
-    let previous = joined.clone();
-    let _ = join_if_branches(&mut joined, &previous, &else_env);
-    *env = joined;
-    apply_finally_delete_prescan(env, body, handlers, orelse, finalbody);
-    check_stmt_sequence_shared(env, local_names, finalbody, return_ty)?;
-    Ok(())
+    join_try_outcome(
+        env,
+        local_names,
+        return_ty,
+        TryPaths {
+            body,
+            handlers,
+            orelse,
+            finalbody,
+            body_env: &body_env,
+            handler_envs: &handler_envs,
+            else_env: &else_env,
+        },
+    )
 }
 
 pub(super) fn check_raise_stmt(

@@ -25,6 +25,16 @@ pub(super) struct TryShape<'a> {
 /// #382 (PR-22 Part 1): collect constraints from the try body, each handler,
 /// the else body, and the finally body. The try body's bindings are joined
 /// back as `Maybe` (the body may raise before reaching an assignment).
+///
+/// #1289: that loop-style join alone left a name `Maybe` even when every
+/// path that completes the statement binds it, so an unannotated helper
+/// such as `try: r = 10 // d / except ZeroDivisionError: r = -1 / return r`
+/// failed with `T0021`. The paths that fall through the statement -- the
+/// `else` path after a completed body, and every handler whose body does not
+/// always terminate, with its `as` name unbound on exit (CPython's implicit
+/// `del`) -- are collected and handed to
+/// [`solver::promote_try_fallthrough`], mirroring the check phase's
+/// `exception::join_try_outcome`.
 pub(super) fn collect_try_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -61,6 +71,7 @@ pub(super) fn collect_try_constraints(
         return_term.clone(),
     )?;
     solver::join_loop_body_solver(env, &body_env, &pre_existing);
+    let mut fallthrough = Vec::new();
     for handler in shape.handlers {
         let mut henv = env.clone();
         // Bind the `as` name in the handler environment.
@@ -92,8 +103,16 @@ pub(super) fn collect_try_constraints(
             return_term.clone(),
         )?;
         solver::join_loop_body_solver(env, &henv, &pre_existing);
+        if !crate::block_always_returns(&handler.body) {
+            if let Some(name) = &handler.name {
+                henv.maybe_bindings.insert(name.clone());
+            }
+            fallthrough.push(henv);
+        }
     }
-    let mut else_env = env.clone();
+    // `else` runs only after the body completed, so it starts from the
+    // body's own state, exactly as the check phase's `else_env` does.
+    let mut else_env = body_env.clone();
     collect_block_constraints(
         signatures,
         parents,
@@ -104,6 +123,10 @@ pub(super) fn collect_try_constraints(
         return_term.clone(),
     )?;
     solver::join_loop_body_solver(env, &else_env, &pre_existing);
+    if !crate::block_always_returns(shape.body) && !crate::block_always_returns(shape.orelse) {
+        fallthrough.push(else_env);
+    }
+    solver::promote_try_fallthrough(env, &fallthrough, &pre_existing);
     // The finally body always runs — collect in-place.
     collect_block_constraints(
         signatures,
