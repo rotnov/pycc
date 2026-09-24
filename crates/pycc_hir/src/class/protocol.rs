@@ -263,16 +263,16 @@ pub(super) fn lower_protocol_class(
                     class_name_defs,
                 )?;
                 // D-228 (issue #918): a container-typed protocol
-                // *attribute* is rejected because no class could ever
-                // satisfy it. Every path by which a class establishes an
-                // instance attribute restricts the slot to
-                // `is_scalar_slot_type`: the annotated class-body attribute
-                // (`class/attrs.rs`), the dataclass field (`class/body.rs`)
-                // and the `self.x = ...` assignment in a hand-written
-                // `__init__` (`slot_ty_from_init_rhs`), because a slot is a
-                // single `i64` word (D-154). A container-typed protocol
-                // attribute is therefore unsatisfiable, not merely
-                // unimplemented.
+                // *attribute* is rejected. D-228 first gave the reason that
+                // no class could satisfy it, because every path that
+                // establishes an instance attribute restricted the slot to
+                // a scalar word (D-154). #1262 made that reasoning false: a
+                // hand-written `__init__` may now seed a `list[int]` or
+                // `dict[str, int]` slot from a parameter
+                // (`class::init_slot`). The rejection stays because
+                // conformance checking and tests for a container-typed
+                // protocol attribute are their own seam -- the attribute is
+                // unimplemented, not unsatisfiable.
                 //
                 // This gate deliberately does *not* extend to a protocol
                 // *method*'s parameters. A parameter type is a signature
@@ -302,20 +302,19 @@ pub(super) fn lower_protocol_class(
                     return Err(unsupported(
                         format!(
                             "protocol attribute `{class_name}.{attr_name}` has container type \
-                             `{}`, which is not supported yet -- no class could satisfy it, \
-                             because every class attribute slot is restricted to a scalar type \
-                             (`int`, `float`, `bool`, `str`); a container type in a protocol \
-                             method's parameter is supported",
+                             `{}`, which is not supported yet as a protocol attribute; a \
+                             container type in a protocol method's parameter is supported",
                             attr_ty.name()
                         ),
                         ann.range,
                     ));
                 }
-                // Part 1 of #1027: the same argument, for the same
-                // reason, one type further out. A slot is a single `i64`
-                // word (D-154) and `is_scalar_slot_type` restricts every
-                // path that establishes one, so no class could satisfy a
-                // buffer-typed attribute either. Part 2a of #1142 (#1165)
+                // Part 1 of #1027: a buffer-typed attribute is refused
+                // too, for a reason that still holds after #1262 admitted
+                // `list[int]`/`dict[str, int]` slots: no class could
+                // satisfy it. A class attribute slot holds a scalar, a
+                // `list[int]` or a `dict[str, int]` (D-154), never a
+                // buffer. Part 2a of #1142 (#1165)
                 // added the type's first producing expression, and does not
                 // weaken this: `a = ndarray(n)` binds a *local* name inside
                 // the allocating function and nothing may carry the value
@@ -331,8 +330,9 @@ pub(super) fn lower_protocol_class(
                         format!(
                             "protocol attribute `{class_name}.{attr_name}` has a buffer \
                              type, which is not supported yet -- no class could \
-                             satisfy it, because every class attribute slot is restricted to \
-                             a scalar type (`int`, `float`, `bool`, `str`); #1027 and #1129 \
+                             satisfy it, because a class attribute slot holds a scalar \
+                             (`int`, `float`, `bool`, `str`), a `list[int]` or a \
+                             `dict[str, int]`, never a buffer; #1027 and #1129 \
                              admit a buffer as a parameter of a `pycc build --ext` export, \
                              and Part 2a of #1142 only as a local binding inside the \
                              function that allocated it"

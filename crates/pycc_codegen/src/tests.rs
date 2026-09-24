@@ -5190,11 +5190,11 @@ fn a_str_attribute_read_twice_and_then_reassigned_does_not_use_after_free() {
 }
 
 #[test]
-#[should_panic(expected = "an instance attribute of type `list[int]` is not supported yet")]
+#[should_panic(expected = "an instance attribute of type `set[int]` is not supported yet")]
 fn slot_word_to_scalar_rejects_an_unsupported_attribute_type() {
-    // `pycc_hir::class::slot_ty_from_init_rhs` structurally restricts
-    // every attribute slot to `int`/`float`/`bool`/`str` (D-154), so a
-    // `list[T]`-typed slot can never reach this function from real,
+    // `pycc_hir::class::init_slot::slot_ty_from_init_rhs` admits only a
+    // scalar or a `list[int]`/`dict[str, int]` slot (D-154, #1262), so a
+    // `set[T]`-typed slot can never reach this function from real,
     // type-checked source -- hand-built directly, matching this file's
     // own established internal-error-test convention (e.g.
     // `to_numeric_encoded_int_rejects_a_list_operand` above).
@@ -5206,7 +5206,7 @@ fn slot_word_to_scalar_rejects_an_unsupported_attribute_type() {
         &context,
         &builder,
         raw,
-        &pycc_mir::Ty::List(Box::new(pycc_mir::Ty::Int)),
+        &pycc_mir::Ty::Set(Box::new(pycc_mir::Ty::Int)),
     );
     let _ = module;
 }
@@ -5215,7 +5215,7 @@ fn slot_word_to_scalar_rejects_an_unsupported_attribute_type() {
 #[should_panic(expected = "cannot store this value into an instance attribute slot")]
 fn scalar_to_slot_word_rejects_an_unsupported_scalar() {
     // Mirror image of `slot_word_to_scalar_rejects_an_unsupported_attribute_type`
-    // above, for the write direction: a `Scalar::List` can never reach
+    // above, for the write direction: a `Scalar::Set` can never reach
     // `scalar_to_slot_word` from real, type-checked source either.
     let context = Context::create();
     let module = context.create_module("test");
@@ -5223,7 +5223,7 @@ fn scalar_to_slot_word_rejects_an_unsupported_scalar() {
     let ptr = context
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
-    scalar_to_slot_word(&context, &builder, Scalar::List(ptr));
+    scalar_to_slot_word(&context, &builder, Scalar::Set(ptr));
     let _ = module;
 }
 

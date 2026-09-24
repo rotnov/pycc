@@ -7036,8 +7036,9 @@ fn a_user_defined_class_named_list_still_wins_over_the_builtin_container() {
 fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
     // The protocol-attribute `AnnAssign` branch ran no type gate at all
     // before #918, because no annotation syntax could produce a container
-    // `Ty` there. A container-typed protocol attribute is unsatisfiable --
-    // no class can declare a container-typed attribute slot at all -- so it
+    // `Ty` there. A container-typed protocol attribute is not supported
+    // yet -- conformance checking for one is its own seam, even though
+    // #1262 lets a class hold a `list[int]`/`dict[str, int]` slot -- so it
     // is rejected, while every non-container attribute type keeps working
     // exactly as before. The asymmetry with a protocol *method*'s
     // parameter, which does lower, is deliberate and pinned by
@@ -7048,7 +7049,7 @@ fn a_container_protocol_attribute_is_rejected_but_a_scalar_one_still_lowers() {
     assert_eq!(diagnostic.code, "C0001");
     assert_eq!(
         diagnostic.message,
-        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet -- no class could satisfy it, because every class attribute slot is restricted to a scalar type (`int`, `float`, `bool`, `str`); a container type in a protocol method's parameter is supported"
+        "protocol attribute `P.xs` has container type `list[int]`, which is not supported yet as a protocol attribute; a container type in a protocol method's parameter is supported"
     );
     let module = pycc_parser_test_helper::parse(
         "from typing import Protocol\n\n\nclass P(Protocol):\n    n: int\n",
@@ -7061,8 +7062,7 @@ fn a_container_annotation_lowers_in_a_protocol_method_parameter() {
     // The counterpart to the test above, pinning the deliberate asymmetry of
     // D-228 decision 10. The gate lives only in the protocol body's
     // `AnnAssign` arm, so it rejects a container-typed protocol *attribute*
-    // (which no class could ever satisfy -- every class attribute slot is
-    // restricted to `is_scalar_slot_type`). A protocol *method*'s parameter
+    // (not supported yet as a protocol attribute). A protocol *method*'s parameter
     // is an ordinary parameter position: it routes through
     // `crate::lower_arg_list` -> `annotation_to_ty` with no container gate,
     // and the resulting program builds and runs (pinned end to end by

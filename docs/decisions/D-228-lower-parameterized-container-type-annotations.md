@@ -161,6 +161,13 @@ status: accepted
       attribute. Every non-container attribute type (`Ty::Instance`,
       `Ty::Optional`, `Ty::None`, `Ty::Protocol`) is unaffected, which is why
       this is a container check and not a reuse of `is_scalar_slot_type`.
+      - Amendment (2026-09-24): [#1262](https://github.com/rotnov/pycc/issues/1262)
+        (Part 1 of [#1218](https://github.com/rotnov/pycc/issues/1218)) lets
+        a hand-written `__init__` establish a `list[int]` or `dict[str, int]`
+        slot from a parameter, so the "unsatisfiable" rationale above no
+        longer holds: such an attribute is now *unimplemented*, not
+        unsatisfiable. The rejection itself is unchanged, and its message no
+        longer claims that no class could satisfy it.
 
       This gate covers protocol **attributes** only. A protocol *method*'s
       parameter is an ordinary parameter position: `def f(self, xs:
