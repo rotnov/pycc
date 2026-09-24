@@ -312,8 +312,10 @@ fn a_built_ext_module_raises_the_right_cpython_import_error_classes() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
+    // The host interpreter's text-mode stdout translates `\n` to `\r\n` on
+    // Windows, the same normalization `tests/issue_1114_numpy_oracle.rs` applies.
     assert_eq!(
-        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
         "ImportError Exception 'plain' True\n\
          ModuleNotFoundError ImportError \"No module named 'zz'\" True\n\
          PluginMissing ImportError 'plug' True\n"
