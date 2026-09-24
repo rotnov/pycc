@@ -213,6 +213,19 @@ pub(crate) fn macho_bundle_lib(library: &Path, source: &Path) -> Result<[PathBuf
     Ok([PathBuf::from(original_id), resolved(source)])
 }
 
+/// [`macho_bundle_lib`]'s names for the interpreter's own shared library
+/// `source`, or none when it has no Mach-O image there: a static-only
+/// interpreter (the static-libpython decision entry) ships no shared
+/// libpython, and asking `otool` about a missing file fails the build.
+/// Only a static build and `pycc lock` meet such an interpreter; a shared
+/// build's probe has already required the library.
+pub(crate) fn source_bundle_lib(source: &Path) -> Result<Vec<PathBuf>, String> {
+    if source.is_file() && macho::is_macho_header(&read_head(source)?) {
+        return Ok(macho_bundle_lib(source, source)?.to_vec());
+    }
+    Ok(Vec::new())
+}
+
 /// The interpreter's resolved `sys.base_prefix`.
 pub(crate) fn canonical_prefix(probe: &EmbedProbe) -> PathBuf {
     resolved(&probe.base_prefix)
@@ -307,7 +320,7 @@ fn derive_macos(probe: &EmbedProbe, closure: &LockedClosure) -> Result<Vec<Deriv
         return Ok(Vec::new());
     }
     let source = layout::source_library(probe);
-    let context = host_context(probe, closure, &macho_bundle_lib(&source, &source)?);
+    let context = host_context(probe, closure, &source_bundle_lib(&source)?);
     let bundled_name = layout::bundled_library_name(EmbedPlatform::MacOs, probe);
     let mut natives = Natives::new(bundled_name);
     let mut pending: Vec<(PathBuf, String)> = Vec::new();
