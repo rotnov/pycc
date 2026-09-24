@@ -264,8 +264,11 @@ fn an_unknown_form_of_reference_or_rpath_is_refused() {
     }
 }
 
+/// `Path::components` already drops an interior `.`; only a leading one
+/// of a relative path reaches the `CurDir` arm.
 #[test]
 fn normalize_drops_dot_and_dot_dot_lexically() {
     assert_eq!(normalize(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
     assert_eq!(normalize(Path::new("/../a")), PathBuf::from("/a"));
+    assert_eq!(normalize(Path::new("./a/../b")), PathBuf::from("b"));
 }
