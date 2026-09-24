@@ -499,8 +499,8 @@ rejected as an invalid invocation when combined with any explicit
 build will carry. [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md) owns the
 contract; this section summarizes it. Part 1 of #1225 (#1241) implements the
 file and the command, Part 2 (#1242) the build consuming it, Part 3 (#1243)
-native libraries outside the interpreter; macOS relative references outside
-a distribution's payload are Part 4 (#1259).
+native libraries outside the interpreter, and Part 4 (#1259) macOS relative
+references outside a distribution's payload.
 
 - **Source.** The closure is read offline from the installed `*.dist-info`
   distributions in the `PYCC_PYTHON` interpreter's `sysconfig` `purelib` and
@@ -571,8 +571,20 @@ a distribution's payload are Part 4 (#1259).
   library that would also answer a dependency kept on the system, a copied
   library with a dependency that resolves nowhere, and a dependency on the
   interpreter's libpython under a name other than the bundled one. On macOS
-  a relative reference outside a closure image's own payload stays refused
-  naming #1259. `pycc check` never reads the lock.
+  every dependency of a closure image or a native, absolute or
+  `@rpath`/`@loader_path`, is resolved on the build host from the image's
+  source directory and its own `LC_RPATH` entries: a locked payload file (of
+  any locked distribution) is kept when the spelling already reaches it in
+  the sidecar, and otherwise rewritten to an explicit `@loader_path` path to
+  its `closure/` copy; a relatively named system library is rewritten to
+  its absolute path; a file under a scanned site directory or
+  `<stdlib>/site-packages` is a native even inside the prefix; anything
+  else outside the prefix is a native. Refused with exit 2, naming the
+  image and the reason: an `@executable_path` reference or an
+  `@executable_path` rpath the search reaches before a match; a reference
+  that resolves nowhere from the image's own rpaths; and any other form
+  (neither absolute nor `@rpath`, `@loader_path` or `@executable_path`,
+  such as a bare relative name). `pycc check` never reads the lock.
 
 ## Exit codes
 

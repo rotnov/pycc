@@ -50,13 +50,29 @@ impl Env {
 
     /// Empty site directories.
     fn bare(tag: &str, body: &str) -> Self {
+        Self::with_sites(tag, body, false)
+    }
+
+    /// Empty site directories inside the interpreter's prefix, as a
+    /// non-venv interpreter has them (#1259).
+    #[cfg(target_os = "macos")]
+    fn in_prefix(tag: &str, body: &str) -> Self {
+        Self::with_sites(tag, body, true)
+    }
+
+    fn with_sites(tag: &str, body: &str, in_prefix: bool) -> Self {
         let dir = ScratchDir::new(tag).unwrap();
         let root = std::fs::canonicalize(&*dir).unwrap();
         let layout_root = root.join("layout");
         std::fs::create_dir_all(&layout_root).unwrap();
         let layout = fake_layout(&layout_root);
-        let pure = root.join("pure");
-        let plat = root.join("plat");
+        let sites = if in_prefix {
+            layout.prefix.join("sites")
+        } else {
+            root.clone()
+        };
+        let pure = sites.join("pure");
+        let plat = sites.join("plat");
         std::fs::create_dir_all(&pure).unwrap();
         std::fs::create_dir_all(&plat).unwrap();
         let lock_probe = parse_lock_probe(&probe_lines(&pure, &plat)).unwrap();
@@ -397,3 +413,7 @@ fn a_linux_native_changed_after_the_lock_is_refused() {
 #[cfg(target_os = "macos")]
 #[path = "macos_closure_tests.rs"]
 mod macos_closure_tests;
+
+#[cfg(target_os = "macos")]
+#[path = "macos_relative_tests.rs"]
+mod macos_relative_tests;

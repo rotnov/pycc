@@ -8,7 +8,7 @@ use super::bundle::io_error;
 use super::macho;
 use super::sha256::sha256_hex;
 use crate::lock::build::LockedClosure;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -90,30 +90,6 @@ fn keep_mode(source: &Path, dest: &Path) -> Result<(), String> {
 #[cfg(not(unix))]
 fn keep_mode(_source: &Path, _dest: &Path) -> Result<(), String> {
     Ok(())
-}
-
-/// Every file under `staging`, relative to it and `/`-separated.
-pub(crate) fn sidecar_files(staging: &Path) -> Result<BTreeSet<String>, String> {
-    let mut files = BTreeSet::new();
-    let mut pending = vec![String::new()];
-    while let Some(rel) = pending.pop() {
-        let dir = staging.join(&rel);
-        let entries = std::fs::read_dir(&dir).map_err(|e| io_error("read", &dir, &e))?;
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let child = if rel.is_empty() {
-                name
-            } else {
-                format!("{rel}/{name}")
-            };
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                pending.push(child);
-            } else {
-                files.insert(child);
-            }
-        }
-    }
-    Ok(files)
 }
 
 #[cfg(test)]

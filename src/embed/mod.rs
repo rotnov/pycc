@@ -16,6 +16,7 @@ mod elf;
 pub(crate) mod fake_layout;
 pub(crate) mod layout;
 mod macho;
+mod macho_host;
 pub(crate) mod native;
 pub(crate) mod native_linux;
 pub(crate) mod sha256;

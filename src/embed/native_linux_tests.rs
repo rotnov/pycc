@@ -518,3 +518,99 @@ fn a_copied_library_with_an_unresolved_dependency_is_refused() {
     let err = fx.plan(true).expect_err("refused");
     assert!(err.contains("`libz.so.1` needs `libnope.so.1`"), "{err}");
 }
+
+/// A library of an unlocked distribution in a site directory inside the
+/// prefix (a scanned one, or `<stdlib>/site-packages`) is a recorded
+/// native when a closure image needs it, and stays a prefix vendor when an
+/// interpreter image needs it (#1259).
+#[test]
+fn a_site_directory_library_inside_the_prefix_is_a_native_for_closure_images() {
+    let mut fx = Fixture::new("native_linux_site");
+    let stdlib_site = fx.layout.stdlib().join("site-packages").join("u");
+    let scanned = fx.layout.prefix.join("lib").join("scanned");
+    fx.write(
+        "prefix/lib/python3.14/site-packages/u/libu.so.1",
+        &ElfSpec::library("libu.so.1", &[]),
+    );
+    fx.write(
+        "prefix/lib/scanned/libs.so.1",
+        &ElfSpec::library("libs.so.1", &[]),
+    );
+    let search = format!("{}:{}", stdlib_site.display(), scanned.display());
+    let module = ElfSpec::module(&["libu.so.1", "libs.so.1"]).runpath(&search);
+    fx.image("pa/_a.so", "pa", &module);
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![scanned];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libs.so.1", "libu.so.1"]);
+
+    let fx = Fixture::new("native_linux_site_interpreter");
+    fx.write(
+        "prefix/lib/python3.14/site-packages/u/libu.so.1",
+        &ElfSpec::library("libu.so.1", &[]),
+    );
+    let search = fx.layout.stdlib().join("site-packages/u");
+    let search = search.display().to_string();
+    let module = ElfSpec::module(&["libu.so.1"]).runpath(&search);
+    let extension = fx
+        .layout
+        .dynload()
+        .join("_u.cpython-314-x86_64-linux-gnu.so");
+    std::fs::write(extension, elf_bytes(&module)).unwrap();
+    let planned = fx.plan(true).expect("planned");
+    assert_eq!(vendor_names(&planned), ["libu.so.1"]);
+    assert!(planned.natives.is_empty());
+}
+
+/// A closure image that reaches a locked payload file through an absolute
+/// `DT_RUNPATH` rather than `$ORIGIN` gets a native copy of it in `lib/`:
+/// Linux has no rebind, so only an `$ORIGIN` payload match is kept (#1259).
+#[test]
+fn a_payload_file_reached_through_an_absolute_runpath_is_a_native() {
+    let mut fx = Fixture::new("native_linux_payload_runpath");
+    let search = fx.root.join("site/pq").display().to_string();
+    let module = ElfSpec::module(&["libq.so.1"]).runpath(&search);
+    fx.image("pq/_q.so", "pq", &module);
+    fx.image("pq/libq.so.1", "pq", &ElfSpec::library("libq.so.1", &[]));
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![fx.root.join("site")];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libq.so.1"]);
+    assert_eq!(planned.natives[0].locked.required_by, ["pq"]);
+    assert_eq!(vendor_names(&planned), ["libq.so.1"]);
+}
+
+/// A distribution Python's site directory lies under a system directory
+/// (`/usr/lib/python3/dist-packages`): an unlocked distribution's library
+/// there is still a native, not a kept system library, while the image's
+/// own `$ORIGIN` payload sibling and a real system library stay kept
+/// (#1259).
+#[test]
+fn a_site_directory_under_a_system_directory_still_yields_natives() {
+    let mut fx = Fixture::new("native_linux_system_site");
+    let site = fx.root.join("sys/python3/dist-packages");
+    fx.write(
+        "sys/python3/dist-packages/unlocked/libd.so.1",
+        &ElfSpec::library("libd.so.1", &[]),
+    );
+    let search = format!("$ORIGIN:{}", site.join("unlocked").display());
+    let module = ElfSpec::module(&["libp.so.1", "libd.so.1", "libc.so.6"]).runpath(&search);
+    for (rel, spec) in [
+        ("pd/_d.so", module),
+        ("pd/libp.so.1", ElfSpec::library("libp.so.1", &[])),
+    ] {
+        let source = fx.write(&format!("sys/python3/dist-packages/{rel}"), &spec);
+        fx.files.push(ClosureFile {
+            rel: rel.to_string(),
+            source,
+            digest: String::new(),
+            package: "pd".to_string(),
+        });
+    }
+    let mut closure = LockedClosure::of_files(fx.files.clone());
+    closure.sites = vec![site];
+    let planned = plan(&fx.layout.probe, Some(&closure), &fx.env, false).expect("planned");
+    assert_eq!(names(&planned), ["libd.so.1"]);
+    // Only the native is copied: the payload sibling and libc are kept.
+    assert_eq!(vendor_names(&planned), ["libd.so.1"]);
+}

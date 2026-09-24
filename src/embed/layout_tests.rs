@@ -246,3 +246,25 @@ fn a_loader_relative_reference_climbs_to_the_library_directory() {
         "@loader_path/../../libssl.3.dylib"
     );
 }
+
+#[test]
+fn a_sidecar_loader_relative_reference_climbs_only_past_the_shared_directories() {
+    // The same directory, a deeper one, a shallower one, and from `lib/`
+    // into `closure/`.
+    assert_eq!(
+        sidecar_loader_relative("closure/pkg/_ext.so", "closure/pkg/libx.dylib"),
+        "@loader_path/libx.dylib"
+    );
+    assert_eq!(
+        sidecar_loader_relative("closure/pkg/_ext.so", "closure/pkg/.dylibs/libx.dylib"),
+        "@loader_path/.dylibs/libx.dylib"
+    );
+    assert_eq!(
+        sidecar_loader_relative("closure/pkg/sub/_ext.so", "closure/other/libx.dylib"),
+        "@loader_path/../../other/libx.dylib"
+    );
+    assert_eq!(
+        sidecar_loader_relative("lib/libout.dylib", "closure/pkg/.dylibs/libx.dylib"),
+        "@loader_path/../closure/pkg/.dylibs/libx.dylib"
+    );
+}

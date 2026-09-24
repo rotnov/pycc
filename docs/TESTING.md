@@ -1333,10 +1333,10 @@ only a run of the protocol above can be that.
 
 D-128's transparent interop contract is partly implemented: the embedded
 executable for standard-library roots (#1223, D-248) and the policy surface
-(#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242)
-and its native libraries outside the interpreter (#1243) exist; macOS
-relative references outside a closure payload (#1259) and Windows embedding
-(#1226) do not. The v0.7 implementation cannot mark its roadmap acceptance complete
+(#1224), `pycc lock` (#1241, D-249), bundling the locked closure (#1242),
+its native libraries outside the interpreter (#1243), and macOS relative
+references outside a closure payload (#1259) exist; Windows embedding
+(#1226) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
@@ -1360,8 +1360,14 @@ tests that cover it now, or the owner of what is still missing.
   `cc`-built extension linking two outside libraries after both are moved
   away; the Linux ELF walk over synthetic images in
   `src/embed/native_linux_tests.rs`, `src/embed/elf_tests.rs` and
-  `src/embed/lock_tests.rs`). *Pending:* macOS relative references outside
-  a closure payload, #1259 (the bundle carries no `site-packages`, D-248);
+  `src/embed/lock_tests.rs`); macOS `@rpath`/`@loader_path` references
+  outside a closure payload, kept, rebound, vendored or refused
+  (`tests/issue_1259_relative_natives.rs`, whose `#[ignore]`d oracle runs
+  one extension per bundling case after the venv and every outside
+  directory are moved away; `src/embed/macho_host_tests.rs` over a fake
+  host probe, `src/embed/macos_relative_tests.rs` and
+  `src/embed/macos_closure_tests.rs` over `cc`-built images). The bundle
+  carries no `site-packages` (D-248);
 - `allowlist` accepts an allowed direct import root, covers its submodules and
   pinned transitive closure, and emits `I0402` for an otherwise-resolvable
   unlisted direct root. *Covered:* acceptance and the unlisted root

@@ -45,17 +45,12 @@ fn every_file_is_copied_and_mach_o_images_are_reported() {
         std::fs::read(root.join("pkg/__init__.py")).unwrap(),
         b"X = 1\n"
     );
-    assert_eq!(
-        sidecar_files(&staging).unwrap(),
-        [
-            "closure/pkg/Main.class",
-            "closure/pkg/__init__.py",
-            "closure/pkg/_ext.so"
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<BTreeSet<String>>()
-    );
+    let mut copied: Vec<String> = std::fs::read_dir(root.join("pkg"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    copied.sort();
+    assert_eq!(copied, ["Main.class", "__init__.py", "_ext.so"]);
 }
 
 #[cfg(unix)]
@@ -135,11 +130,4 @@ fn two_paths_differing_only_in_case_never_overwrite_each_other() {
         assert!(staging.join("closure/pkg/x.py").is_file());
         assert!(staging.join("closure/pkg/X.py").is_file());
     }
-}
-
-#[test]
-fn an_unreadable_sidecar_cannot_be_listed() {
-    let dir = ScratchDir::new("closure_list").unwrap();
-    let err = sidecar_files(&dir.join("absent")).unwrap_err();
-    assert!(err.contains("could not read"), "{err}");
 }

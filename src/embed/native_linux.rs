@@ -115,6 +115,10 @@ struct Walk<'a> {
     source_library: PathBuf,
     /// The resolved sources of the closure's ELF images.
     payload: BTreeSet<PathBuf>,
+    /// The canonical site directories: the closure's scanned ones and
+    /// `<stdlib>/site-packages`. A file there that is not taken as a
+    /// payload sibling is an unlocked distribution's (#1259).
+    sites: Vec<PathBuf>,
     ldconfig: Option<BTreeMap<String, Vec<PathBuf>>>,
     natives: Natives,
     /// Every library copied into `lib/`, by the name it is needed by.
@@ -144,6 +148,12 @@ pub(crate) fn plan(
         bundled_name: bundled_name.clone(),
         source_library: resolved(&source_library),
         payload: BTreeSet::new(),
+        sites: closure
+            .map_or(&[][..], |closure| closure.sites.as_slice())
+            .iter()
+            .cloned()
+            .chain([resolved(&probe.stdlib.join("site-packages"))])
+            .collect(),
         ldconfig: None,
         natives: Natives::new(bundled_name.clone()),
         vendor: BTreeMap::new(),
@@ -295,11 +305,19 @@ impl Walk<'_> {
                 self.bundled_name
             ));
         }
-        if self.system.iter().any(|dir| canonical.starts_with(dir)) {
-            return Ok(LinuxDep::Keep);
-        }
         let closure_image = matches!(node.kind, Kind::Closure(_));
         if closure_image && via_origin && self.payload.contains(canonical) {
+            return Ok(LinuxDep::Keep);
+        }
+        // Before the system directories and the prefix: a distribution
+        // Python's site directory lies under `/usr/lib`, a non-venv
+        // interpreter's under its prefix, and an unlocked distribution's
+        // library there is neither the system's nor the interpreter's.
+        let interpreter_image = matches!(node.kind, Kind::Interpreter(_));
+        if !interpreter_image && self.sites.iter().any(|site| canonical.starts_with(site)) {
+            return Ok(LinuxDep::Native);
+        }
+        if self.system.iter().any(|dir| canonical.starts_with(dir)) {
             return Ok(LinuxDep::Keep);
         }
         if canonical.starts_with(&self.prefix) {

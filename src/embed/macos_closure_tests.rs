@@ -1,13 +1,14 @@
 //! The macOS relocation of locked-closure images (the pycc.lock decision
 //! entry, rule 8; #1242) against real Mach-O images the test builds with
-//! `cc`: each dependency arm on one build, and the two refusals. The
+//! `cc`: each dependency arm on one build, a payload match rebound past
+//! an absolute rpath, the natives, and a native's refusal. The
 //! distribution is installed and locked by the test itself, so no
-//! python3.14 runs.
+//! python3.14 runs. `macos_relative_tests.rs` covers the rest of #1259.
 
 use super::*;
 use crate::embed::fake_layout::{cc, dylib, macho_library};
 
-fn deps(image: &Path) -> Vec<String> {
+pub(super) fn deps(image: &Path) -> Vec<String> {
     macho::parse_otool_l(
         &bundle::run_tool("otool", &[OsString::from("-L"), image.into()]).expect("otool"),
     )
@@ -16,7 +17,7 @@ fn deps(image: &Path) -> Vec<String> {
 /// Builds `<build>/<name>` (a `-dynamiclib` or `-bundle`), optionally with
 /// an install name, linked against `links` and carrying `rpaths`, and
 /// returns its bytes for the distribution's payload.
-fn image(
+pub(super) fn image(
     build: &Path,
     name: &str,
     kind: &str,
@@ -170,10 +171,13 @@ fn every_closure_dependency_arm_relocates_on_one_build() {
 }
 
 /// An `@rpath` whose first rpath is absolute (it may resolve outside the
-/// bundle on the machine that runs the program) is refused naming the
-/// image, its distribution and #1259, with no sidecar left behind.
+/// bundle on the machine that runs the program) and absent on the host,
+/// matched by another locked distribution's payload file: `tinyhelp`'s
+/// RECORD lists `tinynat/.dylibs/libhelper.dylib`, so it co-owns root
+/// `tinynat` and is locked. The reference is rebound to an explicit path
+/// to the closure copy, and nothing is vendored (#1259).
 #[test]
-fn an_unbundleable_closure_dependency_is_refused() {
+fn a_payload_match_behind_an_absolute_rpath_is_rebound() {
     let (env, build) = macos_env("embed_macos_closure_rpath");
     let helper = image(
         &build,
@@ -209,16 +213,25 @@ fn an_unbundleable_closure_dependency_is_refused() {
         &[],
     );
     env.lock();
-    let err = env
-        .embed_on(&env.toolchain(), EmbedPlatform::MacOs)
-        .expect_err("not relocatable");
+    let lock =
+        crate::lock::schema::parse(&std::fs::read_to_string(env.lock_path()).unwrap()).unwrap();
+    let packages: Vec<&str> = lock.target[0]
+        .package
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(packages, ["tinyhelp", "tinynat"]);
+    assert!(lock.target[0].native.is_empty());
+    env.embed_on(&env.toolchain(), EmbedPlatform::MacOs)
+        .expect("embedded");
+    let closure = env.sidecar().join("closure").join("tinynat");
+    let ext_deps = deps(&closure.join("_ext.so"));
     assert!(
-        err.contains("`closure/tinynat/_ext.so` (distribution `tinynat`)"),
-        "{err}"
+        ext_deps.contains(&"@loader_path/.dylibs/libhelper.dylib".to_string()),
+        "{ext_deps:?}"
     );
-    assert!(err.contains("depends on `@rpath/libhelper.dylib`"), "{err}");
-    assert!(err.contains("#1259"), "{err}");
-    assert!(!env.sidecar().exists());
+    assert!(!ext_deps.contains(&"@rpath/libhelper.dylib".to_string()));
+    assert!(!env.sidecar().join("lib").join("libhelper.dylib").exists());
 }
 
 /// Two distributions whose extensions link `libout1`, which links
@@ -356,11 +369,12 @@ fn the_relocation_vendors_only_planned_natives_with_their_locked_bytes() {
     assert!(!env.sidecar().exists());
 }
 
-/// A native reached twice from one distribution is locked once for it, and
-/// a native whose own dependency is a relative reference is refused by the
-/// build naming #1259, since only absolute install names are vendored.
+/// A native reached twice from one distribution is locked once for it,
+/// and a native whose `@rpath` dependency resolves nowhere from its own
+/// location (it has no `LC_RPATH` entry) is refused by the build naming
+/// the native, the distributions that need it and the reason (R2; #1259).
 #[test]
-fn a_native_with_a_relative_dependency_is_refused_naming_1259() {
+fn a_native_whose_rpath_dependency_resolves_nowhere_is_refused() {
     let env = Env::bare("embed_macos_native_relative", "import tinynat\n");
     macho_library(&env.layout);
     let build = env.root.join("build");
@@ -389,8 +403,13 @@ fn a_native_with_a_relative_dependency_is_refused_naming_1259() {
         .embed_on(&env.toolchain(), EmbedPlatform::MacOs)
         .expect_err("relative");
     assert!(
-        err.contains("the native library `lib/libout1.dylib` depends on `@rpath/libout2.dylib`"),
+        err.contains(
+            "the native library `lib/libout1.dylib` (required by `tinynat`) depends on \
+             `@rpath/libout2.dylib`, which resolves nowhere"
+        ),
         "{err}"
     );
-    assert!(err.contains("(#1259)"), "{err}");
+    assert!(err.contains("it has no `LC_RPATH` entry"), "{err}");
+    assert!(!err.contains("#1259"), "{err}");
+    assert!(!env.sidecar().exists());
 }

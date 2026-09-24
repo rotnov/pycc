@@ -17,7 +17,7 @@ use super::resolve::{classify_payload, read_record, scanned_sites, tree_digest};
 use super::schema::{self, LockTarget};
 use crate::embed::EmbedProbe;
 use pycc_hir::HirModule;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// A lock section the build consumes, with what its messages name.
@@ -82,6 +82,10 @@ pub(crate) struct LockedClosure {
     /// The section's `libpython-sha256`, checked against the bundled
     /// library's bytes.
     pub(crate) libpython_sha256: String,
+    /// The canonical scanned site directories (purelib, and platlib when
+    /// it differs), which the native derivation classifies against
+    /// (#1259); empty when the section locks no distribution.
+    pub(crate) sites: Vec<PathBuf>,
     packages: Vec<ExpectedPackage>,
     lock_path: PathBuf,
     entry: PathBuf,
@@ -95,6 +99,7 @@ impl LockedClosure {
         Self {
             files,
             libpython_sha256: String::new(),
+            sites: Vec::new(),
             packages: Vec::new(),
             lock_path: PathBuf::from("pycc.lock"),
             entry: PathBuf::from("m.py"),
@@ -104,16 +109,6 @@ impl LockedClosure {
     /// A refusal naming the lock, `why`, and the command that refreshes it.
     pub(crate) fn stale(&self, why: &str) -> String {
         stale_message(&self.lock_path, &self.entry, why)
-    }
-
-    /// The payload paths of every distribution that claims `rel`: an
-    /// image may load a sibling from any payload it belongs to.
-    pub(crate) fn payload_of(&self, rel: &str) -> BTreeSet<String> {
-        self.packages
-            .iter()
-            .filter(|package| package.paths.iter().any(|path| path == rel))
-            .flat_map(|package| package.paths.iter().cloned())
-            .collect()
     }
 
     /// The first locked distribution that claims `rel`.
@@ -268,6 +263,7 @@ pub(crate) fn payload(
     let mut closure = LockedClosure {
         files: Vec::new(),
         libpython_sha256: section.libpython_sha256.clone(),
+        sites: Vec::new(),
         packages: Vec::new(),
         lock_path: check.lock_path.clone(),
         entry: check.entry.clone(),
@@ -276,6 +272,7 @@ pub(crate) fn payload(
         return Ok(closure);
     }
     let sites = scanned_sites(&lock_probe.purelib, &lock_probe.platlib)?;
+    closure.sites = sites.iter().map(|site| site.path.clone()).collect();
     let mut claims: BTreeMap<String, (String, PathBuf, String)> = BTreeMap::new();
     for package in &section.package {
         let site = sites

@@ -7,15 +7,18 @@
 //! copies what it lists into `OUT.pycc/lib/`.
 //!
 //! The derivation reads the closure's *source* images, the files under the
-//! site directory that `lock::build::payload` lists. On macOS it follows
-//! absolute install names only; relative references are left to the
-//! build's relocation, which refuses those that miss the payload (#1259).
+//! site directory that `lock::build::payload` lists. On macOS it resolves
+//! every dependency, absolute or relative, on the build host and
+//! classifies it with `macho_host.rs`, as the build's relocation does
+//! (#1259); it never refuses, and leaves the refusals to the relocation.
 //! On Linux it is the ELF walk in `native_linux.rs`.
 
 use super::EmbedProbe;
 use super::bundle::{io_error, run_tool};
+use super::closure::CLOSURE_DIR;
 use super::layout::{self, EmbedPlatform};
 use super::macho::{self, MachoDep};
+use super::macho_host::{HostContext, HostImage, HostKind, classify_on_host};
 use super::native_linux::{self, LinuxEnv};
 use super::sha256::sha256_file;
 use crate::lock::build::{ClosureFile, LockedClosure};
@@ -212,8 +215,84 @@ pub(crate) fn canonical_prefix(probe: &EmbedProbe) -> PathBuf {
     resolved(&probe.base_prefix)
 }
 
+/// What both macOS consumers classify a closure's and its natives'
+/// dependencies against: the prefix, the source libpython's names, the
+/// closure's scanned site directories and `<stdlib>/site-packages`, and
+/// every locked payload file by its canonical source path.
+pub(crate) fn host_context(
+    probe: &EmbedProbe,
+    closure: &LockedClosure,
+    bundle_lib: &[PathBuf],
+) -> HostContext {
+    let payload = closure.files.iter();
+    HostContext {
+        prefix: canonical_prefix(probe),
+        bundle_lib: bundle_lib.to_vec(),
+        scanned_sites: closure.sites.clone(),
+        stdlib_sites: resolved(&probe.stdlib.join("site-packages")),
+        payload: payload
+            .map(|file| (resolved(&file.source), file.rel.clone()))
+            .collect(),
+    }
+}
+
+/// Where dyld finds `path` on the build host: the canonical path of an
+/// existing regular file, or a system path the dyld shared cache serves,
+/// where most system libraries live only since macOS 11.
+pub(crate) fn on_host(path: &Path) -> Option<PathBuf> {
+    if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return std::fs::canonicalize(path).ok();
+    }
+    let system = macho::is_system(&path.to_string_lossy());
+    (system && in_shared_cache(path)).then(|| path.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn in_shared_cache(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        // `<mach-o/dyld.h>`, macOS 11 and later.
+        fn _dyld_shared_cache_contains_path(path: *const std::ffi::c_char) -> bool;
+    }
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes());
+    // SAFETY: the argument is a NUL-terminated string that outlives the call.
+    path.is_ok_and(|path| unsafe { _dyld_shared_cache_contains_path(path.as_ptr()) })
+}
+
+/// No dyld shared cache off macOS, where no Mach-O image is resolved.
+#[cfg(not(target_os = "macos"))]
+fn in_shared_cache(_path: &Path) -> bool {
+    false
+}
+
+/// One Mach-O image's own id, its dependencies and its `LC_RPATH`
+/// entries, read with `otool`.
+pub(crate) struct MachoImage {
+    pub(crate) own_id: Option<String>,
+    pub(crate) deps: Vec<String>,
+    pub(crate) rpaths: Vec<String>,
+}
+
+impl MachoImage {
+    pub(crate) fn read(image: &Path) -> Result<Self, String> {
+        let otool = |flag: &str| run_tool("otool", &[OsString::from(flag), image.into()]);
+        Ok(Self {
+            own_id: macho::parse_otool_d(&otool("-D")?),
+            deps: macho::parse_otool_l(&otool("-L")?),
+            rpaths: macho::parse_otool_rpaths(&otool("-l")?),
+        })
+    }
+}
+
+/// The canonical directory of `source`, which dyld expands `@loader_path`
+/// from.
+pub(crate) fn source_dir(source: &Path) -> PathBuf {
+    let source = resolved(source);
+    source.parent().unwrap_or(&source).to_path_buf()
+}
+
 /// The macOS derivation: every Mach-O image in the closure, and every
-/// native it reaches through absolute install names.
+/// native it reaches, directly or through another native.
 fn derive_macos(probe: &EmbedProbe, closure: &LockedClosure) -> Result<Vec<DerivedNative>, String> {
     let mut images: Vec<&ClosureFile> = Vec::new();
     for file in &closure.files {
@@ -225,20 +304,23 @@ fn derive_macos(probe: &EmbedProbe, closure: &LockedClosure) -> Result<Vec<Deriv
         return Ok(Vec::new());
     }
     let source = layout::source_library(probe);
-    let bundle_lib = macho_bundle_lib(&source, &source)?;
-    let prefix = canonical_prefix(probe);
+    let context = host_context(probe, closure, &macho_bundle_lib(&source, &source)?);
     let bundled_name = layout::bundled_library_name(EmbedPlatform::MacOs, probe);
     let mut natives = Natives::new(bundled_name);
     let mut pending: Vec<(PathBuf, String)> = Vec::new();
     for file in images {
-        for native in absolute_natives(&file.source, &prefix, &bundle_lib)? {
+        let sidecar_rel = format!("{CLOSURE_DIR}/{}", file.rel);
+        let image = (sidecar_rel.as_str(), HostKind::Closure);
+        for native in natives_of(&file.source, image, &context)? {
             pending.push((native, file.package.clone()));
         }
     }
     while let Some((source, owner)) = pending.pop() {
         let name = file_name(&source);
         if natives.add(&source, &name, &owner)? {
-            for native in absolute_natives(&source, &prefix, &bundle_lib)? {
+            let sidecar_rel = format!("lib/{name}");
+            let image = (sidecar_rel.as_str(), HostKind::Native);
+            for native in natives_of(&source, image, &context)? {
                 pending.push((native, owner.clone()));
             }
         }
@@ -246,25 +328,31 @@ fn derive_macos(probe: &EmbedProbe, closure: &LockedClosure) -> Result<Vec<Deriv
     Ok(natives.finish())
 }
 
-/// The natives among `image`'s absolute dependencies, its own id aside.
-fn absolute_natives(
-    image: &Path,
-    prefix: &Path,
-    bundle_lib: &[PathBuf],
+/// The natives among the dependencies of the image read from `source`,
+/// which the sidecar holds at `sidecar_rel`.
+fn natives_of(
+    source: &Path,
+    (sidecar_rel, kind): (&str, HostKind),
+    context: &HostContext,
 ) -> Result<Vec<PathBuf>, String> {
-    let id_listing = run_tool("otool", &[OsString::from("-D"), image.into()])?;
-    let own_id = macho::parse_otool_d(&id_listing);
-    let listing = run_tool("otool", &[OsString::from("-L"), image.into()])?;
-    let natives = macho::parse_otool_l(&listing)
-        .into_iter()
-        .filter(|dep| dep.starts_with('/') && own_id.as_deref() != Some(dep.as_str()))
-        .filter_map(|dep| {
-            let path = resolved(Path::new(&dep));
-            match macho::classify_absolute(&dep, &path, prefix, bundle_lib) {
+    let facts = MachoImage::read(source)?;
+    let source_dir = source_dir(source);
+    let image = HostImage {
+        sidecar_rel,
+        source_dir: &source_dir,
+        own_id: facts.own_id.as_deref(),
+        rpaths: &facts.rpaths,
+        kind,
+    };
+    let natives = facts
+        .deps
+        .iter()
+        .filter_map(
+            |dep| match classify_on_host(dep, &image, context, &on_host) {
                 MachoDep::VendorNative(source) => Some(source),
                 _ => None,
-            }
-        })
+            },
+        )
         .collect();
     Ok(natives)
 }

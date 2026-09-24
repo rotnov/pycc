@@ -113,3 +113,28 @@ fn a_macos_closure_without_images_has_no_natives() {
     let err = plan_natives(platform, &layout.probe, Some(&closure), &env, false);
     assert!(err.expect_err("unreadable").contains("could not read"));
 }
+
+/// The production probe: an on-disk file by its canonical path, a system
+/// library the dyld shared cache serves by its own path, and nothing for
+/// a made-up system path, an absent file or a path no C string can hold.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_host_probe_finds_files_and_the_dyld_shared_cache() {
+    let dir = ScratchDir::new("native_on_host").expect("scratch");
+    let lib = file(&dir, "libx.dylib", "x");
+    assert_eq!(on_host(&lib), Some(std::fs::canonicalize(&lib).unwrap()));
+    assert_eq!(on_host(&dir.join("absent.dylib")), None);
+    let cached = Path::new("/usr/lib/libz.1.dylib");
+    assert!(on_host(cached).is_some());
+    assert!(in_shared_cache(cached));
+    let made_up = Path::new("/usr/lib/swift/libmyhelper.dylib");
+    assert_eq!(on_host(made_up), None);
+    assert!(!in_shared_cache(made_up));
+    assert!(!in_shared_cache(Path::new("/usr/lib/lib\0z.dylib")));
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn there_is_no_dyld_shared_cache_off_macos() {
+    assert!(!in_shared_cache(Path::new("/usr/lib/libz.1.dylib")));
+}
