@@ -25,6 +25,10 @@ pub(crate) struct BlockImports {
     /// aliases are all foreign, in source order, each with
     /// [`ForeignImportSite::Block`].
     pub(crate) bindings: Vec<ImportBinding>,
+    /// The span of the `import` statement each entry of `bindings` came
+    /// from, index for index, so a refusal of one binding can point at its
+    /// own statement rather than at the enclosing block.
+    pub(crate) spans: Vec<Span>,
     /// The diagnostic each nested `import` statement that failed to lower
     /// would report at top level, keyed by that statement's span. A
     /// statement with a `pycc_std` alias is in neither list.
@@ -102,6 +106,10 @@ fn walk_stmt(
                         .iter()
                         .all(|binding| matches!(binding, ImportBinding::Foreign { .. }))
                     {
+                        let span = statement_span(import.range);
+                        found
+                            .spans
+                            .extend(std::iter::repeat_n(span, bindings.len()));
                         found.bindings.extend(bindings);
                     }
                 }

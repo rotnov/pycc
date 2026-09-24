@@ -259,15 +259,41 @@ fn a_failed_block_reports_in_source_order_and_binds_nothing() {
 
 #[test]
 fn an_alias_shadowing_a_resolved_spelling_is_refused() {
+    // One name per category and per marker family (#1291 review): a stdlib
+    // module, a builtin function, class, exception and scalar, and each
+    // marker family -- the `TYPE_CHECKING` fold, the base-class, enum,
+    // decorator and dataclass markers, and the import-free annotation
+    // names.
     for alias in [
         "typing",
-        "TYPE_CHECKING",
         "math",
         "range",
+        "super",
+        "property",
+        "staticmethod",
+        "classmethod",
+        "ValueError",
+        "int",
+        "TYPE_CHECKING",
         "Enum",
         "StrEnum",
         "Protocol",
         "ABC",
+        "auto",
+        "override",
+        "abstractmethod",
+        "dataclass",
+        "runtime_checkable",
+        "dataclass_transform",
+        "field",
+        "ClassVar",
+        "Final",
+        "Self",
+        "Annotated",
+        "Any",
+        "TypeAlias",
+        "NDArray",
+        "ndarray",
     ] {
         for source in [
             format!("import colorsys as {alias}\n"),
@@ -278,8 +304,8 @@ fn an_alias_shadowing_a_resolved_spelling_is_refused() {
                 message,
                 format!(
                     "binding the CPython module `colorsys` to `{alias}`, a name pycc resolves \
-                     by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a \
-                     base-class marker), is not supported yet"
+                     by its spelling (a Python builtin, a stdlib module, or a typing, decorator \
+                     or base-class marker), is not supported yet"
                 ),
                 "{source:?}"
             );
@@ -314,6 +340,39 @@ fn shadowing_a_nested_import_follows_the_top_level_rule() {
     assert!(message.contains("shadowing a foreign import"), "{message}");
 
     lower_ok("import numpy\nimport numpy\n");
+}
+
+/// A nested foreign import that names a class the module already defines
+/// is refused exactly like the top-level form (#1291 review), and the
+/// diagnostic points at the nested `import` statement, not at the block.
+/// The seeded builtin exception classes count as defined classes, which
+/// only the unaliased form can reach: an alias spelled `ValueError` is a
+/// builtin, refused first by the alias guard.
+#[test]
+fn a_nested_import_colliding_with_a_class_is_refused_at_its_own_statement() {
+    let source = "class Point:\n    pass\nif c:\n    x = 1\n    import colorsys as Point\n";
+    let diagnostics = errors(source, &[]);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(
+        diagnostics[0].message,
+        "import `Point` collides with a class of the same name already defined in this module"
+    );
+    let start = u32::try_from(source.find("import colorsys").unwrap()).unwrap();
+    let end = u32::try_from(source.len() - 1).unwrap();
+    assert_eq!(diagnostics[0].span, Some(Span::new(start, end)));
+
+    // The exception classes are seeded only in a module that names one.
+    let handler = "try:\n    pass\nexcept ValueError:\n    pass\n";
+    for import in ["import ValueError\n", "if c:\n    import ValueError\n"] {
+        let source = format!("{import}{handler}");
+        let source = source.as_str();
+        assert_eq!(
+            only_message(source),
+            "import `ValueError` collides with a class of the same name already defined in \
+             this module",
+            "{source:?}"
+        );
+    }
 }
 
 #[test]

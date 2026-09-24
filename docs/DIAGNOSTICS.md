@@ -159,12 +159,22 @@ a dotted one. Since [#1291](https://github.com/rotnov/pycc/issues/1291) an
 alias on an undotted module that is neither a project module nor a
 `pycc_std` registration (`import numpy as np`) is a foreign import instead,
 binding the CPython module object. An alias pycc resolves by its spelling
-(`TYPE_CHECKING`, `range`, a `pycc_std` module name such as `typing`, or a
-base-class marker `Enum`, `StrEnum`, `Protocol` or `ABC`) is refused with its
-own C0001 (``binding the CPython module `foo` to `range`, a name pycc resolves
-by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a base-class
-marker), is not supported yet``), because the alias would otherwise
-be read as that other meaning.
+-- any Python builtin (`range`, `super`, `property`, `ValueError`, ...), a
+`pycc_std` module name such as `typing`, or a marker pycc recognises without
+an import (`TYPE_CHECKING`; the base-class markers `Enum`, `StrEnum`,
+`Protocol`, `ABC`; `auto`, `override`, `abstractmethod`, `dataclass`,
+`runtime_checkable`, `dataclass_transform`, `field`; and the annotation names
+`ClassVar`, `Final`, `Self`, `Annotated`, `Any`, `TypeAlias`, `ndarray`,
+`NDArray`) -- is refused with its own C0001 (``binding the CPython module
+`foo` to `range`, a name pycc resolves by its spelling (a Python builtin, a
+stdlib module, or a typing, decorator or base-class marker), is not supported
+yet``), because the alias would otherwise be read as that other meaning. The
+canonical list is `PYTHON_BUILTINS` and `SPELLING_MARKERS` in
+`crates/pycc_hir/src/import/spelling.rs`. A foreign import nested in a
+module-level block that names a class the module defines, or a seeded builtin
+exception class the module mentions, is refused with the same ``import `X`
+collides with a class of the same name already defined in this module`` C0001
+as the top-level form, at the nested statement.
 
 `pycc_types` also uses it for calls to known Python 3.14
 callable builtins that this compiler version does not implement (e.g.

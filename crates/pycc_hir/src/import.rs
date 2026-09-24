@@ -17,6 +17,7 @@
 mod block;
 mod request;
 mod shadow;
+mod spelling;
 mod type_alias;
 
 pub(crate) use block::{lower_block_imports, nested_foreign_import};
@@ -466,12 +467,12 @@ fn lower_import_alias(
     // binds `Y` (#1291).
     if matches!(answer, Some(ResolvedImport::Foreign)) {
         let local_name = alias.asname.as_ref().map_or(module_name, |n| n.as_str());
-        if alias.asname.is_some() && shadows_a_resolved_spelling(local_name) {
+        if alias.asname.is_some() && spelling::shadows_a_resolved_spelling(local_name) {
             return Err(unsupported(
                 format!(
                     "binding the CPython module `{module_name}` to `{local_name}`, a name pycc \
-                     resolves by its spelling (a stdlib module, `range`, `TYPE_CHECKING` or a \
-                     base-class marker), is not supported yet"
+                     resolves by its spelling (a Python builtin, a stdlib module, or a typing, \
+                     decorator or base-class marker), is not supported yet"
                 ),
                 statement.start..statement.end,
             ));
@@ -499,27 +500,6 @@ fn lower_import_alias(
         local_name: local_name.to_string(),
         module,
     })
-}
-
-/// Whether a foreign alias binding `local_name` would be read as something
-/// else (#1291). `TYPE_CHECKING` and a name `pycc_std::resolve_module`
-/// answers (`typing`, `math`, ...) are resolved by their spelling --
-/// `stmt::is_type_checking_guard` and `expr::std_receiver`'s textual
-/// fallback -- so `import foo as typing` followed by
-/// `if typing.TYPE_CHECKING:` would fold a live body away. `range` is also
-/// resolved by its spelling, with no shadowing check, so
-/// `import foo as range` would silently call the builtin. The base-class
-/// markers `Enum`, `StrEnum`, `Protocol` and `ABC` are likewise recognised
-/// by their bare spelling (`crate::typecheck::is_enum_base_name` and its
-/// siblings), so `import foo as Enum` followed by `class C(Enum):` would
-/// lower an enum class. The unaliased shapes (`import TYPE_CHECKING`,
-/// `import range`, `import Enum`) predate #1291 and are not covered here.
-fn shadows_a_resolved_spelling(local_name: &str) -> bool {
-    matches!(local_name, "TYPE_CHECKING" | "range")
-        || crate::typecheck::is_enum_base_name(local_name)
-        || crate::typecheck::is_protocol_base_name(local_name)
-        || crate::typecheck::is_abc_base_name(local_name)
-        || pycc_std::resolve_module(local_name).is_some()
 }
 
 /// `C0001` for `from ... import *` -- shared by the stdlib and project

@@ -563,25 +563,9 @@ fn lower_top_level_item<'a>(
         // pi`, so every bound name is checked, not just the first). A
         // class this module imported earlier is exempt: `from a import
         // Point` twice binds the same definition twice, not a collision.
-        if let Some(colliding) = lowered
-            .bindings
-            .iter()
-            .map(import_local_name)
-            .find(|local_name| {
-                state
-                    .class_defs
-                    .iter()
-                    .enumerate()
-                    .any(|(index, (class_name, _))| {
-                        class_name == local_name && !state.imported_class_indices.contains(&index)
-                    })
-            })
-        {
-            return Err(unsupported(
-                format!(
-                    "import `{colliding}` collides with a class of the same name \
-                     already defined in this module"
-                ),
+        if let Some(index) = colliding_class_import(state, &lowered.bindings) {
+            return Err(class_collision(
+                import_local_name(&lowered.bindings[index]),
                 pycc_ast::stmt_range(stmt),
             ));
         }
@@ -799,6 +783,16 @@ fn lower_top_level_item<'a>(
     // import that never runs is never a lock root, a policy (I0402) or a
     // native-build (I0403) finding.
     let block_imports = crate::import::lower_block_imports(stmt, resolved, &state.imports);
+    // The same class-name collision the top-level arm refuses above: a
+    // nested `import numpy as ValueError` would otherwise bind a name the
+    // module (or its seeded builtin exception classes) already defines.
+    if let Some(index) = colliding_class_import(state, &block_imports.bindings) {
+        let span = block_imports.spans[index];
+        return Err(class_collision(
+            import_local_name(&block_imports.bindings[index]),
+            span.start..span.end,
+        ));
+    }
     let imports_before_block = state.imports.len();
     state.imports.extend(block_imports.bindings.iter().cloned());
     // #1213: a chained assignment expands into several statements, all
@@ -856,3 +850,33 @@ fn statement_span(stmt: &Stmt) -> Span {
 
 #[cfg(test)]
 mod tests;
+
+/// The index of the first of `bindings` whose local name is a class this module defines
+/// (or seeded, like the builtin exception classes) rather than imported --
+/// the reverse-direction class-name collision both the top-level import arm
+/// and a module-level block's nested foreign imports (#1291) refuse. A
+/// class this module imported earlier is exempt: `from a import Point`
+/// twice binds the same definition twice, not a collision.
+fn colliding_class_import(state: &ModuleState<'_>, bindings: &[ImportBinding]) -> Option<usize> {
+    bindings.iter().position(|binding| {
+        let local_name = import_local_name(binding);
+        state
+            .class_defs
+            .iter()
+            .enumerate()
+            .any(|(index, (class_name, _))| {
+                class_name == local_name && !state.imported_class_indices.contains(&index)
+            })
+    })
+}
+
+/// The `C0001` for [`colliding_class_import`]'s finding.
+fn class_collision(colliding: &str, range: std::ops::Range<u32>) -> Diagnostic {
+    unsupported(
+        format!(
+            "import `{colliding}` collides with a class of the same name \
+             already defined in this module"
+        ),
+        range,
+    )
+}
