@@ -79,8 +79,10 @@ struct ExpectedPackage {
 #[derive(Debug)]
 pub(crate) struct LockedClosure {
     pub(crate) files: Vec<ClosureFile>,
-    /// The section's `libpython-sha256`, checked against the bundled
-    /// library's bytes.
+    /// The section's `libpython-sha256`, checked against the digest of the
+    /// file that identifies the interpreter
+    /// (`embed::static_lib::identity_library`): the bundled library's
+    /// bytes in a shared build, whichever file it names in a static one.
     pub(crate) libpython_sha256: String,
     /// The canonical scanned site directories (purelib, and platlib when
     /// it differs), which the native derivation classifies against
@@ -231,8 +233,9 @@ fn describe_roots(roots: &[String]) -> String {
 }
 
 /// Compares the section's interpreter fields with the interpreter being
-/// bundled (step 2). `libpython-sha256` is compared by the bundle, which
-/// already reads the library.
+/// bundled (step 2). `libpython-sha256` is compared by the bundle against
+/// the file [`crate::embed::static_lib::identity_library`] names, which it
+/// already reads.
 pub(crate) fn verify_interpreter(
     check: &ClosureCheck,
     probe: &EmbedProbe,
