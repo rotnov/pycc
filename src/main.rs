@@ -15,6 +15,7 @@ mod source;
 use build_pipeline::try_build;
 use clap::Parser;
 use cli::{Cli, Command, ErrorFormat, OutputFormat};
+use embed::LibpythonLink;
 use frontend::{check_frontend, report_check_failure};
 use std::path::Path;
 use std::process::ExitCode;
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
             target,
             release,
             ext,
+            static_libpython,
             interop,
         } => {
             // Resolved here, not inside `try_build`: this consumption point
@@ -54,6 +56,9 @@ fn main() -> ExitCode {
             // before `try_build` ever runs, is what keeps `run`'s own
             // hardcoded `false` (below) actually final.
             let release = resolve_release_flag(release, &path);
+            // Resolved here for the same reason (D-251): `run` never links
+            // libpython statically, whatever the manifest says.
+            let link = resolve_libpython_link(static_libpython, ext, &path);
             // Caller-owned scratch (#783): the temp object `try_build` emits
             // lives inside this `ScratchDir`, so every exit from this arm --
             // success and each error path alike -- removes it on drop. The
@@ -79,7 +84,7 @@ fn main() -> ExitCode {
                 release,
                 &scratch.join("main.o"),
                 toolchain.as_ref(),
-                &embed::EmbedToolchain::from_env(),
+                &embed::EmbedToolchain::from_env().with_link(link),
                 interop.into_cli(),
             ) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -287,15 +292,38 @@ fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
     if explicit_release {
         return true;
     }
-    let Some(dir) = source_path.parent() else {
-        return false;
-    };
-    let Ok(contents) = std::fs::read_to_string(dir.join("pycc.toml")) else {
-        return false;
-    };
-    match project_config::parse(&contents) {
-        Ok(config) => config.build.opt.as_deref() == Some("release"),
-        Err(_) => false,
+    neighboring_build_section(source_path)
+        .is_some_and(|build| build.opt.as_deref() == Some("release"))
+}
+
+/// The `[build]` section of the `pycc.toml` next to `source_path`, or
+/// `None` when there is no such file or it does not parse -- the shared
+/// read behind `resolve_release_flag` and `resolve_libpython_link`, which
+/// both treat a missing or malformed manifest as "no default".
+fn neighboring_build_section(source_path: &Path) -> Option<project_config::BuildSection> {
+    let dir = source_path.parent()?;
+    let contents = std::fs::read_to_string(dir.join("pycc.toml")).ok()?;
+    project_config::parse(&contents)
+        .ok()
+        .map(|config| config.build)
+}
+
+/// How `pycc build` links libpython into an embedded executable (D-251):
+/// statically when `--static-libpython` is given or a neighboring
+/// `pycc.toml` sets `[build] static = true`, by the same precedence and
+/// the same forgiving manifest read as `resolve_release_flag`. An `--ext`
+/// build loads into a host interpreter and links no libpython, so it is
+/// always `Shared` there. The value matters only when the build embeds an
+/// interpreter; a native, `--pure` or `--target` build ignores it.
+fn resolve_libpython_link(explicit_static: bool, ext: bool, source_path: &Path) -> LibpythonLink {
+    if ext {
+        return LibpythonLink::Shared;
+    }
+    let from_manifest = || neighboring_build_section(source_path).and_then(|build| build.static_);
+    if explicit_static || from_manifest() == Some(true) {
+        LibpythonLink::Static
+    } else {
+        LibpythonLink::Shared
     }
 }
 
@@ -514,6 +542,59 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(resolve_release_flag(false, &source_path));
+    }
+
+    fn manifest_with_static(dir: &Path, value: &str) {
+        std::fs::write(
+            dir.join("pycc.toml"),
+            format!(
+                "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+                 [build]\nstatic = {value}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_static_libpython_flag_links_statically_without_a_manifest() {
+        let link = resolve_libpython_link(true, false, Path::new("/does/not/exist.py"));
+        assert_eq!(link, LibpythonLink::Static);
+    }
+
+    #[test]
+    fn a_manifest_static_key_is_the_default_and_false_or_absent_is_shared() {
+        let dir = scratch_dir("static_key");
+        let source_path = dir.join("main.py");
+        assert_eq!(
+            resolve_libpython_link(false, false, &source_path),
+            LibpythonLink::Shared
+        );
+        manifest_with_static(&dir, "true");
+        assert_eq!(
+            resolve_libpython_link(false, false, &source_path),
+            LibpythonLink::Static
+        );
+        manifest_with_static(&dir, "false");
+        assert_eq!(
+            resolve_libpython_link(false, false, &source_path),
+            LibpythonLink::Shared
+        );
+        // The flag wins over a manifest that says `false`.
+        assert_eq!(
+            resolve_libpython_link(true, false, &source_path),
+            LibpythonLink::Static
+        );
+    }
+
+    #[test]
+    fn an_ext_build_never_links_libpython_statically() {
+        let dir = scratch_dir("static_ext");
+        manifest_with_static(&dir, "true");
+        let source_path = dir.join("main.py");
+        assert_eq!(
+            resolve_libpython_link(false, true, &source_path),
+            LibpythonLink::Shared
+        );
     }
 }
 

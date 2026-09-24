@@ -298,7 +298,14 @@ fn derive(
         let check = build::ClosureCheck::for_section(section.clone(), located, entry_path);
         let closure = build::payload(&check, &env).map_err(LockFailure::Env)?;
         let linux_env = toolchain.linux_env();
-        let natives = embed::plan_natives(platform, &probe, Some(&closure), &linux_env, false);
+        let natives = embed::plan_natives(
+            platform,
+            &probe,
+            Some(&closure),
+            &linux_env,
+            false,
+            embed::LibpythonLink::Shared,
+        );
         section.native = natives.map_err(LockFailure::Env)?.locked();
     }
     Ok(section)

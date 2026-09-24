@@ -1216,6 +1216,22 @@ owns the contract; this is the runtime view of it.
   under a site-packages directory is a native unless it is kept or rebound
   as a payload file, even when that directory lies inside the prefix or
   (on Linux) under a system library directory.
+- **Static libpython (Part 1 of #1227).** `pycc build --static-libpython`, or
+  `[build] static = true` in a neighboring `pycc.toml`, links the embed
+  interpreter's `LIBPL` archive into the executable whole (macOS
+  `-force_load`, Linux `--whole-archive`) and exports its symbols (macOS
+  `-export_dynamic`, Linux `--export-dynamic`), followed by the
+  interpreter's `sysconfig` `LIBS` and `SYSLIBS`, so a `lib-dynload`
+  module's C-API references resolve against the executable itself
+  ([D-251](./decisions/D-251-static-libpython-link-for-embedded-executables.md)).
+  The sidecar then holds no libpython; its marker records the archive's
+  digest as `libpython-sha256` and adds `libpython-link static`. Any bundled
+  image that needs a shared libpython -- by a `libpython3.14` file name, a
+  `Python.framework` binary, or a name that resolves to the interpreter's
+  own library -- is refused at exit 2, since it would load a second
+  interpreter into the process. A build that consumes a `pycc.lock`
+  section is refused at exit 2 until #1272 settles the lock's
+  `libpython-sha256` for this link.
 
 A module body that fails reports through one of two channels, and the exec
 slot preserves whichever one carries the failure. `pycc_rt`'s thread-local

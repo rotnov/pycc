@@ -12,8 +12,9 @@
 use super::EmbedProbe;
 use super::bundle::io_error;
 use super::elf::{self, ElfImage};
-use super::layout::{self, EmbedPlatform};
+use super::layout::{self, EmbedPlatform, LibpythonLink};
 use super::native::{NativePlan, Natives, read_head, resolved};
+use super::static_lib;
 use crate::lock::build::LockedClosure;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -109,6 +110,11 @@ enum LinuxDep {
 struct Walk<'a> {
     env: &'a LinuxEnv,
     executable: &'a Path,
+    /// The interpreter's version, and whether the executable links
+    /// libpython statically (D-251), so every image that needs a shared
+    /// libpython is refused.
+    version: (u32, u32, u32),
+    link: LibpythonLink,
     system: Vec<PathBuf>,
     prefix: PathBuf,
     bundled_name: String,
@@ -131,18 +137,21 @@ struct Walk<'a> {
 
 /// Scans the closure's images (and, with `interpreter`, libpython and the
 /// `lib-dynload` extensions the copy keeps) and returns what the build
-/// copies into `lib/`.
+/// copies into `lib/`. A static build (`link`, D-251) scans no libpython.
 pub(crate) fn plan(
     probe: &EmbedProbe,
     closure: Option<&LockedClosure>,
     env: &LinuxEnv,
     interpreter: bool,
+    link: LibpythonLink,
 ) -> Result<NativePlan, String> {
     let bundled_name = layout::bundled_library_name(EmbedPlatform::Linux, probe);
     let source_library = layout::source_library(probe);
     let mut walk = Walk {
         env,
         executable: &probe.executable,
+        version: probe.version,
+        link,
         system: env.system_dirs.iter().map(|dir| resolved(dir)).collect(),
         prefix: resolved(&probe.base_prefix),
         bundled_name: bundled_name.clone(),
@@ -160,13 +169,15 @@ pub(crate) fn plan(
         kept: BTreeMap::new(),
         pending: Vec::new(),
     };
-    if interpreter {
+    if interpreter && link == LibpythonLink::Shared {
         walk.pending.push(Node {
             path: source_library,
             kind: Kind::Interpreter(bundled_name),
             owner: None,
             preloaded: false,
         });
+    }
+    if interpreter {
         let dynload = probe.stdlib.join("lib-dynload");
         // An interpreter without a `lib-dynload` directory contributes no
         // extension images, so a failed listing is an empty one.
@@ -221,6 +232,12 @@ impl Walk<'_> {
             return Ok(());
         };
         for needed in &image.needed {
+            // By name, before resolving: a static-only interpreter's host
+            // may have no shared libpython for the name to resolve to.
+            let is_static = self.link == LibpythonLink::Static;
+            if is_static && static_lib::names_libpython(needed, self.version) {
+                return Err(static_lib::second_libpython(&node.describe(), needed));
+            }
             let Some((found, via_origin, dep)) = self.resolve(needed, &image, &node.path) else {
                 if node.preloaded {
                     // The executable loads a copied library at start-up,
@@ -296,6 +313,9 @@ impl Walk<'_> {
     ) -> Result<LinuxDep, String> {
         if needed == self.bundled_name {
             return Ok(LinuxDep::Keep);
+        }
+        if canonical == self.source_library && self.link == LibpythonLink::Static {
+            return Err(static_lib::second_libpython(&node.describe(), needed));
         }
         if canonical == self.source_library {
             return Err(format!(
