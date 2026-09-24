@@ -611,10 +611,14 @@ def f() -> int:
 T0041 fires when a local name is assigned on only some of the control-flow \
 paths that can reach a later read of it -- e.g. inside an `if` with no \
 `else`, or inside a `while`/`for` body that might run zero times -- rather \
-than on every path (issue #118 Part 1). This is pycc's strict AOT \
+than on every path (issue #118 Part 1). After a `try`, a name is bound \
+when the body and every `except` handler that can fall through the \
+statement bind it (#1289); a handler that binds nothing (`except E: pass`), a read inside \
+`finally`, or a read of an `except ... as` name after its handler is still \
+T0041. This is pycc's strict AOT \
 equivalent of CPython's `UnboundLocalError`, but caught at compile time via \
 a three-state binding model (definitely bound / maybe bound / unbound) \
-tracked across `if`/`while`/`for` control-flow joins, instead of at \
+tracked across `if`/`while`/`for`/`try` control-flow joins, instead of at \
 runtime. T0041 is distinct from `T0021`'s \"local name `<name>` is not \
 bound before this use\" message: T0021 covers a name never assigned on any \
 path reaching the read, while T0041 covers a name assigned on some but not \

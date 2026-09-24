@@ -97,10 +97,28 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   construct. Reading a maybe-bound name is `T0041` (possibly-unbound read),
   distinct from `T0021` (never bound). An unconditional assignment on the
   current path after the join upgrades a maybe-bound name back to definitely
-  bound, so `if c: x = 1` followed by `x = 2` makes `x` readable. The
+  bound, so `if c: x = 1` followed by `x = 2` makes `x` readable. After a
+  `try` or `try`/`except*` statement (#1289), a name is definitely bound when
+  every path that can complete the statement normally binds it: the `else`
+  path after a completed body, plus every handler whose body does not always
+  return or raise. A handler's `except ... as` name is unbound on that
+  handler's exit (CPython's implicit `del`), and `finally` is checked against
+  the conservative state, because it also runs on the paths that leave early,
+  so a read of a try-bound name inside `finally` is still `T0041`. Every
+  path's binding is type-checked in `check_assignment`'s direction, including
+  a handler that always terminates (a mismatch is `T0023`), and the name keeps
+  the first path's type. This join deliberately does not reuse
+  `join_if_branches`: that function checks the reversed direction, so it
+  admits a later `int` into an earlier `bool` and keeps the `bool` -- which
+  is why `if d == 0: x = True / else: x = 1 / print(x)` prints `True` for
+  `d = 1` where CPython prints `1` (observed on this revision; an `if`/`else`
+  defect outside #1289's scope) -- and it keeps a `Definitely` side's type
+  over a `Maybe` one. The
   private-helper constraint solver mirrors this tracking (issue #118 Part 2,
   #359): its `ConstraintEnvironment` carries a `maybe_bindings` side-table
-  populated by `join_if_branches_solver`/`join_loop_body_solver`, and
+  populated by `join_if_branches_solver`/`join_loop_body_solver` (and, for
+  a `try`, cleared for the names every fall-through path binds by
+  `promote_try_fallthrough`), and
   `collect_expr_constraints`'s `Name` arm skips unification for maybe-bound
   names so the solver does not infer a private-helper return type from a value
   that may not exist (the validation pass's `T0041` remains the user-facing
