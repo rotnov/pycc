@@ -66,24 +66,24 @@ impl StringConversionSite {
 ///
 /// The `Ty::Instance` arm's verdict, in the order it is decided:
 ///
-/// 1. One of the 26 builtin exception names (`pycc_hir::is_builtin_exception_class`)
+/// 1. A builtin exception name (`pycc_hir::is_builtin_exception_class`)
 ///    is decided by *provenance*, never by the class's shape:
 ///    - seeded by HIR lowering (`env.is_synthetic_class`): accept.
 ///      `rewrite_exception_to_message` renders it -- the flat seven by name
-///      (`pycc_mir::exception::resolve_exception_tag`), the `OSError` family
-///      and `Base`/`ExceptionGroup` through their seeded class-table tag.
+///      (`pycc_mir::exception::resolve_exception_tag`), every other builtin
+///      through its seeded class-table tag.
 ///    - absent from the class table (the shadow gate withheld seeding because
 ///      the module binds some *other* builtin exception name): only the flat
-///      seven still render, by name, so they are accepted; the other 18 get
-///      no rewrite and would panic in codegen, so they are rejected.
-///    - present but user-authored (plain or `@dataclass`) under any of the 25
-///      names: rejected. MIR resolves the name before the shape
+///      seven still render, by name, so they are accepted; every other
+///      builtin gets no rewrite and would panic in codegen, so they are rejected.
+///    - present but user-authored (plain or `@dataclass`) under any builtin
+///      exception name: rejected. MIR resolves the name before the shape
 ///      (`rewrite_exception_to_message` runs first at both call sites in
 ///      `crates/pycc_mir/src/expr.rs`) and rewrites the plain instance to an
 ///      exception message, or applies a dataclass `__repr__` to an exception
 ///      object bound by `except*`, and the program crashes at runtime. This
-///      deliberately also rejects a user `@dataclass` under an `OSError`-family
-///      or `ExceptionGroup` name that MIR would render today when instantiated
+///      deliberately also rejects a user `@dataclass` under a builtin exception
+///      name past the flat seven that MIR would render today when instantiated
 ///      directly -- the one loss D-237 records.
 /// 2. Any other name renders only through its synthesized dataclass
 ///    `__repr__`. A D-189 `exception_type_tag` on a user exception class is

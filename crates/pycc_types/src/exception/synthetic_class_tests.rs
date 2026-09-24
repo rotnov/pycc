@@ -80,7 +80,7 @@ fn an_unseeded_module_still_does_not_read_the_flat_seven_as_shadowed() {
                 "`{name}` must not read as shadowed while absent"
             );
         } else {
-            // Part 2 of #543 (#739), work item 5: an `OSError`-family name
+            // Part 2 of #543 (#739), work item 5: a name past the flat seven
             // has no name-based fallback, so absence from the class table
             // must *not* be read as "unshadowed" -- unlike the flat seven,
             // it has to actually be present to be treated as raisable or
@@ -91,7 +91,7 @@ fn an_unseeded_module_still_does_not_read_the_flat_seven_as_shadowed() {
             // referenced but seeding was withheld elsewhere in the module.
             assert!(
                 !unshadowed,
-                "`{name}` (OSError family) must not read as unshadowed while absent from the class table"
+                "`{name}` (past the flat seven) must not read as unshadowed while absent from the class table"
             );
         }
     }

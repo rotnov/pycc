@@ -150,14 +150,14 @@ pub(super) fn lower_exception_value(
 }
 
 /// Resolves an exception class name to its runtime type tag, whether it is one
-/// of the original flat seven builtins (resolved by name, above), one of the
-/// 16-member `OSError` family that carries a fixed tag on its own
+/// of the original flat seven builtins (resolved by name, above), a builtin
+/// past the flat seven, which carries a fixed tag on its own
 /// `HirClassDef` (Part 2 of #543, #739), or a user-defined class that HIR
 /// lowering assigned a tag to (Part 2 of #541, D-189) -- the class-table
 /// fallback below resolves both of the latter two identically.
 ///
 /// Name-first resolution is also why the checker's string-conversion gate
-/// (#977, D-237, `pycc_types::string_conversion`) decides the 26 builtin
+/// (#977, D-237, `pycc_types::string_conversion`) decides the builtin
 /// exception names by *provenance* rather than by name or shape: a user
 /// class -- plain or `@dataclass` -- declared under one of the flat seven
 /// names resolves here by name whatever its shape, and a user exception

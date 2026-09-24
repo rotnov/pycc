@@ -147,3 +147,31 @@ fn pep_0654_except_star_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/pep_0654_except_star.py"
     );
 }
+
+// #1292 (Part 2 of #1282): the appended `ImportError`/`ModuleNotFoundError`
+// builtins. Each class is caught by its own name, by `ImportError` and by
+// `Exception`; an `except ModuleNotFoundError:` handler lets a plain
+// `ImportError` fall to the next handler; a user `ImportError` subclass is
+// caught by `except ImportError:`; and `issubclass` follows CPython's real
+// `ModuleNotFoundError` -> `ImportError` -> `Exception` hierarchy. Every
+// raise uses a literal message and each caught exception is printed exactly
+// once, which keeps the fixture clear of a pre-existing runtime defect in a
+// bound exception's message refcount that #1292 does not touch.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn builtin_import_error_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/builtin_import_error.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("builtin_import_error_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/builtin_import_error.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("builtin_import_error_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/builtin_import_error.py"
+    );
+}

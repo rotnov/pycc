@@ -16,8 +16,9 @@ pub const EXCEPTION_TYPE_KEY_ERROR: u8 = 3;
 pub const EXCEPTION_TYPE_INDEX_ERROR: u8 = 4;
 pub const EXCEPTION_TYPE_ZERO_DIV_ERROR: u8 = 5;
 pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
-/// Part A of #1038 (#1063): `OverflowError`'s tag. Tags 7..=24 belong to the
-/// PEP 3151 `OSError` family and the PEP 654 exception groups, which this
+/// Part A of #1038 (#1063): `OverflowError`'s tag. Every other builtin tag
+/// past the flat seven (7..=24, and 26..=27 for
+/// `ImportError`/`ModuleNotFoundError`, #1292) belongs to a class this
 /// crate never raises by name, so it declares no constants for them. This
 /// crate has no `[dependencies]` and cannot see
 /// `pycc_hir::BUILTIN_EXCEPTION_CLASSES`, so the literal is hand-copied and
@@ -408,7 +409,10 @@ pub unsafe extern "C" fn pycc_rt_exception_raise_with_cause(
 }
 
 /// Returns whether `obj` matches the requested builtin exception tag.
-/// Every supported builtin exception is a direct subclass of `Exception`.
+/// Matches `Exception`'s catch-all tag, or `obj`'s own tag exactly; it walks
+/// no hierarchy -- a handler whose class has subclasses matches through its
+/// MIR-built tag set, which codegen's dispatch chain
+/// (`pycc_codegen::exception`) ORs over one call to this function per tag.
 ///
 /// # Safety
 ///

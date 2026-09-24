@@ -305,9 +305,10 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     // Part 3 of #382 (#542, PEP 654, D-202) added `ExceptionGroup` and
     // `BaseExceptionGroup` to `BUILTIN_EXCEPTION_CLASSES`, shrinking the
     // remaining per-module user-exception tag budget from 233 to 231; Part A
-    // of #1038 (#1063) appended `OverflowError`, shrinking it again to 230.
+    // of #1038 (#1063) appended `OverflowError`, shrinking it again to 230;
+    // #1292 appended `ImportError`/`ModuleNotFoundError`, shrinking it to 228.
     assert!(
-        text.contains("at most 230"),
+        text.contains("at most 228"),
         "unexpected diagnostic: {text}"
     );
 }

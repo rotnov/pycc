@@ -333,9 +333,10 @@ pub struct HirClassDef {
     /// `None` even though they are among the most raisable classes in the
     /// language, because their tags are fixed constants resolved by name
     /// (`pycc_mir::exception::resolve_exception_tag`) rather than assigned
-    /// per module. The 16-member PEP 3151 `OSError` family added by D-194
-    /// has no such name-based fallback and instead carries a fixed `Some`
-    /// tag directly on this field, assigned by array index in
+    /// per module. Every builtin past the flat seven (array index
+    /// `>= FIRST_OSERROR_FAMILY_TAG`) has no such name-based fallback and
+    /// instead carries a fixed `Some` tag directly on this field, assigned by
+    /// array index in
     /// `pycc_hir::exception::builtin_exception_class_defs`. Reading `None`
     /// as "user-defined" or `Some` as "user-defined" is equally wrong.
     ///
@@ -343,11 +344,9 @@ pub struct HirClassDef {
     /// `module::lower_all` for a single module and from the driver's linker
     /// for a whole program) to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
-    /// the range `26..=255` — `0..=25` are reserved for the 26-member builtin
-    /// hierarchy (the flat seven, the `OSError` family, `ExceptionGroup`/
-    /// `BaseExceptionGroup` per Part 3 of #382 (#542, PEP 654, D-202), and
-    /// `OverflowError` per Part A of #1038 (#1063)). A module declaring more
-    /// than 230 such classes is rejected with `C0001`.
+    /// `FIRST_USER_EXCEPTION_TYPE_TAG..=255`; the lower tags are reserved for
+    /// the builtin hierarchy. A module declaring more than
+    /// `MAX_USER_EXCEPTION_CLASSES` such classes is rejected with `C0001`.
     /// Every other class — including a user class that never touches the
     /// exception hierarchy — keeps `None`.
     pub exception_type_tag: Option<u8>,

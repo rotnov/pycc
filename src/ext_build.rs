@@ -924,7 +924,7 @@ fn instance_shape_admissible(class_def: &HirClassDef, class: &str) -> bool {
 /// and the tag half by `a_private_or_exception_inheriting_class_is_not_published`.
 ///
 /// [`instance_shape_admissible`]'s third exclusion, `is_builtin_exception_class`,
-/// is deliberately absent: the 26 synthetic classes `pycc_hir` seeds carry no
+/// is deliberately absent: the synthetic builtin classes `pycc_hir` seeds carry no
 /// public method of their own, so [`collect_class_publications`]'s non-empty
 /// resolved-method-set condition already removes every one of them before this
 /// predicate's answer could matter.
@@ -1517,8 +1517,9 @@ pub(crate) struct UserExceptionClass {
 /// Selection is `exception_type_tag == Some(t)` with
 /// `t >= FIRST_USER_EXCEPTION_TYPE_TAG`. Neither `None` nor a smaller
 /// `Some` is a user class: `crates/pycc_hir/src/class.rs` documents that
-/// trap directly -- the flat seven builtins carry `None` and the PEP 3151
-/// `OSError` family carries a fixed `Some`. Group-derived classes are
+/// trap directly -- the flat seven builtins carry `None` and every builtin
+/// past them carries a fixed `Some` below `FIRST_USER_EXCEPTION_TYPE_TAG`.
+/// Group-derived classes are
 /// excluded by [`GROUP_EXCEPTION_CLASSES`], and a monomorphized generic
 /// specialization is untagged by construction and never appears here.
 ///
