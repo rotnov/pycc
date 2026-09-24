@@ -268,11 +268,15 @@ type \`T\` -- subclassing a builtin type is not supported yet" (Part 1 of
 issue #1283, #1318). The failed class's own name is poisoned as for any
 failed item, and the message is cascade-shaped, so it is itself suppressed
 when an earlier failed item (a `class frozenset:` that did not lower, a
-failed `import json as list`) already poisoned the base name (D-219). Every other unresolved base
-name -- including `object`, the four types CPython refuses as a base
-(`bool`, `range`, `slice`, `memoryview`), and any of the eleven names that
-the module rebinds earlier through a type alias, an import, a `def`, or a
-top-level binding -- keeps the `unknown class` text.
+failed `import json as list`) already poisoned the base name (D-219).
+Every other unresolved base name -- including `object`, the four types
+CPython refuses as a base (`bool`, `range`, `slice`, `memoryview`), and any
+of the eleven names that the module rebinds earlier through a type alias,
+an import, a `def`, or a top-level binding that itself lowered -- keeps the
+`unknown class` text. A rebinding that itself fails to lower and is not
+poisoned (a `def frozenset()` whose body is unsupported, a `frozenset =`
+assignment whose value is) is invisible to that check, so the class then
+reports the builtin-type text alongside the rebinding's own diagnostic.
 
 ## Quality bar
 

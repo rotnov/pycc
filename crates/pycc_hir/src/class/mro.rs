@@ -11,6 +11,10 @@
 //! class-header `range` explicitly, and the circular-inheritance check spells
 //! its `Vec<String>` membership test as `iter().any(...)` now that
 //! `class_name` arrives as a `&str` rather than an owned `String`).
+//! Part 1 of #1283 (#1318) then added a check and a message that are not
+//! boundary edits: an unresolved base naming a subclassable builtin type
+//! (`is_subclassable_builtin_type_name`, guarded by `module_rebinds`) now
+//! reports `builtin_base_message` instead of `unknown_base_message`.
 //!
 //! The seam is "which bases are legal, and what order do they linearize
 //! into". Everything upstream of it stays in `class.rs`: parsing a class
