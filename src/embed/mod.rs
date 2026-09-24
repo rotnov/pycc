@@ -254,14 +254,18 @@ impl EmbedToolchain {
             windows::check_windows_layout(&probe, &name)?;
         }
         // A static build links the archive the static probe checks instead.
-        let library = layout::source_library(&probe);
-        if shared && !library.is_file() {
-            return Err(format!(
-                "the embed interpreter `{name}` reports a shared library `{}` that does not \
-                 exist ({})",
-                library.display(),
-                probe.describe()
-            ));
+        // Windows never computes it: its `LIBDIR` is the import-library
+        // directory, and `check_windows_layout` checked the DLL instead.
+        if shared {
+            let library = layout::source_library(&probe);
+            if !library.is_file() {
+                return Err(format!(
+                    "the embed interpreter `{name}` reports a shared library `{}` that does \
+                     not exist ({})",
+                    library.display(),
+                    probe.describe()
+                ));
+            }
         }
         if !probe.stdlib.is_dir() {
             return Err(format!(
