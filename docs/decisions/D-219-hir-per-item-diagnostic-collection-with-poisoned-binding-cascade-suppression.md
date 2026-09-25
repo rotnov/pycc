@@ -143,10 +143,6 @@ status: accepted
   only the class and type-alias tables no longer holds word for word for
   `validate_bases`: it resolved through the class table alone before this
   change, and now also reads the type-alias, import and module-item tables,
-  solely to choose the unresolved-base wording. For a base spelled like one of those eleven
-  builtin types, an earlier type alias, import, `def`, or assignment of that
-  name that lowered selects the unknown-class wording. One that failed
-  behaves by rule 3: a failed type alias or import poisons the name, so the
-  class's diagnostic is suppressed, while a failed `def` or assignment
-  poisons nothing, so the class reports the builtin-type wording beside the
-  rebinding's own diagnostic. Rule 3's poisoning set is unchanged.
+  solely to choose the unresolved-base wording. Which bases get the new
+  message, and which rebindings keep the unknown-class text, is specified in
+  the `validate_bases` paragraph of `docs/DIAGNOSTICS.md`.
