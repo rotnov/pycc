@@ -1481,7 +1481,7 @@ fn join_if_branches(
 /// whether the loop ran), unless the body leaves it `Maybe` -- a `del`
 /// (#1244). A name that was `Maybe` before the loop and is also bound in the
 /// body stays `Maybe`.
-fn join_loop_body(env: &mut Environment, body_env: &Environment) {
+pub(crate) fn join_loop_body(env: &mut Environment, body_env: &Environment) {
     // For each name bound in the body but not already Definitely bound in env,
     // downgrade to Maybe. Names already Definitely bound in env are unchanged.
     for (name, state) in &body_env.bindings {
@@ -2369,89 +2369,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     Span::new(0, 0),
                 ));
             }
-            // The loop variable holds each item as another opaque
-            // `PyObject *`. It is bound directly rather than through
-            // `check_assignment`, which refuses `Ty::Object` outright (the
-            // K1 guard on binding a foreign value to a name): that guard
-            // exists to stop a *user-written* assignment from capturing an
-            // object, and a `for` target is this construct's own binding,
-            // not a user assignment of a read value.
-            // A loop target that already names a binding of some *other*
-            // type is refused rather than overwritten. `env.bind` overwrites,
-            // so without this guard `x = 5` followed by `for x in <object>:`
-            // would leave `x` as `Ty::Object` for the rest of the module
-            // while the reads above it stay `Ty::Int` -- and `pycc_codegen`
-            // allocates exactly one storage slot per name per function
-            // (`collect_stmt_bindings`), asserting at every scalar read that
-            // the slot's type still equals the expression's
-            // (`local type drifted`). One name with two types is therefore
-            // unrepresentable downstream: whichever type won the slot, the
-            // other access site would either trip that assertion or -- since
-            // it is a `debug_assert`, compiled out in release -- silently
-            // store a `PyObject *` into an `i64` slot. Refusing the shape in
-            // the checker is the only resolution that leaves no program
-            // compiling to wrong code. `T0023` is reused rather than a new
-            // code minted: a `for` target *is* an assignment in Python, and
-            // the message ("cannot assign ... previously inferred as ...")
-            // describes this rebinding exactly. The mirror case -- the loop
-            // first, then `x = 5` -- already reports `T0023` from
-            // `check_assignment`, so this makes the pair symmetric.
-            // A *declared but never assigned* target is the other half of
-            // the same rule, and `lookup_any` does not see it: `x: int`
-            // puts `x` in `declared`, not `bindings`. `check_assignment`
-            // consults `declared_ty` for exactly this case and reports
-            // `T0026`, and a `for` target is an assignment, so it reports
-            // the same. The refusal is unconditional because no declared
-            // type can accept an object item: `object` is not a writable
-            // annotation (`pycc_hir` refuses it with `C0001`), so
-            // `declared_ty` never yields `Ty::Object`. A value-less
-            // `Final[int]` declaration lands here too rather than in
-            // `T0045`, which only fires once the name has a runtime value.
-            if let Some(declared) = env.declared_ty(var) {
-                return Err(Diagnostic::error(
-                    "T0026",
-                    format!(
-                        "cannot assign `object` to `{var}`, previously declared as `{var}: {}`",
-                        declared.name()
-                    ),
-                    Span::new(0, 0),
-                )
-                .with_help(format!(
-                    "use a different name for the `for` target: `{var}` is declared as `{}`, and a name has one type for its whole scope",
-                    declared.name()
-                )));
-            }
-            if let Some(previous) = env.lookup_any(var)
-                && !matches!(previous, Ty::Object)
-            {
-                return Err(Diagnostic::error(
-                        "T0023",
-                        format!(
-                            "cannot assign `object` to `{var}`, previously inferred as `{}`",
-                            previous.name()
-                        ),
-                        Span::new(0, 0),
-                    )
-                    .with_help(format!(
-                        "use a different name for the `for` target: `{var}` is already bound as `{}`, and a name has one type for its whole scope",
-                        previous.name()
-                    )));
-            }
-            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
-            env.bind(var.clone(), Ty::Object);
-            let mut body_env = env.clone();
-            narrow::apply_kill_prescan(&mut body_env, body);
-            narrow::apply_delete_prescan(&mut body_env, body, Some(var));
-            narrow::check_stmt_sequence(&mut body_env, body)?;
-            join_loop_body(env, &body_env);
-            // The loop may execute zero times, so a newly introduced loop
-            // variable is only maybe-bound afterwards -- exactly as in the
-            // `ForList` arm above, and load-bearing here because reading a
-            // `Ty::Object` name in a module body is itself admitted.
-            if !was_definite {
-                env.bind_maybe(var.to_string(), Ty::Object);
-            }
-            Ok(())
+            foreign::for_loop::check_module_object_loop(env, var, body)
         }
         // PR-12 Task 3 (D-117): `target = <comp>` at module scope, checked
         // by the shared `comprehension::check_comp_assign` helper.

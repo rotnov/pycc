@@ -445,6 +445,8 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+pub(crate) mod for_loop;
+
 #[cfg(test)]
 mod call_tests;
 #[cfg(test)]
