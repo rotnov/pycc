@@ -335,6 +335,7 @@ impl Verifier<'_> {
             | MirExpr::OptionalUnwrap(inner, _)
             | MirExpr::Not(inner)
             | MirExpr::ExceptionMessage(inner)
+            | MirExpr::ExceptionTypeTest { obj: inner, .. }
             | MirExpr::AttrGet { base: inner, .. }
             | MirExpr::ObjAttrGet { base: inner, .. }
             | MirExpr::ObjLen { base: inner }

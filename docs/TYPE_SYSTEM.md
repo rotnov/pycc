@@ -430,7 +430,7 @@ pycc uses static dispatch (D-006): every variable's runtime type is exactly its 
 - `issubclass(cls, target)`: both arguments are compile-time class references. For user-defined classes, the result is `true` iff `target` appears in `cls`'s MRO. `issubclass(bool, int)` is `True`; other cross-builtin checks are `False`.
 - Tuple targets (`isinstance(x, (A, B))`): `true` if any member matches.
 - Wrong argument counts, non-class arguments, and unknown class names are rejected with `T0021`/`T0001` before codegen.
-- The MIR emits `MirExpr::BoolLiteral(result)` — no runtime RTTI, type tags, or calls.
+- The MIR emits `MirExpr::BoolLiteral(result)` — no runtime RTTI, type tags, or calls. **One exception** ([#1337](https://github.com/rotnov/pycc/issues/1337)): a value whose static type is a seeded builtin exception class (other than `ExceptionGroup`/`BaseExceptionGroup`) is a runtime exception object whose class may be any subclass — `except ValueError as e` binds a `KeyError` too — so `isinstance(e, T)` with `T` outside the static class's MRO is decided at run time from the object's type tag (`MirExpr::ExceptionTypeTest`, which accepts `T`'s tag and the tag of every user exception class deriving from `T`). A target inside the static MRO still folds to `True`; a value typed as a user exception class, or an `except*` group, keeps the compile-time fold.
 
 ## Annotation semantics
 

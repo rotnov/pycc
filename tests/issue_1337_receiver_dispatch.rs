@@ -249,3 +249,19 @@ fn a_builtin_base_before_a_str_mixin_prints_the_message() {
     );
     assert_eq!(build_and_run("e2e_1337_exception_mixin", &source), "x\nx\n");
 }
+
+/// `isinstance` on a caught builtin exception value reads its runtime type
+/// tag (WI-6a); the fixture's CPython 3.14.7 output, pinned without the
+/// oracle (registered in `tests/conformance/classes.rs`).
+#[test]
+fn the_exception_isinstance_fixture_prints_what_cpython_prints() {
+    assert_eq!(
+        build_and_run(
+            "e2e_1337_exc_isinstance",
+            &fixture("exception_isinstance.py")
+        ),
+        "True False True\nTrue True False\nFalse True\nTrue True False\nTrue False\n\
+         False False False\nTrue True False\nTrue False\nTrue True False\nTrue False\n\
+         False True True\n"
+    );
+}

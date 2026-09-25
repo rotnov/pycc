@@ -39,6 +39,7 @@ use bigint_rc::{
 use comprehension::{CompCx, CompElts, emit_comprehension, emit_comprehension_expr};
 mod int_const;
 use int_const::{emit_int_constant, tag_smallint_const};
+mod exception_isinstance;
 mod exception_render;
 use exception_render::emit_exception_message;
 mod str_rc;
@@ -4009,6 +4010,11 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ExceptionMessage(base) => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             emit_exception_message(builder, rt, base_scalar)
+        }
+        // #1337 (WI-6a): `isinstance` on a caught builtin exception value.
+        MirExpr::ExceptionTypeTest { obj, tags } => {
+            let obj_scalar = emit_expr(context, builder, module, rt, user_functions, locals, obj);
+            exception_isinstance::emit_exception_type_test(context, builder, rt, obj_scalar, tags)
         }
         // PEP 572 (#774): `target := value`. `name`'s storage slot is
         // already predeclared by `collect_expr_bindings` (this node's own

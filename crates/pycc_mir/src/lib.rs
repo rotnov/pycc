@@ -11,6 +11,7 @@ mod class;
 use class::eval_isinstance_protocol;
 use class::{class_def_of, mro_attrs};
 mod exception;
+mod exception_isinstance;
 pub use exception::{MirExceptHandler, MirExceptionValue};
 use exception::{handler_type_tags, lower_raise};
 mod expr;
@@ -643,6 +644,18 @@ pub enum MirExpr {
     /// `Ty::Str`, exactly like `rewrite_instance_to_repr`'s own
     /// `MirExpr::Call` rewrite.
     ExceptionMessage(Box<MirExpr>),
+    /// `isinstance(obj, T)` decided at run time from a caught exception's type
+    /// tag (#1337, WI-6a): `obj`'s static type is a seeded builtin exception
+    /// class, so its runtime value is a `PyExceptionObj` whose dynamic class
+    /// may be any subclass. The result is whether `pycc_rt_exception_type_matches`
+    /// accepts the object for any tag in `tags` -- the target classes' own
+    /// tags plus every raisable class whose MRO reaches one of them, sorted
+    /// and non-empty. `pycc_mir::exception_isinstance` is the sole
+    /// constructor. `.ty()` is `Ty::Bool`.
+    ExceptionTypeTest {
+        obj: Box<MirExpr>,
+        tags: Vec<u8>,
+    },
     /// PEP 572 (#774): `target := value`. Evaluates `value`, stores it into
     /// `name`'s already-predeclared storage slot (see
     /// `pycc_codegen::collect_expr_bindings`, this node's own slot-scanning
@@ -906,6 +919,7 @@ impl MirExpr {
             }
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
+            MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
             MirExpr::Comprehension(comp) => comp.ty(),
         }
@@ -1082,7 +1096,9 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
             }
-            MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
+            MirExpr::ExceptionMessage(inner)
+            | MirExpr::ExceptionTypeTest { obj: inner, .. }
+            | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)
             }
             MirExpr::NamedExpr { name, value, ty } => {
