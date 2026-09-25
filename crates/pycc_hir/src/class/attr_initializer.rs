@@ -310,13 +310,24 @@ pub(super) fn bad_class_attr_shape(attr_name: &str, range: std::ops::Range<u32>)
 /// accepted too, because the motivating example in #885 is
 /// `MIN_WIDTH: int = -1024`, which parses as `UnaryOp(USub,
 /// NumberLiteral(1024))` and not as a literal at all.
+///
+/// A shape it cannot fold is refused through [`classify_non_literal`], so a
+/// non-literal initializer gets the same precise message whichever function
+/// sees it first. Only the annotated spelling reaches this with a
+/// non-literal (the un-annotated one routes those to the classifier itself),
+/// and the annotated spelling never admits one.
 pub(super) fn class_attr_value(
     value: &Expr,
     attr_ty: &Ty,
     attr_name: &str,
+    spelling: Spelling,
+    scope: &InitializerScope<'_>,
     range: std::ops::Range<u32>,
 ) -> Result<ClassAttrValue, Diagnostic> {
-    let bad_shape = || bad_class_attr_shape(attr_name, range.clone());
+    let bad_shape = || {
+        classify_non_literal(value, attr_name, spelling, scope, range.clone())
+            .expect_err("a non-literal reaching the literal extractor is never admitted")
+    };
     let mismatch = |found: &str| {
         unsupported(
             format!(
@@ -497,14 +508,18 @@ mod tests {
         );
     }
 
-    /// The remaining annotated-literal refusals: a unary operator other than
-    /// `+`/`-`, and a `float` or `bool` literal under a different annotation.
+    /// The annotated spelling reaches the literal extractor with any
+    /// initializer: a unary operator other than `+`/`-` and a complex
+    /// literal are refused there through the classifier, and a `float` or
+    /// `bool` literal under a different annotation is a mismatch.
     #[test]
     fn annotated_literal_refusals_name_the_literal_or_the_shape() {
-        assert_collision(
-            "class C:\n    X: int = ~1\n",
-            "must be initialized with a literal",
-        );
+        for value in ["~1", "1j", "-\"a\""] {
+            assert_collision(
+                &format!("class C:\n    X: int = {value}\n"),
+                "must be initialized with a literal",
+            );
+        }
         assert_collision(
             "class C:\n    X: int = 1.5\n",
             "is annotated `int` but is initialized with a `float` literal",

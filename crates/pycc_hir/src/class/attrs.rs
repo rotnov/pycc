@@ -279,11 +279,15 @@ pub(super) fn lower_class_attr(
         return Err(no_class_attr_value(&attr_name, ann.range.into()));
     };
     // #1345: a non-literal initializer gets the classifier's precise
-    // message; a literal one keeps the extractor's own checks.
-    if infer_class_attr_ty(value).is_none() {
-        return Err(non_literal(value));
-    }
-    let attr_value = class_attr_value(value, &attr_ty, &attr_name, ann.range.into())?;
+    // message from inside the extractor; a literal one keeps its own checks.
+    let attr_value = class_attr_value(
+        value,
+        &attr_ty,
+        &attr_name,
+        Spelling::Annotated,
+        scope,
+        ann.range.into(),
+    )?;
     Ok((attr_name, attr_ty, attr_value))
 }
 
@@ -352,7 +356,14 @@ pub(super) fn lower_unannotated_class_attr(
         )?;
         return Ok((attr_name, Ty::Object, ClassAttrValue::ForeignStatic(target)));
     };
-    let attr_value = class_attr_value(value, &attr_ty, &attr_name, assign.range.into())?;
+    let attr_value = class_attr_value(
+        value,
+        &attr_ty,
+        &attr_name,
+        Spelling::Unannotated,
+        scope,
+        assign.range.into(),
+    )?;
     Ok((attr_name, attr_ty, attr_value))
 }
 
