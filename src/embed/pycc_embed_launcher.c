@@ -40,7 +40,8 @@
  * build time from `-o`'s file name (never derived from the running
  * executable's name, so renaming the executable keeps it working). Also
  * defines PYCC_EMBED_CLOSURE when the sidecar holds a locked dependency
- * closure in `closure/` (#1242). */
+ * closure in `closure/` (#1242), and, on Windows, PYCC_EMBED_NATIVES when
+ * it holds the closure's natives in `natives\` (#1306). */
 #include "pycc_embed_config.inc"
 
 extern PyObject *PyInit___main__(void);
@@ -107,6 +108,21 @@ __declspec(dllexport) int pycc_embed_main(int argc, wchar_t **argv, const wchar_
                  sidecar, GetLastError());
         return 1;
     }
+#ifdef PYCC_EMBED_NATIVES
+    /* The closure's natives resolve for its extensions' static imports the
+     * same way (#1306). */
+    static wchar_t natives[32768];
+    if (_snwprintf(natives, size, L"%ls\\natives", sidecar) < 0) {
+        fwprintf(stderr, L"error: pycc could not form the search path under %ls\n", sidecar);
+        return 1;
+    }
+    natives[size - 1] = L'\0';
+    if (AddDllDirectory(natives) == NULL) {
+        fwprintf(stderr, L"error: pycc could not add the DLL directory %ls (error %lu)\n",
+                 natives, GetLastError());
+        return 1;
+    }
+#endif
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
     config.site_import = 0;

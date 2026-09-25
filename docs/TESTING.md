@@ -1494,8 +1494,11 @@ executable for standard-library roots (#1223, D-248) and the policy surface
 its native libraries outside the interpreter (#1243), and macOS relative
 references outside a closure payload (#1259) exist, and so does Windows
 embedding of standard-library roots (#1286, D-253) and of a pure-Python
-locked closure (#1296, `tests/issue_1296_windows_locked_closure.rs`); a
-Windows closure holding a native image (#1297) does not. The v0.7 implementation cannot mark its roadmap acceptance complete
+locked closure (#1296, `tests/issue_1296_windows_locked_closure.rs`), and a
+Windows closure holding a native image is covered by #1306's clang-built
+extension with a native (that file's tests (d), (e) and (f) on the Windows
+leg; `src/embed/native_windows_closure_tests.rs` and
+`src/embed/windows_lock_tests.rs` on every host). The v0.7 implementation cannot mark its roadmap acceptance complete
 until all of the following run on every Tier-1 target. Each bullet names the
 tests that cover it now, or the owner of what is still missing.
 
@@ -1574,7 +1577,8 @@ package artifacts rather than passing only with a pure-Python stand-in
 standard-library roots by #1286 (`tests/issue_1224_interop_policy.rs`'s
 admission tests run on every host) and for other roots with a pure-Python
 locked closure by #1296 (`tests/issue_1296_windows_locked_closure.rs`); a
-closure holding a native image is *pending* #1297.
+closure holding a native image is delivered by #1306 (that file's tests (d),
+(e) and (f)).
 
 ## The bot (planned)
 
