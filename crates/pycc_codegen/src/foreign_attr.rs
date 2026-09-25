@@ -168,9 +168,10 @@ mod tests {
     /// `import <module>` followed by one discarded `<module>.<attr>` load.
     ///
     /// A discarded `ExprStmt` is used rather than an assignment because it
-    /// is the shape PR 2a actually admits end to end: `pycc_types` refuses
-    /// binding a CPython object to a name (`I0404`), so no type-checked
-    /// program can produce an `ObjAttrGet` in any other statement position.
+    /// was the shape PR 2a admitted end to end: `pycc_types` then refused
+    /// binding a CPython object to a name (`I0404`; admitted at module scope
+    /// since #1325), and the discarded load keeps these tests independent of
+    /// the store.
     fn load(module: &str, attr: &str) -> Vec<MirItem> {
         vec![
             MirItem::ForeignImport {

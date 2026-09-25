@@ -16,7 +16,7 @@
 //! immediate branch to the innermost exception target inside any other
 //! function (#1316). `emit_iter_loop` alone keeps the
 //! `expect_module_exec_entry` assertion, because `pycc_types` still admits
-//! `for x in <object>:` only in a module body (#1325).
+//! `for x in <object>:` only in a module body (#1333).
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
@@ -532,9 +532,10 @@ mod tests {
     /// `import <module>` followed by one discarded
     /// `<module>.<method>(args)` call.
     ///
-    /// A discarded `ExprStmt` is the only statement position PR 2b admits
-    /// end to end -- `pycc_types` still refuses binding a CPython object to
-    /// a name (`I0404`) -- so it is the shape every test here builds.
+    /// A discarded `ExprStmt` was the only statement position PR 2b admitted
+    /// end to end -- `pycc_types` then refused binding a CPython object to
+    /// a name (`I0404`; admitted at module scope since #1325) -- so it is
+    /// the shape every test here builds.
     fn call(module: &str, method: &str, args: Vec<MirExpr>) -> Vec<MirItem> {
         vec![
             MirItem::ForeignImport {

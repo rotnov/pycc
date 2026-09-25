@@ -247,7 +247,8 @@ pub(crate) fn infer_expr_in(
                     // `object` name in a function body -- an unannotated
                     // parameter inferred as `object` from a module-level
                     // call site -- stays refused: reading a function-local
-                    // `object` value is #1325's.
+                    // `object` value -- or a module-level `x = <object>`
+                    // global (#1325) -- is #1333's.
                     if env.in_function_body && !env.foreign_globals.contains(name) {
                         crate::foreign::reject_object_read(name, &ty)?;
                     }
@@ -334,7 +335,7 @@ pub(crate) fn infer_expr_in(
                 }
                 // Part 1 of #1026, choke point 3: inside a function body a
                 // function-local `object` value (an inferred-`object`
-                // parameter) is not callable (#1325), which is a different
+                // parameter) is not callable (#1333), which is a different
                 // claim from D-110's "this name is bound to a value, and no
                 // value in the current subset is callable" -- say so with
                 // `I0404` rather than the generic `T0021`.

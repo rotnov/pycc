@@ -357,22 +357,42 @@ fn a_general_method_call_on_a_foreign_object_is_accepted() {
 fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");
     let bodies = [
-        // An expression-position read: assignment, argument, attribute,
-        // f-string interpolation. A module-body direct call (`numpy(1)`)
-        // is admitted since #1313 and raises CPython's own `TypeError` at
-        // run time; `tests/issue_1313_foreign_direct_call.rs` pins it.
-        "import numpy\n\nx = numpy\n",
+        // An expression-position read: argument, attribute, f-string
+        // interpolation. A module-body direct call (`numpy(1)`) is admitted
+        // since #1313 and raises CPython's own `TypeError` at run time;
+        // `tests/issue_1313_foreign_direct_call.rs` pins it.
         "import numpy\n\nprint(numpy)\n",
         "import numpy\n\nnumpy.append(1)\n",
         "import numpy\n\nprint(f\"{numpy}\")\n",
-        // The iterable of a `for` and of a comprehension.
-        "import numpy\n\nfor x in numpy:\n    pass\n",
+        // The iterable of a comprehension.
         "import numpy\n\nxs = [e for e in numpy]\n",
     ];
     for body in bodies {
         let output = check(&dir, body);
         assert_eq!(output.status.code(), Some(1), "{body}");
         assert!(stdout_of(&output).contains("error[I0404]"), "{body}");
+    }
+}
+
+/// The two rows #1325 took out of the table above: binding the module
+/// object to a module-level name and iterating it with a bare-name `for`.
+/// Both check clean; a bare module is not iterable, so the loop raises
+/// CPython's own `TypeError` at run time, which
+/// `tests/issue_1325_foreign_binding.rs` pins.
+#[test]
+fn binding_and_iterating_a_foreign_module_at_module_scope_check_clean() {
+    let dir = ScratchDir::new("foreign_bind_ok").expect("scratch");
+    for body in [
+        "import numpy\n\nx = numpy\n",
+        "import numpy\n\nfor x in numpy:\n    pass\n",
+    ] {
+        let output = check(&dir, body);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{body}: {}",
+            stdout_of(&output)
+        );
     }
 }
 

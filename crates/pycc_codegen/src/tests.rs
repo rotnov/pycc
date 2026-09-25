@@ -33,6 +33,9 @@ mod entry_block;
 // and borrowed raise messages).
 mod exception_message_rc;
 
+// #1325: binding a CPython object value to a module-level name.
+mod object_binding;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any
@@ -15441,47 +15444,6 @@ fn truthiness_of_a_cpython_object_value_calls_the_shim_helper() {
     assert!(
         ir.contains(&format!("ret i64 {EXT_MODULE_EXEC_FAILED}")),
         "{ir}"
-    );
-}
-
-#[test]
-#[should_panic(expected = "assigning a CPython object value to a binding is not supported yet")]
-fn assigning_a_cpython_object_to_a_binding_is_an_internal_error() {
-    // `check_assignment` refuses a `Ty::Object` value source outright,
-    // because a binding would make the object outlive the expression that
-    // produced it and Part 2's leak-only ownership policy has no release
-    // story for that.
-    let context = Context::create();
-    let (module, rt) = list_scalar_panic_fixture(&context);
-    let builder = context.create_builder();
-    // `emit_assign` reads `slot.ty` before it matches on the value, so the
-    // slot must exist; a positioned block is needed because the `Ty::Int`
-    // release path it checks first would build IR for an `int` slot.
-    let function = module.add_function(
-        "assign_object",
-        context.void_type().fn_type(&[], false),
-        None,
-    );
-    let entry = context.append_basic_block(function, "entry");
-    builder.position_at_end(entry);
-    let ptr = builder
-        .build_alloca(context.ptr_type(inkwell::AddressSpace::default()), "o")
-        .expect("build_alloca should not fail for a fresh block");
-    let locals = HashMap::from([(
-        "o".to_string(),
-        StorageSlot {
-            ptr,
-            ty: Ty::Object,
-            initialized: None,
-        },
-    )]);
-    emit_assign(
-        &context,
-        &builder,
-        &rt,
-        &locals,
-        "o",
-        null_object_scalar(&context),
     );
 }
 
