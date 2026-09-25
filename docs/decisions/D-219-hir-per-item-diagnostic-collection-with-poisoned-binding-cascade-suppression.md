@@ -142,7 +142,10 @@ status: accepted
   a cascade. The Context's statement that `validate_bases` consults only the
   class and type-alias tables no longer holds word for word: it now also
   reads the import and module-item tables, solely to choose the
-  unresolved-base wording, so for a base spelled like one of those eleven
-  builtin types the wording (never whether it is reported) depends on
-  whether an earlier import, `def`, or assignment of that name lowered. Rule
-  3's poisoning set is unchanged.
+  unresolved-base wording. For a base spelled like one of those eleven
+  builtin types, an earlier type alias, import, `def`, or assignment of that
+  name that lowered selects the unknown-class wording. One that failed
+  behaves by rule 3: a failed type alias or import poisons the name, so the
+  class's diagnostic is suppressed, while a failed `def` or assignment
+  poisons nothing, so the class reports the builtin-type wording beside the
+  rebinding's own diagnostic. Rule 3's poisoning set is unchanged.
