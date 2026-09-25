@@ -9,9 +9,10 @@
 //! operations share a module because they share everything that matters at
 //! this layer: each is one call to a fixed shim helper that answers a
 //! *scalar* rather than a `PyObject *`, and each reports failure as `-1`
-//! rather than as `NULL`, so none can reuse `foreign_call.rs`'s
-//! `fail_on_null`. PR 4a's `float(o)` is the third member of that family and
-//! lives here for the same reason; `bool(o)` needs no emitter of its own at
+//! rather than as `NULL`, so each routes its failure through
+//! `foreign_fail::route_negative` rather than `route_null`. PR 4a's
+//! `float(o)` is the third member of that family and lives here for the
+//! same reason; `bool(o)` needs no emitter of its own at
 //! all, because it is exactly [`emit_truthy`] widened to a `Scalar::Bool`.
 //! PR 4b's `int(o)` and `str(o)` are the fourth and fifth: identical shape
 //! again, differing only in the out-slot's type -- an `i64` holding a D-141

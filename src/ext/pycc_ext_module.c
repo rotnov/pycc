@@ -165,7 +165,12 @@ extern void pycc_rt_exception_raise(void *obj);
  * `pycc_ext_bridge_mark()` before running compiled code and calls
  * `pycc_ext_bridge_release_to(mark)` on every exit, after
  * `pycc_ext_raise_pending` has looked up the escaping entry. So the table
- * holds at most the entries created during one top-level host call.
+ * holds at most the entries created during one top-level host call. That is
+ * a known limitation, not a per-catch bound: a loop that keeps catching a
+ * bridged exception inside one long call keeps every original (and its
+ * traceback) alive until that call returns, and an embedded program (D-248)
+ * is one `pycc_ext_exec_module` call, so there the table grows for the
+ * program's lifetime (docs/RUNTIME.md).
  *
  * Per thread, not process-wide: pycc's pending exception is thread-local,
  * and a foreign call can release the GIL, so a second thread's wrapper exit

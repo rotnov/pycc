@@ -99,13 +99,14 @@ keyword arguments and attributes are not supported (a keyword argument is
 
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
 class whose MRO reaches a builtin exception class is raisable and catchable.
-HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=255`
+HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=254`
+(tag 255 is reserved for a bridged non-`Exception` `BaseException`, #1316)
 in module source order and records it on `HirClassDef::exception_type_tag`;
 the builtins keep the tags below that and either carry `None` (the flat seven,
 resolved by name) or a fixed tag by array index (every builtin past them; the
 groups are always reconstructed with that fixed tag regardless of the raised
 object's dynamic subclass -- see D-202). A module declaring more than
-`MAX_USER_EXCEPTION_CLASSES` (currently 228) such classes is rejected with
+`MAX_USER_EXCEPTION_CLASSES` (currently 227) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -815,7 +816,16 @@ generated `ext` wrapper take `pycc_ext_bridge_mark()` before running compiled
 code and call `pycc_ext_bridge_release_to(mark)` on every exit, after
 `pycc_ext_raise_pending` has looked up the escaping entry, so the table holds at
 most the entries one top-level host call created and a caught bridged
-exception's original is released when that call returns. The release sets any
+exception's original is released when that call returns. That bound is per
+top-level call, not per catch, and it is a known limitation: a long-running
+call that repeatedly catches a bridged exception -- a loop around a failing
+foreign operation in one exported function, or in the module body -- keeps
+every caught exception's original, and its traceback, alive until the call
+returns. An embedded executable (D-248) runs the whole program inside one
+`pycc_ext_exec_module` mark/release pair, so it is one top-level call and
+the table there grows for the program's lifetime. This sits next to, and is
+smaller than, the pycc exception objects' own leak-only rule
+(`pycc_rt::exception`), which never frees any of them. The release sets any
 live CPython error aside and restores it, and pops entries in order, so a
 finalizer that bridges again cannot observe a released entry. The table is per
 thread (a `Py_tss_t` key created once by `pycc_ext_exec_module`), because
@@ -1017,9 +1027,9 @@ protocol rule per call site.
 `crates/pycc_codegen/src/foreign_call.rs` lowers the loop into the blocks its
 own `a_foreign_for_loop_emits_its_full_block_structure` test enumerates, which is
 the authority for the exact list: `get_iter` runs in the current block and its
-`NULL` edge goes through the shared `fail_on_null` helper, which appends the
-`foreign_iter_get_fail` / `foreign_iter_get_cont` pair every foreign call
-already uses; then come `foreign_iter_header`, which calls `iter_next` and
+`NULL` edge goes through the shared `foreign_fail::route_null` helper, which
+appends the `foreign_iter_get_fail` / `foreign_iter_get_cont` pair every
+foreign call already uses; then come `foreign_iter_header`, which calls `iter_next` and
 switches `-1` to `foreign_iter_next_fail`, `0` to `foreign_iter_after` and `1`
 to `foreign_iter_body`; `foreign_iter_body`; `foreign_iter_after`; and
 `foreign_iter_next_fail`. **Exhaustion is not a failure edge**: an empty iterable runs the body zero
