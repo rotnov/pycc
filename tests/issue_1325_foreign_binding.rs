@@ -60,13 +60,21 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
     assert!(rendered.contains(needle), "{rendered}");
 }
 
-/// The success program: bind a call result, iterate it by bare name, and
-/// alias it to a second name that a truth test reads.
+/// The success program: bind a call result, iterate it by bare name, loop
+/// again over the now-exhausted iterator (which prints nothing), alias it
+/// to a second name that a truth test reads, then rebind the name to a
+/// second producer and iterate that.
 const SUCCESS: &str = "from itertools import product\n\
     x = product(\"ab\", \"c\")\n\
     for t in x:\n    print(str(t))\n\
+    for t in x:\n    print(str(t))\n\
     y = x\n\
-    print(bool(y))\n";
+    print(bool(y))\n\
+    x = product(\"d\", \"ef\")\n\
+    for t in x:\n    print(str(t))\n";
+
+/// What `SUCCESS` prints under CPython.
+const SUCCESS_OUT: &str = "('a', 'c')\n('b', 'c')\nTrue\n('d', 'e')\n('d', 'f')\n";
 
 #[test]
 fn check_accepts_a_module_level_object_binding_and_loop() {
@@ -175,7 +183,7 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_bound_object_iterates_like_cpython_in_the_host() {
     let out = assert_matches_cpython("obj_bind_hosted", "pycc_obj_bind_mod", SUCCESS);
-    assert_eq!(out, "('a', 'c')\n('b', 'c')\nTrue\nno error\n");
+    assert_eq!(out, format!("{SUCCESS_OUT}no error\n"));
 }
 
 /// A raising producer surfaces CPython's own exception from the import,
@@ -205,26 +213,35 @@ fn iterating_a_bare_module_raises_cpythons_exception_in_the_host() {
 }
 
 /// A dependency module's `object` binding is importable by the entry
-/// module and iterates there like CPython.
+/// module and iterates there like CPython. `dep.py` is compiled into the
+/// extension: the oracle runs first, then `dep.py` and any `__pycache__`
+/// are removed before the extension is imported, so a run-time import of
+/// `dep` by CPython would fail with `ModuleNotFoundError` instead of
+/// producing the same output.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_dependency_module_s_object_binding_iterates_in_the_host() {
     let dir = ScratchDir::new("obj_bind_two_modules").expect("scratch");
-    write(
+    let dep = write(
         &dir,
         "dep.py",
         "from itertools import product\nx = product(\"ab\", \"c\")\n",
     );
     let body = "from dep import x\nfor t in x:\n    print(str(t))\n";
     build_ext(&dir, "pycc_obj_bind_two_mod", body);
-    let compiled = python(&dir, "import pycc_obj_bind_two_mod\n");
-    assert_ok(&compiled);
     let oracle = host_python()
         .arg("m.py")
         .current_dir(&*dir)
         .output()
         .expect("python3 should spawn");
     assert_ok(&oracle);
+    std::fs::remove_file(&dep).expect("remove dep.py");
+    let cache = dir.join("__pycache__");
+    if cache.exists() {
+        std::fs::remove_dir_all(&cache).expect("remove __pycache__");
+    }
+    let compiled = python(&dir, "import pycc_obj_bind_two_mod\n");
+    assert_ok(&compiled);
     assert_eq!(stdout_of(&compiled), stdout_of(&oracle));
     assert_eq!(stdout_of(&compiled), "('a', 'c')\n('b', 'c')\n");
 }
@@ -255,5 +272,5 @@ fn an_embedded_build_binds_and_iterates_like_cpython() {
         .expect("python3 should spawn");
     assert_ok(&oracle);
     assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
-    assert_eq!(stdout_of(&embedded), "('a', 'c')\n('b', 'c')\nTrue\n");
+    assert_eq!(stdout_of(&embedded), SUCCESS_OUT);
 }

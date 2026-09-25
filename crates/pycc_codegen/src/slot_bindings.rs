@@ -3,8 +3,9 @@
 //! LLVM IR is emitted -- one slot per name per function
 //! ([`collect_stmt_bindings`]), the module-global set
 //! ([`collect_module_bindings`]), and a walrus target's slot
-//! ([`collect_expr_bindings`]). Moved verbatim out of `lib.rs`; the walks
-//! have no inkwell dependency.
+//! ([`collect_expr_bindings`]). Moved out of `lib.rs` unchanged, except
+//! that #1325 later added `Ty::Object` to the `MirStmt::Assign` arm's
+//! storable-type allow-list; the walks have no inkwell dependency.
 
 use super::*;
 
