@@ -137,3 +137,23 @@ fn a_user_function_named_hash_is_not_intercepted() {
         MirExpr::Call { callee, .. } if callee == "hash"
     ));
 }
+
+#[test]
+fn a_named_expression_operand_surfaces_its_binding() {
+    let r_ty = Ty::Instance(Box::new("R".to_string()));
+    let named = MirExpr::NamedExpr {
+        name: "r".to_string(),
+        value: Box::new(MirExpr::Name {
+            name: "q".to_string(),
+            ty: r_ty.clone(),
+        }),
+        ty: r_ty.clone(),
+    };
+    let mut out = Vec::new();
+    MirExpr::InstanceHash {
+        operand: Box::new(named),
+        via: InstanceHashVia::Identity,
+    }
+    .collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("r".to_string(), r_ty)]);
+}
