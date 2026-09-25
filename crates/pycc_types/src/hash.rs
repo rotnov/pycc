@@ -112,6 +112,18 @@ fn check_instance(
                     ),
                 ));
             }
+            if let Ty::Optional(_) = returns {
+                // CPython raises only when the method returns `None` at
+                // run time, so this is not a static `TypeError`.
+                return Err(not_implemented(
+                    ty,
+                    format!(
+                        "`{mangled}` returns `{}`; pycc compiles only a `__hash__` returning \
+                         `int` or `bool`",
+                        returns.name()
+                    ),
+                ));
+            }
             if !matches!(returns, Ty::Int | Ty::Bool) {
                 return Err(Diagnostic::error(
                     "T0021",
@@ -364,6 +376,33 @@ mod tests {
                 .help()
             )
         );
+    }
+
+    #[test]
+    fn an_optional_hash_result_is_c0001_not_t0021() {
+        // A body returning an int under `-> int | None` is `T0022` before
+        // this check runs, so the signature is registered by hand.
+        let module = pycc_parser::parse(&format!(
+            "{R}\n    def __hash__(self) -> int:\n        return 3\n"
+        ))
+        .expect("parses");
+        let hir = pycc_hir::lower_checked(&module).expect("lowers");
+        let classes: HashMap<String, HirClassDef> = hir.class_defs.into_iter().collect();
+        let instance = Ty::Instance(Box::new("R".to_string()));
+        let mut functions = HashMap::new();
+        functions.insert(
+            "R.__hash__".to_string(),
+            (vec![instance.clone()], Ty::Optional(Box::new(Ty::Int))),
+        );
+        let err = check_instance(&instance, "R", &classes, &functions).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert_eq!(
+            err.message,
+            "`hash()` of `R` is valid Python but not implemented yet"
+        );
+        let help = err.help.expect("help");
+        assert!(help.contains("`R.__hash__` returns `"), "{help}");
+        assert!(help.contains("returning `int` or `bool`"), "{help}");
     }
 
     #[test]

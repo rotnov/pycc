@@ -158,6 +158,18 @@ fn a_subclass_that_hashes_differently_refuses_the_base() {
         verdict(unhashable, "A"),
         InstanceHash::Unhashable { class: s("A") }
     );
+    // Two unhashable verdicts agree whichever class binds `__eq__`.
+    let eq_twice = "class A:\n    def __eq__(self, other: int) -> bool:\n        return True\n\
+                    \n\nclass B(A):\n    def __eq__(self, other: int) -> bool:\n        \
+                    return False\n";
+    assert_eq!(
+        verdict(eq_twice, "A"),
+        InstanceHash::Unhashable { class: s("A") }
+    );
+    assert_eq!(
+        verdict(eq_twice, "B"),
+        InstanceHash::Unhashable { class: s("B") }
+    );
     // A subclass failing a precheck disagrees with an identity base.
     let exception = format!("{base}\n\nclass B(A, ValueError):\n    pass\n");
     assert_eq!(

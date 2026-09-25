@@ -190,6 +190,19 @@ fn own(class: &str, classes: &HashMap<String, HirClassDef>) -> InstanceHash {
     InstanceHash::Identity
 }
 
+/// Whether two verdicts hash alike: the same variant and, for a method, the
+/// same function. Two `Unhashable` verdicts agree whichever class binds
+/// `__eq__`, since both raise the same `TypeError`.
+fn agrees(a: &InstanceHash, b: &InstanceHash) -> bool {
+    matches!(
+        (a, b),
+        (
+            InstanceHash::Unhashable { .. },
+            InstanceHash::Unhashable { .. }
+        )
+    ) || a == b
+}
+
 /// How `hash()` of an instance whose static class is `class` resolves,
 /// against the class table `classes`. See this module's documentation.
 ///
@@ -215,7 +228,7 @@ pub fn resolve_instance_hash(class: &str, classes: &HashMap<String, HirClassDef>
     subclasses.sort();
     match subclasses
         .into_iter()
-        .find(|subclass| own(subclass, classes) != verdict)
+        .find(|subclass| !agrees(&own(subclass, classes), &verdict))
     {
         Some(subclass) => InstanceHash::Unsupported(HashRefusal::SubclassDiffers {
             subclass: subclass.clone(),

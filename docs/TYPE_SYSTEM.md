@@ -1132,7 +1132,8 @@ either name in any of the five ways a class body can: a method, a
 Every other case is valid Python that pycc does not compile yet, `C0001`
 "`hash()` of `C` is valid Python but not implemented yet", with a help line
 naming the reason: a `__hash__` bound as anything but a plain method, or
-taking parameters besides `self`; an enum, exception, protocol or generic
+taking parameters besides `self`; a `__hash__` declared to return
+`int | None` (CPython raises only when it returns `None` at run time); an enum, exception, protocol or generic
 class anywhere on the MRO; and a `@dataclass` or `@dataclass_transform()`
 class with no `__hash__` of its own. The last one deliberately softens a
 bare `@dataclass`'s CPython `TypeError` (its synthesized `__eq__` sets
@@ -1147,7 +1148,10 @@ body is compiled once against the base class, and `self` there may be a
 subclass instance ([#1337](https://github.com/rotnov/pycc/issues/1337)).
 `hash(x)` for a value of static class `C` is therefore admitted only when
 every class deriving from `C` has the same verdict as `C`; otherwise it is
-`C0001` naming the first disagreeing subclass. A class whose own verdict is
+`C0001` naming the first disagreeing subclass. Two verdicts are the same
+when they are the same kind and, for a method, the same function: two
+unhashable classes agree whichever class binds `__eq__`, since both raise
+the same `TypeError`. A class whose own verdict is
 already a refusal keeps its own reason.
 
 The verdict is delivered by the check phase only. The constraint path that

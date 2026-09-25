@@ -352,6 +352,16 @@ fn a_class_with_eq_but_no_hash_is_t0021_unhashable() {
         "unhashable type: `A`",
         help,
     );
+    // A subclass that rebinds only `__eq__` is unhashable too, so it agrees
+    // with its base rather than refusing it as a differing subclass.
+    let eq_twice = format!("class A:\n{INIT}\n{EQ}\n\nclass B(A):\n{EQ}\n\nprint(hash(A()))\n");
+    assert_one_error(
+        "e2e_1335_eq_twice",
+        &eq_twice,
+        "T0021",
+        "unhashable type: `A`",
+        help,
+    );
 }
 
 #[test]
