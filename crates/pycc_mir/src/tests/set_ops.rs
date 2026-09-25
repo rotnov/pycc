@@ -138,7 +138,7 @@ fn ops_of(body: &[MirStmt]) -> Option<SetElementOps> {
         panic!("expected `.add`, got {:?}", body[1]);
     };
     assert_eq!(ops, add_ops);
-    ops.clone()
+    ops.clone().map(|ops| *ops)
 }
 
 #[test]

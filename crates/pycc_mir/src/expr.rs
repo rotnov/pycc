@@ -731,7 +731,8 @@ pub(super) fn lower_expr(
             // `MirExpr::ty` derives it.
             let ops = elements
                 .first()
-                .and_then(|first| set_ops::lower_set_element_ops(&first.ty(), scopes, classes));
+                .and_then(|first| set_ops::lower_set_element_ops(&first.ty(), scopes, classes))
+                .map(Box::new);
             MirExpr::SetLiteral { elements, ops }
         }
         HirExpr::TupleLiteral(elements) => MirExpr::TupleLiteral(
@@ -798,7 +799,7 @@ pub(super) fn lower_expr(
             MirExpr::SetAdd {
                 set: set.clone(),
                 value: Box::new(lower_expr(value, scopes, classes, current_class)),
-                ops: set_ops::lower_set_element_ops(&elem_ty, scopes, classes),
+                ops: set_ops::lower_set_element_ops(&elem_ty, scopes, classes).map(Box::new),
             }
         }
         // D-154 (Part 1 of #375): `base.attr` -- resolved to a compile-time

@@ -273,7 +273,7 @@ pub enum MirExpr {
     /// otherwise ([`SetElementOps`]).
     SetLiteral {
         elements: Vec<MirExpr>,
-        ops: Option<SetElementOps>,
+        ops: Option<Box<SetElementOps>>,
     },
     /// `(e1, e2, ...)` (mirrors `HirExpr::TupleLiteral`, PR-11b Task 4). No
     /// `ty` field: `ty()` below derives `Ty::Tuple(Box::new(elements.iter()
@@ -331,7 +331,7 @@ pub enum MirExpr {
     SetAdd {
         set: String,
         value: Box<MirExpr>,
-        ops: Option<SetElementOps>,
+        ops: Option<Box<SetElementOps>>,
     },
     /// `ClassName(args)` (D-154, Part 1 of #375): allocates a new instance
     /// with `attr_count` slots (`pycc_codegen`'s job, via the class
