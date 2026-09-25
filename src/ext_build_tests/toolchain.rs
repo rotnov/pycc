@@ -442,9 +442,8 @@ fn the_c_shims_foreign_error_mapping_names_its_classes() {
             continue;
         };
         let parts: Vec<&str> = args.split(", ").collect();
-        let [py_class, tag, literal] = parts[..] else {
-            panic!("malformed mapping line: {line}");
-        };
+        assert_eq!(parts.len(), 3, "malformed mapping line: {line}");
+        let (py_class, tag, literal) = (parts[0], parts[1], parts[2]);
         let tag: usize = tag.parse().expect("a decimal tag");
         let class = pycc_hir::BUILTIN_EXCEPTION_CLASSES[tag];
         assert_eq!(py_class, format!("PyExc_{class}"), "tag {tag}");

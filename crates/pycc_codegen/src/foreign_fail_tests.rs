@@ -339,6 +339,29 @@ fn an_unbound_foreign_global_read_in_a_function_raises_name_error() {
     assert!(!unbound.contains("llvm.trap"), "{ir}");
 }
 
+/// Two reads in one module share one `pycc_ext_name_error` declaration,
+/// and each unbound branch still calls it.
+#[test]
+fn two_unbound_foreign_reads_share_one_name_error_declaration() {
+    let read = || {
+        MirStmt::ExprStmt(MirExpr::ObjAttrGet {
+            base: copy_boxed(),
+            attr: "deepcopy".to_string(),
+            ty: Ty::Object,
+        })
+    };
+    let ir = f_ir(
+        "foreign_fail_name_error_twice",
+        vec![function(
+            Vec::new(),
+            Ty::None,
+            vec![read(), read(), MirStmt::Return(None)],
+        )],
+    );
+    let call = format!("call void @{EXT_NAME_ERROR_SYMBOL}(ptr @pycc_foreign_name_copy");
+    assert_eq!(ir.matches(&call).count(), 2, "{ir}");
+}
+
 /// Only a foreign `object` read changes: an unbound `int` global read in a
 /// function keeps its `llvm.trap`, and so does a module-body read, which
 /// D-041 proves bound (it emits no flag check at all there).
