@@ -263,8 +263,9 @@ yet`.
 A class whose base names one of the eleven builtin types this version
 reports by name -- a subset of the types CPython accepts as a base: `int`,
 `float`, `str`, `bytes`, `bytearray`, `list`, `tuple`, `dict`, `set`,
-`frozenset`, `complex` -- is rejected from the
-same `validate_bases` arm with `C0001` "class \`X\` inherits from builtin
+`frozenset`, `complex` -- is rejected from
+`validate_bases`'s unresolved-base branch, the one that otherwise reports
+an unknown class, with `C0001` "class \`X\` inherits from builtin
 type \`T\` -- subclassing a builtin type is not supported yet" (Part 1 of
 issue #1283, #1318). The failed class's own name is poisoned as for any
 failed item, and the message is cascade-shaped, so it is itself suppressed
