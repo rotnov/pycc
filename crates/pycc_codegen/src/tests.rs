@@ -4286,6 +4286,35 @@ fn a_list_result_binop_is_not_yet_supported() {
     let _ = compile_to_object(&mir, &obj_path, None, false);
 }
 
+/// Part 1 of #1319: `frozenset[int]` joins the named container arm, so a
+/// hand-built `frozenset[int]`-result `BinOp` (which `pycc_types` refuses
+/// as `T0021`) names the type instead of reaching the generic catch-all.
+#[test]
+#[should_panic(expected = "binary operators are not supported on frozenset[int] yet")]
+fn a_frozenset_result_binop_is_not_yet_supported() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::BitOr,
+                    left: Box::new(MirExpr::IntLiteral(1)),
+                    right: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::FrozenSet(Box::new(Ty::Int)),
+                },
+            }],
+        }],
+        class_defs: Vec::new(),
+    };
+    let dir = pycc_scratch::ScratchDir::new("binop_frozenset_result_panics")
+        .expect("failed to create scratch dir");
+    let obj_path = dir.join("binop_frozenset_result_panics.o");
+    let _ = compile_to_object(&mir, &obj_path, None, false);
+}
+
 #[test]
 fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
     // `def f(x: list[int]) -> list[int]: return x`. Both halves are

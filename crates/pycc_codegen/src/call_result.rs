@@ -87,7 +87,8 @@ pub(super) fn call_result_scalar<'ctx>(
                 .expect_basic("this function is declared to return Optional[int]")
                 .into_struct_value(),
         ),
-        // The four container families (#925, Part 2 of #918). All of
+        // The container families (#925, Part 2 of #918; `frozenset[int]`
+        // shares `set[int]`'s arm since Part 1 of #1319). All of
         // them were reachable only through the panic below until this
         // change: D-228 (issue #918, Part 1) lowered a parameterized
         // container annotation in every position *except* return, and

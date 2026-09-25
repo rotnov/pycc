@@ -1696,15 +1696,13 @@ fn to_str<'ctx>(
         Scalar::Dict(_) => {
             panic!("pycc_codegen: string conversion of a dict[K, V] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the `List`/
-        // `Dict` arms directly above: `pycc_types` places no type
-        // restriction on `print`'s argument or an f-string interpolation,
-        // so `print(s)`/`f"{s}"` for a `set[int]` local type-checks today
-        // and lands here. v0.2 has no `str(set)`/set-printing semantics
-        // (D-124), and there is no `pycc_rt_int_set_to_str` to call -- so
-        // this panics honestly instead of handing a `PyIntSetObj` pointer
-        // to a `pycc_rt_*_to_str` function that would read it as a
-        // `PyStrObj`.
+        // No longer reachable from source: since Part 1 of #1319,
+        // `pycc_types` refuses `print(s)`/`f"{s}"` for a `set[int]` or
+        // `frozenset[int]` value as `C0001` before codegen. v0.2 has no
+        // `str(set)`/set-printing semantics (D-124), and there is no
+        // `pycc_rt_int_set_to_str` to call -- so this stays an honest
+        // panic backstop instead of handing a `PyIntSetObj` pointer to a
+        // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
         Scalar::Set(_) => {
             panic!("pycc_codegen: string conversion of a set[T] value is not supported yet")
         }
@@ -2576,10 +2574,12 @@ fn emit_expr_unchecked<'ctx>(
                 // and calling out that it's the *operator* that's
                 // unsupported, not just the result type), not new
                 // capability.
-                Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::Tuple(_) => panic!(
-                    "pycc_codegen: binary operators are not supported on {} yet",
-                    ty.name()
-                ),
+                Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Tuple(_) => {
+                    panic!(
+                        "pycc_codegen: binary operators are not supported on {} yet",
+                        ty.name()
+                    )
+                }
                 other => panic!("pycc_codegen: a `{other:?}`-result BinOp is not supported yet"),
             }
         }
@@ -4488,10 +4488,11 @@ fn truthy<'ctx>(
         // exactly when it is non-empty, which its runtime length answers.
         Scalar::Set(ptr) => frozenset::set_truthy(context, builder, rt, ptr),
         // A real, reachable feature gap -- but NOT "identical in kind" to
-        // the `List`/`Dict`/`Set` arms directly above in one respect:
-        // `list[T]`'s own `if xs:`/`while xs:` reachability predates this
-        // whole PR-11 effort entirely (established back in PR-10, D-107);
-        // `dict`/`set`'s own reachability, while more recent (PR-11a's own
+        // the panicking `List`/`Dict` arms above in one respect (the `Set`
+        // arm stopped panicking when Part 1 of #1319 gave it real
+        // truthiness): `list[T]`'s own `if xs:`/`while xs:` reachability
+        // predates this whole PR-11 effort entirely (established back in
+        // PR-10, D-107); `dict`'s own reachability, while more recent (PR-11a's own
         // HIR literal lowering), was already in place before this PR
         // (PR-11b) started -- neither is something this PR's own diff
         // turned from a clean diagnostic into a panic. `tuple[...]`'s

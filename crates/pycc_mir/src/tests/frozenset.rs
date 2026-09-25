@@ -77,8 +77,9 @@ fn a_user_frozenset_function_shadows_the_builtin() {
     assert_eq!(value.ty(), Ty::Int);
 }
 
-/// `frozenset((s := {1}))`: a walrus in the argument binds `s`; a bare
-/// `frozenset()` binds nothing.
+/// A walrus inside the argument (`if frozenset([(n := 3)]):`) is a binding the
+/// collector reports; a bare `frozenset()` binds nothing. The MIR is
+/// hand-built so the test isolates the collector's `FrozenSetFrom` arm.
 #[test]
 fn a_walrus_in_the_frozenset_argument_is_a_collected_binding() {
     let set_ty = Ty::Set(Box::new(Ty::Int));

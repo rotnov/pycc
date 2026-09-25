@@ -1157,7 +1157,7 @@
         {
           "category": "non-scalar interpolation operands (`list`/`dict`/`set`/`tuple` values)",
           "kind": "core",
-          "reason": "pycc's codegen converts an interpolation operand through the shared `to_str` helper (crates/pycc_codegen/src/lib.rs), which handles only `Str`/`Int`/`Float`/`Bool` scalars and panics on `List`/`Dict`/`Set`/`Tuple` because v0.2 defines no `str(list)`/`str(dict)`/`str(set)` semantics (D-105/D-123/D-124); PEP 701's grammar changes therefore cannot be observed over those operand types."
+          "reason": "pycc's codegen converts an interpolation operand through the shared `to_str` helper (crates/pycc_codegen/src/lib.rs), which handles only `Str`/`Int`/`Float`/`Bool` scalars and panics on `List`/`Dict`/`Tuple` (a `set`/`frozenset` operand is refused earlier as `C0001`) because v0.2 defines no `str(list)`/`str(dict)`/`str(set)` semantics (D-105/D-123/D-124); PEP 701's grammar changes therefore cannot be observed over those operand types."
         }
       ]
     },

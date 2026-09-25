@@ -78,10 +78,20 @@ while empty:
 single = frozenset([7])
 for v in single:
     print(v)
+if source:
+    print(\"source is truthy\")
+else:
+    print(\"source is falsy\")
+drained = {v for v in empty}
+if drained:
+    print(\"drained is truthy\")
+else:
+    print(\"drained is falsy\")
 ";
 
 const SUCCESS_STDOUT: &str = "0 2 3 3\n6 6 0\n2 3 3\n2\n3\nempty is falsy\n\
-                              from_literal is truthy\n7\n";
+                              from_literal is truthy\n7\nsource is truthy\n\
+                              drained is falsy\n";
 
 /// A user `def frozenset` shadows the builtin, including for an unannotated
 /// private helper defined before it, which the constraint path types.

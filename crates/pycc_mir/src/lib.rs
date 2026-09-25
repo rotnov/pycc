@@ -1002,7 +1002,7 @@ impl MirExpr {
                 }
             }
             // Part 1 of #1319: the argument, when present, is the node's
-            // only child (`frozenset((s := {1}))`).
+            // only child (`if frozenset([(n := 3)]):`).
             MirExpr::FrozenSetFrom { source } => {
                 if let Some(source) = source {
                     source.collect_named_expr_bindings(out);
