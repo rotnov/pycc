@@ -139,4 +139,10 @@ status: accepted
   failed class's own name is unchanged and independent of which message it
   reports; what the fourth parser adds is that a builtin-base `C0001` whose
   base name an earlier failed item already poisoned is itself suppressed as
-  a cascade.
+  a cascade. The Context's statement that `validate_bases` consults only the
+  class and type-alias tables no longer holds word for word: it now also
+  reads the import and module-item tables, solely to choose the
+  unresolved-base wording, so for a base spelled like one of those eleven
+  builtin types the wording (never whether it is reported) depends on
+  whether an earlier import, `def`, or assignment of that name lowered. Rule
+  3's poisoning set is unchanged.

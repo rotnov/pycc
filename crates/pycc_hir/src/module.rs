@@ -23,7 +23,7 @@
 //! method aborts its whole class -- and lowering continues with the next
 //! item. Some `C0001` shapes are *cascades* of an earlier skipped item rather
 //! than independent gaps: a bare-name or bare-container annotation that
-//! names a class or type alias which failed to lower, and a base-class
+//! names a class, type alias, or import which failed to lower, and a base-class
 //! reference to one (whether its message says "unknown class" or, since
 //! Part 1 of #1283, "builtin type").
 //! The lowering source suppresses those silently through the "poisoned
