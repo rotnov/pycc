@@ -14,7 +14,16 @@
 //! element type class-wide, and its gate refuses any provisional slot it
 //! could not resolve (D-245's 2026-09-24 amendment for #1265). The
 //! unannotated `{}` stays `C0001` until its producer exists (#891).
+//!
+//! #1266 (Part 5) lets a class-body declaration (`n: int`,
+//! `d: dict[str, int]`, see `super::declared_attrs`) supply the slot type:
+//! the establishing assignment then records the **declared** type, the RHS
+//! passing only `slot_ty_from_init_rhs`'s shape gate (`declared_slot_ty`).
+//! That is also what admits an establishing `{}` -- under a `dict[K, V]`
+//! declaration the slot is concrete, and `pycc_types`' existing reset
+//! rewrite types the literal.
 
+use super::declared_attrs::DeclaredAttr;
 use crate::{Ty, unsupported};
 use pycc_ast::{Expr, Number, Stmt};
 use pycc_diag::Diagnostic;
@@ -38,6 +47,11 @@ use pycc_diag::Diagnostic;
 /// spelled -- see `super::receiver`) -- used to resolve a
 /// bare-parameter-name RHS's `Ty`.
 ///
+/// `declared` carries the class body's instance attribute declarations
+/// (#1266). For a declared attribute, the first plain assignment records the
+/// declared type (see `declared_slot_ty`), and a first annotated assignment
+/// must name that same type.
+///
 /// `annotation_ty` resolves an annotated assignment's annotation to its
 /// `Ty`. The caller passes the same `annotation_to_ty` call, in the same
 /// context, that `stmt::ann_assign` used when it lowered and accepted this
@@ -51,6 +65,7 @@ pub(super) fn collect_init_attrs(
     init_body: &[Stmt],
     params: &[(String, Ty)],
     receiver_name: &str,
+    declared: &DeclaredAttrs<'_>,
     annotation_ty: &dyn Fn(&Expr) -> Result<Ty, Diagnostic>,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     let mut attrs: Vec<(String, Ty)> = Vec::new();
@@ -66,7 +81,25 @@ pub(super) fn collect_init_attrs(
             if let Some(attr_name) = receiver_attr(&ann.target, receiver_name)
                 && !attrs.iter().any(|(name, _)| *name == attr_name)
             {
-                attrs.push((attr_name, annotation_ty(&ann.annotation)?));
+                let ty = annotation_ty(&ann.annotation)?;
+                // #1266: a class-body declaration and the establishing
+                // annotated assignment must name the same type.
+                if let Some(decl) = declared.find(&attr_name)
+                    && decl.ty != ty
+                {
+                    return Err(unsupported(
+                        format!(
+                            "instance attribute `{attr_name}` is declared in class `{}` as \
+                             `{}` but annotated `{}` in `__init__` -- the two annotations must \
+                             agree",
+                            declared.class_name,
+                            decl.ty.name(),
+                            ty.name()
+                        ),
+                        ann.range,
+                    ));
+                }
+                attrs.push((attr_name, ty));
             }
             continue;
         }
@@ -84,11 +117,82 @@ pub(super) fn collect_init_attrs(
             if attrs.iter().any(|(name, _)| *name == attr_name) {
                 continue;
             }
-            let ty = slot_ty_from_init_rhs(&assign.value, params, receiver_name)?;
+            let ty = match declared.find(&attr_name) {
+                Some(decl) => {
+                    declared_slot_ty(decl, declared.class_name, assign, params, receiver_name)?
+                }
+                None => slot_ty_from_init_rhs(&assign.value, params, receiver_name)?,
+            };
             attrs.push((attr_name, ty));
         }
     }
     Ok(attrs)
+}
+
+/// A class body's instance attribute declarations (#1266), as the `__init__`
+/// pre-scan consumes them: the list [`super::declared_attrs`] built, plus
+/// the class name its diagnostics quote.
+pub(super) struct DeclaredAttrs<'a> {
+    /// The declarations, in source order.
+    pub(super) attrs: &'a [DeclaredAttr],
+    /// The class's own name.
+    pub(super) class_name: &'a str,
+}
+
+impl DeclaredAttrs<'_> {
+    /// The declaration of `name`, if the class body declares it.
+    fn find(&self, name: &str) -> Option<&DeclaredAttr> {
+        self.attrs.iter().find(|decl| decl.name == name)
+    }
+}
+
+/// The slot type of a declared attribute's establishing plain assignment
+/// (#1266): the **declared** type, never the right-hand side's.
+///
+/// An empty `[]`/`{}` takes the declared type without consulting
+/// [`slot_ty_from_init_rhs`]: under a matching `list[int]`/`dict[str, int]`
+/// declaration `pycc_types::empty_container`'s `rewrite_attr_resets` types
+/// the literal from the now-concrete slot (this is how the unannotated `{}`
+/// becomes admissible), and under any other declaration the literal stays
+/// untyped and the checker reports the same wrong-shape `T0003` a later
+/// reset gets. Any other right-hand side must still pass
+/// `slot_ty_from_init_rhs`'s shape gate, which is what keeps an `__init__`
+/// RHS from reading a still-unassigned slot; its inferred type is then
+/// discarded, and `pycc_types::check_attr_set` judges the value against the
+/// declared slot as for every `AttrSet`. The one pair that check cannot
+/// judge -- a type parameter against anything else, since `is_assignable`
+/// admits any scalar into a `Ty::Param` slot and a `Ty::Param` into any
+/// scalar slot -- is refused here, so it cannot compile into a slot that
+/// holds the wrong representation for some instantiation.
+fn declared_slot_ty(
+    decl: &DeclaredAttr,
+    class_name: &str,
+    assign: &pycc_ast::StmtAssign,
+    params: &[(String, Ty)],
+    receiver_name: &str,
+) -> Result<Ty, Diagnostic> {
+    let value = assign.value.as_ref();
+    let is_empty_display = matches!(value, Expr::List(list) if list.elts.is_empty())
+        || matches!(value, Expr::Dict(dict) if dict.items.is_empty());
+    if is_empty_display {
+        return Ok(decl.ty.clone());
+    }
+    let inferred = slot_ty_from_init_rhs(value, params, receiver_name)?;
+    let involves_param = matches!(inferred, Ty::Param(_)) || matches!(decl.ty, Ty::Param(_));
+    if involves_param && inferred != decl.ty {
+        return Err(unsupported(
+            format!(
+                "instance attribute `{}` declared in class `{class_name}` as `{}` is assigned a \
+                 value of type `{}` -- a type-parameter attribute must be assigned a value of \
+                 that same type parameter, and a concrete attribute cannot hold one",
+                decl.name,
+                decl.ty.name(),
+                inferred.name()
+            ),
+            assign.range,
+        ));
+    }
+    Ok(decl.ty.clone())
 }
 
 /// The attribute name `target` assigns when it is `<receiver>.<attr>` on
@@ -113,7 +217,9 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// empty list display is accepted. A parameter may be a scalar
 /// (int/float/bool/str), a PEP 695 type parameter, or -- since #1262 -- a
 /// `list[int]`/`dict[str, int]` container, which the slot stores as its
-/// pointer word.
+/// pointer word. For an attribute a class-body declaration types (#1266),
+/// this is only the shape gate: `declared_slot_ty` discards the type it
+/// returns in favor of the declared one.
 ///
 /// `[]` yields the provisional slot type `list[<Ty::Infer>]`. It is the one
 /// place this crate records a `Ty::Infer` slot on purpose, and it never
@@ -122,7 +228,9 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// `self.<attr>.append(v)` in the class's own methods, and refuses the
 /// program with `T0003` when neither exists. An empty dict display has no
 /// such producer yet (`self.d[k] = v` is #891), so it gets its own `C0001`
-/// naming the annotated spelling that works. Every other RHS shape --
+/// naming the two spellings that work: the annotated assignment and a
+/// class-body declaration, whose type `declared_slot_ty` supplies without
+/// calling this function for an empty literal. Every other RHS shape --
 /// including an arithmetic expression, a call, or a reference to `self`
 /// itself -- is `C0001`.
 fn slot_ty_from_init_rhs(
@@ -248,9 +356,10 @@ fn slot_ty_from_init_rhs(
         Expr::Dict(dict) if dict.items.is_empty() => Err(unsupported(
             format!(
                 "an unannotated `{receiver_name}.<attr> = {{}}` has no key/value type source \
-                 yet -- annotate it (`{receiver_name}.d: dict[str, int] = {{}}`); inferring it \
-                 from `{receiver_name}.d[k] = v` needs a subscript store on an attribute \
-                 receiver (#891)"
+                 yet -- annotate it (`{receiver_name}.d: dict[str, int] = {{}}`) or declare it \
+                 in the class body (`d: dict[str, int]`); inferring it from \
+                 `{receiver_name}.d[k] = v` needs a subscript store on an attribute receiver \
+                 (#891)"
             ),
             pycc_ast::expr_range(value),
         )),
@@ -365,14 +474,17 @@ mod tests {
 
     #[test]
     fn an_init_attr_assigned_an_empty_dict_literal_names_the_annotated_spelling() {
-        // The dict half has no producer yet: `self.d[k] = v` is #891.
+        // The dict half has no producer yet: `self.d[k] = v` is #891. The
+        // message names both spellings that do supply a type: the annotated
+        // assignment (#1264) and a class-body declaration (#1266).
         let message =
             c0001_message("class C:\n    def __init__(this) -> None:\n        this.d = {}\n");
         assert_eq!(
             message,
             "an unannotated `this.<attr> = {}` has no key/value type source yet -- annotate \
-             it (`this.d: dict[str, int] = {}`); inferring it from `this.d[k] = v` needs a \
-             subscript store on an attribute receiver (#891)"
+             it (`this.d: dict[str, int] = {}`) or declare it in the class body (`d: dict[str, \
+             int]`); inferring it from `this.d[k] = v` needs a subscript store on an attribute \
+             receiver (#891)"
         );
     }
 

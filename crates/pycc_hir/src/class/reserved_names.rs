@@ -72,6 +72,11 @@
 //!   `lower_protocol_class` *before* the method loop, so a `Protocol` body
 //!   never reaches `super::body` at all.
 //!
+//!   #1266 adds a sixth, attribute-shaped call site:
+//!   `super::declared_attrs::collect_declared_attrs`, which guards a plain
+//!   body's value-less instance attribute declaration (`x: int`) with
+//!   [`ClassBodyRoute::Plain`] before the walk ever starts.
+//!
 //!   None of the method call sites takes a [`ClassBodyRoute`]: a plain and a
 //!   `@dataclass` body share the one method loop, and an `Enum` body rejects
 //!   method definitions outright before it (`C0001`, "an enum class body must
@@ -146,10 +151,11 @@ use pycc_diag::Diagnostic;
 /// Rejects a class-body binding of a name the interpreter gives its own
 /// meaning, in every spelling and every class body.
 ///
-/// Called first thing after name extraction from three of the five routes
+/// Called first thing after name extraction from four of the six routes
 /// into a class body: [`super::attrs::lower_class_attr`] (annotated),
 /// [`super::attrs::lower_unannotated_class_attr`] (#910's bare assignment),
-/// and [`super::enum_class`]'s member loop. `route` distinguishes the last of
+/// `super::declared_attrs::collect_declared_attrs` (a value-less instance
+/// attribute declaration, #1266), and [`super::enum_class`]'s member loop. `route` distinguishes the last of
 /// those, because only the `__slots__` explanation differs between them. The
 /// remaining two call sites are method walks and do not come here:
 /// [`super::body`]'s method loop calls [`reject_reserved_method_name`] and
@@ -193,7 +199,7 @@ pub(super) fn reject_reserved_class_attr_name(
 /// Since #984 it is reached from [`reject_reserved_method_name`] rather than
 /// directly from `super::body`; the dispatch is unchanged, only relocated.
 /// `super::body`'s method loop routes `@property def __new__(self) -> int` to
-/// `MethodKind::PropertyGetter`, so none of the three attribute routes sees
+/// `MethodKind::PropertyGetter`, so none of the four attribute routes sees
 /// it; without this call `ensure_init` synthesizes a constructor from the
 /// method table alone and pycc accepts `C()`, while CPython 3.13.9 raises
 /// `TypeError: 'property' object is not callable` at that call.
@@ -435,7 +441,7 @@ const PROPERTY_SLOTS_MESSAGE: &str = "a `@property` getter named `__slots__` is 
 /// each protocol without consulting a class attribute of that name -- is the
 /// same everywhere.
 ///
-/// It covers the three *attribute* routes only. The method routes do not pass
+/// It covers the four *attribute* routes only. The method routes do not pass
 /// a `ClassBodyRoute` at all: `super::body`'s method loop is a single arm
 /// serving both a plain and a `@dataclass` body, and a `Protocol` body has its
 /// own walk, so they carry [`PROPERTY_SLOTS_MESSAGE`] and

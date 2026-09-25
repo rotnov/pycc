@@ -405,17 +405,22 @@ fn a_subscripted_annotation_may_now_appear_on_the_right_of_a_type_alias() {
 
 #[test]
 fn the_class_body_positions_move_to_three_different_answers() {
-    // A class attribute and a dataclass field: the `T0044` becomes each
-    // position's own scalar-slot `C0001`, because the subscripted annotation
-    // now lands where the equivalent *bare* `NDArray` annotation already
-    // did. A diagnostic-code swap, not a behavior change.
+    // A value-less class-body annotation and a dataclass field: the `T0044`
+    // becomes each position's own slot-type `C0001`, because the subscripted
+    // annotation now lands where the equivalent *bare* `NDArray` annotation
+    // already did. A diagnostic-code swap, not a behavior change. Since
+    // #1266 the value-less class-body spelling is an instance attribute
+    // declaration, so its message is the declaration's own type refusal.
     let text = assert_rejects(
         "1130_class_attribute",
         "class NDArray:\n    pass\n\n\nclass D:\n    x: NDArray[int]\n",
         "C0001",
     );
     assert!(
-        text.contains("class attribute `x` has type `NDArray`, which is not a scalar slot type"),
+        text.contains(
+            "instance attribute `x` declared in class `D` has type `NDArray`, which has no \
+             instance-slot representation"
+        ),
         "{text}"
     );
     let text = assert_rejects(
