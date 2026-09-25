@@ -59,6 +59,7 @@
 //! recursion into a nested `if`/`while`/`for`), matching this same minimal,
 //! single-pass scope.
 
+mod attr_initializer;
 mod attrs;
 mod body;
 mod declared_attrs;
