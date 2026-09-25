@@ -1150,10 +1150,11 @@ line written so far would otherwise stay in that buffer when `__str__`
 raises, ending the `print` before its newline, and would be lost when the
 host exits, or would be written after anything `__str__` writes through
 CPython. A native-only `print` does not flush, and neither does an f-string,
-which writes nothing until the whole string is built. The flush is
-object-only, so a native conversion that raises mid-line — `print("a", 1e20)`,
-whose float needs the unsupported scientific notation — still leaves its
-partial line buffered; that pre-existing gap is unchanged.
+which writes nothing until the whole string is built. A native conversion
+needs no flush because it never ends a `print` early: `print("a", 1e20)`,
+whose float needs the unsupported scientific notation, writes its empty-`str`
+sentinel and the newline (`a \n`), and the pending `RuntimeError` is observed
+at the next checkpoint, as D-244's 2026-09-13 amendment on sentinels records.
 
 **The `tuple` unpack is the sixth helper on that edge, and the first with a
 non-scalar out-slot.** PR 4c of
