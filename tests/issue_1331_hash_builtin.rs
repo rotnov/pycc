@@ -30,9 +30,6 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
 }
 
-/// `2**62`, the smallest positive int D-061 stores as a heap bigint.
-const PROMOTED: &str = "4611686018427387904";
-
 /// The pinned values: `-1 -> -2`, the `2**61 - 1` modulus wrap of both
 /// signs, the smallint/bigint boundary, heap bigints built by addition,
 /// bools, tuple hashes (including a heap-bigint element), a `bool` passed to
@@ -348,8 +345,11 @@ fn a_wrong_argument_count_is_t0021() {
 
 #[cfg(unix)]
 mod peak_rss {
-    use super::{PROMOTED, ScratchDir, pycc};
+    use super::{ScratchDir, pycc};
     use std::process::Command;
+
+    /// `2**62`, the smallest positive int D-061 stores as a heap bigint.
+    const PROMOTED: &str = "4611686018427387904";
 
     /// The child's `ru_maxrss` (bytes on macOS, kilobytes on Linux, so only
     /// ever compared as a ratio). Follows `tests/issue_1211_bool_ops.rs`.
