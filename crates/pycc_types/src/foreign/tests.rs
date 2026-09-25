@@ -835,7 +835,7 @@ fn a_pre_bound_loop_variable_of_another_type_is_refused() {
 /// restructuring them, so a regression that moved a diagnostic into the
 /// type checker fails here.
 #[test]
-fn the_deferred_for_iterable_shapes_keep_their_own_refusals() {
+fn the_deferred_for_iterables_keep_their_refusals_and_a_bare_module_is_admitted() {
     for (source, phrase) in [
         (
             "for x in numpy.pi[0]:\n    pass\n",

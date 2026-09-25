@@ -162,26 +162,91 @@ fn an_unannotated_helper_beside_the_binding_still_solves() {
     ));
 }
 
+/// The new bare-name route is module-body only: inside a function body a
+/// loop over a module-level foreign import's name -- which #1316 made
+/// readable there -- keeps the read refusal in an annotated `def`, a
+/// method and an unannotated helper alike, and a bare module is no
+/// exception (#1333).
+#[test]
+fn a_function_body_bare_name_loop_over_a_foreign_import_is_refused() {
+    for (source, name) in [
+        (
+            "from sys import path\n\n\ndef f() -> None:\n    for p in path:\n        pass\n",
+            "path",
+        ),
+        (
+            "import sys\n\n\ndef f() -> None:\n    for q in sys:\n        pass\n",
+            "sys",
+        ),
+        (
+            "from sys import path\n\n\nclass C:\n    def m(self) -> None:\n        for p in path:\n            pass\n",
+            "path",
+        ),
+        (
+            "from sys import path\n\n\ndef _h():\n    for p in path:\n        pass\n    return 1\n\n\nprint(_h())\n",
+            "path",
+        ),
+    ] {
+        refused(
+            source,
+            "I0404",
+            &format!("using `{name}`, which is bound to a CPython object"),
+        );
+    }
+}
+
+/// `check_and_resolve_all_keyed`'s single diagnostic for `source`, after
+/// asserting the check phase alone admits it.
+fn monomorphization_refusal(source: &str) -> pycc_diag::Diagnostic {
+    let hir = lower_all_foreign(source);
+    assert!(
+        crate::check_all(&hir).is_ok(),
+        "{source:?}: the check phase admits it"
+    );
+    let Err(diagnostics) = crate::check_and_resolve_all_keyed(&hir) else {
+        panic!("{source:?}: monomorphization refuses it");
+    };
+    let [(_, diagnostic)] = diagnostics.as_slice() else {
+        panic!("{source:?}: exactly one diagnostic: {diagnostics:?}");
+    };
+    diagnostic.clone()
+}
+
 /// The monomorphization pass re-walks the module body without the foreign
 /// names (the gap `foreign/tests.rs`'s
 /// `the_monomorphization_pass_walks_a_for_loop_iterable` pins for an
 /// attribute iterable), so in a module that also defines a generic function
-/// the binding the check phase admits is refused there with `T0021`. #1325
-/// widens that pre-existing gap to the binding rather than opening it; #1101
-/// tracks it.
+/// a module-level statement the check phase admits is refused there with
+/// `T0021` whenever it *reads* a foreign name: a direct call (pre-existing
+/// since #1313), the binding #1325 admits, and an alias of a foreign import.
+/// A bare-name loop over a foreign import passes, because that walk never
+/// resolves a `ForList` iterable's name. #1325 widens the pre-existing gap
+/// rather than opening it; #1101 tracks it.
 #[test]
-fn a_module_with_a_generic_function_refuses_the_binding_in_monomorphization() {
-    let source = format!(
-        "{FROM_FORM}def g[T](a: T) -> T:\n    return a\n\n\nx = product(\"ab\")\nprint(g(1))\n"
-    );
-    let hir = lower_all_foreign(&source);
-    assert!(crate::check_all(&hir).is_ok(), "the check phase admits it");
-    let Err(diagnostics) = crate::check_and_resolve_all_keyed(&hir) else {
-        panic!("monomorphization refuses the binding");
-    };
-    let [(_, diagnostic)] = diagnostics.as_slice() else {
-        panic!("exactly one diagnostic: {diagnostics:?}");
-    };
+fn a_module_with_a_generic_function_refuses_foreign_reads_in_monomorphization() {
+    const GENERIC: &str = "def g[T](a: T) -> T:\n    return a\n\n\n";
+    for (body, message) in [
+        ("product(\"ab\")\n", "call to undefined function `product`"),
+        (
+            "x = product(\"ab\")\n",
+            "call to undefined function `product`",
+        ),
+    ] {
+        let diagnostic =
+            monomorphization_refusal(&format!("{FROM_FORM}{GENERIC}{body}print(g(1))\n"));
+        assert_eq!(diagnostic.code, "T0021", "{diagnostic:?}");
+        assert!(diagnostic.message.contains(message), "{diagnostic:?}");
+    }
+    let diagnostic = monomorphization_refusal(&format!(
+        "from sys import path\n{GENERIC}y = path\nprint(g(1))\n"
+    ));
     assert_eq!(diagnostic.code, "T0021", "{diagnostic:?}");
-    assert!(diagnostic.message.contains("`product`"), "{diagnostic:?}");
+    assert!(
+        diagnostic.message.contains("name `path` is not defined"),
+        "{diagnostic:?}"
+    );
+    let hir = lower_all_foreign(&format!(
+        "from sys import path\n{GENERIC}for t in path:\n    pass\nprint(g(1))\n"
+    ));
+    crate::check_and_resolve_all_keyed(&hir).expect("a bare-name loop passes monomorphization");
 }
