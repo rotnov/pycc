@@ -900,3 +900,17 @@ fn a_comprehension_of_a_set_of_instances_is_c0001_naming_1344() {
         );
     }
 }
+
+#[test]
+fn a_set_comprehension_element_error_in_an_unannotated_helper_is_reported() {
+    // The solver collects a set comprehension's element before it builds
+    // the container term; an element that fails collection must surface
+    // its own diagnostic rather than a container one.
+    assert_one_error(
+        "e2e_1343_set_comp_element_error",
+        "import math\ndef _f(n):\n    return {math.sqrt for x in range(n)}\n\nprint(len(_f(3)))\n",
+        "T0021",
+        "`math.sqrt` is a stdlib function and must be called",
+        "call it: `math.sqrt(...)`",
+    );
+}

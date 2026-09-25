@@ -153,11 +153,9 @@ impl<'ctx> SetEmitter<'_, 'ctx> {
         callee: &str,
         leading: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     ) -> inkwell::values::BasicValueEnum<'ctx> {
-        let function = self.user_functions.get(callee).unwrap_or_else(|| {
-            panic!(
-                "pycc_codegen: internal error: set element method `{callee}` is not a user function"
-            )
-        });
+        // MIR resolved `callee` from the class's own method table, which
+        // codegen declares in full before any body, so indexing cannot miss.
+        let function = &self.user_functions[callee];
         let value = build_call_to_with_leading_args(
             self.context,
             self.builder,
