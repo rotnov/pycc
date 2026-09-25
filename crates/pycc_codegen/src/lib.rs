@@ -3880,16 +3880,6 @@ fn emit_expr_unchecked<'ctx>(
         // whose free is a documented no-op on null. A second guard is emitted
         // *before* the allocator call, for an exception that was already
         // pending when this arm was reached -- see it in place below.
-        MirExpr::InstanceHash { operand, via } => hash::emit_instance_hash(
-            context,
-            builder,
-            module,
-            rt,
-            user_functions,
-            locals,
-            operand,
-            *via,
-        ),
         MirExpr::FrozenSetFrom { source } => frozenset::emit_frozenset_from(
             context,
             builder,
@@ -3988,6 +3978,16 @@ fn emit_expr_unchecked<'ctx>(
             // on an owned buffer with no arm of their own.
             Scalar::MemoryView(view)
         }
+        MirExpr::InstanceHash { operand, via } => hash::emit_instance_hash(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            operand,
+            *via,
+        ),
         // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
         // o` at module scope, and the same at any other fixed arity -- the
         // PEP 585 variadic `tuple[float, ...]` stays refused and never
