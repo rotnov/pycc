@@ -53,7 +53,7 @@ pub(super) fn synthesize_dataclass_eq(class_name: &str, fields: &[(String, Ty)])
 /// `display_name`: `return f"{display_name}(f1={self.f1}, ...)"`, or
 /// `return "{display_name}()"` for a zero-field dataclass.
 ///
-/// [`synthesize_dataclass_repr`] renders the defining class. `pycc_types`'
+/// `synthesize_dataclass_repr` renders the defining class. `pycc_types`'
 /// inherited-method copy pass (#1337, D-254) renders the receiver of a copy
 /// instead, as CPython's `type(self).__qualname__` does for a subclass that
 /// inherits the synthesized method.
