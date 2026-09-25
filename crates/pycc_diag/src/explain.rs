@@ -1347,20 +1347,21 @@ def scale(x: float) -> float:
 I0404 reports an unsupported operation on a value whose type is the opaque \
 CPython object type `object` -- a module bound by a CPython `import` under \
 `--ext`, or an attribute loaded from one. Reading such a value is not \
-itself an error, and #1026 implements eight operations on it: loading a \
+itself an error, and #1026 implements nine operations on it: loading a \
 further attribute, calling a method with positional \
 `int`/`float`/`bool`/`str` arguments, calling the object itself with \
 such arguments (#1313), `len`, using it as an \
 `if`/`while` condition or comprehension guard, *loading* a subscript \
 `o[k]` whose key is an `int`, `float`, `bool` or `str`, iterating it \
-with `for`, and binding it to a module-level name (#1325). The loop is \
+with `for`, binding it to a module-level name (#1325), and printing it \
+or interpolating it into an f-string (#1340), which renders it with \
+CPython's own `str()` or `format()`. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
-still refused, including printing or f-string interpolation, \
-`isinstance`, a `match` subject, iterating over a subscript load \
+still refused, including `isinstance`, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods or to the \
 object itself, and indexing with a key of any other type. Storing through a \
@@ -1387,7 +1388,9 @@ the boundary conversions -- and this code is retired when they have.",
         example: "\
 import numpy
 
-print(numpy.pi)  # error[I0404]: printing a CPython object
+match numpy.pi:  # error[I0404]: matching on a CPython object
+    case 1:
+        pass
 ",
     },
     DiagnosticExplanation {

@@ -56,6 +56,8 @@ mod int_bitwise;
 mod int_encoding;
 /// `set[int]`/`frozenset[int]`'s `PyIntSetObj` (D-121, Part 1 of #1319).
 mod int_set;
+/// `print`'s stdout flush (#1340); the other print primitives stay below.
+mod print;
 
 #[cfg(not(test))]
 pub use exception::pycc_rt_exception_print_and_exit;
@@ -83,6 +85,7 @@ pub use int_set::{
     pycc_rt_int_set_decref, pycc_rt_int_set_from_int_list, pycc_rt_int_set_get,
     pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new,
 };
+pub use print::pycc_rt_print_flush;
 
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")

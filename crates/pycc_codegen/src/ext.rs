@@ -356,6 +356,20 @@ pub const EXT_OBJ_TO_INT_SYMBOL: &str = "pycc_ext_obj_to_int";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_TO_STR_SYMBOL: &str = "pycc_ext_obj_to_str";
 
+/// The fixed C shim's f-string interpolation helper (#1340): it takes a
+/// borrowed `PyObject *` and a `void **` out-parameter, writes a pycc
+/// `PyStrObj *` at refcount 1 and returns `0`, or returns `-1` with the
+/// CPython exception already set.
+///
+/// [`EXT_OBJ_TO_STR_SYMBOL`]'s contract, ownership and copy-before-release
+/// ordering exactly, with `PyObject_Format(o, NULL)` in place of
+/// `PyObject_Str(o)`: CPython renders `f"{value}"` as `format(value, '')`,
+/// which reaches the value's `__format__`, not its `__str__`. `print(o)`
+/// writes `str(o)` and so reaches [`EXT_OBJ_TO_STR_SYMBOL`] instead.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_FORMAT_SYMBOL: &str = "pycc_ext_obj_format";
+
 /// The fixed C shim's fixed-arity all-`float` tuple unpack helper (Part 4
 /// of #1026, PR 4c of #1083): it takes a borrowed `PyObject *`, the
 /// declared arity and a `double *` out-array, writes that many converted

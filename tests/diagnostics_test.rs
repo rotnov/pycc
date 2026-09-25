@@ -1513,10 +1513,12 @@ fn t0036_inferred_dict_int_int_is_not_compiled_yet() {
 // Part 1 of #1026: a CPython `import` binds the module object and nothing
 // more, so every operation on the binding is refused.
 
-/// `I0404` on the plainest read there is -- passing the bound module to
-/// `print`. The choke-point set behind this one fixture (an expression-
-/// position read, a `for`/comprehension iterable, and a call of the name)
-/// is exercised shape by shape in `tests/issue_1080_foreign_object.rs`.
+/// `I0404` on the plainest read there is -- matching on the bound module.
+/// (The fixture passed the module to `print` until #1340 admitted
+/// rendering a CPython object.) The choke-point set behind this one fixture
+/// (an expression-position read, a `for`/comprehension iterable, and a call
+/// of the name) is exercised shape by shape in
+/// `tests/issue_1080_foreign_object.rs`.
 #[test]
 fn i0404_foreign_module_operation() {
     assert_diagnostic_matches_fixture("i0404_foreign_module_operation");

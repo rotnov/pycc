@@ -1131,6 +1131,31 @@ Neither is the thunk seam's unpacker: `pycc_ext_unpack_int_at` and
 closed, and refusing a duck type is what an explicit conversion must not do.
 The rule-7 paragraph above covers all four conversions unchanged.
 
+**Printing an object and interpolating it reuse and extend that edge.**
+[#1340](https://github.com/rotnov/pycc/issues/1340) admits `print(o)` and
+`f"{o}"`. `print` renders an object argument with `pycc_ext_obj_to_str`, the
+`str(o)` helper above, and an f-string renders an interpolated object with a
+new helper, `pycc_ext_obj_format`, which runs `PyObject_Format(o, NULL)` —
+CPython's `format(o, '')`, reaching the value's `__format__` — and is otherwise
+shaped exactly like `pycc_ext_obj_to_str`. The conversions run where CPython
+runs them: `print` evaluates every argument first and converts an object
+argument only while writing it, after the separator before it, and an
+f-string converts each part as it reaches it. Both take the same failing edge
+as every other object operation, so a raising `__str__` or `__format__` fails
+the module body or, inside a function, is bridged to a catchable exception.
+Compiled `print` writes through Rust's own line-buffered stdout, which is
+separate from CPython's `sys.stdout`, so `print` calls
+`pycc_rt_print_flush` immediately before converting an object argument: the
+line written so far would otherwise stay in that buffer when `__str__`
+raises, ending the `print` before its newline, and would be lost when the
+host exits, or would be written after anything `__str__` writes through
+CPython. A native-only `print` does not flush, and neither does an f-string,
+which writes nothing until the whole string is built. A native conversion
+needs no flush because it never ends a `print` early: `print("a", 1e20)`,
+whose float needs the unsupported scientific notation, writes its empty-`str`
+sentinel and the newline (`a \n`), and the pending `RuntimeError` is observed
+at the next checkpoint, as D-244's 2026-09-13 amendment on sentinels records.
+
 **The `tuple` unpack is the sixth helper on that edge, and the first with a
 non-scalar out-slot.** PR 4c of
 [#1083](https://github.com/rotnov/pycc/issues/1083) added exactly one shim
@@ -1219,7 +1244,7 @@ exactly, each releasing its `PyNumber_Long`/`PyObject_Str` temporary on the
 failing return as well as the successful one; `pycc_ext_obj_to_str` carries the
 one additional ordering constraint, that the `pycc_rt_str_from_literal` copy
 must complete **before** the `Py_DECREF`, because `PyUnicode_AsUTF8AndSize`
-points into the temporary's own buffer and that buffer dies with it. Only an
+points into the temporary's own buffer and that buffer dies with it. #1340's `pycc_ext_obj_format` follows the same rule, including the copy-before-release ordering, for its `PyObject_Format` temporary. Only an
 encoded `i64` and a pycc-owned `str` handle escape into compiled code. PR
 4c's `pycc_ext_obj_unpack_float_tuple` follows the same rule once per item:
 each `PyNumber_Float` temporary is released inside the iteration that
@@ -1279,7 +1304,8 @@ Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
 a subscript load, `for` iteration, `len`, a truth test, a module-level binding
-(#1325) or a `float`/`bool`/`int`/`str` conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
+(#1325), a `float`/`bool`/`int`/`str` conversion or printing and f-string
+interpolation (#1340, which hand CPython's text back as a pycc `str`) is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)

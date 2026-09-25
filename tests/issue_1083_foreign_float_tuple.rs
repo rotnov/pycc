@@ -177,7 +177,12 @@ fn a_mixed_or_variadic_tuple_annotation_keeps_its_refusal() {
 #[test]
 fn the_unchanged_refusal_now_names_the_admitted_assignment() {
     let dir = ScratchDir::new("foreign_float_tuple_message").expect("scratch");
-    let output = check(&dir, "import gc\n\nprint(gc)\n");
+    // A `match` subject is still refused; `print(gc)`, the former probe, is
+    // admitted since #1340.
+    let output = check(
+        &dir,
+        "import gc\n\nmatch gc:\n    case 1:\n        print(1)\n",
+    );
     assert!(!output.status.success(), "{}", stdout_of(&output));
     let text = stdout_of(&output);
     assert!(
