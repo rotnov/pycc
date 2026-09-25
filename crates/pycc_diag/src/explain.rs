@@ -1371,7 +1371,7 @@ attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
 `add` is still refused by `C0001`. In a module body every supported \
 operation is admitted only *below the import*. Since #1316 each one except \
-the `for` loop is also admitted inside a function body when the name is a \
+the `for` loop and the binding is also admitted inside a function body when the name is a \
 module-level foreign binding that no local shadows: a call that runs \
 before the import has bound the name raises `NameError` at run time, and \
 a failing operation raises a pycc exception the function can catch. \
