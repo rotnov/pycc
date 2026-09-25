@@ -137,6 +137,23 @@ pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
 /// tests count that symbol's occurrences in the emitted IR.
 pub const EXT_IMPORT_ERROR_BRIDGE_SYMBOL: &str = "pycc_ext_import_error_bridge";
 
+/// The fixed C shim's foreign-operation bridge (#1316): `int
+/// pycc_ext_obj_error_bridge(void)` translates CPython's pending exception
+/// (a failed attribute load, call, `len`, ...) into a pending pycc
+/// exception and keeps the original for the host. Unlike
+/// [`EXT_IMPORT_ERROR_BRIDGE_SYMBOL`] it is total: it always returns `1`
+/// with a pycc exception pending and CPython's indicator clear, so a
+/// function body's failure edge branches straight to its innermost
+/// handler. Module exec keeps its direct `-1` edge instead (#1096).
+pub const EXT_OBJ_ERROR_BRIDGE_SYMBOL: &str = "pycc_ext_obj_error_bridge";
+
+/// The fixed C shim's read-before-import error (#1316): `void
+/// pycc_ext_name_error(const unsigned char *name, long long len)` raises
+/// CPython's `NameError("name '<name>' is not defined")` and bridges it
+/// through [`EXT_OBJ_ERROR_BRIDGE_SYMBOL`]. Emitted on the unbound branch of
+/// a function body's read of a module-level foreign name.
+pub const EXT_NAME_ERROR_SYMBOL: &str = "pycc_ext_name_error";
+
 /// The fixed C shim's attribute-load helper (Part 2 of #1026): it takes a
 /// borrowed `PyObject *` and a NUL-terminated attribute name, and returns a
 /// *new* reference to the attribute's value, or `NULL` with the CPython

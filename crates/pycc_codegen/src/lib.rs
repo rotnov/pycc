@@ -48,6 +48,7 @@ mod ext;
 mod ext_thunk;
 mod foreign_attr;
 mod foreign_call;
+mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
 
@@ -62,6 +63,7 @@ type ObjectConversionEmitter = for<'a> fn(
     &'a Context,
     &inkwell::builder::Builder<'a>,
     &inkwell::module::Module<'a>,
+    &RtFns<'a>,
     Scalar<'a>,
 ) -> Scalar<'a>;
 mod target_machine;
@@ -72,12 +74,13 @@ pub use ext::{
     mangle_ext_name,
 };
 use ext::{
-    EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
-    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
-    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
-    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
-    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
+    EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,
+    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL,
+    EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL,
+    EXT_OBJ_TRUTHY_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name,
+    is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -2088,12 +2091,17 @@ fn emit_expr_unchecked<'ctx>(
                     .build_conditional_branch(is_initialized, ready, unbound)
                     .expect("build_conditional_branch should not fail for an i1 condition");
                 builder.position_at_end(unbound);
-                builder
-                    .build_call(rt.trap, &[], "unbound_global")
-                    .expect("build_call should not fail for llvm.trap");
-                builder
-                    .build_unreachable()
-                    .expect("build_unreachable should not fail in a fresh block");
+                // #1316: a foreign `object` global read in a function body
+                // before its import ran raises a catchable `NameError`, as
+                // CPython does; every other unbound read keeps the trap.
+                if !foreign_fail::emit_unbound_object_read(context, builder, module, rt, ty, name) {
+                    builder
+                        .build_call(rt.trap, &[], "unbound_global")
+                        .expect("build_call should not fail for llvm.trap");
+                    builder
+                        .build_unreachable()
+                        .expect("build_unreachable should not fail in a fresh block");
+                }
                 builder.position_at_end(ready);
             }
             // Deviation from the task brief: the brief's version matched
@@ -2808,7 +2816,7 @@ fn emit_expr_unchecked<'ctx>(
                 // destination type, not the implicit thunk-seam crossing D-244
                 // rule 7 closes (see `foreign_len::emit_to_float`).
                 if matches!(scalar, Scalar::Object(_)) {
-                    return foreign_len::emit_to_float(context, builder, module, scalar);
+                    return foreign_len::emit_to_float(context, builder, module, rt, scalar);
                 }
                 return Scalar::Float(to_float(context, builder, rt, scalar));
             }
@@ -2839,7 +2847,7 @@ fn emit_expr_unchecked<'ctx>(
                          -- pycc_types::check (C0001) should have rejected this before codegen"
                     )
                 };
-                let bit = foreign_len::emit_truthy(context, builder, module, ptr);
+                let bit = foreign_len::emit_truthy(context, builder, module, rt, ptr);
                 return Scalar::Bool(
                     builder
                         .build_int_z_extend(bit, context.i8_type(), "bool_from_object")
@@ -2878,7 +2886,7 @@ fn emit_expr_unchecked<'ctx>(
                          -- pycc_types::check (C0001) should have rejected this before codegen"
                     )
                 }
-                return emit(context, builder, module, scalar);
+                return emit(context, builder, module, rt, scalar);
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
@@ -3710,7 +3718,7 @@ fn emit_expr_unchecked<'ctx>(
         // side owns the "CPython raised" transition.
         MirExpr::ObjAttrGet { base, attr, .. } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_attr::emit(context, builder, module, base_scalar, attr)
+            foreign_attr::emit(context, builder, module, rt, base_scalar, attr)
         }
         // Part 2 of #1026 (PR 2b of #1081): the call counterpart of
         // `ObjAttrGet` directly above. The order below is CPython's own --
@@ -3726,12 +3734,13 @@ fn emit_expr_unchecked<'ctx>(
             base, method, args, ..
         } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            let bound = foreign_call::emit_lookup(context, builder, module, base_scalar, method);
+            let bound =
+                foreign_call::emit_lookup(context, builder, module, rt, base_scalar, method);
             let arg_scalars: Vec<Scalar<'ctx>> = args
                 .iter()
                 .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
                 .collect();
-            foreign_call::emit_call(context, builder, module, bound, &arg_scalars)
+            foreign_call::emit_call(context, builder, module, rt, bound, &arg_scalars)
         }
         // #1313: `callee(args)` on an `object`-typed name (a foreign
         // binding or a `for` loop target). CPython's order -- the callee,
@@ -3747,7 +3756,14 @@ fn emit_expr_unchecked<'ctx>(
                 .iter()
                 .map(|arg| emit_expr(context, builder, module, rt, user_functions, locals, arg))
                 .collect();
-            foreign_call::emit_call_borrowed(context, builder, module, callee_scalar, &arg_scalars)
+            foreign_call::emit_call_borrowed(
+                context,
+                builder,
+                module,
+                rt,
+                callee_scalar,
+                &arg_scalars,
+            )
         }
         // Part 3 of #1026 (PR 3a of #1082): `len(o)`. `foreign_len` carries
         // the contract -- why the D-141 encode happens inside the shim
@@ -3755,7 +3771,7 @@ fn emit_expr_unchecked<'ctx>(
         // why the out-parameter's `alloca` is hoisted to the entry block.
         MirExpr::ObjLen { base } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_len::emit_len(context, builder, module, base_scalar)
+            foreign_len::emit_len(context, builder, module, rt, base_scalar)
         }
         // Part 3 of #1026 (PR 3b of #1082): `o[k]`. The evaluation order
         // below is CPython's own -- base, then key -- and
@@ -3766,7 +3782,7 @@ fn emit_expr_unchecked<'ctx>(
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let index_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, index);
-            foreign_call::emit_subscript(context, builder, module, base_scalar, index_scalar)
+            foreign_call::emit_subscript(context, builder, module, rt, base_scalar, index_scalar)
         }
         // Part 2 of #1027: `b[i]` on a `pycc build --ext` export's
         // `memoryview` parameter. Base then index, CPython's own order and
@@ -3948,7 +3964,7 @@ fn emit_expr_unchecked<'ctx>(
         // why the arity travels as a call argument.
         MirExpr::ObjUnpackFloatTuple { base, arity } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            foreign_len::emit_unpack_float_tuple(context, builder, module, base_scalar, *arity)
+            foreign_len::emit_unpack_float_tuple(context, builder, module, rt, base_scalar, *arity)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
@@ -4618,13 +4634,13 @@ fn truthy<'ctx>(
         // D-244, Part 3 of #1026 (PR 3a of #1082): CPython's own `bool(x)`
         // for an arbitrary object consults `__bool__`/`__len__`, which is
         // arbitrary Python code, so this delegates to the shim's
-        // `pycc_ext_obj_truthy` -- and takes the module-exec failure edge
-        // when that code raises. This arm is what closed Part 2's R11 hole:
+        // `pycc_ext_obj_truthy` -- and takes `foreign_fail.rs`'s failure
+        // edge when that code raises. This arm is what closed Part 2's R11 hole:
         // `pycc_types` used to refuse a `Ty::Object` condition at ten
         // condition-position sites *because* there was no answer here, and
         // PR 3a deleted all ten (`crates/pycc_types/src/foreign.rs`).
         Scalar::Object(ptr) => {
-            let bit = foreign_len::emit_truthy(context, builder, module, ptr);
+            let bit = foreign_len::emit_truthy(context, builder, module, rt, ptr);
             builder
                 .build_int_z_extend(bit, context.i8_type(), "bool_from_object_truthy")
                 .expect("build_int_z_extend should not fail widening i1 to i8")
@@ -7719,7 +7735,7 @@ fn emit_stmt<'ctx>(
         // store, the body and the back-edge are emitted here.
         MirStmt::ForObject { var, iter, body } => {
             let iterable = emit_expr(context, builder, module, rt, user_functions, locals, iter);
-            let loop_blocks = foreign_call::emit_iter_loop(context, builder, module, iterable);
+            let loop_blocks = foreign_call::emit_iter_loop(context, builder, module, rt, iterable);
             // Stored directly rather than through `emit_assign`, whose own
             // `Scalar::Object` arm panics: that arm refuses a *user*
             // assignment of a foreign value to a name (`pycc_types`'
