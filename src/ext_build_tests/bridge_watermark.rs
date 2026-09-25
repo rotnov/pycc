@@ -70,13 +70,13 @@ fn the_watermark_helpers_are_defined_above_the_generated_include() {
 
 #[test]
 fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
-    assert!(!SHIM_C.contains("pycc_ext_bridge_table_clear"));
+    let shim = shim_c();
+    assert!(!shim.contains("pycc_ext_bridge_table_clear"));
     assert!(
-        SHIM_C
-            .contains("    mark = pycc_ext_bridge_mark();\n    if (pycc_ext_module_exec() != 0) {")
+        shim.contains("    mark = pycc_ext_bridge_mark();\n    if (pycc_ext_module_exec() != 0) {")
     );
     assert_eq!(
-        SHIM_C.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    return 0;\n").count(),
+        shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    return 0;\n").count(),
         1
     );
 }
@@ -86,5 +86,5 @@ fn a_bridged_entry_is_removed_in_order() {
     // An inner re-entrant frame restoring its own entry must never move an
     // outer frame's entry across the outer frame's mark, which the old
     // swap-remove did.
-    assert!(SHIM_C.contains("            memmove(&table->entries[i], &table->entries[i + 1],\n"));
+    assert!(shim_c().contains("            memmove(&table->entries[i], &table->entries[i + 1],\n"));
 }

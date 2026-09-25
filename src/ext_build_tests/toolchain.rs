@@ -481,7 +481,7 @@ fn the_c_shims_foreign_error_mapping_names_its_classes() {
         Some(pycc_hir::FOREIGN_BASE_EXCEPTION_TYPE_TAG)
     );
     assert!(
-        SHIM_C.contains(
+        shim_c().contains(
             "    case PYCC_EXT_TAG_FOREIGN_BASE:\n        exc_type = PyExc_BaseException;"
         ),
         "the raising switch falls back to BaseException for the reserved tag"
