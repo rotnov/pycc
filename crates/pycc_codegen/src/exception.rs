@@ -125,6 +125,15 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
                 | pycc_mir::BinOpKind::RShift
         ),
         MirExpr::Subscript { base, .. } => matches!(base.ty(), pycc_mir::Ty::List(_)),
+        // #1343: an instance set insertion that calls a user `__hash__` or
+        // `__eq__` guards each call itself, but the raise can still be
+        // pending when the statement ends. An `int` or identity-only
+        // insertion falls through to the non-raising list below.
+        MirExpr::SetLiteral { ops: Some(ops), .. } | MirExpr::SetAdd { ops: Some(ops), .. }
+            if ops.calls_user_code() =>
+        {
+            true
+        }
         MirExpr::IntLiteral(_)
         | MirExpr::FloatLiteral(_)
         | MirExpr::BoolLiteral(_)
@@ -139,7 +148,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::ListAppend { .. }
         | MirExpr::DictLiteral(_)
         | MirExpr::EmptyDict(_)
-        | MirExpr::SetLiteral(_)
+        | MirExpr::SetLiteral { .. }
         // Part 1 of #1319: `frozenset(x)` copies an already-validated
         // container, exactly as a set literal inserts already-validated
         // words -- the runtime's bigint raise is unreachable from a

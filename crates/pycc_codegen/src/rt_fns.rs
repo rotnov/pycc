@@ -209,6 +209,13 @@ pub(super) struct RtFns<'ctx> {
     /// `pycc_rt_int_set_check_not_resized`'s own doc comment for why
     /// `set.add()` made this reachable.
     pub(super) int_set_check_not_resized: FunctionValue<'ctx>,
+    /// #1343: a set of user-class instances (`set_instance.rs`). `candidate`
+    /// finds the next stored entry with an equal hash, `push` appends a new
+    /// entry with its hash, and `add_identity` is the whole insert for a
+    /// class whose `__eq__` is identity.
+    pub(super) obj_set_candidate: FunctionValue<'ctx>,
+    pub(super) obj_set_push: FunctionValue<'ctx>,
+    pub(super) obj_set_add_identity: FunctionValue<'ctx>,
     pub(super) trap: FunctionValue<'ctx>,
     /// D-154 (Part 1 of #375): `pycc_rt::instance`'s own three-function
     /// cluster -- `instance_new` (allocates a fresh, zero-initialized
@@ -580,6 +587,18 @@ pub(super) fn declare_rt_functions<'ctx>(
         int_set_check_not_resized: declare(
             "pycc_rt_int_set_check_not_resized",
             void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+        ),
+        obj_set_candidate: declare(
+            "pycc_rt_obj_set_candidate",
+            i64_type.fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false),
+        ),
+        obj_set_push: declare(
+            "pycc_rt_obj_set_push",
+            void_type.fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false),
+        ),
+        obj_set_add_identity: declare(
+            "pycc_rt_obj_set_add_identity",
+            void_type.fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false),
         ),
         trap: module.add_function("llvm.trap", void_type.fn_type(&[], false), None),
         instance_new: declare(

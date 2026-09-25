@@ -30,5 +30,6 @@ mod obj_bind;
 mod obj_call;
 mod protocol;
 mod scope;
+mod set_ops;
 mod slice;
 mod stmt;

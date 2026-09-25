@@ -302,6 +302,7 @@ fn lowers_set_add_to_mir_recursively() {
         MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
             set: "s".to_string(),
             value: Box::new(MirExpr::IntLiteral(2)),
+            ops: None,
         }))
     );
 }
@@ -665,7 +666,11 @@ fn an_empty_set_literals_ty_panics_with_an_internal_error() {
     // empty `SetLiteral` cannot even be *written* in real Python source
     // (`{}` always parses as an empty `dict`, never an empty `set`) --
     // but the panic path itself still needs direct coverage.
-    MirExpr::SetLiteral(vec![]).ty();
+    MirExpr::SetLiteral {
+        elements: vec![],
+        ops: None,
+    }
+    .ty();
 }
 
 #[test]
@@ -790,7 +795,10 @@ fn set_literal_lowers_to_mir_set_literal_with_correct_ty() {
         class_defs: Vec::new(),
     };
     let mir = build(&hir);
-    let expected_value = MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]);
+    let expected_value = MirExpr::SetLiteral {
+        elements: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+        ops: None,
+    };
     assert_eq!(expected_value.ty(), Ty::Set(Box::new(Ty::Int)));
     assert_eq!(
         mir.items[0],
@@ -828,6 +836,7 @@ fn for_x_in_set_lowers_to_mir_for_set() {
         mir.items[1],
         MirItem::TopLevelStmt(MirStmt::ForSet {
             var: "v".to_string(),
+            var_ty: Ty::Int,
             set: "x".to_string(),
             body: vec![MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),

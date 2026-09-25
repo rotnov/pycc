@@ -522,7 +522,7 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::DictLiteral(_)
         | MirExpr::EmptyDict(_)
         | MirExpr::DictGet { .. }
-        | MirExpr::SetLiteral(_)
+        | MirExpr::SetLiteral { .. }
         | MirExpr::TupleLiteral(_)
         | MirExpr::Slice { .. }
         | MirExpr::ListPop { .. }
@@ -618,7 +618,7 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // `Ty::MemoryView`, never `Ty::Int`, so like `BufferGet` it can
         // never reach this function at all.
         | MirExpr::BufferAlloc { .. }
-        // Part 1 of #1319: its `.ty()` is always `frozenset[int]`, never
+        // Part 1 of #1319: its `.ty()` is always a `frozenset`, never
         // `Ty::Int`, so it can never reach this function either.
         | MirExpr::FrozenSetFrom { .. }
         // #1335: `hash(instance)` *is* `Ty::Int`, and owning: its word is

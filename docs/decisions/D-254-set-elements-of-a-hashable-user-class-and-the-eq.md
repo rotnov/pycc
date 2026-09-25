@@ -1,0 +1,26 @@
+---
+id: D-254
+title: "set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation"
+status: accepted
+---
+
+## D-254: set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation
+
+- Status: accepted ([#1343](https://github.com/rotnov/pycc/issues/1343), Part 1 of [#1336](https://github.com/rotnov/pycc/issues/1336); partially supersedes [D-122](./D-122-dict-k-v-set-t-key-element-types-are-scoped-to.md) for set elements only, its `dict` half is unchanged)
+- Context: D-122 shipped exactly one set element type, `int`, and rejected "general hashability inference" because no user type had `__eq__`/`__hash__` then. [#1335](https://github.com/rotnov/pycc/issues/1335) since gave a user-class instance a hash verdict (`pycc_hir::resolve_instance_hash`), and the interop subject needs sets of user-class instances. CPython's `set` hashes each element once per insertion and, for every stored entry whose hash matches, checks identity and then calls `stored.__eq__(new)`; its probe order follows the hash table's slots. `pycc_rt` cannot call user code, and its set object (`PyIntSetObj`) is an append-only vector scanned linearly.
+- Decision:
+  1. **Admitted elements.** `set[C]`/`frozenset[C]` compile for a user class `C` whose hash verdict (`resolve_instance_hash`, [`docs/TYPE_SYSTEM.md`](../TYPE_SYSTEM.md)'s `hash()` of a user-class instance) is the identity hash or a compiled `__hash__`, and whose eq verdict below is admitted. The annotation gate `T0038` admits every instance; the class verdict is delivered where an element is inserted: a set literal and `.add(...)`. Every other element type stays `T0038`.
+  2. **The eq verdict** (`pycc_hir::resolve_instance_eq`) takes the first MRO class binding `__eq__`: none is identity; a plain method is admitted only as `def __eq__(self, other: K) -> bool` with `K` the element class or one of its bases; any other binding, signature or return is `C0001`.
+  3. **Subclass refusal.** A user `__eq__` is refused (`C0001`) when any class derives from the element class: CPython's `do_richcompare` tries a subclass's reflected `__eq__` first, which static dispatch on the declared class cannot reproduce ([#1337](https://github.com/rotnov/pycc/issues/1337)). The hash side keeps #1335's subclass-agreement rule.
+  4. **`T0054`.** A class binding `__eq__` without `__hash__` inserted into a set is `T0054`, CPython's `TypeError: unhashable type`, reported statically.
+  5. **Representation.** The element is stored as its instance pointer in the same `PyIntSetObj`, which gains a parallel `hashes` vector (empty for `set[int]`). Codegen hashes each element once, then drives the probe itself: for each stored entry with an equal hash, in insertion order, an identity check and then a direct `stored.__eq__(new)` call; no match appends. The vector is append-only, so a candidate index stays valid across a reentrant `__eq__`.
+  6. **Reproduced:** a display of at most 30 elements (CPython's `STACK_USE_GUIDELINE`, one `BUILD_SET`) evaluates every element before hashing any, a longer one evaluates and inserts one at a time; `.add` evaluates, then inserts; one `__hash__` call per insertion; identity before `__eq__`; `stored.__eq__(new)` argument order; equal objects with different hashes are both kept; `frozenset(s)` of a set or frozenset makes no calls; a raising `__hash__` or `__eq__` propagates like any other call.
+  7. **Deviation, recorded:** the count and order of `__eq__` calls when several stored entries share a hash, or when CPython's probe revisits a slot, are not reproduced: pycc compares each candidate at most once, in insertion order. Iteration order is D-123's, unchanged.
+  8. Comprehensions over or producing a `set[C]`/`frozenset[C]` are not admitted yet (`C0001` naming [#1344](https://github.com/rotnov/pycc/issues/1344), Part 2 of #1336).
+- Alternatives considered:
+  - Runtime callbacks into user `__hash__`/`__eq__` from `pycc_rt` -- rejected: `pycc_rt` has no function-pointer ABI for compiled methods, and codegen already emits direct calls with exception guards.
+  - Recomputing each stored element's hash during the scan -- rejected: CPython calls `__hash__` once per insertion, and a recomputing scan would call it once per stored element.
+  - A separate `PyObjSetObj` runtime type -- rejected: every element-agnostic set operation (`len`, iteration, truthiness, `frozenset` copy) would need a second implementation for no behavioural gain.
+  - An identity-only first part -- rejected: the interop subject's element classes define `__eq__`/`__hash__`, so it would not advance the subject.
+  - Reproducing CPython's open-addressing probe sequence -- rejected: it depends on table size and resize history, which only the call count of a multi-candidate `__eq__` would observe.
+- Consequences: a set of user-class instances compiles from literals and `.add`, with `len`, `for`, truthiness and `frozenset(...)`. A program whose output depends on how many times `__eq__` runs among colliding hashes can differ from CPython (rule 7). Part 2 (#1344) extends comprehensions; widening `other` beyond a class in the MRO, or admitting subclassed element classes, needs #1337's dispatch fix first.

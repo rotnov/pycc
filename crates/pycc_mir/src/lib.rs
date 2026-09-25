@@ -17,6 +17,8 @@ mod matching;
 #[cfg(test)]
 use matching::nest_match_alternatives;
 use matching::try_lower_enum_member_attr;
+mod set_ops;
+pub use set_ops::{SetElementOps, SetEqOp, SetHashOp};
 mod stmt;
 use pycc_hir::{CompIter, ForeignImportSite, HirItem, HirModule, HirStmt, ImportBinding};
 use std::collections::HashMap;
@@ -252,8 +254,8 @@ pub enum MirExpr {
     /// `ty` field: `ty()` below derives `Ty::Set(Box::new(elements[0].ty()))`
     /// from the first element, exactly like `ListLiteral`/`DictLiteral`
     /// above derive their own element/key-value type from their first
-    /// element/pair rather than hardcoding one. Empirically only
-    /// `Ty::Set(Box::new(Ty::Int))` ever reaches this crate today
+    /// element/pair rather than hardcoding one. Only a `set[int]` or (since
+    /// #1343) a set of a user-class instance reaches this crate
     /// (`pycc_types`' T0037/T0038 gates reject every other element type at
     /// construction time), but deriving here keeps this lowering correct on
     /// its own terms rather than baking in an assumption this crate has no
@@ -265,7 +267,14 @@ pub enum MirExpr {
     /// bare `{}` to `ast.Dict`, never `ast.Set`), so `elements` is non-empty
     /// for every `SetLiteral` `pycc_hir::lower_expr`'s own `Expr::Set` arm
     /// could ever construct from a real parse.
-    SetLiteral(Vec<MirExpr>),
+    ///
+    /// #1343: the element is an `int` or a user-class instance. `ops` is
+    /// `None` for `int` and carries the instance class's hash and equality
+    /// otherwise ([`SetElementOps`]).
+    SetLiteral {
+        elements: Vec<MirExpr>,
+        ops: Option<SetElementOps>,
+    },
     /// `(e1, e2, ...)` (mirrors `HirExpr::TupleLiteral`, PR-11b Task 4). No
     /// `ty` field: `ty()` below derives `Ty::Tuple(Box::new(elements.iter()
     /// .map(MirExpr::ty).collect()))` positionally from every element (not
@@ -317,9 +326,12 @@ pub enum MirExpr {
     /// always returns `None`, exactly like `ListAppend` -- a true invariant,
     /// not narrowed by any gate, hardcoded on purpose (mirrors `ListAppend`'s
     /// own `ty()` arm).
+    ///
+    /// #1343: `ops` is the set literal's own field, for the set's element.
     SetAdd {
         set: String,
         value: Box<MirExpr>,
+        ops: Option<SetElementOps>,
     },
     /// `ClassName(args)` (D-154, Part 1 of #375): allocates a new instance
     /// with `attr_count` slots (`pycc_codegen`'s job, via the class
@@ -552,15 +564,17 @@ pub enum MirExpr {
         len: Box<MirExpr>,
     },
     /// `frozenset()` / `frozenset(x)` (Part 1 of #1319): a fresh
-    /// `frozenset[int]` built by the `frozenset` builtin, split off
+    /// frozenset built by the `frozenset` builtin, split off
     /// `Call { callee: "frozenset" }` in `expr.rs` under the user-shadow
     /// guard, exactly as `ObjLen`/`BufferLen` split off `len`.
     ///
     /// `source` is `None` for the empty call, otherwise the argument, whose
-    /// own type (`set[int]`, `frozenset[int]` or `list[int]` -- the only
-    /// shapes `pycc_types` admits) selects the runtime copy constructor in
-    /// codegen. [`MirExpr::ty`] answers `frozenset[int]` unconditionally:
-    /// that is the only frozenset type compiled (D-122).
+    /// own type (`set[int]`, `frozenset[int]`, `list[int]`, or since #1343 a
+    /// `set`/`frozenset` of a user-class instance -- the only shapes
+    /// `pycc_types` admits) selects the runtime copy constructor in
+    /// codegen. [`MirExpr::ty`] answers the source's own element type (a
+    /// `set`/`frozenset` of a user-class instance since #1343), and
+    /// `frozenset[int]` for the empty call and a `list[int]` source.
     ///
     /// A dedicated node rather than a [`MirExpr::Call`], because no user
     /// signature backs the call: the ordinary call path would look up a
@@ -823,7 +837,7 @@ impl MirExpr {
                     other.name()
                 ),
             },
-            MirExpr::SetLiteral(elements) => {
+            MirExpr::SetLiteral { elements, .. } => {
                 let first = elements.first().unwrap_or_else(|| {
                     panic!(
                         "pycc_mir: internal error: an empty set literal has no element type to derive -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
@@ -885,7 +899,11 @@ impl MirExpr {
             MirExpr::BufferAlloc { .. } => Ty::MemoryView,
             // Part 1 of #1319: the only compiled frozenset type. See the
             // variant's own documentation.
-            MirExpr::FrozenSetFrom { .. } => Ty::FrozenSet(Box::new(Ty::Int)),
+            // #1343: the source's element type; `frozenset()` is `frozenset[int]`.
+            MirExpr::FrozenSetFrom { source } => match source.as_deref().map(MirExpr::ty) {
+                Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => Ty::FrozenSet(elem),
+                _ => Ty::FrozenSet(Box::new(Ty::Int)),
+            },
             // #1335: `hash()` always yields an `int`.
             MirExpr::InstanceHash { .. } => Ty::Int,
             // Rebuilt from `arity` rather than read from a field: the
@@ -973,7 +991,7 @@ impl MirExpr {
                 }
             }
             MirExpr::ListLiteral(elements)
-            | MirExpr::SetLiteral(elements)
+            | MirExpr::SetLiteral { elements, .. }
             | MirExpr::TupleLiteral(elements) => {
                 for element in elements {
                     element.collect_named_expr_bindings(out);
@@ -1188,8 +1206,12 @@ pub enum MirStmt {
     /// base is lowered to this node instead of `MirStmt::ForList`, PR-11
     /// Task 8, D-123). `set` is carried as the plain variable name, exactly
     /// like `ForList`'s `list` field and `ForDict`'s `dict` field.
+    ///
+    /// #1343: `var_ty` is the set's element type, `int` or a user-class
+    /// instance, which codegen binds `var` as.
     ForSet {
         var: String,
+        var_ty: Ty,
         set: String,
         body: Vec<MirStmt>,
     },

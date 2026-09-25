@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 mod instance_hash;
 mod receiver_dispatch;
+mod set_ops;
 
 use instance_hash::lower_instance_hash;
 
@@ -721,12 +722,18 @@ pub(super) fn lower_expr(
                 })
                 .collect(),
         ),
-        HirExpr::SetLiteral(elements) => MirExpr::SetLiteral(
-            elements
+        HirExpr::SetLiteral(elements) => {
+            let elements: Vec<MirExpr> = elements
                 .iter()
                 .map(|e| lower_expr(e, scopes, classes, current_class))
-                .collect(),
-        ),
+                .collect();
+            // #1343: the first element's type is the literal's, as
+            // `MirExpr::ty` derives it.
+            let ops = elements
+                .first()
+                .and_then(|first| set_ops::lower_set_element_ops(&first.ty(), scopes, classes));
+            MirExpr::SetLiteral { elements, ops }
+        }
         HirExpr::TupleLiteral(elements) => MirExpr::TupleLiteral(
             elements
                 .iter()
@@ -784,10 +791,16 @@ pub(super) fn lower_expr(
                 ty: kv.1,
             }
         }
-        HirExpr::SetAdd { set, value } => MirExpr::SetAdd {
-            set: set.clone(),
-            value: Box::new(lower_expr(value, scopes, classes, current_class)),
-        },
+        HirExpr::SetAdd { set, value } => {
+            let Ty::Set(elem_ty) = lookup(scopes, set) else {
+                panic!("pycc_types admits `.add()` only on a set")
+            };
+            MirExpr::SetAdd {
+                set: set.clone(),
+                value: Box::new(lower_expr(value, scopes, classes, current_class)),
+                ops: set_ops::lower_set_element_ops(&elem_ty, scopes, classes),
+            }
+        }
         // D-154 (Part 1 of #375): `base.attr` -- resolved to a compile-time
         // slot index against the base's class's `HirClassDef`, per the
         // class-instance-layout ADR (never a runtime string-keyed lookup).
