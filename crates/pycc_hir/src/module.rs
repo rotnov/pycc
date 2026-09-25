@@ -21,9 +21,11 @@
 //! failing top-level item instead of stopping at the first. A failing item
 //! is skipped as a unit -- a `def` aborts only that function, a failing
 //! method aborts its whole class -- and lowering continues with the next
-//! item. Two `C0001` shapes are *cascades* of an earlier skipped item rather
-//! than independent gaps: a bare-name annotation that names a class or
-//! type alias which failed to lower, and a base-class reference to one.
+//! item. Some `C0001` shapes are *cascades* of an earlier skipped item rather
+//! than independent gaps: a bare-name or bare-container annotation that
+//! names a class, type alias, or import which failed to lower, and a base-class
+//! reference to one (whether its message says "unknown class" or, since
+//! Part 1 of #1283, "builtin type").
 //! The lowering source suppresses those silently through the "poisoned
 //! bindings" set kept by `lower_module` (see `poisonable_names` and
 //! `cascade_name`); everything else it produces is reported. The suppression
@@ -36,7 +38,7 @@
 mod poison;
 
 pub(crate) use poison::{
-    bare_container_annotation_message, cascade_name, poisonable_names,
+    bare_container_annotation_message, builtin_base_message, cascade_name, poisonable_names,
     unknown_annotation_name_message, unknown_base_message,
 };
 
@@ -206,7 +208,7 @@ pub fn lower_all(module: &ModModule) -> Result<HirModule, Vec<Diagnostic>> {
 /// first and its failure classified afterwards. When an item fails, the
 /// class, type-alias, or project-import names it would have bound
 /// (`poisonable_names`) are recorded as poisoned; when a later item fails
-/// with one of the two cascade-shaped `C0001`s (`cascade_name`) naming a
+/// with one of the cascade-shaped `C0001`s (`cascade_name`) naming a
 /// poisoned name, that item's own lowering diagnostic is dropped *silently*
 /// (the post-item enum-call scan still runs on it, D-233 decision 3, so a
 /// call to another, valid enum class inside it is still reported) and its

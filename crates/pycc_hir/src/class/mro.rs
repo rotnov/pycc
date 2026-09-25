@@ -11,6 +11,10 @@
 //! class-header `range` explicitly, and the circular-inheritance check spells
 //! its `Vec<String>` membership test as `iter().any(...)` now that
 //! `class_name` arrives as a `&str` rather than an owned `String`).
+//! Part 1 of #1283 (#1318) then added a check and a message that are not
+//! boundary edits: an unresolved base naming a subclassable builtin type
+//! (`is_subclassable_builtin_type_name`, guarded by `module_rebinds`) now
+//! reports `builtin_base_message` instead of `unknown_base_message`.
 //!
 //! The seam is "which bases are legal, and what order do they linearize
 //! into". Everything upstream of it stays in `class.rs`: parsing a class
@@ -21,14 +25,66 @@
 //! base resolution, so it deliberately stays with the other `type_param`
 //! checks.
 
-use crate::{HirClassDef, Ty, unsupported};
+use crate::{HirClassDef, HirItem, ImportBinding, Ty, unsupported};
 use pycc_diag::Diagnostic;
+
+/// The CPython builtin types a user class may subclass that this version
+/// reports as "not supported yet" rather than as an unknown class (Part 1
+/// of #1283, #1318): `class fzset(frozenset):` is valid Python.
+///
+/// Enumerated rather than derived from `pycc_types`'s builtin name list,
+/// which mixes functions with types. Deliberately excluded, so they keep the
+/// unknown-class message: `object` (`class C(object)` means `class C:`, so
+/// the honest fix there is to accept it), the four types CPython itself
+/// refuses as a base with `TypeError: type 'bool' is not an acceptable base
+/// type` (`bool`, `range`, `slice`, `memoryview`), and every other builtin.
+/// `tests/issue_1283_builtin_base.rs` checks the enumeration and the four
+/// refusals against the oracle interpreter.
+fn is_subclassable_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "int"
+            | "float"
+            | "complex"
+            | "str"
+            | "bytes"
+            | "bytearray"
+            | "list"
+            | "tuple"
+            | "dict"
+            | "set"
+            | "frozenset"
+    )
+}
+
+/// Whether an item lowered earlier in this module binds `name`, so a base
+/// spelled `name` no longer means the builtin: a type alias (`type list =
+/// int`, or the legacy `TypeAlias` spelling), an import (`import list` of a
+/// foreign module), a top-level `def`, or any other top-level binding
+/// (`frozenset = 1`). Such a base keeps the unknown-class message instead of
+/// being reported as a builtin type it is not.
+fn module_rebinds(
+    name: &str,
+    aliases: &[(String, Ty)],
+    imports: &[ImportBinding],
+    module_items: &[HirItem],
+) -> bool {
+    aliases.iter().any(|(alias, _)| alias == name)
+        || imports
+            .iter()
+            .any(|binding| crate::import_local_name(binding) == name)
+        || module_items
+            .iter()
+            .any(|item| matches!(item, HirItem::Function { name: defined, .. } if defined == name))
+        || crate::top_level_bound_names(module_items).contains(name)
+}
 
 /// Validates every direct base of the class being lowered against the
 /// classes already defined earlier in the same module (#432).
 ///
 /// Rejects, in order, an unknown base (a name not defined earlier in the
-/// module), an enum base class (#941), a PEP 695 generic base class, and
+/// module, or a builtin type such as `frozenset`, which gets its own
+/// "not supported yet" wording), an enum base class (#941), a PEP 695 generic base class, and
 /// circular inheritance (the base already lists this class in its own MRO).
 /// Each rejection is a `C0001` capability diagnostic spanning the class
 /// header's `range`.
@@ -46,22 +102,34 @@ use pycc_diag::Diagnostic;
 /// as not supported yet.
 ///
 /// `defined_classes` maps each already-defined class name to its own
-/// `HirClassDef`, in source order.
+/// `HirClassDef`, in source order. `aliases`, `imports` and `module_items`
+/// are the module's earlier type aliases, import bindings and lowered
+/// items; they only choose the wording of the unknown-base rejection (see
+/// [`module_rebinds`]) and never resolve a base.
 pub(super) fn validate_bases(
     class_name: &str,
     bases: &[String],
     defined_classes: &[(String, HirClassDef)],
+    aliases: &[(String, Ty)],
+    imports: &[ImportBinding],
+    module_items: &[HirItem],
     range: std::ops::Range<u32>,
 ) -> Result<(), Diagnostic> {
     // #432: validate each base class against the already-defined classes.
     for base_name in bases {
         let Some(base_def) = defined_classes.iter().find(|(name, _)| name == base_name) else {
-            // The message is built in `module` so #867's cascade classifier
-            // can parse it back (D-219).
-            return Err(unsupported(
-                crate::module::unknown_base_message(class_name, base_name),
-                range.clone(),
-            ));
+            // Both messages are built in `module` so #867's cascade
+            // classifier can parse them back (D-219). A builtin type the
+            // module has not rebound is valid Python this version cannot
+            // compile yet, not an unknown name (Part 1 of #1283).
+            let message = if is_subclassable_builtin_type_name(base_name)
+                && !module_rebinds(base_name, aliases, imports, module_items)
+            {
+                crate::module::builtin_base_message(class_name, base_name)
+            } else {
+                crate::module::unknown_base_message(class_name, base_name)
+            };
+            return Err(unsupported(message, range.clone()));
         };
         // #941: an enum class is not a real base. CPython refuses to extend
         // an enum that has members; a member-less enum is extensible in
@@ -770,5 +838,50 @@ mod tests {
         let (_, b_def) = &hir.class_defs[2];
         assert_eq!(b_def.bases, vec!["A".to_string()]);
         assert!(!b_def.is_enum);
+    }
+    // -- Part 1 of #1283: a builtin-type base -----------------------------------
+
+    /// The `C0001` message `lower_checked` reports for `class C(<base>): pass`.
+    fn base_rejection(base: &str) -> String {
+        let source = format!("class C({base}):\n    pass\n");
+        let module = crate::pycc_parser_test_helper::parse(&source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        diagnostic.message
+    }
+
+    #[test]
+    fn every_subclassable_builtin_type_gets_the_builtin_base_message() {
+        for base in [
+            "int",
+            "float",
+            "complex",
+            "str",
+            "bytes",
+            "bytearray",
+            "list",
+            "tuple",
+            "dict",
+            "set",
+            "frozenset",
+        ] {
+            assert_eq!(
+                base_rejection(base),
+                crate::module::builtin_base_message("C", base)
+            );
+        }
+    }
+
+    #[test]
+    fn object_refused_builtin_types_and_functions_keep_the_unknown_class_message() {
+        // `object` is excluded because the honest fix is to accept it;
+        // `bool`, `range`, `slice` and `memoryview` are the four types CPython
+        // refuses as a base; `len` is a builtin function, not a type.
+        for base in ["object", "bool", "range", "slice", "memoryview", "len"] {
+            assert_eq!(
+                base_rejection(base),
+                crate::module::unknown_base_message("C", base)
+            );
+        }
     }
 }

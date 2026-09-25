@@ -131,3 +131,19 @@ status: accepted
     pins an import gap, a rejected class, two silent cascades, and a later
     reported gap. Part 3 (#868) regenerates nothing here: with HIR failing,
     the type checker still does not run.
+- Amendment (2026-09-25): the cascade-shaped `C0001` inventory named above
+  as two is now four, and `cascade_name` parses all four: D-228 added the
+  bare-container annotation message, and Part 1 of #1283 (#1318) added the
+  builtin-type base message ("class X inherits from builtin type T --
+  subclassing a builtin type is not supported yet"). Rule 3's poisoning of a
+  failed class's own name is unchanged and independent of which message it
+  reports; what the fourth parser adds is that a builtin-base `C0001` whose
+  base name an earlier failed item already poisoned is itself suppressed as
+  a cascade. The Context's statement that the two cascade lookups consult
+  only the class and type-alias tables no longer holds word for word for
+  `validate_bases`: it resolved through the class table alone before this
+  change, and now also reads the type-alias, import and module-item tables,
+  solely to choose the unresolved-base wording. Which bases get the new
+  message, and which rebindings keep the unknown-class text, is specified in
+  the paragraph of `docs/DIAGNOSTICS.md` that begins "A class whose base
+  names one of the eleven builtin types".

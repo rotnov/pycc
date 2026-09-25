@@ -261,6 +261,26 @@ extend <enum 'Color'>`, and when it is a member-less docstring-only enum
 `cannot inherit from member-less enum class \`...\` -- ... not supported
 yet`.
 
+A class whose base names one of the eleven builtin types this version
+reports by name -- a subset of the types CPython accepts as a base: `int`,
+`float`, `str`, `bytes`, `bytearray`, `list`, `tuple`, `dict`, `set`,
+`frozenset`, `complex` -- is rejected from
+`validate_bases`'s unresolved-base branch, the one that otherwise reports
+an unknown class, with `C0001` "class \`X\` inherits from builtin
+type \`T\` -- subclassing a builtin type is not supported yet" (Part 1 of
+issue #1283, #1318). The failed class's own name is poisoned as for any
+failed item, and the message is cascade-shaped, so it is itself suppressed
+when an earlier failed item (a `class frozenset:` that did not lower, a
+failed `import json as list`) already poisoned the base name (D-219).
+Every other unresolved base name -- including `object`, the four types
+CPython refuses as a base (`bool`, `range`, `slice`, `memoryview`), and any
+of the eleven names that the module rebinds earlier through a type alias,
+an import, a `def`, or a top-level binding that itself lowered -- keeps the
+`unknown class` text. A rebinding that itself fails to lower and is not
+poisoned (a `def frozenset()` whose body is unsupported, a `frozenset =`
+assignment whose value is) is invisible to that check, so the class then
+reports the builtin-type text alongside the rebinding's own diagnostic.
+
 ## Quality bar
 
 - Every error: primary span, ≥1 label, expected/found where applicable, help with a suggestion when one is safe. Populated for arity/type-mismatch, missing-annotation, and literal-index-constraint families as of D-152 (`docs/decisions/D-152-populate-diagnostic-help-for-arity-type.md`). That is a standing contract on those families, not a snapshot of the tree D-152 measured: a diagnostic added to one of them later joins the populated set at its own introduction (`T0053`, D-228 decision 11, is the first such case). Still `None`/empty for name-resolution, capability-limitation, and ambiguous-conflict diagnostics, and human-format output never renders it.

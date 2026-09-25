@@ -273,6 +273,12 @@ IDENTIFIER_ELISIONS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"^class `[^`]*` (inherits from unknown class `.*)$"),
         r"class X \1",
     ),
+    # The same subject-only elision for a base naming a subclassable builtin
+    # type (Part 1 of #1283, #1318): the builtin type stays verbatim.
+    (
+        re.compile(r"^class `[^`]*` (inherits from builtin type `.*)$"),
+        r"class X \1",
+    ),
 )
 
 
