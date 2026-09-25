@@ -92,7 +92,15 @@ y` aliasing gap (issue #963; CPython binds a `_Feature` object pycc never \
 models -- a stdlib module behind `import X as Y` lowers since issue #962, \
 D-231); the nine no-op \
 features lower to nothing, and a feature name CPython itself rejects is \
-`L0001`, not C0001. The construct remains reserved and stops \
+`L0001`, not C0001. Since #1337 (D-254) two more shapes are C0001: an \
+inherited method body compiled once more for a subclass that lacks a \
+capability the body needs (a `print(self)` of a non-dataclass subclass of \
+a dataclass), reported at the origin body's location with a note naming \
+the subclass; and a user exception class whose MRO resolves an \
+instance-protocol dunder (`__str__`, `__bool__`, `__eq__`, ...) to a user \
+class rather than to a builtin exception base, reported at the class \
+definition because a raised exception value would silently ignore that \
+dunder (Part 3 of #541). The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \
@@ -332,6 +340,11 @@ statically; `hash()` of a type CPython can hash but pycc cannot yet is \
 an instance whose class is unhashable (it defines `__eq__` without \
 `__hash__`), as \"unhashable type: `<class>`\", or whose `__hash__` does \
 not return an integer, as \"`__hash__` method should return an integer\". \
+Since #1337 (D-254) it also fires in an inherited method body compiled \
+once more for a subclass, when that copy passes the subclass receiver where \
+only the base class is accepted (`helper(self)` with `def helper(a: A)`, or \
+a dataclass `==` the subclass lacks); the diagnostic is reported at the \
+origin body's location with a note naming the subclass. \
 Different call \
 sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \

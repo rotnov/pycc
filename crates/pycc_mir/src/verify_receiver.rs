@@ -140,6 +140,11 @@ impl Verifier<'_> {
         let Some((class, rest)) = spelled.split_once('.') else {
             return;
         };
+        // A PEP 695 generic-class specialization (`0gen_C__T_int.m`) names
+        // its class with the prefix, so the stripped `C__T_int` is not a
+        // registered class and the call is skipped. That is deliberate: a
+        // generic class never receives a receiver-exact copy (D-254 rule 2),
+        // so the invariant this module guards cannot be violated there.
         if self.class(class).is_none() {
             return;
         }
