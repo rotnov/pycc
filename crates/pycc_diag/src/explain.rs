@@ -324,7 +324,11 @@ top-level package, and a relative target that resolves to no module. (An \
 import shape pycc merely has not implemented yet stays `C0001`.) Since #1125 (Part 1 of #884) it also covers the call shapes CPython rejects when a keyword \
 argument is bound to a parameter by name: an unexpected keyword name, a \
 positional-only parameter passed as a keyword, a parameter supplied both \
-positionally and by keyword, and a parameter left unsupplied. Different call \
+positionally and by keyword, and a parameter left unsupplied. Since #1331 \
+(Part 1 of #1327) it also reports `hash()` of a `list`, `dict` or `set` as \
+\"unhashable type: `<ty>`\", the `TypeError` CPython raises for it, reported \
+statically; `hash()` of a type CPython can hash but pycc cannot yet is \
+`C0001` instead. Different call \
 sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \
 that they are all instances of the same underlying category (a name or \

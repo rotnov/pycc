@@ -790,6 +790,19 @@ pub(crate) fn infer_expr_in(
                 if callee == crate::frozenset::FROZENSET {
                     return crate::frozenset::check_call(arg_tys);
                 }
+                // #1331: `hash(...)`, placed here for `frozenset`'s reason
+                // directly above. It also yields to a stdlib module alias
+                // spelled `hash` (`import math as hash`), which lives in no
+                // table consulted above; that call keeps the known-builtin
+                // `C0001` below instead of being typed as the builtin.
+                if callee == crate::hash::HASH
+                    && !env
+                        .std_module_aliases
+                        .iter()
+                        .any(|(alias, _)| alias == callee)
+                {
+                    return crate::hash::check_call(arg_tys);
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

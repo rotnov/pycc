@@ -21,6 +21,7 @@ mod exception;
 mod expr;
 mod expr_ty;
 mod frozenset;
+mod hash;
 mod import;
 mod matching;
 mod narrow;

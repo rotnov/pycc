@@ -268,7 +268,8 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // `class ndarray` is what this set adds, because the solver has no
         // class table of its own. Part 1 of #1319 records a `class
         // frozenset` here for the same reason: the solver's `frozenset(...)`
-        // arm must yield to it.
+        // arm must yield to it, and #1331 a `class hash` for its `hash(...)`
+        // arm.
         shadowed_producers: hir
             .class_defs
             .iter()
@@ -276,6 +277,7 @@ pub(crate) fn infer_function_signatures_with_solver_all(
             .filter(|class_name| {
                 crate::buffer::is_producer_spelling(class_name)
                     || class_name == crate::frozenset::FROZENSET
+                    || class_name == crate::hash::HASH
             })
             .collect(),
         // #1165 review round 8: module scope binds no `Final` name this

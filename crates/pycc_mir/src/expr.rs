@@ -343,6 +343,16 @@ pub(super) fn lower_expr(
                 // `pycc_types::infer_expr_in`'s comment for why `float` (unlike
                 // `len`/`print`) needs this. Always `Ty::Float`.
                 Ty::Float
+            } else if callee == "hash"
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                // #1331: mirrors `pycc_types::hash`'s arms under `float`'s
+                // user-defined-function guard. A user `class hash` never
+                // reaches here: the `Instantiate` lookup above claims it.
+                // Always `Ty::Int`.
+                Ty::Int
             } else if callee == "bool"
                 && !scopes
                     .iter()
