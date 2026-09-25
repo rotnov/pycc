@@ -127,14 +127,14 @@ fn the_deferred_iterable_shapes_keep_their_own_refusals() {
     }
 }
 
-/// The loop inherits PR 2a's positional bound unchanged, and the loop
-/// variable is only *maybe* bound once the loop ends.
+/// The loop stays module-body only, and the loop variable is only
+/// *maybe* bound once the loop ends.
 ///
-/// A foreign object is readable only in a module body, because that is
-/// the one function with a `-1` failure edge for a raising iterator to
-/// take; and a loop that runs zero times never writes its variable's
-/// slot, so a read after the loop is `T0041` rather than a load of
-/// whatever the slot happened to hold.
+/// #1316 admits reading a foreign name inside a function body, but not
+/// iterating it: the loop target would bind a function-local `object`,
+/// which is #1325's scope. And a loop that runs zero times never writes
+/// its variable's slot, so a read after the loop is `T0041` rather than a
+/// load of whatever the slot happened to hold.
 #[test]
 fn the_loop_inherits_the_positional_bound_and_binds_only_maybe() {
     let dir = ScratchDir::new("foreign_iteration_bounds").expect("scratch");
