@@ -2315,7 +2315,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T]/frozenset[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
@@ -3225,7 +3225,7 @@ fn check_stmt_in_function(
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T]/frozenset[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
