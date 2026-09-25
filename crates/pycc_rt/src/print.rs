@@ -92,6 +92,7 @@ mod tests {
     fn print_flush_does_not_panic_on_an_empty_or_partial_line() {
         pycc_rt_print_flush();
         pycc_rt_print_space();
+        pycc_rt_print_none();
         pycc_rt_print_flush();
         pycc_rt_print_newline();
     }
