@@ -101,13 +101,24 @@ pub fn is_flat_builtin_exception_class(name: &str) -> bool {
 /// [`HirClassDef`].
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
 
+/// #1316: the runtime tag reserved for a CPython exception the `ext` shim's
+/// foreign-operation bridge translates when it is not an `Exception` at all
+/// (`SystemExit`, `KeyboardInterrupt`, a non-`Exception`
+/// `BaseExceptionGroup`). It is `pycc_rt`'s `EXCEPTION_TYPE_FOREIGN_BASE`,
+/// the one tag `except Exception` does not match. It names no class a
+/// program can spell, so it sits at the top of the `u8` range, past every
+/// user class's tag, and [`MAX_USER_EXCEPTION_CLASSES`] leaves it out.
+pub const FOREIGN_BASE_EXCEPTION_TYPE_TAG: u8 = u8::MAX;
+
 /// Part 2 of #541 (D-189): how many user-defined exception classes one module
 /// may declare. The runtime carries the type tag as a `u8`, so the whole
 /// hierarchy is capped at 256 types; the builtins take the low
-/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] tags and the rest, up to 255, are
-/// available to the module's own classes.
+/// [`FIRST_USER_EXCEPTION_TYPE_TAG`] tags,
+/// [`FOREIGN_BASE_EXCEPTION_TYPE_TAG`] takes the top one (#1316), and the
+/// rest, up to 254, are available to the module's own classes.
 /// Exceeding this is rejected with `C0001` during HIR lowering.
-pub const MAX_USER_EXCEPTION_CLASSES: usize = 256 - BUILTIN_EXCEPTION_CLASSES.len();
+pub const MAX_USER_EXCEPTION_CLASSES: usize =
+    FOREIGN_BASE_EXCEPTION_TYPE_TAG as usize - BUILTIN_EXCEPTION_CLASSES.len();
 
 const fn const_str_eq(a: &str, b: &str) -> bool {
     let a = a.as_bytes();
