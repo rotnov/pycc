@@ -331,6 +331,36 @@ fn a_forwarder_outside_every_section_is_refused() {
     );
 }
 
+/// A truncated file whose section headers still declare the full section
+/// places a forwarder past the end of the file: refused, never a panic.
+#[test]
+fn every_truncation_of_a_forwarding_image_is_refused_without_a_panic() {
+    let bytes = PeSpec::dll(&["KERNEL32.dll"])
+        .forwards(&["NTDLL.RtlAllocateHeap", "python314.Py_Initialize"])
+        .bytes();
+    for len in 0..bytes.len() {
+        forwarder_refused(&bytes[..len]);
+    }
+    assert_eq!(forwarders(&bytes), ["NTDLL.dll", "python314.dll"]);
+}
+
+/// A section declared larger than the file places a forwarder past the
+/// file's end: refused, never read.
+#[test]
+fn a_forwarder_past_the_end_of_the_file_is_refused() {
+    let spec = PeSpec::dll(&[]).forwards(&["a.b"]);
+    let mut bytes = spec.bytes();
+    put32(&mut bytes, SECTION_HEADER + 8, 0x10000);
+    put32(&mut bytes, SECTION_HEADER + 16, 0x10000);
+    put32(&mut bytes, OPTIONAL + 112 + 4, 0x10000);
+    put32(&mut bytes, spec.export_offset() + 40, VA + 0x8000);
+    let err = forwarder_refused(&bytes);
+    assert_eq!(
+        err,
+        "the forwarder at RVA 0xa000 lies past the end of the file"
+    );
+}
+
 #[test]
 fn forwarders_of_a_malformed_image_are_refused() {
     let mut bytes = PeSpec::dll(&[]).forwards(&["a.b"]).bytes();

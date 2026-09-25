@@ -234,7 +234,10 @@ pub(crate) fn parse_forwarders(bytes: &[u8]) -> Result<Vec<String>, String> {
         let (text_at, text_end) =
             locate(sections, address, bytes.len()).ok_or_else(|| unmapped("forwarder", address))?;
         let bound = usize::try_from(range.end - u64::from(address)).unwrap_or(usize::MAX);
-        let window = &bytes[text_at..text_end.min(text_at.saturating_add(bound))];
+        let window = bytes.get(text_at..text_end.min(text_at.saturating_add(bound)));
+        let window = window.ok_or_else(|| {
+            format!("the forwarder at RVA {address:#x} lies past the end of the file")
+        })?;
         let length = window.iter().position(|byte| *byte == 0);
         let length = length.ok_or_else(|| {
             format!("the forwarder at RVA {address:#x} has no NUL within the export directory")
