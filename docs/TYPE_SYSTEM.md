@@ -1125,15 +1125,16 @@ either name in any of the five ways a class body can: a method, a
   A `__hash__` that raises propagates like any other call.
 - `__eq__` without `__hash__` (directly or inherited): `T0021` "unhashable
   type: `C`", the `TypeError` CPython raises, reported statically.
-- A `__hash__` whose return type is neither `int` nor `bool`: `T0021`
-  "`__hash__` method should return an integer", the `TypeError` CPython
-  raises on every call.
+- A `__hash__` whose return type is neither `int` nor `bool`, nor one of
+  them `| None` (so `float | None` included): `T0021` "`__hash__` method
+  should return an integer", the `TypeError` CPython raises on every call.
 
 Every other case is valid Python that pycc does not compile yet, `C0001`
 "`hash()` of `C` is valid Python but not implemented yet", with a help line
 naming the reason: a `__hash__` bound as anything but a plain method, or
 taking parameters besides `self`; a `__hash__` declared to return
-`int | None` (CPython raises only when it returns `None` at run time); an enum, exception, protocol or generic
+`int | None` or `bool | None` (CPython raises only when it returns `None`
+at run time); an enum, exception, protocol or generic
 class anywhere on the MRO; and a `@dataclass` or `@dataclass_transform()`
 class with no `__hash__` of its own. The last one deliberately softens a
 bare `@dataclass`'s CPython `TypeError` (its synthesized `__eq__` sets

@@ -112,9 +112,13 @@ fn check_instance(
                     ),
                 ));
             }
-            if let Ty::Optional(_) = returns {
+            if let Ty::Optional(inner) = returns
+                && matches!(**inner, Ty::Int | Ty::Bool)
+            {
                 // CPython raises only when the method returns `None` at
-                // run time, so this is not a static `TypeError`.
+                // run time, so this is not a static `TypeError`. A
+                // `float | None` result raises on every call and stays
+                // `T0021` below.
                 return Err(not_implemented(
                     ty,
                     format!(
@@ -378,10 +382,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_optional_hash_result_is_c0001_not_t0021() {
-        // A body returning an int under `-> int | None` is `T0022` before
-        // this check runs, so the signature is registered by hand.
+    /// `check_instance` for class `R` whose `__hash__` is registered by
+    /// hand as returning `returns`: a body returning an int under
+    /// `-> int | None` is `T0022` before this check runs.
+    fn check_hash_returning(returns: Ty) -> Diagnostic {
         let module = pycc_parser::parse(&format!(
             "{R}\n    def __hash__(self) -> int:\n        return 3\n"
         ))
@@ -390,19 +394,30 @@ mod tests {
         let classes: HashMap<String, HirClassDef> = hir.class_defs.into_iter().collect();
         let instance = Ty::Instance(Box::new("R".to_string()));
         let mut functions = HashMap::new();
-        functions.insert(
-            "R.__hash__".to_string(),
-            (vec![instance.clone()], Ty::Optional(Box::new(Ty::Int))),
-        );
-        let err = check_instance(&instance, "R", &classes, &functions).unwrap_err();
-        assert_eq!(err.code, "C0001");
-        assert_eq!(
-            err.message,
-            "`hash()` of `R` is valid Python but not implemented yet"
-        );
-        let help = err.help.expect("help");
-        assert!(help.contains("`R.__hash__` returns `"), "{help}");
-        assert!(help.contains("returning `int` or `bool`"), "{help}");
+        functions.insert("R.__hash__".to_string(), (vec![instance.clone()], returns));
+        check_instance(&instance, "R", &classes, &functions).unwrap_err()
+    }
+
+    #[test]
+    fn an_optional_int_or_bool_hash_result_is_c0001_not_t0021() {
+        for inner in [Ty::Int, Ty::Bool] {
+            let err = check_hash_returning(Ty::Optional(Box::new(inner)));
+            assert_eq!(err.code, "C0001");
+            assert_eq!(
+                err.message,
+                "`hash()` of `R` is valid Python but not implemented yet"
+            );
+            let help = err.help.expect("help");
+            assert!(help.contains("`R.__hash__` returns `"), "{help}");
+            assert!(help.contains("returning `int` or `bool`"), "{help}");
+        }
+    }
+
+    #[test]
+    fn an_optional_float_hash_result_stays_t0021() {
+        let err = check_hash_returning(Ty::Optional(Box::new(Ty::Float)));
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`__hash__` method should return an integer");
     }
 
     #[test]
