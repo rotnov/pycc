@@ -234,31 +234,21 @@ pub(crate) fn infer_expr_in(
                     // refuses on its own instead -- `crate::foreign`'s
                     // module doc carries the full rule.
                     let ty = env.narrowed_ty(name).unwrap_or_else(|| ty.clone());
-                    // The read stays refused inside a *function body*,
-                    // though, which is what `in_function_body` buys here.
-                    // Two independent reasons, both found by PR 2a's
-                    // review:
-                    //
-                    // 1. D-041 checks a body against the module
-                    //    environment as it stands after *all* top-level
-                    //    code, so this arm cannot tell whether the call
-                    //    site precedes the `import`. `def _pi(): return
-                    //    numpy.pi` called above `import numpy` is a
-                    //    `NameError` in CPython; admitting the read
-                    //    compiled it into a global-initialization trap
-                    //    (`llvm.trap`, rc 133) instead of a compile error.
-                    // 2. `pycc_codegen`'s `foreign_attr::emit` routes a
-                    //    failed lookup to the module-exec failure edge,
-                    //    which exists only inside
-                    //    `pycc_ext_module_exec`. A function body has no
-                    //    such edge, so a load emitted there would have no
-                    //    way to report CPython's error.
-                    //
-                    // PR 2a ships no user-visible capability, so refusing
-                    // the narrower set costs nothing; lifting it needs the
-                    // ordering analysis and the function-level failure
-                    // protocol that PR 2b's exception transition brings.
-                    if env.in_function_body {
+                    // Inside a *function body* the read is admitted only for
+                    // a module-level foreign import (#1316,
+                    // `env.foreign_globals`). The two reasons PR 2a refused
+                    // it are answered below this layer: a read that runs
+                    // before the import at run time raises `NameError`
+                    // from codegen's unbound-global branch, since D-041
+                    // cannot prove call order here, and a failed operation
+                    // bridges CPython's exception into pycc's pending
+                    // state and branches to the innermost exception target
+                    // (`pycc_codegen`'s `foreign_fail.rs`). Any other
+                    // `object` name in a function body -- an unannotated
+                    // parameter inferred as `object` from a module-level
+                    // call site -- stays refused: reading a function-local
+                    // `object` value is #1325's.
+                    if env.in_function_body && !env.foreign_globals.contains(name) {
                         crate::foreign::reject_object_read(name, &ty)?;
                     }
                     reject_memoryview_read(name, &ty, env.owned_buffers.contains(name))?;
@@ -329,7 +319,12 @@ pub(crate) fn infer_expr_in(
                 // positional-scalar argument rule (`crate::foreign`'s module
                 // doc). `lookup` answers `None` for a maybe-bound name, so a
                 // one-arm-`if` import falls through to the `T0041` below.
-                if matches!(ty, Ty::Object) && !env.in_function_body {
+                // #1316 admits the same call in a function body when the
+                // callee is a module-level foreign import, exactly as the
+                // `Name` arm admits its read.
+                if matches!(ty, Ty::Object)
+                    && (!env.in_function_body || env.foreign_globals.contains(callee))
+                {
                     let arg_tys = args
                         .iter()
                         .map(|arg| infer_expr_in(env, local_names, arg))
@@ -338,10 +333,11 @@ pub(crate) fn infer_expr_in(
                     return Ok(Ty::Object);
                 }
                 // Part 1 of #1026, choke point 3: inside a function body a
-                // foreign object is not callable *yet* (#1316), which is a
-                // different claim from D-110's "this name is bound to a
-                // value, and no value in the current subset is callable" --
-                // say so with `I0404` rather than the generic `T0021`.
+                // function-local `object` value (an inferred-`object`
+                // parameter) is not callable (#1325), which is a different
+                // claim from D-110's "this name is bound to a value, and no
+                // value in the current subset is callable" -- say so with
+                // `I0404` rather than the generic `T0021`.
                 crate::foreign::reject_object_read(callee, &ty)?;
                 return Err(non_callable_binding(callee));
             }
@@ -712,7 +708,14 @@ pub(crate) fn infer_expr_in(
             // takes precedence for every generic function, including one
             // reached recursively while inferring a nested call's own
             // arguments (e.g. `print(identity(1))`).
+            // #1316: a type parameter admits any argument, so a CPython
+            // object passed to a generic is refused before substitution
+            // (an ordinary user function refuses it in its argument loop
+            // below; a constructor or method parameter is always declared
+            // or refused as uninferable, so `class::check_call_args`'s own
+            // mismatch already refuses an `object` there).
             if let Some(generic_func) = env.lookup_generic(callee) {
+                crate::foreign::reject_object_arguments(arg_tys)?;
                 return Ok(instantiate_generic_call(generic_func, arg_tys)?.return_ty);
             }
             // Part 2b of #1142 (#1164): a buffer-returning function is
@@ -833,6 +836,12 @@ pub(crate) fn infer_expr_in(
                     };
                     return Err(diag);
                 }
+                // #1316: an `object` argument that got this far met a
+                // parameter it is assignable to -- an unannotated private
+                // helper's solver-inferred `object` parameter -- and is
+                // refused here, after the ordinary mismatch so a declared
+                // parameter keeps its `T0021`.
+                crate::foreign::reject_object_operand(arg_ty, crate::foreign::PASSING_TO_A_FUNCTION)?;
             }
             Ok(return_ty.clone())
         }

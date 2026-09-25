@@ -134,19 +134,21 @@ fn the_admitted_pair_stays_refused_at_every_other_declared_position() {
     // annotated assignment, and each must stay refused.
     for (code, source) in [
         // A `return` under a declared return type. `T0022` rather than
-        // `I0404`: `gc` is a module-level foreign binding, so inside a
-        // function body the name is not in scope as a value at all and the
-        // return-type check reports the mismatch first. Either way the
-        // relaxation never reaches a `return`.
+        // `I0404`: #1316 admits the in-function read of the module-level
+        // foreign `gc`, and the declared-return check reports the
+        // `object`-versus-tuple mismatch before the `return` refusal of a
+        // CPython object. Either way the relaxation never reaches a
+        // `return`.
         (
             "T0022",
             "import gc\n\ndef f() -> tuple[float, float, float]:\n    return gc.garbage\n",
         ),
         // The same statement inside a function body, which is exactly why
-        // the in-function `AnnAssign` arm needs no branch of its own: the
-        // read of the foreign name is already `I0404` there.
+        // the in-function `AnnAssign` arm needs no branch of its own: #1316
+        // admits the read, and the ordinary assignability check refuses
+        // the `object` value against the declared tuple (`T0025`).
         (
-            "I0404",
+            "T0025",
             "import gc\n\ndef f() -> None:\n    x: tuple[float, float, float] = gc.garbage\n",
         ),
     ] {

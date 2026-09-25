@@ -113,15 +113,15 @@ fn check_accepts_a_call_of_a_foreign_loop_target() {
     );
 }
 
-/// The module-body-only rule is unchanged: a function body cannot read the
-/// object (#1316), and above its import the name is not yet bound.
+/// A function body may call the object (#1316) but not bind its result to
+/// a local, and above its import the name is not yet bound.
 #[test]
 fn the_callee_follows_the_foreign_object_rules() {
     assert_one_error(
         "obj_call_fn_body",
-        "from itertools import product\n\n\ndef f() -> None:\n    product(\"ab\")\n",
+        "from itertools import product\n\n\ndef f() -> None:\n    product(\"ab\")\n    p = product(\"ab\")\n",
         "I0404",
-        "using `product`",
+        "binding a CPython object to a name",
     );
     assert_one_error(
         "obj_call_early",

@@ -109,21 +109,17 @@ fn the_neighbouring_subscript_shapes_keep_their_own_refusals() {
     }
 }
 
-/// The load inherits PR 2a's positional bound unchanged.
-///
-/// A foreign object is readable only in a module body, because that is the
-/// one function with a `-1` failure edge for a raising `PyObject_GetItem`
-/// to take. Reading one inside a function body is still `I0404`.
+/// The load is admitted inside a function body since #1316, which gave
+/// every pycc function a failure edge for a raising `PyObject_GetItem` to
+/// take (`crates/pycc_codegen/src/foreign_fail.rs`).
 #[test]
-fn a_subscript_load_inherits_the_positional_bound() {
+fn a_subscript_load_is_admitted_in_a_function_body() {
     let dir = ScratchDir::new("foreign_subscript_positional").expect("scratch");
     let out = check(
         &dir,
         "import gc\n\n\ndef _n() -> int:\n    return len(gc.garbage[0])\n\n\nprint(_n())\n",
     );
-    assert!(!out.status.success(), "{}", stdout_of(&out));
-    let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
-    assert!(text.contains("I0404"), "{text}");
+    assert!(out.status.success(), "{}", stdout_of(&out));
 }
 
 /// Builds `body` as an extension module named `module` inside `dir`.

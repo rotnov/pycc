@@ -72,18 +72,43 @@ fn a_non_scalar_argument_is_refused() {
     );
 }
 
-/// The module-body-only rule is unchanged (#1316 owns function bodies): an
-/// annotated `def`, an unannotated private helper (not the `T0021`
-/// "add an annotation" refusal) and a generic function are each the
-/// function-body read refusal.
+/// #1316: a direct call of a module-level foreign name is admitted in an
+/// annotated `def`, an unannotated private helper and a generic function
+/// body alike -- the type layer lifts the function-body read refusal for
+/// a name the module binds to a CPython object.
 #[test]
-fn a_call_in_any_function_body_is_the_read_refusal() {
+fn a_call_in_any_function_body_is_admitted() {
     for body in [
         "def f() -> None:\n    product(\"ab\")\n",
         "def _helper():\n    product(\"ab\")\n",
         "def g[T](x: T) -> T:\n    product(\"ab\")\n    return x\n",
     ] {
-        refused(&format!("{FROM_FORM}{body}"), "I0404", "in this position");
+        admitted(&format!("{FROM_FORM}{body}"));
+    }
+}
+
+/// A function-local rebinding shadows the module-level foreign name, so
+/// the lift does not reach it: the local is an ordinary `int`.
+#[test]
+fn a_local_rebinding_shadows_the_foreign_callee() {
+    refused(
+        &format!("{FROM_FORM}def f() -> None:\n    product = 1\n    product(\"ab\")\n"),
+        "T0021",
+        "product",
+    );
+}
+
+/// A CPython object is never passed into a pycc-compiled function, at
+/// module scope or inside a function body.
+#[test]
+fn passing_a_foreign_object_to_a_pycc_function_is_refused() {
+    let helper = "def _g(x) -> None:\n    pass\n";
+    for tail in ["_g(product)\n", "def f() -> None:\n    _g(product)\n"] {
+        refused(
+            &format!("{FROM_FORM}{helper}{tail}"),
+            "I0404",
+            "passing a CPython object to a function",
+        );
     }
 }
 
