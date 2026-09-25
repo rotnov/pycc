@@ -25,7 +25,8 @@ pub use class::{
     HirClassDef, InstanceHash, InstanceHashLowering, PropertyDef, ProtocolMember,
     class_name_foreign_static, class_namespace_winner, declares_name_outside_class_attrs,
     flat_attr_layout, instance_foreign_static, method_shadows_foreign_static,
-    mro_has_instance_slot, resolve_instance_hash, subclass_divergence,
+    mro_has_instance_slot, resolve_instance_hash, slot_behind_foreign_static_meets_property,
+    subclass_divergence,
 };
 pub use compare_chain::{CompareLink, compare_chain_operands};
 pub use container::{check_container_ty, check_tuple_element_ty};

@@ -157,6 +157,25 @@ pub fn instance_foreign_static<'a>(
     class_name_foreign_static(mro, lookup, name)
 }
 
+/// An instance access whose class-namespace winner is a foreign
+/// `staticmethod` attribute, with an instance slot of the same name
+/// declining the foreign path and an `@property` of that name later in the
+/// MRO. CPython reads the slot (the winner is a non-data descriptor, so the
+/// instance `__dict__` wins), while the existing property-first instance
+/// dispatch would reach the property; the access is refused instead.
+pub fn slot_behind_foreign_static_meets_property<'a>(
+    mro: &'a [String],
+    lookup: impl Fn(&str) -> Option<&'a HirClassDef> + Copy,
+    name: &str,
+) -> bool {
+    mro_has_instance_slot(mro, lookup, name)
+        && class_name_foreign_static(mro, lookup, name).is_some()
+        && mro
+            .iter()
+            .filter_map(|class_name| lookup(class_name))
+            .any(|class_def| class_def.properties.iter().any(|p| p.name == name))
+}
+
 /// Rule 7: an instance **read** `x.name` whose winner is a method-kind
 /// binding (a method, `@staticmethod`, `@classmethod`, or `Protocol` `def`)
 /// while a foreign `staticmethod` attribute of that name sits later in the
@@ -240,15 +259,20 @@ pub fn subclass_divergence<'a>(
 ) -> Option<&'a str> {
     let own_mro = &lookup(class_name)?.mro;
     let own = instance_winner(own_mro, lookup, name);
-    all_classes.into_iter().find_map(|sub| {
-        if sub.name == class_name || !sub.mro.iter().any(|c| c == class_name) {
-            return None;
-        }
-        let theirs = instance_winner(&sub.mro, lookup, name);
-        let involves_foreign = matches!(own, InstanceWinner::Foreign(_))
-            || matches!(theirs, InstanceWinner::Foreign(_));
-        (involves_foreign && theirs != own).then_some(sub.name.as_str())
-    })
+    // The alphabetically first diverging subclass, so the refusal names the
+    // same class whatever order `all_classes` iterates in.
+    all_classes
+        .into_iter()
+        .filter_map(|sub| {
+            if sub.name == class_name || !sub.mro.iter().any(|c| c == class_name) {
+                return None;
+            }
+            let theirs = instance_winner(&sub.mro, lookup, name);
+            let involves_foreign = matches!(own, InstanceWinner::Foreign(_))
+                || matches!(theirs, InstanceWinner::Foreign(_));
+            (involves_foreign && theirs != own).then_some(sub.name.as_str())
+        })
+        .min()
 }
 
 /// Whether `body` binds `name` in its own scope: an assignment, annotated

@@ -484,6 +484,68 @@ fn a_subclass_that_resolves_the_name_differently_is_refused() {
     );
 }
 
+/// With several diverging subclasses the refusal names the alphabetically
+/// first, whatever order the class table iterates in.
+#[test]
+fn the_divergence_refusal_names_the_first_subclass_by_name() {
+    let method = "    def exists(self, p: str) -> str:\n        return p\n\n\n";
+    assert_one_error(
+        "fs_subclass_two",
+        &with_fs(&format!(
+            "class Zed(FS):\n{method}class Alpha(FS):\n{method}class Mid(FS):\n{method}\
+             fs = FS()\nprint(fs.exists(\"/\"))\n"
+        )),
+        "T0044",
+        "could reach a subclass override in `Alpha`",
+    );
+}
+
+/// `D(FS, B, S)`: the foreign attribute wins the class namespace, `S`'s
+/// instance slot declines it, and `B`'s `@property` would be reached by the
+/// property-first instance dispatch while CPython reads the slot. Both the
+/// read and the call are refused.
+#[test]
+fn a_slot_behind_a_foreign_attribute_with_a_later_property_is_refused() {
+    let classes = "class B:\n    @property\n    def exists(self) -> int:\n        return 7\n\n\n\
+                   class S:\n    def __init__(self) -> None:\n        self.exists = 3\n\n\n\
+                   class D(FS, B, S):\n    pass\n\n\nd = D()\n";
+    let needle = "while an `@property` of the same name sits later in the MRO";
+    assert_one_error(
+        "fs_slot_property_read",
+        &with_fs(&format!("{classes}print(d.exists)\n")),
+        "T0044",
+        needle,
+    );
+    assert_one_error(
+        "fs_slot_property_call",
+        &with_fs(&format!("{classes}print(d.exists(\"/\"))\n")),
+        "T0044",
+        needle,
+    );
+    // Without the property the slot shape keeps its existing handling.
+    assert_checks(
+        "fs_slot_no_property",
+        &with_fs(
+            "class S:\n    def __init__(self) -> None:\n        self.exists = 3\n\n\n\
+             class D(FS, S):\n    pass\n\n\nd = D()\nprint(d.exists)\n",
+        ),
+    );
+}
+
+/// `cls.exists(p)` in a `@classmethod` takes the instance path, so a
+/// subclass that overrides the name refuses it.
+#[test]
+fn a_cls_call_with_a_diverging_subclass_is_refused() {
+    assert_one_error(
+        "fs_cls_subclass",
+        "import os\n\n\nclass FS:\n    exists = staticmethod(os.path.exists)\n\n\
+         \x20   @classmethod\n    def probe(cls, p: str) -> None:\n        print(cls.exists(p))\n\n\n\
+         class G(FS):\n    exists = staticmethod(os.path.isdir)\n",
+        "T0044",
+        "could reach a subclass override in `G`",
+    );
+}
+
 /// Rule 7: an instance read whose positional winner is a method, with a
 /// foreign attribute later in the MRO, is refused; the call in the same
 /// shape reaches the method and is accepted.
@@ -655,6 +717,24 @@ fn assert_matches_cpython(tag: &str, module: &str, body: &str) -> String {
     let (compiled, oracle) = compiled_and_oracle(tag, module, body);
     assert_eq!(compiled, oracle);
     compiled
+}
+
+/// A runtime `isinstance` against a `@runtime_checkable` protocol answers
+/// like CPython's `hasattr` check even though the static conformance check
+/// refuses the attribute (T0046); a `cls.exists(p)` call and a
+/// `cls.exists.__name__` read in a `@classmethod` run like CPython.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_protocol_isinstance_and_a_cls_call_run_like_cpython_in_the_host() {
+    let body = "import os\nfrom typing import Protocol, runtime_checkable\n\n\n\
+                @runtime_checkable\nclass P(Protocol):\n    exists: int\n\n\n\
+                class FS:\n    exists = staticmethod(os.path.exists)\n\n\
+                \x20   @classmethod\n    def probe(cls, p: str) -> None:\n\
+                \x20       print(cls.exists(p))\n        print(bool(cls.exists.__name__))\n\n\n\
+                def main() -> None:\n    f = FS()\n    print(isinstance(f, P))\n    FS.probe(\"/\")\n\n\n\
+                main()\n";
+    let out = assert_matches_cpython("fs_hosted_protocol_cls", "fs_protocol_cls_mod", body);
+    assert_eq!(out, "True\nTrue\nTrue\nno error\n");
 }
 
 #[test]

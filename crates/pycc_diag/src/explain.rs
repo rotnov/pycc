@@ -95,8 +95,10 @@ features lower to nothing, and a feature name CPython itself rejects is \
 `L0001`, not C0001. A class-attribute initializer that is not a literal \
 is C0001 too (issue #1345, D-256), with one message per shape naming its \
 tracking issue: a call, a name or attribute reference, and a container \
-(#1348), `classmethod(...)` or a `staticmethod` of a pycc callable (#1347), \
-the annotated spelling, a conditional import root, a rebound \
+(#1348), `staticmethod(...)` of a call, lambda, subscript or other \
+non-reference expression (#1348), `classmethod(...)` or a `staticmethod` of \
+a pycc callable (#1347), a `staticmethod` whose root name an earlier \
+statement of the same class body binds (#1347), the annotated spelling, a conditional import root, a rebound \
 `staticmethod`, and a dunder, class-private or container-dispatched name. \
 The one admitted non-literal shape is `name = staticmethod(<foreign import \
 reference>)`. The construct remains reserved and stops \

@@ -69,7 +69,7 @@ pub(crate) mod foreign_static;
 pub use foreign_static::{
     ClassNamespaceWinner, ForeignCallableRef, class_name_foreign_static, class_namespace_winner,
     instance_foreign_static, method_shadows_foreign_static, mro_has_instance_slot,
-    subclass_divergence,
+    slot_behind_foreign_static_meets_property, subclass_divergence,
 };
 mod init;
 mod init_slot;

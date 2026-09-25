@@ -25,7 +25,7 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
     ClassAttrValue, ClassNamespaceWinner, ForeignCallableRef, HirClassDef, HirExpr, Ty,
     class_name_foreign_static, class_namespace_winner, instance_foreign_static,
-    method_shadows_foreign_static, subclass_divergence,
+    method_shadows_foreign_static, slot_behind_foreign_static_meets_property, subclass_divergence,
 };
 
 /// The foreign target a read or call of `attr` through the class object
@@ -135,6 +135,18 @@ fn instance_target<'a>(
                 "the {what} `{class_name}.{attr}` through an instance could reach a subclass \
                  override in `{subclass}` that pycc resolves statically (#1337); calling it \
                  through the class name `{class_name}.{attr}(...)` is supported (#1350)"
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    if slot_behind_foreign_static_meets_property(&class_def.mro, lookup, attr) {
+        return Err(Diagnostic::error(
+            "T0044",
+            format!(
+                "the {what} `{class_name}.{attr}` through an instance reaches an instance \
+                 attribute that CPython reads ahead of the `staticmethod(...)` class attribute, \
+                 while an `@property` of the same name sits later in the MRO -- pycc would \
+                 resolve it to the property, so this combination is not supported"
             ),
             Span::new(0, 0),
         ));
