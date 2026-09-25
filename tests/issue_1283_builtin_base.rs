@@ -116,8 +116,9 @@ fn cpython_accepts_the_frozenset_subclass_and_pycc_refuses_it_honestly() {
         .arg(format!("{source}\n{ORACLE_DRIVER}"))
         .output()
         .expect("python3 should spawn");
+    // CPython's text-mode stdout writes `\r\n` on Windows.
     assert_eq!(
-        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"),
         "ok\n",
         "stderr: {}",
         String::from_utf8_lossy(&run.stderr)
