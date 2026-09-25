@@ -141,7 +141,7 @@ status: accepted
   base name an earlier failed item already poisoned is itself suppressed as
   a cascade. The Context's statement that `validate_bases` consults only the
   class and type-alias tables no longer holds word for word: it now also
-  reads the import and module-item tables, solely to choose the
+  reads the type-alias, import and module-item tables, solely to choose the
   unresolved-base wording. For a base spelled like one of those eleven
   builtin types, an earlier type alias, import, `def`, or assignment of that
   name that lowered selects the unknown-class wording. One that failed

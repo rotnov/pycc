@@ -37,7 +37,7 @@ use pycc_diag::Diagnostic;
 /// a name the two cascade lookups (`annotation_to_ty`'s bare-name arm
 /// and `validate_bases`) cannot resolve anyway -- they resolve only
 /// through the class table and the alias table; since Part 1 of #1283
-/// `validate_bases` also reads the import and module-item tables, but only
+/// `validate_bases` also reads the type-alias, import and module-item tables, but only
 /// to choose the unresolved-base message's wording -- so a later annotation naming it
 /// fails today either way, and that diagnostic is a genuine,
 /// independent gap that must stay reported.
