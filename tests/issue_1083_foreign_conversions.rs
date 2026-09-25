@@ -25,8 +25,8 @@
 //!
 //! PR 4b's own two consequences are pinned here as well: `print(str(o))`
 //! type-checks (the `str` the shim copies out of CPython is an ordinary pycc
-//! `str`, so `string_conversion.rs` needs nothing for it, while `print(o)`
-//! stays `I0404`), and `int(o)` refuses a value outside the D-141
+//! `str`, so `string_conversion.rs` needs nothing for it; `print(o)` itself
+//! is admitted too since #1340), and `int(o)` refuses a value outside the D-141
 //! inline-integer range with `OverflowError` rather than growing a bigint
 //! path (#1040).
 //!
@@ -114,10 +114,7 @@ fn python(dir: &Path, script: &str) -> Output {
 /// binding the result to a name and feeding it to arithmetic or a `print`
 /// both go through the ordinary `float`/`bool` paths, so a converted value
 /// is not something that has to stay anonymous the way the object itself
-/// does (`check_assignment` still refuses *that*). It is also the visible
-/// consequence worth stating: `print(float(o))` type-checks where `print(o)`
-/// stays `I0404` -- the refusal is on the object, not on a value derived
-/// from one.
+/// does (`check_assignment` still refuses *that* inside a function body).
 #[test]
 fn both_conversions_of_a_cpython_object_are_admitted() {
     let dir = ScratchDir::new("foreign_conversions_admitted").expect("scratch");
@@ -416,10 +413,9 @@ fn a_shadowing_conversion_definition_still_builds_in_the_host() {
 ///
 /// `both_conversions_of_a_cpython_object_are_admitted`'s claim for `int` and
 /// `str`, with the same three shapes per row: the bare call, a binding, and
-/// a consumer that only accepts a real scalar. The last `str` row is the C6
-/// consequence in particular -- `print(str(o))` type-checks while `print(o)`
-/// stays `I0404`, and it needs nothing from `string_conversion.rs` because
-/// the value it sees is an ordinary `str`.
+/// a consumer that only accepts a real scalar. The last `str` row needs
+/// nothing from `string_conversion.rs`, because the value it sees is an
+/// ordinary `str`.
 #[test]
 fn the_other_two_conversions_of_a_cpython_object_are_admitted() {
     let dir = ScratchDir::new("foreign_int_str_admitted").expect("scratch");

@@ -36,10 +36,10 @@ use pycc_hir::{HirExpr, Ty};
 /// [`reject_unrenderable`]'s catch-all arm and is renderable, and codegen's
 /// `to_str` returns a `Scalar::Str` unchanged -- so the heap `PyStrObj` the
 /// shim copies out of CPython is handled identically to a literal-derived
-/// one. The visible consequence is an asymmetry worth naming: `print(str(o))`
-/// compiles while `print(o)` stays `I0404`, because this module's
-/// [`Ty::Object`] arm below is deliberately unchanged. The refusal is on the
-/// object, not on a `str` derived from one.
+/// one. `print(o)` and `f"{o}"` on the object itself are admitted as well
+/// since #1340 ([`reject_unrenderable`] has no [`Ty::Object`] arm): codegen
+/// renders the object through the shim, `print` with `str()` and an
+/// f-string with `format(o, '')`, exactly as CPython does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StringConversionSite {
     /// An argument of a `print(...)` call.
@@ -118,19 +118,13 @@ pub(crate) fn reject_unrenderable(
             }
         }
         Ty::Protocol(name) => Err(unrenderable_protocol(name, site)),
-        // Part 2 of #1026 (#1081). Before Part 2 this fell into the
-        // catch-all and was *accepted*: `print(numpy)` was refused one
-        // level up, by the read of the binding itself, so no renderer ever
-        // saw a `Ty::Object`. With that producer-side refusal gone the
-        // catch-all would admit `print(numpy.pi)` all the way to
-        // `pycc_codegen`'s `to_str`, which has no object arm -- a compiler
-        // panic where the user should have had a diagnostic. `I0404`
-        // rather than this module's own `T0021` family, because the reason
-        // is "pycc implements nothing on a CPython object yet", not
-        // "this type has no `__str__`".
-        Ty::Object => Err(crate::foreign::object_operation_unsupported(
-            "printing or formatting a CPython object",
-        )),
+        // #1340: a CPython object renders, so it takes the catch-all.
+        // Part 2 of #1026 refused it here because `pycc_codegen`'s `to_str`
+        // had no object arm; codegen now converts an object operand before
+        // `to_str` -- `print` through the shim's `PyObject_Str` helper in
+        // its write phase, an f-string part through its `PyObject_Format`
+        // helper (`crates/pycc_codegen/src/string_render.rs`) -- so no arm
+        // is needed.
         // Part 1 of #1319: `pycc_codegen`'s `to_str` has no set arm, so
         // before this refusal `print({1})` passed `pycc check` and panicked
         // in the backend. `list`, `dict` and `tuple` are deliberately not

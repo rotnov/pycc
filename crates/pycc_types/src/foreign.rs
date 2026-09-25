@@ -151,9 +151,9 @@
 //! The residual incoherence is stated rather than hidden: `bool(o)` compiles
 //! while `bool(1)` is still `C0001`, because Part 4 relaxes exactly the
 //! object case and leaves the general builtin-conversion story to
-//! #1017/#1018. The positional bound is inherited unchanged, and
-//! `print(float(o))` now type-checks where `print(o)` stays `I0404` --
-//! the refusal is on the object, not on a `float` derived from one.
+//! #1017/#1018. The positional bound is inherited unchanged. (Part 4 left
+//! `print(o)` itself `I0404` while `print(float(o))` type-checked; #1340
+//! admits `print(o)` and `f"{o}"` too -- see below.)
 //!
 //! **PR 4b of #1083 adds the other two conversions out of the opaque type:
 //! `int(o)` and `str(o)`.** Both are new `expr.rs` arms (mirrored in
@@ -168,10 +168,16 @@
 //! still adds nothing to #1092.
 //!
 //! The same asymmetry is inherited and stated: `str(o)` compiles while
-//! `str(1)` keeps its `C0001`, and `print(str(o))` type-checks where
-//! `print(o)` stays `I0404` -- `string_conversion.rs`'s [`Ty::Object`] arm
-//! is untouched, because the refusal is on the object and not on a `str`
-//! derived from one.
+//! `str(1)` keeps its `C0001`.
+//!
+//! **#1340 admits rendering the object itself: `print(o)` and `f"{o}"`.**
+//! `string_conversion.rs`'s `Ty::Object` refusal is gone, and
+//! `pycc_codegen` renders the operand through the shim as CPython does --
+//! `print` calls `str()` (`pycc_ext_obj_to_str`) in its write phase, after
+//! every argument is evaluated, and an f-string part calls
+//! `format(o, '')` (`pycc_ext_obj_format`, the operand's `__format__`) as
+//! soon as it is evaluated. Conversion flags and format specs (`f"{o!r}"`,
+//! `f"{o:>8}"`) stay refused in `pycc_hir` for every operand type.
 //!
 //! **PR 4c of #1083 admits the opaque type at one *annotated assignment*.**
 //! `x: tuple[float, float, float] = <object>` in a module body -- and more
@@ -264,7 +270,7 @@ pub(crate) fn is_object_float_tuple_annotation(ty: &Ty) -> bool {
 /// The diagnostic every unsupported operation on a CPython object gets.
 ///
 /// `operation` is a noun phrase naming what the *consumer* was about to
-/// do, written so the message reads as a sentence: "printing a CPython
+/// do, written so the message reads as a sentence: "matching on a CPython
 /// object is not supported yet". Part 1 interpolated the binding's local
 /// name here instead; Part 2's refusals sit at consuming sites that hold
 /// an anonymous temporary and have no name to report (see the module doc).
@@ -277,7 +283,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              scalar-argument method calls and direct calls, `len`, truth \
              testing, a \
              scalar-key subscript load, `for` iteration, binding the \
-             value to a module-level name, the `float`, \
+             value to a module-level name, printing it and f-string \
+             interpolation, the `float`, \
              `bool`, `int` and `str` conversions and an annotated \
              module-level assignment to a fixed-arity all-`float` `tuple` \
              on it and nothing else"

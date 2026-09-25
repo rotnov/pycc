@@ -1,7 +1,8 @@
 //! Emission for `len(o)`, truth testing, the `float(o)`, `int(o)` and
-//! `str(o)` conversions and the fixed-arity all-`float` tuple unpack on a
-//! CPython object value (Part 3 of #1026, PR 3a of #1082; Part 4 of #1026,
-//! PRs 4a, 4b and 4c of #1083).
+//! `str(o)` conversions, the f-string rendering `format(o, '')` and the
+//! fixed-arity all-`float` tuple unpack on a CPython object value (Part 3 of
+//! #1026, PR 3a of #1082; Part 4 of #1026, PRs 4a, 4b and 4c of #1083;
+//! #1340).
 //!
 //! The third sibling of `foreign_attr.rs` and `foreign_call.rs`, carved out
 //! of `lib.rs` for the same reason (AGENTS.md's "Keep source files
@@ -33,7 +34,8 @@
 //! `pycc_ext_obj_truthy` answers a C `int`, `pycc_ext_obj_to_float`
 //! answers a `double`, `pycc_ext_obj_to_int` answers a D-141 encoded word
 //! and `pycc_ext_obj_to_str` answers a `PyStrObj *` copied out of CPython's
-//! own buffer, and `pycc_ext_obj_unpack_float_tuple` writes plain `double`s
+//! own buffer (as does #1340's `pycc_ext_obj_format`, for `format(o, '')`),
+//! and `pycc_ext_obj_unpack_float_tuple` writes plain `double`s
 //! through an out-param -- each after releasing the CPython temporary its
 //! conversion protocol handed it, on *every* exit rather than only the
 //! successful one -- and none touches its operand's refcount. So unlike an
@@ -140,6 +142,23 @@ fn obj_to_str_fn<'ctx>(
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     module.add_function(
         EXT_OBJ_TO_STR_SYMBOL,
+        context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
+        None,
+    )
+}
+
+/// Declares the shim's `int pycc_ext_obj_format(PyObject *, void **)` once
+/// per module (#1340), on [`obj_len_fn`]'s pattern and for its reason.
+fn obj_format_fn<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = module.get_function(EXT_OBJ_FORMAT_SYMBOL) {
+        return existing;
+    }
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    module.add_function(
+        EXT_OBJ_FORMAT_SYMBOL,
         context.i32_type().fn_type(&[ptr.into(), ptr.into()], false),
         None,
     )
@@ -410,24 +429,73 @@ pub(super) fn emit_to_str<'ctx>(
     rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
+    Scalar::Str(emit_to_str_pointer(context, builder, module, rt, base))
+}
+
+/// [`emit_to_str`] yielding the bare `PyStrObj *` rather than a
+/// [`Scalar::Str`], for a caller that writes the text straight out: the
+/// write phase of `print(o)` (#1340, `string_render.rs`).
+pub(super) fn emit_to_str_pointer<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    base: Scalar<'ctx>,
+) -> PointerValue<'ctx> {
+    let helper = obj_to_str_fn(context, module);
+    emit_text_conversion(context, builder, module, rt, base, helper, "foreign_to_str")
+}
+
+/// Emits one f-string interpolation `f"{o}"` of a CPython object and yields
+/// the text as a bare `PyStrObj *` (#1340).
+///
+/// [`emit_to_str`] exactly, reaching `pycc_ext_obj_format` instead: CPython
+/// renders an interpolation as `format(o, '')`, which calls the operand's
+/// `__format__` rather than its `__str__`, so the two differ whenever a
+/// class overrides `__format__`. The ownership (a refcount-1 handle from
+/// `pycc_rt_str_from_literal`) and the failure edge (a raising `__format__`
+/// answers `-1`) are [`emit_to_str`]'s.
+pub(super) fn emit_format<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    base: Scalar<'ctx>,
+) -> PointerValue<'ctx> {
+    let helper = obj_format_fn(context, module);
+    emit_text_conversion(context, builder, module, rt, base, helper, "foreign_format")
+}
+
+/// The shared body of [`emit_to_str`] and [`emit_format`]: one call to a
+/// shim helper of shape `int (PyObject *, void **)` that writes a pycc
+/// `PyStrObj *` through a pointer out-slot, routed through the failure
+/// edge, yielding the loaded pointer. `label` prefixes every emitted value
+/// and block name, so the two helpers stay distinguishable in the IR.
+fn emit_text_conversion<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    base: Scalar<'ctx>,
+    helper: FunctionValue<'ctx>,
+    label: &str,
+) -> PointerValue<'ctx> {
     let edge = ForeignFailEdge::for_current(builder);
     let entry_fn = edge.function();
-    let to_str_fn = obj_to_str_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
-    let out = out_slot_in_entry_block(builder, entry_fn, ptr_ty, "foreign_to_str_out");
+    let out = out_slot_in_entry_block(builder, entry_fn, ptr_ty, &format!("{label}_out"));
     let status = builder
-        .build_call(to_str_fn, &[base_ptr.into(), out.into()], "foreign_to_str")
-        .expect("build_call should not fail for pycc_ext_obj_to_str")
+        .build_call(helper, &[base_ptr.into(), out.into()], label)
+        .expect("build_call should not fail for a text-conversion shim helper")
         .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_to_str returns int")
+        .expect_basic("a text-conversion shim helper returns int")
         .into_int_value();
-    route_negative(context, builder, module, rt, edge, status, "foreign_to_str");
-    let value = builder
-        .build_load(ptr_ty, out, "foreign_to_str_value")
+    route_negative(context, builder, module, rt, edge, status, label);
+    builder
+        .build_load(ptr_ty, out, &format!("{label}_value"))
         .expect("build_load should not fail")
-        .into_pointer_value();
-    Scalar::Str(value)
+        .into_pointer_value()
 }
 
 /// Emits the unpack of a CPython object into a fixed-arity all-`float`

@@ -146,16 +146,13 @@ fn raising_a_call_result_is_refused() {
 }
 
 /// The result has no consumer beyond the ones every object producer has:
-/// binding it to a module-level name is admitted (#1325), and printing it
-/// keeps its refusal.
+/// binding it to a module-level name is admitted (#1325), and so are
+/// printing it and interpolating it into an f-string (#1340).
 #[test]
-fn binding_a_call_result_is_admitted_and_printing_it_is_still_refused() {
+fn binding_and_printing_a_call_result_are_admitted() {
     admitted(&format!("{FROM_FORM}x = product(\"ab\")\n"));
-    refused(
-        &format!("{FROM_FORM}print(product(\"ab\"))\n"),
-        "I0404",
-        "printing or formatting",
-    );
+    admitted(&format!("{FROM_FORM}print(product(\"ab\"))\n"));
+    admitted(&format!("{FROM_FORM}print(f\"<{{product(\"ab\")}}>\")\n"));
 }
 
 /// A `for` loop target bound to a CPython object is callable in the loop

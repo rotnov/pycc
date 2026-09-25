@@ -83,12 +83,12 @@ pub use ext::{
 };
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,
-    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL,
-    EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
-    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL,
-    EXT_OBJ_TRUTHY_SYMBOL, EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name,
-    is_module_entry_symbol,
+    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
+    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
+    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
+    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -1779,16 +1779,17 @@ fn to_str<'ctx>(
             panic!("pycc_codegen: string conversion of an Optional[int] value is not supported yet")
         }
         // Defensive rather than a reachable feature gap, unlike the
-        // container arms above (D-244, Part 2 of #1026): `pycc_types`'
-        // `reject_unrenderable` refuses a `Ty::Object` `print` argument and
-        // f-string interpolation explicitly (Part 2's R2 hole), so no
-        // type-checked program reaches this arm. Rendering a foreign object
-        // needs `PyObject_Str`, which only a `pycc_ext_obj_*` shim may call
-        // -- and Part 2 ships none.
+        // container arms above: since #1340 both callers convert a CPython
+        // object *before* reaching here -- `print` through the shim's
+        // `PyObject_Str` helper in its write phase and an f-string
+        // interpolation through its `PyObject_Format` helper
+        // (`string_render.rs`) -- because rendering a foreign object needs a
+        // `pycc_ext_obj_*` shim call and its failure edge, neither of which
+        // this plain runtime-call helper can emit.
         Scalar::Object(_) => {
             panic!(
-                "pycc_codegen: internal error: string conversion of a CPython object value is \
-                 not supported yet -- pycc_types::string_conversion should have refused this"
+                "pycc_codegen: internal error: string conversion of a CPython object value must \
+                 go through the shim -- string_render should have converted it first"
             )
         }
         // Defensive, unlike the `List`/`Dict` arms above and like

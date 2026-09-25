@@ -76,6 +76,9 @@ pub(super) struct RtFns<'ctx> {
     pub(super) print_space: FunctionValue<'ctx>,
     pub(super) print_newline: FunctionValue<'ctx>,
     pub(super) print_none: FunctionValue<'ctx>,
+    /// `pycc_rt_print_flush` (#1340): empties compiled code's stdout before
+    /// `print` asks CPython for an object argument's `str()`.
+    pub(super) print_flush: FunctionValue<'ctx>,
     /// D-141's checked numeric decoder. Container ingress calls it for
     /// validation and keeps the original encoded word; index, slice, and
     /// `str`-repeat-count sites use its raw `0`/`1`/smallint result as an
@@ -424,6 +427,7 @@ pub(super) fn declare_rt_functions<'ctx>(
         print_space: declare("pycc_rt_print_space", void_type.fn_type(&[], false)),
         print_newline: declare("pycc_rt_print_newline", void_type.fn_type(&[], false)),
         print_none: declare("pycc_rt_print_none", void_type.fn_type(&[], false)),
+        print_flush: declare("pycc_rt_print_flush", void_type.fn_type(&[], false)),
         int_from_i64: declare(
             "pycc_rt_int_from_i64",
             i64_type.fn_type(&[i64_type.into()], false),

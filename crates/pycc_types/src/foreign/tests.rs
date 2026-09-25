@@ -174,20 +174,21 @@ fn the_non_generic_exit_leaves_a_recorded_position_alone() {
 /// function -- where CPython raises `TypeError: 'module' object is not
 /// callable`. Applying the binding at its recorded position is what refuses
 /// it. Since #1313 admits a module-body direct call of a CPython object, and
-/// #1325 binding its result to a module-level name, the probe prints the
-/// call's result: printing is `I0404` only if `json` is the foreign object,
-/// while the `int` the shadowed `def` returns would print cleanly. What the
+/// #1325 binding its result to a module-level name, and #1340 printing it,
+/// the probe declares the call's result `int`: that is refused only if
+/// `json` is the foreign object (an `object` is assignable to nothing),
+/// while the `int` the shadowed `def` returns would bind cleanly. What the
 /// test pins is that the call is no longer a native call of the shadowed
 /// `def`.
 #[test]
 fn a_foreign_import_supersedes_an_earlier_def_of_the_same_name() {
-    let source = "def json() -> int:\n    return 1\n\n\nprint(json())\n";
+    let source = "def json() -> int:\n    return 1\n\n\nx: int = json()\n";
     let hir = with_foreign_import_named(lower(source), "json", 1);
-    let diagnostics = crate::check_all(&hir).expect_err("the print must be refused");
+    let diagnostics = crate::check_all(&hir).expect_err("the binding must be refused");
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.code == "I0404" && d.message.contains("printing or formatting")),
+            .any(|d| d.code == "T0025" && d.message.contains("`object`")),
         "{diagnostics:?}"
     );
 }
@@ -332,11 +333,11 @@ fn a_module_scope_attribute_load_on_a_cpython_object_is_admitted() {
 }
 
 /// #1316: a function body may read a module-level foreign name, but a
-/// CPython object never leaves the function through `return` and is never
-/// rendered. The read itself is admitted (`numpy.pi` as a discarded
-/// statement), so each refusal is the consumer's own.
+/// CPython object never leaves the function through `return`. The read
+/// itself is admitted (`numpy.pi` as a discarded statement), so each
+/// refusal is the consumer's own. Rendering it is admitted since #1340.
 #[test]
-fn a_function_body_reads_a_foreign_object_but_may_not_return_or_render_it() {
+fn a_function_body_reads_and_renders_a_foreign_object_but_may_not_return_it() {
     assert!(
         check_foreign("def f() -> None:\n    numpy.pi\n").is_none(),
         "a discarded in-function attribute load is admitted"
@@ -348,12 +349,16 @@ fn a_function_body_reads_a_foreign_object_but_may_not_return_or_render_it() {
     ] {
         assert_refused(HELPER_SHAPE, source, "I0404", RETURNING);
     }
-    assert_refused(
-        "an in-function print",
+    for source in [
         "def f() -> None:\n    print(numpy)\n",
-        "I0404",
-        "printing or formatting",
-    );
+        "def f() -> None:\n    print(numpy.pi, 1, \"x\", None)\n",
+        "def f() -> None:\n    print(f\"<{numpy.pi}>\")\n",
+    ] {
+        assert!(
+            check_foreign(source).is_none(),
+            "an in-function render: {source}"
+        );
+    }
 }
 
 /// The lift is keyed on the foreign import, not on the `object` type: an
@@ -444,15 +449,10 @@ fn a_module_body_read_above_the_import_is_unbound() {
 /// have, pinned separately below the table.
 #[test]
 fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_shapes() {
-    for (phrase, snippet) in [
-        // Rendering: `print` and f-string interpolation both route through
-        // `reject_unrenderable`.
-        ("printing or formatting", "print(numpy.pi)\n"),
-        (
-            "matching on a CPython object",
-            "match numpy.pi:\n    case 1:\n        print(1)\n",
-        ),
-    ] {
+    for (phrase, snippet) in [(
+        "matching on a CPython object",
+        "match numpy.pi:\n    case 1:\n        print(1)\n",
+    )] {
         for (shape, source) in both_producer_shapes(snippet) {
             assert_refused(shape, &source, "I0404", phrase);
         }
@@ -464,6 +464,26 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
             "T0050",
             "walrus assignment (`:=`) value of type `object`",
         );
+    }
+}
+
+/// #1340 removed the table's rendering row: `print` and f-string
+/// interpolation of a CPython object are admitted at module scope, with any
+/// number of other `print` arguments, because `pycc_codegen` renders the
+/// object through the shim (`crates/pycc_codegen/src/string_render.rs`).
+///
+/// In the helper shape the helper's own `return` is still refused, so that
+/// is the one diagnostic left: the render adds none of its own.
+#[test]
+fn rendering_a_cpython_object_is_admitted_in_both_producer_shapes() {
+    for snippet in [
+        "print(numpy.pi)\n",
+        "print(numpy.pi, 1, \"x\", None, True)\n",
+        "print(f\"pi={numpy.pi}!\")\n",
+    ] {
+        let [(_, direct), (helper_shape, helper)] = both_producer_shapes(snippet);
+        assert!(check_foreign(&direct).is_none(), "{direct}");
+        assert_refused(helper_shape, &helper, "I0404", RETURNING);
     }
 }
 

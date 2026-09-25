@@ -15393,12 +15393,12 @@ fn to_float_rejects_a_cpython_object_operand() {
 }
 
 #[test]
-#[should_panic(expected = "string conversion of a CPython object value is not supported yet")]
+#[should_panic(expected = "string conversion of a CPython object value must go through the shim")]
 fn to_str_rejects_a_cpython_object_operand() {
-    // Rendering a foreign object needs `PyObject_Str`, which only a
-    // `pycc_ext_obj_*` shim may call and Part 2 ships none --
-    // `reject_unrenderable` refuses a `Ty::Object` `print` argument and
-    // f-string interpolation instead (`I0404`).
+    // Rendering a foreign object needs a `pycc_ext_obj_*` shim call and its
+    // failure edge, which this plain runtime-call helper cannot emit -- so
+    // since #1340 both callers (`string_render.rs`) convert an object
+    // operand before reaching `to_str`, and this arm is the backstop.
     let context = Context::create();
     let (_module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();

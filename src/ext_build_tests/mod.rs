@@ -164,5 +164,6 @@ mod bridge_watermark;
 mod buffer_slice_parity;
 mod exports;
 mod generated_c;
+mod object_text;
 mod refusal_completeness;
 mod toolchain;

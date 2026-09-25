@@ -2059,6 +2059,52 @@ int pycc_ext_obj_to_str(PyObject *o, void **out)
 }
 
 /*
+ * #1340: an f-string interpolation `f"{o}"` of a CPython object
+ * (`EXT_OBJ_FORMAT_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `pycc_ext_obj_to_str`'s exact contract and shape, with
+ * `PyObject_Format(o, NULL)` in place of `PyObject_Str(o)`. CPython renders
+ * an f-string's `{value}` as `format(value, '')`, which calls the value's
+ * `__format__` rather than its `__str__`; the two differ whenever a class
+ * overrides `__format__`, so an interpolation must not reuse the `str()`
+ * helper. A NULL spec is the empty spec, exactly as in CPython's own
+ * `FORMAT_VALUE` path.
+ *
+ * # Ownership -- the copy must complete before the release
+ *
+ * The paragraph on `pycc_ext_obj_to_str` above, unchanged:
+ * `PyObject_Format` hands back a new reference whose buffer
+ * `PyUnicode_AsUTF8AndSize` points into, so `pycc_rt_str_from_literal` runs
+ * before the `Py_DECREF`, and the reference is released on every exit.
+ *
+ * The NULL guard is the same defence in depth `pycc_ext_obj_len` documents.
+ */
+int pycc_ext_obj_format(PyObject *o, void **out)
+{
+    PyObject *formatted;
+    const char *utf8;
+    Py_ssize_t size;
+    void *copied;
+
+    if (o == NULL || out == NULL) {
+        return -1;
+    }
+    formatted = PyObject_Format(o, NULL);
+    if (formatted == NULL) {
+        return -1;
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(formatted, &size);
+    if (utf8 == NULL) {
+        Py_DECREF(formatted);
+        return -1;
+    }
+    copied = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)size);
+    Py_DECREF(formatted);
+    *out = copied;
+    return 0;
+}
+
+/*
  * Part 4 of #1026 (PR 4c of #1083): unpacking a CPython object into a
  * fixed-arity all-`float` `tuple` annotation at a module-level annotated
  * assignment (`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL` in

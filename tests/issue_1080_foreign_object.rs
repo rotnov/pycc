@@ -357,13 +357,14 @@ fn a_general_method_call_on_a_foreign_object_is_accepted() {
 fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");
     let bodies = [
-        // An expression-position read: argument, attribute, f-string
-        // interpolation. A module-body direct call (`numpy(1)`) is admitted
-        // since #1313 and raises CPython's own `TypeError` at run time;
-        // `tests/issue_1313_foreign_direct_call.rs` pins it.
-        "import numpy\n\nprint(numpy)\n",
+        // An expression-position read: a `match` subject and a D-105
+        // String-keyed method spelling. A module-body direct call
+        // (`numpy(1)`) is admitted since #1313 and raises CPython's own
+        // `TypeError` at run time; `tests/issue_1313_foreign_direct_call.rs`
+        // pins it. `print(numpy)` and `f"{numpy}"` are admitted since #1340
+        // (the test below).
+        "import numpy\n\nmatch numpy:\n    case 1:\n        pass\n",
         "import numpy\n\nnumpy.append(1)\n",
-        "import numpy\n\nprint(f\"{numpy}\")\n",
         // The iterable of a comprehension.
         "import numpy\n\nxs = [e for e in numpy]\n",
     ];
@@ -371,6 +372,26 @@ fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
         let output = check(&dir, body);
         assert_eq!(output.status.code(), Some(1), "{body}");
         assert!(stdout_of(&output).contains("error[I0404]"), "{body}");
+    }
+}
+
+/// The two rows #1340 took out of the table above: printing the module
+/// object and interpolating it into an f-string both check clean.
+/// `tests/issue_1340_print_object.rs` runs them against CPython.
+#[test]
+fn printing_and_interpolating_a_foreign_module_check_clean() {
+    let dir = ScratchDir::new("foreign_print_ok").expect("scratch");
+    for body in [
+        "import numpy\n\nprint(numpy)\n",
+        "import numpy\n\nprint(f\"{numpy}\")\n",
+    ] {
+        let output = check(&dir, body);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{body}: {}",
+            stdout_of(&output)
+        );
     }
 }
 
