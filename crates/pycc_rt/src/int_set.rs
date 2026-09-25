@@ -100,7 +100,7 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
 /// loop-test's `pycc_rt_exception_active() == 0` conjunct is evaluated on the
 /// same iteration and terminates the loop either way, so the only observable
 /// difference is which exception survives.
-pub(crate) fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
+fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
     if pycc_rt_exception_active() != 0 {
         return;
     }
@@ -224,7 +224,7 @@ pub unsafe extern "C" fn pycc_rt_int_set_from_int_list(src: *mut PyIntListObj) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{a_bigint_word, assert_overflow_raised};
+    use crate::tests::{a_bigint_word, assert_overflow_raised, pending_tag_and_message};
 
     fn int_list_of(values: &[i64]) -> *mut PyIntListObj {
         let list = pycc_rt_int_list_new();
@@ -323,10 +323,47 @@ mod tests {
 
     #[test]
     fn pycc_rt_int_set_check_not_resized_is_a_no_op_when_lengths_match() {
-        // Calls the public wrapper directly (safe for the non-panicking
-        // path, unlike the panic-path test below), so the wrapper's own
-        // call-through line is exercised too, not just the private helper.
+        // Calls the public wrapper directly on the equal-lengths path, so
+        // the wrapper's own call-through line is exercised too, not just the
+        // private helper the two raising-path tests below call.
         pycc_rt_int_set_check_not_resized(3, 3);
+    }
+
+    #[test]
+    fn check_set_len_unchanged_raises_when_lengths_differ() {
+        // Part B of #1038 (#1064): was `#[should_panic]`. The function is
+        // `-> ()`, so there is no sentinel: the `ForSet` loop-test codegen
+        // terminates the loop by reading `pycc_rt_exception_active()`. The
+        // message is now CPython's own, capitalised `Set`, where the panic
+        // said lowercase `set`.
+        pycc_rt_exception_clear();
+        check_set_len_unchanged(4, 3);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
+        assert_eq!(message, "Set changed size during iteration");
+        assert!(!message.contains("pycc_rt: "), "{message}");
+        pycc_rt_exception_clear();
+    }
+
+    #[test]
+    fn check_set_len_unchanged_keeps_an_already_pending_exception() {
+        // Part B of #1038 (#1064), review round 2: a `ForSet` body that both
+        // grows the set and raises reaches the loop test with its own
+        // exception pending. `pycc_rt_exception_raise` clobbers the pending
+        // value unconditionally, so without this guard the body's
+        // `IndexError` would be relabelled `RuntimeError: Set changed size
+        // during iteration` and the wrong `except` handler would run.
+        pycc_rt_exception_clear();
+        raise_builtin(
+            EXCEPTION_TYPE_INDEX_ERROR,
+            "IndexError",
+            "pop from empty list",
+        );
+        check_set_len_unchanged(4, 3);
+        let (tag, message) = pending_tag_and_message();
+        assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
+        assert_eq!(message, "pop from empty list");
+        pycc_rt_exception_clear();
     }
 
     #[test]

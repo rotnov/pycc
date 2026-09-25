@@ -2,8 +2,7 @@
 //! `frozenset[int]` share, called through the `rlib` exactly as generated
 //! code links them from the `staticlib`.
 //!
-//! The unit tests in `crates/pycc_rt/src/int_set.rs` and `lib.rs` own the
-//! semantics; this file pins the exported ABI from outside the crate. It is
+//! The unit tests in `crates/pycc_rt/src/int_set.rs` own the semantics; this file pins the exported ABI from outside the crate. It is
 //! also where the diff-coverage gate sees these functions: the
 //! `--workspace` export keeps an integration-test binary's copy of a
 //! `pycc_rt` symbol and discards the unit-test binary's counters for it

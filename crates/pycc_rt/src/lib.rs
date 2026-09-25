@@ -74,8 +74,6 @@ pub use int_bitwise::{
 // which reach them through `use super::*` -- keep referring to these names
 // unqualified, exactly as when they lived in this file.
 use int_encoding::*;
-#[cfg(test)]
-use int_set::check_set_len_unchanged;
 pub use int_set::{
     PyIntSetObj, pycc_rt_int_set_add, pycc_rt_int_set_check_not_resized, pycc_rt_int_set_copy,
     pycc_rt_int_set_decref, pycc_rt_int_set_from_int_list, pycc_rt_int_set_get,
@@ -2752,7 +2750,7 @@ mod tests {
     /// `cargo test` runs in parallel, so every caller clears before raising
     /// and after asserting; a message left pending would otherwise be read by
     /// whatever test the harness schedules next on this thread.
-    fn pending_tag_and_message() -> (u8, String) {
+    pub(crate) fn pending_tag_and_message() -> (u8, String) {
         assert_eq!(pycc_rt_exception_active(), 1);
         let obj = exception::pycc_rt_exception_value();
         let tag = unsafe { (*obj).type_tag };
@@ -4897,43 +4895,6 @@ mod tests {
             pycc_rt_dict_incref(std::ptr::null_mut());
             pycc_rt_dict_decref(std::ptr::null_mut());
         }
-    }
-
-    #[test]
-    fn check_set_len_unchanged_raises_when_lengths_differ() {
-        // Part B of #1038 (#1064): was `#[should_panic]`. The function is
-        // `-> ()`, so there is no sentinel: the `ForSet` loop-test codegen
-        // terminates the loop by reading `pycc_rt_exception_active()`. The
-        // message is now CPython's own, capitalised `Set`, where the panic
-        // said lowercase `set`.
-        pycc_rt_exception_clear();
-        check_set_len_unchanged(4, 3);
-        let (tag, message) = pending_tag_and_message();
-        assert_eq!(tag, EXCEPTION_TYPE_RUNTIME_ERROR);
-        assert_eq!(message, "Set changed size during iteration");
-        assert!(!message.contains("pycc_rt: "), "{message}");
-        pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn check_set_len_unchanged_keeps_an_already_pending_exception() {
-        // Part B of #1038 (#1064), review round 2: a `ForSet` body that both
-        // grows the set and raises reaches the loop test with its own
-        // exception pending. `pycc_rt_exception_raise` clobbers the pending
-        // value unconditionally, so without this guard the body's
-        // `IndexError` would be relabelled `RuntimeError: Set changed size
-        // during iteration` and the wrong `except` handler would run.
-        pycc_rt_exception_clear();
-        raise_builtin(
-            EXCEPTION_TYPE_INDEX_ERROR,
-            "IndexError",
-            "pop from empty list",
-        );
-        check_set_len_unchanged(4, 3);
-        let (tag, message) = pending_tag_and_message();
-        assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
-        assert_eq!(message, "pop from empty list");
-        pycc_rt_exception_clear();
     }
 
     /// #1054, coverage-bearing companion to
