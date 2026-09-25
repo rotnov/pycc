@@ -277,14 +277,38 @@ fn a_c_string_literal_escapes_everything_outside_printable_ascii() {
     assert_eq!(c_string_literal("é1"), "\"\\303\\2511\"");
     assert_eq!(c_string_literal("a\nb"), "\"a\\012b\"");
     assert!(
-        embed_config_inc("app.pycc", false).contains("#define PYCC_EMBED_SIDECAR \"app.pycc\"\n")
+        embed_config_inc("app.pycc", false, false)
+            .contains("#define PYCC_EMBED_SIDECAR \"app.pycc\"\n")
     );
 }
 
 #[test]
 fn the_closure_define_is_written_only_for_a_closure() {
-    assert!(!embed_config_inc("app.pycc", false).contains("PYCC_EMBED_CLOSURE"));
-    assert!(embed_config_inc("app.pycc", true).ends_with("#define PYCC_EMBED_CLOSURE 1\n"));
+    assert!(!embed_config_inc("app.pycc", false, false).contains("PYCC_EMBED_CLOSURE"));
+    assert!(embed_config_inc("app.pycc", true, false).ends_with("#define PYCC_EMBED_CLOSURE 1\n"));
+}
+
+/// Each of the four combinations of the closure and natives defines: the
+/// natives define follows the closure's, and neither changes the rest.
+#[test]
+fn the_natives_define_is_written_only_for_natives() {
+    let base = embed_config_inc("app.pycc", false, false);
+    let closure = "#define PYCC_EMBED_CLOSURE 1\n";
+    let natives = "#define PYCC_EMBED_NATIVES 1\n";
+    assert!(!base.contains("PYCC_EMBED_NATIVES"));
+    assert_eq!(
+        embed_config_inc("app.pycc", true, false),
+        format!("{base}{closure}")
+    );
+    assert_eq!(
+        embed_config_inc("app.pycc", false, true),
+        format!("{base}{natives}")
+    );
+    assert_eq!(
+        embed_config_inc("app.pycc", true, true),
+        format!("{base}{closure}{natives}")
+    );
+    assert_eq!(WINDOWS_NATIVES_DIR, "natives");
 }
 
 #[test]

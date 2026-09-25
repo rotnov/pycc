@@ -52,7 +52,8 @@ pub(crate) fn check_existing(sidecar: &Path) -> Result<bool, String> {
 /// swaps it into `parent/sidecar_name`. Returns the bundled library's final
 /// path, which the link step names by file. `locked` is the consumed
 /// `pycc.lock` section's closure, when the build has one (#1242), and
-/// `natives` what the build copies into `lib/` besides libpython (#1243).
+/// `natives` what the build copies into `lib/` besides libpython (#1243),
+/// or into `natives\` on Windows (#1306).
 /// `static_lib` is a static build's archive (D-251): nothing is bundled in
 /// libpython's place, and the returned path names no file. On Windows the
 /// library sits at the sidecar root ([`layout::bundled_library_path`]).
@@ -142,7 +143,7 @@ fn populate(
     static_lib: Option<&StaticProbe>,
 ) -> Result<(), String> {
     if platform == EmbedPlatform::Windows {
-        return windows::populate(probe, staging, locked);
+        return windows::populate(probe, staging, locked, natives);
     }
     let lib_dir = staging.join("lib");
     std::fs::create_dir(&lib_dir).map_err(|e| io_error("create", &lib_dir, &e))?;

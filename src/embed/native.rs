@@ -4,14 +4,17 @@
 //! depends on, directly or through another native. One derivation serves
 //! both consumers: `pycc lock` records its result as `[[target.native]]`,
 //! and an embedded build re-derives it, compares it with the section, and
-//! copies what it lists into `OUT.pycc/lib/`.
+//! copies what it lists into `OUT.pycc/lib/` (`OUT.pycc\natives\` on
+//! Windows).
 //!
 //! The derivation reads the closure's *source* images, the files under the
 //! site directory that `lock::build::payload` lists. On macOS it resolves
 //! every dependency, absolute or relative, on the build host and
 //! classifies it with `macho_host.rs`, as the build's relocation does
 //! (#1259); it never refuses, and leaves the refusals to the relocation.
-//! On Linux it is the ELF walk in `native_linux.rs`.
+//! On Linux it is the ELF walk in `native_linux.rs`. On Windows it is the
+//! strict PE classification in `native_windows_closure.rs` (#1306), which
+//! refuses, at lock and build alike, an import it cannot place.
 
 use super::EmbedProbe;
 use super::bundle::{io_error, run_tool};
@@ -21,6 +24,7 @@ use super::macho::{self, MachoDep};
 use super::macho_host::{HostContext, HostImage, HostKind, classify_on_host};
 use super::native_linux::{self, LinuxEnv};
 use super::native_windows::{self, WindowsEnv};
+use super::native_windows_closure;
 use super::sha256::sha256_file;
 use crate::lock::build::{ClosureFile, LockedClosure};
 use crate::lock::schema::LockedNative;
@@ -37,8 +41,8 @@ pub(crate) struct DerivedNative {
     pub(crate) locked: LockedNative,
 }
 
-/// What an embedded build copies into `OUT.pycc/lib/` besides libpython
-/// and the standard library.
+/// What an embedded build copies into `OUT.pycc/lib/` (`OUT.pycc\natives\`
+/// on Windows) besides libpython and the standard library.
 #[derive(Debug, Default)]
 pub(crate) struct NativePlan {
     /// The natives, sorted by name.
@@ -73,7 +77,9 @@ impl NativePlan {
 /// bundles from the interpreter against `windows_env` (#1305), refusing
 /// one that would not load once moved; `pycc lock` walks the closure
 /// alone, as on macOS, where the relocation walks the interpreter's
-/// images. `link` is
+/// images. On Windows the closure's images are classified and their
+/// natives derived by `native_windows_closure::derive` for both callers
+/// (#1306). `link` is
 /// how the executable links libpython (D-251): a static build walks no
 /// libpython and refuses an image that needs one.
 pub(crate) fn plan_natives(
@@ -94,22 +100,32 @@ pub(crate) fn plan_natives(
             linux_vendor: Vec::new(),
         }),
         EmbedPlatform::Linux => native_linux::plan(probe, closure, env, interpreter, link),
-        // Windows: nothing to vendor. The interpreter's images are scanned
-        // and bundled as they are; a closure holding a PE image is refused
-        // (`plan_embed`) until #1306.
+        // Windows: the interpreter's images are scanned and bundled as they
+        // are; the closure's images are classified strictly, and their
+        // natives are copied into `natives\` (#1306).
         EmbedPlatform::Windows => {
             if interpreter {
                 native_windows::scan_interpreter(probe, windows_env)?;
             }
-            Ok(NativePlan::default())
+            let natives = match closure {
+                Some(closure) => native_windows_closure::derive(probe, closure, windows_env)?,
+                None => Vec::new(),
+            };
+            Ok(NativePlan {
+                natives,
+                ..NativePlan::default()
+            })
         }
     }
 }
 
 /// The natives found so far, and the names they and every other vendored
-/// library claim in `lib/`.
+/// library claim in the bundle's native directory (`lib/`, or `natives\`
+/// on Windows).
 pub(crate) struct Natives {
     bundled_name: String,
+    /// The native directory as a message names it: `lib/` or `natives\`.
+    dir_label: &'static str,
     /// Source path to (name, sha256, the distributions that need it).
     by_source: BTreeMap<PathBuf, (String, String, BTreeSet<String>)>,
     /// Case-folded name to (name, source).
@@ -118,14 +134,20 @@ pub(crate) struct Natives {
 
 impl Natives {
     pub(crate) fn new(bundled_name: String) -> Self {
+        Self::with_dir(bundled_name, "lib/")
+    }
+
+    /// Natives copied into the directory a message names `dir_label`.
+    pub(crate) fn with_dir(bundled_name: String, dir_label: &'static str) -> Self {
         Self {
             bundled_name,
+            dir_label,
             by_source: BTreeMap::new(),
             names: BTreeMap::new(),
         }
     }
 
-    /// Claims `name` in `lib/` for the library read from `source`, and
+    /// Claims `name` in the native directory for the library read from `source`, and
     /// returns whether that library already claimed it. Refused when it is
     /// the bundled libpython's name, or when a different source already
     /// claims it; names are compared case-folded, because the macOS default
@@ -133,18 +155,20 @@ impl Natives {
     pub(crate) fn claim_name(&mut self, name: &str, source: &Path) -> Result<bool, String> {
         if name.eq_ignore_ascii_case(&self.bundled_name) {
             return Err(format!(
-                "the library `{}` needs the name `{name}` in the bundle's `lib/`, which the \
+                "the library `{}` needs the name `{name}` in the bundle's `{}`, which the \
                  bundled libpython already has; pycc cannot bundle both",
-                source.display()
+                source.display(),
+                self.dir_label
             ));
         }
         let folded = name.to_ascii_lowercase();
         match self.names.get(&folded) {
             Some((other, other_source)) if other_source != source => Err(format!(
                 "the libraries `{}` and `{}` both need the name `{name}` in the bundle's \
-                 `lib/` (as `{other}` and `{name}`); pycc cannot bundle both",
+                 `{}` (as `{other}` and `{name}`); pycc cannot bundle both",
                 other_source.display(),
-                source.display()
+                source.display(),
+                self.dir_label
             )),
             Some(_) => Ok(true),
             None => {
