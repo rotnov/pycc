@@ -15,9 +15,9 @@
 
 use crate::module::LoweredModule;
 use crate::{
-    FIRST_USER_EXCEPTION_TYPE_TAG, ForeignImportSite, FromImport, HirModule, ImportBinding,
-    MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs, builtin_exception_init_item,
-    foreign_bound_object, is_builtin_exception_class, unsupported,
+    FIRST_USER_EXCEPTION_TYPE_TAG, FOREIGN_BASE_EXCEPTION_TYPE_TAG, ForeignImportSite, FromImport,
+    HirModule, ImportBinding, MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs,
+    builtin_exception_init_item, foreign_bound_object, is_builtin_exception_class, unsupported,
 };
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
@@ -387,10 +387,11 @@ pub fn finalize(mut hir: HirModule) -> Result<HirModule, Vec<Diagnostic>> {
                 continue;
             }
             any_user_exception_class = true;
-            if next_tag > u16::from(u8::MAX) {
+            if next_tag >= u16::from(FOREIGN_BASE_EXCEPTION_TYPE_TAG) {
                 // The tag is a `u8` in `PyExceptionObj` and in every runtime
                 // entry point that carries one, so the hierarchy cannot grow
-                // past 256 types. No span is available here: `class_defs`
+                // past 256 types, the top one reserved for a bridged foreign
+                // non-`Exception` (#1316). No span is available here: `class_defs`
                 // records no source range, and the diagnostic is about the
                 // program's class count rather than any one declaration.
                 // Reached only when every item lowered, so this stays a

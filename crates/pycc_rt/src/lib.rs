@@ -57,12 +57,13 @@ mod int_encoding;
 pub use exception::pycc_rt_exception_print_and_exit;
 use exception::raise_builtin;
 pub use exception::{
-    EXCEPTION_TYPE_EXCEPTION, EXCEPTION_TYPE_INDEX_ERROR, EXCEPTION_TYPE_KEY_ERROR,
-    EXCEPTION_TYPE_OVERFLOW_ERROR, EXCEPTION_TYPE_RUNTIME_ERROR, EXCEPTION_TYPE_TYPE_ERROR,
-    EXCEPTION_TYPE_VALUE_ERROR, EXCEPTION_TYPE_ZERO_DIV_ERROR, PyExceptionObj,
-    pycc_rt_exception_active, pycc_rt_exception_alloc, pycc_rt_exception_clear,
-    pycc_rt_exception_message, pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause,
-    pycc_rt_exception_type_matches, pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
+    EXCEPTION_TYPE_EXCEPTION, EXCEPTION_TYPE_FOREIGN_BASE, EXCEPTION_TYPE_INDEX_ERROR,
+    EXCEPTION_TYPE_KEY_ERROR, EXCEPTION_TYPE_OVERFLOW_ERROR, EXCEPTION_TYPE_RUNTIME_ERROR,
+    EXCEPTION_TYPE_TYPE_ERROR, EXCEPTION_TYPE_VALUE_ERROR, EXCEPTION_TYPE_ZERO_DIV_ERROR,
+    PyExceptionObj, pycc_rt_exception_active, pycc_rt_exception_alloc, pycc_rt_exception_clear,
+    pycc_rt_exception_group_alloc, pycc_rt_exception_group_partition, pycc_rt_exception_message,
+    pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
+    pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
 };
 pub use int_bitwise::{
     pycc_rt_int_and, pycc_rt_int_lshift, pycc_rt_int_or, pycc_rt_int_rshift, pycc_rt_int_xor,

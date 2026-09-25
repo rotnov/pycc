@@ -28,7 +28,8 @@
 //! **The admission is module-level and annotation-driven only.** PEP 585's
 //! variadic `tuple[float, ...]` has no fixed arity and stays refused, as
 //! does any mixed annotation; the same statement inside a function body
-//! keeps its `I0404`, because `gc` is not in scope as a value there at all.
+//! is refused too -- #1316 admits the read of `gc` there, and the ordinary
+//! assignability check refuses the `object` value with `T0025`.
 //! `crates/pycc_types/src/tests/foreign_float_tuple.rs` pins each of those
 //! refusals against the checker directly; the tests below pin the two that
 //! are worth seeing through the public CLI.

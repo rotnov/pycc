@@ -264,11 +264,10 @@ fn a_user_defined_conversion_class_still_wins() {
     }
 }
 
-/// PR 2a's positional bound is inherited unchanged by both conversions: a
-/// foreign object may be read only in a module body, so a conversion inside
-/// a function body is still `I0404`.
+/// Both conversions are admitted inside a function body since #1316, which
+/// lifted PR 2a's positional bound for a module-level foreign name.
 #[test]
-fn a_conversion_inside_a_function_body_is_still_refused() {
+fn a_conversion_inside_a_function_body_is_admitted() {
     let dir = ScratchDir::new("foreign_conversion_in_function").expect("scratch");
     for name in ["float", "bool"] {
         let body = format!(
@@ -281,9 +280,7 @@ fn a_conversion_inside_a_function_body_is_still_refused() {
              print(f())\n"
         );
         let out = check(&dir, &body);
-        assert!(!out.status.success(), "{name} should still be refused");
-        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(text.contains("I0404"), "{name}: {text}");
+        assert!(out.status.success(), "{name}: {}", stdout_of(&out));
     }
 }
 
@@ -537,9 +534,9 @@ fn a_user_defined_int_or_str_class_still_wins() {
     }
 }
 
-/// PR 2a's positional bound is inherited by PR 4b's conversions too.
+/// PR 4b's conversions are admitted inside a function body too (#1316).
 #[test]
-fn an_int_or_str_conversion_inside_a_function_body_is_still_refused() {
+fn an_int_or_str_conversion_inside_a_function_body_is_admitted() {
     let dir = ScratchDir::new("foreign_int_str_in_function").expect("scratch");
     for name in ["int", "str"] {
         let body = format!(
@@ -552,9 +549,7 @@ fn an_int_or_str_conversion_inside_a_function_body_is_still_refused() {
              print(f())\n"
         );
         let out = check(&dir, &body);
-        assert!(!out.status.success(), "{name} should still be refused");
-        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(text.contains("I0404"), "{name}: {text}");
+        assert!(out.status.success(), "{name}: {}", stdout_of(&out));
     }
 }
 

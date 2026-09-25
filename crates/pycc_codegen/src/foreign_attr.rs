@@ -20,6 +20,7 @@
 //! argument marshalling. The deferral is recorded in `docs/RUNTIME.md`.
 
 use super::*;
+use crate::foreign_fail::{ForeignFailEdge, route_null};
 use inkwell::builder::Builder;
 
 /// Declares the shim's
@@ -83,32 +84,23 @@ pub(super) fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
 /// execution of module n raised unreported exception` instead of the real
 /// `AttributeError`.
 ///
-/// So this arm emits the `NULL` check itself and routes the failure to the
-/// **module-exec failure edge** `foreign_import.rs` already uses for a
-/// failed `pycc_ext_obj_import`: return [`EXT_MODULE_EXEC_FAILED`]
-/// immediately, leaving CPython's own exception set and unmodified. The
-/// remaining statements never run, and the interpreter reports the real
-/// exception. Bridging the two protocols -- naming the exception in
-/// `pycc_rt::exception`, which carries no `AttributeError` tag -- stays PR
-/// 2b's, together with `MirExpr::ObjMethodCall`; nothing here needs pycc to
-/// name it.
+/// So this arm emits the `NULL` check itself and routes the failure through
+/// [`ForeignFailEdge`] (#1316), whose edge depends on the function being
+/// emitted into:
 ///
-/// # Why the enclosing function is always the module-exec entry
+/// - in `pycc_ext_module_exec` it is the **module-exec failure edge**
+///   `foreign_import.rs` already uses for a failed `pycc_ext_obj_import`:
+///   return [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's own
+///   exception set and unmodified, so the interpreter reports the real
+///   exception;
+/// - in any other function (a user function reading a module-level foreign
+///   name) it calls `pycc_ext_obj_error_bridge`, which moves CPython's
+///   exception into pycc's pending state, and branches to the innermost
+///   exception target -- the enclosing `try`'s handler, or the function's
+///   own `exception_exit` -- exactly as a failed pycc operation does.
 ///
-/// That failure edge exists only inside `pycc_ext_module_exec`, so this
-/// asserts it is the function being emitted into. PR 2a's review settled
-/// the reachability question with evidence rather than argument: `import
-/// numpy` + `def _helper(): return numpy.pi` + `_helper()` built *and ran*
-/// on this branch, so an `ObjAttrGet` really could be emitted inside a
-/// function body, where returning an `i64` from a function of another
-/// return type would not even verify. The answer is at the `pycc_types`
-/// layer -- `expr.rs`'s `HirExpr::Name` arm refuses reading a foreign
-/// object inside a function body at all (`docs/TYPE_SYSTEM.md`), which PR
-/// 2a can afford because it ships no user-visible capability. That leaves
-/// exactly two admitted shapes, both at module scope: a discarded
-/// `ExprStmt`, and the base of a *further* `ObjAttrGet`, because `a.b.c`
-/// nests this node inside itself. The nested case is answered twice over
-/// now -- this check stops the outer load from ever seeing the inner
+/// The nested case (`a.b.c` nests this node inside itself) is answered
+/// twice over: this check stops the outer load from ever seeing the inner
 /// `NULL`, and the shim's own NULL-`obj` guard in
 /// `src/ext/pycc_ext_module.c` still holds the line for any caller that
 /// reaches it another way.
@@ -116,10 +108,11 @@ pub(super) fn emit<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
     attr: &str,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
     let getattr = obj_getattr_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let name = builder
@@ -132,41 +125,23 @@ pub(super) fn emit<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_getattr returns PyObject *")
         .into_pointer_value();
-    let failed = builder
-        .build_is_null(loaded, "foreign_attr_failed")
-        .expect("build_is_null should not fail");
-    let fail_bb = context.append_basic_block(entry_fn, "foreign_attr_fail");
-    let cont_bb = context.append_basic_block(entry_fn, "foreign_attr_cont");
-    builder
-        .build_conditional_branch(failed, fail_bb, cont_bb)
-        .expect("build_conditional_branch should not fail");
-    builder.position_at_end(fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
-    builder.position_at_end(cont_bb);
+    route_null(context, builder, module, rt, edge, loaded, "foreign_attr");
     Scalar::Object(loaded)
 }
 
 /// The function `builder` is currently emitting into, once it is known to
 /// be the `--ext` module-body entry point.
 ///
+/// Since #1316 only the operations that remain module-body-only call this:
+/// `foreign_call.rs`'s `for` loop over a foreign iterable and
+/// `foreign_len.rs`'s float-tuple unpack, both of which `pycc_types` still
+/// admits only at module scope. Every other foreign operation routes its
+/// failure through [`ForeignFailEdge`], which works in any function.
+///
 /// The guard runs *before* any block is appended: the failure edge returns
 /// `i64 -1`, so emitting it into a function with a different return type
-/// would be an LLVM verifier error rather than a diagnosable one. See
-/// [`emit`]'s own doc comment for why every admitted `ObjAttrGet` really is
-/// emitted here -- it is a `pycc_types` refusal, so reaching this arm from
-/// anywhere else is a front-end defect.
-///
-/// Shared by every foreign-object operation that has a failure edge, not
-/// just the attribute load this module owns: `foreign_call.rs`'s method
-/// call and `foreign_len.rs`'s `len` and truth test call it too, on the
-/// identical reasoning and behind the identical `pycc_types` refusal. The
-/// message therefore names the class of operation rather than one of them.
+/// would be an LLVM verifier error rather than a diagnosable one. Reaching
+/// it from anywhere else is a front-end defect.
 pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> FunctionValue<'ctx> {
     let function = builder
         .get_insert_block()
@@ -175,10 +150,9 @@ pub(super) fn expect_module_exec_entry<'ctx>(builder: &Builder<'ctx>) -> Functio
         .expect("every basic block belongs to a function");
     if function.get_name().to_bytes() != EXT_MODULE_EXEC_SYMBOL.as_bytes() {
         panic!(
-            "pycc_codegen: internal error: an operation on a CPython object was emitted \
-             outside `{EXT_MODULE_EXEC_SYMBOL}` -- pycc_types refuses reading a CPython \
-             object anywhere but a module body, and only the module-exec entry has the \
-             failure edge a failed operation takes"
+            "pycc_codegen: internal error: a module-body-only operation on a CPython object \
+             was emitted outside `{EXT_MODULE_EXEC_SYMBOL}` -- pycc_types admits a foreign \
+             `for` loop and a float-tuple unpack only in a module body"
         )
     }
     function

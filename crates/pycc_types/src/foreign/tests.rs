@@ -260,9 +260,15 @@ fn a_foreign_import_after_an_unrolled_enum_loop_is_repositioned_past_it() {
 /// The label [`both_producer_shapes`] gives the helper-call shape.
 const HELPER_SHAPE: &str = "a private helper returning `object`";
 
-/// The `I0404` phrase a foreign read inside a function body now reports,
-/// from `expr.rs`'s `HirExpr::Name` arm.
+/// The `I0404` phrase `expr.rs`'s `HirExpr::Name` arm reports for a
+/// `Ty::Object` read it does not admit: at module scope a bare foreign name
+/// in a position that needs a value, and inside a function body any
+/// `object` global the module did not bind by a foreign import (#1316).
 const FUNCTION_BODY_READ: &str = "using `numpy`, which is bound to a CPython object";
+
+/// The `I0404` phrase `crate::lib`'s `Return` arm reports (#1316): a
+/// function may read a module-level foreign name but not hand it back.
+const RETURNING: &str = "returning a CPython object from a function";
 
 /// `snippet` in each of the two producer shapes: literally, and with every
 /// `numpy.pi` replaced by a call to a private helper that returns one.
@@ -271,12 +277,10 @@ const FUNCTION_BODY_READ: &str = "using `numpy`, which is bound to a CPython obj
 /// makes `object` unspellable in one, so a solver-inferred return is the
 /// only way a call expression can have this type at all.
 ///
-/// **PR 2a of #1081 narrowed what the second shape proves.** A foreign read
-/// inside a function body is refused again (`expr.rs`'s `Name` arm), so the
-/// helper's own body is now rejected before any consumer sees its result:
-/// the shape pins the narrowing rather than a consumer's type-keyed
-/// refusal. It stays in the table because that is exactly the regression a
-/// silent re-admission of the read would show up as.
+/// #1316 admits the helper's foreign read but refuses its `return` of a
+/// CPython object, so the helper can never really produce one; the shape
+/// stays in the table because the module-body consumer refusal is still
+/// the diagnostic a caller of such a helper sees first.
 fn both_producer_shapes(snippet: &str) -> [(&'static str, String); 2] {
     [
         ("`numpy.pi`", snippet.to_string()),
@@ -329,23 +333,68 @@ fn a_module_scope_attribute_load_on_a_cpython_object_is_admitted() {
     assert!(check_foreign(source).is_none(), "{source}");
 }
 
-/// The same load inside a function body is refused (PR 2a of #1081).
-///
-/// Two things are pinned at once, because one rule answers both: a helper
-/// body cannot read a foreign name, and therefore no call expression can
-/// carry `object` either. The refusal is what keeps `pycc_codegen`'s
-/// `foreign_attr::emit` reachable only from the module-exec entry, whose
-/// failure edge is the only one a failed lookup can take, and what restores
-/// the compile-time refusal of a helper called *above* its own `import`.
+/// #1316: a function body may read a module-level foreign name, but a
+/// CPython object never leaves the function through `return` and is never
+/// rendered. The read itself is admitted (`numpy.pi` as a discarded
+/// statement), so each refusal is the consumer's own.
 #[test]
-fn a_function_body_may_not_read_a_foreign_object() {
+fn a_function_body_reads_a_foreign_object_but_may_not_return_or_render_it() {
+    assert!(
+        check_foreign("def f() -> None:\n    numpy.pi\n").is_none(),
+        "a discarded in-function attribute load is admitted"
+    );
     for source in [
         "def _h():\n    return numpy.pi\n\n\n_h()\n",
         "def _h():\n    return numpy.pi\n\n\nx = 1\n",
-        "def f() -> None:\n    print(numpy)\n",
+        "def _h():\n    return numpy\n\n\nx = 1\n",
     ] {
-        assert_refused(HELPER_SHAPE, source, "I0404", FUNCTION_BODY_READ);
+        assert_refused(HELPER_SHAPE, source, "I0404", RETURNING);
     }
+    assert_refused(
+        "an in-function print",
+        "def f() -> None:\n    print(numpy)\n",
+        "I0404",
+        "printing or formatting",
+    );
+}
+
+/// The lift is keyed on the foreign import, not on the `object` type: an
+/// `object` global the module did not bind by a foreign import stays the
+/// function-body read refusal, for a plain read and for a call alike.
+///
+/// No source program reaches this today -- every other module-level
+/// `object` binding (a `for` loop variable over a CPython object) may be
+/// unbound and is `T0041` first, which the second half pins -- so the
+/// gate is pinned on a hand-built function environment.
+#[test]
+fn a_non_import_object_global_stays_refused_in_a_function_body() {
+    let mut module = crate::env::Environment::new();
+    module.bind("x".to_string(), Ty::Object);
+    module.foreign_globals.insert("numpy".to_string());
+    let body = module.child_for_function(&[]);
+    for expr in [
+        pycc_hir::HirExpr::Name("x".to_string()),
+        pycc_hir::HirExpr::Call {
+            callee: "x".to_string(),
+            args: vec![],
+        },
+    ] {
+        let diagnostic = crate::expr::infer_expr_in(&body, &[], &expr)
+            .expect_err("a non-import `object` global is refused");
+        assert_eq!(diagnostic.code, "I0404", "{diagnostic:?}");
+        assert!(
+            diagnostic
+                .message
+                .contains("using `x`, which is bound to a CPython object"),
+            "{diagnostic:?}"
+        );
+    }
+    assert_refused(
+        "a module-level `for` loop variable",
+        "for x in numpy.pi:\n    pass\ndef f() -> None:\n    len(x)\n",
+        "T0041",
+        "may not be bound",
+    );
 }
 
 /// A module-body read placed *above* its own `import` is an unbound name.
@@ -387,11 +436,9 @@ fn a_module_body_read_above_the_import_is_unbound() {
 /// (`crates/pycc_codegen/src/foreign_len.rs`), so there is no refusal left
 /// to assert; `tests/issue_1082_foreign_len_and_truth.rs` asserts the
 /// acceptance in its place. What remains here is the rendering, binding,
-/// walrus and `match` group, which PR 3a does not touch. The in-function
-/// shapes of all five condition sites still report the function-body read
-/// refusal, which
-/// [`the_in_function_condition_sites_report_the_function_body_read_refusal`]
-/// pins unchanged.
+/// walrus and `match` group, which PR 3a does not touch. #1316 admits the
+/// in-function shapes of all five condition sites, which
+/// [`the_in_function_condition_sites_are_admitted`] pins.
 #[test]
 fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_shapes() {
     for (phrase, snippet) in [
@@ -418,15 +465,11 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
 }
 
 /// The five condition sites inside a function body, which is a separate
-/// pass in `crate::lib`, all report the function-body read refusal -- one
-/// rule, reached before any of them.
-///
-/// Unchanged by PR 3a of #1082. A truth test on a CPython object is now
-/// supported *in a module body*; PR 2a's positional bound is what still
-/// stops it here, and only the module-exec entry point has the failure
-/// edge a raising `PyObject_IsTrue` takes.
+/// pass in `crate::lib`, are all admitted (#1316): a function body now has
+/// the failure edge a raising `PyObject_IsTrue` takes
+/// (`pycc_codegen::foreign_fail`).
 #[test]
-fn the_in_function_condition_sites_report_the_function_body_read_refusal() {
+fn the_in_function_condition_sites_are_admitted() {
     for snippet in [
         "def f() -> None:\n    if numpy.pi:\n        print(1)\n",
         "def f() -> None:\n    while numpy.pi:\n        print(1)\n",
@@ -434,7 +477,7 @@ fn the_in_function_condition_sites_report_the_function_body_read_refusal() {
         "def f() -> None:\n    ys = {i for i in range(3) if numpy.pi}\n",
         "def f() -> None:\n    zs = {\"k\": i for i in range(3) if numpy.pi}\n",
     ] {
-        assert_refused("`numpy.pi`", snippet, "I0404", FUNCTION_BODY_READ);
+        assert!(check_foreign(snippet).is_none(), "{snippet}");
     }
 }
 
@@ -598,14 +641,14 @@ fn a_subscript_store_on_a_cpython_object_is_still_refused() {
 /// `object` cannot be spelled in (D-137) -- the exact dead end the
 /// `AttrGet` arm's own comment describes. The assertion is therefore on
 /// *which diagnostic* the user gets, not on the program being admitted:
-/// PR 2a's positional bound still refuses the helper body.
+/// #1316's `return` refusal still refuses the helper body.
 #[test]
-fn a_private_helper_returning_a_subscript_load_reports_the_read_refusal() {
+fn a_private_helper_returning_a_subscript_load_reports_the_return_refusal() {
     assert_refused(
         HELPER_SHAPE,
         "def _h():\n    return numpy.pi[0]\n\n\nx = 1\n",
         "I0404",
-        FUNCTION_BODY_READ,
+        RETURNING,
     );
 }
 

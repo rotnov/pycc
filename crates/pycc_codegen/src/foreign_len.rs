@@ -9,9 +9,10 @@
 //! operations share a module because they share everything that matters at
 //! this layer: each is one call to a fixed shim helper that answers a
 //! *scalar* rather than a `PyObject *`, and each reports failure as `-1`
-//! rather than as `NULL`, so none can reuse `foreign_call.rs`'s
-//! `fail_on_null`. PR 4a's `float(o)` is the third member of that family and
-//! lives here for the same reason; `bool(o)` needs no emitter of its own at
+//! rather than as `NULL`, so each routes its failure through
+//! `foreign_fail::route_negative` rather than `route_null`. PR 4a's
+//! `float(o)` is the third member of that family and lives here for the
+//! same reason; `bool(o)` needs no emitter of its own at
 //! all, because it is exactly [`emit_truthy`] widened to a `Scalar::Bool`.
 //! PR 4b's `int(o)` and `str(o)` are the fourth and fifth: identical shape
 //! again, differing only in the out-slot's type -- an `i64` holding a D-141
@@ -42,14 +43,17 @@
 //!
 //! **Failure** (`docs/RUNTIME.md`). Every helper here leaves *CPython's*
 //! error indicator set, which pycc's own pending-exception guard (D-173) cannot
-//! see, so each arm below emits its own check and returns
-//! [`EXT_MODULE_EXEC_FAILED`] from the module-exec entry point -- exactly
-//! `foreign_attr::emit`'s answer to the same question, and for exactly its
-//! reasons. #1096 tracks the fact that such an edge bypasses pycc's MIR
-//! exception target and so cannot be caught by a module-scope `try`.
+//! see, so each arm below emits its own check through
+//! `foreign_fail::route_negative`: inside `pycc_ext_module_exec` it returns
+//! [`EXT_MODULE_EXEC_FAILED`], and inside any other function it bridges the
+//! exception into pycc's pending state and branches to the innermost
+//! exception target (#1316). #1096 tracks the fact that the module-exec edge
+//! bypasses pycc's MIR exception target and so cannot be caught by a
+//! module-scope `try`.
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
+use crate::foreign_fail::{ForeignFailEdge, route_negative};
 use inkwell::builder::Builder;
 use inkwell::values::{IntValue, PointerValue};
 
@@ -161,46 +165,6 @@ fn obj_unpack_float_tuple_fn<'ctx>(
     )
 }
 
-/// Routes a negative `status` to the module-exec failure edge, leaving the
-/// builder positioned on the success continuation.
-///
-/// The scalar counterpart of `foreign_call.rs`'s `fail_on_null`: both shim
-/// helpers here report failure as `-1` with CPython's exception already set,
-/// so the test is `status < 0` rather than a null check. It is a *signed*
-/// comparison against zero rather than an equality test against `-1` so that
-/// any future negative status is fail-closed; `pycc_ext_obj_truthy`'s
-/// success values are `0` and `1`, and `pycc_ext_obj_len`'s are `0` alone.
-fn fail_on_negative<'ctx>(
-    context: &'ctx Context,
-    builder: &Builder<'ctx>,
-    entry_fn: FunctionValue<'ctx>,
-    status: IntValue<'ctx>,
-    label: &str,
-) {
-    let failed = builder
-        .build_int_compare(
-            inkwell::IntPredicate::SLT,
-            status,
-            context.i32_type().const_zero(),
-            &format!("{label}_failed"),
-        )
-        .expect("build_int_compare should not fail");
-    let fail_bb = context.append_basic_block(entry_fn, &format!("{label}_fail"));
-    let cont_bb = context.append_basic_block(entry_fn, &format!("{label}_cont"));
-    builder
-        .build_conditional_branch(failed, fail_bb, cont_bb)
-        .expect("build_conditional_branch should not fail");
-    builder.position_at_end(fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
-    builder.position_at_end(cont_bb);
-}
-
 /// Allocates one `slot_ty` out-slot named `name` in the *entry block* of
 /// `entry_fn`, leaving the builder positioned exactly where it was.
 ///
@@ -233,19 +197,21 @@ fn out_slot_in_entry_block<'ctx>(
 /// two -- see the C side's own comment for why the encode arm is unreachable
 /// for a real container.
 ///
-/// # Why the enclosing function is always the module-exec entry
+/// # Failure edge
 ///
-/// `expect_module_exec_entry` asserts it, before any block is appended, on
-/// exactly `foreign_attr::emit`'s reasoning: `pycc_types` refuses reading a
-/// foreign object inside a function body (`I0404`), so the failure edge's
-/// `ret i64 -1` is always emitted into a function that returns `i64`.
+/// `foreign_fail::route_negative`'s: the module-exec return inside
+/// `pycc_ext_module_exec`, the bridge plus an immediate branch to the
+/// innermost exception target in any other function (#1316). The out-slot is
+/// hoisted into the entry block of whichever function that is.
 pub(super) fn emit_len<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
+    let entry_fn = edge.function();
     let len_fn = obj_len_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let out = out_slot_in_entry_block(builder, entry_fn, context.i64_type(), "foreign_len_out");
@@ -255,7 +221,7 @@ pub(super) fn emit_len<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_len returns int")
         .into_int_value();
-    fail_on_negative(context, builder, entry_fn, status, "foreign_len");
+    route_negative(context, builder, module, rt, edge, status, "foreign_len");
     let encoded = builder
         .build_load(context.i64_type(), out, "foreign_len_value")
         .expect("build_load should not fail")
@@ -273,21 +239,22 @@ pub(super) fn emit_len<'ctx>(
 /// so this is the answer they were waiting on.
 ///
 /// `PyObject_IsTrue` runs the operand's own `__bool__` or `__len__`, so it
-/// can raise; the `-1` status takes the module-exec failure edge. The
+/// can raise; the `-1` status takes [`emit_len`]'s failure edge. The
 /// success values are `0` and `1`, which the truncation to `i1` below maps
-/// exactly.
+/// exactly. The edge's branch is immediate, which matters most here: the
+/// condition-position caller has no expression guard after it.
 ///
-/// The module-exec entry assertion is [`emit_len`]'s, unchanged. The one
-/// `truthy` call site it does *not* cover is `MirExpr::Not` -- `not o` never
+/// The one `truthy` call site this does *not* cover is `MirExpr::Not` -- `not o` never
 /// reaches here, because `pycc_types`' `unop.rs` answers `T0021` for a
 /// non-`bool` operand, before and after PR 3a alike.
 pub(super) fn emit_truthy<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     object: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
     let truthy_fn = obj_truthy_fn(context, module);
     let status = builder
         .build_call(truthy_fn, &[object.into()], "foreign_truthy")
@@ -295,7 +262,7 @@ pub(super) fn emit_truthy<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_truthy returns int")
         .into_int_value();
-    fail_on_negative(context, builder, entry_fn, status, "foreign_truthy");
+    route_negative(context, builder, module, rt, edge, status, "foreign_truthy");
     builder
         .build_int_truncate(status, context.bool_type(), "foreign_truthy_bit")
         .expect("build_int_truncate should not fail")
@@ -319,19 +286,19 @@ pub(super) fn emit_truthy<'ctx>(
 ///
 /// The shim releases the reference `PyNumber_Float` produces on every exit,
 /// so nothing here adds to the #1092 leak-only set. Failure is `-1` with
-/// CPython's error indicator set, taking [`fail_on_negative`]'s module-exec
-/// failure edge -- `PyNumber_Float` raises `TypeError` for an operand with
+/// CPython's error indicator set, taking [`emit_len`]'s failure edge --
+/// `PyNumber_Float` raises `TypeError` for an operand with
 /// no conversion and `ValueError` for an unparseable string, neither of
 /// which pycc can rule out at compile time for an opaque pointee.
-///
-/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
 pub(super) fn emit_to_float<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
+    let entry_fn = edge.function();
     let to_float_fn = obj_to_float_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let out = out_slot_in_entry_block(
@@ -350,7 +317,15 @@ pub(super) fn emit_to_float<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_to_float returns int")
         .into_int_value();
-    fail_on_negative(context, builder, entry_fn, status, "foreign_to_float");
+    route_negative(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        status,
+        "foreign_to_float",
+    );
     let value = builder
         .build_load(context.f64_type(), out, "foreign_to_float_value")
         .expect("build_load should not fail")
@@ -377,20 +352,20 @@ pub(super) fn emit_to_float<'ctx>(
 /// conversion is the seam where CPython's own answers are the contract.
 ///
 /// Failure is `-1` with CPython's error indicator set, taking
-/// [`fail_on_negative`]'s module-exec failure edge: `PyNumber_Long` raises
+/// [`emit_len`]'s failure edge: `PyNumber_Long` raises
 /// for an operand with no integer conversion and for an unparseable string,
 /// and a result outside pycc's inline-integer range raises `OverflowError`
 /// (#1040) -- none of which pycc can rule out at compile time for an opaque
 /// pointee.
-///
-/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
 pub(super) fn emit_to_int<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
+    let entry_fn = edge.function();
     let to_int_fn = obj_to_int_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let out = out_slot_in_entry_block(builder, entry_fn, context.i64_type(), "foreign_to_int_out");
@@ -400,7 +375,7 @@ pub(super) fn emit_to_int<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_to_int returns int")
         .into_int_value();
-    fail_on_negative(context, builder, entry_fn, status, "foreign_to_int");
+    route_negative(context, builder, module, rt, edge, status, "foreign_to_int");
     let encoded = builder
         .build_load(context.i64_type(), out, "foreign_to_int_value")
         .expect("build_load should not fail")
@@ -425,18 +400,18 @@ pub(super) fn emit_to_int<'ctx>(
 /// [`emit_to_float`]'s paragraph, unchanged. `PyObject_Str` *is* `str()`.
 ///
 /// Failure is `-1` with CPython's error indicator set, taking
-/// [`fail_on_negative`]'s module-exec failure edge: a `__str__` that raises
+/// [`emit_len`]'s failure edge: a `__str__` that raises
 /// and a result holding a lone surrogate (no UTF-8 encoding) are both real
 /// and neither is decidable at compile time for an opaque pointee.
-///
-/// The module-exec entry assertion is [`emit_len`]'s, unchanged.
 pub(super) fn emit_to_str<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
+    let entry_fn = edge.function();
     let to_str_fn = obj_to_str_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let ptr_ty = context.ptr_type(inkwell::AddressSpace::default());
@@ -447,7 +422,7 @@ pub(super) fn emit_to_str<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_to_str returns int")
         .into_int_value();
-    fail_on_negative(context, builder, entry_fn, status, "foreign_to_str");
+    route_negative(context, builder, module, rt, edge, status, "foreign_to_str");
     let value = builder
         .build_load(ptr_ty, out, "foreign_to_str_value")
         .expect("build_load should not fail")
@@ -476,19 +451,21 @@ pub(super) fn emit_to_str<'ctx>(
 /// [`EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL`] records. The runtime object's
 /// items are never type-checked by pycc; a bad item fails at run time with
 /// whatever exception CPython's own `PyNumber_Float` raises, on
-/// [`fail_on_negative`]'s module-exec failure edge together with a wrong
+/// the module-exec failure edge together with a wrong
 /// container type and a wrong arity.
 ///
-/// The module-exec entry assertion is [`emit_len`]'s, unchanged: `pycc_types`
+/// This emitter alone keeps the module-exec entry assertion: `pycc_types`
 /// admits this shape only at a *module-level* annotated assignment.
 pub(super) fn emit_unpack_float_tuple<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
     arity: usize,
 ) -> Scalar<'ctx> {
     let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::ModuleExec(entry_fn);
     let unpack_fn = obj_unpack_float_tuple_fn(context, module);
     let base_ptr = expect_object_pointer(base);
     let element_ty = context.f64_type();
@@ -513,10 +490,12 @@ pub(super) fn emit_unpack_float_tuple<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_unpack_float_tuple returns int")
         .into_int_value();
-    fail_on_negative(
+    route_negative(
         context,
         builder,
-        entry_fn,
+        module,
+        rt,
+        edge,
         status,
         "foreign_unpack_float_tuple",
     );

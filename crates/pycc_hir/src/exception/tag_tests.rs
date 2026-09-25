@@ -120,27 +120,46 @@ fn many_exception_classes(count: usize) -> String {
 
 #[test]
 fn the_maximum_number_of_user_exception_classes_still_lowers() {
-    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 228);
+    // 255 - 28: the top tag is reserved for a bridged foreign
+    // non-`Exception` (#1316).
+    assert_eq!(MAX_USER_EXCEPTION_CLASSES, 227);
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES));
-    let lowered = lower_checked(&module).expect("228 exception classes must lower");
+    let lowered = lower_checked(&module).expect("227 exception classes must lower");
     let last = lowered
         .class_defs
         .iter()
-        .find(|(name, _)| name == "E227")
+        .find(|(name, _)| name == "E226")
         .expect("the last class must be present");
-    assert_eq!(last.1.exception_type_tag, Some(u8::MAX));
+    assert_eq!(last.1.exception_type_tag, Some(u8::MAX - 1));
 }
 
 #[test]
 fn one_exception_class_past_the_maximum_is_rejected() {
     let module =
         pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES + 1));
-    let diagnostic = lower_checked(&module).expect_err("229 exception classes must be rejected");
+    let diagnostic = lower_checked(&module).expect_err("228 exception classes must be rejected");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
-        diagnostic.message.contains("at most 228"),
+        diagnostic.message.contains("at most 227"),
         "unexpected message: {}",
         diagnostic.message
+    );
+}
+
+#[test]
+fn no_user_exception_class_is_ever_given_the_foreign_base_tag() {
+    // #1316: tag 255 belongs to a bridged foreign non-`Exception`, which
+    // `except Exception` must not match; a user class carrying it would
+    // silently escape every `except Exception:` handler.
+    assert_eq!(crate::FOREIGN_BASE_EXCEPTION_TYPE_TAG, u8::MAX);
+    let module =
+        pycc_parser_test_helper::parse(&many_exception_classes(MAX_USER_EXCEPTION_CLASSES));
+    let lowered = lower_checked(&module).expect("the maximum must lower");
+    assert!(
+        lowered
+            .class_defs
+            .iter()
+            .all(|(_, def)| def.exception_type_tag != Some(crate::FOREIGN_BASE_EXCEPTION_TYPE_TAG))
     );
 }

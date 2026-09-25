@@ -241,6 +241,23 @@ pub struct Environment {
     /// runtime free is a documented no-op on the null a never-taken path
     /// leaves in the slot.
     pub(crate) owned_buffers: HashSet<String>,
+    /// #1316: the local names of every foreign import in the module, at any
+    /// site (`HirModule::imports`, top-level and block imports alike),
+    /// minus the names a function body declares locally
+    /// ([`Self::child_for_function`] removes them).
+    ///
+    /// A function body may read such a name: `expr.rs`'s `Name` and `Call`
+    /// arms admit a `Ty::Object` read inside a function body only for a
+    /// member of this set, so a function-local `object` value -- an
+    /// unannotated parameter inferred as `object` from a module-level call
+    /// site -- keeps its `I0404` (#1325's territory).
+    ///
+    /// Position-blind on purpose, like pass 3 itself (D-041): a member is
+    /// readable only while `bindings` also holds it `Definitely` as
+    /// `Ty::Object`, so a maybe-bound import still fails `T0041` and a read
+    /// that runs before the import at run time raises `NameError` from
+    /// codegen's unbound-global branch (`pycc_codegen`'s `foreign_fail.rs`).
+    pub(crate) foreign_globals: HashSet<String>,
 }
 
 impl Environment {
@@ -445,6 +462,8 @@ impl Environment {
             // is hygiene that keeps the set's meaning local rather than a
             // hole being closed.
             child.owned_buffers.remove(*name);
+            // #1316: a local of the same name shadows a foreign global.
+            child.foreign_globals.remove(*name);
         }
         // Issue #22: a function body may call any module-level function
         // regardless of source order -- Python's late binding evaluates a

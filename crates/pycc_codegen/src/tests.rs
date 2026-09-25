@@ -15414,33 +15414,6 @@ fn truthiness_of_a_cpython_object_value_calls_the_shim_helper() {
     );
 }
 
-/// The enclosing-function assertion `truthy`'s object arm inherits from
-/// `foreign_len::emit_truthy`: the failure edge returns `i64 -1`, which
-/// would not even verify inside a function of another return type. No
-/// type-checked program reaches it -- `pycc_types` refuses reading a
-/// CPython object outside a module body (`I0404`) -- so this pins it
-/// directly by positioning the builder inside an ordinary function.
-#[test]
-#[should_panic(expected = "was emitted outside `pycc_ext_module_exec`")]
-fn truthiness_of_a_cpython_object_outside_the_module_entry_is_an_internal_error() {
-    let context = Context::create();
-    let (module, rt) = list_scalar_panic_fixture(&context);
-    let builder = context.create_builder();
-    let f = module.add_function(
-        "not_the_entry",
-        context.void_type().fn_type(&[], false),
-        None,
-    );
-    builder.position_at_end(context.append_basic_block(f, "entry"));
-    truthy(
-        &context,
-        &builder,
-        &module,
-        &rt,
-        null_object_scalar(&context),
-    );
-}
-
 #[test]
 #[should_panic(expected = "assigning a CPython object value to a binding is not supported yet")]
 fn assigning_a_cpython_object_to_a_binding_is_an_internal_error() {
@@ -15565,13 +15538,12 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
     // `ExprStmt` discards it.
     //
     // The returned value is the foreign module global itself rather than a
-    // `numpy.pi` load, because `pycc_types` now refuses reading a CPython
-    // object inside a function body at all (see
-    // `foreign_attr::expect_module_exec_entry`), so a body containing an
-    // `ObjAttrGet` is no longer a shape any type-checked program produces.
-    // The MIR here is therefore already past what the front end admits;
-    // it exists to select these two codegen arms, which PR 2b's method
-    // calls will make reachable from real source again.
+    // `numpy.pi` load so the test selects exactly these two arms; an
+    // `ObjAttrGet` inside a function body has its own failure-edge tests in
+    // `foreign_fail_tests.rs` (#1316). `pycc_types` refuses returning a
+    // CPython object from a function (`I0404`), so the MIR here is past
+    // what the front end admits; it exists to select these two codegen
+    // arms.
     //
     // D-137's amendment keeps `object` unspellable in an annotation, so
     // such a helper can never be public and never reaches an `ext` export
@@ -15590,35 +15562,6 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
             },
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "_module".to_string(),
-                args: vec![],
-                ty: Ty::Object,
-            })),
-        ]),
-    );
-}
-
-#[test]
-#[should_panic(expected = "an operation on a CPython object was emitted outside")]
-fn a_foreign_attribute_load_inside_a_function_body_is_an_internal_error() {
-    // The guard `foreign_attr::expect_module_exec_entry` exists for. This
-    // exact program -- `import numpy`, `def _pi(): return numpy.pi`,
-    // `_pi()` -- compiled and ran on PR 2a's branch before its review, so
-    // the arm is a real front-end contract rather than a hypothetical:
-    // `pycc_types` refuses the read inside a function body, and reaching
-    // codegen with one anyway means that refusal regressed. A failed
-    // lookup there would have no failure edge to take, since only
-    // `pycc_ext_module_exec` may return `EXT_MODULE_EXEC_FAILED`.
-    compile_ext_items(
-        "object_attr_in_function_body",
-        with_foreign_numpy(vec![
-            MirItem::Function {
-                name: "_pi".to_string(),
-                params: vec![],
-                return_ty: Ty::Object,
-                body: vec![MirStmt::Return(Some(numpy_pi()))],
-            },
-            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
-                callee: "_pi".to_string(),
                 args: vec![],
                 ty: Ty::Object,
             })),

@@ -26,6 +26,24 @@ pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 /// `exception_type_tags_match_the_c_shims_hardcoded_switch` and by
 /// `src/ext_build_tests/toolchain.rs`.
 pub const EXCEPTION_TYPE_OVERFLOW_ERROR: u8 = 25;
+/// #1316: the reserved tag the `ext` C shim's foreign-operation bridge gives
+/// a CPython exception that is not an `Exception` at all -- `SystemExit`,
+/// `KeyboardInterrupt`, `GeneratorExit`, a non-`Exception`
+/// `BaseExceptionGroup`. It is the one tag above every user class's
+/// (`pycc_hir::FOREIGN_BASE_EXCEPTION_TYPE_TAG`), and it is the only tag
+/// `Exception`'s catch-all does not match: [`pycc_rt_exception_type_matches`]
+/// and [`pycc_rt_exception_group_partition`] exclude it, so `except
+/// Exception:` lets it through exactly as CPython does, while a bare
+/// `except:` (which never calls the matcher) and `finally` still run.
+pub const EXCEPTION_TYPE_FOREIGN_BASE: u8 = u8::MAX;
+
+/// Whether a handler for `handler_tag` catches an exception whose own tag is
+/// `obj_tag`: an exact match, or `Exception`'s catch-all for anything but a
+/// bridged non-`Exception` [`EXCEPTION_TYPE_FOREIGN_BASE`].
+fn tag_matches(obj_tag: u8, handler_tag: u8) -> bool {
+    obj_tag == handler_tag
+        || (handler_tag == EXCEPTION_TYPE_EXCEPTION && obj_tag != EXCEPTION_TYPE_FOREIGN_BASE)
+}
 
 /// Heap-allocated builtin exception object. Exception lifetime management is
 /// intentionally leak-only in this first implementation: clearing a pending
@@ -312,8 +330,9 @@ pub unsafe extern "C" fn pycc_rt_exception_group_alloc(
 /// `tags` (Part 3 of #382, #542, PEP 654 `except*` dispatch): an empty
 /// `tags` (`tags_len == 0`) matches every member, mirroring a bare
 /// `except*:`; a nonempty `tags` matches a member whose own `type_tag`
-/// equals [`EXCEPTION_TYPE_EXCEPTION`] (the universal catch-all, consistent
-/// with [`pycc_rt_exception_type_matches`]) or any entry in `tags`
+/// equals [`EXCEPTION_TYPE_EXCEPTION`] (the catch-all, consistent with
+/// [`pycc_rt_exception_type_matches`], which excludes only
+/// [`EXCEPTION_TYPE_FOREIGN_BASE`]) or any entry in `tags`
 /// (Part 2 of #541's multi-tag subclass matching, carried over unchanged).
 ///
 /// `matched_out` receives a fresh `ExceptionGroup`-shaped group wrapping the
@@ -364,10 +383,8 @@ pub unsafe extern "C" fn pycc_rt_exception_group_partition(
     let mut rest = Vec::new();
     for member in members {
         let member_tag = unsafe { (*member).type_tag };
-        let is_match = tag_slice.is_empty()
-            || tag_slice
-                .iter()
-                .any(|tag| *tag == EXCEPTION_TYPE_EXCEPTION || member_tag == *tag);
+        let is_match =
+            tag_slice.is_empty() || tag_slice.iter().any(|tag| tag_matches(member_tag, *tag));
         if is_match {
             matched.push(member);
         } else {
@@ -409,7 +426,8 @@ pub unsafe extern "C" fn pycc_rt_exception_raise_with_cause(
 }
 
 /// Returns whether `obj` matches the requested builtin exception tag.
-/// Matches `Exception`'s catch-all tag, or `obj`'s own tag exactly; it walks
+/// Matches `Exception`'s catch-all tag (for anything but
+/// [`EXCEPTION_TYPE_FOREIGN_BASE`], #1316), or `obj`'s own tag exactly; it walks
 /// no hierarchy -- a handler whose class has subclasses matches through its
 /// MIR-built tag set, which codegen's dispatch chain
 /// (`pycc_codegen::exception`) ORs over one call to this function per tag.
@@ -426,7 +444,7 @@ pub unsafe extern "C" fn pycc_rt_exception_type_matches(
         return 0;
     }
     let obj_tag = unsafe { (*obj).type_tag };
-    i8::from(type_tag == EXCEPTION_TYPE_EXCEPTION || obj_tag == type_tag)
+    i8::from(tag_matches(obj_tag, type_tag))
 }
 
 /// Returns the exception's own message string, borrowed and unretained
@@ -621,6 +639,9 @@ pub(crate) fn raise_builtin(type_tag: u8, name: &'static str, msg: &str) {
         message,
     ));
 }
+
+#[cfg(test)]
+mod foreign_base_tests;
 
 #[cfg(test)]
 mod tests {
