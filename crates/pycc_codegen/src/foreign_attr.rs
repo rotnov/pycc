@@ -43,19 +43,24 @@ fn obj_getattr_fn<'ctx>(
     )
 }
 
-/// The base of a foreign attribute load or method call, as a `PyObject *`.
+/// The object operand of a foreign-object operation -- for example an
+/// attribute load's or method call's base, a direct call's callee, a
+/// subscript's base, a `for` loop's iterable, or the operand of `len`, a
+/// truth test, a conversion or a tuple unpack (`foreign_len`) -- as a
+/// `PyObject *`.
 ///
-/// `pycc_mir`'s lowering builds `MirExpr::ObjAttrGet` only where the base's
-/// inferred type is `Ty::Object` (`pycc_mir::expr`'s `HirExpr::AttrGet`
-/// arm), and `ty_to_basic_type` maps that to a pointer, so every other
+/// `pycc_mir`'s lowering builds each of those nodes only where the
+/// operand's inferred type is `Ty::Object` (for example `pycc_mir::expr`'s
+/// `HirExpr::AttrGet` arm, and its `HirExpr::Call` arm for `ObjCall`,
+/// #1313), and `ty_to_basic_type` maps that to a pointer, so every other
 /// `Scalar` here is a lowering defect rather than a program the front end
 /// let through.
 pub(super) fn expect_object_pointer(scalar: Scalar<'_>) -> PointerValue<'_> {
     let Scalar::Object(ptr) = scalar else {
         panic!(
-            "pycc_codegen: internal error: a foreign attribute base did not evaluate to a \
-             CPython object -- pycc_mir lowers `ObjAttrGet`/`ObjMethodCall` only for a \
-             `Ty::Object` base"
+            "pycc_codegen: internal error: a foreign-object operand did not evaluate to a \
+             CPython object -- pycc_mir lowers every foreign-object operation only for a \
+             `Ty::Object` operand"
         )
     };
     ptr
@@ -302,7 +307,7 @@ mod tests {
     /// any other `Scalar` is a lowering defect. Reached here by handing the
     /// node an `int` base directly, which no `lower_expr` path produces.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_base_is_an_internal_error() {
         entry_ir(
             "foreign_attr_bad_base",

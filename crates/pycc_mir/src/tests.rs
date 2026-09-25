@@ -23,6 +23,7 @@ mod expr_ty;
 mod import;
 mod matching;
 mod narrow;
+mod obj_call;
 mod protocol;
 mod scope;
 mod slice;

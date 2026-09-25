@@ -184,18 +184,28 @@
 //! in-function arm gains no branch at all: the read of the foreign name is
 //! already `I0404` there, which PR 4c's own test pins.
 //!
+//! **#1313 added a direct call of an `object`-typed name** (`product("ab")`
+//! after `from itertools import product`, or a call of a `for` loop target
+//! bound to an object). `expr::infer_expr_in`'s
+//! `HirExpr::Call` arm answers [`Ty::Object`] for a callee bound to
+//! [`Ty::Object`] in a module body, under the same positional-scalar
+//! argument rule as a method call ([`check_object_call_args`]); the
+//! constraint solver's own `Call` arm answers the same term. Part 2 kept
+//! the call refused because admitting `f(2.0)` also admits `numpy(1)`,
+//! which CPython answers with `TypeError: 'module' object is not
+//! callable`. That is now the intended reading: the call is compiled and
+//! the host raises exactly that `TypeError`, on the same uncatchable
+//! module-exec failure edge every other object operation uses (#1096).
+//!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
 //!
 //! 1. `lookup_bound_name` (D-105's `ForList`/`ListAppend` HIR shape carries
 //!    its list as a plain `String`, so it never becomes a `HirExpr::Name`),
-//! 2. `expr::infer_expr_in`'s `HirExpr::Call` arm, whose value-binding gate
-//!    would otherwise report the generic `non_callable_binding` `T0021`.
-//!    Calling a CPython object stays refused in Part 2 deliberately: the
-//!    environment does not record whether a `Ty::Object` came from a
-//!    foreign global or from an attribute load, so admitting `f(2.0)`
-//!    would also admit `numpy(1)`, which CPython itself answers with
-//!    `TypeError: 'module' object is not callable`,
+//! 2. `expr::infer_expr_in`'s `HirExpr::Call` arm inside a function body,
+//!    where a call of a foreign binding is refused for the positional
+//!    reason the in-function read below is (#1316 tracks lifting it) and
+//!    would otherwise report the generic `non_callable_binding` `T0021`,
 //! 3. the in-function read above, which is the one site that keys on
 //!    *position* as well as on the type.
 
@@ -242,7 +252,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
         format!(
             "{operation} is not supported yet -- pycc models a CPython object as an opaque \
              value, and #1026 implements attribute access, positional \
-             scalar-argument method calls, `len`, truth testing, a \
+             scalar-argument method calls and direct calls, `len`, truth \
+             testing, a \
              scalar-key subscript load, `for` iteration, the `float`, \
              `bool`, `int` and `str` conversions and an annotated \
              module-level assignment to a fixed-arity all-`float` `tuple` \
@@ -252,11 +263,35 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
     )
 }
 
+/// `Err(I0404)` unless every argument of a call on a CPython object is one
+/// of the four packable scalars -- `int`, `float`, `bool` or `str`, each of
+/// which has a `pycc_ext_obj_pack_*` helper in the shim.
+///
+/// The one statement of the argument rule both object-call shapes share: a
+/// method call (`o.method(args)`, PR 2b of #1081, `what` = `"method"`) and
+/// a direct call of an `object`-typed name (`product(args)`, #1313, `what` =
+/// `"call"`). Anything else -- a container, an instance, `None`, or a
+/// second `Ty::Object` -- has no boundary representation yet and is
+/// refused here rather than reaching codegen, naming the first offending
+/// argument's type.
+pub(crate) fn check_object_call_args(arg_tys: &[Ty], what: &str) -> Result<(), Diagnostic> {
+    for arg_ty in arg_tys {
+        if !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+            return Err(object_operation_unsupported(&format!(
+                "passing a `{}` argument to a CPython object's {what}",
+                arg_ty.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `Err(I0404)` when `ty` is the opaque object type, `Ok(())` otherwise.
 ///
 /// The guard for the three sites that key on a *named* binding rather than
 /// on a consumed value -- `lookup_bound_name`, the `HirExpr::Call`
-/// value-binding gate, and the in-function-body read (module doc). A
+/// value-binding gate inside a function body, and the in-function-body
+/// read (module doc). A
 /// consuming site calls [`object_operation_unsupported`] directly instead,
 /// because it knows the operation and its operand has no name.
 pub(crate) fn reject_object_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
@@ -371,5 +406,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+#[cfg(test)]
+mod call_tests;
 #[cfg(test)]
 mod tests;

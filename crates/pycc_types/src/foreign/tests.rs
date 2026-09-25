@@ -173,7 +173,10 @@ fn the_non_generic_exit_leaves_a_recorded_position_alone() {
 /// `I0404` refusal, and `json()` compiled into a call to the shadowed
 /// function -- where CPython raises `TypeError: 'module' object is not
 /// callable`. Applying the binding at its recorded position is what refuses
-/// it.
+/// it. Since #1313 admits a module-body direct call of a CPython object, the
+/// refusal that fires here is the one on binding its `object` result to `x`;
+/// what the test pins is that the call is no longer a native call of the
+/// shadowed `def`.
 #[test]
 fn a_foreign_import_supersedes_an_earlier_def_of_the_same_name() {
     let source = "def json() -> int:\n    return 1\n\n\nx = json()\n";

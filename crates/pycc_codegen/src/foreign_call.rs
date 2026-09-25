@@ -1,4 +1,5 @@
 //! Emission for `MirExpr::ObjMethodCall` (Part 2 of #1026, PR 2b of #1081),
+//! `MirExpr::ObjCall` (#1313, through the same argument marshalling),
 //! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082) and
 //! `MirStmt::ForObject` (PR 3c of #1082).
 //!
@@ -355,6 +356,51 @@ pub(super) fn emit_call<'ctx>(
     bound: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
 ) -> Scalar<'ctx> {
+    emit_call_with(context, builder, module, EXT_OBJ_CALL_SYMBOL, bound, args)
+}
+
+/// Marshals `args` and calls `callee` *itself* (#1313), yielding the call's
+/// result as an opaque [`Scalar::Object`].
+///
+/// `callee` is the already-evaluated `object`-typed name -- a
+/// `MirExpr::Name` read, which is a *borrow* of a reference the caller
+/// keeps (a retained module global, or a `for` loop target's slot;
+/// `lib.rs`'s `Ty::Object` load arm). It therefore goes to
+/// [`EXT_OBJ_CALL_BORROWED_SYMBOL`], which takes its own reference before
+/// delegating to the consuming `pycc_ext_obj_call`; passing the callee
+/// straight to [`emit_call`]'s consuming helper would release the caller's
+/// reference on the first call. The packed
+/// arguments are consumed on every path, exactly as for a method call.
+pub(super) fn emit_call_borrowed<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    callee: Scalar<'ctx>,
+    args: &[Scalar<'ctx>],
+) -> Scalar<'ctx> {
+    let callee_ptr = expect_object_pointer(callee);
+    emit_call_with(
+        context,
+        builder,
+        module,
+        EXT_OBJ_CALL_BORROWED_SYMBOL,
+        callee_ptr,
+        args,
+    )
+}
+
+/// The shared body of [`emit_call`] and [`emit_call_borrowed`]: the two
+/// shim helpers take the same `(callable, args, nargs)` parameters and
+/// differ only in who owns `callable`, so the packer loop, the hoisted
+/// argument array and the failure edge are written once.
+fn emit_call_with<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    symbol: &str,
+    callable: inkwell::values::PointerValue<'ctx>,
+    args: &[Scalar<'ctx>],
+) -> Scalar<'ctx> {
     let entry_fn = expect_module_exec_entry(builder);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
@@ -396,22 +442,22 @@ pub(super) fn emit_call<'ctx>(
 
     let call = shim_fn(
         module,
-        EXT_OBJ_CALL_SYMBOL,
+        symbol,
         ptr.fn_type(&[ptr.into(), ptr.into(), i64_type.into()], false),
     );
     let result = builder
         .build_call(
             call,
             &[
-                bound.into(),
+                callable.into(),
                 arg_array.into(),
                 i64_type.const_int(args.len() as u64, false).into(),
             ],
             "foreign_call",
         )
-        .expect("build_call should not fail for pycc_ext_obj_call")
+        .expect("build_call should not fail for a foreign call helper")
         .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_call returns PyObject *")
+        .expect_basic("a foreign call helper returns PyObject *")
         .into_pointer_value();
 
     fail_on_null(context, builder, entry_fn, result, "foreign_call");
@@ -478,6 +524,8 @@ pub(super) fn emit_subscript<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod call_tests;
     use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};
     use inkwell::values::AnyValue;
     use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
@@ -687,7 +735,7 @@ mod tests {
     /// through this node: only `pycc_mir`'s own lowering builds it, and only
     /// over a `Ty::Object` base.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_base_is_an_internal_error() {
         entry_ir(
             "foreign_call_bad_base",
@@ -1012,7 +1060,7 @@ mod tests {
     /// The defensive arm in `foreign_attr::expect_object_pointer` reached
     /// through the *loop* node, which has its own call to it.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_for_loop_iterable_is_an_internal_error() {
         entry_ir(
             "foreign_iter_bad_iterable",
@@ -1027,7 +1075,7 @@ mod tests {
     /// The defensive arm in `foreign_attr::expect_object_pointer` reached
     /// through the *subscript* node, which has its own call to it.
     #[test]
-    #[should_panic(expected = "a foreign attribute base did not evaluate to a CPython object")]
+    #[should_panic(expected = "did not evaluate to a CPython object")]
     fn a_non_object_subscript_base_is_an_internal_error() {
         entry_ir(
             "foreign_subscript_bad_base",
