@@ -92,7 +92,7 @@ fn the_issue_reproduction_runs_the_override() {
 ///
 /// A subclass defined in a *second* imported module whose base comes from
 /// a third one is not covered here: that import shape panics in
-/// `pycc_hir::import` on `main` already, independently of #1337.
+/// `pycc_hir::import` on `main` already, independently of #1337 (#1351).
 #[test]
 fn an_imported_base_runs_the_subclass_override() {
     let dir = ScratchDir::new("e2e_1337_multi_file").expect("scratch");
