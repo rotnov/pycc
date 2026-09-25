@@ -56,15 +56,15 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // stops the module body.
         //
         // So for both nodes the `true` answer is fail-closed conservatism
-        // rather than a live dependency, and it is not waiting on a future
-        // part either: PR 2b did *not* translate CPython's exception into
-        // pycc's pending state, and needs no such bridge, because both
-        // nodes are admitted only in a module body -- the one function with
-        // a `-1` edge to take. `foreign_call.rs`'s module documentation and
-        // `docs/RUNTIME.md` own that reasoning. A part that lifts the
-        // positional bound is what would need the bridge, and this
-        // classification is what makes the D-173 guard correct on the day
-        // it exists.
+        // rather than a live dependency: the emitter's own check is
+        // immediate. In the module body it returns the `-1` status; in any
+        // other function (#1316) it calls `pycc_ext_obj_error_bridge`,
+        // which moves CPython's exception into pycc's pending state, and
+        // branches straight to the innermost exception target
+        // (`foreign_fail.rs`). Either way the D-173 guard emitted after the
+        // node sees no pending exception on the path it guards, and this
+        // classification stays correct should a future emitter defer its
+        // branch to that guard instead.
         MirExpr::Call { .. }
         | MirExpr::DictGet { .. }
         | MirExpr::Instantiate(_)
@@ -356,24 +356,48 @@ pub(super) fn guard_statement_effects<'ctx>(
         builder.position_at_end(continuation);
         return;
     }
-    // Snapshot rather than borrow across block emission: nothing below
-    // mutates the stack, but cloning up front keeps the borrow scoped to
-    // this one line, matching this file's existing style for `targets`/
-    // `reraise_values` snapshots elsewhere.
-    let snapshot: Vec<IntValue<'ctx>> = pending.clone();
     drop(pending);
     let unwind_bb = context.append_basic_block(function, "effect_exc_unwind");
     builder
         .build_conditional_branch(has_exc, unwind_bb, continuation)
         .expect("build_conditional_branch should guard a statement effect");
     builder.position_at_end(unwind_bb);
+    jump_to_exception_target(context, builder, rt);
+    builder.position_at_end(continuation);
+}
+
+/// Terminates the current block with an unconditional branch to the
+/// innermost exception target, first releasing a snapshot of
+/// `rt.exceptions.pending_int_releases` (#638, D-208).
+///
+/// The one definition of that unwind: [`guard_statement_effects`] emits it
+/// into its `effect_exc_unwind` block, and `foreign_fail.rs` emits it on a
+/// failed foreign operation inside a function body (#1316), after the shim
+/// has bridged CPython's exception into pycc's pending state. With an empty
+/// stack it is the bare branch.
+pub(super) fn jump_to_exception_target<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+) {
+    let exception_target = rt
+        .exceptions
+        .targets
+        .borrow()
+        .last()
+        .copied()
+        .expect("expression emission always has an installed exception target");
+    // Snapshot rather than borrow across block emission: nothing below
+    // mutates the stack, but cloning up front keeps the borrow scoped to
+    // this one line, matching this file's existing style for `targets`/
+    // `reraise_values` snapshots elsewhere.
+    let snapshot: Vec<IntValue<'ctx>> = rt.exceptions.pending_int_releases.borrow().clone();
     for word in snapshot {
         emit_bigint_refcount_call(context, builder, rt, word, BigIntRefcount::Release);
     }
     builder
         .build_unconditional_branch(exception_target)
         .expect("build_unconditional_branch should not fail for a fresh unwind block");
-    builder.position_at_end(continuation);
 }
 
 #[allow(clippy::too_many_arguments)]

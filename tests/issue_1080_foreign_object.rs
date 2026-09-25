@@ -20,12 +20,14 @@
 //!   -- but not which programs it refuses, which is why every row of the
 //!   table below still holds. `crates/pycc_types/src/foreign.rs` documents
 //!   the migration. PR 2a's review then bounded the admitted set by
-//!   *position* as well: a read of a foreign object is admitted only in a
+//!   *position* as well: a read of a foreign object was admitted only in a
 //!   module body, never inside a function body, and never above the
 //!   `import` itself -- both were compile errors before this change and
-//!   both had become run-time traps. The one exception is a general method
-//!   call (`numpy.sqrt(2.0)`), which PR 2a refused as `T0043` rather than
-//!   `I0404` because it added no `Ty::Object` branch ahead of
+//!   both had become run-time traps. #1316 later admitted the in-function
+//!   read of a module-level foreign name, with a failure edge and a
+//!   run-time `NameError` for a read before the import. The one exception
+//!   is a general method call (`numpy.sqrt(2.0)`), which PR 2a refused as
+//!   `T0043` rather than `I0404` because it added no `Ty::Object` branch ahead of
 //!   `class::resolve_method_call`. **PR 2b of #1081 admits that shape**: the
 //!   branch exists now and answers `Ty::Object`, so the program type-checks
 //!   (`a_general_method_call_on_a_foreign_object_is_accepted`).
@@ -245,12 +247,12 @@ fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
 /// The solver's `AttrGet` term types `numpy.pi` as `object` exactly as its
 /// `Name` term types `numpy`, which is what keeps the diagnostic right:
 /// without the term, signature materialization reports the `T0021` this
-/// test rules out. PR 2a of #1081 then narrowed which pass reports the
-/// refusal -- reading a foreign object inside a function body is itself
-/// `I0404` now, so the helper's own body is rejected and the consuming
-/// site is never reached. The assertion is unchanged, deliberately: both
-/// halves of it are still the contract, and the solver term is still what
-/// makes the second half true.
+/// test rules out. Which pass reports the refusal has moved twice: PR 2a
+/// of #1081 refused the in-function read itself, and #1316 admits the read
+/// but refuses the helper's `return` of a CPython object, so the consuming
+/// site is still never reached. The assertion is unchanged, deliberately:
+/// both halves of it are still the contract, and the solver term is still
+/// what makes the second half true.
 #[test]
 fn an_unannotated_helper_returning_a_foreign_attribute_is_i0404_not_t0021() {
     let dir = ScratchDir::new("foreign_helper_attr_return").expect("scratch");
@@ -278,19 +280,17 @@ fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
     assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
 }
 
-/// The same load *inside a function body* is refused (PR 2a of #1081
-/// review finding 2).
+/// A helper that returns a foreign attribute is refused, even when it is
+/// called above the `import`.
 ///
-/// D-041 checks a body against the module environment as it stands after
-/// all top-level code, so the check phase cannot see that this call site
-/// precedes the `import`. CPython raises `NameError` here. Before the
-/// refusal, the eager module-scope `Ty::Object` bind
-/// (`pycc_mir::build`, plan deviation 9) made the program type-check,
-/// lower and build, and the artifact died with `SIGTRAP` (rc 133) on the
-/// global-initialization failure edge -- a regression against `main`,
-/// where the program was refused at compile time. Refusing the read
-/// restores that, and costs nothing: PR 2a ships no user-visible
-/// capability either way.
+/// PR 2a of #1081 refused the in-function read here, because D-041 checks
+/// a body against the module environment as it stands after all top-level
+/// code and the artifact then trapped (`SIGTRAP`) on the unbound global.
+/// #1316 admits the read and gives it a failure edge instead: a helper
+/// that reads the name before the `import` has run raises CPython's own
+/// `NameError` at run time (`tests/issue_1316_foreign_in_function.rs`).
+/// This shape stays refused for a different reason -- a CPython object is
+/// never returned from a function.
 #[test]
 fn a_helper_reading_a_foreign_object_before_its_import_is_refused() {
     let dir = ScratchDir::new("foreign_helper_before_import").expect("scratch");

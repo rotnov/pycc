@@ -259,8 +259,10 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
             _ => format!("a{index}"),
         });
     }
+    // #1316: the same bridge-table watermark `wrapper_for` takes.
     out.push_str(&format!(
-        "    ((void (*)({params}))fnptr_{symbol})({call_args});\n",
+        "    Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n    \
+         ((void (*)({params}))fnptr_{symbol})({call_args});\n",
         call_args = call_args.join(", ")
     ));
     // The same order `wrapper_for` uses, for the same reason: a compiled
@@ -270,7 +272,8 @@ fn tp_init_c(ctor: &ExtCtor) -> String {
     // both arms.
     out.push_str(&format!(
         "    if (pycc_rt_ext_pending_type() >= 0) {{\n{}        \
-         pycc_ext_raise_pending();\n        return -1;\n    }}\n{}",
+         pycc_ext_raise_pending();\n        pycc_ext_bridge_release_to(bridge_mark);\n        \
+         return -1;\n    }}\n    pycc_ext_bridge_release_to(bridge_mark);\n{}",
         buffer_releases(&slots, "        "),
         buffer_releases(&slots, "    ")
     ));

@@ -6,13 +6,17 @@
 //! The two share this module because they share the *packer contract*: each
 //! marshals a pycc scalar into a `PyObject *` through a `pycc_ext_obj_pack_*`
 //! helper and hands the resulting owned reference to a shim helper that
-//! releases it. `emit_subscript` reuses `packer_for`, `shim_fn` and
-//! `fail_on_null` unchanged rather than re-deriving them, so that contract
-//! cannot fork into two spellings.
+//! releases it. `emit_subscript` reuses `packer_for` and `shim_fn`
+//! unchanged rather than re-deriving them, so that contract cannot fork
+//! into two spellings.
 //!
 //! The call counterpart of `foreign_attr.rs`, which this module reuses for
-//! everything the two share -- `expect_object_pointer`, and the
-//! `expect_module_exec_entry` assertion that pins the enclosing function.
+//! `expect_object_pointer`. Every failure edge is `foreign_fail.rs`'s: the
+//! module-exec return inside `pycc_ext_module_exec`, and the bridge plus an
+//! immediate branch to the innermost exception target inside any other
+//! function (#1316). `emit_iter_loop` alone keeps the
+//! `expect_module_exec_entry` assertion, because `pycc_types` still admits
+//! `for x in <object>:` only in a module body (#1325).
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
@@ -43,6 +47,7 @@
 
 use super::*;
 use crate::foreign_attr::{expect_module_exec_entry, expect_object_pointer};
+use crate::foreign_fail::{ForeignFailEdge, route_null};
 use inkwell::builder::Builder;
 use inkwell::values::BasicValueEnum;
 
@@ -92,8 +97,7 @@ fn packer_for<'ctx>(scalar: Scalar<'ctx>) -> (&'static str, BasicValueEnum<'ctx>
 /// An `alloca` is only reclaimed when its function returns, so emitting one
 /// at the call site would make a module body's own loop grow the stack
 /// without bound: `for i in range(n): gc.disable()` is an admitted program
-/// -- the positional bound refuses a foreign read in a *function body*, and
-/// a top-level loop is not one -- and it segfaulted the hosting interpreter
+/// -- and it segfaulted the hosting interpreter
 /// at twenty million iterations before this hoist. The size is a compile-time
 /// constant that depends on nothing in scope, so the entry block is always a
 /// legal position for it, and LLVM's own convention is that every `alloca`
@@ -112,53 +116,6 @@ fn alloca_in_entry_block<'ctx>(
         )
         .expect("build_array_alloca should not fail")
     })
-}
-
-/// Routes a NULL `value` to the module-exec failure edge, leaving the
-/// builder positioned on the success continuation.
-///
-/// # Which side owns the "CPython raised" transition
-///
-/// The same answer `foreign_attr::emit` gives, and for the same reason. A
-/// shim helper returns NULL with *CPython's* error indicator set, which
-/// pycc's own pending-exception guard (D-173) cannot see, so this arm emits
-/// the NULL check itself and routes the failure to the module-exec failure
-/// edge: return [`EXT_MODULE_EXEC_FAILED`] immediately, leaving CPython's
-/// exception exactly as the shim left it. The host then reports the real
-/// `AttributeError` for a missing method, or whatever the method itself
-/// raised, and the remaining module-body statements never run.
-///
-/// This is why PR 2b needs no CPython-to-pycc exception bridge at all.
-/// `pycc_rt::exception` carries no `AttributeError` tag, and the plan
-/// treated adding one (or accepting a documented semantics downgrade) as an
-/// open item; because 2b's calls inherit PR 2a's positional bound -- a
-/// foreign object is readable only in a *module body below its own import*
-/// -- every admitted call is emitted inside `pycc_ext_module_exec`, where
-/// this edge exists. The item dissolves rather than being deferred.
-fn fail_on_null<'ctx>(
-    context: &'ctx Context,
-    builder: &Builder<'ctx>,
-    entry_fn: FunctionValue<'ctx>,
-    value: inkwell::values::PointerValue<'ctx>,
-    label: &str,
-) {
-    let failed = builder
-        .build_is_null(value, &format!("{label}_failed"))
-        .expect("build_is_null should not fail");
-    let fail_bb = context.append_basic_block(entry_fn, &format!("{label}_fail"));
-    let cont_bb = context.append_basic_block(entry_fn, &format!("{label}_cont"));
-    builder
-        .build_conditional_branch(failed, fail_bb, cont_bb)
-        .expect("build_conditional_branch should not fail");
-    builder.position_at_end(fail_bb);
-    builder
-        .build_return(Some(
-            &context
-                .i64_type()
-                .const_int(EXT_MODULE_EXEC_FAILED as u64, true),
-        ))
-        .expect("build_return should not fail");
-    builder.position_at_end(cont_bb);
 }
 
 /// The blocks and per-iteration item of a lowered `for x in <object>:`
@@ -203,6 +160,7 @@ pub(super) fn emit_iter_loop<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     iterable: Scalar<'ctx>,
 ) -> ForeignIterLoop<'ctx> {
     let entry_fn = expect_module_exec_entry(builder);
@@ -222,7 +180,15 @@ pub(super) fn emit_iter_loop<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_get_iter returns PyObject *")
         .into_pointer_value();
-    fail_on_null(context, builder, entry_fn, iterator, "foreign_iter_get");
+    route_null(
+        context,
+        builder,
+        module,
+        rt,
+        ForeignFailEdge::ModuleExec(entry_fn),
+        iterator,
+        "foreign_iter_get",
+    );
 
     let header_bb = context.append_basic_block(entry_fn, "foreign_iter_header");
     let body_bb = context.append_basic_block(entry_fn, "foreign_iter_body");
@@ -299,20 +265,23 @@ pub(super) fn emit_iter_loop<'ctx>(
 /// grow a module-scope loop's stack per iteration, which is the defect
 /// [`alloca_in_entry_block`] exists to prevent.
 ///
-/// # Why the enclosing function is always the module-exec entry
+/// # Failure edge
 ///
-/// `expect_module_exec_entry` asserts it, before any block is appended, on
-/// exactly `foreign_attr::emit`'s reasoning: `pycc_types` refuses reading a
-/// foreign object inside a function body (`I0404`), so the failure edge's
-/// `ret i64 -1` is always emitted into a function that returns `i64`.
+/// A missing method returns `NULL` with CPython's `AttributeError` set,
+/// which `foreign_fail::route_null` routes: the module-exec return inside
+/// `pycc_ext_module_exec`, the bridge and an immediate branch to the
+/// innermost exception target in any other function (#1316). The branch is
+/// immediate because the arguments are evaluated next, with no guard in
+/// between.
 pub(super) fn emit_lookup<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
     method: &str,
 ) -> inkwell::values::PointerValue<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
     let base_ptr = expect_object_pointer(base);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let name = builder
@@ -334,7 +303,15 @@ pub(super) fn emit_lookup<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_ext_obj_getattr returns PyObject *")
         .into_pointer_value();
-    fail_on_null(context, builder, entry_fn, bound, "foreign_call_lookup");
+    route_null(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        bound,
+        "foreign_call_lookup",
+    );
     bound
 }
 
@@ -353,10 +330,19 @@ pub(super) fn emit_call<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     bound: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
 ) -> Scalar<'ctx> {
-    emit_call_with(context, builder, module, EXT_OBJ_CALL_SYMBOL, bound, args)
+    emit_call_with(
+        context,
+        builder,
+        module,
+        rt,
+        EXT_OBJ_CALL_SYMBOL,
+        bound,
+        args,
+    )
 }
 
 /// Marshals `args` and calls `callee` *itself* (#1313), yielding the call's
@@ -375,6 +361,7 @@ pub(super) fn emit_call_borrowed<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     callee: Scalar<'ctx>,
     args: &[Scalar<'ctx>],
 ) -> Scalar<'ctx> {
@@ -383,6 +370,7 @@ pub(super) fn emit_call_borrowed<'ctx>(
         context,
         builder,
         module,
+        rt,
         EXT_OBJ_CALL_BORROWED_SYMBOL,
         callee_ptr,
         args,
@@ -397,11 +385,13 @@ fn emit_call_with<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     symbol: &str,
     callable: inkwell::values::PointerValue<'ctx>,
     args: &[Scalar<'ctx>],
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
+    let entry_fn = edge.function();
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
 
@@ -460,7 +450,7 @@ fn emit_call_with<'ctx>(
         .expect_basic("a foreign call helper returns PyObject *")
         .into_pointer_value();
 
-    fail_on_null(context, builder, entry_fn, result, "foreign_call");
+    route_null(context, builder, module, rt, edge, result, "foreign_call");
     Scalar::Object(result)
 }
 
@@ -469,7 +459,7 @@ fn emit_call_with<'ctx>(
 ///
 /// Lives here rather than in a module of its own because it reuses this
 /// one's three primitives unchanged -- [`packer_for`] for the key,
-/// [`shim_fn`] for the declaration, [`fail_on_null`] for the failure edge --
+/// [`shim_fn`] for the declaration, [`route_null`] for the failure edge --
 /// and because the *packer contract* is the thing that must not fork:
 /// `pycc_ext_obj_getitem` consumes the packed key exactly as
 /// `pycc_ext_obj_call` consumes a packed argument, so whatever a packer
@@ -478,17 +468,18 @@ fn emit_call_with<'ctx>(
 /// That is also why no NULL check is emitted on the packed key. A failed
 /// packer stores `NULL`, the shim tests for it and propagates the
 /// already-set exception, and the operation therefore has exactly *one*
-/// module-exec failure edge rather than two. The result is a new reference
+/// failure edge rather than two. The result is a new reference
 /// that is deliberately never released, on the leak-only rule
 /// `foreign_attr.rs` documents for an attribute load.
 pub(super) fn emit_subscript<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
     base: Scalar<'ctx>,
     index: Scalar<'ctx>,
 ) -> Scalar<'ctx> {
-    let entry_fn = expect_module_exec_entry(builder);
+    let edge = ForeignFailEdge::for_current(builder);
     let base_ptr = expect_object_pointer(base);
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
 
@@ -517,7 +508,15 @@ pub(super) fn emit_subscript<'ctx>(
         .expect_basic("pycc_ext_obj_getitem returns PyObject *")
         .into_pointer_value();
 
-    fail_on_null(context, builder, entry_fn, result, "foreign_subscript");
+    route_null(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        result,
+        "foreign_subscript",
+    );
     Scalar::Object(result)
 }
 
@@ -891,7 +890,7 @@ mod tests {
     ///
     /// Six appended blocks, listed in the order emission creates them: the
     /// `get_iter` NULL test's own fail/continuation pair (appended by the
-    /// shared `fail_on_null` helper), then the header, body, after and
+    /// shared `foreign_fail::route_null` helper), then the header, body, after and
     /// next-failure blocks. The `get_iter` call itself is emitted into the
     /// current block and appends none. The array below is the list; do not
     /// restate its length in prose here or in `docs/RUNTIME.md`. Naming each one and asserting on the label is

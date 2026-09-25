@@ -1363,10 +1363,16 @@ spellings before the foreign path sees them, so they do not reach it even \
 with admitted arguments. Since #1263 container lowering admits an \
 attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
-`add` is still refused by `C0001`. Every supported operation is \
-admitted only in a *module body below the import*: inside a function body \
-the read is this same error, because the compiler cannot prove the import \
-has already run. The refusal narrows as the later parts of #1026 land -- \
+`add` is still refused by `C0001`. In a module body every supported \
+operation is admitted only *below the import*. Since #1316 each one except \
+the `for` loop is also admitted inside a function body when the name is a \
+module-level foreign binding that no local shadows: a call that runs \
+before the import has bound the name raises `NameError` at run time, and \
+a failing operation raises a pycc exception the function can catch. \
+Inside a function body this code still refuses iterating the object with \
+`for` (#1325), binding it to a name, returning it, passing it to a pycc \
+function, and a parameter whose type would be inferred as the object. The \
+refusal narrows as the later parts of #1026 land -- \
 the boundary conversions -- and this code is retired when they have.",
         example: "\
 import numpy

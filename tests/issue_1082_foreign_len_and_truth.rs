@@ -144,23 +144,18 @@ fn not_on_a_cpython_object_is_still_refused_with_t0021() {
     assert!(text.contains("unary operator Not is not defined"), "{text}");
 }
 
-/// Both new operations inherit PR 2a's positional bound unchanged.
-///
-/// A foreign object is readable only in a module body, because that is the
-/// one function with a `-1` failure edge for a raising `PyObject_Size` or
-/// `PyObject_IsTrue` to take. Reading one inside a function body is still
-/// `I0404`, and PR 3a changed nothing about that.
+/// Both operations are admitted inside a function body since #1316, which
+/// gave every pycc function a failure edge for a raising `PyObject_Size`
+/// or `PyObject_IsTrue` to take (`crates/pycc_codegen/src/foreign_fail.rs`).
 #[test]
-fn both_operations_inherit_the_positional_bound() {
+fn both_operations_are_admitted_in_a_function_body() {
     let dir = ScratchDir::new("foreign_len_positional").expect("scratch");
     for body in [
         "import gc\n\ndef _n() -> int:\n    return len(gc)\n\nprint(_n())\n",
         "import gc\n\ndef _t() -> int:\n    if gc:\n        return 1\n    return 0\n\nprint(_t())\n",
     ] {
         let out = check(&dir, body);
-        assert!(!out.status.success(), "{body}: {}", stdout_of(&out));
-        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
-        assert!(text.contains("I0404"), "{body}: {text}");
+        assert!(out.status.success(), "{body}: {}", stdout_of(&out));
     }
 }
 

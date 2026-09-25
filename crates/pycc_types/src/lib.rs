@@ -3025,6 +3025,15 @@ fn check_stmt_in_function(
                 }
             }
             let actual = infer_expr_in(env, local_names, expr)?;
+            // #1316: a function body may read a module-level foreign
+            // `object`, but not hand one to its caller -- the caller could
+            // only bind or pass it, which is #1325's. Context-free, so an
+            // unannotated helper whose return type the solver inferred as
+            // `object` is refused here too.
+            crate::foreign::reject_object_operand(
+                &actual,
+                "returning a CPython object from a function",
+            )?;
             if !class::is_assignable_env(env, &actual, &return_ty) {
                 // #380 (PR-20): if the mismatch involves a protocol,
                 // produce a detailed T0046 conformance error.
@@ -3248,13 +3257,12 @@ fn check_stmt_in_function(
             Ok(())
         }
         // PR 3c of #1082: refused unconditionally inside a function body.
-        // A function body cannot read a foreign object at all (PR 2a of
-        // #1081: D-041 checks a body against the module environment as it
-        // stands after all top-level code, so it cannot tell whether the
-        // call site precedes the `import`, and `pycc_codegen`'s module-exec
-        // failure edge does not exist inside a function). The iterable is
-        // therefore never inferred here -- there is no shape of it this arm
-        // could accept.
+        // Since #1316 a function body may read a module-level foreign
+        // object, but the loop would bind its target to a function-local
+        // `object` value, which is #1325's; the module body's own loop
+        // target is a module global instead. The iterable is therefore
+        // never inferred here -- there is no shape of it this arm could
+        // accept.
         //
         // The message states that bound and stops there. `pycc_hir` routes
         // *every* attribute and attribute-callee-call iterable to
@@ -3266,8 +3274,8 @@ fn check_stmt_in_function(
         HirStmt::ForObject { .. } => Err(Diagnostic::error(
             "I0404",
             "`for ... in <attribute or method call>` is not supported inside a function body \
-             -- a function body has no module-exec failure edge, so the statement is refused \
-             here whatever the iterable turns out to be"
+             -- its loop variable would bind a function-local CPython object, so the statement \
+             is refused here whatever the iterable turns out to be"
                 .to_string(),
             Span::new(0, 0),
         )),

@@ -306,9 +306,11 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     // `BaseExceptionGroup` to `BUILTIN_EXCEPTION_CLASSES`, shrinking the
     // remaining per-module user-exception tag budget from 233 to 231; Part A
     // of #1038 (#1063) appended `OverflowError`, shrinking it again to 230;
-    // #1292 appended `ImportError`/`ModuleNotFoundError`, shrinking it to 228.
+    // #1292 appended `ImportError`/`ModuleNotFoundError`, shrinking it to 228;
+    // #1316 reserved tag 255 for a bridged non-`Exception` `BaseException`,
+    // shrinking it to 227.
     assert!(
-        text.contains("at most 228"),
+        text.contains("at most 227"),
         "unexpected diagnostic: {text}"
     );
 }

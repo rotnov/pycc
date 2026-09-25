@@ -304,6 +304,11 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     } else {
         "result = "
     };
+    // #1316: the bridge-table watermark, taken immediately before compiled
+    // code runs. Anything the call bridges above it is released on both
+    // exits below, so a host calling this export in a loop never grows the
+    // table. See the C shim's `pycc_ext_bridge_release_to`.
+    out.push_str("    Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n");
     if use_thunk {
         out.push_str(&format!("    {assign}{thunk}({call_args});\n"));
     } else {
@@ -341,9 +346,13 @@ pub(crate) fn wrapper_for(export: &ExtExport) -> String {
     // Empty for an export with no `memoryview` parameter, so every wrapper
     // generated before Part 1 of #1027 is byte-identical to what it was.
     let release: String = buffer_releases(&slots, "    ");
+    // #1316: the watermark release runs *after* `pycc_ext_raise_pending`,
+    // which must find the escaping exception's bridge entry first; the
+    // release sets CPython's indicator aside around its own `Py_DECREF`s.
     out.push_str(&format!(
         "    if (pycc_rt_ext_pending_type() >= 0) {{\n{}        pycc_ext_raise_pending();\n        \
-         return NULL;\n    }}\n",
+         pycc_ext_bridge_release_to(bridge_mark);\n        return NULL;\n    }}\n    \
+         pycc_ext_bridge_release_to(bridge_mark);\n",
         buffer_releases(&slots, "        ")
     ));
     out.push_str(&caller_owned_buffer_acquire(

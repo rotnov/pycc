@@ -37,20 +37,28 @@
 //!    therefore key on the **type**, never on the producing expression
 //!    shape, and the list is expected to keep growing.
 //!
-//! **PR 2a of #1081 bounded the admitted read by position.** A foreign
-//! object may be read only where the compiler can tell the `import` has
-//! already run and can report a failed lookup: a module body. Two shapes
-//! Part 2 briefly admitted are refused again, both of which had turned a
-//! compile error into a run-time trap --
+//! **PR 2a of #1081 bounded the admitted read by position; #1316 widened
+//! the bound to function bodies.** A foreign object may be read only where
+//! the compiler can report a failed lookup and a read before the `import`:
 //!
-//! * a read inside a *function body*, refused by
-//!   [`reject_object_read`] from `expr::infer_expr_in`'s `HirExpr::Name`
-//!   arm, because D-041 checks a body against the module environment as it
-//!   stands after all top-level code and so cannot see whether the call
-//!   site precedes the `import` (and because `pycc_codegen`'s module-exec
-//!   failure edge does not exist inside one);
-//! * a module-body read placed *above* the `import`, which is now an
-//!   ordinary unbound-name `T0021` -- see [`bind_foreign_objects`].
+//! * a module body, where a read placed *above* the `import` is an
+//!   ordinary unbound-name `T0021` -- see [`bind_foreign_objects_at`] --
+//!   and a failed operation stops the module exec;
+//! * a function body, method body or unannotated helper, for a name in
+//!   [`Environment::foreign_globals`] -- a module-level foreign import no
+//!   local shadows (#1316). D-041 checks a body against the module
+//!   environment as it stands after all top-level code, so it cannot see
+//!   whether the call site precedes the `import`; `pycc_codegen` answers
+//!   that read at run time with the `NameError` CPython raises, and
+//!   bridges a failed operation into pycc's pending exception so the
+//!   body's own `try` can catch it (`pycc_codegen`'s `foreign_fail.rs`).
+//!
+//! Any other `Ty::Object` name in a function body -- an unannotated
+//! parameter inferred as `object` from a module-level call site -- stays
+//! refused by [`reject_object_read`], and so do the three shapes that would
+//! let a function hold an object beyond one expression: binding it
+//! (`check_assignment`), returning it, and passing it to a pycc-compiled
+//! callable ([`reject_object_arguments`]). All three are #1325's.
 //!
 //! `docs/TYPE_SYSTEM.md` carries the user-facing statement of both.
 //!
@@ -63,9 +71,8 @@
 //! `str` -- the four scalars the shim has a `pycc_ext_obj_pack_*` helper
 //! for -- and refuses every other argument type with
 //! [`object_operation_unsupported`], including a second `Ty::Object`. The
-//! call inherits PR 2a's positional bound unchanged: the base is read
-//! through the same `HirExpr::Name` arm, so a call inside a function body
-//! is still `I0404` and a call above the `import` is still `T0021`.
+//! call inherits the positional bound unchanged: the base is read through
+//! the same `HirExpr::Name` arm.
 //!
 //! The arm is not reached for four method names. `pycc_hir`'s container
 //! fast paths claim `append`, `pop`, `get` and `add` while lowering, so
@@ -87,8 +94,7 @@
 //! so the ten `reject_object_condition` sites that existed only to keep an
 //! object away from a codegen panic are gone. Nothing else about the
 //! positional bound changes: both operations read their operand through the
-//! same `HirExpr::Name` arm, so both are still `I0404` inside a function
-//! body and still `T0021` above the `import`.
+//! same `HirExpr::Name` arm.
 //!
 //! `not o` is *not* part of this: `unop.rs`'s `Not` arm answers `T0021` for
 //! a non-`bool` operand, which it did before PR 3a and still does.
@@ -181,21 +187,26 @@
 //! ordinary `T0025` this arm already produced, while PEP 585's variadic
 //! `tuple[float, ...]` never reaches this crate -- `pycc_hir` refuses the
 //! `...` type argument with `T0053` while lowering the annotation. The
-//! in-function arm gains no branch at all: the read of the foreign name is
-//! already `I0404` there, which PR 4c's own test pins.
+//! in-function arm gains no branch at all: since #1316 the read of a
+//! module-level foreign name is admitted there, and the ordinary
+//! assignability check refuses the `object` value against the declared
+//! tuple with `T0025`, as PR 4c's own test pins.
 //!
 //! **#1313 added a direct call of an `object`-typed name** (`product("ab")`
 //! after `from itertools import product`, or a call of a `for` loop target
 //! bound to an object). `expr::infer_expr_in`'s
 //! `HirExpr::Call` arm answers [`Ty::Object`] for a callee bound to
-//! [`Ty::Object`] in a module body, under the same positional-scalar
+//! [`Ty::Object`] in a module body -- and, since #1316, for a
+//! module-level foreign import called from a function body -- under the
+//! same positional-scalar
 //! argument rule as a method call ([`check_object_call_args`]); the
 //! constraint solver's own `Call` arm answers the same term. Part 2 kept
 //! the call refused because admitting `f(2.0)` also admits `numpy(1)`,
 //! which CPython answers with `TypeError: 'module' object is not
 //! callable`. That is now the intended reading: the call is compiled and
-//! the host raises exactly that `TypeError`, on the same uncatchable
-//! module-exec failure edge every other object operation uses (#1096).
+//! the host raises exactly that `TypeError`, on the same failure edge
+//! every other object operation uses: uncatchable in a module body
+//! (#1096), catchable in a function body (#1316).
 //!
 //! [`reject_object_read`] serves the three sites that key on a *named*
 //! binding rather than on a consumed value:
@@ -203,9 +214,10 @@
 //! 1. `lookup_bound_name` (D-105's `ForList`/`ListAppend` HIR shape carries
 //!    its list as a plain `String`, so it never becomes a `HirExpr::Name`),
 //! 2. `expr::infer_expr_in`'s `HirExpr::Call` arm inside a function body,
-//!    where a call of a foreign binding is refused for the positional
-//!    reason the in-function read below is (#1316 tracks lifting it) and
-//!    would otherwise report the generic `non_callable_binding` `T0021`,
+//!    where a call of a function-local `object` value (anything but a name
+//!    in [`Environment::foreign_globals`]) is refused for the reason the
+//!    in-function read below is and would otherwise report the generic
+//!    `non_callable_binding` `T0021`,
 //! 3. the in-function read above, which is the one site that keys on
 //!    *position* as well as on the type.
 
@@ -321,6 +333,33 @@ pub(crate) fn reject_object_operand(ty: &Ty, operation: &str) -> Result<(), Diag
     Ok(())
 }
 
+/// Refuses a CPython object as an argument to a pycc-compiled callable --
+/// a function, method, constructor or generic function (#1316).
+///
+/// Context-free on purpose: `object` is unspellable in an annotation
+/// (D-137's amendment), so the only parameter that could accept one is an
+/// unannotated private helper's, inferred as `object` from this very call
+/// site, and the callee could then only read it as a function-local
+/// `object` -- #1325's territory. Before #1316 no type-layer rule refused
+/// the module-level shape either, and `pycc_codegen` aborted on it with an
+/// internal error instead of a diagnostic.
+///
+/// A generic function calls this over every argument before
+/// substitution; an ordinary function applies [`PASSING_TO_A_FUNCTION`]
+/// per argument after its own assignability check instead, so a declared
+/// parameter keeps its `T0021` mismatch. A method or constructor needs
+/// neither: its parameters are declared, or refused as uninferable, so the
+/// ordinary mismatch already refuses an `object` argument.
+pub(crate) fn reject_object_arguments(arg_tys: &[Ty]) -> Result<(), Diagnostic> {
+    arg_tys
+        .iter()
+        .try_for_each(|ty| reject_object_operand(ty, PASSING_TO_A_FUNCTION))
+}
+
+/// The `I0404` operation phrase for a CPython object passed to a
+/// pycc-compiled callable (see [`reject_object_arguments`]).
+pub(crate) const PASSING_TO_A_FUNCTION: &str = "passing a CPython object to a function";
+
 /// The local names a module's import table binds to a CPython object, in
 /// source order.
 pub(crate) fn foreign_object_names(imports: &[ImportBinding]) -> Vec<&str> {
@@ -408,5 +447,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 #[cfg(test)]
 mod call_tests;
+#[cfg(test)]
+mod in_function_tests;
 #[cfg(test)]
 mod tests;

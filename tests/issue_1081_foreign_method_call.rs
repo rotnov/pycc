@@ -111,26 +111,23 @@ fn an_unmarshallable_argument_is_refused_with_i0404() {
     }
 }
 
-/// PR 2a's positional bound is inherited unchanged: a call inside a
-/// function body is `I0404`, and a call above the `import` is `T0021`.
+/// A call inside a function body is admitted since #1316, and a call above
+/// the `import` is still `T0021`.
 ///
-/// This is the load-bearing pair. Both bounds are what make PR 2b's
-/// failure protocol free: every admitted call is emitted inside
-/// `pycc_ext_module_exec`, the one function with the `ret i64 -1` edge a
-/// failed call takes, so no CPython-to-pycc exception bridge is needed.
-/// Lifting either bound would cost both an ordering analysis and that
-/// bridge.
+/// #1316 gave every pycc function a failure edge
+/// (`crates/pycc_codegen/src/foreign_fail.rs`): a failed call there is
+/// bridged to a pycc exception and branches to the innermost handler, so
+/// the positional bound PR 2b relied on no longer applies to a function
+/// body. The source-order bound still does.
 #[test]
-fn a_method_call_inherits_the_positional_bound() {
+fn a_method_call_inherits_the_source_order_bound() {
     let dir = ScratchDir::new("foreign_call_position").expect("scratch");
 
     let output = check(
         &dir,
         "import gc\n\n\ndef off() -> None:\n    gc.disable()\n",
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
 
     let output = check(&dir, "gc.disable()\n\nimport gc\n");
     assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
@@ -290,8 +287,8 @@ fn a_missing_method_raises_attribute_error_in_the_host() {
 
 /// A call inside a module-scope loop does not grow the stack per iteration.
 ///
-/// The positional bound refuses a foreign read in a *function body*, but a
-/// top-level `for` is not one, so this shape is admitted -- and an `alloca`
+/// A top-level `for` is not a function body, so the call is emitted in
+/// `pycc_ext_module_exec` -- and an `alloca`
 /// emitted at the call site is only reclaimed when `pycc_ext_module_exec`
 /// returns. Twenty million iterations segfaulted the hosting interpreter
 /// until `alloca_in_entry_block` hoisted the argument array; the loop below

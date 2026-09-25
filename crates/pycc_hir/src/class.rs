@@ -345,8 +345,9 @@ pub struct HirClassDef {
     /// `module::lower_all` for a single module and from the driver's linker
     /// for a whole program) to every user-declared class whose
     /// MRO reaches a builtin exception class, in a deterministic order, from
-    /// `FIRST_USER_EXCEPTION_TYPE_TAG..=255`; the lower tags are reserved for
-    /// the builtin hierarchy. A module declaring more than
+    /// `FIRST_USER_EXCEPTION_TYPE_TAG..=254`; the lower tags are reserved for
+    /// the builtin hierarchy and 255 for a bridged foreign non-`Exception`
+    /// (`FOREIGN_BASE_EXCEPTION_TYPE_TAG`, #1316). A module declaring more than
     /// `MAX_USER_EXCEPTION_CLASSES` such classes is rejected with `C0001`.
     /// Every other class — including a user class that never touches the
     /// exception hierarchy — keeps `None`.

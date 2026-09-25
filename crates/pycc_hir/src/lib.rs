@@ -29,9 +29,10 @@ pub use container::{check_container_ty, check_tuple_element_ty};
 pub use dunder_name::DUNDER_NAME;
 pub use exception::{
     BUILTIN_EXCEPTION_CLASSES, EXCEPTION_GROUP_TYPE_TAG, EXCEPTION_INIT_MANGLED_NAME,
-    FIRST_USER_EXCEPTION_TYPE_TAG, HirExceptHandler, MAX_USER_EXCEPTION_CLASSES,
-    builtin_exception_class_defs, builtin_exception_init_item, builtin_exception_parent,
-    except_handler_binding_type_name, is_builtin_exception_class, is_flat_builtin_exception_class,
+    FIRST_USER_EXCEPTION_TYPE_TAG, FOREIGN_BASE_EXCEPTION_TYPE_TAG, HirExceptHandler,
+    MAX_USER_EXCEPTION_CLASSES, builtin_exception_class_defs, builtin_exception_init_item,
+    builtin_exception_parent, except_handler_binding_type_name, is_builtin_exception_class,
+    is_flat_builtin_exception_class,
 };
 pub use expr::receiver_takes_method_path;
 pub(crate) use func::{

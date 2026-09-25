@@ -914,14 +914,14 @@ pub(crate) fn collect_expr_constraints(
                 // for is reported as `T0021: cannot infer return type`,
                 // which would pre-empt the `I0404` the check phase owes an
                 // unannotated `def _helper(): return numpy.pi`. What the
-                // term does *not* do any more is let such a signature reach
-                // `pycc_codegen`: PR 2a of #1081 refuses reading a foreign
-                // object inside a function body at all (`crate::expr`'s
-                // `Name` arm), so the helper is rejected right after the
-                // solver hands its return type over. At module scope, where
-                // the read stays admitted, the consumer-side refusals are
-                // what keep a `Ty::Object` sound: nothing may be *done*
-                // with one except load another attribute from it.
+                // term does *not* do is let such a signature reach
+                // `pycc_codegen`: the check phase refuses returning a
+                // CPython object from a function (#1316, its `Return` arm),
+                // so the helper is rejected right after the solver hands
+                // its return type over. The read itself is admitted in a
+                // body since #1316 (`crate::expr`'s `Name` arm), and there
+                // as at module scope the consumer-side refusals are what
+                // keep a `Ty::Object` sound.
                 //
                 // The names still deliberately stay out of `bindings`: the
                 // `Call` arm below refuses any bound non-`def` callee with

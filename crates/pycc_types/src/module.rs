@@ -279,6 +279,12 @@ pub(super) fn check_with_environment_all(
     // exactly once rather than in each constructor -- a fully annotated
     // module takes the concrete path and would otherwise never see it.
     env.std_module_aliases = crate::std_receiver::bind_std_module_aliases(&hir.imports);
+    // #1316: which names a function body may read as a module-level foreign
+    // `object` (see the field's own doc comment).
+    env.foreign_globals = crate::foreign::foreign_object_names(&hir.imports)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     // Part 1 of #1026 pre-seeded every foreign import as a definitely-bound
     // `Ty::Object` here, before the source-order pass. PR 2a of #1081
     // removed that seed: Part 1's refusal of the *read* was what made the

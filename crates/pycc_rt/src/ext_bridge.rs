@@ -196,5 +196,8 @@ mod tests {
         // absent: this crate declares no constants for classes it never
         // raises by name, so there is nothing here to pin them against.
         assert_eq!(crate::EXCEPTION_TYPE_OVERFLOW_ERROR, 25);
+        // #1316: the shim's `PYCC_EXT_TAG_FOREIGN_BASE`, which
+        // `src/ext_build_tests/toolchain.rs` pins against `pycc_hir`.
+        assert_eq!(crate::EXCEPTION_TYPE_FOREIGN_BASE, 255);
     }
 }
