@@ -288,11 +288,21 @@ fn a_conversion_inside_a_function_body_is_admitted() {
 #[test]
 fn the_refusal_message_lists_the_admitted_conversions() {
     let dir = ScratchDir::new("foreign_conversion_enumeration").expect("scratch");
-    let out = check(&dir, "import gc\n\nprint(gc)\n");
+    // A `match` subject is still refused; `print(gc)`, the former probe, is
+    // admitted since #1340.
+    let out = check(
+        &dir,
+        "import gc\n\nmatch gc:\n    case 1:\n        print(1)\n",
+    );
     assert!(!out.status.success());
     let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
+    assert!(text.contains("error[I0404]"), "{text}");
     assert!(
         text.contains("the `float`, `bool`, `int` and `str` conversions"),
+        "{text}"
+    );
+    assert!(
+        text.contains("printing it and f-string interpolation"),
         "{text}"
     );
 }
