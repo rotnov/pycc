@@ -131,16 +131,17 @@ fn cpython_accepts_the_frozenset_subclass_and_pycc_refuses_it_honestly() {
         .arg("build")
         .arg(&src)
         .arg("-o")
-        .arg(dir.join("m.abi3.so"))
+        // A bare name gains the host's own suffix (`.abi3.so` or `.pyd`).
+        .arg(dir.join("m"))
         .arg("--ext")
         .output()
         .expect("pycc should spawn");
-    assert_eq!(build.status.code(), Some(1));
     let output = format!(
         "{}{}",
         String::from_utf8_lossy(&build.stdout),
         String::from_utf8_lossy(&build.stderr)
     );
+    assert_eq!(build.status.code(), Some(1), "{output}");
     assert_eq!(
         output.matches("error[").count(),
         1,
