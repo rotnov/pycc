@@ -1,6 +1,8 @@
 //! Part 1 of #1319: the `pycc_rt_int_set_*` entry points `set[int]` and
 //! `frozenset[int]` share, called through the `rlib` exactly as generated
-//! code links them from the `staticlib`.
+//! code links them from the `staticlib`, plus the #1343 `pycc_rt_obj_set_*`
+//! probe, push and identity-insert points a `set[C]` of a hashable user
+//! class shares with them.
 //!
 //! The unit tests in `crates/pycc_rt/src/int_set.rs` own the semantics; this file pins the exported ABI from outside the crate. It is
 //! also where the diff-coverage gate sees these functions: the
