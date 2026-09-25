@@ -25,6 +25,7 @@ mod hash;
 mod import;
 mod matching;
 mod narrow;
+mod obj_bind;
 mod obj_call;
 mod protocol;
 mod scope;

@@ -1066,7 +1066,12 @@ into the module-exec entry block, so a loop does not grow the host's stack. The
 loop is still admitted only in a module body: #1316 did not extend it, because
 its target would bind a function-local `object`, and binding a CPython object
 to a name inside a function is
-[#1325](https://github.com/rotnov/pycc/issues/1325)'s scope.
+[#1333](https://github.com/rotnov/pycc/issues/1333)'s scope. Since
+[#1325](https://github.com/rotnov/pycc/issues/1325) the iterable may also be a
+bare name bound to an `object` (`for t in x:`): `pycc_mir` lowers the checker's
+`ForList` over such a name to the same `MirStmt::ForObject`, with a `Name` load
+of the module global as the iterable, so the block structure above is
+unchanged.
 
 **The `float` and `bool` conversions fail on that same edge.** PR 4a of [#1083](https://github.com/rotnov/pycc/issues/1083)
 (Part 4 of #1026) added exactly one shim helper, `pycc_ext_obj_to_float`, which
@@ -1159,6 +1164,20 @@ loop, and `PyIter_Next` hands back a new reference to each item, which
 the leak trip-count-linear by construction**, where an attribute load in a loop
 body merely happens to be written inside one.
 
+**Binding moves the reference into the global and rebinding leaks it.** Since
+[#1325](https://github.com/rotnov/pycc/issues/1325) a producer's result may be
+bound to a module-level name (`x = product("ab")`). `emit_assign`'s
+`Scalar::Object` arm stores the pointer into the name's `pyglobal_<name>` slot
+and sets its `initialized` flag, with no reference-count call in either
+direction: the producer's new reference simply moves into the global. A
+rebinding (`x = product("c")`) likewise stores without releasing the previous
+value, because an alias `y = x` shares that pointer without an increment, so a
+release on rebind could free an object `y` still names -- a use-after-free
+where the leak is only a leak. The binding is module-global only (a
+function-local `object` is [#1333](https://github.com/rotnov/pycc/issues/1333)),
+so each binding statement leaks at most one reference per execution, on the
+same terms as the producers above.
+
 **The key slot repeats the argument slot's rule rather than inventing a second
 one.** `pycc_ext_obj_getitem` *borrows* the object and **consumes the key
 reference on every path**, including the one where either argument is already
@@ -1246,8 +1265,8 @@ calling such an exported function N times leaks N references per operation.
 Part 2 accepts it because releasing correctly requires a release protocol that
 is not yet built, and because nothing in Part 2 can hand such a value to a host:
 every consuming operation other than a further attribute load, a method call,
-a subscript load, `for` iteration, `len`, a truth test or a
-`float`/`bool`/`int`/`str` conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
+a subscript load, `for` iteration, `len`, a truth test, a module-level binding
+(#1325) or a `float`/`bool`/`int`/`str` conversion is refused with `I0404`, and the `ext` export boundary refuses an `object`
 parameter or return (`C0003`). A method call's result leaks on exactly the same
 terms and is trip-count-linear in exactly the same way. **A benchmark run under
 [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md)

@@ -54,11 +54,20 @@
 //!   body's own `try` can catch it (`pycc_codegen`'s `foreign_fail.rs`).
 //!
 //! Any other `Ty::Object` name in a function body -- an unannotated
-//! parameter inferred as `object` from a module-level call site -- stays
+//! parameter inferred as `object` from a module-level call site, or a
+//! module-level name a `x = <object>` statement bound (#1325) -- stays
 //! refused by [`reject_object_read`], and so do the three shapes that would
 //! let a function hold an object beyond one expression: binding it
 //! (`check_assignment`), returning it, and passing it to a pycc-compiled
-//! callable ([`reject_object_arguments`]). All three are #1325's.
+//! callable ([`reject_object_arguments`]). All three are #1333's.
+//!
+//! **#1325 admitted binding an object to a name in a module body.**
+//! `check_assignment`'s guard now refuses only inside a function body; at
+//! module scope `x = product("ab")` stores the new reference into an
+//! ordinary module global that never releases it (a rebinding leaks the old
+//! reference, #1092). `for t in x:` over such a name is the bare-name form
+//! of `HirStmt::ForObject`: `check_stmt`'s `ForList` arm routes a
+//! definitely-bound `object` name to the same checks ([`for_loop`]).
 //!
 //! `docs/TYPE_SYSTEM.md` carries the user-facing statement of both.
 //!
@@ -114,7 +123,8 @@
 //! different HIR shape, which `pycc_hir` rejects with `C0001` ("only
 //! assigning to a bare-name subscript target") before this crate sees it,
 //! and `check_assignment`'s own `reject_object_operand` guard keeps
-//! `x = o[k]` an `I0404` besides. A *slice* (`o[a:b]`) is a third shape
+//! `x = o[k]` an `I0404` inside a function body (a module body admits it
+//! since #1325). A *slice* (`o[a:b]`) is a third shape
 //! again and keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The positional
 //! bound is inherited unchanged.
 //!
@@ -266,7 +276,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              value, and #1026 implements attribute access, positional \
              scalar-argument method calls and direct calls, `len`, truth \
              testing, a \
-             scalar-key subscript load, `for` iteration, the `float`, \
+             scalar-key subscript load, `for` iteration, binding the \
+             value to a module-level name, the `float`, \
              `bool`, `int` and `str` conversions and an annotated \
              module-level assignment to a fixed-arity all-`float` `tuple` \
              on it and nothing else"
@@ -340,7 +351,8 @@ pub(crate) fn reject_object_operand(ty: &Ty, operation: &str) -> Result<(), Diag
 /// (D-137's amendment), so the only parameter that could accept one is an
 /// unannotated private helper's, inferred as `object` from this very call
 /// site, and the callee could then only read it as a function-local
-/// `object` -- #1325's territory. Before #1316 no type-layer rule refused
+/// `object` -- #1333's territory (#1325 admitted the binding at module
+/// scope only). Before #1316 no type-layer rule refused
 /// the module-level shape either, and `pycc_codegen` aborted on it with an
 /// internal error instead of a diagnostic.
 ///
@@ -445,6 +457,10 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
     }
 }
 
+pub(crate) mod for_loop;
+
+#[cfg(test)]
+mod binding_tests;
 #[cfg(test)]
 mod call_tests;
 #[cfg(test)]

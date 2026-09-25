@@ -173,17 +173,21 @@ fn the_non_generic_exit_leaves_a_recorded_position_alone() {
 /// `I0404` refusal, and `json()` compiled into a call to the shadowed
 /// function -- where CPython raises `TypeError: 'module' object is not
 /// callable`. Applying the binding at its recorded position is what refuses
-/// it. Since #1313 admits a module-body direct call of a CPython object, the
-/// refusal that fires here is the one on binding its `object` result to `x`;
-/// what the test pins is that the call is no longer a native call of the
-/// shadowed `def`.
+/// it. Since #1313 admits a module-body direct call of a CPython object, and
+/// #1325 binding its result to a module-level name, the probe prints the
+/// call's result: printing is `I0404` only if `json` is the foreign object,
+/// while the `int` the shadowed `def` returns would print cleanly. What the
+/// test pins is that the call is no longer a native call of the shadowed
+/// `def`.
 #[test]
 fn a_foreign_import_supersedes_an_earlier_def_of_the_same_name() {
-    let source = "def json() -> int:\n    return 1\n\n\nx = json()\n";
+    let source = "def json() -> int:\n    return 1\n\n\nprint(json())\n";
     let hir = with_foreign_import_named(lower(source), "json", 1);
-    let diagnostics = crate::check_all(&hir).expect_err("the call must be refused");
+    let diagnostics = crate::check_all(&hir).expect_err("the print must be refused");
     assert!(
-        diagnostics.iter().any(|d| d.code == "I0404"),
+        diagnostics
+            .iter()
+            .any(|d| d.code == "I0404" && d.message.contains("printing or formatting")),
         "{diagnostics:?}"
     );
 }
@@ -259,12 +263,6 @@ fn a_foreign_import_after_an_unrolled_enum_loop_is_repositioned_past_it() {
 
 /// The label [`both_producer_shapes`] gives the helper-call shape.
 const HELPER_SHAPE: &str = "a private helper returning `object`";
-
-/// The `I0404` phrase `expr.rs`'s `HirExpr::Name` arm reports for a
-/// `Ty::Object` read it does not admit: at module scope a bare foreign name
-/// in a position that needs a value, and inside a function body any
-/// `object` global the module did not bind by a foreign import (#1316).
-const FUNCTION_BODY_READ: &str = "using `numpy`, which is bound to a CPython object";
 
 /// The `I0404` phrase `crate::lib`'s `Return` arm reports (#1316): a
 /// function may read a module-level foreign name but not hand it back.
@@ -435,24 +433,21 @@ fn a_module_body_read_above_the_import_is_unbound() {
 /// CPython object is a supported operation now
 /// (`crates/pycc_codegen/src/foreign_len.rs`), so there is no refusal left
 /// to assert; `tests/issue_1082_foreign_len_and_truth.rs` asserts the
-/// acceptance in its place. What remains here is the rendering, binding,
-/// walrus and `match` group, which PR 3a does not touch. #1316 admits the
-/// in-function shapes of all five condition sites, which
+/// acceptance in its place. What remains here is the rendering and `match`
+/// group, which PR 3a does not touch. #1316 admits the in-function shapes of
+/// all five condition sites, which
 /// [`the_in_function_condition_sites_are_admitted`] pins.
+///
+/// #1325 removed the `x = numpy.pi` row: a module-level binding is admitted
+/// now (`foreign/binding_tests.rs`). The walrus no longer reaches that
+/// guard's refusal either, so it draws the `T0050` its operand always would
+/// have, pinned separately below the table.
 #[test]
 fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_shapes() {
     for (phrase, snippet) in [
         // Rendering: `print` and f-string interpolation both route through
         // `reject_unrenderable`.
         ("printing or formatting", "print(numpy.pi)\n"),
-        ("binding a CPython object to a name", "x = numpy.pi\n"),
-        // PEP 572's walrus reaches the same `check_assignment` guard, so it
-        // reports the binding refusal rather than the `T0050` the operand
-        // would otherwise draw.
-        (
-            "binding a CPython object to a name",
-            "if (y := numpy.pi):\n    print(1)\n",
-        ),
         (
             "matching on a CPython object",
             "match numpy.pi:\n    case 1:\n        print(1)\n",
@@ -461,6 +456,14 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
         for (shape, source) in both_producer_shapes(snippet) {
             assert_refused(shape, &source, "I0404", phrase);
         }
+    }
+    for (shape, source) in both_producer_shapes("if (y := numpy.pi):\n    print(1)\n") {
+        assert_refused(
+            shape,
+            &source,
+            "T0050",
+            "walrus assignment (`:=`) value of type `object`",
+        );
     }
 }
 
@@ -594,21 +597,12 @@ fn a_subscript_key_outside_the_packable_scalars_is_refused() {
 }
 
 /// C6/K1 of the #1082 plan: binding the *result* of a subscript load to a
-/// name is still refused, and the code it reports moved from `T0033`
-/// ("`object` does not support indexing", which the load itself no longer
-/// draws) to the `check_assignment` entry guard's own `I0404`.
-///
-/// This is a deliberate scope decision rather than an oversight: admitting
-/// the binding needs the name-binding work the rest of #1026 carries, and
-/// nothing in PR 3b changes `check_assignment`.
+/// name was refused by PR 3b with the `check_assignment` entry guard's own
+/// `I0404`. #1325 is the name-binding work that decision deferred: at
+/// module scope the binding now checks clean, like any other producer's.
 #[test]
-fn binding_a_subscript_load_to_a_name_is_still_refused() {
-    assert_refused(
-        "`numpy.pi`",
-        "x = numpy.pi[0]\n",
-        "I0404",
-        "binding a CPython object to a name",
-    );
+fn binding_a_subscript_load_to_a_module_level_name_is_admitted() {
+    assert!(check_foreign("x = numpy.pi[0]\n").is_none());
 }
 
 /// K7 of the #1082 plan: a subscript *store* is explicitly out of scope.
@@ -841,7 +835,7 @@ fn a_pre_bound_loop_variable_of_another_type_is_refused() {
 /// restructuring them, so a regression that moved a diagnostic into the
 /// type checker fails here.
 #[test]
-fn the_deferred_for_iterable_shapes_keep_their_own_refusals() {
+fn the_deferred_for_iterables_keep_their_refusals_and_a_bare_module_is_admitted() {
     for (source, phrase) in [
         (
             "for x in numpy.pi[0]:\n    pass\n",
@@ -861,15 +855,11 @@ fn the_deferred_for_iterable_shapes_keep_their_own_refusals() {
         );
     }
     // A bare foreign name is an `Expr::Name` iterable, so it lowers to
-    // `HirStmt::ForList` and `lookup_bound_name`'s own `reject_object_read`
-    // refuses it -- a module object is not iterable, and PR 3c does not
-    // change that.
-    assert_refused(
-        "a bare foreign-name iterable",
-        "for x in numpy:\n    pass\n",
-        "I0404",
-        FUNCTION_BODY_READ,
-    );
+    // `HirStmt::ForList`. Since #1325 that arm routes a definitely-bound
+    // `object` name to the object loop, keyed on the type alone: a bare
+    // module is admitted, and CPython's own `TypeError` answers it at run
+    // time.
+    assert!(check_foreign("for x in numpy:\n    pass\n").is_none());
 }
 
 /// The in-function constraint solver walks a `ForObject` before the

@@ -1343,19 +1343,21 @@ def scale(x: float) -> float:
 I0404 reports an unsupported operation on a value whose type is the opaque \
 CPython object type `object` -- a module bound by a CPython `import` under \
 `--ext`, or an attribute loaded from one. Reading such a value is not \
-itself an error, and #1026 implements seven operations on it: loading a \
+itself an error, and #1026 implements eight operations on it: loading a \
 further attribute, calling a method with positional \
 `int`/`float`/`bool`/`str` arguments, calling the object itself with \
 such arguments (#1313), `len`, using it as an \
 `if`/`while` condition or comprehension guard, *loading* a subscript \
-`o[k]` whose key is an `int`, `float`, `bool` or `str`, and iterating it \
-with `for` -- the last only when the iterable is written as an attribute \
-load (`for x in o.attr:`) or a method call (`for x in o.method(...):`): \
-the loop is admitted by the iterable's syntactic shape, because lowering \
-runs before types are known. Everything else is \
-still refused, including printing or f-string interpolation, binding the \
-value to a name, `isinstance`, a `match` subject, iterating over a bare \
-imported module or over a subscript load (`for x in o[k]:`), \
+`o[k]` whose key is an `int`, `float`, `bool` or `str`, iterating it \
+with `for`, and binding it to a module-level name (#1325). The loop is \
+admitted when the iterable is written as an attribute load \
+(`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
+name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
+a bare imported module is iterated too, and raises CPython's own \
+`TypeError` at run time. Everything else is \
+still refused, including printing or f-string interpolation, \
+`isinstance`, a `match` subject, iterating over a subscript load \
+(`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods or to the \
 object itself, and indexing with a key of any other type. Storing through a \
 subscript (`o[k] = v`), slicing (`o[a:b]`) and iterating a direct \
@@ -1369,12 +1371,12 @@ attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
 `add` is still refused by `C0001`. In a module body every supported \
 operation is admitted only *below the import*. Since #1316 each one except \
-the `for` loop is also admitted inside a function body when the name is a \
+the `for` loop and the binding is also admitted inside a function body when the name is a \
 module-level foreign binding that no local shadows: a call that runs \
 before the import has bound the name raises `NameError` at run time, and \
 a failing operation raises a pycc exception the function can catch. \
 Inside a function body this code still refuses iterating the object with \
-`for` (#1325), binding it to a name, returning it, passing it to a pycc \
+`for` (#1333), binding it to a name, returning it, passing it to a pycc \
 function, and a parameter whose type would be inferred as the object. The \
 refusal narrows as the later parts of #1026 land -- \
 the boundary conversions -- and this code is retired when they have.",

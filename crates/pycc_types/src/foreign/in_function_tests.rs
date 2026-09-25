@@ -96,7 +96,7 @@ fn a_local_rebinding_shadows_the_foreign_global() {
 
 /// What stays refused: a CPython object never becomes a function-local
 /// value, a loop or comprehension iterable, a return value or an argument
-/// (the #1325 boundary).
+/// (the #1333 boundary; #1325 admitted the binding at module scope only).
 #[test]
 fn a_foreign_object_never_becomes_a_function_local_value() {
     for (phrase, body) in [

@@ -146,14 +146,11 @@ fn raising_a_call_result_is_refused() {
 }
 
 /// The result has no consumer beyond the ones every object producer has:
-/// binding it and printing it keep their own refusals.
+/// binding it to a module-level name is admitted (#1325), and printing it
+/// keeps its refusal.
 #[test]
-fn binding_or_printing_a_call_result_is_still_refused() {
-    refused(
-        &format!("{FROM_FORM}x = product(\"ab\")\n"),
-        "I0404",
-        "binding a CPython object to a name",
-    );
+fn binding_a_call_result_is_admitted_and_printing_it_is_still_refused() {
+    admitted(&format!("{FROM_FORM}x = product(\"ab\")\n"));
     refused(
         &format!("{FROM_FORM}print(product(\"ab\"))\n"),
         "I0404",

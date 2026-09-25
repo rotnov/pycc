@@ -250,7 +250,8 @@ pub struct Environment {
     /// arms admit a `Ty::Object` read inside a function body only for a
     /// member of this set, so a function-local `object` value -- an
     /// unannotated parameter inferred as `object` from a module-level call
-    /// site -- keeps its `I0404` (#1325's territory).
+    /// site, or a module-level `x = <object>` global (#1325) -- keeps its
+    /// `I0404` (#1333's territory).
     ///
     /// Position-blind on purpose, like pass 3 itself (D-041): a member is
     /// readable only while `bindings` also holds it `Definitely` as
