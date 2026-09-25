@@ -360,6 +360,11 @@ fn two_unbound_foreign_reads_share_one_name_error_declaration() {
     );
     let call = format!("call void @{EXT_NAME_ERROR_SYMBOL}(ptr @pycc_foreign_name_copy");
     assert_eq!(ir.matches(&call).count(), 2, "{ir}");
+    // A second `add_function` of the same symbol would be renamed by LLVM
+    // to `@pycc_ext_name_error.1`; both calls naming the bare symbol is
+    // what proves the declaration is reused.
+    let renamed = format!("@{EXT_NAME_ERROR_SYMBOL}.");
+    assert!(!ir.contains(&renamed), "{ir}");
 }
 
 /// Only a foreign `object` read changes: an unbound `int` global read in a
