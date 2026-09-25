@@ -76,3 +76,25 @@ fn a_user_frozenset_function_shadows_the_builtin() {
     );
     assert_eq!(value.ty(), Ty::Int);
 }
+
+/// `frozenset((s := {1}))`: a walrus in the argument binds `s`; a bare
+/// `frozenset()` binds nothing.
+#[test]
+fn a_walrus_in_the_frozenset_argument_is_a_collected_binding() {
+    let set_ty = Ty::Set(Box::new(Ty::Int));
+    let named = MirExpr::NamedExpr {
+        name: "s".to_string(),
+        value: Box::new(MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1)])),
+        ty: set_ty.clone(),
+    };
+    let mut out = Vec::new();
+    MirExpr::FrozenSetFrom {
+        source: Some(Box::new(named)),
+    }
+    .collect_named_expr_bindings(&mut out);
+    assert_eq!(out, vec![("s".to_string(), set_ty)]);
+
+    let mut none = Vec::new();
+    MirExpr::FrozenSetFrom { source: None }.collect_named_expr_bindings(&mut none);
+    assert!(none.is_empty());
+}
