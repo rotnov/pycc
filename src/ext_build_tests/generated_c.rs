@@ -1445,7 +1445,10 @@ fn a_memoryview_parameter_is_released_on_the_success_path_and_on_the_pending_bai
     // The half nothing else in the tree would notice was missing: the
     // buffer is still held when the compiled call returns normally.
     assert!(
-        inc.contains("    PyBuffer_Release(&b0);\n    return pycc_ext_pack_float(result);\n}\n\n"),
+        inc.contains(
+            "    pycc_ext_bridge_release_to(bridge_mark);\n    PyBuffer_Release(&b0);\n    \
+             return pycc_ext_pack_float(result);\n}\n\n"
+        ),
         "{inc}"
     );
     // And on the other exit past the acquisition -- a pycc exception the
@@ -1454,7 +1457,8 @@ fn a_memoryview_parameter_is_released_on_the_success_path_and_on_the_pending_bai
     assert!(
         inc.contains(
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        PyBuffer_Release(&b0);\n        \
-             pycc_ext_raise_pending();\n        return NULL;\n    }\n"
+             pycc_ext_raise_pending();\n        pycc_ext_bridge_release_to(bridge_mark);\n        \
+             return NULL;\n    }\n"
         ),
         "{inc}"
     );
@@ -1568,7 +1572,8 @@ fn an_export_with_no_memoryview_parameter_emits_no_release_at_all() {
     assert!(
         inc.contains(
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        pycc_ext_raise_pending();\n        \
-             return NULL;\n    }\n    return pycc_ext_pack_str(result);\n"
+             pycc_ext_bridge_release_to(bridge_mark);\n        return NULL;\n    }\n    \
+             pycc_ext_bridge_release_to(bridge_mark);\n    return pycc_ext_pack_str(result);\n"
         ),
         "{inc}"
     );
@@ -1976,6 +1981,7 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
     assert!(
         inc.contains(
             "    inst = pycc_rt_instance_new(2);\n    \
+             Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n    \
              ((void (*)(void *, long long, long long))fnptr_0m4_Grid8___init__)\
              (inst, a0, a1);\n"
         ),
@@ -1987,7 +1993,8 @@ fn a_constructible_class_gets_a_tp_init_three_slots_and_a_carrier_sized_spec() {
     assert!(
         inc.contains(
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        \
-             pycc_ext_raise_pending();\n        return -1;\n    }\n    \
+             pycc_ext_raise_pending();\n        pycc_ext_bridge_release_to(bridge_mark);\n        \
+             return -1;\n    }\n    pycc_ext_bridge_release_to(bridge_mark);\n    \
              ((PyccExtInstance *)self)->inst = inst;\n    return 0;\n}\n"
         ),
         "{inc}"
@@ -2041,6 +2048,7 @@ fn a_zero_argument_constructor_declares_a_receiver_only_parameter_list() {
     assert!(
         inc.contains(
             "    inst = pycc_rt_instance_new(0);\n    \
+             Py_ssize_t bridge_mark = pycc_ext_bridge_mark();\n    \
              ((void (*)(void *))fnptr_0m4_Grid8___init__)(inst);\n"
         ),
         "{inc}"
@@ -2089,7 +2097,9 @@ fn a_memoryview_constructor_releases_its_buffer_on_every_exit_past_the_acquire()
     assert!(
         inc.contains(
             "    if (pycc_rt_ext_pending_type() >= 0) {\n        PyBuffer_Release(&b0);\n        \
-             pycc_ext_raise_pending();\n        return -1;\n    }\n    PyBuffer_Release(&b0);\n"
+             pycc_ext_raise_pending();\n        pycc_ext_bridge_release_to(bridge_mark);\n        \
+             return -1;\n    }\n    pycc_ext_bridge_release_to(bridge_mark);\n    \
+             PyBuffer_Release(&b0);\n"
         ),
         "{inc}"
     );
@@ -2378,7 +2388,9 @@ fn a_buffer_returning_export_with_no_buffer_parameter_packs_as_it_always_did() {
     assert!(
         inc.contains(concat!(
             "    if (pycc_rt_ext_pending_type() >= 0) {\n",
-            "        pycc_ext_raise_pending();\n        return NULL;\n    }\n",
+            "        pycc_ext_raise_pending();\n",
+            "        pycc_ext_bridge_release_to(bridge_mark);\n        return NULL;\n    }\n",
+            "    pycc_ext_bridge_release_to(bridge_mark);\n",
             "    return pycc_ext_pack_memoryview(result);\n",
         )),
         "{inc}"

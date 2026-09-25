@@ -423,6 +423,72 @@ fn the_c_shims_import_error_bridge_tags_still_name_their_classes() {
     }
 }
 
+/// #1316: the foreign-operation bridge maps a CPython exception to a pycc
+/// tag through one `PYCC_EXT_OBJ_TAG(PyExc_X, tag, "Name")` line per class,
+/// first match wins. This pins every line's tag and name against
+/// `BUILTIN_EXCEPTION_CLASSES`, pins the list to cover every builtin but the
+/// two groups, and pins subclass-before-base order through
+/// `builtin_exception_parent`: a base listed ahead of its subclass would
+/// silently swallow it (`ConnectionError` ahead of `BrokenPipeError` makes
+/// `except BrokenPipeError:` stop matching a foreign one).
+#[test]
+fn the_c_shims_foreign_error_mapping_names_its_classes() {
+    let mut mapped: Vec<(usize, &str)> = Vec::new();
+    for line in SHIM_C.lines().map(str::trim) {
+        let Some(args) = line
+            .strip_prefix("PYCC_EXT_OBJ_TAG(")
+            .and_then(|r| r.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let parts: Vec<&str> = args.split(", ").collect();
+        let [py_class, tag, literal] = parts[..] else {
+            panic!("malformed mapping line: {line}");
+        };
+        let tag: usize = tag.parse().expect("a decimal tag");
+        let class = pycc_hir::BUILTIN_EXCEPTION_CLASSES[tag];
+        assert_eq!(py_class, format!("PyExc_{class}"), "tag {tag}");
+        assert_eq!(literal, format!("\"{class}\""), "tag {tag}");
+        mapped.push((tag, class));
+    }
+    let mut tags: Vec<usize> = mapped.iter().map(|(tag, _)| *tag).collect();
+    tags.sort_unstable();
+    let mut expected = (0..=22).collect::<Vec<_>>();
+    expected.extend([25, 26, 27]);
+    assert_eq!(tags, expected);
+    for (position, (_, class)) in mapped.iter().enumerate() {
+        let mut ancestor = pycc_hir::builtin_exception_parent(class);
+        while let Some(base) = ancestor {
+            let base_position = mapped.iter().position(|(_, c)| *c == base);
+            assert!(
+                base_position.is_none_or(|p| p > position),
+                "{base} is mapped before its subclass {class}"
+            );
+            ancestor = pycc_hir::builtin_exception_parent(base);
+        }
+    }
+    // `Exception` is the last line, so everything that falls past it is a
+    // non-`Exception` `BaseException`, which takes the reserved tag.
+    assert_eq!(mapped.last(), Some(&(0, "Exception")));
+    let foreign_base = SHIM_C
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("#define PYCC_EXT_TAG_FOREIGN_BASE ")
+        })
+        .expect("the shim defines the reserved tag");
+    assert_eq!(
+        foreign_base.trim().parse::<u8>().ok(),
+        Some(pycc_hir::FOREIGN_BASE_EXCEPTION_TYPE_TAG)
+    );
+    assert!(
+        SHIM_C.contains(
+            "    case PYCC_EXT_TAG_FOREIGN_BASE:\n        exc_type = PyExc_BaseException;"
+        ),
+        "the raising switch falls back to BaseException for the reserved tag"
+    );
+}
+
 #[test]
 fn the_probe_runs_the_interpreter_in_isolated_mode() {
     let command = probe_command(OsStr::new("python3"), "print(1)");

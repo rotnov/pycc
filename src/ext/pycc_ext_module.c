@@ -131,49 +131,145 @@ extern void pycc_rt_exception_raise(void *obj);
 #define PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR "ModuleNotFoundError"
 
 /*
+ * #1316: the reserved tag a bridged non-`Exception` `BaseException`
+ * (`SystemExit`, `KeyboardInterrupt`, `GeneratorExit`, a non-`Exception`
+ * `BaseExceptionGroup`) carries. It is `pycc_rt`'s
+ * `EXCEPTION_TYPE_FOREIGN_BASE` and `pycc_hir`'s
+ * `FOREIGN_BASE_EXCEPTION_TYPE_TAG`, the one tag above every user class's:
+ * `except Exception` does not match it, exactly as in CPython, while a bare
+ * `except:` and `finally` still run.
+ */
+#define PYCC_EXT_TAG_FOREIGN_BASE 255
+
+/*
  * The bridge table: each bridged pycc exception object paired with a strong
  * reference to the CPython exception it was translated from. When the pycc
- * exception escapes the module body unchanged (unmatched, re-raised with a
- * bare `raise`, or re-raised after `finally`), `pycc_ext_raise_pending`
- * finds its pointer here and re-raises the *original*, so the host still
- * sees `.name`, `.path`, the exact class and the traceback.
+ * exception escapes unchanged (unmatched, re-raised with a bare `raise`, or
+ * re-raised after `finally`), `pycc_ext_raise_pending` finds its pointer
+ * here and re-raises the *original*, so the host still sees `.name`,
+ * `.path`, the exact class and the traceback.
  *
  * Pointer identity is sound because a `PyExceptionObj` is never freed
  * (`pycc_rt::exception`'s leak-only rule), so no other exception can ever
  * reuse a bridged one's address. A table rather than one slot because a
- * handler can bridge a second failed import (`try: import b` inside
- * `except ImportError:`) before re-raising the first. It stays small: a
- * nested foreign import is admitted only at a module-level `if`/`try` site,
- * never in a loop, so one exec adds at most one entry per static import
- * site. Populated only during `pycc_ext_module_exec`, and emptied by
- * `pycc_ext_bridge_table_clear` on both of `pycc_ext_exec_module`'s exits
- * after the module body has run. Its three earlier returns precede the
- * `pycc_ext_module_exec` call, when the table is still empty.
+ * handler can bridge a second failure (`try: import b` inside `except
+ * ImportError:`) before re-raising the first.
+ *
+ * Two bridges fill it: the failed-import bridge (#1293), during module exec
+ * only, and the foreign-operation bridge (#1316), from any compiled
+ * function. The second makes it unbounded by static sites -- a host may
+ * call an exported function any number of times, and every *caught*
+ * bridged exception would otherwise stay here forever -- so it is bounded
+ * by a watermark instead: every frame that can return to CPython (each
+ * generated wrapper, and `pycc_ext_exec_module`) takes
+ * `pycc_ext_bridge_mark()` before running compiled code and calls
+ * `pycc_ext_bridge_release_to(mark)` on every exit, after
+ * `pycc_ext_raise_pending` has looked up the escaping entry. So the table
+ * holds at most the entries created during one top-level host call.
+ *
+ * Per thread, not process-wide: pycc's pending exception is thread-local,
+ * and a foreign call can release the GIL, so a second thread's wrapper exit
+ * must never release the first thread's live entries. The key is heap
+ * allocated because `Py_tss_t` is an incomplete type under this file's
+ * limited API. It is created once per process by `pycc_ext_exec_module`
+ * and never deleted (the module is never unloaded); each thread's table is
+ * allocated lazily on its first bridge and, TSS having no destructor, is
+ * leaked with its buffer when the thread ends. No CPython object leaks
+ * with it: the watermark has emptied it by then.
  */
 typedef struct {
     void *pycc;
     PyObject *orig;
 } pycc_ext_bridge_entry;
 
-static pycc_ext_bridge_entry *pycc_ext_bridge_entries = NULL;
-static Py_ssize_t pycc_ext_bridge_len = 0;
-static Py_ssize_t pycc_ext_bridge_cap = 0;
+typedef struct {
+    pycc_ext_bridge_entry *entries;
+    Py_ssize_t len;
+    Py_ssize_t cap;
+} pycc_ext_bridge_table;
+
+static Py_tss_t *pycc_ext_bridge_key = NULL;
+
+/* This thread's table, or NULL when it has never bridged. */
+static pycc_ext_bridge_table *pycc_ext_bridge_current(void)
+{
+    if (pycc_ext_bridge_key == NULL) {
+        return NULL;
+    }
+    return (pycc_ext_bridge_table *)PyThread_tss_get(pycc_ext_bridge_key);
+}
 
 /*
- * Releases every remaining bridge entry. Called only after the entries can
- * no longer be looked up. The caller may hold a set CPython error, which a
- * finalizer run by a released original must not clobber, so it is set aside
- * across the releases and restored afterwards (a NULL round-trips).
+ * This thread's table with room for one more entry, allocating the table on
+ * the thread's first bridge. NULL when it cannot -- no key yet, or an
+ * allocation failed -- with CPython's error indicator untouched.
  */
-static void pycc_ext_bridge_table_clear(void)
+static pycc_ext_bridge_table *pycc_ext_bridge_reserve(void)
 {
-    PyObject *saved = PyErr_GetRaisedException();
-    Py_ssize_t i;
+    pycc_ext_bridge_table *table = pycc_ext_bridge_current();
 
-    for (i = 0; i < pycc_ext_bridge_len; i++) {
-        Py_XDECREF(pycc_ext_bridge_entries[i].orig);
+    if (table == NULL) {
+        if (pycc_ext_bridge_key == NULL) {
+            return NULL;
+        }
+        table = PyMem_Calloc(1, sizeof(pycc_ext_bridge_table));
+        if (table == NULL) {
+            return NULL;
+        }
+        if (PyThread_tss_set(pycc_ext_bridge_key, table) != 0) {
+            PyMem_Free(table);
+            return NULL;
+        }
     }
-    pycc_ext_bridge_len = 0;
+    if (table->len == table->cap) {
+        Py_ssize_t cap = table->cap == 0 ? 4 : table->cap * 2;
+        pycc_ext_bridge_entry *grown =
+            PyMem_Realloc(table->entries, (size_t)cap * sizeof(pycc_ext_bridge_entry));
+        if (grown == NULL) {
+            return NULL;
+        }
+        table->entries = grown;
+        table->cap = cap;
+    }
+    return table;
+}
+
+/*
+ * The watermark: this thread's current entry count, 0 when it has no
+ * table. Taken before a frame runs compiled code.
+ */
+static Py_ssize_t pycc_ext_bridge_mark(void)
+{
+    pycc_ext_bridge_table *table = pycc_ext_bridge_current();
+
+    return table == NULL ? 0 : table->len;
+}
+
+/*
+ * Releases every entry above `mark`, which clamps: a mark at or above the
+ * current length releases nothing. Called on a frame's exits, after
+ * `pycc_ext_raise_pending` has looked up the escaping entry. The caller may
+ * hold a set CPython error, which a finalizer run by a released original
+ * must not clobber, so it is set aside across the releases and restored
+ * afterwards (a NULL round-trips). Each entry leaves the table before its
+ * release, so a finalizer that bridges again (and may grow the buffer)
+ * never sees a released entry.
+ */
+static void pycc_ext_bridge_release_to(Py_ssize_t mark)
+{
+    pycc_ext_bridge_table *table = pycc_ext_bridge_current();
+    PyObject *saved;
+
+    if (table == NULL || mark >= table->len) {
+        return;
+    }
+    saved = PyErr_GetRaisedException();
+    while (table->len > mark) {
+        PyObject *orig;
+        table->len--;
+        orig = table->entries[table->len].orig;
+        Py_XDECREF(orig);
+    }
     PyErr_SetRaisedException(saved);
 }
 
@@ -182,21 +278,90 @@ static void pycc_ext_bridge_table_clear(void)
  * back into CPython's error indicator and removes its entry. Returns 1 on a
  * hit, 0 when `obj` was never bridged. `PyErr_SetRaisedException` steals
  * the table's reference, so the removed entry is not released again.
+ *
+ * The removal preserves order (#1316): a re-entrant inner frame restoring
+ * its own entry must never move an outer frame's entry across that outer
+ * frame's watermark.
  */
 static int pycc_ext_bridge_restore(void *obj)
 {
+    pycc_ext_bridge_table *table = pycc_ext_bridge_current();
     Py_ssize_t i;
 
-    for (i = 0; i < pycc_ext_bridge_len; i++) {
-        if (pycc_ext_bridge_entries[i].pycc == obj) {
-            PyObject *orig = pycc_ext_bridge_entries[i].orig;
-            pycc_ext_bridge_len--;
-            pycc_ext_bridge_entries[i] = pycc_ext_bridge_entries[pycc_ext_bridge_len];
+    if (table == NULL) {
+        return 0;
+    }
+    for (i = 0; i < table->len; i++) {
+        if (table->entries[i].pycc == obj) {
+            PyObject *orig = table->entries[i].orig;
+            memmove(&table->entries[i], &table->entries[i + 1],
+                    (size_t)(table->len - i - 1) * sizeof(pycc_ext_bridge_entry));
+            table->len--;
             PyErr_SetRaisedException(orig);
             return 1;
         }
     }
     return 0;
+}
+
+/*
+ * Translates `exc` into a pending pycc exception of `tag`, whose message is
+ * CPython's own `str(exc)`, and keeps `exc` in this thread's table. Shared
+ * by both bridges. `class_name` must be a string literal: it outlives the
+ * object as `pycc_rt_exception_alloc` requires, which a heap type's
+ * `tp_name` does not.
+ *
+ * Returns 1 having taken over `exc`'s reference, with CPython's error
+ * indicator clear. Returns 0 when the table cannot grow or `str(exc)`
+ * fails, with `exc` still the caller's, no pycc exception pending, and the
+ * error indicator clear. Every fallible step runs before any pycc state is
+ * touched.
+ */
+static int pycc_ext_bridge_store(PyObject *exc, unsigned char tag, const char *class_name,
+                                 size_t class_name_len)
+{
+    pycc_ext_bridge_table *table = pycc_ext_bridge_reserve();
+    PyObject *text;
+    const char *utf8;
+    Py_ssize_t utf8_len = 0;
+    void *message;
+    void *obj;
+
+    if (table == NULL) {
+        return 0;
+    }
+    text = PyObject_Str(exc);
+    if (text == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    utf8 = PyUnicode_AsUTF8AndSize(text, &utf8_len);
+    if (utf8 == NULL) {
+        Py_DECREF(text);
+        PyErr_Clear();
+        return 0;
+    }
+    /* The copy completes before `text`, whose buffer `utf8` points into, is
+     * released -- the order `pycc_ext_obj_to_str` documents. The fresh +1
+     * is the message's owning reference, exactly as a string literal's is
+     * in a compiled `raise ImportError("...")`. */
+    message = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)utf8_len);
+    Py_DECREF(text);
+    /* `str(exc)` can run arbitrary code, and a `__str__` that itself failed
+     * a foreign operation and bridged would have moved the buffer: take the
+     * table again rather than trusting the pointer from before. The slot is
+     * still free -- a nested bridge that grew it reserved its own. */
+    table = pycc_ext_bridge_reserve();
+    if (table == NULL) {
+        pycc_rt_str_decref(message);
+        return 0;
+    }
+    obj = pycc_rt_exception_alloc(tag, (const unsigned char *)class_name, class_name_len, message);
+    pycc_rt_exception_raise(obj);
+    table->entries[table->len].pycc = obj;
+    table->entries[table->len].orig = exc;
+    table->len++;
+    return 1;
 }
 
 /*
@@ -334,6 +499,13 @@ static int pycc_ext_raise_pending(void)
         break;
     case 27:
         exc_type = PyExc_ModuleNotFoundError;
+        break;
+    /* #1316: a bridged non-`Exception` `BaseException`. Only a fallback --
+     * the bridge-table lookup above normally re-raises the original -- and
+     * a named label so the decimal-tag drift guard does not read it as a
+     * `BUILTIN_EXCEPTION_CLASSES` index. */
+    case PYCC_EXT_TAG_FOREIGN_BASE:
+        exc_type = PyExc_BaseException;
         break;
     default:
         /*
@@ -1160,11 +1332,6 @@ done:
 int pycc_ext_import_error_bridge(void)
 {
     PyObject *exc = PyErr_GetRaisedException();
-    PyObject *text;
-    const char *utf8;
-    Py_ssize_t utf8_len = 0;
-    void *message;
-    void *obj;
     unsigned char tag;
     const char *class_name;
     size_t class_name_len;
@@ -1176,36 +1343,6 @@ int pycc_ext_import_error_bridge(void)
         PyErr_SetRaisedException(exc);
         return 0;
     }
-    if (pycc_ext_bridge_len == pycc_ext_bridge_cap) {
-        Py_ssize_t cap = pycc_ext_bridge_cap == 0 ? 4 : pycc_ext_bridge_cap * 2;
-        pycc_ext_bridge_entry *grown = PyMem_Realloc(
-            pycc_ext_bridge_entries, (size_t)cap * sizeof(pycc_ext_bridge_entry));
-        if (grown == NULL) {
-            PyErr_SetRaisedException(exc);
-            return 0;
-        }
-        pycc_ext_bridge_entries = grown;
-        pycc_ext_bridge_cap = cap;
-    }
-    text = PyObject_Str(exc);
-    if (text == NULL) {
-        PyErr_Clear();
-        PyErr_SetRaisedException(exc);
-        return 0;
-    }
-    utf8 = PyUnicode_AsUTF8AndSize(text, &utf8_len);
-    if (utf8 == NULL) {
-        Py_DECREF(text);
-        PyErr_Clear();
-        PyErr_SetRaisedException(exc);
-        return 0;
-    }
-    /* The copy completes before `text`, whose buffer `utf8` points into, is
-     * released -- the order `pycc_ext_obj_to_str` documents. The fresh +1
-     * is the message's owning reference, exactly as a string literal's is
-     * in a compiled `raise ImportError("...")`. */
-    message = pycc_rt_str_from_literal((const unsigned char *)utf8, (long long)utf8_len);
-    Py_DECREF(text);
     if (PyErr_GivenExceptionMatches(exc, PyExc_ModuleNotFoundError)) {
         tag = PYCC_EXT_TAG_MODULE_NOT_FOUND_ERROR;
         class_name = PYCC_EXT_NAME_MODULE_NOT_FOUND_ERROR;
@@ -1215,16 +1352,143 @@ int pycc_ext_import_error_bridge(void)
         class_name = PYCC_EXT_NAME_IMPORT_ERROR;
         class_name_len = sizeof(PYCC_EXT_NAME_IMPORT_ERROR) - 1;
     }
-    /* `class_name` is a string literal, so it outlives the object as
-     * `pycc_rt_exception_alloc` requires. */
-    obj = pycc_rt_exception_alloc(tag, (const unsigned char *)class_name, class_name_len, message);
-    pycc_rt_exception_raise(obj);
-    /* The slot was reserved above, so this store cannot fail; the table
-     * takes over `exc`'s strong reference. */
-    pycc_ext_bridge_entries[pycc_ext_bridge_len].pycc = obj;
-    pycc_ext_bridge_entries[pycc_ext_bridge_len].orig = exc;
-    pycc_ext_bridge_len++;
+    if (!pycc_ext_bridge_store(exc, tag, class_name, class_name_len)) {
+        PyErr_SetRaisedException(exc);
+        return 0;
+    }
     return 1;
+}
+
+/*
+ * #1316: the foreign-operation bridge's class mapping. Each line maps one
+ * CPython class to the pycc builtin tag and class-name literal a bridged
+ * instance of it carries, and the first match wins, so a subclass is
+ * listed before its base: `ModuleNotFoundError` before `ImportError`, the
+ * four `ConnectionError` children before `ConnectionError`, every PEP 3151
+ * subclass before `OSError`. A CPython class pycc does not model maps to
+ * its nearest modelled base, and anything else under `Exception` to tag 0.
+ * That is sound for compiled code -- `except AttributeError` and `except
+ * NameError` are compile-time `T0021`, so no pycc handler can tell -- and
+ * the host always sees the original through the bridge table.
+ *
+ * `ext_build_tests`' `the_c_shims_foreign_error_mapping_names_its_classes`
+ * parses these lines against `pycc_hir::BUILTIN_EXCEPTION_CLASSES` and
+ * `builtin_exception_parent`, so a renumbered tag, a drifted name, or a
+ * base listed ahead of its subclass fails there.
+ */
+#define PYCC_EXT_OBJ_TAG(py_class, tag_value, literal)                                           \
+    if (PyErr_GivenExceptionMatches(exc, py_class)) {                                            \
+        *class_name = literal;                                                                   \
+        *class_name_len = sizeof(literal) - 1;                                                   \
+        return tag_value;                                                                        \
+    }
+
+static unsigned char pycc_ext_obj_error_tag(PyObject *exc, const char **class_name,
+                                            size_t *class_name_len)
+{
+    PYCC_EXT_OBJ_TAG(PyExc_ModuleNotFoundError, 27, "ModuleNotFoundError")
+    PYCC_EXT_OBJ_TAG(PyExc_ImportError, 26, "ImportError")
+    PYCC_EXT_OBJ_TAG(PyExc_OverflowError, 25, "OverflowError")
+    PYCC_EXT_OBJ_TAG(PyExc_BrokenPipeError, 19, "BrokenPipeError")
+    PYCC_EXT_OBJ_TAG(PyExc_ConnectionAbortedError, 20, "ConnectionAbortedError")
+    PYCC_EXT_OBJ_TAG(PyExc_ConnectionRefusedError, 21, "ConnectionRefusedError")
+    PYCC_EXT_OBJ_TAG(PyExc_ConnectionResetError, 22, "ConnectionResetError")
+    PYCC_EXT_OBJ_TAG(PyExc_BlockingIOError, 8, "BlockingIOError")
+    PYCC_EXT_OBJ_TAG(PyExc_ChildProcessError, 9, "ChildProcessError")
+    PYCC_EXT_OBJ_TAG(PyExc_ConnectionError, 10, "ConnectionError")
+    PYCC_EXT_OBJ_TAG(PyExc_FileExistsError, 11, "FileExistsError")
+    PYCC_EXT_OBJ_TAG(PyExc_FileNotFoundError, 12, "FileNotFoundError")
+    PYCC_EXT_OBJ_TAG(PyExc_InterruptedError, 13, "InterruptedError")
+    PYCC_EXT_OBJ_TAG(PyExc_IsADirectoryError, 14, "IsADirectoryError")
+    PYCC_EXT_OBJ_TAG(PyExc_NotADirectoryError, 15, "NotADirectoryError")
+    PYCC_EXT_OBJ_TAG(PyExc_PermissionError, 16, "PermissionError")
+    PYCC_EXT_OBJ_TAG(PyExc_ProcessLookupError, 17, "ProcessLookupError")
+    PYCC_EXT_OBJ_TAG(PyExc_TimeoutError, 18, "TimeoutError")
+    PYCC_EXT_OBJ_TAG(PyExc_OSError, 7, "OSError")
+    PYCC_EXT_OBJ_TAG(PyExc_ZeroDivisionError, 5, "ZeroDivisionError")
+    PYCC_EXT_OBJ_TAG(PyExc_KeyError, 3, "KeyError")
+    PYCC_EXT_OBJ_TAG(PyExc_IndexError, 4, "IndexError")
+    PYCC_EXT_OBJ_TAG(PyExc_ValueError, 1, "ValueError")
+    PYCC_EXT_OBJ_TAG(PyExc_TypeError, 2, "TypeError")
+    PYCC_EXT_OBJ_TAG(PyExc_RuntimeError, 6, "RuntimeError")
+    PYCC_EXT_OBJ_TAG(PyExc_Exception, 0, "Exception")
+    /* Not an `Exception` at all: `SystemExit`, `KeyboardInterrupt`,
+     * `GeneratorExit`, or a `BaseExceptionGroup` that is not an
+     * `ExceptionGroup`. `except Exception` must not catch it. */
+    *class_name = "BaseException";
+    *class_name_len = sizeof("BaseException") - 1;
+    return PYCC_EXT_TAG_FOREIGN_BASE;
+}
+
+#undef PYCC_EXT_OBJ_TAG
+
+/*
+ * #1316: the foreign-operation bridge. Called by compiled code outside
+ * module exec -- any function body -- when a foreign operation
+ * (`pycc_ext_obj_getattr`, `_call`, `_len`, ...) failed with CPython's
+ * exception set. It translates that exception into a pending pycc one and
+ * keeps the original in the bridge table, so an enclosing `try` in the
+ * compiled function runs exactly as CPython's would, and an exception that
+ * escapes unchanged reaches the host as the original object.
+ *
+ * Total, unlike `pycc_ext_import_error_bridge`: on return a pycc exception
+ * is always pending and CPython's error indicator is always clear, because
+ * the generated code branches straight to the innermost handler and has no
+ * other edge. Its degraded paths:
+ *
+ *  - No exception set. The shim that failed broke CPython's contract;
+ *    bridge a `SystemError` saying so rather than raising nothing.
+ *  - The table cannot grow, or `str(exc)` fails. Raise a pycc exception of
+ *    the mapped class whose message is that class's name, and drop the
+ *    original. The mapped tag, not tag 0, is kept deliberately, so a
+ *    degraded `SystemExit` still escapes `except Exception`.
+ *
+ * Returns 1 always; the `int` return mirrors the import bridge's shape.
+ * Not `static`: LLVM-generated code declares and calls it by this name
+ * (`EXT_OBJ_ERROR_BRIDGE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ */
+int pycc_ext_obj_error_bridge(void)
+{
+    PyObject *exc = PyErr_GetRaisedException();
+    const char *class_name;
+    size_t class_name_len;
+    unsigned char tag;
+    void *message;
+
+    if (exc == NULL) {
+        PyErr_SetString(PyExc_SystemError,
+                        "pycc: foreign operation failed without setting an exception");
+        exc = PyErr_GetRaisedException();
+    }
+    tag = pycc_ext_obj_error_tag(exc, &class_name, &class_name_len);
+    if (pycc_ext_bridge_store(exc, tag, class_name, class_name_len)) {
+        return 1;
+    }
+    /* Defensive: reached only when an allocation or `str(exc)` fails. */
+    message = pycc_rt_str_from_literal((const unsigned char *)class_name,
+                                       (long long)class_name_len);
+    pycc_rt_exception_raise(pycc_rt_exception_alloc(
+        tag, (const unsigned char *)class_name, class_name_len, message));
+    Py_DECREF(exc);
+    PyErr_Clear();
+    return 1;
+}
+
+/*
+ * #1316: a compiled function read a module-level foreign name before the
+ * module body bound it -- `f()` called above `import copy`, which D-041's
+ * checker cannot rule out. CPython raises `NameError` there, so this does
+ * too, and bridges it like any other failed foreign operation. The caller
+ * then branches to its innermost handler.
+ *
+ * `name` is the binding's local name (`c` for `from copy import copy as
+ * c`), `len` bytes of UTF-8, not NUL-terminated. Not `static`: LLVM-
+ * generated code calls it (`EXT_NAME_ERROR_SYMBOL`).
+ */
+void pycc_ext_name_error(const unsigned char *name, long long len)
+{
+    PyErr_Format(PyExc_NameError, "name '%.*s' is not defined", (int)len, (const char *)name);
+    (void)pycc_ext_obj_error_bridge();
 }
 
 /*
@@ -2376,6 +2640,8 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
  */
 static int pycc_ext_exec_module(PyObject *module)
 {
+    Py_ssize_t mark;
+
     /*
      * The synthesized user exception classes are created and published as
      * module attributes before the module body runs, so a body that raises
@@ -2420,6 +2686,32 @@ static int pycc_ext_exec_module(PyObject *module)
     if (pycc_ext_register_method_types(module) != 0) {
         return -1;
     }
+    /*
+     * #1316: the bridge table's thread-specific-storage key, created once
+     * per process. A re-import after `del sys.modules[...]` runs this slot
+     * again, and must not replace a key that live wrappers on other threads
+     * still read.
+     */
+    if (pycc_ext_bridge_key == NULL) {
+        Py_tss_t *key = PyThread_tss_alloc();
+        if (key == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        if (PyThread_tss_create(key) != 0) {
+            PyThread_tss_free(key);
+            PyErr_SetString(PyExc_RuntimeError, "pycc: cannot create the bridge-table key");
+            return -1;
+        }
+        pycc_ext_bridge_key = key;
+    }
+    /*
+     * The watermark, not a whole-table clear: when this exec runs beneath a
+     * live wrapper on the same thread (a handler whose foreign helper
+     * re-imports the module), that wrapper's entries survive it. When exec
+     * is the outermost frame the mark is 0, which empties the table.
+     */
+    mark = pycc_ext_bridge_mark();
     if (pycc_ext_module_exec() != 0) {
         /*
          * The generic `ImportError` is a last resort, not the default. A
@@ -2444,10 +2736,10 @@ static int pycc_ext_exec_module(PyObject *module)
         }
         /* Only after the lookup above: any entry still here belongs to a
          * bridged exception that was caught, or replaced by another. */
-        pycc_ext_bridge_table_clear();
+        pycc_ext_bridge_release_to(mark);
         return -1;
     }
-    pycc_ext_bridge_table_clear();
+    pycc_ext_bridge_release_to(mark);
     return 0;
 }
 
