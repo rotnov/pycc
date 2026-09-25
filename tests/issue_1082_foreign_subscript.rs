@@ -68,14 +68,15 @@ fn a_subscript_load_with_each_admitted_key_type_is_admitted() {
     }
 }
 
-/// The three neighbouring shapes PR 3b deliberately leaves refused, each
+/// The neighbouring shapes PR 3b deliberately left refused, each
 /// with the diagnostic that owns it.
 ///
-/// A key with no `pycc_ext_obj_pack_*` helper is the new `I0404`; binding
-/// the result to a name is `check_assignment`'s pre-existing `I0404`; a
+/// A key with no `pycc_ext_obj_pack_*` helper is the new `I0404`; a
 /// *store* is `C0001` from HIR lowering and a *slice* is `T0033` from the
 /// type checker's own `Slice` arm. Splitting them out this way is what
-/// pins that admitting the load did not widen any of the three.
+/// pins that admitting the load did not widen any of them. Binding the
+/// result to a module-level name was a fourth row until #1325 admitted it
+/// (`tests/issue_1325_foreign_binding.rs`).
 #[test]
 fn the_neighbouring_subscript_shapes_keep_their_own_refusals() {
     let dir = ScratchDir::new("foreign_subscript_refused").expect("scratch");
@@ -84,11 +85,6 @@ fn the_neighbouring_subscript_shapes_keep_their_own_refusals() {
             "import gc\n\ngc.garbage[None]\n",
             "I0404",
             "indexing a CPython object with a `None` key",
-        ),
-        (
-            "import gc\n\nx = gc.garbage[0]\n",
-            "I0404",
-            "binding a CPython object to a name",
         ),
         (
             "import gc\n\ngc.garbage[0] = 1\n",

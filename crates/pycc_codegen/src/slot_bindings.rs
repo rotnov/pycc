@@ -96,6 +96,13 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
                     // absent slot -- the exact symptom the `Ty::Optional`
                     // comment above records.
                     | pycc_mir::Ty::MemoryView
+                    // #1325: a module-level `x = product("ab")` binds a
+                    // CPython object to a module global, which needs its
+                    // predeclared slot exactly like every type above;
+                    // missing from this list, `emit_assign` panics on the
+                    // absent slot. A function-local object binding never
+                    // reaches here -- `pycc_types` refuses it.
+                    | pycc_mir::Ty::Object
             ) {
                 bindings.entry(target.clone()).or_insert(ty);
             }

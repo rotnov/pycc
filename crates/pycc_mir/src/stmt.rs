@@ -428,7 +428,8 @@ pub(super) fn lower_stmt(
             // alike (it has no type information to pick a different node)
             // -- this is the point where the real type is resolved and
             // where a dict- or set-typed binding is routed into
-            // `MirStmt::ForDict`/`MirStmt::ForSet` instead of
+            // `MirStmt::ForDict`/`MirStmt::ForSet`, and an object-typed one
+            // into `MirStmt::ForObject` (#1325), instead of
             // `MirStmt::ForList`, mirroring `lower_expr`'s own
             // `HirExpr::Subscript` arm doing the same list/dict routing for
             // reads (subscripting a set is rejected earlier, by
@@ -475,6 +476,24 @@ pub(super) fn lower_stmt(
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
+                        body,
+                    }
+                }
+                // #1325: a bare name bound to a CPython object is the
+                // bare-name form of `HirStmt::ForObject` below, so it lowers
+                // to the same node with a `Name` iterable. `bind`, for the
+                // reason that arm's comment gives.
+                Ty::Object => {
+                    let iter = MirExpr::Name {
+                        name: list.clone(),
+                        ty: Ty::Object,
+                    };
+                    bind(scopes, var.clone(), Ty::Object);
+                    super::kill_narrowing(scopes, var);
+                    let body = lower_loop_body(body, scopes, classes, current_class);
+                    MirStmt::ForObject {
+                        var: var.clone(),
+                        iter,
                         body,
                     }
                 }

@@ -1,6 +1,8 @@
 //! The target-and-body half of a module-level `for` loop over a CPython
-//! object (PR 3c of #1082), shared by `check_stmt`'s `HirStmt::ForObject`
-//! arm. Moved out of `lib.rs` verbatim.
+//! object, shared by `check_stmt`'s two loop arms: `HirStmt::ForObject`
+//! (`for x in o.attr:` / `for x in o.method(...):`, PR 3c of #1082) and
+//! `HirStmt::ForList` over a bare name bound to an object (`for t in x:`,
+//! #1325).
 
 use crate::{BindingState, Environment, join_loop_body, narrow};
 use pycc_diag::{Diagnostic, Span};
@@ -16,11 +18,11 @@ pub(crate) fn check_module_object_loop(
 ) -> Result<(), Diagnostic> {
     // The loop variable holds each item as another opaque
     // `PyObject *`. It is bound directly rather than through
-    // `check_assignment`, which refuses `Ty::Object` outright (the
-    // K1 guard on binding a foreign value to a name): that guard
-    // exists to stop a *user-written* assignment from capturing an
-    // object, and a `for` target is this construct's own binding,
-    // not a user assignment of a read value.
+    // `check_assignment`: that function's K1 guard now refuses an
+    // object binding only inside a function body (#1325), and the
+    // target guards below are this construct's own -- they name the
+    // `for` target in their help text, which `check_assignment`'s
+    // generic reassignment diagnostics would not.
     // A loop target that already names a binding of some *other*
     // type is refused rather than overwritten. `env.bind` overwrites,
     // so without this guard `x = 5` followed by `for x in <object>:`
@@ -90,8 +92,8 @@ pub(crate) fn check_module_object_loop(
     narrow::check_stmt_sequence(&mut body_env, body)?;
     join_loop_body(env, &body_env);
     // The loop may execute zero times, so a newly introduced loop
-    // variable is only maybe-bound afterwards -- exactly as in the
-    // `ForList` arm above, and load-bearing here because reading a
+    // variable is only maybe-bound afterwards -- exactly as in
+    // `check_stmt`'s `ForList` arm, and load-bearing here because reading a
     // `Ty::Object` name in a module body is itself admitted.
     if !was_definite {
         env.bind_maybe(var.to_string(), Ty::Object);

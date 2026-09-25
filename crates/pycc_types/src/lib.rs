@@ -1108,22 +1108,30 @@ fn check_range_operand_in(
 }
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
-    // Part 2 of #1026 (#1081): binding a CPython object to a name stays
-    // refused. Placed at the entry, *before* the `env.lookup_any(target)`
-    // branch below, because that branch is the only thing that runs
-    // `class::is_assignable_env` -- a *first* `x = numpy.pi` has no previous
-    // binding and would otherwise be bound with no check at all, and a
-    // second one would pass anyway on `is_assignable`'s `from == to` path.
-    // The entry placement also covers `AnnAssign` and the
-    // `HirPattern::Capture` caller further down, which are the same rule.
+    // #1325: binding a CPython object to a name is admitted in a module
+    // body and stays refused in a function body. Placed at the entry,
+    // *before* the `env.lookup_any(target)` branch below, because that
+    // branch is the only thing that runs `class::is_assignable_env` -- a
+    // *first* `x = numpy.pi` in a function has no previous binding and would
+    // otherwise be bound with no check at all. The entry placement also
+    // covers `AnnAssign` and the `HirPattern::Capture` caller further down,
+    // which are the same rule.
     //
-    // Refused rather than admitted deliberately: admitting the binding
-    // makes `f(2.0)` reachable on a name bound to an object, which the
-    // `HirExpr::Call` value-binding gate refuses (`crate::foreign`'s module
-    // doc), and admitting one while refusing the other is incoherent.
-    // Releasing the object would also become this crate's problem, which is
-    // the ownership question Part 2 explicitly defers (`docs/RUNTIME.md`).
-    foreign::reject_object_operand(&ty, "binding a CPython object to a name")?;
+    // At module scope the name is an ordinary module global
+    // (`pycc_codegen`'s `collect_module_bindings`), so the rest of this
+    // function applies unchanged: rebinding it to another type is `T0023`,
+    // an annotation it does not satisfy is `T0025`, and a one-armed `if`
+    // leaves it possibly unbound. The global owns the reference its
+    // producer returned and never releases it; a rebinding leaks the old
+    // one (#1092), because `y = x` aliases the pointer with no incref and a
+    // release would free an object `y` still points at (`docs/RUNTIME.md`).
+    //
+    // A function body keeps the refusal: the name would be a function-local
+    // slot, and a function-local object has no ownership story yet --
+    // binding, returning and passing one are #1333's.
+    if env.in_function_body {
+        foreign::reject_object_operand(&ty, "binding a CPython object to a name")?;
+    }
     // Part 2a of #1142 (#1165): assigning to a name bound to a buffer
     // *parameter* is refused. See `buffer::buffer_parameter_rebinding` for
     // the two independent grounds; the one that matters most here is that
@@ -2290,6 +2298,19 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             {
                 return check_enum_loop_body_module(env, var, list, body);
             }
+            // #1325: a bare name bound to a CPython object iterates exactly
+            // like `for x in o.attr:` does -- `pycc_hir` has no type
+            // information, so the bare name arrives here rather than as a
+            // `HirStmt::ForObject`, and `pycc_mir` routes it to
+            // `MirStmt::ForObject`. Keyed on the type alone: a bare imported
+            // module iterates too, and fails at run time with CPython's own
+            // `TypeError`, which import provenance could not rule out anyway
+            // (`from os import path` binds a module, `from sys import path` a
+            // list). A `Maybe` binding falls through to `lookup_bound_name`
+            // and keeps its possibly-unbound diagnostic.
+            if let Some(BindingState::Definitely(Ty::Object)) = env.binding_state(list) {
+                return foreign::for_loop::check_module_object_loop(env, var, body);
+            }
             // Module (top-level) scope has no "local before assignment"
             // concept the way a function body does -- every other arm here
             // (e.g. `ExprStmt` via `infer_expr`) resolves names with an
@@ -2946,7 +2967,7 @@ fn check_stmt_in_function(
             let actual = infer_expr_in(env, local_names, expr)?;
             // #1316: a function body may read a module-level foreign
             // `object`, but not hand one to its caller -- the caller could
-            // only bind or pass it, which is #1325's. Context-free, so an
+            // only bind or pass it, which is #1333's. Context-free, so an
             // unannotated helper whose return type the solver inferred as
             // `object` is refused here too.
             crate::foreign::reject_object_operand(
@@ -3178,7 +3199,7 @@ fn check_stmt_in_function(
         // PR 3c of #1082: refused unconditionally inside a function body.
         // Since #1316 a function body may read a module-level foreign
         // object, but the loop would bind its target to a function-local
-        // `object` value, which is #1325's; the module body's own loop
+        // `object` value, which is #1333's; the module body's own loop
         // target is a module global instead. The iterable is therefore
         // never inferred here -- there is no shape of it this arm could
         // accept.

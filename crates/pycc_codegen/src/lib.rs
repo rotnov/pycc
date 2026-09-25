@@ -289,10 +289,11 @@ enum Scalar<'ctx> {
     /// exhaustive `Scalar` match (`truthy`/`to_str`/`to_numeric_encoded_int`/
     /// `to_float`/`coerce_scalar_to_type`/`emit_assign`/slot marshalling)
     /// would otherwise hand it straight to a `pycc_rt_str_*` or
-    /// `pycc_rt_instance_*` function. Those arms are all refusals here --
-    /// `pycc_types` refuses every operation on a `Ty::Object` value except
-    /// the attribute load this part adds, so reaching one means the checker
-    /// let something through.
+    /// `pycc_rt_instance_*` function. Those arms were all refusals when
+    /// this variant was added -- `pycc_types` refused every operation on a
+    /// `Ty::Object` value except the attribute load Part 2 added -- and
+    /// each later operation turned its own arm into a real one (the store
+    /// in `emit_assign` is #1325's, for a module-level binding).
     ///
     /// Ownership is leak-only, exactly as `foreign_import`'s module objects
     /// already are: `pycc_ext_obj_getattr` returns a new reference and
@@ -2328,9 +2329,10 @@ fn emit_expr_unchecked<'ctx>(
                 // `Ty::Instance(_)` above, for the global a foreign
                 // `import numpy` binds. The plan for this PR expected the
                 // catch-all below to stay the only `Ty::Object` answer here
-                // -- `pycc_types` refuses binding a CPython object to a
-                // name, so no *local* can carry one -- but a foreign
-                // import's module global is a storage slot like any other,
+                // -- `pycc_types` refused binding a CPython object to a
+                // name, so no *local* could carry one -- but a foreign
+                // import's module global is a storage slot like any other
+                // (and since #1325 so is a module-level `x = <object>`),
                 // and `MirExpr::ObjAttrGet`'s base -- like
                 // `MirExpr::ObjMethodCall`'s, added by PR 2b -- is a plain
                 // `MirExpr::Name` read of it. Without this arm the one
@@ -2340,7 +2342,8 @@ fn emit_expr_unchecked<'ctx>(
                 // No reference-count traffic accompanies the read: the
                 // global owns the one reference the import created and
                 // never releases it (`docs/RUNTIME.md`), so a read is a
-                // borrow with nothing to balance.
+                // borrow with nothing to balance. A `x = <object>` global
+                // owns its reference the same way (#1325).
                 Ty::Object => {
                     let loaded = builder
                         .build_load(
@@ -4937,21 +4940,21 @@ fn emit_assign<'ctx>(
         // accompanies it either, for the identical D-182-acknowledged
         // reason `Tuple`'s own comment already gives.
         Scalar::Optional(v) => v.into(),
-        // NOT a pass-through, unlike every arm above (D-244, Part 2 of
-        // #1026): storing a foreign object into a named slot would make the
-        // binding outlive the expression that produced it, which Part 2's
-        // leak-only ownership policy has no release story for.
-        // `pycc_types`' `check_assignment` refuses a `Ty::Object` value
-        // source outright (Part 2's R6 hole), so this arm is defensive.
-        Scalar::Object(_) => {
-            panic!(
-                "pycc_codegen: internal error: assigning a CPython object value to a binding is \
-                 not supported yet -- pycc_types::check_assignment should have refused this"
-            )
-        }
-        // A pass-through since Part 2a of #1142 (#1165), where it was the
-        // `Object`-style panic above: storing one `PyccExtBufferView *` into
-        // a slot `ty_to_basic_type` already allocated as a pointer.
+        // A pass-through since #1325: storing one owned `PyObject *` into a
+        // slot `ty_to_basic_type` already allocated as a pointer, with no
+        // refcount traffic. The slot owns the new reference its producer
+        // returned and never releases it; a rebinding overwrites and leaks
+        // the previous reference, which is #1092's leak-only rule. A
+        // release here would be a use-after-free, not a fix: `y = x`
+        // aliases the pointer without an incref, so freeing `x`'s old value
+        // would free an object `y` still points at. Reachable only for a
+        // module global -- `pycc_types`' `check_assignment` still refuses
+        // an object binding inside a function body.
+        Scalar::Object(v) => v.into(),
+        // A pass-through since Part 2a of #1142 (#1165), where it was a
+        // panic (as `Object`'s arm above was until #1325): storing one
+        // `PyccExtBufferView *` into a slot `ty_to_basic_type` already
+        // allocated as a pointer.
         //
         // The value is always artifact-owned storage, never the host's. The
         // two shapes that would put a *borrowed* view here are both refused
@@ -7338,10 +7341,9 @@ fn emit_stmt<'ctx>(
         MirStmt::ForObject { var, iter, body } => {
             let iterable = emit_expr(context, builder, module, rt, user_functions, locals, iter);
             let loop_blocks = foreign_call::emit_iter_loop(context, builder, module, rt, iterable);
-            // Stored directly rather than through `emit_assign`, whose own
-            // `Scalar::Object` arm panics: that arm refuses a *user*
-            // assignment of a foreign value to a name (`pycc_types`'
-            // `check_assignment` K1 guard), while a `for` target is this
+            // Stored directly rather than through `emit_assign`, which also
+            // stores a `Scalar::Object` since #1325 but predates this arm's
+            // own store and is kept separate: a `for` target is this
             // construct's own binding. The store carries no refcount
             // traffic -- the item is a new reference this boundary
             // deliberately leaks (#1092), so there is nothing to release
@@ -7774,9 +7776,8 @@ fn emit_stmt<'ctx>(
                         // returns one opaque `PyObject *`, and
                         // `ty_to_basic_type`'s own `Ty::Object` arm already
                         // gave the function's LLVM signature the same
-                        // pointer return type. Unlike every other
-                        // `Scalar::Object` site in this file this arm is
-                        // genuinely reachable: an unannotated private
+                        // pointer return type. This arm is genuinely
+                        // reachable: an unannotated private
                         // helper whose body is `return numpy.pi` infers a
                         // `Ty::Object` return type, which is the second
                         // producer shape Part 2's refusal migration admits.

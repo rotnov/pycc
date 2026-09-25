@@ -98,7 +98,8 @@ fn both_admitted_iterable_shapes_are_admitted() {
 /// were added as guards *ahead* of the `let ... else` bindings that
 /// produce them, so a regression that moved either diagnostic into the
 /// type checker fails here. A bare foreign name is an `Expr::Name`
-/// iterable and stays `I0404`: a module object is not iterable.
+/// iterable; since #1325 it checks clean like any other `object` name, and
+/// CPython's own `TypeError` answers a module object at run time.
 #[test]
 fn the_deferred_iterable_shapes_keep_their_own_refusals() {
     let dir = ScratchDir::new("foreign_iteration_refused").expect("scratch");
@@ -113,11 +114,6 @@ fn the_deferred_iterable_shapes_keep_their_own_refusals() {
             "C0001",
             "got a tuple as the iterable",
         ),
-        (
-            "import gc\n\nfor x in gc:\n    pass\n",
-            "I0404",
-            "which is bound to a CPython object",
-        ),
     ] {
         let out = check(&dir, body);
         assert!(!out.status.success(), "{body}: {}", stdout_of(&out));
@@ -125,6 +121,8 @@ fn the_deferred_iterable_shapes_keep_their_own_refusals() {
         assert!(text.contains(code), "{body}: {text}");
         assert!(text.contains(phrase), "{body}: {text}");
     }
+    let out = check(&dir, "import gc\n\nfor x in gc:\n    pass\n");
+    assert!(out.status.success(), "{}", stdout_of(&out));
 }
 
 /// The loop stays module-body only, and the loop variable is only
@@ -132,7 +130,7 @@ fn the_deferred_iterable_shapes_keep_their_own_refusals() {
 ///
 /// #1316 admits reading a foreign name inside a function body, but not
 /// iterating it: the loop target would bind a function-local `object`,
-/// which is #1325's scope. And a loop that runs zero times never writes
+/// which is #1333's scope. And a loop that runs zero times never writes
 /// its variable's slot, so a read after the loop is `T0041` rather than a
 /// load of whatever the slot happened to hold.
 #[test]
