@@ -136,3 +136,25 @@ fn from_int_list_dedups_keeping_the_first_occurrence() {
         pycc_rt_int_set_decref(set);
     }
 }
+
+/// The defensive path: a bigint word in the source list raises the same
+/// `OverflowError` `pycc_rt_int_set_add` does and stops copying there.
+#[test]
+fn from_int_list_raises_on_a_bigint_word_and_stops() {
+    pycc_rt_exception_clear();
+    let big = bigint_word();
+    unsafe {
+        let list = pycc_rt_int_list_new();
+        pycc_rt_int_list_append(list, small(4));
+        pycc_rt_int_list_append(list, big);
+        pycc_rt_int_list_append(list, small(7));
+        let set = pycc_rt_int_set_from_int_list(list);
+        assert_eq!(
+            pycc_rt_ext_pending_type(),
+            i32::from(EXCEPTION_TYPE_OVERFLOW_ERROR)
+        );
+        assert_eq!(items(set), vec![small(4)]);
+        pycc_rt_exception_clear();
+        pycc_rt_int_set_decref(set);
+    }
+}
