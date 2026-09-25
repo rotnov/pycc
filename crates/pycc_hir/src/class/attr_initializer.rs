@@ -6,11 +6,236 @@
 //! right-hand side: inferring an un-annotated attribute's type from its
 //! literal, extracting the compile-time constant, and the shared `C0001`s
 //! both spellings report for a missing or unsupported initializer.
+//!
+//! #1345 (Part 1 of #1284) adds [`classify_non_literal`]: the one
+//! non-literal shape admitted, `name = staticmethod(<foreign ref>)`, and a
+//! precise `C0001` naming the tracking issue for every other shape.
 
 use super::ClassAttrValue;
-use crate::{Ty, unsupported};
-use pycc_ast::{Expr, Number, UnaryOp};
+use super::foreign_static::{ForeignCallableRef, binds_name};
+use crate::expr::receiver_dispatch::RECEIVER_DISPATCHED_NAMES;
+use crate::hir_module::ForeignImportSite;
+use crate::import::import_local_name;
+use crate::{ImportBinding, Ty, unsupported};
+use pycc_ast::{Expr, Number, Stmt, UnaryOp};
 use pycc_diag::Diagnostic;
+
+/// What the non-literal classifier needs to know about the scope a class
+/// attribute is written in.
+pub(super) struct InitializerScope<'a> {
+    /// The module's import table as it stands at this class.
+    pub(super) imports: &'a [ImportBinding],
+    /// Whether the module body binds `staticmethod` anywhere (a `def`,
+    /// assignment, or import), computed once by `module::lower_module`.
+    pub(super) staticmethod_rebound: bool,
+    /// The statements of this class body that precede the attribute.
+    pub(super) earlier: &'a [Stmt],
+}
+
+/// Which spelling an attribute was written in: the annotated one
+/// (`X: int = ...`, `X: Final = ...`) or the bare one (`X = ...`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Spelling {
+    Annotated,
+    Unannotated,
+}
+
+/// #1345: classifies a class-attribute initializer that is not a literal
+/// [`infer_class_attr_ty`] recognizes.
+///
+/// The un-annotated `name = staticmethod(<ref>)` whose `<ref>` is a bare
+/// name or dotted attribute chain rooted at an unconditional module-level
+/// foreign import is admitted and returned. Every other shape is a `C0001`
+/// that names what is unsupported and the issue tracking it; a shape this
+/// classifier does not name keeps [`bad_class_attr_shape`]'s literal-only
+/// wording. Both spellings go through here, so they report identically
+/// except that the annotated spelling of an otherwise admitted shape is
+/// refused with its own message.
+pub(super) fn classify_non_literal(
+    value: &Expr,
+    attr_name: &str,
+    spelling: Spelling,
+    scope: &InitializerScope<'_>,
+    range: std::ops::Range<u32>,
+) -> Result<ForeignCallableRef, Diagnostic> {
+    let refuse = |reason: String| {
+        Err(unsupported(
+            format!("class attribute `{attr_name}` {reason}"),
+            range.clone(),
+        ))
+    };
+    let Expr::Call(call) = value else {
+        if let Some((root, path)) = reference_chain(value) {
+            let hint = if foreign_item_import(scope.imports, &root) {
+                format!(
+                    "; to bind a CPython callable, write `{attr_name} = staticmethod({})`",
+                    render(&root, &path)
+                )
+            } else {
+                String::new()
+            };
+            return refuse(format!(
+                "is initialized with a name or attribute reference, which is not supported yet \
+                 (#1348) -- a class attribute must be a literal or \
+                 `staticmethod(<foreign import>)`{hint}"
+            ));
+        }
+        if matches!(
+            value,
+            Expr::List(_)
+                | Expr::Tuple(_)
+                | Expr::Set(_)
+                | Expr::Dict(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_)
+                | Expr::Generator(_)
+        ) {
+            return refuse(
+                "is initialized with a container, which is not supported yet (#1348) -- a class \
+                 attribute must be a literal or `staticmethod(<foreign import>)`"
+                    .to_string(),
+            );
+        }
+        return Err(bad_class_attr_shape(attr_name, range));
+    };
+    let callee = match call.func.as_ref() {
+        Expr::Name(name) => name.id.as_str(),
+        _ => "",
+    };
+    if callee == "classmethod" {
+        return refuse("uses `classmethod(...)`, which is not supported yet (#1347)".to_string());
+    }
+    if callee != "staticmethod" {
+        return refuse(
+            "is initialized with a call, which is not supported yet (#1348) -- a class attribute \
+             must be a literal or `staticmethod(<foreign import>)`"
+                .to_string(),
+        );
+    }
+    if scope.staticmethod_rebound || binds_name(scope.earlier, scope.imports, "staticmethod") {
+        return refuse(
+            "calls `staticmethod`, which is rebound in this module or class body, so it is not \
+             the builtin `staticmethod`"
+                .to_string(),
+        );
+    }
+    let [argument] = &*call.arguments.args else {
+        return refuse(
+            "uses `staticmethod(...)`, which takes exactly one positional argument".to_string(),
+        );
+    };
+    if !call.arguments.keywords.is_empty() || matches!(argument, Expr::Starred(_)) {
+        return refuse(
+            "uses `staticmethod(...)`, which takes exactly one positional argument".to_string(),
+        );
+    }
+    let Some((root, path)) = reference_chain(argument) else {
+        return refuse(
+            "uses `staticmethod(...)` whose argument is not a name or dotted attribute of a \
+             foreign (CPython) import, which is not supported yet (#1348)"
+                .to_string(),
+        );
+    };
+    let written = render(&root, &path);
+    if binds_name(scope.earlier, scope.imports, &root) {
+        return refuse(format!(
+            "uses `staticmethod({written})`, where `{root}` refers to this class's own earlier \
+             binding, not a foreign import -- `staticmethod` of a class-body binding is not \
+             supported yet (#1347)"
+        ));
+    }
+    let binding = scope
+        .imports
+        .iter()
+        .rev()
+        .find(|binding| import_local_name(binding) == root);
+    match binding {
+        Some(ImportBinding::Foreign {
+            site: ForeignImportSite::Item(_),
+            ..
+        }) => {}
+        Some(ImportBinding::Foreign { .. }) => {
+            return refuse(format!(
+                "uses `staticmethod({written})`, but the import of `{root}` is conditional (inside \
+                 a module-level `if` or `try`), which is not supported yet (#1348)"
+            ));
+        }
+        _ => {
+            return refuse(format!(
+                "uses `staticmethod({written})`, but `{root}` is not a foreign (CPython) import \
+                 defined above this class -- `staticmethod` of a pycc function, class, or module \
+                 is not supported yet (#1347)"
+            ));
+        }
+    }
+    if attr_name.starts_with("__") && attr_name.ends_with("__") {
+        return refuse(
+            "is a special (dunder) name, which CPython looks up implicitly and which is not \
+             supported for a `staticmethod` class attribute (#1348)"
+                .to_string(),
+        );
+    }
+    if attr_name.starts_with("__") {
+        return refuse(
+            "is a class-private name, which CPython mangles and pycc does not model yet (#1348) \
+             -- a `staticmethod` class attribute must not start with `__`"
+                .to_string(),
+        );
+    }
+    if RECEIVER_DISPATCHED_NAMES.contains(&attr_name) {
+        return refuse(
+            "is dispatched as a container method (`append`, `pop`, `get`, `add`), which a \
+             `staticmethod` class attribute cannot use yet (#1348) -- choose another attribute \
+             name"
+                .to_string(),
+        );
+    }
+    if spelling == Spelling::Annotated {
+        return refuse(format!(
+            "is annotated -- only the un-annotated spelling `{attr_name} = staticmethod(...)` is \
+             supported for a foreign `staticmethod` class attribute yet (#1348)"
+        ));
+    }
+    Ok(ForeignCallableRef { root, path })
+}
+
+/// A bare name or a chain of attribute accesses ending in one, as
+/// `(root, path)`; `None` for any other expression shape.
+fn reference_chain(expr: &Expr) -> Option<(String, Vec<String>)> {
+    match expr {
+        Expr::Name(name) => Some((name.id.to_string(), Vec::new())),
+        Expr::Attribute(attribute) => {
+            let (root, mut path) = reference_chain(&attribute.value)?;
+            path.push(attribute.attr.to_string());
+            Some((root, path))
+        }
+        _ => None,
+    }
+}
+
+/// `root.path...` as the user wrote it.
+fn render(root: &str, path: &[String]) -> String {
+    std::iter::once(root)
+        .chain(path.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Whether `root` is the local name of an unconditional module-level foreign
+/// import, the one root [`classify_non_literal`] admits.
+fn foreign_item_import(imports: &[ImportBinding], root: &str) -> bool {
+    matches!(
+        imports
+            .iter()
+            .rev()
+            .find(|binding| import_local_name(binding) == root),
+        Some(ImportBinding::Foreign {
+            site: ForeignImportSite::Item(_),
+            ..
+        })
+    )
+}
 
 /// #910: The natural type of an un-annotated class attribute's literal
 /// right-hand side, or `None` when the shape is not one this pass folds.
@@ -62,7 +287,10 @@ pub(super) fn no_class_attr_value(attr_name: &str, range: std::ops::Range<u32>) 
 }
 
 /// The `C0001` for a class-attribute initializer whose shape this pass does
-/// not fold, shared by both spellings so they report identically.
+/// not fold, shared by both spellings so they report identically. Since
+/// #1345 it is the fallback of [`classify_non_literal`], which both spellings
+/// call for a non-literal initializer and which reports a more precise
+/// message for every shape it names.
 pub(super) fn bad_class_attr_shape(attr_name: &str, range: std::ops::Range<u32>) -> Diagnostic {
     unsupported(
         format!(
@@ -211,7 +439,7 @@ mod tests {
     fn an_unannotated_call_initializer_is_rejected() {
         assert_collision(
             "def f() -> int:\n    return 1\n\n\nclass C:\n    X = f()\n",
-            "must be initialized with a literal",
+            "is initialized with a call, which is not supported yet (#1348)",
         );
     }
 
@@ -227,7 +455,7 @@ mod tests {
     fn an_unannotated_bare_name_initializer_is_rejected() {
         assert_collision(
             "Y: int = 1\n\n\nclass C:\n    X = Y\n",
-            "must be initialized with a literal",
+            "is initialized with a name or attribute reference",
         );
     }
 
@@ -304,5 +532,121 @@ mod tests {
         // constant, so it takes no instance slot -- the same invariant the
         // annotated spelling carries.
         assert!(class_def.attrs.is_empty());
+    }
+
+    // -- #1345: the non-literal classifier ---------------------------------
+    //
+    // Every refusal is also pinned through the CLI in
+    // `tests/issue_1284_foreign_static_class_attr.rs`; these pin the
+    // admitted value and the hint's presence or absence at the unit level,
+    // with every import answered as a foreign module.
+
+    use crate::class::foreign_static::tests::lower_foreign;
+
+    /// `source` fails with a `C0001` containing `needle`.
+    fn assert_foreign_c0001(source: &str, needle: &str) {
+        let diagnostic = lower_foreign(source).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001", "source: {source:?}");
+        assert!(
+            diagnostic.message.contains(needle),
+            "expected {needle:?} in {:?}",
+            diagnostic.message
+        );
+    }
+
+    /// The admitted value of `source`'s class `C`, attribute `x`.
+    fn admitted(source: &str) -> ClassAttrValue {
+        let hir = lower_foreign(source).expect("the attribute is admitted");
+        let (_, class_def) = hir
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "C")
+            .expect("class C");
+        let (_, ty, value) = class_def
+            .class_attrs
+            .iter()
+            .find(|(name, _, _)| name == "x")
+            .expect("attribute x");
+        assert_eq!(*ty, Ty::Object);
+        value.clone()
+    }
+
+    #[test]
+    fn a_dotted_foreign_reference_is_admitted_with_its_path() {
+        let ClassAttrValue::ForeignStatic(target) =
+            admitted("import os\n\n\nclass C:\n    x = staticmethod(os.path.exists)\n")
+        else {
+            panic!("expected a foreign static attribute");
+        };
+        assert_eq!(target.root, "os");
+        assert_eq!(target.path, ["path", "exists"]);
+    }
+
+    #[test]
+    fn a_bare_foreign_name_and_a_module_are_admitted() {
+        let ClassAttrValue::ForeignStatic(target) =
+            admitted("from operator import add\n\n\nclass C:\n    x = staticmethod(add)\n")
+        else {
+            panic!("expected a foreign static attribute");
+        };
+        assert_eq!((target.root.as_str(), target.path.len()), ("add", 0));
+        assert!(matches!(
+            admitted("import os\n\n\nclass C:\n    x = staticmethod(os)\n"),
+            ClassAttrValue::ForeignStatic(_)
+        ));
+    }
+
+    /// The self-named `mul = staticmethod(mul)`: the value is evaluated
+    /// before the target is bound, so the root is still the import.
+    #[test]
+    fn a_self_named_attribute_is_admitted() {
+        assert!(
+            lower_foreign("from operator import mul\n\n\nclass C:\n    mul = staticmethod(mul)\n")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_foreign_import_carries_the_staticmethod_hint() {
+        assert_foreign_c0001(
+            "import os\n\n\nclass C:\n    x = os.path.exists\n",
+            "; to bind a CPython callable, write `x = staticmethod(os.path.exists)`",
+        );
+        let module = crate::pycc_parser_test_helper::parse("Y: int = 1\n\n\nclass C:\n    X = Y\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert!(!diagnostic.message.contains("to bind a CPython callable"));
+    }
+
+    #[test]
+    fn every_container_shape_gets_the_container_refusal() {
+        for value in [
+            "(1, 2)",
+            "{1, 2}",
+            "{1: 2}",
+            "{a for a in range(2)}",
+            "{a: a for a in range(2)}",
+            "(a for a in range(2))",
+        ] {
+            assert_collision(
+                &format!("class C:\n    X = {value}\n"),
+                "is initialized with a container",
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_of_a_non_name_callee_is_a_call_refusal() {
+        assert_foreign_c0001(
+            "import os\n\n\nclass C:\n    X = os.getcwd()\n",
+            "is initialized with a call",
+        );
+    }
+
+    #[test]
+    fn a_starred_argument_is_an_arity_refusal() {
+        assert_foreign_c0001(
+            "from operator import add\nxs = [add]\n\n\nclass C:\n    x = staticmethod(*xs)\n",
+            "which takes exactly one positional argument",
+        );
     }
 }

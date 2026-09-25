@@ -1488,6 +1488,13 @@ pub(crate) fn infer_expr_in(
                 if let Some(ty) = enum_member_attr_type(class_def, class_name, attr) {
                     return Ok(ty);
                 }
+                // Part 1 of #1284: a winning `staticmethod(<foreign
+                // callable>)` class attribute reads the foreign callable.
+                if let Some(ty) =
+                    class::foreign_static::class_name_read(env, local_names, class_name, attr)?
+                {
+                    return Ok(ty);
+                }
                 // #911 (Part 1 of #885): `W.MIN_WIDTH` -- reading a
                 // class-level attribute through the class name itself. This
                 // is the *only* class-name attribute read pycc supports;
@@ -1521,6 +1528,22 @@ pub(crate) fn infer_expr_in(
                 ));
             }
             let base_ty = infer_expr_in(env, local_names, base)?;
+            // Part 1 of #1284: an instance read reaching a
+            // `staticmethod(<foreign callable>)` class attribute. Runs
+            // before the literal gate below so a non-name receiver gets the
+            // foreign wording, and before `resolve_attr_get`'s property
+            // walk, matching `pycc_mir`'s guard placement.
+            if let Ty::Instance(class_name) = &base_ty
+                && let Some(ty) = class::foreign_static::instance_read(
+                    env,
+                    local_names,
+                    base,
+                    class_name,
+                    attr,
+                )?
+            {
+                return Ok(ty);
+            }
             // #911 (Part 1 of #885): a class-attribute read is folded to its
             // constant by `pycc_mir`, which *discards* the base expression.
             // That is only sound when evaluating the base has no observable
@@ -1602,6 +1625,22 @@ pub(crate) fn infer_expr_in(
             // class method. The guard runs before the method-table walk so
             // a shadowed name short-circuits straight to the ordinary
             // instance path below.
+            // Part 1 of #1284: `C.name(args)` reaching a
+            // `staticmethod(<foreign callable>)` class attribute. Runs
+            // before the static/class-method table walk, which is not
+            // positional against class attributes (MRO case D3).
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && class_name_dispatch(env, local_names, class_name)?
+                && let Some(ty) = class::foreign_static::class_name_call(
+                    env,
+                    local_names,
+                    class_name,
+                    method,
+                    args,
+                )?
+            {
+                return Ok(ty);
+            }
             if let Some(class_name) =
                 receiver_dispatch::static_or_class_method_receiver(env, local_names, base, method)?
             {
@@ -1634,6 +1673,20 @@ pub(crate) fn infer_expr_in(
             if matches!(base_ty, Ty::Object) {
                 crate::foreign::check_object_call_args(&arg_tys, "method")?;
                 return Ok(Ty::Object);
+            }
+            // Part 1 of #1284: the instance form of the call above, placed
+            // before the static/class-method tables for the same reason.
+            if let Ty::Instance(ref class_name) = base_ty
+                && let Some(ty) = class::foreign_static::instance_call(
+                    env,
+                    local_names,
+                    base,
+                    class_name,
+                    method,
+                    args,
+                )?
+            {
+                return Ok(ty);
             }
             // #436: static and class methods can also be called on an
             // instance. Check the static/class method tables before the

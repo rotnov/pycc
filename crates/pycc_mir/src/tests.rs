@@ -20,6 +20,7 @@ mod comprehension;
 mod exception;
 mod expr;
 mod expr_ty;
+mod foreign_static;
 mod frozenset;
 mod hash;
 mod import;

@@ -731,6 +731,7 @@ mod tests {
             &[],
             &[],
             &crate::expr::keyword_bind::SignatureTable::default(),
+            false,
         )
         .unwrap_err();
         assert_eq!(diagnostic.code, "C0001");

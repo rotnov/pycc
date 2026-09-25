@@ -16,6 +16,7 @@ use pycc_hir::{
 };
 use std::collections::HashMap;
 
+mod foreign_static;
 mod instance_hash;
 mod receiver_dispatch;
 
@@ -921,6 +922,12 @@ pub(super) fn lower_expr(
                 && !scopes.iter().any(|scope| scope.contains_key(class_name))
                 && let Some(class_def) = classes.get(class_name.as_str())
             {
+                // Part 1 of #1284: `C.name` where the winning class-level
+                // binding is `name = staticmethod(<foreign callable>)` reads
+                // the foreign callable itself.
+                if let Some(target) = foreign_static::class_name_target(class_def, classes, attr) {
+                    return lower_expr(&target.read_expr(), scopes, classes, current_class);
+                }
                 for mro_class in &class_def.mro {
                     let mro_def = mro_class_def(mro_class, classes);
                     if let Some(folded) = fold_class_attr(mro_def, attr) {
@@ -964,6 +971,13 @@ pub(super) fn lower_expr(
                 };
             }
             let class_def = class_def_of(&base, classes);
+            // Part 1 of #1284: `x.name` reaching a
+            // `staticmethod(<foreign callable>)` class attribute reads the
+            // foreign callable. `pycc_types` restricts the receiver to a
+            // bare name, so discarding the lowered `base` is unobservable.
+            if let Some(target) = foreign_static::instance_target(class_def, classes, attr) {
+                return lower_expr(&target.read_expr(), scopes, classes, current_class);
+            }
             // #432: walk the MRO for property lookup first (matching
             // CPython's descriptor protocol precedence), then for regular
             // attribute slots using the flat MRO layout.
@@ -1145,6 +1159,18 @@ pub(super) fn lower_expr(
                 && receiver_dispatch::is_unshadowed_class_name(class_name, scopes, classes)
             {
                 let class_def = &classes[class_name.as_str()];
+                // Part 1 of #1284: `C.name(args)` reaching a
+                // `staticmethod(<foreign callable>)` class attribute calls
+                // the foreign callable.
+                if let Some(target) = foreign_static::class_name_target(class_def, classes, method)
+                {
+                    return lower_expr(
+                        &target.call_expr(args.clone()),
+                        scopes,
+                        classes,
+                        current_class,
+                    );
+                }
                 let static_mangled = class_def.mro.iter().find_map(|mro_class| {
                     let mro_def = mro_class_def(mro_class, classes);
                     mro_def
@@ -1214,6 +1240,17 @@ pub(super) fn lower_expr(
                 };
             }
             let class_def = class_def_of(&base, classes);
+            // Part 1 of #1284: `x.name(args)` reaching a
+            // `staticmethod(<foreign callable>)` class attribute calls the
+            // foreign callable; the bare-name receiver is not an argument.
+            if let Some(target) = foreign_static::instance_target(class_def, classes, method) {
+                return lower_expr(
+                    &target.call_expr(args.clone()),
+                    scopes,
+                    classes,
+                    current_class,
+                );
+            }
             // #436: check static_methods and class_methods before regular
             // method resolution. Static methods can be called on both
             // classes and instances; class methods can too. When called on
@@ -1565,6 +1602,12 @@ fn fold_class_attr(class_def: &HirClassDef, attr: &str) -> Option<MirExpr> {
         ClassAttrValue::Float(f) => MirExpr::FloatLiteral(*f),
         ClassAttrValue::Bool(b) => MirExpr::BoolLiteral(*b),
         ClassAttrValue::Str(s) => MirExpr::StringLiteral(s.clone()),
+        // Part 1 of #1284: no constant to fold. Every class-name and
+        // instance read reaches `foreign_static`'s rewrite before this
+        // fold, so the only caller that gets here is the `super()` walk,
+        // which `pycc_types` refuses; returning `None` lets that walk fall
+        // through to its own internal-error panic.
+        ClassAttrValue::ForeignStatic(_) => return None,
     })
 }
 

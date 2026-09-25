@@ -19,6 +19,10 @@ status: accepted
   simply that class-level attribute assignments did not exist at all. Landing them
   removes that reason, so the deferral needs a new, explicitly-implemented
   precondition rather than an accidental one.
+- Amendment (2026-09-25): [D-256](./D-256-admit-a-foreign-callable-staticmethod-class.md) narrows this
+  decision for exactly one shape, `name = staticmethod(<foreign import reference>)`. That shape is a
+  storage-less `Ty::Object` attribute that is re-read at each access. A CPython `staticmethod` has no
+  `__set_name__`, so D-213 stays sound.
 - Amendment (2026-09-24): the D-154 paraphrase in the context above predates #1262 (Part 1
   of #1218), after which an instance attribute slot can also hold a leak-only `list[int]` or
   `dict[str, int]` pointer seeded from an `__init__` parameter (D-154's 2026-09-24 amendment).

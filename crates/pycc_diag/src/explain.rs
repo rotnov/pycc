@@ -92,7 +92,14 @@ y` aliasing gap (issue #963; CPython binds a `_Feature` object pycc never \
 models -- a stdlib module behind `import X as Y` lowers since issue #962, \
 D-231); the nine no-op \
 features lower to nothing, and a feature name CPython itself rejects is \
-`L0001`, not C0001. The construct remains reserved and stops \
+`L0001`, not C0001. A class-attribute initializer that is not a literal \
+is C0001 too (issue #1345, D-256), with one message per shape naming its \
+tracking issue: a call, a name or attribute reference, and a container \
+(#1348), `classmethod(...)` or a `staticmethod` of a pycc callable (#1347), \
+the annotated spelling, a conditional import root, a rebound \
+`staticmethod`, and a dunder, class-private or container-dispatched name. \
+The one admitted non-literal shape is `name = staticmethod(<foreign import \
+reference>)`. The construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \

@@ -330,7 +330,8 @@ fn a_non_literal_class_attribute_value_is_rejected() {
     assert_rejected(
         "911_call_rhs",
         "def f() -> int:\n    return 1\n\n\nclass C:\n    X: int = f()\n\n    def __init__(self) -> None:\n        self.n = 0\n",
-        "must be initialized with a literal",
+        // #1284 names the shape: a call is its own refusal now.
+        "is initialized with a call, which is not supported yet (#1348)",
     );
 }
 

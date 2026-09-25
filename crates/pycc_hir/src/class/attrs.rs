@@ -9,7 +9,8 @@
 //! attribute whose name collides with something else the class exposes.
 
 use super::attr_initializer::{
-    bad_class_attr_shape, class_attr_value, infer_class_attr_ty, no_class_attr_value,
+    InitializerScope, Spelling, class_attr_value, classify_non_literal, infer_class_attr_ty,
+    no_class_attr_value,
 };
 use super::reserved_names::{ClassBodyRoute, reject_reserved_class_attr_name};
 use super::{ClassAnnotationInfo, ClassAttrValue, HirClassDef, PropertyDef, is_scalar_slot_type};
@@ -139,7 +140,10 @@ fn is_class_var_annotation(annotation: &Expr) -> bool {
 /// non-scalar annotation rejects a descriptor-valued class attribute
 /// (`x: SomeDescriptor = SomeDescriptor()`) along with it, so
 /// `__set_name__`'s own precondition never arises. Relaxing this
-/// restriction requires revisiting #585 in the same change.
+/// restriction requires revisiting #585 in the same change. The annotated
+/// spelling of #1345's foreign `staticmethod` shape is refused by
+/// [`classify_non_literal`], so this path still only ever yields a scalar.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lower_class_attr(
     ann: &pycc_ast::StmtAnnAssign,
     stripped: StrippedAnnotation<'_>,
@@ -148,6 +152,7 @@ pub(super) fn lower_class_attr(
     aliases: &[(String, Ty)],
     class_name_defs: &[ClassAnnotationInfo],
     already: &[(String, Ty, ClassAttrValue)],
+    scope: &InitializerScope<'_>,
 ) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
     let Expr::Name(target_name) = ann.target.as_ref() else {
         return Err(unsupported(
@@ -157,6 +162,16 @@ pub(super) fn lower_class_attr(
         ));
     };
     let attr_name = target_name.id.to_string();
+    let non_literal = |value: &Expr| {
+        classify_non_literal(
+            value,
+            &attr_name,
+            Spelling::Annotated,
+            scope,
+            ann.range.into(),
+        )
+        .expect_err("the annotated spelling never admits a non-literal initializer")
+    };
     reject_reserved_class_attr_name(&attr_name, ClassBodyRoute::Plain, ann.range.into())?;
     if already.iter().any(|(name, _, _)| name == &attr_name) {
         return Err(unsupported(
@@ -255,7 +270,7 @@ pub(super) fn lower_class_attr(
                 return Err(no_class_attr_value(&attr_name, ann.range.into()));
             };
             let Some(attr_ty) = infer_class_attr_ty(value) else {
-                return Err(bad_class_attr_shape(&attr_name, ann.range.into()));
+                return Err(non_literal(value));
             };
             attr_ty
         }
@@ -263,6 +278,11 @@ pub(super) fn lower_class_attr(
     let Some(value) = &ann.value else {
         return Err(no_class_attr_value(&attr_name, ann.range.into()));
     };
+    // #1345: a non-literal initializer gets the classifier's precise
+    // message; a literal one keeps the extractor's own checks.
+    if infer_class_attr_ty(value).is_none() {
+        return Err(non_literal(value));
+    }
     let attr_value = class_attr_value(value, &attr_ty, &attr_name, ann.range.into())?;
     Ok((attr_name, attr_ty, attr_value))
 }
@@ -279,13 +299,18 @@ pub(super) fn lower_class_attr(
 /// spellings accept and reject exactly the same programs.
 ///
 /// The #585/D-224 scalar-only invariant documented on [`lower_class_attr`]
-/// holds here by construction rather than by a check: `infer_class_attr_ty`
-/// only ever yields a scalar, so an un-annotated attribute can never name a
-/// descriptor and `__set_name__`'s precondition never arises.
+/// holds for every *literal* attribute by construction: `infer_class_attr_ty`
+/// only ever yields a scalar. A non-literal initializer goes to
+/// [`classify_non_literal`], whose one admitted shape,
+/// `name = staticmethod(<foreign ref>)` (#1345, D-256), is the single
+/// non-scalar exception: a `staticmethod` object is a descriptor but has no
+/// `__set_name__` (measured on CPython 3.14.7), so `__set_name__`'s
+/// precondition still never arises.
 pub(super) fn lower_unannotated_class_attr(
     assign: &pycc_ast::StmtAssign,
     class_name: &str,
     already: &[(String, Ty, ClassAttrValue)],
+    scope: &InitializerScope<'_>,
 ) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
     // `a = b = 1` binds both names to one value. Modelling it would mean
     // pushing two entries from one statement, each needing its own duplicate
@@ -318,7 +343,14 @@ pub(super) fn lower_unannotated_class_attr(
     }
     let value = assign.value.as_ref();
     let Some(attr_ty) = infer_class_attr_ty(value) else {
-        return Err(bad_class_attr_shape(&attr_name, assign.range.into()));
+        let target = classify_non_literal(
+            value,
+            &attr_name,
+            Spelling::Unannotated,
+            scope,
+            assign.range.into(),
+        )?;
+        return Ok((attr_name, Ty::Object, ClassAttrValue::ForeignStatic(target)));
     };
     let attr_value = class_attr_value(value, &attr_ty, &attr_name, assign.range.into())?;
     Ok((attr_name, attr_ty, attr_value))
@@ -393,7 +425,8 @@ pub(super) fn reject_class_attr_collisions(
         defined_classes,
         ref range,
     } = input;
-    for (attr_name, _, _) in class_attrs {
+    for (attr_name, _, value) in class_attrs {
+        let foreign = matches!(value, ClassAttrValue::ForeignStatic(_));
         if let Some(what) = collision_kind(
             attr_name,
             attrs,
@@ -406,6 +439,7 @@ pub(super) fn reject_class_attr_collisions(
                 class_name,
                 attr_name,
                 what,
+                foreign,
                 range.clone(),
             ));
         }
@@ -430,6 +464,7 @@ pub(super) fn reject_class_attr_collisions(
                     class_name,
                     attr_name,
                     &format!("{what} inherited from `{base}`"),
+                    foreign,
                     range.clone(),
                 ));
             }
@@ -473,18 +508,30 @@ fn collision_kind(
 }
 
 /// The single `C0001` a [`reject_class_attr_collisions`] collision produces.
+///
+/// `foreign` selects the reason: a literal attribute is folded to a
+/// constant at every read, while a `staticmethod(<foreign callable>)`
+/// attribute (Part 1 of #1284) is rewritten to its foreign reference at
+/// every read and call -- either way the read never consults the other
+/// binding, so the two cannot share a name.
 fn class_attr_collision(
     class_name: &str,
     attr_name: &str,
     what: &str,
+    foreign: bool,
     range: std::ops::Range<u32>,
 ) -> Diagnostic {
+    let reason = if foreign {
+        "a `staticmethod(...)` class attribute is rewritten to its foreign callable at every \
+         read and call"
+    } else {
+        "a class attribute is folded to a constant at every read"
+    };
     unsupported(
         format!(
             "class attribute `{class_name}.{attr_name}` collides with {what} of the same \
-             name -- a class attribute is folded to a constant at every read, so it can never \
-             share a name with a value that lives in an instance slot, behind a descriptor, or \
-             in the class's method table"
+             name -- {reason}, so it can never share a name with a value that lives in an \
+             instance slot, behind a descriptor, or in the class's method table"
         ),
         range,
     )

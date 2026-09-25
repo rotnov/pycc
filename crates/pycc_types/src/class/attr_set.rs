@@ -92,6 +92,19 @@ pub(crate) fn check_attr_set(
     if let Ty::Instance(class_name) = &base_ty
         && let Some(class_attr_ty) = lookup_class_attr_through_mro(env, class_name, attr)
     {
+        // Part 1 of #1284: a `staticmethod(<foreign callable>)` class
+        // attribute is no constant either, and has no storage of its own.
+        if super::foreign_static::is_foreign_static_class_attr(env, class_name, attr) {
+            return Err(Diagnostic::error(
+                "T0044",
+                format!(
+                    "cannot assign to `{attr}`: it is a `staticmethod(...)` class attribute of \
+                     class `{class_name}`, which is re-read from its foreign callable at every \
+                     access and has no storage to write to"
+                ),
+                Span::new(0, 0),
+            ));
+        }
         return Err(Diagnostic::error(
             "T0044",
             format!(

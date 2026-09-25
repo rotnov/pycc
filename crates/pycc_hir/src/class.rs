@@ -65,6 +65,12 @@ mod body;
 mod declared_attrs;
 pub(crate) mod enum_call;
 mod enum_class;
+pub(crate) mod foreign_static;
+pub use foreign_static::{
+    ClassNamespaceWinner, ForeignCallableRef, class_name_foreign_static, class_namespace_winner,
+    instance_foreign_static, method_shadows_foreign_static, mro_has_instance_slot,
+    subclass_divergence,
+};
 mod init;
 mod init_slot;
 mod instance_hash;
@@ -112,13 +118,14 @@ pub enum EnumMemberValue {
     Str(String),
 }
 
-/// The compile-time constant value of an annotated class-level attribute
-/// (#911, Part 1 of #885).
+/// The value of a class-level attribute (#911, Part 1 of #885).
 ///
-/// A class attribute has **no runtime storage and no instance slot** -- every
-/// read of it is folded to this literal by `pycc_mir`. The variants therefore
-/// mirror exactly the scalar slot types the annotation is restricted to (see
-/// [`HirClassDef::class_attrs`]), not the full expression grammar.
+/// A class attribute has **no runtime storage and no instance slot**. Every
+/// read of a literal variant is folded to that literal by `pycc_mir`, and the
+/// literal variants mirror exactly the scalar slot types the annotation is
+/// restricted to (see [`HirClassDef::class_attrs`]), not the full expression
+/// grammar. The one non-literal variant, [`ClassAttrValue::ForeignStatic`],
+/// is not folded but re-evaluated at every access (#1345).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassAttrValue {
     /// An `int`-typed attribute (`MIN_WIDTH: int = -1024`).
@@ -129,6 +136,14 @@ pub enum ClassAttrValue {
     Bool(bool),
     /// A `str`-typed attribute (`KIND: str = "window"`).
     Str(String),
+    /// #1284 Part 1 (#1345): `name = staticmethod(<ref>)`, where `<ref>` is
+    /// a bare name or a dotted attribute chain rooted at a module-level
+    /// foreign (`ImportBinding::Foreign`) import. Not a constant: every read
+    /// or call through the attribute re-evaluates the reference at the use
+    /// site (D-256), so its `class_attrs` type is `Ty::Object`. A
+    /// `staticmethod` object has no `__set_name__`, so admitting it keeps
+    /// D-213's deferral sound.
+    ForeignStatic(ForeignCallableRef),
 }
 
 /// A single class's declared shape (D-154): its attribute slots, in
@@ -262,13 +277,22 @@ pub struct HirClassDef {
     /// MRO base wins, matching CPython. This deliberately differs from the enum-member model, which
     /// allocates a per-member singleton with a module global.
     ///
+    /// The one exception is [`ClassAttrValue::ForeignStatic`] (#1345,
+    /// D-256): `name = staticmethod(<foreign ref>)`, typed `Ty::Object`. It
+    /// has no storage either; a read or call is rewritten at the use site
+    /// into the reference, selected by
+    /// [`class_namespace_winner`](foreign_static::class_namespace_winner).
+    ///
     /// **Named invariant -- class attributes are restricted to scalar slot
-    /// types.** Beyond D-154's storage constraint, this is what keeps
-    /// `__set_name__` untriggerable per #585/D-213: a descriptor-valued
-    /// class attribute (`x: SomeDescriptor = SomeDescriptor()`) is not a
-    /// scalar and is rejected with `C0001`, so `__set_name__`'s own
-    /// precondition never arises. Relaxing this restriction requires
-    /// revisiting #585 in the same change.
+    /// types, except the foreign `staticmethod`.** Beyond D-154's storage
+    /// constraint, this is what keeps `__set_name__` untriggerable per
+    /// #585/D-213: a descriptor-valued class attribute
+    /// (`x: SomeDescriptor = SomeDescriptor()`) is not a scalar and is
+    /// rejected with `C0001`, so `__set_name__`'s own precondition never
+    /// arises. A `staticmethod` object is a descriptor but has no
+    /// `__set_name__` (measured on CPython 3.14.7), so the one admitted
+    /// exception keeps the precondition unreachable. Relaxing this
+    /// restriction further requires revisiting #585 in the same change.
     ///
     /// `Ty::Param(_)` is excluded as well: a type parameter has no
     /// compile-time constant value to fold.
@@ -809,6 +833,10 @@ fn class_getitem_return_ty(
 /// builtin-exception class, or any base this crate cannot introspect) is
 /// simply treated as not defining a validatable inherited hook, matching
 /// this file's existing "unintrospectable -> unrestricted" posture elsewhere.
+///
+/// `staticmethod_rebound` (#1345) is whether the module body binds
+/// `staticmethod` anywhere, computed once by `module::lower_module`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
@@ -817,6 +845,7 @@ pub(crate) fn lower_class(
     base_class_asts: &[(String, &pycc_ast::StmtClassDef)],
     imports: &[ImportBinding],
     signatures: &SignatureTable,
+    staticmethod_rebound: bool,
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     // #380 (PR-20): build the projected class slice `annotation_to_ty` uses
     // to resolve cross-class annotations (including protocol-typed ones);
@@ -1118,6 +1147,7 @@ pub(crate) fn lower_class(
         defined_classes,
         imports,
         signatures,
+        staticmethod_rebound,
     })?;
     // #911: the class-attribute/instance-slot collision check runs here,
     // after the walk, not at the `AnnAssign` site: `attrs` is populated only

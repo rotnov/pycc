@@ -1376,6 +1376,18 @@ import does. Collapsing the duplicate to one call, or releasing the
 overwritten reference, would be an optimization of an already-correct
 program, and belongs with the release protocol described above.
 
+**A foreign `staticmethod` class attribute adds no runtime entry point.**
+`exists = staticmethod(os.path.exists)` in a class body
+([#1345](https://github.com/rotnov/pycc/issues/1345),
+[D-256](./decisions/D-256-admit-a-foreign-callable-staticmethod-class.md)) is
+rewritten at every read or call into the reference itself. That rewrite
+reuses the existing helpers at each access: the attribute-load helper, the
+method-call helper, and the #1313 direct-call helper. The chain is re-read
+from the module's foreign import every time. Like every class attribute, it
+is not published on an `--ext` extension type. `docs/TYPE_SYSTEM.md`'s
+"Class-level attributes" section owns the rule and its two divergences from
+CPython.
+
 **The bound name does not cross a module boundary yet.** The binding is
 positional — a top-level `ImportBinding::Foreign` carries the index of the
 item the import sits at in *its own* module's item list, which

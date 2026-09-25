@@ -18,6 +18,7 @@
 //! Enum and protocol class bodies never reach this walk -- `lower_class`
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
+use super::attr_initializer::InitializerScope;
 use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
 use super::declared_attrs::{
     ClassMethodTables, collect_declared_attrs, instance_declaration_name,
@@ -117,6 +118,9 @@ pub(super) struct ClassBodyInput<'a> {
     /// fall back to the old capability rejection -- so this field is
     /// covered by its own regression test.
     pub(super) signatures: &'a SignatureTable,
+    /// Whether the module body binds `staticmethod` anywhere (#1345), so a
+    /// class attribute `name = staticmethod(...)` is not the builtin.
+    pub(super) staticmethod_rebound: bool,
 }
 
 /// The tables the class-body walk accumulates, handed back to
@@ -162,6 +166,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         defined_classes,
         imports,
         signatures,
+        staticmethod_rebound,
     } = input;
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
@@ -183,7 +188,14 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
     } else {
         collect_declared_attrs(body, class_name, type_param, aliases, class_name_defs)?
     };
-    for stmt in body {
+    for (index, stmt) in body.iter().enumerate() {
+        // #1345: what a non-literal class-attribute initializer is
+        // classified against, including the statements before this one.
+        let scope = InitializerScope {
+            imports,
+            staticmethod_rebound,
+            earlier: &body[..index],
+        };
         // #378 (PR-18): a `@dataclass` class body accepts `AnnAssign`
         // (`x: int` or `x: int = default`) alongside method definitions.
         // An annotated field contributes to `dataclass_fields`. In a
@@ -230,6 +242,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                     aliases,
                     class_name_defs,
                     &class_attrs,
+                    &scope,
                 )?);
                 continue;
             }
@@ -283,6 +296,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                     aliases,
                     class_name_defs,
                     &class_attrs,
+                    &scope,
                 )?);
                 continue;
             }
@@ -386,6 +400,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 assign,
                 class_name,
                 &class_attrs,
+                &scope,
             )?);
             continue;
         }
