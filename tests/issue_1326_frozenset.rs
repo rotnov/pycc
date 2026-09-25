@@ -124,6 +124,48 @@ print(f.x)
 print(_g(frozenset(4)))
 ";
 
+/// A user `class frozenset:` constructed inside a private helper. With the
+/// helper's return annotated, the call is typed by `crate::expr` and runs.
+const CLASS_SHADOW_ANNOTATED_HELPER: &str = "\
+class frozenset:
+    def __init__(self, a: int) -> None:
+        self.a = a
+
+
+def _f(a: int) -> frozenset:
+    return frozenset(a)
+
+
+def main() -> None:
+    x = _f(3)
+    print(x.a)
+
+
+main()
+";
+
+/// The same helper left unannotated reaches the constraint solver, whose
+/// frozenset arm skips a class-shadowed name and falls through to the
+/// pre-existing known-callable-builtin `C0001` (CPython prints `3`). Pinned
+/// so a change to that fallback is deliberate.
+const CLASS_SHADOW_UNANNOTATED_HELPER: &str = "\
+class frozenset:
+    def __init__(self, a: int) -> None:
+        self.a = a
+
+
+def _f(a):
+    return frozenset(a)
+
+
+def main() -> None:
+    x = _f(3)
+    print(x.a)
+
+
+main()
+";
+
 /// Builds `source` natively, runs it, and asserts its stdout equals
 /// CPython's run of the same file and `expected`.
 fn assert_native_matches_cpython(tag: &str, source: &str, expected: &str) {
@@ -208,6 +250,21 @@ fn frozenset_programs_match_cpython() {
 fn a_user_frozenset_function_or_class_shadows_the_builtin() {
     assert_native_matches_cpython("e2e_1326_fn_shadow", FUNCTION_SHADOW, "3 5\n");
     assert_native_matches_cpython("e2e_1326_class_shadow", CLASS_SHADOW, "3\n4\n");
+    assert_native_matches_cpython(
+        "e2e_1326_class_shadow_annotated_helper",
+        CLASS_SHADOW_ANNOTATED_HELPER,
+        "3\n",
+    );
+}
+
+#[test]
+fn a_class_shadowed_frozenset_in_an_unannotated_helper_is_still_c0001() {
+    assert_one_error(
+        "e2e_1326_class_shadow_unannotated_helper",
+        CLASS_SHADOW_UNANNOTATED_HELPER,
+        "C0001",
+        "call to builtin `frozenset` is valid Python but not implemented yet",
+    );
 }
 
 #[test]

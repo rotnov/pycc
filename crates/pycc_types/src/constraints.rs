@@ -1490,7 +1490,13 @@ pub(crate) fn collect_expr_constraints(
                 // Part 1 of #1319: the solver half of `crate::expr`'s
                 // `frozenset(...)` arm. `signatures` has already missed, so a
                 // `def frozenset` cannot reach here; `shadowed_producers`
-                // carries a module `class frozenset`, which keeps its meaning.
+                // carries a module `class frozenset`, which skips this arm and
+                // falls through to `is_known_callable_builtin`'s `C0001`
+                // below -- the pre-existing behavior every builtin-named
+                // class shares (`class range:` reports the same). Deferring
+                // with `Ok(None)` would only trade that for the unannotated
+                // private helper's `T0021` any user class returned from one
+                // gets; an annotated helper never reaches this solver.
                 if callee == crate::frozenset::FROZENSET
                     && !env.shadowed_producers.contains(callee.as_str())
                 {
