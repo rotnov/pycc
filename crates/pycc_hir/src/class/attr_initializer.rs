@@ -497,6 +497,24 @@ mod tests {
         );
     }
 
+    /// The remaining annotated-literal refusals: a unary operator other than
+    /// `+`/`-`, and a `float` or `bool` literal under a different annotation.
+    #[test]
+    fn annotated_literal_refusals_name_the_literal_or_the_shape() {
+        assert_collision(
+            "class C:\n    X: int = ~1\n",
+            "must be initialized with a literal",
+        );
+        assert_collision(
+            "class C:\n    X: int = 1.5\n",
+            "is annotated `int` but is initialized with a `float` literal",
+        );
+        assert_collision(
+            "class C:\n    X: int = True\n",
+            "is annotated `int` but is initialized with a `bool` literal",
+        );
+    }
+
     // -- #910: every inferred literal shape, at the lowering seam ---------
 
     #[test]
@@ -573,23 +591,22 @@ mod tests {
 
     #[test]
     fn a_dotted_foreign_reference_is_admitted_with_its_path() {
-        let ClassAttrValue::ForeignStatic(target) =
-            admitted("import os\n\n\nclass C:\n    x = staticmethod(os.path.exists)\n")
-        else {
-            panic!("expected a foreign static attribute");
-        };
-        assert_eq!(target.root, "os");
-        assert_eq!(target.path, ["path", "exists"]);
+        let value = admitted("import os\n\n\nclass C:\n    x = staticmethod(os.path.exists)\n");
+        assert!(
+            matches!(&value, ClassAttrValue::ForeignStatic(target)
+                if target.root == "os" && target.path == ["path", "exists"]),
+            "{value:?}"
+        );
     }
 
     #[test]
     fn a_bare_foreign_name_and_a_module_are_admitted() {
-        let ClassAttrValue::ForeignStatic(target) =
-            admitted("from operator import add\n\n\nclass C:\n    x = staticmethod(add)\n")
-        else {
-            panic!("expected a foreign static attribute");
-        };
-        assert_eq!((target.root.as_str(), target.path.len()), ("add", 0));
+        let value = admitted("from operator import add\n\n\nclass C:\n    x = staticmethod(add)\n");
+        assert!(
+            matches!(&value, ClassAttrValue::ForeignStatic(target)
+                if target.root == "add" && target.path.is_empty()),
+            "{value:?}"
+        );
         assert!(matches!(
             admitted("import os\n\n\nclass C:\n    x = staticmethod(os)\n"),
             ClassAttrValue::ForeignStatic(_)

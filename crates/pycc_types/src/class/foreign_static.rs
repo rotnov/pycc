@@ -79,25 +79,23 @@ pub(crate) fn instance_read(
     class_name: &str,
     attr: &str,
 ) -> Result<Option<Ty>, Diagnostic> {
-    let Some(class_def) = env.lookup_class(class_name) else {
-        return Ok(None);
-    };
-    let lookup = |name: &str| env.lookup_class(name);
-    if method_shadows_foreign_static(&class_def.mro, lookup, attr) {
-        return Err(Diagnostic::error(
-            "T0044",
-            format!(
-                "reading `{class_name}.{attr}` through an instance reaches a method that \
-                 shadows a `staticmethod(...)` class attribute later in the MRO -- a bound \
-                 method read is not supported yet (#1350)"
-            ),
-            Span::new(0, 0),
-        ));
-    }
-    let Some(target) = instance_target(env, local_names, base, class_def, attr, "read")? else {
-        return Ok(None);
-    };
-    infer_expr_in(env, local_names, &target.read_expr()).map(Some)
+    env.lookup_class(class_name).map_or(Ok(None), |class_def| {
+        let lookup = |name: &str| env.lookup_class(name);
+        if method_shadows_foreign_static(&class_def.mro, lookup, attr) {
+            return Err(Diagnostic::error(
+                "T0044",
+                format!(
+                    "reading `{class_name}.{attr}` through an instance reaches a method that \
+                     shadows a `staticmethod(...)` class attribute later in the MRO -- a bound \
+                     method read is not supported yet (#1350)"
+                ),
+                Span::new(0, 0),
+            ));
+        }
+        instance_target(env, local_names, base, class_def, attr, "read")?
+            .map(|target| infer_expr_in(env, local_names, &target.read_expr()))
+            .transpose()
+    })
 }
 
 /// `x.attr(args)` through an instance receiver: as [`instance_read`], for
@@ -111,13 +109,11 @@ pub(crate) fn instance_call(
     attr: &str,
     args: &[HirExpr],
 ) -> Result<Option<Ty>, Diagnostic> {
-    let Some(class_def) = env.lookup_class(class_name) else {
-        return Ok(None);
-    };
-    let Some(target) = instance_target(env, local_names, base, class_def, attr, "call")? else {
-        return Ok(None);
-    };
-    infer_expr_in(env, local_names, &target.call_expr(args.to_vec())).map(Some)
+    env.lookup_class(class_name).map_or(Ok(None), |class_def| {
+        instance_target(env, local_names, base, class_def, attr, "call")?
+            .map(|target| infer_expr_in(env, local_names, &target.call_expr(args.to_vec())))
+            .transpose()
+    })
 }
 
 /// The shared instance-receiver gate: the subclass-divergence refusal,
@@ -173,18 +169,16 @@ fn check_use_site(
     target: &ForeignCallableRef,
 ) -> Result<(), Diagnostic> {
     let root = target.root.as_str();
-    let shadowed_by = if local_names.contains(&root) {
-        "a local binding"
-    } else if env.in_function_body && !env.foreign_globals.contains(root) {
-        "a binding"
-    } else {
+    let shadowed = local_names.contains(&root)
+        || (env.in_function_body && !env.foreign_globals.contains(root));
+    if !shadowed {
         return Ok(());
-    };
+    }
     Err(Diagnostic::error(
         "T0044",
         format!(
             "class attribute `{class_name}.{attr}` refers to `{root}`, a foreign import of the \
-             module that defines `{class_name}`, which is shadowed by {shadowed_by} here"
+             module that defines `{class_name}`, which is shadowed by a local binding here"
         ),
         Span::new(0, 0),
     )
@@ -222,13 +216,12 @@ pub(crate) fn is_foreign_static_class_attr(
     class_name: &str,
     attr: &str,
 ) -> bool {
-    let Some(class_def) = env.lookup_class(class_name) else {
-        return false;
-    };
-    class_def
-        .mro
-        .iter()
-        .filter_map(|name| env.lookup_class(name))
-        .find_map(|def| def.class_attrs.iter().find(|(name, _, _)| name == attr))
-        .is_some_and(|(_, _, value)| matches!(value, ClassAttrValue::ForeignStatic(_)))
+    env.lookup_class(class_name).is_some_and(|class_def| {
+        class_def
+            .mro
+            .iter()
+            .filter_map(|name| env.lookup_class(name))
+            .find_map(|def| def.class_attrs.iter().find(|(name, _, _)| name == attr))
+            .is_some_and(|(_, _, value)| matches!(value, ClassAttrValue::ForeignStatic(_)))
+    })
 }

@@ -694,11 +694,12 @@ fn operator_roots_run_like_cpython_in_the_host() {
     assert_eq!(out, "5 5 6 6\n5 5\nab 4.0\nno error\n");
 }
 
-/// Only the exception host runs hosted: a build of any module with a PEP 695
-/// generic class re-checks function bodies without the #1316 foreign-global
-/// set, so even a plain `os.path.exists(p)` in a function body is `T0021`
-/// there -- the pre-existing check/build divergence of a module with a
-/// generic class that #989 tracks, independent of this attribute.
+/// Only the exception host runs hosted: in a module with a PEP 695 generic
+/// class, even a plain `os.path.exists(p)` in a function body passes
+/// `pycc check` and fails `pycc build` with `T0021` (`os` is not defined),
+/// independent of this attribute. That is the same check/build divergence
+/// shape as item 3 of #989 (there `T0021` names the generic class itself);
+/// the shared cause is inferred, not isolated.
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn an_exception_host_runs_like_cpython_in_the_host() {
