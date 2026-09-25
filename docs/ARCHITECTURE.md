@@ -124,9 +124,7 @@ module-global and function-local tuple storage work end to end. Like
 `list`/`dict` above, string conversion of a tuple (`print(t)`,
 f-string interpolation) and truthiness of a tuple (`if t:`/`while t:`)
 both type-check but stop codegen with a "not supported yet" panic in
-`to_str`/`truthy` respectively (`set` left that group with Part 1 of
-[#1319](https://github.com/rotnov/pycc/issues/1319): its truthiness is
-real, and its string conversion is refused earlier as `C0001`) -- but
+`to_str`/`truthy` respectively (not `set`, since #1326) -- but
 unlike those two, whose own identical gap predates this whole PR-11
 effort (`list`, PR-10) or was already in place before this slice started
 (`dict`, PR-11a), this
