@@ -97,6 +97,13 @@ status: accepted
   `crates/pycc_hir/src/exception.rs`, and pinned by
   `tests/issue_740_multi_type_except.rs`'s
   `isinstance_on_a_multi_type_handler_binding_never_produces_a_false_positive`.
+  Amendment (2026-09-25, [#1337](https://github.com/rotnov/pycc/issues/1337)):
+  the false negatives described above are gone. `isinstance(e, T)` on a
+  value typed as a seeded builtin exception class now reads the caught
+  object's runtime type tag whenever `T` lies outside the static MRO
+  (`MirExpr::ExceptionTypeTest`, `docs/TYPE_SYSTEM.md`), so the
+  `"Exception"` binding answers exactly as CPython does and the pinned
+  test now expects `True`, `False`, `True`.
   `raise e` (bare-name re-raise) is unaffected by this choice either way:
   it lowers to `MirExceptionValue::Existing`, which preserves the actual
   runtime exception object and tag rather than reconstructing from the
