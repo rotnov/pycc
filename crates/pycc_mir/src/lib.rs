@@ -696,15 +696,6 @@ impl MirComprehension {
     }
 }
 
-/// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
-/// directly) to keep `MirExpr`'s own size close to its other variants --
-/// `ctor: String` + `attr_count: usize` + `args: Vec<MirExpr>` + `ty: Ty`
-/// inlined directly measured large enough to trip clippy's
-/// `large_enum_variant` lint (`-D warnings`) on `MirItem` (whose
-/// `TopLevelStmt(MirStmt)` variant embeds `MirExpr` several layers deep,
-/// e.g. via `MirStmt::AttrSet`'s two raw `MirExpr` fields and
-/// `CompSource::Range`'s three), the same reasoning `Ty::Tuple(Box<Vec<Ty>>)`
-/// and `Ty::Dict(Box<(Ty, Ty)>)` already apply one crate over.
 /// How a [`MirExpr::InstanceHash`] hashes its instance (#1335).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstanceHashVia {
@@ -715,6 +706,15 @@ pub enum InstanceHashVia {
     Method,
 }
 
+/// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
+/// directly) to keep `MirExpr`'s own size close to its other variants --
+/// `ctor: String` + `attr_count: usize` + `args: Vec<MirExpr>` + `ty: Ty`
+/// inlined directly measured large enough to trip clippy's
+/// `large_enum_variant` lint (`-D warnings`) on `MirItem` (whose
+/// `TopLevelStmt(MirStmt)` variant embeds `MirExpr` several layers deep,
+/// e.g. via `MirStmt::AttrSet`'s two raw `MirExpr` fields and
+/// `CompSource::Range`'s three), the same reasoning `Ty::Tuple(Box<Vec<Ty>>)`
+/// and `Ty::Dict(Box<(Ty, Ty)>)` already apply one crate over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstantiateExpr {
     pub ctor: String,
