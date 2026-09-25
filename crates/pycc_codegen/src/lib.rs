@@ -1142,8 +1142,8 @@ fn build_int_set_add<'ctx>(
 }
 
 /// A `PyIntSetObj`'s current element count, as a raw `i64` counter, shared
-/// by the `len(s)` builtin's `Ty::Set` branch and
-/// `MirStmt::ForSet`'s own loop bound -- mirrors `build_int_list_len`/
+/// by the `len(s)` builtin's `Ty::Set` branch, `MirStmt::ForSet`'s own loop
+/// bound and `frozenset::set_truthy` -- mirrors `build_int_list_len`/
 /// `build_dict_len` exactly, for the identical reason.
 fn build_int_set_len<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,

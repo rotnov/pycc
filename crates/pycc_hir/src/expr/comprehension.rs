@@ -230,8 +230,8 @@ fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
 
 /// Resolves a comprehension's `for var in <iter>` clause into a `CompIter`,
 /// reusing `Stmt::For`'s own iterable-shape acceptance verbatim (D-117):
-/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`
-/// downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
+/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`/
+/// `Ty::FrozenSet` downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
 /// Any other shape is rejected with the existing generic `C0001` path,
 /// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
 /// <list>` is supported so far" message.

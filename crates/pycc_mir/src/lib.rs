@@ -2096,7 +2096,7 @@ pub(crate) fn resolve_comp_source(
                 (CompSource::Set(name.clone()), *elem_ty)
             }
             other => panic!(
-                "pycc_mir: internal error: `{name}` is neither a list, dict, nor set (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                "pycc_mir: internal error: `{name}` is neither a list, dict, set, nor frozenset (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
                 other.name()
             ),
         },

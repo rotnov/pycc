@@ -415,7 +415,8 @@ pub(super) fn lower_stmt(
             // var, kv.0)` / `check_assignment(env, var, *elem_ty)` for the
             // set case), not hardcoded to `Ty::Int`. Empirically only a
             // `Ty::List(Box::new(Ty::Int))`, `Ty::Dict(Box::new((Ty::Str,
-            // Ty::Int)))`, or `Ty::Set(Box::new(Ty::Int))` binding ever
+            // Ty::Int)))`, `Ty::Set(Box::new(Ty::Int))`, or
+            // `Ty::FrozenSet(Box::new(Ty::Int))` binding ever
             // reaches this arm today (`pycc_types`' T0034/T0036/T0037/T0038
             // gates reject every other element/key-value combination before
             // HIR ever constructs one -- see those gates' own comments and
@@ -478,7 +479,7 @@ pub(super) fn lower_stmt(
                     }
                 }
                 other => panic!(
-                    "pycc_mir: internal error: `{list}` is neither a list, dict, nor set (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    "pycc_mir: internal error: `{list}` is neither a list, dict, set, nor frozenset (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
                     other.name()
                 ),
             }

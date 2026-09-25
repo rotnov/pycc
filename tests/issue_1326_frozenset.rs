@@ -284,6 +284,24 @@ fn a_frozenset_is_immutable_and_distinct_from_a_set() {
         "T0025",
         "cannot assign `set[int]` to `x: frozenset[int]`",
     );
+    assert_one_error(
+        "e2e_1326_frozenset_into_set",
+        "x: set[int] = frozenset([1])\n",
+        "T0025",
+        "cannot assign `frozenset[int]` to `x: set[int]`, initializer does not match the declared annotation",
+    );
+    assert_one_error(
+        "e2e_1326_frozenset_reassigned_over_set",
+        "x: set[int] = {1}\nx = frozenset([1])\n",
+        "T0023",
+        "cannot assign `frozenset[int]` to `x`, previously inferred as `set[int]`",
+    );
+    assert_one_error(
+        "e2e_1326_frozenset_argument_for_set",
+        "def f(s: set[int]) -> int:\n    return len(s)\n\n\nprint(f(frozenset([1])))\n",
+        "T0021",
+        "argument 1 of `f` expects `set[int]`, got `frozenset[int]`",
+    );
 }
 
 #[test]
