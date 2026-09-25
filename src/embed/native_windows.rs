@@ -157,7 +157,7 @@ impl Scan<'_> {
 /// The case-folded file names in every system directory. A directory that
 /// is missing or unreadable counts as empty, so its imports fall to the
 /// refusal.
-fn system_names(env: &WindowsEnv) -> BTreeSet<String> {
+pub(super) fn system_names(env: &WindowsEnv) -> BTreeSet<String> {
     let listings = env
         .system_dirs
         .iter()
@@ -208,7 +208,7 @@ fn parent(rel: &Path) -> &Path {
 }
 
 /// `rel`'s components joined with `\`, whatever the host's separator.
-fn backslashed(rel: &Path) -> String {
+pub(super) fn backslashed(rel: &Path) -> String {
     let parts: Vec<_> = rel.iter().map(|part| part.to_string_lossy()).collect();
     parts.join("\\")
 }

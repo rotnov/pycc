@@ -281,7 +281,7 @@ Generators/`yield from` as state machines, iterator protocol, `itertools`/`funct
 
 ## v0.7 — transparent CPython interop
 
-This milestone is **mostly not implemented**: #1223 (D-248), #1286 embed stdlib; #1224 policies; #1241/#1242 lock and embed closures (#1296 on Windows), #1243/#1259 natives; #1305 PE scan; #1271/#1272 link libpython statically.
+This milestone is **mostly not implemented**: #1223 (D-248), #1286 embed stdlib; #1224 policies; #1241/#1242 lock and embed closures (#1296 on Windows), #1243/#1259 natives; #1305/#1306 PE scans; #1271/#1272 link libpython statically.
 Ordinary standard-Python imports such as `import numpy as np` are classified
 without pycc-specific source rewrites. The **embedded** mode bundles a pinned
 CPython 3.14/package/native dependency closure under the `auto` (default),

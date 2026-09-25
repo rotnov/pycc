@@ -20,6 +20,7 @@ mod macho_host;
 pub(crate) mod native;
 pub(crate) mod native_linux;
 mod native_windows;
+mod native_windows_closure;
 mod pe;
 pub(crate) mod sha256;
 pub(crate) mod static_lib;
@@ -468,10 +469,10 @@ pub(crate) struct EmbedPlan {
 /// file that identifies the interpreter (#1272), not the archive it links.
 ///
 /// A Windows build (D-253) refuses a static libpython before the probe,
-/// refuses a locked closure that holds a PE image once the payload is
-/// planned (#1296, until #1297 scans them), then refuses an interpreter
-/// image whose imports would not resolve once moved (#1305), all before
-/// anything is written; it compiles without `-fPIC`,
+/// then refuses an interpreter image whose imports would not resolve once
+/// moved (#1305) and a locked closure image or native whose imports no
+/// strict rule places (#1306), all before anything is written; its
+/// natives are copied into `OUT.pycc\natives\`; it compiles without `-fPIC`,
 /// links the program DLL into the sidecar as [`EmbedPlan::artifact`], and
 /// describes the stub `OUT` linked after it as [`EmbedPlan::stub`].
 pub(crate) fn plan_embed(
@@ -501,7 +502,6 @@ pub(crate) fn plan_embed(
         }
         None => None,
     };
-    windows::check_closure_images(platform, locked.as_ref())?;
     let natives = plan_natives(
         platform,
         &probe,
@@ -529,7 +529,8 @@ pub(crate) fn plan_embed(
     write_source(&exports_path, &exports_inc)?;
     write_source(&launcher, LAUNCHER_C)?;
     let config_path = obj_path.with_file_name(EMBED_CONFIG_INC_NAME);
-    let config = layout::embed_config_inc(&sidecar_name, has_closure);
+    let has_natives = platform == EmbedPlatform::Windows && !natives.natives.is_empty();
+    let config = layout::embed_config_inc(&sidecar_name, has_closure, has_natives);
     write_source(&config_path, &config)?;
     let library = bundle::assemble(
         &probe,

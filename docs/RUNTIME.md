@@ -1336,7 +1336,7 @@ owns the contract; this is the runtime view of it.
   on macOS by its install name, on Linux as `ld.so` would on the build host
   (#1243). A system library is kept. A library under the interpreter's
   prefix, or (for a closure image) a native locked in `[[target.native]]`,
-  is copied into `OUT.pycc/lib/`; on macOS the reference is rewritten to
+  is copied into `OUT.pycc/lib/` (`OUT.pycc\natives\` on Windows); on macOS the reference is rewritten to
   the copy, and on Linux the executable links every copied library by name,
   so the loader finds it already loaded when an extension module asks for
   it. An interpreter image needing anything else is refused as not
@@ -1356,7 +1356,7 @@ owns the contract; this is the runtime view of it.
   under a site-packages directory is a native unless it is kept or rebound
   as a payload file, even when that directory lies inside the prefix or
   (on Linux) under a system library directory.
-- **Windows host (Part 1 of #1226, #1286, #1296).** A program
+- **Windows host (Part 1 of #1226, #1286, #1296, #1306).** A program
   builds on a Windows host as a stub `OUT` plus `OUT.pycc\`
   ([D-253](./decisions/D-253-windows-embedded-executable-a-stub-out-loading-a.md)).
   The stub (`src/embed/pycc_embed_stub_windows.c`, static CRT, importing
@@ -1370,7 +1370,8 @@ owns the contract; this is the runtime view of it.
   `Lib\` and `DLLs\` (without `site-packages`, `__pycache__`, `test` and the
   Tcl/Tk files), the program DLL and the marker, plus `closure\` holding
   the program's locked pure-Python closure when it imports a root outside
-  the standard library (#1296); there is no `lib\`. The
+  the standard library (#1296), and `natives\` holding the closure's locked
+  natives when there are any (#1306). The
   launcher sets `sys.path` explicitly to `<sidecar>\Lib` then
   `<sidecar>\DLLs`, then `<sidecar>\closure` when a closure is bundled, and
   leaves `platlibdir` at its default. The build links
@@ -1390,11 +1391,18 @@ owns the contract; this is the runtime view of it.
   or `python314.dll`); a kept `Lib\` file that is a PE image is refused, and
   `DLLs\` images of another ABI (`.cp3NNt-`, `_d.pyd`, `_d.dll`) are not
   copied. The launcher calls `AddDllDirectory(<sidecar>)` before starting
-  the interpreter, so a `.pyd` importing a root DLL finds it in the sidecar.
-  A locked closure holding a file Windows would load as a PE image (a `.pyd`
-  or `.dll` suffix, or an `MZ` header on any suffix other than `.exe`) is
-  refused at exit 2 naming #1297 and `pycc build --ext`, and a static
-  libpython is refused there (D-251).
+  the interpreter, and `AddDllDirectory(<sidecar>\natives)` when natives
+  are bundled, so a `.pyd` importing a root DLL or a native finds it there.
+  A locked closure file Windows would load as a PE image (a `.pyd` or `.dll`
+  suffix, or an `MZ` header on any suffix other than `.exe`) is parsed too
+  (#1306): it must be an x86-64 PE32+ DLL, and each import must be an API
+  set, a root DLL, a closure image beside it or uniquely named in the
+  closure, a native (a non-locked file beside it, copied to `natives\` and
+  scanned in turn), or a System32 file; a delay import or forwarder must be
+  an API set, a System32 file or `python314.dll`. Anything else, and a
+  native shadowing a System32, closure-image or `DLLs\` name, is refused at
+  exit 2 by `pycc lock` and the build alike, naming the image, the import
+  and `pycc build --ext`. A static libpython is refused there (D-251).
 - **Static libpython (Part 1 of #1227).** `pycc build --static-libpython`, or
   `[build] static = true` in a neighboring `pycc.toml`, links the embed
   interpreter's `LIBPL` archive into the executable whole (macOS
