@@ -266,12 +266,17 @@ pub(crate) fn infer_function_signatures_with_solver_all(
         // Part 2a of #1142 (#1165): D-244 #1129 statement (h) applied per
         // spelling. A `def ndarray` is already covered by `signatures`; a
         // `class ndarray` is what this set adds, because the solver has no
-        // class table of its own.
+        // class table of its own. Part 1 of #1319 records a `class
+        // frozenset` here for the same reason: the solver's `frozenset(...)`
+        // arm must yield to it.
         shadowed_producers: hir
             .class_defs
             .iter()
             .map(|(class_name, _)| class_name.clone())
-            .filter(|class_name| crate::buffer::is_producer_spelling(class_name))
+            .filter(|class_name| {
+                crate::buffer::is_producer_spelling(class_name)
+                    || class_name == crate::frozenset::FROZENSET
+            })
             .collect(),
         // #1165 review round 8: module scope binds no `Final` name this
         // solver consults -- the set is read only at the buffer producer's

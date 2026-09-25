@@ -297,7 +297,7 @@ pub(super) fn lower_protocol_class(
                 // reuse of `is_scalar_slot_type`.
                 if matches!(
                     attr_ty,
-                    Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Tuple(_)
+                    Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Tuple(_)
                 ) {
                     return Err(unsupported(
                         format!(

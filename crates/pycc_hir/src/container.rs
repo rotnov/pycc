@@ -59,8 +59,8 @@ pub fn check_tuple_element_ty(element: &Ty, span: Span) -> Result<(), Diagnostic
 
 /// Rejects a container `Ty` whose element types this version's codegen
 /// cannot represent: `list[int]` (`T0034`, D-105), `dict[str, int]`
-/// (`T0036`, D-122) and `set[int]` (`T0038`, D-122) are the only admitted
-/// shapes, and a `tuple`'s elements are each checked with
+/// (`T0036`, D-122), `set[int]` and `frozenset[int]` (`T0038`, D-122) are
+/// the only admitted shapes, and a `tuple`'s elements are each checked with
 /// [`check_tuple_element_ty`].
 ///
 /// A non-container `Ty` is accepted unchanged, so an annotation-lowering
@@ -94,19 +94,10 @@ pub fn check_container_ty(ty: &Ty, span: Span) -> Result<(), Diagnostic> {
             }
             Ok(())
         }
-        Ty::Set(element) => {
-            if **element != Ty::Int {
-                return Err(Diagnostic::error(
-                    "T0038",
-                    format!(
-                        "{} is not compiled yet (D-122) -- only set[int] is",
-                        ty.name()
-                    ),
-                    span,
-                ));
-            }
-            Ok(())
-        }
+        Ty::Set(element) => check_int_set_element(ty, element, "set", span),
+        // Part 1 of #1319: `frozenset[int]` is `set[int]`'s exact sibling,
+        // gated by the same code for the same reason (D-122).
+        Ty::FrozenSet(element) => check_int_set_element(ty, element, "frozenset", span),
         Ty::Tuple(elements) => {
             for element in elements.iter() {
                 check_tuple_element_ty(element, span)?;
@@ -126,6 +117,27 @@ pub fn check_container_ty(ty: &Ty, span: Span) -> Result<(), Diagnostic> {
         | Ty::Object
         | Ty::MemoryView => Ok(()),
     }
+}
+
+/// The `T0038` gate shared by `set[T]` and `frozenset[T]`: only an `int`
+/// element is compiled. `family` names the admitted form in the message.
+fn check_int_set_element(
+    ty: &Ty,
+    element: &Ty,
+    family: &str,
+    span: Span,
+) -> Result<(), Diagnostic> {
+    if *element != Ty::Int {
+        return Err(Diagnostic::error(
+            "T0038",
+            format!(
+                "{} is not compiled yet (D-122) -- only {family}[int] is",
+                ty.name()
+            ),
+            span,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

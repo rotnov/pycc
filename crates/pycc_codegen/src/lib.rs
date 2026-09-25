@@ -51,6 +51,8 @@ mod foreign_call;
 mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
+/// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
+mod frozenset;
 
 /// One Part 4 conversion emitter in `foreign_len.rs` (PR 4b of #1083).
 ///
@@ -477,7 +479,9 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // codegen runs), but the arm itself is not narrowed to that one
         // element type, matching `List(_)`/`Dict(_)`'s own
         // element/key/value-agnostic shape.
-        pycc_mir::Ty::Set(_) => context.ptr_type(inkwell::AddressSpace::default()).into(),
+        pycc_mir::Ty::Set(_) | pycc_mir::Ty::FrozenSet(_) => {
+            context.ptr_type(inkwell::AddressSpace::default()).into()
+        }
         // A class instance's runtime object (`pycc_rt::instance::PyInstanceObj`,
         // D-154, Part 1 of #375) is heap-allocated and always referenced by
         // pointer -- exactly the same storage/parameter representation
@@ -585,6 +589,7 @@ fn default_value_for_type<'ctx>(
         | pycc_mir::Ty::List(_)
         | pycc_mir::Ty::Dict(_)
         | pycc_mir::Ty::Set(_)
+        | pycc_mir::Ty::FrozenSet(_)
         | pycc_mir::Ty::Instance(_)
         | pycc_mir::Ty::Protocol(_)
         | pycc_mir::Ty::Object
@@ -1140,8 +1145,8 @@ fn build_int_set_add<'ctx>(
 }
 
 /// A `PyIntSetObj`'s current element count, as a raw `i64` counter, shared
-/// by the `len(s)` builtin's `Ty::Set` branch and
-/// `MirStmt::ForSet`'s own loop bound -- mirrors `build_int_list_len`/
+/// by the `len(s)` builtin's `Ty::Set` branch, `MirStmt::ForSet`'s own loop
+/// bound and `frozenset::set_truthy` -- mirrors `build_int_list_len`/
 /// `build_dict_len` exactly, for the identical reason.
 fn build_int_set_len<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
@@ -1694,15 +1699,13 @@ fn to_str<'ctx>(
         Scalar::Dict(_) => {
             panic!("pycc_codegen: string conversion of a dict[K, V] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the `List`/
-        // `Dict` arms directly above: `pycc_types` places no type
-        // restriction on `print`'s argument or an f-string interpolation,
-        // so `print(s)`/`f"{s}"` for a `set[int]` local type-checks today
-        // and lands here. v0.2 has no `str(set)`/set-printing semantics
-        // (D-124), and there is no `pycc_rt_int_set_to_str` to call -- so
-        // this panics honestly instead of handing a `PyIntSetObj` pointer
-        // to a `pycc_rt_*_to_str` function that would read it as a
-        // `PyStrObj`.
+        // No longer reachable from source: since Part 1 of #1319,
+        // `pycc_types` refuses `print(s)`/`f"{s}"` for a `set[int]` or
+        // `frozenset[int]` value as `C0001` before codegen. v0.2 has no
+        // `str(set)`/set-printing semantics (D-124), and there is no
+        // `pycc_rt_int_set_to_str` to call -- so this stays an honest
+        // panic backstop instead of handing a `PyIntSetObj` pointer to a
+        // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
         Scalar::Set(_) => {
             panic!("pycc_codegen: string conversion of a set[T] value is not supported yet")
         }
@@ -2232,7 +2235,7 @@ fn emit_expr_unchecked<'ctx>(
                 // `MirExpr::Name`), so without it every one of those would
                 // fall through to the catch-all below and panic on a real,
                 // type-checked program instead of reading the value.
-                Ty::Set(_) => {
+                Ty::Set(_) | Ty::FrozenSet(_) => {
                     let loaded = builder
                         .build_load(
                             context.ptr_type(inkwell::AddressSpace::default()),
@@ -2579,10 +2582,12 @@ fn emit_expr_unchecked<'ctx>(
                 // and calling out that it's the *operator* that's
                 // unsupported, not just the result type), not new
                 // capability.
-                Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::Tuple(_) => panic!(
-                    "pycc_codegen: binary operators are not supported on {} yet",
-                    ty.name()
-                ),
+                Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Tuple(_) => {
+                    panic!(
+                        "pycc_codegen: binary operators are not supported on {} yet",
+                        ty.name()
+                    )
+                }
                 other => panic!("pycc_codegen: a `{other:?}`-result BinOp is not supported yet"),
             }
         }
@@ -2771,7 +2776,7 @@ fn emit_expr_unchecked<'ctx>(
                         let dict_ptr = expect_dict_pointer(scalar, "`len`'s argument");
                         build_dict_len(builder, rt, dict_ptr)
                     }
-                    Ty::Set(_) => {
+                    Ty::Set(_) | Ty::FrozenSet(_) => {
                         let set_ptr = expect_set_pointer(scalar, "`len`'s argument");
                         build_int_set_len(builder, rt, set_ptr)
                     }
@@ -3866,6 +3871,15 @@ fn emit_expr_unchecked<'ctx>(
         // whose free is a documented no-op on null. A second guard is emitted
         // *before* the allocator call, for an exception that was already
         // pending when this arm was reached -- see it in place below.
+        MirExpr::FrozenSetFrom { source } => frozenset::emit_frozenset_from(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            source.as_deref(),
+        ),
         MirExpr::BufferAlloc { len } => {
             let len_scalar = emit_expr(context, builder, module, rt, user_functions, locals, len);
             let encoded_len = to_numeric_encoded_int(context, builder, len_scalar);
@@ -4486,23 +4500,15 @@ fn truthy<'ctx>(
         Scalar::Dict(_) => {
             panic!("pycc_codegen: truthiness of a dict[K, V] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the `List`/
-        // `Dict` arms directly above: `pycc_types` places no type
-        // restriction on an `if`/`while` condition, so `if s:` for a
-        // `set[int]` local type-checks today and lands here. v0.2 has no
-        // `bool(set)` semantics (D-124 ships only `len(x)`/iteration), and
-        // there is no `pycc_rt_int_set_truthy` to call -- so this panics
-        // honestly instead of calling `pycc_rt_str_truthy` on a
-        // `PyIntSetObj` pointer, whose layout has nothing in common with
-        // `PyStrObj`'s.
-        Scalar::Set(_) => {
-            panic!("pycc_codegen: truthiness of a set[T] value is not supported yet")
-        }
+        // Part 1 of #1319: a `set[int]`/`frozenset[int]` value is truthy
+        // exactly when it is non-empty, which its runtime length answers.
+        Scalar::Set(ptr) => frozenset::set_truthy(context, builder, rt, ptr),
         // A real, reachable feature gap -- but NOT "identical in kind" to
-        // the `List`/`Dict`/`Set` arms directly above in one respect:
-        // `list[T]`'s own `if xs:`/`while xs:` reachability predates this
-        // whole PR-11 effort entirely (established back in PR-10, D-107);
-        // `dict`/`set`'s own reachability, while more recent (PR-11a's own
+        // the panicking `List`/`Dict` arms above in one respect (the `Set`
+        // arm stopped panicking when Part 1 of #1319 gave it real
+        // truthiness): `list[T]`'s own `if xs:`/`while xs:` reachability
+        // predates this whole PR-11 effort entirely (established back in
+        // PR-10, D-107); `dict`'s own reachability, while more recent (PR-11a's own
         // HIR literal lowering), was already in place before this PR
         // (PR-11b) started -- neither is something this PR's own diff
         // turned from a clean diagnostic into a panic. `tuple[...]`'s
@@ -5231,6 +5237,7 @@ fn collect_expr_bindings(expr: &MirExpr, bindings: &mut BTreeMap<String, pycc_mi
                 | pycc_mir::Ty::List(_)
                 | pycc_mir::Ty::Dict(_)
                 | pycc_mir::Ty::Set(_)
+                | pycc_mir::Ty::FrozenSet(_)
                 | pycc_mir::Ty::Tuple(_)
                 | pycc_mir::Ty::Instance(_)
                 | pycc_mir::Ty::Optional(_)
@@ -5265,6 +5272,7 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                     | pycc_mir::Ty::List(_)
                     | pycc_mir::Ty::Dict(_)
                     | pycc_mir::Ty::Set(_)
+                    | pycc_mir::Ty::FrozenSet(_)
                     | pycc_mir::Ty::Tuple(_)
                     // D-154 (Part 1 of #375): `p = Point(1, 2)` needs its
                     // own predeclared storage slot exactly like every other
@@ -5718,7 +5726,7 @@ fn declare_module_globals<'ctx>(
                 // `Ty::Str` loop in `compile_to_object`): D-124 keeps
                 // `set[T]` leak-only for v0.2, extending D-107's exact
                 // reasoning.
-                pycc_mir::Ty::Set(_) => (
+                pycc_mir::Ty::Set(_) | pycc_mir::Ty::FrozenSet(_) => (
                     context.ptr_type(inkwell::AddressSpace::default()).into(),
                     context
                         .ptr_type(inkwell::AddressSpace::default())

@@ -233,7 +233,9 @@ pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
     /// `signatures` covers only `def`s. Seeded once per module in
     /// `constraints::signatures` from the HIR's own class table, per
     /// *spelling*: a module defining `class ndarray` must still be able to
-    /// call `NDArray(n)`.
+    /// call `NDArray(n)`. Since Part 1 of #1319 it also holds `frozenset`
+    /// when the module defines `class frozenset`, for the same reason: the
+    /// solver's `frozenset(...)` builtin arm must yield to the class.
     pub(crate) shadowed_producers: HashSet<String>,
     /// #1165 review round 8: the names a `Final` annotation has bound in
     /// this scope, the solver's counterpart of `Environment::finals`.
@@ -1225,16 +1227,19 @@ pub(crate) fn collect_expr_constraints(
                 // so accepting the new argument type here is the whole
                 // change the solver needs.
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
-                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Object)
+                    && !matches!(
+                        arg_ty,
+                        Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Object
+                    )
                 {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `{}`",
+                            "`len` expects a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` argument, got `{}`",
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ).with_help("pass a `list[T]`, `dict[K, V]`, or `set[T]` value"));
+                    ).with_help("pass a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` value"));
                 }
                 return Ok(Some(Ok(Ty::Int)));
             }
@@ -1481,6 +1486,22 @@ pub(crate) fn collect_expr_constraints(
                 // in Python 3.14, so it is a capability gap, not an
                 // unresolved callee. A genuinely unknown name still returns
                 // `Ok(None)` and defers to final validation's `T0021`.
+                //
+                // Part 1 of #1319: the solver half of `crate::expr`'s
+                // `frozenset(...)` arm. `signatures` has already missed, so a
+                // `def frozenset` cannot reach here; `shadowed_producers`
+                // carries a module `class frozenset`, which skips this arm and
+                // falls through to `is_known_callable_builtin`'s `C0001`
+                // below -- the pre-existing behavior every builtin-named
+                // class shares (`class range:` reports the same). Deferring
+                // with `Ok(None)` would only trade that for the unannotated
+                // private helper's `T0021` any user class returned from one
+                // gets; an annotated helper never reaches this solver.
+                if callee == crate::frozenset::FROZENSET
+                    && !env.shadowed_producers.contains(callee.as_str())
+                {
+                    return Ok(Some(Ok(crate::frozenset::check_call_terms(&arg_terms)?)));
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

@@ -477,6 +477,7 @@ fn every_ty_the_gap_message_can_name_renders_a_python_spelling() {
         (Ty::List(Box::new(Ty::Int)), "list"),
         (Ty::Dict(Box::new((Ty::Str, Ty::Int))), "dict"),
         (Ty::Set(Box::new(Ty::Int)), "set"),
+        (Ty::FrozenSet(Box::new(Ty::Int)), "frozenset"),
         (Ty::Tuple(Box::new(vec![Ty::Int])), "tuple"),
         (Ty::Object, "object"),
         (Ty::MemoryView, "memoryview"),

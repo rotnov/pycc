@@ -217,6 +217,7 @@ fn expected_to_carry(ty: &Ty) -> bool {
         | Ty::List(_)
         | Ty::Dict(_)
         | Ty::Set(_)
+        | Ty::FrozenSet(_)
         | Ty::Instance(_)
         | Ty::Protocol(_)
         | Ty::Optional(_) => false,
@@ -249,6 +250,7 @@ fn no_type_outside_the_admitted_set_is_carried_at_a_parameter_position() {
         Ty::List(Box::new(Ty::Int)),
         Ty::Dict(Box::new((Ty::Str, Ty::Int))),
         Ty::Set(Box::new(Ty::Int)),
+        Ty::FrozenSet(Box::new(Ty::Int)),
         Ty::Instance(name()),
         Ty::Protocol(name()),
         Ty::Optional(Box::new(Ty::Int)),

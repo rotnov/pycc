@@ -482,15 +482,18 @@ pub(crate) fn infer_expr_in(
                 // deliberately stays as it is: `object` is not spellable in
                 // an annotation, so naming it in the message a user sees for
                 // `len(5)` would point at a type they cannot write.
-                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::Object) {
+                if !matches!(
+                    arg_tys[0],
+                    Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Object
+                ) {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `{}`",
+                            "`len` expects a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` argument, got `{}`",
                             arg_tys[0].name()
                         ),
                         Span::new(0, 0),
-                    ).with_help("pass a `list[T]`, `dict[K, V]`, or `set[T]` value"));
+                    ).with_help("pass a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` value"));
                 }
                 return Ok(Ty::Int);
             }
@@ -778,6 +781,14 @@ pub(crate) fn infer_expr_in(
                     } else {
                         crate::buffer::producer_at_module_scope(callee)
                     });
+                }
+                // Part 1 of #1319: the `frozenset(...)` builtin, placed here
+                // for the same statement-(h) reason as the buffer producer
+                // above -- the class, generic and user-function tables have
+                // all been consulted, so a program's own `class frozenset`
+                // or `def frozenset` keeps its meaning.
+                if callee == crate::frozenset::FROZENSET {
+                    return crate::frozenset::check_call(arg_tys);
                 }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
@@ -1727,6 +1738,7 @@ fn is_walrus_value_ty_supported(ty: &Ty) -> bool {
         | Ty::List(_)
         | Ty::Dict(_)
         | Ty::Set(_)
+        | Ty::FrozenSet(_)
         | Ty::Tuple(_)
         | Ty::Instance(_)
         | Ty::Protocol(_)

@@ -22,10 +22,13 @@
 //!   compute a truth value for at codegen time --
 //!   [`truthy`](../../pycc_codegen/fn.truthy.html) in `pycc_codegen`
 //!   handles `bool`, `int`, `float`, `str`, `None`, `Optional`, and a class
-//!   instance, but panics on `list`/`dict`/`set` (no `pycc_rt_*_truthy`
+//!   instance, but panics on `list`/`dict` (no `pycc_rt_*_truthy`
 //!   entry point exists for them yet). Accepting those container types
 //!   here would let a `not` expression reach that panic, so they are
-//!   rejected with `T0021` instead -- the same "every type pycc models a
+//!   rejected with `T0021` instead. `set[int]`/`frozenset[int]` truthiness
+//!   is real since Part 1 of #1319, which widened only `if`/`while`
+//!   conditions; `not` over a set stays `T0021` until a later part admits
+//!   it -- the same "every type pycc models a
 //!   truth value for" reading the issue's own completion criteria use,
 //!   not a narrowing of them. `None` needs no runtime call at all: a
 //!   `Ty::None`-typed `MirExpr::Name` read lowers to `Scalar::Bool` backed

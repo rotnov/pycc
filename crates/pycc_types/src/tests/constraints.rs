@@ -1284,7 +1284,7 @@ fn constraint_collection_len_call_rejects_a_concretely_known_non_list_argument()
     assert_eq!(err.code, "T0033");
     assert_eq!(
         err.message,
-        "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `int`"
+        "`len` expects a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` argument, got `int`"
     );
 }
 #[test]

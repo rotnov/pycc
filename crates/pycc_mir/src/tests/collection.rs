@@ -417,10 +417,10 @@ fn a_dict_get_over_a_non_dict_bases_ty_panics_with_an_internal_error() {
 }
 
 #[test]
-#[should_panic(expected = "neither a list, dict, nor set")]
+#[should_panic(expected = "neither a list, dict, set, nor frozenset")]
 fn a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error() {
     // Same reasoning again: `pycc_types` already rejects `for v in x:`
-    // when `x` is neither a list, dict, nor set (T0033), but the
+    // when `x` is neither a list, dict, set, nor frozenset (T0033), but the
     // defensive panic path in `lower_stmt`'s `ForList` arm still needs
     // direct coverage.
     let hir = HirModule {

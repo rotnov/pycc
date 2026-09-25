@@ -449,7 +449,7 @@ fn container_annotation_to_ty(
         .with_help(help));
     }
     let exact_arity = match family {
-        "list" | "set" => Some(1usize),
+        "list" | "set" | "frozenset" => Some(1usize),
         "dict" => Some(2usize),
         // `tuple` is variadic in arity: any count of one or more.
         _ => None,
@@ -500,6 +500,7 @@ fn container_annotation_to_ty(
     let ty = match family {
         "list" => Ty::List(Box::new(elements.next().expect("arity checked above"))),
         "set" => Ty::Set(Box::new(elements.next().expect("arity checked above"))),
+        "frozenset" => Ty::FrozenSet(Box::new(elements.next().expect("arity checked above"))),
         "dict" => {
             let key = elements.next().expect("arity checked above");
             let value = elements.next().expect("arity checked above");
@@ -974,9 +975,10 @@ pub(crate) fn annotation_to_ty(
                             class_defs,
                         );
                     }
-                    // Step 3, D-228 (issue #918): the four builtin container
-                    // types are lowered here, from a *parameterized*
-                    // annotation only -- the bare `list`/`dict`/`set`/`tuple`
+                    // Step 3, D-228 (issue #918): the builtin container
+                    // types (`frozenset` since Part 1 of #1319) are lowered
+                    // here, from a *parameterized* annotation only -- the
+                    // bare `list`/`dict`/`set`/`frozenset`/`tuple`
                     // spelling still falls through the `Expr::Name` arm's
                     // `other =>` branch and gets its own `C0001`.
                     //

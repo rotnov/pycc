@@ -825,7 +825,7 @@
     },
     {
       "pep": "[585](https://peps.python.org/pep-0585/)",
-      "feature": "Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen, and since D-228 (issue #918), widened by issue #925, the parameterized *annotation* forms `list[T]`, `set[T]`, `dict[K, V]` and `tuple[A, B, ...]` are lowered in parameter, return, local- and module-variable and type-alias positions, with explicit arity validation (`T0053`) and the same element-type capability gates the literals run (`T0034`/`T0036`/`T0038`/`T0039`). Passing a container *value* across a function boundary now works from real Python source in both directions — an annotated parameter (#918) and an annotated return type (#925) — measured end to end for all four families against CPython 3.14. Still deferred: a **protocol attribute's** type (not supported yet; a protocol *method's* parameter and return type both lower), a container-typed instance attribute other than a `list[int]`/`dict[str, int]` seeded from an `__init__` parameter (that case shipped in #1262), nested containers (#895), unions inside containers (#747), `frozenset[...]`/`type[...]` (no `Ty` variant under D-109's 16-byte ceiling), the variadic `tuple[int, ...]` and empty `tuple[()]` (both rejected with `T0053`), and inferring an empty literal's element type from its annotation (#927)",
+      "feature": "Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen, and since D-228 (issue #918), widened by issue #925, the parameterized *annotation* forms `list[T]`, `set[T]`, `dict[K, V]` and `tuple[A, B, ...]` are lowered — joined by `frozenset[T]` since #1326 (Part 1 of #1319), with `frozenset()`/`frozenset(x)` construction from a `set[int]`, `frozenset[int]` or `list[int]` — in parameter, return, local- and module-variable and type-alias positions, with explicit arity validation (`T0053`) and the same element-type capability gates the literals run (`T0034`/`T0036`/`T0038`/`T0039`). Passing a container *value* across a function boundary now works from real Python source in both directions — an annotated parameter (#918) and an annotated return type (#925) — measured end to end for all five families against CPython 3.14 (`frozenset[int]`: `tests/issue_1326_frozenset.rs`). Still deferred: a **protocol attribute's** type (not supported yet; a protocol *method's* parameter and return type both lower), a container-typed instance attribute other than a `list[int]`/`dict[str, int]` seeded from an `__init__` parameter (that case shipped in #1262), nested containers (#895), unions inside containers (#747), `type[...]` (no `Ty` variant; the D-109 16-byte ceiling is not the obstacle, as `frozenset[T]`'s measurement showed), the variadic `tuple[int, ...]` and empty `tuple[()]` (both rejected with `T0053`), and inferring an empty literal's element type from its annotation (#927)",
       "matrix_line": 348,
       "fixtures": [
         "pep_0585_builtin_generics.py",
@@ -864,7 +864,7 @@
         {
           "category": "`frozenset[...]`, `type[...]`, and the remaining builtin generic aliases",
           "kind": "core",
-          "reason": "Not exercised, and outside the recorded scalar container scope: neither has a `Ty` variant, which D-109's 16-byte `size_of::<Ty>()` ceiling would have to be cleared to add."
+          "reason": "Not exercised by a conformance fixture. `frozenset[int]` ships (#1326) and is proven against CPython by `tests/issue_1326_frozenset.rs`; `type[...]` has no `Ty` variant."
         }
       ]
     },
@@ -1157,7 +1157,7 @@
         {
           "category": "non-scalar interpolation operands (`list`/`dict`/`set`/`tuple` values)",
           "kind": "core",
-          "reason": "pycc's codegen converts an interpolation operand through the shared `to_str` helper (crates/pycc_codegen/src/lib.rs), which handles only `Str`/`Int`/`Float`/`Bool` scalars and panics on `List`/`Dict`/`Set`/`Tuple` because v0.2 defines no `str(list)`/`str(dict)`/`str(set)` semantics (D-105/D-123/D-124); PEP 701's grammar changes therefore cannot be observed over those operand types."
+          "reason": "pycc's codegen converts an interpolation operand through the shared `to_str` helper (crates/pycc_codegen/src/lib.rs), which handles only `Str`/`Int`/`Float`/`Bool` scalars and panics on `List`/`Dict`/`Tuple` (a `set`/`frozenset` operand is refused earlier as `C0001`) because v0.2 defines no `str(list)`/`str(dict)`/`str(set)` semantics (D-105/D-123/D-124); PEP 701's grammar changes therefore cannot be observed over those operand types."
         }
       ]
     },

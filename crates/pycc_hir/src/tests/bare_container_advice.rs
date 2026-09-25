@@ -12,15 +12,16 @@ use super::*;
 fn an_unsupported_annotation_type_returns_a_capability_error() {
     // D-228 (issue #918): `list[int]` now lowers, so a *bare* `list` gets its
     // own message naming the parameterized form to write instead, rather than
-    // the generic unknown-name message. `frozenset` keeps the generic one --
-    // it has no `Ty` variant, so there is no parameterized form to suggest.
+    // the generic unknown-name message. `type` keeps the generic one -- it
+    // has no `Ty` variant, so there is no parameterized form to suggest
+    // (`frozenset` left this position when Part 1 of #1319 gave it one).
     assert_capability_error_message(
         "def f(x: list) -> None:\n    return\n",
         "a bare `list` type annotation is not supported yet -- write the parameterized form, e.g. `list[int]`",
     );
     assert_capability_error_message(
-        "def f(x: frozenset) -> None:\n    return\n",
-        "type annotation `frozenset` is not supported yet",
+        "def f(x: type) -> None:\n    return\n",
+        "type annotation `type` is not supported yet",
     );
 }
 
@@ -32,6 +33,7 @@ fn each_bare_container_annotation_names_its_own_parameterized_form() {
     for (bare, example) in [
         ("list", "list[int]"),
         ("set", "set[int]"),
+        ("frozenset", "frozenset[int]"),
         ("dict", "dict[str, int]"),
         ("tuple", "tuple[int, int]"),
     ] {

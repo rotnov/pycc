@@ -126,6 +126,14 @@ pub enum Ty {
     Dict(Box<(Ty, Ty)>),
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
+    /// `frozenset[T]` (Part 1 of #1319). The immutable sibling of `Set`:
+    /// only `frozenset[int]` is compiled (D-122's one-combination gate,
+    /// `T0038`), and it shares `set[int]`'s run-time representation
+    /// (`PyIntSetObj`); immutability is enforced by `pycc_types` alone.
+    /// `Box<Ty>` is a thin pointer, the same shape as `Set`, so this
+    /// variant keeps `size_of::<Ty>()` at 16 bytes, inside the D-109
+    /// ceiling (measured, and pinned by `ty_size_stays_within_d109_ceiling`).
+    FrozenSet(Box<Ty>),
     /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
     /// scope. Boxed (D-109) as `Box<Vec<Ty>>` -- a second indirection: a
     /// thin (8-byte) pointer to a heap-allocated `Vec<Ty>` -- not as
@@ -227,6 +235,7 @@ impl Ty {
             Ty::List(elem) => format!("list[{}]", elem.name()),
             Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
             Ty::Set(elem) => format!("set[{}]", elem.name()),
+            Ty::FrozenSet(elem) => format!("frozenset[{}]", elem.name()),
             Ty::Tuple(elems) => format!(
                 "tuple[{}]",
                 elems.iter().map(Ty::name).collect::<Vec<_>>().join(", ")

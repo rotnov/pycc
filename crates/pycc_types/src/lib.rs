@@ -12,6 +12,7 @@ mod env;
 mod exception;
 mod expr;
 mod foreign;
+mod frozenset;
 mod module;
 mod monomorphize;
 mod narrow;
@@ -500,7 +501,9 @@ fn lookup_bound_name_inner(
 fn ty_contains_param(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) => true,
-        Ty::List(inner) | Ty::Set(inner) | Ty::Optional(inner) => ty_contains_param(inner),
+        Ty::List(inner) | Ty::Set(inner) | Ty::FrozenSet(inner) | Ty::Optional(inner) => {
+            ty_contains_param(inner)
+        }
         Ty::Dict(kv) => ty_contains_param(&kv.0) || ty_contains_param(&kv.1),
         Ty::Tuple(elems) => elems.iter().any(ty_contains_param),
         // D-154: an instance's payload is only its class's name, never a
@@ -2307,12 +2310,12 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Dict(kv) => kv.0,
-                Ty::Set(elem_ty) => *elem_ty,
+                Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => *elem_ty,
                 other => {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T]/frozenset[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
@@ -3217,12 +3220,12 @@ fn check_stmt_in_function(
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Dict(kv) => kv.0,
-                Ty::Set(elem_ty) => *elem_ty,
+                Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => *elem_ty,
                 other => {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T]/frozenset[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
@@ -3533,7 +3536,7 @@ fn scan_signature_ty_for_param(
             }
             Ok(())
         }
-        Ty::List(elem) | Ty::Set(elem) | Ty::Optional(elem) => {
+        Ty::List(elem) | Ty::Set(elem) | Ty::FrozenSet(elem) | Ty::Optional(elem) => {
             scan_signature_ty_for_param(elem, false, found)
         }
         Ty::Dict(kv) => {

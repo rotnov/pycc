@@ -253,11 +253,11 @@ fn a_bare_name_dict_sourced_dict_comprehension_resolves_comp_source_dict_with_va
 }
 
 #[test]
-#[should_panic(expected = "neither a list, dict, nor set")]
+#[should_panic(expected = "neither a list, dict, set, nor frozenset")]
 fn a_comprehension_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error() {
     // Same reasoning as `a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error`
     // above: `pycc_types` already rejects a comprehension whose bare-name
-    // iterable is neither a list, dict, nor set (T0033), but
+    // iterable is neither a list, dict, set, nor frozenset (T0033), but
     // `resolve_comp_source`'s own defensive panic path still needs
     // direct coverage via a hand-built HIR that bypasses that guarantee.
     let hir = HirModule {

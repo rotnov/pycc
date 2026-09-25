@@ -791,7 +791,9 @@ fn free_of(resolution: Resolution, rejected: fn(&Ty) -> bool) -> Option<Resoluti
 fn contains_infer(ty: &Ty) -> bool {
     match ty {
         Ty::Infer => true,
-        Ty::List(element) | Ty::Set(element) | Ty::Optional(element) => contains_infer(element),
+        Ty::List(element) | Ty::Set(element) | Ty::FrozenSet(element) | Ty::Optional(element) => {
+            contains_infer(element)
+        }
         Ty::Dict(pair) => contains_infer(&pair.0) || contains_infer(&pair.1),
         Ty::Tuple(elements) => elements.iter().any(contains_infer),
         Ty::Int
@@ -817,7 +819,7 @@ fn contains_infer(ty: &Ty) -> bool {
 fn contains_optional(ty: &Ty) -> bool {
     match ty {
         Ty::Optional(_) => true,
-        Ty::List(element) | Ty::Set(element) => contains_optional(element),
+        Ty::List(element) | Ty::Set(element) | Ty::FrozenSet(element) => contains_optional(element),
         Ty::Dict(pair) => contains_optional(&pair.0) || contains_optional(&pair.1),
         Ty::Tuple(elements) => elements.iter().any(contains_optional),
         Ty::Int

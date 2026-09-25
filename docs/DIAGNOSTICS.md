@@ -35,12 +35,12 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0030` | error | non-exhaustive `match` (missing cases listed) |
 | `T0031` | error | `@override` without matching base method |
 | `T0032` | error | list literal elements must all share one type |
-| `T0033` | error | value does not support list/dict/set operations (subscript, slicing, item assignment, `for`, `.append()`, `.pop()`, `.get()`, `.add()`, `len()`), or `len()` called with the wrong number of arguments |
+| `T0033` | error | value does not support list/dict/set/frozenset operations (subscript, slicing, item assignment, `for`, `.append()`, `.pop()`, `.get()`, `.add()`, `len()`), or `len()` called with the wrong number of arguments |
 | `T0034` | error | list codegen only supports `list[int]` in v0.2 (D-105) — gates both an inferred list-literal element type and a written `list[T]` annotation (D-228) |
 | `T0035` | error | dict literal key/value pairs must all share one key type and one value type |
 | `T0036` | error | dict codegen only supports `dict[str, int]` in v0.2 (D-122) — gates both an inferred dict-literal key/value type and a written `dict[K, V]` annotation (D-228) |
 | `T0037` | error | set literal elements must all share one type |
-| `T0038` | error | set codegen only supports `set[int]` in v0.2 (D-122) — gates both an inferred set-literal element type and a written `set[T]` annotation (D-228) |
+| `T0038` | error | set codegen only supports `set[int]` in v0.2 (D-122) — gates both an inferred set-literal element type and a written `set[T]` annotation (D-228), and a written `frozenset[T]` annotation, whose only compiled form is `frozenset[int]` (Part 1 of #1319) |
 | `T0039` | error | tuple element type not compiled yet (int/bool/float only, D-116) — gates both an inferred tuple-literal element type and each element of a written `tuple[A, B, ...]` annotation (D-228) |
 | `T0040` | error | tuple index must be a non-negative literal integer within range (D-116) |
 | `T0041` | error | local name may not be bound on every path reaching this use (definite-assignment tracking, issue #118 Part 1, D-147) |

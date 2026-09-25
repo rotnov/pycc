@@ -295,6 +295,22 @@ pub(super) fn lower_expr(
                     len: Box::new(args.into_iter().next().expect("checked len() == 1")),
                 };
             }
+            // Part 1 of #1319: the `frozenset(...)` builtin. Placed after the
+            // class-instantiation lookup above and under the `$fn:` shadow
+            // guard, like `ndarray` directly above, so a program's own
+            // `class frozenset` or `def frozenset` keeps its meaning --
+            // mirroring `pycc_types`' own interception, which sits after its
+            // class and user-function lookups. `pycc_types` admits at most
+            // one argument.
+            if callee == "frozenset"
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                return MirExpr::FrozenSetFrom {
+                    source: args.into_iter().next().map(Box::new),
+                };
+            }
             let ty = if callee == "print" {
                 Ty::None
             } else if callee == "math.sqrt" {

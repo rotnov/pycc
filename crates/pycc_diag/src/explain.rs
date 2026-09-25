@@ -491,16 +491,16 @@ def f() -> None:
     DiagnosticExplanation {
         code: "T0033",
         severity: Severity::Error,
-        summary: "value does not support list/dict/set operations, or `len()` called with the wrong number of arguments",
+        summary: "value does not support list/dict/set/frozenset operations, or `len()` called with the wrong number of arguments",
         explanation: "\
 T0033 covers a family of \"this value does not support this container \
 operation\" mismatches: subscript (`x[i]`), slicing, item assignment \
 (`x[i] = v`), iterating with `for`, and the built-in container methods \
 `.append()`/`.pop()`/`.get()`/`.add()`, when the receiver's inferred type \
-isn't a `list`/`dict`/`set` at all, or isn't the specific container kind \
+isn't a `list`/`dict`/`set`/`frozenset` at all, or isn't the specific container kind \
 that method requires. It also covers `len(...)` being called with a number \
 of arguments other than exactly one, and `len(...)`'s single argument not \
-being a `list[T]`/`dict[K, V]`/`set[T]`.",
+being a `list[T]`/`dict[K, V]`/`set[T]`/`frozenset[T]`.",
         example: "\
 def f() -> int:
     x = 5
@@ -574,7 +574,8 @@ def f() -> None:
 T0038 fires when a `set[T]` value's element type `T` is anything other than \
 `int` -- pycc's v0.2 set codegen (D-122) implements only `set[int]`'s \
 representation; other element types are type-checked but not yet \
-compilable and are rejected here rather than silently miscompiled.",
+compilable and are rejected here rather than silently miscompiled. \
+`frozenset[T]` shares the gate: only `frozenset[int]` is compiled.",
         example: "\
 def f() -> None:
     xs: set[str] = {\"a\", \"b\"}

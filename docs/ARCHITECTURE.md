@@ -121,12 +121,13 @@ since a heterogeneous tuple's element type at position `k` is only knowable
 when `k` is known at compile time; any other element type is rejected
 before codegen with `T0039`, mirroring `T0034`/`T0036`/`T0038`. Both
 module-global and function-local tuple storage work end to end. Like
-`list`/`dict`/`set` above, string conversion of a tuple (`print(t)`,
+`list`/`dict` above, string conversion of a tuple (`print(t)`,
 f-string interpolation) and truthiness of a tuple (`if t:`/`while t:`)
 both type-check but stop codegen with a "not supported yet" panic in
-`to_str`/`truthy` respectively -- but unlike those three, whose own
-identical gap predates this whole PR-11 effort (`list`, PR-10) or was
-already in place before this slice started (`dict`/`set`, PR-11a), this
+`to_str`/`truthy` respectively (not `set`, since #1326) -- but
+unlike those two, whose own identical gap predates this whole PR-11
+effort (`list`, PR-10) or was already in place before this slice started
+(`dict`, PR-11a), this
 reachability for `tuple[...]` is new as of this slice's own tuple-literal
 HIR lowering: before that change, any program containing a tuple literal
 failed to lower at all and got a clean `C0001` diagnostic instead of ever

@@ -242,6 +242,18 @@ status: accepted
     variant, and adding one has to clear
     [D-109](./D-109-keep-size-of-ty-at-16-bytes.md)'s 16-byte
     `size_of::<Ty>()` ceiling first — a separate decision.
+    - Amendment (2026-09-25): [#1326](https://github.com/rotnov/pycc/issues/1326)
+      (Part 1 of [#1319](https://github.com/rotnov/pycc/issues/1319)) lowers
+      `frozenset[T]`. The D-109 premise did not hold when measured:
+      `FrozenSet(Box<Ty>)` is a thin pointer like `Set(Box<Ty>)`, and
+      `size_of::<Ty>()` stays 16 bytes, which the in-tree
+      `ty_size_stays_within_d109_ceiling` test pins. `frozenset[int]` is
+      `set[int]`'s immutable sibling under the same one-combination `T0038`
+      gate ([D-122](./D-122-dict-k-v-set-t-key-element-types-are-scoped-to.md)) and
+      shares its runtime object. The Decision's rule that a bare `frozenset`
+      keeps the generic unknown-name message therefore no longer holds: it
+      now gets the `frozenset[int]` advice, and only `type` keeps the
+      generic message. `type[T]` stays rejected as above.
 
 - Consequences:
   - *Easier:* a container value can now cross a function boundary from real
@@ -266,6 +278,12 @@ status: accepted
     (`pycc_codegen/src/lib.rs:4024`/`4036`/`4048`/`4074` and
     `:1528`/`1540`/`1580`) with and without an annotation — so this decision
     adds no new route to them.
+    - Amendment (2026-09-25): for `set[T]` this no longer holds.
+      [#1326](https://github.com/rotnov/pycc/issues/1326) (Part 1 of
+      [#1319](https://github.com/rotnov/pycc/issues/1319)) gives
+      `set[int]` and `frozenset[int]` real truthiness (non-emptiness) and
+      refuses their string conversion as `C0001` before code generation. The
+      `list`, `dict` and `tuple` panics stay as described above.
   - *Irreversible-ish:* `T0053` is now a published diagnostic code, and the
     bare-container `C0001` wording is now a fixture-pinned public contract.
   - *Known inconsistency, recorded rather than fixed:* `type_arg_name_to_ty`

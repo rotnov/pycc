@@ -179,6 +179,11 @@ fn ty_shrinks_after_boxing_dict_and_tuple_d109() {
 
 #[test]
 fn ty_size_stays_within_d109_ceiling() {
+    // Part 1 of #1319 added `Ty::FrozenSet(Box<Ty>)`, the same thin
+    // pointer shape as `Ty::Set`; constructing it here keeps the variant
+    // in the measured set.
+    let frozen = Ty::FrozenSet(Box::new(Ty::Int));
+    assert_eq!(frozen.name(), "frozenset[int]");
     // D-133 added `Ty::Param(Box<String>)`; D-154 added
     // `Ty::Instance(Box<String>)`. Both are a single (thin, 8-byte)
     // pointer -- unlike `Box<str>`, which measured 24 bytes here because
@@ -2392,13 +2397,14 @@ fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
 fn subscripted_type_annotation_with_unknown_base_is_rejected() {
     // #435 (Part D): subscripted type annotations (`ClassName[type_arg]`)
     // are now supported for known class names (PEP 560
-    // `__class_getitem__`). D-228 (issue #918) additionally lowers the four
-    // builtin container families, so this test now pins a name that is
-    // neither -- `frozenset[int]`, which has no `Ty` variant and so still
-    // falls through to the bare-name recursion and its unknown-name message.
+    // `__class_getitem__`). D-228 (issue #918) additionally lowers the
+    // builtin container families -- `frozenset` among them since Part 1 of
+    // #1319 -- so this test now pins a name that is neither: `type[int]`,
+    // which has no `Ty` variant and so still falls through to the bare-name
+    // recursion and its unknown-name message.
     assert_capability_error_message(
-        "x: frozenset[int] = frozenset()\n",
-        "type annotation `frozenset` is not supported yet",
+        "x: type[int] = int\n",
+        "type annotation `type` is not supported yet",
     );
 }
 
@@ -6803,6 +6809,8 @@ fn a_container_return_annotation_lowers_in_every_family() {
         ("list[int]", Ty::List(Box::new(Ty::Int))),
         ("dict[str, int]", Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
         ("set[int]", Ty::Set(Box::new(Ty::Int))),
+        // Part 1 of #1319.
+        ("frozenset[int]", Ty::FrozenSet(Box::new(Ty::Int))),
         (
             "tuple[int, int]",
             Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
