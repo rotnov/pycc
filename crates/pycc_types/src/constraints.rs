@@ -1502,6 +1502,19 @@ pub(crate) fn collect_expr_constraints(
                 {
                     return Ok(Some(Ok(crate::frozenset::check_call_terms(&arg_terms)?)));
                 }
+                // #1331: the solver half of `crate::expr`'s `hash(...)` arm,
+                // guarded like the `frozenset` arm directly above and, like
+                // `crate::expr`'s, against a stdlib module alias spelled
+                // `hash`.
+                if callee == crate::hash::HASH
+                    && !env.shadowed_producers.contains(callee.as_str())
+                    && !env
+                        .std_module_aliases
+                        .iter()
+                        .any(|(alias, _)| alias == callee)
+                {
+                    return Ok(Some(Ok(crate::hash::check_call_terms(&arg_terms)?)));
+                }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }

@@ -788,7 +788,7 @@ fn free_of(resolution: Resolution, rejected: fn(&Ty) -> bool) -> Option<Resoluti
 /// unannotated helper parameter's list), and a `list[list[<inferred>]]`
 /// stored in the node is the same wrong resolution a bare
 /// `list[<inferred>]` is.
-fn contains_infer(ty: &Ty) -> bool {
+pub(crate) fn contains_infer(ty: &Ty) -> bool {
     match ty {
         Ty::Infer => true,
         Ty::List(element) | Ty::Set(element) | Ty::FrozenSet(element) | Ty::Optional(element) => {

@@ -48,6 +48,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 mod exception;
 /// D-244 rule 2's `PyObject*` boundary, runtime half (#1025/#1028).
 pub mod ext_bridge;
+/// `hash()` of `int`, `bool` and int/bool tuples (#1331).
+mod hash;
 mod instance;
 /// `<< >> & | ^` over encoded ints (#1210).
 mod int_bitwise;
@@ -67,6 +69,7 @@ pub use exception::{
     pycc_rt_exception_raise, pycc_rt_exception_raise_with_cause, pycc_rt_exception_type_matches,
     pycc_rt_ext_pending_message, pycc_rt_ext_pending_type,
 };
+pub use hash::{pycc_rt_hash_int, pycc_rt_hash_tuple};
 pub use int_bitwise::{
     pycc_rt_int_and, pycc_rt_int_lshift, pycc_rt_int_or, pycc_rt_int_rshift, pycc_rt_int_xor,
 };

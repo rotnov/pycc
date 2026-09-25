@@ -13,6 +13,7 @@ mod exception;
 mod expr;
 mod foreign;
 mod frozenset;
+mod hash;
 mod module;
 mod monomorphize;
 mod narrow;

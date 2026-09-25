@@ -53,6 +53,7 @@ mod foreign_import;
 mod foreign_len;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
+mod hash;
 
 /// One Part 4 conversion emitter in `foreign_len.rs` (PR 4b of #1083).
 ///
@@ -2824,6 +2825,13 @@ fn emit_expr_unchecked<'ctx>(
                     return foreign_len::emit_to_float(context, builder, module, rt, scalar);
                 }
                 return Scalar::Float(to_float(context, builder, rt, scalar));
+            }
+            // #1331: `hash(x)`, guarded like `float` above; `pycc_types`
+            // admits exactly one argument.
+            if let ("hash", [arg]) = (callee.as_str(), args.as_slice())
+                && !user_functions.contains_key(callee.as_str())
+            {
+                return hash::emit_hash(context, builder, module, rt, user_functions, locals, arg);
             }
             if callee == "bool" && !user_functions.contains_key(callee.as_str()) {
                 // Part 4 of #1026 (PR 4a of #1083). `pycc_types` admits the

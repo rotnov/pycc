@@ -12,6 +12,10 @@ use super::*;
 /// declarations.
 pub(super) struct RtFns<'ctx> {
     pub(super) int_from_i64: FunctionValue<'ctx>,
+    /// #1331: `pycc_rt_hash_int`/`pycc_rt_hash_tuple`, CPython's `hash()`
+    /// of an encoded int and of a tuple's already-hashed lanes.
+    pub(super) hash_int: FunctionValue<'ctx>,
+    pub(super) hash_tuple: FunctionValue<'ctx>,
     pub(super) int_add: FunctionValue<'ctx>,
     pub(super) int_sub: FunctionValue<'ctx>,
     pub(super) int_mul: FunctionValue<'ctx>,
@@ -423,6 +427,14 @@ pub(super) fn declare_rt_functions<'ctx>(
         int_from_i64: declare(
             "pycc_rt_int_from_i64",
             i64_type.fn_type(&[i64_type.into()], false),
+        ),
+        hash_int: declare(
+            "pycc_rt_hash_int",
+            i64_type.fn_type(&[i64_type.into()], false),
+        ),
+        hash_tuple: declare(
+            "pycc_rt_hash_tuple",
+            i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
         ),
         int_untag_checked: declare(
             "pycc_rt_int_untag_checked",

@@ -41,6 +41,31 @@ stay correct once that happens);
 their lengths and positional indices remain raw
 runtime counters.
 
+### `hash()` of an `int`, a `bool` and a tuple ([#1331](https://github.com/rotnov/pycc/issues/1331))
+
+`crates/pycc_rt/src/hash.rs` exports the two functions `hash()` compiles to
+(the typing contract is [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s "`hash()`"
+section). Both return a raw `i64`, which `pycc_codegen` encodes with
+`pycc_rt_int_from_i64`, so a result outside the smallint range becomes a heap
+bigint. Neither allocates a result, raises, or releases its argument.
+
+- `pycc_rt_hash_int(word: i64) -> i64` is CPython's `long_hash`
+  (`Objects/longobject.c`) for one D-061/D-141 encoded int word: the
+  magnitude reduced modulo `2**61 - 1`, the sign reapplied, and `-1` mapped
+  to `-2`. A smallint, including a bool marker, takes a direct path; a heap
+  bigint is borrowed, and its base-`2**32` limbs are folded most significant
+  first, which gives the same residue as CPython's 30-bit digits because the
+  reduction is of the numeric value. A codegen call site that hashes an owned
+  int temporary (`hash(n + n)`) retires it afterwards (D-181).
+- `pycc_rt_hash_tuple(lanes: *const i64, len: usize) -> i64` is CPython's
+  `tuplehash` (`Objects/tupleobject.c`): the xxHash-derived accumulator over
+  already-computed element hashes, including its `1546275796` substitute for
+  an all-ones accumulator. A tuple is an SSA struct of known arity
+  (D-115/D-116), so codegen computes every element's hash (the widened `0`/`1`
+  for a `bool` field, `pycc_rt_hash_int` otherwise), spills them into one
+  entry-block `i64` array, and makes this single call. Tuple fields are
+  borrowed, never released (D-124/D-182).
+
 ## Exceptions
 
 **Current state (PR-22 Part 1, #382, D-173):** exception handling uses

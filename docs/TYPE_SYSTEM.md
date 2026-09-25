@@ -1065,6 +1065,39 @@ same type and is refused with `T0023` when they do not; #1237 tracks it.
 End-to-end tests are in `tests/issue_1214_comprehension_expr.rs`, and the
 byte-exact oracle fixture is `tests/fixtures/comprehension_expr.py`.
 
+### `hash()` ([#1331](https://github.com/rotnov/pycc/issues/1331), Part 1 of [#1327](https://github.com/rotnov/pycc/issues/1327))
+
+`hash(x)` takes exactly one argument and is typed `int`. It compiles for an
+`int`, a `bool`, and a tuple whose elements are all `int` or `bool`, and its
+value is CPython's own on a 64-bit build: an int's magnitude is reduced
+modulo `2**61 - 1` with its sign kept and `-1` mapped to `-2` (so
+`hash(-1) == -2`), a `bool` hashes as `0`/`1`, and a tuple folds its element
+hashes with CPython 3.14's xxHash-derived `tuplehash` (`hash((1, 2)) ==
+-3550055125485641917`). A heap bigint hashes like any other int and is not
+consumed; a tuple hash outside the smallint range is itself a heap-bigint
+`int`. The runtime entry points are in [RUNTIME.md](./RUNTIME.md) ("`hash()`
+of an `int`, a `bool` and a tuple").
+
+The refusals follow CPython's own split. A `list`, `dict` or `set` argument
+is `T0021` "unhashable type: `<ty>`", the `TypeError` CPython raises,
+reported statically. Every other argument -- `str`, `float`, `None`, a
+tuple with any other element type, a `frozenset[int]`, a user-class
+instance -- is hashable in CPython but not yet here, so it is `C0001`
+"`hash()` of `<ty>` is valid Python but not implemented yet". Any other
+argument count is `T0021`.
+
+Both of `pycc_types`' paths check the call through one module
+(`crates/pycc_types/src/hash.rs`): the public-body path and the constraint
+path for an unannotated private helper, which admits an argument whose type
+is still unresolved and leaves it to the final check. A program's own
+`def hash` or `class hash` keeps its meaning, and a stdlib module alias
+spelled `hash` (`import math as hash`) is the module, not the builtin; a
+`class hash` called from an unannotated helper is the pre-existing `C0001`
+"call to builtin `hash` is valid Python but not implemented yet" every
+builtin-named class gets there. Under `--ext` a hash is an ordinary `int`,
+so a hash outside the smallint range cannot be returned across the
+extension boundary (#1040).
+
 ## Error philosophy
 
 Rust-grade messages: primary span + labels, expected/found diff, suggestion machine-applicable where safe (a planned `pycc check --fix` flag would apply trivial ones once implemented; not yet implemented, see `docs/CLI_SPEC.md`), `pycc explain T0021` long-form. Every diagnostic documented + tested. Full registry: [DIAGNOSTICS.md](./DIAGNOSTICS.md).
