@@ -16,7 +16,10 @@ use pycc_hir::{
 };
 use std::collections::HashMap;
 
+mod instance_hash;
 mod receiver_dispatch;
+
+use instance_hash::lower_instance_hash;
 
 pub(super) fn lower_expr(
     expr: &HirExpr,
@@ -310,6 +313,21 @@ pub(super) fn lower_expr(
                 return MirExpr::FrozenSetFrom {
                     source: args.into_iter().next().map(Box::new),
                 };
+            }
+            // #1335 (Part 1 of #1332): `hash(instance)`, under the same
+            // shadow guard as `frozenset` above. `pycc_types` admitted the
+            // class only when `resolve_instance_hash` gives a lowerable
+            // verdict, from the same class table. The `hash` branch of the
+            // type chain below still types every other argument.
+            if callee == "hash"
+                && let [instance] = args.as_slice()
+                && let Ty::Instance(class) = instance.ty()
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                let instance = instance.clone();
+                return lower_instance_hash(instance, &class, scopes, classes);
             }
             let ty = if callee == "print" {
                 Ty::None

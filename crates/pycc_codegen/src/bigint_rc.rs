@@ -620,7 +620,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         | MirExpr::BufferAlloc { .. }
         // Part 1 of #1319: its `.ty()` is always `frozenset[int]`, never
         // `Ty::Int`, so it can never reach this function either.
-        | MirExpr::FrozenSetFrom { .. } => false,
+        | MirExpr::FrozenSetFrom { .. }
+        // #1335: `hash(instance)` *is* `Ty::Int`, and owning: its word is
+        // born by `pycc_rt_int_from_i64`, exactly like `hash(x)`'s `Call`.
+        | MirExpr::InstanceHash { .. } => false,
     }
 }
 

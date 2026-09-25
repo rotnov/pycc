@@ -146,6 +146,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `list[int]` codegen built, as `pycc_rt_int_set_from_int_list`'s
         // own doc comment records.
         | MirExpr::FrozenSetFrom { .. }
+        // #1335: `hash(instance)`'s own work -- a pointer hash, a
+        // `slot_tp_hash` reduction, an int birth -- cannot fail. A user
+        // `__hash__` is the inner `Call`, which guards itself where
+        // `emit_expr` evaluates it, before this node's work runs.
+        | MirExpr::InstanceHash { .. }
         | MirExpr::TupleLiteral(_)
         | MirExpr::Slice { .. }
         | MirExpr::ListPop { .. }

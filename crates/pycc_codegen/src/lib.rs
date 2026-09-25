@@ -2834,7 +2834,8 @@ fn emit_expr_unchecked<'ctx>(
                 return Scalar::Float(to_float(context, builder, rt, scalar));
             }
             // #1331: `hash(x)`, guarded like `float` above; `pycc_types`
-            // admits exactly one argument.
+            // admits exactly one argument. A class instance never arrives
+            // here: `pycc_mir` lowers it to `MirExpr::InstanceHash` (#1335).
             if let ("hash", [arg]) = (callee.as_str(), args.as_slice())
                 && !user_functions.contains_key(callee.as_str())
             {
@@ -3984,6 +3985,16 @@ fn emit_expr_unchecked<'ctx>(
             // on an owned buffer with no arm of their own.
             Scalar::MemoryView(view)
         }
+        MirExpr::InstanceHash { operand, via } => hash::emit_instance_hash(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            operand,
+            *via,
+        ),
         // Part 4 of #1026 (PR 4c of #1083): `x: tuple[float, float, float] =
         // o` at module scope, and the same at any other fixed arity -- the
         // PEP 585 variadic `tuple[float, ...]` stays refused and never
