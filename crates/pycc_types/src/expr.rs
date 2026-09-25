@@ -307,9 +307,11 @@ pub(crate) fn infer_expr_in(
             // module `helper = 1` shadows both a same-named `def` and a
             // builtin at every later call site, and every value binding in
             // the current subset is a primitive, so a shadowed target is
-            // always non-callable. The gate is deliberately callee-first
-            // (before argument inference), uniform with how the local gate
-            // below always behaved. Local diagnostics are preserved exactly:
+            // non-callable -- with one exception: a module-body `object`
+            // binding (a foreign import or a `for` loop target) is callable
+            // since #1313, admitted by the first branch inside the gate. The
+            // gate is deliberately callee-first (before argument inference),
+            // uniform with how the local gate below always behaved. Local diagnostics are preserved exactly:
             // a value-bound local reported `non_callable_binding` before this
             // reordering too, and a local without a binding still falls
             // through to `unbound_local`. In pass 3 the environment is the
