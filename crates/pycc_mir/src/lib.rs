@@ -568,6 +568,20 @@ pub enum MirExpr {
     FrozenSetFrom {
         source: Option<Box<MirExpr>>,
     },
+    /// `hash(x)` of a user-class instance (#1335, Part 1 of #1332), split
+    /// off `Call { callee: "hash" }` in `expr.rs` under the same user-shadow
+    /// guard as `FrozenSetFrom`. `pycc_hir::resolve_instance_hash` chose
+    /// `via` from the class table, which codegen does not see.
+    ///
+    /// For [`InstanceHashVia::Identity`], `operand` is the instance
+    /// expression; for [`InstanceHashVia::Method`], it is an ordinary
+    /// [`MirExpr::Call`] of the mangled `__hash__` with the instance, the
+    /// shape `r.__hash__()` already lowers to, so the call keeps its own
+    /// exception guard and argument ownership. [`MirExpr::ty`] answers `int`.
+    InstanceHash {
+        operand: Box<MirExpr>,
+        via: InstanceHashVia,
+    },
     /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
     /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
     /// into a fixed-arity all-`float` tuple.
@@ -680,6 +694,16 @@ impl MirComprehension {
             MirCompElt::Dict { key, value } => Ty::Dict(Box::new((key.ty(), value.ty()))),
         }
     }
+}
+
+/// How a [`MirExpr::InstanceHash`] hashes its instance (#1335).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceHashVia {
+    /// `object.__hash__`: the operand is the instance, hashed by address.
+    Identity,
+    /// A user `__hash__`: the operand is the call to it, whose `int` or
+    /// `bool` result becomes the hash as CPython's `slot_tp_hash` does.
+    Method,
 }
 
 /// `MirExpr::Instantiate`'s payload, boxed (not inlined into that variant
@@ -862,6 +886,8 @@ impl MirExpr {
             // Part 1 of #1319: the only compiled frozenset type. See the
             // variant's own documentation.
             MirExpr::FrozenSetFrom { .. } => Ty::FrozenSet(Box::new(Ty::Int)),
+            // #1335: `hash()` always yields an `int`.
+            MirExpr::InstanceHash { .. } => Ty::Int,
             // Rebuilt from `arity` rather than read from a field: the
             // annotation this node exists for is a fixed-arity tuple whose
             // every element is `float`, so the arity is the whole type.
@@ -1008,6 +1034,8 @@ impl MirExpr {
                     source.collect_named_expr_bindings(out);
                 }
             }
+            // #1335: the operand is the only child (`hash((r := R()))`).
+            MirExpr::InstanceHash { operand, .. } => operand.collect_named_expr_bindings(out),
             MirExpr::AttrGet { base, .. }
             | MirExpr::ObjAttrGet { base, .. }
             | MirExpr::ObjLen { base }

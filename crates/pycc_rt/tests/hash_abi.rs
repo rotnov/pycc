@@ -1,4 +1,5 @@
-//! #1331 (Part 1 of #1327): the `pycc_rt_hash_*` entry points, called
+//! #1331 (Part 1 of #1327) and #1335 (Part 1 of #1332): the
+//! `pycc_rt_hash_*` entry points, called
 //! through the `rlib` exactly as generated code links them from the
 //! `staticlib`.
 //!
@@ -11,8 +12,8 @@
 //! Every expected value is CPython 3.14's own on a 64-bit build.
 
 use pycc_rt::{
-    pycc_rt_bigint_release, pycc_rt_ext_pending_type, pycc_rt_hash_int, pycc_rt_hash_tuple,
-    pycc_rt_int_lshift, pycc_rt_int_sub,
+    pycc_rt_bigint_release, pycc_rt_ext_pending_type, pycc_rt_hash_int, pycc_rt_hash_pointer,
+    pycc_rt_hash_slot_int, pycc_rt_hash_tuple, pycc_rt_int_lshift, pycc_rt_int_sub,
 };
 
 /// D-061's inline smallint word for `value`.
@@ -104,4 +105,53 @@ fn an_accumulator_of_all_ones_maps_to_cpythons_sentinel() {
         .wrapping_sub(XXPRIME_5)
         .wrapping_mul(inverse(XXPRIME_2));
     assert_eq!(tuple(&[lane as i64]), 1_546_275_796);
+}
+
+#[test]
+fn an_instance_pointer_hashes_like_py_hash_pointer() {
+    assert_eq!(pycc_rt_hash_pointer(0x10 as *const _), 1);
+    assert_eq!(pycc_rt_hash_pointer(0x1234_5670 as *const _), 0x0123_4567);
+    assert_eq!(
+        pycc_rt_hash_pointer(usize::MAX as *const _),
+        -2,
+        "-1 maps to -2"
+    );
+}
+
+/// `-word`, for an encoded `word`.
+fn negate(word: i64) -> i64 {
+    pycc_rt_int_sub(small(0), word)
+}
+
+/// `slot_tp_hash` of `word`, then releases it when it is a heap bigint.
+fn slot_owned(word: i64) -> i64 {
+    let hash = pycc_rt_hash_slot_int(word);
+    pycc_rt_bigint_release(word);
+    hash
+}
+
+#[test]
+fn a_hash_method_result_passes_through_slot_tp_hash_like_cpython() {
+    assert_eq!(pycc_rt_hash_slot_int(small(1 << 61)), 1 << 61);
+    assert_eq!(pycc_rt_hash_slot_int(small(-1)), -2);
+    assert_eq!(pycc_rt_hash_slot_int(small(-2)), -2);
+    assert_eq!(pycc_rt_hash_slot_int(6), 1, "D-141's True marker");
+    assert_eq!(pycc_rt_hash_slot_int(2), 0, "D-141's False marker");
+    // Heap bigints that still fit an i64 are used unreduced.
+    assert_eq!(slot_owned(pow2(62)), 1 << 62);
+    assert_eq!(slot_owned(pycc_rt_int_sub(pow2(63), small(1))), i64::MAX);
+    assert_eq!(slot_owned(negate(pow2(63))), i64::MIN);
+    assert_eq!(
+        slot_owned(pycc_rt_int_sub(negate(pow2(62)), small(1))),
+        -(1 << 62) - 1
+    );
+    // Wider values are reduced like `long_hash`.
+    assert_eq!(slot_owned(pow2(63)), 4);
+    assert_eq!(slot_owned(pycc_rt_int_sub(negate(pow2(63)), small(1))), -5);
+    assert_eq!(slot_owned(negate(pow2(70))), -512);
+    // Borrowed, not consumed.
+    let word = pow2(64);
+    assert_eq!(pycc_rt_hash_slot_int(word), 8);
+    assert_eq!(pycc_rt_hash_slot_int(word), 8);
+    pycc_rt_bigint_release(word);
 }

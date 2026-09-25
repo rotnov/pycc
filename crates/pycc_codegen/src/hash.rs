@@ -14,6 +14,10 @@
 //! `pycc_rt_int_from_i64`, which births a heap bigint when a tuple hash
 //! leaves the smallint range -- a fresh owned word, which is what
 //! `bigint_rc` already classifies a `Call` result as (D-181).
+//!
+//! A class instance never reaches [`emit_hash`]: `pycc_mir` lowers
+//! `hash(instance)` to `MirExpr::InstanceHash` (#1335, Part 1 of #1332),
+//! which [`emit_instance_hash`] emits.
 
 use super::*;
 
@@ -109,6 +113,7 @@ pub(super) fn emit_hash<'ctx>(
             hash_tuple(context, builder, rt, &elements, tuple)
         }
         (_, Scalar::Bool(value)) => hash_bool(context, builder, value),
+        // An instance argument is `MirExpr::InstanceHash`, never this call.
         (_, other) => {
             let word = to_encoded_int(context, builder, other);
             let hash = hash_int_word(builder, rt, word);
@@ -116,6 +121,73 @@ pub(super) fn emit_hash<'ctx>(
             // once hashed, since this path bypasses generic argument
             // handling. A borrowed read releases nothing.
             release_if_int_temporary(context, builder, rt, arg, word);
+            hash
+        }
+    };
+    Scalar::Int(
+        builder
+            .build_call(rt.int_from_i64, &[raw.into()], "hash_result")
+            .expect("build_call should not fail for pycc_rt_int_from_i64")
+            .try_as_basic_value()
+            .expect_basic("pycc_rt_int_from_i64 returns an encoded int")
+            .into_int_value(),
+    )
+}
+
+/// Emits `MirExpr::InstanceHash` (#1335, Part 1 of #1332) and returns its
+/// `int` result.
+///
+/// - [`InstanceHashVia::Identity`](pycc_mir::InstanceHashVia::Identity):
+///   `operand` is the instance, hashed by address through
+///   `pycc_rt_hash_pointer`. An instance is never freed, so a temporary
+///   operand releases nothing.
+/// - [`InstanceHashVia::Method`](pycc_mir::InstanceHashVia::Method):
+///   `operand` is the `__hash__` call, whose own `emit_expr` guard stops a
+///   raising method before this node runs. A `bool` result is its own hash;
+///   an `int` result goes through `pycc_rt_hash_slot_int`, CPython's
+///   `slot_tp_hash` reduction, and its birth reference is then retired.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_instance_hash<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    operand: &MirExpr,
+    via: pycc_mir::InstanceHashVia,
+) -> Scalar<'ctx> {
+    let scalar = emit_expr(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        operand,
+    );
+    let raw = match (via, scalar) {
+        (pycc_mir::InstanceHashVia::Identity, scalar) => {
+            let pointer = expect_instance_pointer(scalar, "a `hash()` identity operand");
+            builder
+                .build_call(rt.hash_pointer, &[pointer.into()], "hash_pointer")
+                .expect("build_call should not fail for pycc_rt_hash_pointer")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_hash_pointer returns an i64")
+                .into_int_value()
+        }
+        (pycc_mir::InstanceHashVia::Method, Scalar::Bool(value)) => {
+            hash_bool(context, builder, value)
+        }
+        (pycc_mir::InstanceHashVia::Method, other) => {
+            let word = to_encoded_int(context, builder, other);
+            let hash = builder
+                .build_call(rt.hash_slot_int, &[word.into()], "hash_slot_int")
+                .expect("build_call should not fail for pycc_rt_hash_slot_int")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_hash_slot_int returns an i64")
+                .into_int_value();
+            release_if_int_temporary(context, builder, rt, operand, word);
             hash
         }
     };

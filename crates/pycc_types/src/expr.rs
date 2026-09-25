@@ -802,7 +802,7 @@ pub(crate) fn infer_expr_in(
                         .iter()
                         .any(|(alias, _)| alias == callee)
                 {
-                    return crate::hash::check_call(arg_tys);
+                    return crate::hash::check_call(arg_tys, env);
                 }
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));

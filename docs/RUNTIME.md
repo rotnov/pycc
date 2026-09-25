@@ -41,13 +41,13 @@ stay correct once that happens);
 their lengths and positional indices remain raw
 runtime counters.
 
-### `hash()` of an `int`, a `bool` and a tuple ([#1331](https://github.com/rotnov/pycc/issues/1331))
+### `hash()` of an `int`, a `bool`, a tuple and an instance ([#1331](https://github.com/rotnov/pycc/issues/1331), [#1335](https://github.com/rotnov/pycc/issues/1335))
 
-`crates/pycc_rt/src/hash.rs` exports the two functions `hash()` compiles to
+`crates/pycc_rt/src/hash.rs` exports the four functions `hash()` compiles to
 (the typing contract is [TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s "`hash()`"
-section). Both return a raw `i64`, which `pycc_codegen` encodes with
+section). All return a raw `i64`, which `pycc_codegen` encodes with
 `pycc_rt_int_from_i64`, so a result outside the smallint range becomes a heap
-bigint. Neither allocates a result, raises, or releases its argument.
+bigint. None allocates a result, raises, or releases its argument.
 
 - `pycc_rt_hash_int(word: i64) -> i64` is CPython's `long_hash`
   (`Objects/longobject.c`) for one D-061/D-141 encoded int word: the
@@ -65,6 +65,19 @@ bigint. Neither allocates a result, raises, or releases its argument.
   for a `bool` field, `pycc_rt_hash_int` otherwise), spills them into one
   entry-block `i64` array, and makes this single call. Tuple fields are
   borrowed, never released (D-124/D-182).
+- `pycc_rt_hash_pointer(pointer: *const c_void) -> i64` is CPython's
+  `_Py_HashPointer`, the identity hash of an instance with no `__hash__` or
+  `__eq__` on its MRO: the address rotated right by 4 bits, with `-1` mapped
+  to `-2`. The pointer is never dereferenced. An instance is never moved or
+  freed, so the hash is stable for the program's lifetime.
+- `pycc_rt_hash_slot_int(word: i64) -> i64` is the `int` branch of CPython's
+  `slot_tp_hash` (`Objects/typeobject.c`), applied to a user `__hash__`'s
+  result: a value that fits 64 bits is the hash as it is, including a heap
+  bigint between `2**62` and `2**63 - 1` or between `-2**63` and
+  `-2**62 - 1`; a wider value is reduced as `pycc_rt_hash_int` does; `-1`
+  becomes `-2`. A bool marker decodes to `0`/`1`. The word is borrowed; the
+  codegen call site retires the method call's birth reference afterwards
+  (D-181). A `-> bool` `__hash__` makes no call: its `0`/`1` is widened.
 
 ## Exceptions
 

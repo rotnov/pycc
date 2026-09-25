@@ -270,13 +270,7 @@ fn a_hashable_but_unimplemented_argument_is_c0001() {
         "C0001",
         "`hash()` of `frozenset[int]` is valid Python but not implemented yet",
     );
-    assert_one_error(
-        "e2e_1331_instance",
-        "class R:\n    def __init__(self) -> None:\n        self.x = 1\n\n\n\
-         print(hash(R()))\n",
-        "C0001",
-        "`hash()` of `R` is valid Python but not implemented yet",
-    );
+    // A class instance is hashed since #1335: `tests/issue_1335_hash_instance.rs`.
     // An unannotated helper whose parameter the constraint path infers
     // from its call site: the argument's type is resolved only after the
     // solver runs, and the final check still refuses it.

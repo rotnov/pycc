@@ -13,10 +13,19 @@
 //!   `tuplehash`. `pycc_codegen` computes every lane first, because a tuple
 //!   is an SSA struct of known arity (D-115/D-116), and makes one call.
 //!
-//! Both return a raw `i64`; `pycc_codegen` encodes it with
-//! `pycc_rt_int_from_i64`, which promotes a tuple hash outside the smallint
-//! range to a heap bigint. Neither function allocates a result, raises or
-//! releases its argument.
+//! #1335 (Part 1 of #1332) adds the two hashes of a user-class instance:
+//!
+//! - [`pycc_rt_hash_pointer`] is `object.__hash__`, CPython's
+//!   `_Py_HashPointer` of the instance's address.
+//! - [`pycc_rt_hash_slot_int`] is the int branch of `slot_tp_hash`, which
+//!   turns a user `__hash__`'s return value into the hash `hash()` yields:
+//!   a value that fits 64 bits is used as is, a larger one is reduced like
+//!   `long_hash`, and `-1` becomes `-2`.
+//!
+//! Every function returns a raw `i64`; `pycc_codegen` encodes it with
+//! `pycc_rt_int_from_i64`, which promotes a hash outside the smallint range
+//! to a heap bigint. None allocates a result, raises or releases its
+//! argument.
 
 use crate::int_encoding::{inline_int_value, to_sign_and_magnitude};
 
@@ -60,6 +69,48 @@ pub extern "C" fn pycc_rt_hash_int(word: i64) -> i64 {
         residue as i64
     };
     if hash == -1 { -2 } else { hash }
+}
+
+/// `object.__hash__` of the instance at `pointer`: CPython's
+/// `_Py_HashPointer`, the address rotated right by four bits, with `-1`
+/// mapped to `-2`. An instance is a `Box::into_raw` allocation that never
+/// moves (`instance.rs`), so the hash is stable for the object's lifetime.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_hash_pointer(pointer: *const std::ffi::c_void) -> i64 {
+    let hash = (pointer as usize as u64).rotate_right(4) as i64;
+    if hash == -1 { -2 } else { hash }
+}
+
+/// The hash `hash(x)` yields when `x.__hash__()` returned the encoded int
+/// word `word` (D-061/D-141): `slot_tp_hash`'s int branch. A value that
+/// fits an `i64` -- every inline smallint, both bool markers, and a heap
+/// bigint in `-2**63..2**63` -- is used unchanged; a wider one is reduced
+/// modulo `2**61 - 1` exactly as [`pycc_rt_hash_int`] does. `-1` then
+/// becomes `-2`. Borrows `word`: it neither retains nor releases a heap
+/// bigint.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_hash_slot_int(word: i64) -> i64 {
+    let value = inline_int_value(word).or_else(|| {
+        let (negative, limbs) = to_sign_and_magnitude(word);
+        if limbs.len() > 2 {
+            return None;
+        }
+        let magnitude = limbs
+            .iter()
+            .rev()
+            .fold(0, |m: u64, &limb| (m << 32) | u64::from(limb));
+        if negative {
+            // `-2**63` is the one magnitude past `i64::MAX` that still fits.
+            0i64.checked_sub_unsigned(magnitude)
+        } else {
+            i64::try_from(magnitude).ok()
+        }
+    });
+    match value {
+        Some(-1) => -2,
+        Some(value) => value,
+        None => pycc_rt_hash_int(word),
+    }
 }
 
 /// CPython's `hash(t)` for a tuple whose element hashes are `lanes[..len]`.
@@ -170,6 +221,44 @@ mod tests {
                 "{limbs:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_pointer_hash_is_the_address_rotated_right_by_four() {
+        assert_eq!(pycc_rt_hash_pointer(std::ptr::null()), 0);
+        assert_eq!(pycc_rt_hash_pointer(0x10 as *const _), 1);
+        assert_eq!(pycc_rt_hash_pointer(0x1234_5670 as *const _), 0x0123_4567);
+        // `0xF...FF` rotates to itself, `-1`, which maps to `-2`.
+        assert_eq!(pycc_rt_hash_pointer(usize::MAX as *const _), -2);
+    }
+
+    fn slot_big(negative: bool, limbs: &[u32]) -> i64 {
+        let word = big(negative, limbs);
+        let hash = pycc_rt_hash_slot_int(word);
+        bigint_release(word);
+        hash
+    }
+
+    #[test]
+    fn a_hash_method_result_is_reduced_like_slot_tp_hash() {
+        assert_eq!(pycc_rt_hash_slot_int(tag_smallint(1 << 61)), 1 << 61);
+        assert_eq!(pycc_rt_hash_slot_int(tag_smallint(-1)), -2);
+        assert_eq!(pycc_rt_hash_slot_int(tag_smallint(-2)), -2);
+        assert_eq!(pycc_rt_hash_slot_int(tag_smallint(7)), 7);
+        assert_eq!(pycc_rt_hash_slot_int(6), 1, "True");
+        assert_eq!(pycc_rt_hash_slot_int(2), 0, "False");
+        // 2**62, 2**63 - 1, -2**63, -2**62 - 1: heap bigints within i64.
+        assert_eq!(slot_big(false, &[0, 1 << 30]), 1 << 62);
+        assert_eq!(slot_big(false, &[u32::MAX, i32::MAX as u32]), i64::MAX);
+        assert_eq!(slot_big(true, &[0, 1 << 31]), i64::MIN);
+        assert_eq!(slot_big(true, &[1, 1 << 30]), -(1 << 62) - 1);
+        // A one-limb heap word (never built by arithmetic) is used as is.
+        assert_eq!(slot_big(false, &[5]), 5);
+        // 2**63, -2**63 - 1, 2**64 + 5, -(2**70): reduced like `long_hash`.
+        assert_eq!(slot_big(false, &[0, 1 << 31]), 4);
+        assert_eq!(slot_big(true, &[1, 1 << 31]), -5);
+        assert_eq!(slot_big(false, &[5, 0, 1]), 13);
+        assert_eq!(slot_big(true, &[0, 0, 1 << 6]), -512);
     }
 
     fn tuple(lanes: &[i64]) -> i64 {
