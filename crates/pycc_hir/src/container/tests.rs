@@ -66,7 +66,7 @@ fn container_gate_rejects_a_set_element_type_codegen_cannot_represent() {
     assert_eq!(error.code, "T0038");
     assert_eq!(
         error.message,
-        "set[str] is not compiled yet (D-122) -- only set[int] is"
+        "set[str] is not compiled yet (D-122) -- only set[int] and a set of a user-class instance are"
     );
 }
 

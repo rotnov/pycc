@@ -17,6 +17,10 @@ use crate::{
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{CompElt, CompIter, HirComprehension, HirExpr, Ty};
 
+/// The `help` of both #1343 comprehension refusals.
+const INSTANCE_SET_COMP_HELP: &str = "use a `for` statement (with `.add(...)` to build a set) \
+     instead; comprehensions over or producing a set of user-class instances are tracked by #1344";
+
 /// The element expressions of one comprehension, by kind.
 pub(crate) enum CompElts<'a> {
     /// `[elt for ...]`.
@@ -56,6 +60,23 @@ pub(crate) fn resolve_comp_iter(
         }
         CompIter::Name(name) => {
             let base_ty = lookup_bound_name(env, local_names, name)?;
+            // #1343 (Part 1 of #1336): a set of user-class instances is not a
+            // comprehension source yet -- the comprehension codegen binds
+            // each element as an `int` word -- so it is refused here rather
+            // than miscompiled (Part 2, #1344).
+            if let Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) = &base_ty
+                && matches!(**elem_ty, Ty::Instance(_))
+            {
+                return Err(Diagnostic::error(
+                    "C0001",
+                    format!(
+                        "a comprehension over `{}` is not compiled yet",
+                        base_ty.name()
+                    ),
+                    Span::new(0, 0),
+                )
+                .with_help(INSTANCE_SET_COMP_HELP));
+            }
             match base_ty {
                 Ty::List(elem_ty) => Ok(*elem_ty),
                 Ty::Dict(kv) => Ok(kv.0),
@@ -104,11 +125,21 @@ pub(crate) fn comp_container_ty(
         }
         CompElts::Set(elt) => {
             let elt_ty = infer_expr_in(env, local_names, elt)?;
+            // #1343: a set of user-class instances is compiled from a
+            // literal and `.add`, but not from a comprehension yet (#1344).
+            if let Ty::Instance(class) = &elt_ty {
+                return Err(Diagnostic::error(
+                    "C0001",
+                    format!("a set comprehension of `{class}` is not compiled yet"),
+                    Span::new(0, 0),
+                )
+                .with_help(INSTANCE_SET_COMP_HELP));
+            }
             if elt_ty != Ty::Int {
                 return Err(Diagnostic::error(
                     "T0038",
                     format!(
-                        "set codegen only supports `set[int]` in v0.2, got a comprehension producing `set[{}]`",
+                        "set comprehension codegen only supports `set[int]` (D-122), got a comprehension producing `set[{}]`",
                         elt_ty.name()
                     ),
                     Span::new(0, 0),

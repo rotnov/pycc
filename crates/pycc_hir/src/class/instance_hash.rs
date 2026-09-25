@@ -203,6 +203,21 @@ fn agrees(a: &InstanceHash, b: &InstanceHash) -> bool {
     ) || a == b
 }
 
+/// Every class deriving from `class`, sorted, so the subclass a refusal
+/// names does not depend on the table's iteration order.
+fn sorted_subclasses<'c>(
+    class: &str,
+    classes: &'c HashMap<String, HirClassDef>,
+) -> Vec<&'c String> {
+    let mut subclasses: Vec<&String> = classes
+        .iter()
+        .filter(|(name, def)| name.as_str() != class && def.mro.iter().any(|m| m == class))
+        .map(|(name, _)| name)
+        .collect();
+    subclasses.sort();
+    subclasses
+}
+
 /// How `hash()` of an instance whose static class is `class` resolves,
 /// against the class table `classes`. See this module's documentation.
 ///
@@ -218,14 +233,7 @@ pub fn resolve_instance_hash(class: &str, classes: &HashMap<String, HirClassDef>
     if matches!(verdict, InstanceHash::Unsupported(_)) {
         return verdict;
     }
-    // Sorted, so the subclass a refusal names does not depend on the
-    // table's iteration order.
-    let mut subclasses: Vec<&String> = classes
-        .iter()
-        .filter(|(name, def)| name.as_str() != class && def.mro.iter().any(|m| m == class))
-        .map(|(name, _)| name)
-        .collect();
-    subclasses.sort();
+    let subclasses = sorted_subclasses(class, classes);
     match subclasses
         .into_iter()
         .find(|subclass| !agrees(&own(subclass, classes), &verdict))
@@ -234,6 +242,90 @@ pub fn resolve_instance_hash(class: &str, classes: &HashMap<String, HirClassDef>
             subclass: subclass.clone(),
         }),
         None => verdict,
+    }
+}
+
+/// #1343 (Part 1 of #1336): how two instances of a class compare when a set
+/// probes for an equal element. `docs/TYPE_SYSTEM.md`'s set section is the
+/// contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceEq {
+    /// No class of the MRO binds `__eq__`: `object.__eq__`, which is
+    /// identity.
+    Identity,
+    /// A user `def __eq__(self, other)`, by its mangled function name.
+    Method(String),
+    /// Valid Python that pycc does not compile yet (`C0001`).
+    Unsupported(EqRefusal),
+}
+
+/// Why a set of a class with a user `__eq__` is not compiled yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EqRefusal {
+    /// `class` binds `__eq__` as something other than a plain instance
+    /// method: a property, a static or class method, or a class attribute.
+    NotAMethod { class: String },
+    /// `subclass` derives from the element class. CPython's
+    /// `do_richcompare` calls a strict subclass's reflected `__eq__` first,
+    /// and a subclass may override `__eq__`; static dispatch on the declared
+    /// class reproduces neither.
+    Subclassed { subclass: String },
+}
+
+impl EqRefusal {
+    /// The `help` line of the `C0001` this refusal becomes.
+    #[must_use]
+    pub fn help(&self) -> String {
+        match self {
+            EqRefusal::NotAMethod { class } => format!(
+                "`{class}` binds `__eq__` as something other than a plain \
+                 `def __eq__(self, other)` method, which pycc does not compile as a set \
+                 element yet"
+            ),
+            EqRefusal::Subclassed { subclass } => format!(
+                "subclass `{subclass}` derives from the element class, and a set compares \
+                 through a user `__eq__` by static dispatch on the declared class, which \
+                 cannot reproduce CPython's subclass-first reflected comparison (#1337)"
+            ),
+        }
+    }
+}
+
+/// How two instances whose static class is `class` compare inside a set,
+/// against the class table `classes`: the first class of the MRO binding
+/// `__eq__` decides, and a user method is admitted only when no class
+/// derives from `class` (the first by sorted name is named otherwise).
+///
+/// The protocol, enum, exception, and generic refusals are the hash side's
+/// ([`resolve_instance_hash`]), which a set element resolves first.
+///
+/// # Panics
+/// When `class` or a class of an MRO is not in `classes`.
+#[must_use]
+pub fn resolve_instance_eq(class: &str, classes: &HashMap<String, HirClassDef>) -> InstanceEq {
+    let def = class_def(classes, class);
+    let Some(owner) = def
+        .mro
+        .iter()
+        .find(|name| binds(class_def(classes, name), EQ))
+    else {
+        return InstanceEq::Identity;
+    };
+    let Some((_, mangled)) = class_def(classes, owner)
+        .methods
+        .iter()
+        .find(|(n, _)| n == EQ)
+    else {
+        return InstanceEq::Unsupported(EqRefusal::NotAMethod {
+            class: owner.clone(),
+        });
+    };
+    let subclasses = sorted_subclasses(class, classes);
+    match subclasses.first() {
+        Some(subclass) => InstanceEq::Unsupported(EqRefusal::Subclassed {
+            subclass: (*subclass).clone(),
+        }),
+        None => InstanceEq::Method(mangled.clone()),
     }
 }
 

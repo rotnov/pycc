@@ -18,6 +18,7 @@ mod module;
 mod monomorphize;
 mod narrow;
 mod redeclaration;
+mod set_element;
 mod solver;
 mod std_receiver;
 mod string_conversion;

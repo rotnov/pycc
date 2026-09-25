@@ -59,8 +59,13 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod set_comp;
 mod signatures;
 mod try_stmt;
+
+#[cfg(test)]
+pub(crate) use set_comp::ContainerDefault;
+pub(crate) use set_comp::{DeferredConstraints, deferred_frozenset};
 pub(crate) use signatures::*;
 
 use std::collections::{HashMap, HashSet};
@@ -79,8 +84,8 @@ use crate::{
 };
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{
-    BinOpKind, CompIter, ContainerReceiver, FStringPart, HirExpr, HirItem, HirModule, HirStmt, Ty,
-    UnaryOpKind, bool_op_result_ty,
+    BinOpKind, CompElt, CompIter, ContainerReceiver, FStringPart, HirExpr, HirItem, HirModule,
+    HirStmt, Ty, UnaryOpKind, bool_op_result_ty,
 };
 
 type TypeTerm = Result<Ty, usize>;
@@ -129,7 +134,7 @@ pub(crate) struct AnnotationDefaultConstraint {
 
 #[derive(Debug, Default)]
 pub(crate) struct SolverConstraints {
-    binops: Vec<BinOpConstraint>,
+    pub(crate) deferred: DeferredConstraints,
     pub(crate) annotation_defaults: Vec<AnnotationDefaultConstraint>,
     non_scalar_local_terms: Vec<usize>,
 }
@@ -802,7 +807,7 @@ pub(crate) fn collect_expr_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
-    binops: &mut Vec<BinOpConstraint>,
+    deferred: &mut DeferredConstraints,
     env: &ConstraintEnvironment<'_, '_>,
     expr: &HirExpr,
 ) -> Result<Option<TypeTerm>, Diagnostic> {
@@ -941,21 +946,21 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?;
+                    collect_expr_constraints(signatures, parents, concrete, deferred, env, expr)?;
                 }
             }
             Ok(Some(Ok(Ty::Str)))
         }
         HirExpr::Compare { left, right, .. } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
-            collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
         }
         // #1212: a chained comparison mirrors `Compare` -- every operand is
         // collected, and the result is `bool`.
         HirExpr::CompareChain { first, links } => {
             for operand in pycc_hir::compare_chain_operands(first, links) {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, operand)?;
             }
             Ok(Some(Ok(Ty::Bool)))
         }
@@ -973,9 +978,10 @@ pub(crate) fn collect_expr_constraints(
             right,
             truth_only,
         } => {
-            let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
+            let left =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
             let right =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, right)?;
             if *truth_only {
                 return Ok(Some(Ok(Ty::Bool)));
             }
@@ -1034,12 +1040,12 @@ pub(crate) fn collect_expr_constraints(
             op: UnaryOpKind::Not,
             operand,
         } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, operand)?;
             Ok(Some(Ok(Ty::Bool)))
         }
         HirExpr::UnaryOp { op, operand } => {
             let operand =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, operand)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, operand)?;
             match operand {
                 Some(Ok(operand_ty)) => Ok(Some(Ok(unary_result_type(*op, operand_ty)?))),
                 Some(operand) => {
@@ -1057,20 +1063,23 @@ pub(crate) fn collect_expr_constraints(
                     } else {
                         BinOpKind::Sub
                     };
-                    binops.push((bin_op, Ok(Ty::Int), operand, result.clone()));
+                    deferred
+                        .binops
+                        .push((bin_op, Ok(Ty::Int), operand, result.clone()));
                     Ok(Some(result))
                 }
                 None => Ok(None),
             }
         }
         HirExpr::BinOp { op, left, right } => {
-            let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
+            let left =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
             let right =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, right)?;
             match (left, right) {
                 (Some(left), Some(right)) => {
                     let result = fresh_term(parents, concrete);
-                    binops.push((*op, left, right, result.clone()));
+                    deferred.binops.push((*op, left, right, result.clone()));
                     Ok(Some(result))
                 }
                 _ => Ok(None),
@@ -1130,7 +1139,7 @@ pub(crate) fn collect_expr_constraints(
             // in-function `I0404`.
             if env.foreign_objects.contains(callee.as_str()) {
                 for arg in args {
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, arg)?;
+                    collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
                 }
                 return Ok(Some(Ok(Ty::Object)));
             }
@@ -1190,7 +1199,7 @@ pub(crate) fn collect_expr_constraints(
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
                 arg_terms.push(collect_expr_constraints(
-                    signatures, parents, concrete, binops, env, arg,
+                    signatures, parents, concrete, deferred, env, arg,
                 )?);
             }
             if callee == "print" {
@@ -1500,7 +1509,9 @@ pub(crate) fn collect_expr_constraints(
                 if callee == crate::frozenset::FROZENSET
                     && !env.shadowed_producers.contains(callee.as_str())
                 {
-                    return Ok(Some(Ok(crate::frozenset::check_call_terms(&arg_terms)?)));
+                    return Ok(Some(crate::frozenset::check_call_terms(
+                        &arg_terms, parents, concrete, deferred,
+                    )?));
                 }
                 // #1331: the solver half of `crate::expr`'s `hash(...)` arm,
                 // guarded like the `frozenset` arm directly above and, like
@@ -1627,7 +1638,7 @@ pub(crate) fn collect_expr_constraints(
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
                 element_terms.push(collect_expr_constraints(
-                    signatures, parents, concrete, binops, env, element,
+                    signatures, parents, concrete, deferred, env, element,
                 )?);
             }
             if let Some(element_ty) = homogeneous_private_solver_scalar_list_element(&element_terms)
@@ -1662,12 +1673,12 @@ pub(crate) fn collect_expr_constraints(
                 && let Some(term) = env.bindings.get(buffer_name).cloned()
                 && let Some(Ty::MemoryView) = resolved_term(term, parents, concrete)
             {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, index)?;
                 return Ok(Some(Ok(Ty::Float)));
             }
             let base_term =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
-            collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, index)?;
             // D-146 (#239): when the base resolves to a `Ty::List` element-
             // type carrier (produced by the `ListLiteral` arm above or a
             // `Ty::List`-bound name), extract the scalar element type -- the
@@ -1709,9 +1720,9 @@ pub(crate) fn collect_expr_constraints(
             stop,
             step,
         } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for bound in [start, stop, step].into_iter().flatten() {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, bound)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, bound)?;
             }
             Ok(None)
         }
@@ -1719,7 +1730,7 @@ pub(crate) fn collect_expr_constraints(
         // order), only to propagate its own genuine errors.
         HirExpr::ListAppend { list, value } => {
             for sub in list.attr_expr().into_iter().chain([value.as_ref()]) {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, sub)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, sub)?;
             }
             Ok(None)
         }
@@ -1729,8 +1740,8 @@ pub(crate) fn collect_expr_constraints(
         // key and value only to keep propagating genuine errors.
         HirExpr::DictLiteral(pairs) => {
             for (key, value) in pairs {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
-                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, key)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
             }
             Ok(None)
         }
@@ -1740,7 +1751,7 @@ pub(crate) fn collect_expr_constraints(
         // element only to keep propagating genuine errors.
         HirExpr::SetLiteral(elements) => {
             for element in elements {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, element)?;
             }
             Ok(None)
         }
@@ -1750,7 +1761,7 @@ pub(crate) fn collect_expr_constraints(
         // every element only to keep propagating genuine errors.
         HirExpr::TupleLiteral(elements) => {
             for element in elements {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, element)?;
             }
             Ok(None)
         }
@@ -1781,7 +1792,7 @@ pub(crate) fn collect_expr_constraints(
         HirExpr::ListPop {
             list: ContainerReceiver::Attr(receiver),
         } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, receiver)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, receiver)?;
             Ok(None)
         }
         HirExpr::DictGetOrDefault { dict, key, default } => {
@@ -1790,12 +1801,12 @@ pub(crate) fn collect_expr_constraints(
                 .into_iter()
                 .chain([key.as_ref(), default.as_ref()])
             {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, sub)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, sub)?;
             }
             Ok(None)
         }
         HirExpr::SetAdd { set: _, value } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
             Ok(None)
         }
         // D-154 (Part 1 of #375): same reasoning as `Subscript`/`ListPop`
@@ -1816,7 +1827,7 @@ pub(crate) fn collect_expr_constraints(
         // missing type term itself remains unchanged.
         HirExpr::AttrGet { base, .. } => {
             let base_term =
-                collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             // Part 2 of #1026 (#1081): `numpy.pi` is a term, not a hole.
             // Discarding it here would recreate one level up the exact dead
             // end the `Name` arm above was carved out to avoid: an
@@ -1840,9 +1851,9 @@ pub(crate) fn collect_expr_constraints(
             Ok(None)
         }
         HirExpr::MethodCall { base, args, .. } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, arg)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(None)
         }
@@ -1859,7 +1870,7 @@ pub(crate) fn collect_expr_constraints(
                 signatures,
                 parents,
                 concrete,
-                binops,
+                deferred,
                 env,
                 reading.as_ref().unwrap_or(call),
             )
@@ -1878,7 +1889,7 @@ pub(crate) fn collect_expr_constraints(
         // not here.
         HirExpr::GenericClassInstantiate { class, args, .. } => {
             for arg in args {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, arg)?;
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(Some(Ok(Ty::Instance(Box::new(class.clone())))))
         }
@@ -1906,7 +1917,7 @@ pub(crate) fn collect_expr_constraints(
         // since a walrus's value *is* the expression's value (mirroring
         // `infer_expr_in`'s own `NamedExpr` arm exactly).
         HirExpr::NamedExpr { name: _, value } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, value)
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, value)
         }
         // #1254 (D-250): the loop variable is bound in a clone, so it never
         // becomes a binding of the enclosing scope. `bind_comp_loop_var`
@@ -1921,13 +1932,26 @@ pub(crate) fn collect_expr_constraints(
                 signatures,
                 parents,
                 concrete,
-                binops,
+                deferred,
                 &mut scoped,
                 &comp.var,
                 &comp.iter,
             )?;
+            let mut elt_term = None;
             for sub in comp.body_exprs() {
-                collect_expr_constraints(signatures, parents, concrete, binops, &scoped, sub)?;
+                elt_term = collect_expr_constraints(
+                    signatures, parents, concrete, deferred, &scoped, sub,
+                )?;
+            }
+            // #1343: a set comprehension's container is a fresh term with a
+            // `set[int]` default unless its element is already `int`, so a
+            // declared `set[R]` it meets is not a false `T0022`. The element
+            // is the last body expression (`body_exprs` puts the condition
+            // first).
+            if let CompElt::Set(_) = comp.elt {
+                return Ok(Some(set_comp::set_comp_container(
+                    elt_term, parents, concrete, deferred,
+                )));
             }
             Ok(Some(Ok(crate::comprehension::comp_container_of(&comp.elt))))
         }
@@ -1962,13 +1986,13 @@ fn bind_named_expr_targets(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
-    binops: &mut Vec<BinOpConstraint>,
+    deferred: &mut DeferredConstraints,
     env: &mut ConstraintEnvironment<'_, '_>,
     expr: &HirExpr,
 ) -> Result<(), Diagnostic> {
     match expr {
         HirExpr::NamedExpr { name, value } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, value)?;
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, value)?;
             // Issue #771 (D-199), mirrored here for the walrus operator: a
             // `:=` target is unconditionally (re)bound wherever it is
             // evaluated, so any earlier `def` shadow, maybe-bound marker, or
@@ -1977,7 +2001,8 @@ fn bind_named_expr_targets(
             env.defs_rebound.remove(name.as_str());
             env.maybe_bindings.remove(name.as_str());
             env.opaque_bindings.remove(name.as_str());
-            let term = collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            let term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, value)?;
             // Round-11 review finding 2: a walrus rebinds its target, so it
             // drops any artifact-owned buffer provenance the name carried,
             // exactly as the `Assign` arm does and after the value is
@@ -2006,7 +2031,7 @@ fn bind_named_expr_targets(
         | HirExpr::Super => Ok(()),
         HirExpr::ListPop { list } => {
             if let Some(receiver) = list.attr_expr() {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, receiver)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, receiver)?;
             }
             Ok(())
         }
@@ -2014,42 +2039,42 @@ fn bind_named_expr_targets(
         HirExpr::Comprehension(_) => Ok(()),
         HirExpr::Call { args, .. } => {
             for arg in args {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(())
         }
         HirExpr::BinOp { left, right, .. }
         | HirExpr::Compare { left, right, .. }
         | HirExpr::BoolOp { left, right, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, left)?;
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, right)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, left)?;
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, right)
         }
         HirExpr::CompareChain { first, links } => {
             for operand in pycc_hir::compare_chain_operands(first, links) {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, operand)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, operand)?;
             }
             Ok(())
         }
         HirExpr::UnaryOp { operand, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, operand)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, operand)
         }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
-                    bind_named_expr_targets(signatures, parents, concrete, binops, env, inner)?;
+                    bind_named_expr_targets(signatures, parents, concrete, deferred, env, inner)?;
                 }
             }
             Ok(())
         }
         HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
             for e in es {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, e)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, e)?;
             }
             Ok(())
         }
         HirExpr::Subscript { base, index } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, index)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, base)?;
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, index)
         }
         HirExpr::Slice {
             base,
@@ -2057,25 +2082,25 @@ fn bind_named_expr_targets(
             stop,
             step,
         } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, base)?;
             for bound in [start, stop, step].into_iter().flatten() {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, bound)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, bound)?;
             }
             Ok(())
         }
         HirExpr::ListAppend { list, value } => {
             for sub in list.attr_expr().into_iter().chain([value.as_ref()]) {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, sub)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, sub)?;
             }
             Ok(())
         }
         HirExpr::SetAdd { value, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, value)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, value)
         }
         HirExpr::DictLiteral(pairs) => {
             for (k, v) in pairs {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, k)?;
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, v)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, k)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, v)?;
             }
             Ok(())
         }
@@ -2085,26 +2110,26 @@ fn bind_named_expr_targets(
                 .into_iter()
                 .chain([key.as_ref(), default.as_ref()])
             {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, sub)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, sub)?;
             }
             Ok(())
         }
         HirExpr::AttrGet { base, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, base)
         }
         HirExpr::MethodCall { base, args, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, base)?;
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(())
         }
         HirExpr::ReceiverDispatchedCall { call, .. } => {
-            bind_named_expr_targets(signatures, parents, concrete, binops, env, call)
+            bind_named_expr_targets(signatures, parents, concrete, deferred, env, call)
         }
         HirExpr::GenericClassInstantiate { args, .. } => {
             for arg in args {
-                bind_named_expr_targets(signatures, parents, concrete, binops, env, arg)?;
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }
             Ok(())
         }
@@ -2124,7 +2149,7 @@ fn bind_comp_loop_var(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
-    binops: &mut Vec<BinOpConstraint>,
+    deferred: &mut DeferredConstraints,
     env: &mut ConstraintEnvironment<'_, '_>,
     var: &str,
     iter: &CompIter,
@@ -2133,7 +2158,7 @@ fn bind_comp_loop_var(
         CompIter::Range { start, stop, step } => {
             for (position, expr) in [("start", start), ("stop", stop), ("step", step)] {
                 if let Some(term @ Err(_)) =
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
+                    collect_expr_constraints(signatures, parents, concrete, deferred, env, expr)?
                 {
                     unify_terms(
                         term,
@@ -2175,15 +2200,14 @@ fn bind_comp_loop_var(
 /// an unannotated private helper (the only case the solver runs for) failed
 /// with a spurious `T0021` "not bound before this use". The container type
 /// is exact: the check phase's element gate (D-119) admits only
-/// `list[int]`, `set[int]` and `dict[str, int]`.
-fn bind_comp_target(env: &mut ConstraintEnvironment<'_, '_>, target: &str, container: Ty) {
+/// `list[int]`, `set[int]` and `dict[str, int]` -- for a set comprehension,
+/// a term defaulted to `set[int]` (#1343, [`set_comp::set_comp_container`]).
+fn bind_comp_target(env: &mut ConstraintEnvironment<'_, '_>, target: &str, container: TypeTerm) {
     env.defs_rebound.remove(target);
     env.maybe_bindings.remove(target);
     env.opaque_bindings.remove(target);
     env.rebind_over_owned_buffer(target);
-    env.bindings
-        .entry(target.to_string())
-        .or_insert(Ok(container));
+    env.bindings.entry(target.to_string()).or_insert(container);
 }
 
 pub(crate) fn collect_block_constraints(
@@ -2232,7 +2256,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         len_arg,
                     )?;
@@ -2247,7 +2271,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     value,
                 )?;
@@ -2325,7 +2349,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         len_arg,
                     )?;
@@ -2362,7 +2386,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     value,
                 )? {
@@ -2428,7 +2452,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     expr,
                 )?;
@@ -2436,7 +2460,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     expr,
                 )?;
@@ -2451,7 +2475,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     test,
                 )?;
@@ -2459,7 +2483,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     test,
                 )?;
@@ -2517,7 +2541,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     test,
                 )?;
@@ -2525,7 +2549,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     test,
                 )?;
@@ -2576,7 +2600,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         expr,
                     )? {
@@ -2706,7 +2730,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     iter,
                 )?;
@@ -2830,7 +2854,7 @@ pub(crate) fn collect_block_constraints(
                                     signatures,
                                     parents,
                                     concrete,
-                                    &mut constraints.binops,
+                                    &mut constraints.deferred,
                                     env,
                                     bound,
                                 )?;
@@ -2854,7 +2878,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         expr,
                     )?,
@@ -2910,7 +2934,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     key,
                 )?;
@@ -2918,7 +2942,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     value,
                 )?;
@@ -2933,7 +2957,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     base,
                 )?;
@@ -2941,7 +2965,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     value,
                 )?;
@@ -2983,7 +3007,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     var,
                     iter,
@@ -2993,16 +3017,16 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         cond,
                     )?;
                 }
-                collect_expr_constraints(
+                let elt_term = collect_expr_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     elt,
                 )?;
@@ -3018,9 +3042,17 @@ pub(crate) fn collect_block_constraints(
                 // `var` needs no such call: it is the D-117 synthesized
                 // internal loop name (see `HirStmt::ListCompAssign`'s own
                 // doc comment), which cannot collide with a source name.
+                //
+                // #1343: a set comprehension's container is the same
+                // defaulted term as the expression form's.
                 let container = match stmt {
-                    HirStmt::SetCompAssign { .. } => Ty::Set(Box::new(Ty::Int)),
-                    _ => Ty::List(Box::new(Ty::Int)),
+                    HirStmt::SetCompAssign { .. } => set_comp::set_comp_container(
+                        elt_term,
+                        parents,
+                        concrete,
+                        &mut constraints.deferred,
+                    ),
+                    _ => Ok(Ty::List(Box::new(Ty::Int))),
                 };
                 bind_comp_target(env, target, container);
             }
@@ -3036,7 +3068,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     var,
                     iter,
@@ -3046,7 +3078,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         cond,
                     )?;
@@ -3055,7 +3087,7 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     key,
                 )?;
@@ -3063,19 +3095,19 @@ pub(crate) fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     value,
                 )?;
                 // Round-11 review finding 2: see the list/set arm above.
-                bind_comp_target(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+                bind_comp_target(env, target, Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))));
             }
             HirStmt::Match { subject, cases } => {
                 collect_expr_constraints(
                     signatures,
                     parents,
                     concrete,
-                    &mut constraints.binops,
+                    &mut constraints.deferred,
                     env,
                     subject,
                 )?;
@@ -3173,7 +3205,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         exc_expr,
                     );
@@ -3183,7 +3215,7 @@ pub(crate) fn collect_block_constraints(
                         signatures,
                         parents,
                         concrete,
-                        &mut constraints.binops,
+                        &mut constraints.deferred,
                         env,
                         cause_expr,
                     );

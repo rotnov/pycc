@@ -67,7 +67,10 @@ mod enum_class;
 mod init;
 mod init_slot;
 mod instance_hash;
-pub use instance_hash::{HashRefusal, InstanceHash, InstanceHashLowering, resolve_instance_hash};
+pub use instance_hash::{
+    EqRefusal, HashRefusal, InstanceEq, InstanceHash, InstanceHashLowering, resolve_instance_eq,
+    resolve_instance_hash,
+};
 mod mro;
 pub use mro::flat_attr_layout;
 mod protocol;

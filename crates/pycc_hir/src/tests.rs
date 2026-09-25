@@ -6762,7 +6762,7 @@ fn a_container_annotation_runs_the_same_element_gate_as_a_container_literal() {
         (
             "def f(x: set[str]) -> None:\n    return\n",
             "T0038",
-            "set[str] is not compiled yet (D-122) -- only set[int] is",
+            "set[str] is not compiled yet (D-122) -- only set[int] and a set of a user-class instance are",
         ),
         (
             "def f(x: tuple[int, str]) -> None:\n    return\n",

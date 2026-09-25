@@ -8,6 +8,11 @@
 //! assignable to `frozenset[int]` (or back) because `is_assignable` is
 //! structural. The only conversion is an explicit `frozenset(x)`.
 //!
+//! #1343 widens the admitted sources to a `set`/`frozenset` of a user-class
+//! instance; the result keeps the source's element type ([`frozenset_of`]).
+//! On the constraint path a source still unresolved when the call is checked
+//! is deferred to `constraints::set_comp`'s container defaults.
+//!
 //! The call is checked on both of this crate's paths: the public-body path
 //! (`crate::expr::infer_expr_in`) and the constraint path for unannotated
 //! private helpers (`crate::constraints`). Both place the arm *after* every
@@ -30,10 +35,31 @@ pub(crate) fn frozenset_int() -> Ty {
 }
 
 /// Whether `ty` is a value `frozenset(...)` can copy its elements from: a
-/// `set[int]`, a `frozenset[int]` or a `list[int]`.
+/// `set[int]`, a `frozenset[int]` or a `list[int]`, or (#1343) a set or
+/// frozenset of a user-class instance. `list[R]` is `T0034` already.
 fn is_admitted_source(ty: &Ty) -> bool {
-    matches!(ty, Ty::Set(element) | Ty::FrozenSet(element) | Ty::List(element) if **element == Ty::Int)
+    match ty {
+        Ty::Set(element) | Ty::FrozenSet(element) => {
+            matches!(**element, Ty::Int | Ty::Instance(_))
+        }
+        Ty::List(element) => **element == Ty::Int,
+        _ => false,
+    }
 }
+
+/// The frozenset `frozenset(source)` produces: the element type of a set or
+/// frozenset source (the stored words and hashes are copied, #1343), and
+/// `frozenset[int]` otherwise.
+fn frozenset_of(source: &Ty) -> Ty {
+    match source {
+        Ty::Set(element) | Ty::FrozenSet(element) => Ty::FrozenSet(element.clone()),
+        _ => frozenset_int(),
+    }
+}
+
+/// The admitted sources, for both help lines.
+const SOURCES_HELP: &str = "a `set[int]`, `frozenset[int]` or `list[int]` value, or a set or \
+                            frozenset of a hashable user class";
 
 /// `T0021` for a call with more than one argument.
 fn wrong_arity(count: usize) -> Diagnostic {
@@ -42,7 +68,7 @@ fn wrong_arity(count: usize) -> Diagnostic {
         format!("`frozenset` expects at most 1 argument, got {count}"),
         Span::new(0, 0),
     )
-    .with_help("pass no argument, or one `set[int]`, `frozenset[int]` or `list[int]` value")
+    .with_help(format!("pass no argument, or one {SOURCES_HELP}"))
 }
 
 /// `T0021` for an argument whose type is not an admitted source.
@@ -55,29 +81,41 @@ fn wrong_source(ty: &Ty) -> Diagnostic {
         ),
         Span::new(0, 0),
     )
-    .with_help("pass a `set[int]`, `frozenset[int]` or `list[int]` value")
+    .with_help(format!("pass {SOURCES_HELP}"))
 }
 
 /// Checks a `frozenset(...)` call whose argument types are all known (the
-/// public-body path) and returns `frozenset[int]`.
+/// public-body path) and returns the frozenset it produces.
 pub(crate) fn check_call(arg_tys: &[Ty]) -> Result<Ty, Diagnostic> {
     match arg_tys {
         [] => Ok(frozenset_int()),
-        [source] if is_admitted_source(source) => Ok(frozenset_int()),
+        [source] if is_admitted_source(source) => Ok(frozenset_of(source)),
         [source] => Err(wrong_source(source)),
         _ => Err(wrong_arity(arg_tys.len())),
     }
 }
 
-/// The constraint-path twin of [`check_call`]. An argument whose term is
-/// still unresolved is admitted, because the result never depends on it:
-/// the final check pass (`check_call` through `infer_expr_in`) validates it
-/// once it is known -- the lenient-until-known pattern `float` already uses.
-pub(crate) fn check_call_terms<V>(arg_terms: &[Option<Result<Ty, V>>]) -> Result<Ty, Diagnostic> {
+/// The constraint-path twin of [`check_call`], returning the result's term.
+/// An argument whose term is still unresolved is admitted -- the final check
+/// pass (`check_call` through `infer_expr_in`) validates it once it is known,
+/// the lenient-until-known pattern `float` already uses -- and its result is
+/// a fresh term the solver defaults once the argument settles (#1343,
+/// `constraints::set_comp`), since the result's element is the argument's.
+pub(crate) fn check_call_terms(
+    arg_terms: &[Option<Result<Ty, usize>>],
+    parents: &mut Vec<usize>,
+    concrete: &mut Vec<Option<Ty>>,
+    deferred: &mut crate::DeferredConstraints,
+) -> Result<Result<Ty, usize>, Diagnostic> {
     match arg_terms {
-        [] => Ok(frozenset_int()),
+        [] => Ok(Ok(frozenset_int())),
         [Some(Ok(source))] if !is_admitted_source(source) => Err(wrong_source(source)),
-        [_] => Ok(frozenset_int()),
+        [Some(Ok(source))] => Ok(Ok(frozenset_of(source))),
+        [Some(Err(var))] => Ok(match crate::resolved_term(Err(*var), parents, concrete) {
+            Some(source) => Ok(frozenset_of(&source)),
+            None => crate::deferred_frozenset(Some(*var), parents, concrete, deferred),
+        }),
+        [None] => Ok(crate::deferred_frozenset(None, parents, concrete, deferred)),
         _ => Err(wrong_arity(arg_terms.len())),
     }
 }
@@ -133,21 +171,71 @@ mod tests {
 
     #[test]
     fn the_constraint_twin_is_lenient_only_for_an_unresolved_term() {
-        let empty: [Option<Result<Ty, usize>>; 0] = [];
-        assert_eq!(check_call_terms(&empty).unwrap(), frozenset_int());
-        assert_eq!(
-            check_call_terms::<usize>(&[Some(Err(3))]).unwrap(),
-            frozenset_int()
-        );
-        assert_eq!(check_call_terms::<usize>(&[None]).unwrap(), frozenset_int());
-        assert_eq!(
-            check_call_terms::<usize>(&[Some(Ok(set()))]).unwrap(),
-            frozenset_int()
-        );
-        let err = check_call_terms::<usize>(&[Some(Ok(Ty::Int))]).unwrap_err();
+        let mut parents = vec![0];
+        let mut concrete: Vec<Option<Ty>> = vec![None];
+        let mut deferred = crate::DeferredConstraints::default();
+        let mut call = |terms: &[Option<Result<Ty, usize>>]| {
+            check_call_terms(terms, &mut parents, &mut concrete, &mut deferred)
+        };
+        assert_eq!(call(&[]).unwrap(), Ok(frozenset_int()));
+        // An unresolved argument (variable 0) and an opaque one each get a
+        // fresh, deferred result term (variables 1 and 2).
+        assert_eq!(call(&[Some(Err(0))]).unwrap(), Err(1));
+        assert_eq!(call(&[None]).unwrap(), Err(2));
+        assert_eq!(call(&[Some(Ok(set()))]).unwrap(), Ok(frozenset_int()));
+        let err = call(&[Some(Ok(Ty::Int))]).unwrap_err();
         assert_eq!(err.code, "T0021");
-        let err = check_call_terms::<usize>(&[None, None]).unwrap_err();
+        let err = call(&[None, None]).unwrap_err();
         assert_eq!(err.message, "`frozenset` expects at most 1 argument, got 2");
+        assert_eq!(
+            deferred.container_defaults,
+            vec![
+                crate::ContainerDefault::FrozenSetOf {
+                    source: Some(0),
+                    result: 1
+                },
+                crate::ContainerDefault::FrozenSetOf {
+                    source: None,
+                    result: 2
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_resolved_source_term_gives_its_own_element() {
+        let instance = Ty::Instance(Box::new("R".to_string()));
+        let mut parents = vec![0, 1];
+        let mut concrete = vec![
+            Some(Ty::Set(Box::new(instance.clone()))),
+            Some(Ty::List(Box::new(Ty::Int))),
+        ];
+        let mut deferred = crate::DeferredConstraints::default();
+        assert_eq!(
+            check_call_terms(&[Some(Err(0))], &mut parents, &mut concrete, &mut deferred).unwrap(),
+            Ok(Ty::FrozenSet(Box::new(instance.clone())))
+        );
+        assert_eq!(
+            check_call_terms(&[Some(Err(1))], &mut parents, &mut concrete, &mut deferred).unwrap(),
+            Ok(frozenset_int())
+        );
+        assert!(deferred.container_defaults.is_empty());
+    }
+
+    #[test]
+    fn a_set_or_frozenset_of_an_instance_is_an_admitted_source() {
+        let instance = Ty::Instance(Box::new("R".to_string()));
+        for source in [
+            Ty::Set(Box::new(instance.clone())),
+            Ty::FrozenSet(Box::new(instance.clone())),
+        ] {
+            assert_eq!(
+                check_call(&[source]).unwrap(),
+                Ty::FrozenSet(Box::new(instance.clone()))
+            );
+        }
+        let err = check_call(&[Ty::List(Box::new(instance))]).unwrap_err();
+        assert!(err.help.unwrap().contains("hashable user class"));
     }
 
     #[test]
