@@ -145,4 +145,5 @@ status: accepted
   change, and now also reads the type-alias, import and module-item tables,
   solely to choose the unresolved-base wording. Which bases get the new
   message, and which rebindings keep the unknown-class text, is specified in
-  the `validate_bases` paragraph of `docs/DIAGNOSTICS.md`.
+  the paragraph of `docs/DIAGNOSTICS.md` that begins "A class whose base
+  names one of the eleven builtin types".
