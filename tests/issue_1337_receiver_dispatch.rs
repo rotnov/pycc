@@ -1,0 +1,209 @@
+//! End-to-end proof for receiver-exact inherited methods ([#1337], D-254).
+//!
+//! An inherited method runs the body its receiver's static class resolves
+//! to: `self.m()`, `super()`, class-attribute reads, property accessors,
+//! `isinstance(self, ...)` and classmethod calls inside an inherited body
+//! are decided for the subclass, as CPython decides them at run time. The
+//! byte-exact oracle fixtures are `tests/fixtures/receiver_exact_dispatch.py`
+//! and `tests/fixtures/receiver_exact_protocol.py` (registered in
+//! `tests/conformance/classes.rs`); this file pins their expected output
+//! without the oracle, the honest refusals where a copy cannot be typed, and
+//! the hosted `--ext` arm.
+//!
+//! [#1337]: https://github.com/rotnov/pycc/issues/1337
+
+use pycc_scratch::ScratchDir;
+use std::path::Path;
+use std::process::{Command, Output};
+
+fn pycc() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).replace("\r\n", "\n")
+}
+
+/// Builds `source` and returns the built program's stdout.
+fn build_and_run(category: &str, source: &str) -> String {
+    let dir = ScratchDir::new(category).expect("scratch");
+    let path = dir.join("subject.py");
+    std::fs::write(&path, source).expect("write the subject");
+    let exe = dir.join("subject");
+    let build = pycc()
+        .arg("build")
+        .arg(&path)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{source}: {}", text(&build.stderr));
+    let run: Output = Command::new(&exe)
+        .output()
+        .expect("the program should spawn");
+    assert!(run.status.success(), "{source}: {}", text(&run.stderr));
+    text(&run.stdout)
+}
+
+fn fixture(name: &str) -> String {
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name),
+    )
+    .expect("read the fixture")
+}
+
+/// The oracle fixture's CPython 3.14.7 output, pinned so the proof runs
+/// without the oracle too.
+#[test]
+fn the_dispatch_fixture_prints_what_cpython_prints() {
+    assert_eq!(
+        build_and_run("e2e_1337_dispatch", &fixture("receiver_exact_dispatch.py")),
+        "2 1\n2 12\n20\n2 3 1\nTrue False\n6 20 10\n3 2\n13 12 1\n7\n42\n111 1111 11\n\
+         r! 1!\n2\n3 2\n1\n2\n2 12\n101 1\n"
+    );
+}
+
+#[test]
+fn the_protocol_fixture_prints_what_cpython_prints() {
+    assert_eq!(
+        build_and_run("e2e_1337_protocol", &fixture("receiver_exact_protocol.py")),
+        "2 1\n102 101\n"
+    );
+}
+
+/// The issue's own reproduction: a template method on the base calls a hook
+/// the subclass overrides.
+#[test]
+fn the_issue_reproduction_runs_the_override() {
+    let source = "class Base:\n    def run(self) -> str:\n        return self.step()\n    \
+                  def step(self) -> str:\n        return \"base\"\n\n\
+                  class Child(Base):\n    def step(self) -> str:\n        return \"child\"\n\n\
+                  print(Child().run())\nprint(Base().run())\n";
+    assert_eq!(build_and_run("e2e_1337_issue", source), "child\nbase\n");
+}
+
+/// A `super()` inside an inherited body continues along the *receiver's*
+/// MRO: in a diamond, `B.f`'s `super()` reaches the sibling `C` for a `D`.
+#[test]
+fn super_in_an_inherited_body_follows_the_receivers_mro() {
+    let source = "class A:\n    def f(self) -> str:\n        return \"A\"\n\
+                  class B(A):\n    def f(self) -> str:\n        return \"B->\" + super().f()\n\
+                  class C(A):\n    def f(self) -> str:\n        return \"C\"\n\
+                  class D(B, C):\n    def f(self) -> str:\n        return \"D->\" + super().f()\n\
+                  print(D().f())\nprint(B().f())\n";
+    assert_eq!(build_and_run("e2e_1337_diamond", source), "D->B->C\nB->A\n");
+}
+
+/// Runs `pycc check --error-format json` and returns the output, asserting
+/// the check failed.
+fn check_json_fails(category: &str, source: &str) -> String {
+    let dir = ScratchDir::new(category).expect("scratch");
+    let path = dir.join("subject.py");
+    std::fs::write(&path, source).expect("write the subject");
+    let output = pycc()
+        .arg("check")
+        .arg("--error-format")
+        .arg("json")
+        .arg(&path)
+        .output()
+        .expect("pycc should spawn");
+    assert!(!output.status.success(), "{source} was accepted");
+    let mut rendered = text(&output.stdout);
+    rendered.push_str(&text(&output.stderr));
+    rendered
+}
+
+/// Where a copy compiled for the subclass cannot be typed -- the receiver
+/// escapes into a slot typed as the base, or the body uses a capability the
+/// subclass lacks -- the program is refused, never compiled for the base
+/// class, and the diagnostic names the subclass the body was compiled for.
+#[test]
+fn an_untypeable_copy_is_refused_and_names_the_subclass() {
+    for (source, code, note) in [
+        (
+            "class A:\n    def m(self) -> int:\n        return 1\n    def me(self) -> A:\n        \
+             return self\nclass B(A):\n    def m(self) -> int:\n        return 2\n\
+             print(B().me().m())\n",
+            "\"T0022\"",
+            "while compiling `A.me` inherited by subclass `B`",
+        ),
+        (
+            "class A:\n    def m(self) -> int:\n        return 1\n    def g(self) -> int:\n        \
+             return helper(self)\nclass B(A):\n    def m(self) -> int:\n        return 2\n\
+             def helper(a: A) -> int:\n    return a.m()\nprint(B().g())\n",
+            "\"T0021\"",
+            "while compiling `A.g` inherited by subclass `B`",
+        ),
+        (
+            "from dataclasses import dataclass\n@dataclass\nclass A:\n    x: int\n    \
+             def show(self) -> None:\n        print(self)\nclass B(A):\n    pass\nB(1).show()\n",
+            "\"C0001\"",
+            "while compiling `A.show` inherited by subclass `B`",
+        ),
+        (
+            "from dataclasses import dataclass\n@dataclass\nclass A:\n    x: int\n    \
+             def same(self, o: A) -> bool:\n        return self == o\nclass B(A):\n    pass\n\
+             print(B(1).same(A(1)))\n",
+            "\"T0021\"",
+            "while compiling `A.same` inherited by subclass `B`",
+        ),
+    ] {
+        let rendered = check_json_fails("e2e_1337_refused", source);
+        assert!(rendered.contains(code), "{source}: {rendered}");
+        assert!(rendered.contains(note), "{source}: {rendered}");
+    }
+}
+
+/// A diagnostic raised identically in an origin body and its copies is
+/// reported once, at the origin.
+#[test]
+fn a_diagnostic_repeated_in_every_copy_is_reported_once() {
+    let source = "class A:\n    def m(self) -> int:\n        return 1\n    def g(self) -> int:\n        \
+                  return self.m() + \"x\"\nclass B(A):\n    def m(self) -> int:\n        return 2\n\
+                  print(B().g())\n";
+    let rendered = check_json_fails("e2e_1337_dedup", source);
+    assert_eq!(rendered.matches("\"code\"").count(), 1, "{rendered}");
+}
+
+const EXT_MODULE: &str = "class A:\n    def __init__(self) -> None:\n        self.x = 0\n        \
+     self.x = self.hook()\n    def hook(self) -> int:\n        return 1\n    def m(self) -> int:\n        \
+     return 1\n    def g(self) -> int:\n        return self.m()\n    @classmethod\n    \
+     def k(cls) -> int:\n        return cls.base()\n    @classmethod\n    def base(cls) -> int:\n        \
+     return 10\n    def getx(self) -> int:\n        return self.x\n\
+     class B(A):\n    def m(self) -> int:\n        return 2\n    def hook(self) -> int:\n        \
+     return 7\n    @classmethod\n    def base(cls) -> int:\n        return 20\n";
+
+const EXT_SCRIPT: &str = "import pycc_1337_mod as mod\n\
+     b = mod.B()\n\
+     a = mod.A()\n\
+     print(b.g(), a.g(), b.getx(), a.getx(), mod.B.k(), mod.A.k())\n";
+
+/// A host calling an inherited method on a published subclass runs the
+/// copy compiled for that subclass, and constructing it runs the copied
+/// `__init__`.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_hosted_subclass_runs_its_receiver_exact_copies() {
+    let dir = ScratchDir::new("e2e_1337_ext").expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, EXT_MODULE).expect("write the module");
+    let build = pycc()
+        .arg("build")
+        .arg(&src)
+        .arg("-o")
+        .arg(dir.join("pycc_1337_mod"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", text(&build.stderr));
+    let run = Command::new(std::env::var_os("PYCC_PYTHON").unwrap_or_else(|| "python3".into()))
+        .arg("-c")
+        .arg(EXT_SCRIPT)
+        .current_dir(&*dir)
+        .output()
+        .expect("python3 should spawn");
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n");
+}

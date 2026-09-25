@@ -521,6 +521,13 @@ pub fn ext_thunk_symbol(name: &str) -> String {
 /// specialization shapes put the substitution suffix last
 /// (`0gen_<Class>.<method>__<P>_<C>`), so a `0gen_` name's last segment is
 /// never `static`.
+///
+/// A receiver-exact copy of an inherited body (#1337, D-254) needs no case
+/// of its own: a primary copy is spelled exactly as the receiver's own
+/// definition would be (`C.m`, `C.k.classmethod`) and is judged as one, and
+/// a `super()`-target copy (`C.m.0super_D`) carries a third segment that is
+/// neither `static` nor `classmethod`, so it is refused here and by the
+/// driver alike -- it is only ever called from another copy, never hosted.
 #[must_use]
 pub fn is_ext_exportable_name(name: &str) -> bool {
     if name.starts_with("0gen_") {

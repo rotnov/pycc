@@ -156,13 +156,12 @@ pub fn check_and_resolve_all_keyed(hir: &HirModule) -> Result<HirModule, KeyedDi
     // cannot accept a program `pycc build` then panics on in
     // `MirExpr::ty()`. The rewritten module is what everything downstream
     // (checker, solver, `monomorphize`, MIR lowering, codegen) consumes.
-    let resolved = empty_container::resolve_empty_containers(hir);
-    let hir = resolved.as_ref().unwrap_or(hir);
-    // #1265 (D-245's 2026-09-24 amendment): a provisional `self.xs = []`
-    // slot the pass above could not type is refused here, ahead of D-210's
-    // redeclaration check -- which would otherwise report the placeholder as
-    // a `T0052` naming `list[<inferred>]` -- and ahead of every other check.
-    empty_container::attr_slot::reject_unresolved_attr_slots(hir)?;
+    let prepared = Prepared::new(hir)?;
+    resolve_prepared(prepared.module(hir)).map_err(|d| prepared.rekey(d))
+}
+
+/// [`check_and_resolve_all_keyed`] over an already [`Prepared`] module.
+fn resolve_prepared(hir: &HirModule) -> Result<HirModule, KeyedDiagnostics> {
     let function_local_names = module_function_local_names(hir);
     let signatures = checked_function_signatures_all(hir, &function_local_names)?;
 
@@ -196,6 +195,51 @@ pub fn check_and_resolve_all_keyed(hir: &HirModule) -> Result<HirModule, KeyedDi
     // signature. A second check here would be unreachable dead code.
     let monomorphized = monomorphize(&resolved_hir).map_err(module_level)?;
     unroll_enum_loops(monomorphized).map_err(module_level)
+}
+
+/// The module both entry points check: the shared pre-pass, run in the same
+/// place over the same input by `pycc check` and `pycc build`.
+///
+/// 1. #1021 (D-245): every empty container literal is resolved before any
+///    checking. `None` when the module has none, which keeps the no-clone
+///    property for every other program. See `crate::empty_container`.
+/// 2. #1265 (D-245's 2026-09-24 amendment): a provisional `self.xs = []`
+///    slot step 1 could not type is refused here, ahead of D-210's
+///    redeclaration check -- which would otherwise report the placeholder as
+///    a `T0052` naming `list[<inferred>]` -- and ahead of every other check.
+/// 3. #1337 (D-254): every inherited method body whose behaviour depends on
+///    its receiver's class gets a receiver-exact copy (see
+///    `crate::inherited_copies`). It runs after step 1 so the copies inherit
+///    the resolved slot types. A diagnostic raised inside a copy is re-keyed
+///    to the copied item by [`Prepared::rekey`].
+struct Prepared {
+    resolved: Option<HirModule>,
+    copied: Option<inherited_copies::CopiedModule>,
+}
+
+impl Prepared {
+    fn new(hir: &HirModule) -> Result<Self, KeyedDiagnostics> {
+        let resolved = empty_container::resolve_empty_containers(hir);
+        let base = resolved.as_ref().unwrap_or(hir);
+        empty_container::attr_slot::reject_unresolved_attr_slots(base)?;
+        let copied = inherited_copies::add_inherited_copies(base);
+        Ok(Prepared { resolved, copied })
+    }
+
+    fn module<'a>(&'a self, hir: &'a HirModule) -> &'a HirModule {
+        match (&self.copied, &self.resolved) {
+            (Some(copied), _) => &copied.module,
+            (None, Some(resolved)) => resolved,
+            (None, None) => hir,
+        }
+    }
+
+    fn rekey(&self, diagnostics: KeyedDiagnostics) -> KeyedDiagnostics {
+        match &self.copied {
+            Some(copied) => copied.rekey(diagnostics),
+            None => diagnostics,
+        }
+    }
 }
 
 /// First-diagnostic view of [`check_with_signatures_all`], kept for the
@@ -430,16 +474,13 @@ pub fn check_all(hir: &HirModule) -> Result<(), Vec<Diagnostic>> {
 pub fn check_all_keyed(hir: &HirModule) -> Result<(), KeyedDiagnostics> {
     // #1021 (D-245): resolve every empty container literal *before* any
     // checking, so the check path and the build path see the identical
-    // module. Returns `None` when the module has no empty container at all,
-    // which keeps this entry point's no-clone property for every other
-    // program. See `crate::empty_container`.
-    let resolved = empty_container::resolve_empty_containers(hir);
-    let hir = resolved.as_ref().unwrap_or(hir);
-    // #1265 (D-245's 2026-09-24 amendment): a provisional `self.xs = []`
-    // slot the pass above could not type is refused here, ahead of D-210's
-    // redeclaration check -- which would otherwise report the placeholder as
-    // a `T0052` naming `list[<inferred>]` -- and ahead of every other check.
-    empty_container::attr_slot::reject_unresolved_attr_slots(hir)?;
+    // module (see [`Prepared`]).
+    let prepared = Prepared::new(hir)?;
+    check_prepared(prepared.module(hir)).map_err(|d| prepared.rekey(d))
+}
+
+/// [`check_all_keyed`] over an already [`Prepared`] module.
+fn check_prepared(hir: &HirModule) -> Result<(), KeyedDiagnostics> {
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the
     // concrete or solver path -- including a same-arity, `Ty::Infer`-

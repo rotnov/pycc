@@ -352,7 +352,12 @@ T0022 fires when a function's `return` statement's value has a type that is \
 not assignable to the function's own declared (or, for a private helper, \
 inferred) return type -- including the implicit `None` return type when a \
 function's body falls off the end without an explicit `return` in a path \
-that needs one.",
+that needs one. It also fires in an inherited method compiled again for a \
+subclass (#1337, D-254) whose body returns `self` from a method annotated \
+with the base class: the copy's `self` is the subclass, which the base-typed \
+return slot would silently widen, so the program is refused and the \
+diagnostic carries the note \"while compiling `D.m` inherited by subclass \
+`C`\".",
         example: "\
 def f() -> int:
     return \"not an int\"

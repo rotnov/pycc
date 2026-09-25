@@ -1,0 +1,186 @@
+use super::*;
+use pycc_hir::HirClassDef;
+
+fn class(name: &str, mro: &[&str], methods: &[&str]) -> HirClassDef {
+    HirClassDef {
+        class_attrs: Vec::new(),
+        exception_type_tag: None,
+        name: name.to_string(),
+        bases: Vec::new(),
+        mro: mro.iter().map(|m| (*m).to_string()).collect(),
+        attrs: Vec::new(),
+        methods: methods
+            .iter()
+            .map(|m| ((*m).to_string(), format!("{name}.{m}")))
+            .collect(),
+        type_param: None,
+        properties: Vec::new(),
+        static_methods: Vec::new(),
+        class_methods: Vec::new(),
+        is_enum: false,
+        implicit_object_init: false,
+        enum_members: Vec::new(),
+        is_dataclass: false,
+        dataclass_fields: Vec::new(),
+        is_protocol: false,
+        runtime_checkable: false,
+        protocol_members: Vec::new(),
+        abstract_methods: Vec::new(),
+        is_abstract: false,
+    }
+}
+
+/// `A` defines `m`, `g` and `__len__`; `B(A)` overrides `m`.
+fn classes() -> HashMap<String, HirClassDef> {
+    [
+        class("A", &["A"], &["m", "g", "__len__"]),
+        class("B", &["B", "A"], &["m"]),
+    ]
+    .into_iter()
+    .map(|d| (d.name.clone(), d))
+    .collect()
+}
+
+fn instance(class: &str) -> Ty {
+    Ty::Instance(Box::new(class.to_string()))
+}
+
+fn recv(class: &str) -> MirExpr {
+    MirExpr::Name {
+        name: "self".to_string(),
+        ty: instance(class),
+    }
+}
+
+fn call(callee: &str, receiver: MirExpr) -> MirExpr {
+    MirExpr::Call {
+        callee: callee.to_string(),
+        args: vec![receiver],
+        ty: Ty::Int,
+    }
+}
+
+fn function(name: &str, body: Vec<MirStmt>) -> MirItem {
+    MirItem::Function {
+        name: name.to_string(),
+        params: Vec::new(),
+        return_ty: Ty::Int,
+        body,
+    }
+}
+
+fn module(items: Vec<MirItem>) -> MirModule {
+    MirModule {
+        items,
+        class_defs: Vec::new(),
+    }
+}
+
+#[test]
+fn a_call_resolved_for_its_receiver_passes() {
+    let body = vec![
+        MirStmt::ExprStmt(call("B.m", recv("B"))),
+        MirStmt::ExprStmt(call("A.g", recv("B"))),
+        MirStmt::ExprStmt(call("A.m", recv("A"))),
+    ];
+    verify(&module(vec![function("f", body)]), &classes());
+}
+
+#[test]
+#[should_panic(expected = "receiver-exact dispatch violated")]
+fn a_call_that_skips_the_receivers_override_panics() {
+    let body = vec![MirStmt::Return(Some(call("A.m", recv("B"))))];
+    verify(&module(vec![function("f", body)]), &classes());
+}
+
+#[test]
+fn an_existing_copy_is_the_only_accepted_callee() {
+    // With `B.g` (a copy of `A.g` for `B`) lowered, `A.g` on a `B` is a
+    // violation and `B.g` is accepted.
+    let items = vec![
+        function("B.g", Vec::new()),
+        function("f", vec![MirStmt::ExprStmt(call("B.g", recv("B")))]),
+    ];
+    verify(&module(items), &classes());
+    let bad = vec![
+        function("B.g", Vec::new()),
+        function("f", vec![MirStmt::ExprStmt(call("A.g", recv("B")))]),
+    ];
+    let result = std::panic::catch_unwind(|| verify(&module(bad), &classes()));
+    assert!(result.is_err());
+}
+
+#[test]
+fn a_super_call_from_the_anchor_is_accepted() {
+    // Inside `B.m`, `super().m()` runs `A.m` on a `B` receiver.
+    let items = vec![function(
+        "B.m",
+        vec![MirStmt::ExprStmt(call("A.m", recv("B")))],
+    )];
+    verify(&module(items), &classes());
+}
+
+#[test]
+fn unrelated_callees_and_receivers_are_skipped() {
+    let body = vec![
+        // Not an instance receiver.
+        MirStmt::ExprStmt(call("A.m", MirExpr::IntLiteral(1))),
+        // An unknown receiver class.
+        MirStmt::ExprStmt(call("A.m", recv("Z"))),
+        // A top-level function callee, and a dotted non-class callee.
+        MirStmt::ExprStmt(call("helper", recv("B"))),
+        MirStmt::ExprStmt(call("mod.helper", recv("B"))),
+        // A static method takes no receiver.
+        MirStmt::ExprStmt(call("A.s.static", recv("B"))),
+        // No arguments at all.
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "A.m".to_string(),
+            args: Vec::new(),
+            ty: Ty::Int,
+        }),
+    ];
+    verify(
+        &module(vec![
+            function("f", body),
+            MirItem::TopLevelStmt(MirStmt::NoOp),
+        ]),
+        &classes(),
+    );
+}
+
+#[test]
+fn a_protocol_specialization_is_checked_through_its_prefix() {
+    let ok = vec![MirStmt::ExprStmt(call("0gen_B.m__P_B", recv("B")))];
+    verify(&module(vec![function("f", ok)]), &classes());
+    let dunder = vec![MirStmt::ExprStmt(call("0gen_A.__len____P_B", recv("B")))];
+    verify(&module(vec![function("f", dunder)]), &classes());
+    let bad = vec![MirStmt::ExprStmt(call("0gen_A.m__P_B", recv("B")))];
+    let result = std::panic::catch_unwind(|| verify(&module(vec![function("f", bad)]), &classes()));
+    assert!(result.is_err());
+}
+
+#[test]
+fn split_generic_tail_prefers_a_bound_member() {
+    let bound = |m: &str| m == "__len__" || m == "m";
+    assert_eq!(
+        split_generic_tail("__len____P_B", bound),
+        ("__len__", "__P_B")
+    );
+    assert_eq!(split_generic_tail("m__P_B", bound), ("m", "__P_B"));
+    assert_eq!(split_generic_tail("m", bound), ("m", ""));
+    assert_eq!(split_generic_tail("zz__P_B", bound), ("zz__P_B", ""));
+}
+
+#[test]
+fn a_specialized_copy_is_found_by_its_specialized_name() {
+    // A protocol-parameter method exists only specialized: the copy of
+    // `A.g` for `B` is `0gen_B.g__P_B`, and `B.g` itself is not an item.
+    let items = vec![
+        function("0gen_B.g__P_B", Vec::new()),
+        function(
+            "f",
+            vec![MirStmt::ExprStmt(call("0gen_B.g__P_B", recv("B")))],
+        ),
+    ];
+    verify(&module(items), &classes());
+}

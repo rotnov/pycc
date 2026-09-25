@@ -22,6 +22,19 @@ Layers 4 and 6 are planned and not yet implemented on current `main`; no
 describe the target architecture, not a live system — see the dedicated
 planned sections below for the current status of each.
 
+Debug builds also carry one compiler-internal invariant check that every
+test exercises: `crates/pycc_mir/src/verify_receiver.rs` (compiled only under
+`debug_assertions`) re-derives each user-method callee in the finished MIR
+module from the class tables alone and panics when a call would run a body
+other than the one the receiver's static class resolves to
+([#1337](https://github.com/rotnov/pycc/issues/1337),
+[D-254](./decisions/D-254-inherited-methods-are-compiled-per-receiver-class.md)).
+The behaviour it guards is pinned by the oracle fixtures
+`tests/fixtures/receiver_exact_dispatch.py` and
+`tests/fixtures/receiver_exact_protocol.py` (registered in
+`tests/conformance/classes.rs`) and by `tests/issue_1337_receiver_dispatch.rs`,
+whose `--ext` arm needs CPython development headers and is `#[ignore]`d.
+
 Layer 2's `tests/conformance/pyXY/` location is the same kind of row: it
 describes the eventual v1.0-scale, language-level-selecting harness, not what
 runs today. Every conformance fixture currently lives **flat** at

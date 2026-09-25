@@ -76,6 +76,8 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `W1001` | warning | unreachable code |
 | `W1002` | warning | boxed fallback in hot loop (`--memstats` hint) |
 
+Note on inherited-method copies ([#1337](https://github.com/rotnov/pycc/issues/1337), [D-254](./decisions/D-254-inherited-methods-are-compiled-per-receiver-class.md)): an inherited body is compiled once more for a subclass whose behaviour for it differs. A diagnostic raised only in that copy keeps its own code (typically `T0021`/`T0022` when the receiver escapes into a base-typed slot, or `C0001`/`T0021` for a dataclass capability the subclass lacks), is reported at the origin body's location, and carries the help note ``while compiling `D.m` inherited by subclass `C` ``, which `--error-format json` shows. A diagnostic the origin body already raises at the same place is reported once. Pinned by `tests/issue_1337_receiver_dispatch.rs`.
+
 Note on `O0201`: legal Python never observes moves (see MEMORY_OWNERSHIP.md — optimization is semantics-preserving). The code exists for internal assertions and `--emit mir` tooling; if it ever fires on user code, that's a pycc bug, auto-reported.
 
 Adding a new code here requires a matching `EXPLANATIONS` entry in

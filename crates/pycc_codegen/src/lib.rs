@@ -28,6 +28,7 @@ mod call_result;
 mod compare;
 mod compare_chain;
 mod comprehension;
+mod copy_slots;
 use bigint_rc::{
     BigIntRefcount, emit_bigint_refcount_call, pop_pending_int_release,
     push_pending_int_release_if_scalar_temporary, push_pending_int_release_if_temporary,
@@ -5834,6 +5835,8 @@ fn compile_to_object_with_observer(
     // is still null) aborts with `pycc_rt_name_error` -- matching
     // CPython's `NameError: name 'foo' is not defined`.
     let mut def_iter = function_defs_in_order.iter().peekable();
+    let copy_slots = copy_slots::CopySlots::new(mir);
+    let mut fn_ordinal = 0usize;
     rt.exceptions.targets.borrow_mut().push(top_exception_exit);
     for item in &mir.items {
         match item {
@@ -5914,12 +5917,28 @@ fn compile_to_object_with_observer(
                 let &(_, f) = def_iter.next().expect(
                     "def_iter should have an entry for every MirItem::Function                      (the declaration pass populates function_defs_in_order                      from the same mir.items in the same order)",
                 );
-                let uf = &user_functions[name.as_str()];
-                if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
-                    let _ = builder.build_store(
-                        fn_ptr_global.as_pointer_value(),
-                        f.as_global_value().as_pointer_value(),
-                    );
+                let ordinal = fn_ordinal;
+                fn_ordinal += 1;
+                // #1337 (D-254): an inherited-method copy is bound with the
+                // origin `def` it copies, not at its own (appended)
+                // position -- see `copy_slots`.
+                if copy_slots.is_copy(ordinal) {
+                    continue;
+                }
+                let bound = std::iter::once((name.as_str(), f)).chain(
+                    copy_slots
+                        .bound_with(ordinal)
+                        .iter()
+                        .map(|&copy| function_defs_in_order[copy]),
+                );
+                for (name, f) in bound {
+                    let uf = &user_functions[name];
+                    if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
+                        let _ = builder.build_store(
+                            fn_ptr_global.as_pointer_value(),
+                            f.as_global_value().as_pointer_value(),
+                        );
+                    }
                 }
             }
         }

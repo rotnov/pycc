@@ -6,6 +6,7 @@ status: accepted
 
 ## D-160: super() uses static dispatch (no runtime polymorphism)
 - Status: accepted
+- Amendment (2026-09-25, [#1337](https://github.com/rotnov/pycc/issues/1337)): [D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md) lifts the diamond limitation described below. A `super()` inside an inherited body now continues along the *receiver's* MRO, because the body is compiled per receiver class when the `super()` target differs; for a body compiled for its own defining class this entry's rule is unchanged.
 - Context: Issue #433 requires implementing zero-argument `super()` (PEP 3135)
   and base class `__init__` calls. In CPython, `super()` resolves the next
   class in the MRO of `type(self)` — the most-derived type — at runtime. This
