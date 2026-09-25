@@ -121,6 +121,39 @@ fn a_super_call_from_the_anchor_is_accepted() {
 }
 
 #[test]
+fn a_super_target_setter_copy_is_accepted_by_its_kind_suffix() {
+    // `A` and `B(A)` both define a property `p` with a setter; `C(B)`
+    // inherits `B`'s. Inside `C.p.setter` (the copy of `B.p.setter`),
+    // `super().p = v` runs `A.p.setter` for a `C`: the super-target copy
+    // `C.p.0super_A.setter`, whose kind is its last segment.
+    let with_p = |name: &str, mro: &[&str]| {
+        let mut def = class(name, mro, &[]);
+        def.properties.push(pycc_hir::PropertyDef {
+            name: "p".to_string(),
+            getter: format!("{name}.p"),
+            setter: Some(format!("{name}.p.setter")),
+        });
+        def
+    };
+    let classes: HashMap<String, HirClassDef> = [
+        with_p("A", &["A"]),
+        with_p("B", &["B", "A"]),
+        class("C", &["C", "B", "A"], &[]),
+    ]
+    .into_iter()
+    .map(|d| (d.name.clone(), d))
+    .collect();
+    let items = vec![
+        function("C.p.0super_A.setter", Vec::new()),
+        function(
+            "C.p.setter",
+            vec![MirStmt::ExprStmt(call("C.p.0super_A.setter", recv("C")))],
+        ),
+    ];
+    verify(&module(items), &classes);
+}
+
+#[test]
 fn unrelated_callees_and_receivers_are_skipped() {
     let body = vec![
         // Not an instance receiver.

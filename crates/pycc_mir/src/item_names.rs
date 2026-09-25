@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use pycc_hir::{HirClassDef, inherited_copy_origin};
+use pycc_hir::{HirClassDef, SUPER_TARGET_MARKER, inherited_copy_origin};
 
 /// The class a method item's body is anchored in -- the class whose MRO a
 /// `super()` inside it continues after (#433) -- or `None` for a top-level
@@ -76,9 +76,10 @@ pub(super) fn resolve_method_owner_class<'a>(
 /// identifiers cannot contain `.`) pass through unchanged.
 pub(super) fn source_frame_name(mangled: &str) -> String {
     // #1337 (D-254): a `super()`-target inherited-method copy is named
-    // `<C>.<m>.0super_<T>`; its frame is the copied body's `m`, as
-    // CPython's would be.
-    let mangled = match mangled.split_once(".0super_") {
+    // `<C>.<m>.0super_<T>[.<kind>]`; its frame is the copied body's `m`,
+    // as CPython's would be.
+    let marker = format!(".{SUPER_TARGET_MARKER}");
+    let mangled = match mangled.split_once(marker.as_str()) {
         Some((copied, _origin)) => copied,
         None => mangled,
     };

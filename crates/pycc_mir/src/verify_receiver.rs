@@ -144,8 +144,9 @@ impl Verifier<'_> {
             return;
         }
         // The member spelling: `m`, `m.classmethod`, `m.setter`, `m.static`,
-        // `m.0super_T` (a super-target copy), and for a `0gen_`
-        // specialization a `__<P>_<C>` substitution tail.
+        // `m.0super_T[.classmethod|.setter]` (a super-target copy), and for
+        // a `0gen_` specialization a `__<P>_<C>` substitution tail. The
+        // kind is always the last segment.
         let (member, tail) = rest.split_once('.').unwrap_or((rest, ""));
         let (member, gen_tail) = if generic {
             split_generic_tail(member, |m| {
@@ -158,8 +159,8 @@ impl Verifier<'_> {
         if tail == "static" {
             return;
         }
-        let suffix = match tail {
-            "classmethod" | "setter" => format!(".{tail}"),
+        let suffix = match tail.rsplit('.').next() {
+            Some(kind @ ("classmethod" | "setter")) => format!(".{kind}"),
             _ => String::new(),
         };
         let spell = |name: &str| {

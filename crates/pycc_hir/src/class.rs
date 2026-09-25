@@ -67,8 +67,8 @@ mod enum_class;
 mod exception_dunders;
 mod inherited_copy;
 pub use inherited_copy::{
-    CopiedMemberKind, InheritedCopy, binds_member, first_definer, inherited_copy_name,
-    inherited_copy_origin,
+    CopiedMemberKind, InheritedCopy, SUPER_TARGET_MARKER, binds_member, first_definer,
+    inherited_copy_name, inherited_copy_origin,
 };
 mod dataclass_methods;
 pub use dataclass_methods::dataclass_repr_body;

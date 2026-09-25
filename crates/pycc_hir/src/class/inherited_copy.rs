@@ -8,7 +8,8 @@
 //! (D-254). Every later phase -- the checker's `super()` anchor, MIR's member
 //! resolution and anchor, codegen's function-pointer slot timing, the `ext`
 //! driver's publication -- must agree on which items are copies and what
-//! they copy. They all ask this module, and nothing else parses a copy name.
+//! they copy. They all ask this module, and nothing else parses a copy name
+//! (a traceback frame name only strips the exported [`SUPER_TARGET_MARKER`]).
 //!
 //! **Two spellings.**
 //! - The *primary* copy of the body `C` actually resolves `m` to (the first
@@ -78,8 +79,9 @@ pub struct InheritedCopy {
 }
 
 /// The third-segment marker of a `super()`-target copy (see the module
-/// comment).
-const SUPER_TARGET_MARKER: &str = "0super_";
+/// comment). Exported so a caller that only needs to strip the marker (a
+/// traceback frame name) spells it from this one constant.
+pub const SUPER_TARGET_MARKER: &str = "0super_";
 
 /// Whether `class` binds `member` in its own namespace, as any member kind:
 /// a method, property, static method, class method, or class attribute.

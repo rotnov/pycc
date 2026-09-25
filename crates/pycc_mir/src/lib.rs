@@ -650,8 +650,9 @@ pub enum MirExpr {
     /// may be any subclass. The result is whether `pycc_rt_exception_type_matches`
     /// accepts the object for any tag in `tags` -- the target classes' own
     /// tags plus every raisable class whose MRO reaches one of them, sorted
-    /// and non-empty. `pycc_mir::exception_isinstance` is the sole
-    /// constructor. `.ty()` is `Ty::Bool`.
+    /// and non-empty. `class::lower_isinstance` is the sole constructor,
+    /// using `pycc_mir::exception_isinstance`'s helpers. `.ty()` is
+    /// `Ty::Bool`.
     ExceptionTypeTest {
         obj: Box<MirExpr>,
         tags: Vec<u8>,

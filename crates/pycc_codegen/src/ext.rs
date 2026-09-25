@@ -557,11 +557,12 @@ pub fn is_ext_exportable_name(name: &str) -> bool {
         // superset the driver narrows (#1145).
         None => true,
         Some(kind) => {
-            // A fourth segment cannot arise: a class nested in a class or a
+            // The only four-segment name is a `super()`-target copy of a
+            // setter or classmethod (`C.k.0super_D.classmethod`, D-254),
+            // which is never hosted: a class nested in a class or a
             // function is refused by `pycc_hir` (`stmt.rs`, `class.rs`), so
-            // no `A.B.method` name exists; a `super()`-target copy of a
-            // setter or classmethod (`C.k.0super_D.classmethod`, D-254) is
-            // never hosted either. Refusing it is the fail-closed reading.
+            // no `A.B.method` name exists. Refusing every fourth segment is
+            // the fail-closed reading.
             segments.next().is_none() && (kind == "static" || kind == "classmethod")
         }
     }
