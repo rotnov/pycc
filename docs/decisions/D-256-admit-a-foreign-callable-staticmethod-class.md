@@ -44,7 +44,10 @@ status: accepted
       pycc resolves the member statically, so the subclass case would otherwise
       miscompile (#1337).
     - A non-name instance receiver and a `super()` receiver are refused (#1346).
-    - The root must not be shadowed at the use site.
+    - The root must not be shadowed by a local of the enclosing function at the use
+      site. A comprehension target with the root's name is not refused: the rewritten
+      chain still reads the module-level import, which matches CPython's result there
+      (measured at module and function scope).
   - D-213 stays sound. A CPython `staticmethod` object has no `__set_name__`, measured on
     3.14.7: `hasattr(staticmethod(len), '__set_name__')`, the same check on its type,
     and the same check on `os.path.exists` are all `False`. So this descriptor-valued

@@ -478,7 +478,7 @@ Because the value is folded, the accepted surface is deliberately narrow:
   - **Receivers.** A class-name read or call (`FS.exists`, `FS.exists(p)`) is supported, and so is one through a plain-name instance (`fs.exists(p)`, `self.exists(p)`). Other receivers are `T0044`:
     - a non-name receiver (`make().exists`), because the rewrite would discard it (#1346);
     - a `super()` receiver (#1346);
-    - a use site where a local binding, or an absent #1316 foreign global, shadows the root.
+    - a use site where a local binding, or an absent #1316 foreign global, shadows the root. A comprehension target with the root's name is not refused: the rewritten chain still reads the module-level import, as CPython's captured object would.
   - **MRO rule.** The rule is positional. `pycc_types` and `pycc_mir` apply it through one set of shared helpers (`crates/pycc_hir/src/class/foreign_static.rs`).
     - Winner for a class-name access: the first class-level binding of the name in the MRO. If that binding is the foreign attribute, the access is rewritten. Otherwise the existing dispatch runs, so `D4(A, FS)` reaches `A`'s `@staticmethod`.
     - Instance access: additionally, an instance slot anywhere in the MRO wins.

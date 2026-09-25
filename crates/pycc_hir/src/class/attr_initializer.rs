@@ -248,8 +248,9 @@ fn foreign_item_import(imports: &[ImportBinding], root: &str) -> bool {
 ///
 /// This deliberately mirrors, and never widens, [`class_attr_value`]'s
 /// accepted set. A complex literal (`1j`) has no `Ty` in this compiler and
-/// yields `None` rather than a type `class_attr_value` would then reject with
-/// a second, less specific message.
+/// yields `None`, so the un-annotated spelling sends it to
+/// [`classify_non_literal`]; the annotated spelling reaches the same refusal
+/// through `class_attr_value`'s complex arm.
 pub(super) fn infer_class_attr_ty(value: &Expr) -> Option<Ty> {
     let inner = match value {
         Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::USub | UnaryOp::UAdd) => {
