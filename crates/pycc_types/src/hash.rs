@@ -383,8 +383,9 @@ mod tests {
     }
 
     /// `check_instance` for class `R` whose `__hash__` is registered by
-    /// hand as returning `returns`: a body returning an int under
-    /// `-> int | None` is `T0022` before this check runs.
+    /// hand as returning `returns`, independent of the method body (the
+    /// source-level `-> int | None` case is pinned end to end in
+    /// `tests/issue_1335_hash_instance.rs`).
     fn check_hash_returning(returns: Ty) -> Diagnostic {
         let module = pycc_parser::parse(&format!(
             "{R}\n    def __hash__(self) -> int:\n        return 3\n"

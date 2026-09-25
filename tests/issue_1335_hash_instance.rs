@@ -379,6 +379,29 @@ fn a_hash_method_returning_a_non_integer_is_t0021() {
 }
 
 #[test]
+fn a_hash_method_returning_an_optional_integer_is_c0001() {
+    // CPython raises only when such a method returns `None` at run time,
+    // so the declared return type alone is not a static `TypeError`.
+    for (tag, ty) in [
+        ("e2e_1335_optional_int", "int"),
+        ("e2e_1335_optional_bool", "bool"),
+    ] {
+        assert_one_error(
+            tag,
+            &class_r(
+                &format!(
+                    "    def __hash__(self) -> {ty} | None:\n        v: {ty} | None = None\n        return v\n"
+                ),
+                "print(hash(R()))\n",
+            ),
+            "C0001",
+            "`hash()` of `R` is valid Python but not implemented yet",
+            &format!("`R.__hash__` returns `{ty} | None`"),
+        );
+    }
+}
+
+#[test]
 fn an_uncompiled_hash_binding_is_c0001() {
     let needle = "`hash()` of `R` is valid Python but not implemented yet";
     for (tag, body, help) in [
