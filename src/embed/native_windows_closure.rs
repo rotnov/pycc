@@ -29,11 +29,14 @@
 //! when its name is a system DLL's (it would shadow it for every image),
 //! a scanned closure image's, or a file's in the interpreter's `DLLs\`.
 //!
-//! Every name is compared ASCII case-insensitively through per-directory
-//! listing maps ([`listing_map`]), never by probing a joined path, so the
-//! derivation classifies alike on a case-sensitive host. Nothing here
-//! depends on the host: the system directories are injected
-//! ([`WindowsEnv`]) and every path in a message is rendered with `\`.
+//! Every name is compared ASCII case-insensitively, never by probing a
+//! joined path: a lookup in an image's own directory or in `DLLs\` goes
+//! through a per-directory listing map ([`listing_map`]), and the root,
+//! system and closure-image names are case-folded sets, so the derivation
+//! classifies alike on a case-sensitive host. The system directories are
+//! injected ([`WindowsEnv`]); an image or native a message names is shown
+//! with `\`, while a directory a listing or I/O refusal names is shown as
+//! the host renders it.
 
 use super::EmbedProbe;
 use super::bundle::io_error;

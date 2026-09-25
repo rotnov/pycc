@@ -457,7 +457,8 @@ and `ntdll` and loads that
 DLL from its own sidecar; the sidecar holds `python314.dll`, `python3.dll`,
 the interpreter's `vcruntime140.dll` and `vcruntime140_1.dll` when present,
 and the filtered `Lib\` and `DLLs\`, plus `closure\` when the program's
-`pycc.lock` section records one (#1296, D-249). `--static-libpython` and
+`pycc.lock` section records one (#1296, D-249) and `natives\` when that
+closure needs natives (#1306). `--static-libpython` and
 `[build] static = true` are refused at exit 2 (D-251). A locked closure file
 Windows would load as a PE image (a `.pyd` or `.dll` suffix, or an `MZ`
 header on any suffix other than `.exe`) must be an x86-64 PE32+ DLL whose
