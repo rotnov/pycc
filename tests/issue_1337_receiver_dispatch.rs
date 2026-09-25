@@ -207,3 +207,45 @@ fn a_hosted_subclass_runs_its_receiver_exact_copies() {
     assert!(run.status.success(), "{}", text(&run.stderr));
     assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n");
 }
+
+const STR_MIXIN: &str =
+    "class Mixin:\n    def __str__(self) -> str:\n        return \"custom\"\n\n";
+
+/// A raised exception value is a runtime exception object that never calls a
+/// user dunder, so an exception class whose MRO resolves one to a user class
+/// is refused at its definition rather than printing the message where
+/// CPython prints the override (WI-6b).
+#[test]
+fn a_user_dunder_an_exception_value_would_ignore_is_refused() {
+    for (source, dunder) in [
+        (
+            format!(
+                "{STR_MIXIN}class E(Mixin, ValueError):\n    pass\n\ntry:\n    raise E(\"x\")\n\
+                 except ValueError as e:\n    print(e)\n"
+            ),
+            "`__str__` (defined by `Mixin`)",
+        ),
+        (
+            "class E(ValueError):\n    def __bool__(self) -> bool:\n        return False\n\n\
+             try:\n    raise E(\"x\")\nexcept ValueError as e:\n    print(\"t\" if e else \"f\")\n"
+                .to_string(),
+            "`E` has a user-defined `__bool__`",
+        ),
+    ] {
+        let rendered = check_json_fails("e2e_1337_exception_dunder", &source);
+        assert!(rendered.contains("\"C0001\""), "{source}: {rendered}");
+        assert!(rendered.contains(dunder), "{source}: {rendered}");
+        assert!(rendered.contains("Part 3 of #541"), "{source}: {rendered}");
+    }
+}
+
+/// With the builtin base first, `BaseException.__str__` wins over the mixin,
+/// exactly as in CPython, and the program is accepted.
+#[test]
+fn a_builtin_base_before_a_str_mixin_prints_the_message() {
+    let source = format!(
+        "{STR_MIXIN}class E(ValueError, Mixin):\n    pass\n\ntry:\n    raise E(\"x\")\n\
+         except ValueError as e:\n    print(e)\n    print(f\"{{e}}\")\n"
+    );
+    assert_eq!(build_and_run("e2e_1337_exception_mixin", &source), "x\nx\n");
+}

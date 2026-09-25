@@ -64,6 +64,7 @@ mod body;
 mod declared_attrs;
 pub(crate) mod enum_call;
 mod enum_class;
+mod exception_dunders;
 mod inherited_copy;
 pub use inherited_copy::{
     CopiedMemberKind, InheritedCopy, binds_member, first_definer, inherited_copy_name,
@@ -1383,6 +1384,12 @@ pub(crate) fn lower_class(
     // list well below `walk_class_body`) and every base's own `attrs` final
     // (a base is always defined earlier in the module, so it is).
     validate_mro_slot_layout(&class_def, defined_classes, def.range.into())?;
+    // #1337 (WI-6b): a user dunder a raised exception value would ignore.
+    exception_dunders::reject_ignored_exception_dunders(
+        &class_def,
+        defined_classes,
+        def.range.into(),
+    )?;
     Ok((class_def, items))
 }
 
