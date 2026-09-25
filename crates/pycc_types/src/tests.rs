@@ -5430,6 +5430,22 @@ fn adding_to_a_non_set_value_is_rejected_as_t0033() {
 }
 
 #[test]
+fn adding_to_a_frozenset_is_rejected_as_t0033_naming_frozenset() {
+    // Part 1 of #1319: a `frozenset[int]` is immutable, so `.add` is
+    // refused by the same arm as any other non-set receiver, and the
+    // message names the receiver's own type.
+    let mut env = Environment::new();
+    env.bind("fs".to_string(), Ty::FrozenSet(Box::new(Ty::Int)));
+    let expr = HirExpr::SetAdd {
+        set: "fs".to_string(),
+        value: Box::new(HirExpr::IntLiteral(1)),
+    };
+    let err = infer_expr(&env, &expr).unwrap_err();
+    assert_eq!(err.code, "T0033");
+    assert_eq!(err.message, "`frozenset[int]` does not support `.add()`");
+}
+
+#[test]
 fn adding_a_mismatched_value_type_is_rejected_as_t0021() {
     let mut env = Environment::new();
     env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
@@ -5699,7 +5715,7 @@ fn len_of_a_non_list_value_is_rejected_as_t0033() {
     assert_eq!(err.code, "T0033");
     assert_eq!(
         err.message,
-        "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `int`"
+        "`len` expects a `list[T]`, `dict[K, V]`, `set[T]`, or `frozenset[T]` argument, got `int`"
     );
 }
 

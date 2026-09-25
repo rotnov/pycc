@@ -982,7 +982,7 @@ fn rewrite_generic_calls_in_stmt(
             let var_ty = match env.lookup_any(list) {
                 Some(Ty::List(elem)) => *elem,
                 Some(Ty::Dict(kv)) => kv.0,
-                Some(Ty::Set(elem)) => *elem,
+                Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => *elem,
                 _ => {
                     // Already validated as iterable by the ordinary check
                     // pass that ran before `monomorphize`; a scalar or
@@ -1241,7 +1241,7 @@ fn rewrite_comp_iter(
         CompIter::Name(name) => match env.lookup_any(name) {
             Some(Ty::List(elem)) => Ok(*elem),
             Some(Ty::Dict(kv)) => Ok(kv.0),
-            Some(Ty::Set(elem)) => Ok(*elem),
+            Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => Ok(*elem),
             // Already validated as iterable before `monomorphize` ever
             // runs; see `ForList`'s own fallback above.
             _ => Ok(Ty::Infer),

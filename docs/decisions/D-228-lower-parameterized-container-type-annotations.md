@@ -242,6 +242,18 @@ status: accepted
     variant, and adding one has to clear
     [D-109](./D-109-keep-size-of-ty-at-16-bytes.md)'s 16-byte
     `size_of::<Ty>()` ceiling first — a separate decision.
+    - Amendment (2026-09-25): [#1326](https://github.com/rotnov/pycc/issues/1326)
+      (Part 1 of [#1319](https://github.com/rotnov/pycc/issues/1319)) lowers
+      `frozenset[T]`. The D-109 premise did not hold when measured:
+      `FrozenSet(Box<Ty>)` is a thin pointer like `Set(Box<Ty>)`, and
+      `size_of::<Ty>()` stays 16 bytes, which the in-tree
+      `ty_size_stays_within_d109_ceiling` test pins. `frozenset[int]` is
+      `set[int]`'s immutable sibling under the same one-combination `T0038`
+      gate ([D-122](./D-122-dict-k-v-set-t-key-element-types-are-scoped-to.md)) and
+      shares its runtime object. The Decision's rule that a bare `frozenset`
+      keeps the generic unknown-name message therefore no longer holds: it
+      now gets the `frozenset[int]` advice, and only `type` keeps the
+      generic message. `type[T]` stays rejected as above.
 
 - Consequences:
   - *Easier:* a container value can now cross a function boundary from real

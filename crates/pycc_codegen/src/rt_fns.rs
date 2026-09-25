@@ -186,6 +186,11 @@ pub(super) struct RtFns<'ctx> {
     pub(super) int_set_add: FunctionValue<'ctx>,
     pub(super) int_set_len: FunctionValue<'ctx>,
     pub(super) int_set_get: FunctionValue<'ctx>,
+    /// Part 1 of #1319: `frozenset(...)`'s two copy constructors --
+    /// `int_set_copy` for a `set[int]`/`frozenset[int]` source and
+    /// `int_set_from_int_list` for a `list[int]` source.
+    pub(super) int_set_copy: FunctionValue<'ctx>,
+    pub(super) int_set_from_int_list: FunctionValue<'ctx>,
     /// `ForSet`'s own loop-test check (Task 11 review fix, P1): panics if
     /// the set's freshly re-read length no longer matches the length
     /// captured once in the loop's preheader -- see
@@ -534,6 +539,14 @@ pub(super) fn declare_rt_functions<'ctx>(
         int_set_get: declare(
             "pycc_rt_int_set_get",
             i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        int_set_copy: declare(
+            "pycc_rt_int_set_copy",
+            ptr_type.fn_type(&[ptr_type.into()], false),
+        ),
+        int_set_from_int_list: declare(
+            "pycc_rt_int_set_from_int_list",
+            ptr_type.fn_type(&[ptr_type.into()], false),
         ),
         int_set_check_not_resized: declare(
             "pycc_rt_int_set_check_not_resized",

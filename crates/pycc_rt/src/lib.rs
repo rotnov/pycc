@@ -52,6 +52,8 @@ mod instance;
 /// `<< >> & | ^` over encoded ints (#1210).
 mod int_bitwise;
 mod int_encoding;
+/// `set[int]`/`frozenset[int]`'s `PyIntSetObj` (D-121, Part 1 of #1319).
+mod int_set;
 
 #[cfg(not(test))]
 pub use exception::pycc_rt_exception_print_and_exit;
@@ -72,6 +74,13 @@ pub use int_bitwise::{
 // which reach them through `use super::*` -- keep referring to these names
 // unqualified, exactly as when they lived in this file.
 use int_encoding::*;
+#[cfg(test)]
+use int_set::check_set_len_unchanged;
+pub use int_set::{
+    PyIntSetObj, pycc_rt_int_set_add, pycc_rt_int_set_check_not_resized, pycc_rt_int_set_copy,
+    pycc_rt_int_set_decref, pycc_rt_int_set_from_int_list, pycc_rt_int_set_get,
+    pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new,
+};
 
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
@@ -2313,171 +2322,6 @@ pub unsafe extern "C" fn pycc_rt_dict_decref(dict: *mut PyDictObj) {
     obj.rc.set(rc);
     if rc == 0 {
         drop(unsafe { Box::from_raw(dict) });
-    }
-}
-
-/// `set[int]`'s runtime representation (D-121/D-141): structurally identical
-/// to `PyIntListObj` (a dense array of encoded int-compatible words), but insertion goes
-/// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-121)
-/// instead of `PyIntListObj`'s unconditional append -- this is the one
-/// behavioral difference and the reason this is its own distinct type
-/// rather than a reuse of `PyIntListObj` (mirrors the same reasoning
-/// D-107 gave for `Scalar::List` needing its own variant instead of
-/// reusing `Scalar::Str`: distinct semantics deserve a distinct type so
-/// the compiler enforces every call site acknowledges the difference).
-pub struct PyIntSetObj {
-    rc: Cell<u32>,
-    items: Cell<Vec<i64>>,
-}
-
-/// Allocates a fresh, empty `PyIntSetObj` with refcount `1`. Never panics.
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
-    Box::into_raw(Box::new(PyIntSetObj {
-        rc: Cell::new(1),
-        items: Cell::new(Vec::new()),
-    }))
-}
-
-/// Dedup-checked insert (D-121/D-141): linear-scan by decoded Python numeric
-/// value; appends only if absent and preserves the first encoded word. Thus
-/// `{True, 1}` retains `True`, while `{1, True}` retains ordinary integer `1`.
-///
-/// # Safety
-/// `set` must be a live `PyIntSetObj` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_int_set_add(set: *mut PyIntSetObj, value: i64) {
-    // Decode *before* taking `items` out of the `Cell`: an early return
-    // between the `take()` and the matching `set()` would leave the set
-    // silently emptied.
-    let Some(value_numeric) = decode_inline_or_raise(value, "storing in set[int]") else {
-        return;
-    };
-    let mut items = unsafe { &*set }.items.take();
-    if !items
-        .iter()
-        .copied()
-        // Already-stored words passed the ingress check above, so none of
-        // them is a bigint; `inline_int_value` needs no raise of its own and
-        // a hypothetical bigint simply compares unequal.
-        .any(|existing| inline_int_value(existing) == Some(value_numeric))
-    {
-        items.push(value);
-    }
-    unsafe { &*set }.items.set(items);
-}
-
-/// Returns `set`'s current element count.
-///
-/// # Safety
-/// `set` must be a live `PyIntSetObj` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
-    let items = unsafe { &*set }.items.take();
-    let len = items.len() as i64;
-    unsafe { &*set }.items.set(items);
-    len
-}
-
-/// Raises `RuntimeError` (D-173) if `current_len` differs from
-/// `expected_len`. `ForSet`'s own
-/// iteration codegen (Task 9) calls this once per loop-test evaluation,
-/// comparing a freshly re-read `pycc_rt_int_set_len` against the length
-/// captured once in the loop's preheader. `set.add(value)` (PR-12, D-119)
-/// made this reachable for the first time: `for x in s: s.add(x + 1)`
-/// would otherwise silently visit every newly-inserted element too,
-/// never terminating for a value like `x + 1` that is always distinct
-/// from every prior element -- unlike `ForDict`'s own identical
-/// re-read-every-iteration shape, which D-123 already accepts as a
-/// bounded divergence (a dict grown by re-inserting existing keys stays
-/// finite; a set grown by always-novel derived values does not). Real
-/// CPython raises a catchable `RuntimeError: Set changed size during
-/// iteration` here, and Part B of #1038 (#1064) makes this do the same:
-/// a D-173 pending-exception raise with CPython's own message, not an
-/// abort. The function returns `()`; the `ForSet` loop-test codegen
-/// terminates the loop by conjoining `pycc_rt_exception_active() == 0`
-/// onto its continue condition.
-///
-/// A pending exception suppresses the check entirely. `pycc_rt_exception_raise`
-/// replaces the thread-local pending value unconditionally, so a body that both
-/// grows the set *and* raises -- `for x in s: s.add(x + 1); xs.pop()` on an
-/// empty `xs` -- would otherwise reach this check with `IndexError` pending and
-/// leave with `RuntimeError` pending, selecting the wrong `except` handler
-/// (CPython propagates the body's own `IndexError`). Suppressing here rather
-/// than reordering the loop-test codegen costs nothing in correctness: the
-/// loop-test's `pycc_rt_exception_active() == 0` conjunct is evaluated on the
-/// same iteration and terminates the loop either way, so the only observable
-/// difference is which exception survives.
-fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
-    if pycc_rt_exception_active() != 0 {
-        return;
-    }
-    if current_len != expected_len {
-        raise_builtin(
-            EXCEPTION_TYPE_RUNTIME_ERROR,
-            "RuntimeError",
-            "Set changed size during iteration",
-        );
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_int_set_check_not_resized(current_len: i64, expected_len: i64) {
-    check_set_len_unchanged(current_len, expected_len);
-}
-
-/// Element at a given insertion-order position, used only by `ForSet`'s
-/// own iteration codegen (Task 9) -- `set` has no user-facing indexing in
-/// Python (real CPython also rejects `s[0]`), so this is an internal
-/// codegen helper only.
-///
-/// # Safety
-/// `set` must be a live `PyIntSetObj` pointer; `index` must satisfy
-/// `0 <= index < pycc_rt_int_set_len(set)` (an internal codegen
-/// invariant, mirroring `pycc_rt_dict_key_at`'s own contract).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_int_set_get(set: *mut PyIntSetObj, index: i64) -> i64 {
-    let items = unsafe { &*set }.items.take();
-    let value = items[index as usize];
-    unsafe { &*set }.items.set(items);
-    value
-}
-
-/// D-060-style unconditional refcounting for `set[int]`, matching
-/// `pycc_rt_int_list_incref`'s own convention exactly: increments `set`'s
-/// refcount by one, a no-op on a null pointer.
-///
-/// # Safety
-/// `set` must be either a null pointer or a live `PyIntSetObj` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_int_set_incref(set: *mut PyIntSetObj) {
-    if set.is_null() {
-        return;
-    }
-    let obj = unsafe { &*set };
-    obj.rc.set(obj.rc.get() + 1);
-}
-
-/// D-060-style unconditional refcounting for `set[int]`, matching
-/// `pycc_rt_int_list_decref`'s own convention exactly: decrements `set`'s
-/// refcount by one, freeing the allocation once it reaches zero (which,
-/// via `Box::from_raw`'s own drop glue, also frees the `Cell<Vec<i64>>`
-/// payload's backing buffer -- no separate manual deallocation call
-/// needed). A no-op on a null pointer, same rationale as
-/// `pycc_rt_int_set_incref` above.
-///
-/// # Safety
-/// Same as `pycc_rt_int_set_incref`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pycc_rt_int_set_decref(set: *mut PyIntSetObj) {
-    if set.is_null() {
-        return;
-    }
-    let obj = unsafe { &*set };
-    let rc = obj.rc.get() - 1;
-    obj.rc.set(rc);
-    if rc == 0 {
-        drop(unsafe { Box::from_raw(set) });
     }
 }
 

@@ -6086,22 +6086,23 @@ fn an_error_inside_a_for_set_body_propagates_out_of_codegen() {
 }
 
 #[test]
-#[should_panic(expected = "pycc_codegen: truthiness of a set[T] value is not supported yet")]
-fn truthiness_of_a_set_value_panics_honestly() {
-    // The `set[T]` counterpart of `truthiness_of_a_dict_value_panics_
-    // honestly` above (D-107's reasoning, per D-124): `pycc_types`
-    // accepts any type in a boolean context, so `if s:` for a
-    // `set[int]` local type-checks today. v0.2 has no `bool(set)`
-    // semantics (D-124), so an honest panic naming the gap is the
-    // correct behavior. Calls `truthy` directly with a hand-built
-    // `Scalar::Set`, for the identical reason that test gives.
+fn truthiness_of_a_set_value_is_its_non_emptiness() {
+    // Part 1 of #1319 replaced the honest panic this test used to pin:
+    // `if s:` for a `set[int]`/`frozenset[int]` value now reads the
+    // runtime length and compares it with zero; `truthy` then narrows the
+    // arm's `i8` to the `i1` a branch consumes.
     let context = Context::create();
     let (module, rt) = list_scalar_panic_fixture(&context);
     let builder = context.create_builder();
+    let f = module.add_function("f", context.void_type().fn_type(&[], false), None);
+    builder.position_at_end(context.append_basic_block(f, "entry"));
     let ptr = context
         .ptr_type(inkwell::AddressSpace::default())
         .const_null();
-    truthy(&context, &builder, &module, &rt, Scalar::Set(ptr));
+    let bit = truthy(&context, &builder, &module, &rt, Scalar::Set(ptr));
+    assert_eq!(bit.get_type().get_bit_width(), 1);
+    let ir = llvm_string_to_owned(module.print_to_string());
+    assert!(ir.contains("call i64 @pycc_rt_int_set_len"), "{ir}");
 }
 
 #[test]

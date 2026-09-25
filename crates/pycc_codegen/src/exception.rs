@@ -140,6 +140,12 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::DictLiteral(_)
         | MirExpr::EmptyDict(_)
         | MirExpr::SetLiteral(_)
+        // Part 1 of #1319: `frozenset(x)` copies an already-validated
+        // container, exactly as a set literal inserts already-validated
+        // words -- the runtime's bigint raise is unreachable from a
+        // `list[int]` codegen built, as `pycc_rt_int_set_from_int_list`'s
+        // own doc comment records.
+        | MirExpr::FrozenSetFrom { .. }
         | MirExpr::TupleLiteral(_)
         | MirExpr::Slice { .. }
         | MirExpr::ListPop { .. }

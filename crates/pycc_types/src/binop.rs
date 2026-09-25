@@ -127,7 +127,11 @@ fn bitwise_result_type(op: BinOpKind, left: &Ty, right: &Ty) -> Result<Ty, Diagn
         });
     }
     let defined_by_cpython = match (left, right) {
-        (Ty::Set(_), Ty::Set(_)) => op != BinOpKind::LShift && op != BinOpKind::RShift,
+        // `set` and `frozenset` combine with each other in CPython, in any
+        // mix (Part 1 of #1319).
+        (Ty::Set(_) | Ty::FrozenSet(_), Ty::Set(_) | Ty::FrozenSet(_)) => {
+            op != BinOpKind::LShift && op != BinOpKind::RShift
+        }
         (Ty::Dict(_), Ty::Dict(_)) => op == BinOpKind::BitOr,
         _ => false,
     };
@@ -218,6 +222,7 @@ mod tests {
     #[test]
     fn the_set_and_dict_operators_cpython_defines_are_not_supported_yet() {
         let set = || Ty::Set(Box::new(Ty::Int));
+        let frozen = || Ty::FrozenSet(Box::new(Ty::Int));
         let dict = || Ty::Dict(Box::new((Ty::Str, Ty::Int)));
         for (op, left, right, reason) in [
             (BinOpKind::BitOr, set(), set(), "is not supported yet"),
@@ -229,6 +234,11 @@ mod tests {
             (BinOpKind::BitAnd, dict(), dict(), "is not defined"),
             (BinOpKind::BitXor, dict(), dict(), "is not defined"),
             (BinOpKind::BitOr, set(), Ty::Int, "is not defined"),
+            (BinOpKind::BitOr, frozen(), frozen(), "is not supported yet"),
+            (BinOpKind::BitAnd, set(), frozen(), "is not supported yet"),
+            (BinOpKind::BitXor, frozen(), set(), "is not supported yet"),
+            (BinOpKind::LShift, frozen(), frozen(), "is not defined"),
+            (BinOpKind::BitOr, frozen(), Ty::Int, "is not defined"),
         ] {
             let err = numeric_result_type(op, left.clone(), right.clone()).unwrap_err();
             assert_eq!(err.code, "T0021");

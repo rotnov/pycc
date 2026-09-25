@@ -617,7 +617,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // `BufferLen`'s answer-with-a-reason -- its own `.ty()` is always
         // `Ty::MemoryView`, never `Ty::Int`, so like `BufferGet` it can
         // never reach this function at all.
-        | MirExpr::BufferAlloc { .. } => false,
+        | MirExpr::BufferAlloc { .. }
+        // Part 1 of #1319: its `.ty()` is always `frozenset[int]`, never
+        // `Ty::Int`, so it can never reach this function either.
+        | MirExpr::FrozenSetFrom { .. } => false,
     }
 }
 

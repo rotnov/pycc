@@ -465,7 +465,7 @@ pub(super) fn lower_stmt(
                 // which mirrors `pycc_types::check_stmt`'s own identical
                 // `Ty::Set(elem_ty) => *elem_ty` arm (added in that crate's
                 // Task 7 fix round).
-                Ty::Set(elem_ty) => {
+                Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
                     // D-068 re-review of #780 (sixth round): see the
                     // `ForRange` arm's identical comment above.

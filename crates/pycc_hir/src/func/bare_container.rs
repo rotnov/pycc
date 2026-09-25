@@ -10,20 +10,24 @@ use crate::unsupported;
 use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
 
-/// The four builtin container types this version lowers from a parameterized
-/// annotation (D-228, issue #918). `frozenset[T]` and `type[T]` are absent on
-/// purpose: neither has a `Ty` variant, and adding one would have to clear
-/// D-109's 16-byte `size_of::<Ty>()` ceiling first.
-pub(super) const CONTAINER_ANNOTATION_NAMES: [&str; 4] = ["list", "set", "dict", "tuple"];
+/// The five builtin container types this version lowers from a parameterized
+/// annotation (D-228, issue #918; `frozenset` since Part 1 of #1319).
+/// `type[T]` is absent on purpose: it has no `Ty` variant and no run-time
+/// representation. (D-109's 16-byte `size_of::<Ty>()` ceiling is not the
+/// obstacle: a thin-pointer variant such as `Ty::FrozenSet(Box<Ty>)`
+/// measurably keeps `Ty` at 16 bytes.)
+pub(super) const CONTAINER_ANNOTATION_NAMES: [&str; 5] =
+    ["list", "set", "frozenset", "dict", "tuple"];
 
 /// A worked parameterized example for a bare container annotation's `C0001`,
-/// or `None` for a name that is not one of the four. `tuple` gets its own
+/// or `None` for a name that is not one of the five. `tuple` gets its own
 /// two-argument example: `tuple[int]` is legal but atypical, and a
 /// single-element example would read as if `tuple` were homogeneous.
 pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
     match name {
         "list" => Some("list[int]"),
         "set" => Some("set[int]"),
+        "frozenset" => Some("frozenset[int]"),
         "dict" => Some("dict[str, int]"),
         "tuple" => Some("tuple[int, int]"),
         _ => None,

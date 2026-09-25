@@ -131,6 +131,13 @@ pub(crate) fn reject_unrenderable(
         Ty::Object => Err(crate::foreign::object_operation_unsupported(
             "printing or formatting a CPython object",
         )),
+        // Part 1 of #1319: `pycc_codegen`'s `to_str` has no set arm, so
+        // before this refusal `print({1})` passed `pycc check` and panicked
+        // in the backend. `list`, `dict` and `tuple` are deliberately not
+        // added here: #1220 owns rendering them.
+        Ty::Set(_) | Ty::FrozenSet(_) => Err(crate::frozenset::unrenderable_set(ty)),
+        // This catch-all also swallows every `Ty` variant added later: a new
+        // variant `to_str` cannot render needs its own arm above.
         _ => Ok(()),
     }
 }

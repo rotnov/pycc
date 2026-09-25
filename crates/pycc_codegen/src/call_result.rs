@@ -121,7 +121,7 @@ pub(super) fn call_result_scalar<'ctx>(
                 .expect_basic("this function is declared to return dict")
                 .into_pointer_value(),
         ),
-        Ty::Set(_) => Scalar::Set(
+        Ty::Set(_) | Ty::FrozenSet(_) => Scalar::Set(
             call_site
                 .try_as_basic_value()
                 .expect_basic("this function is declared to return set")

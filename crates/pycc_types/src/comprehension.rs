@@ -59,7 +59,7 @@ pub(crate) fn resolve_comp_iter(
             match base_ty {
                 Ty::List(elem_ty) => Ok(*elem_ty),
                 Ty::Dict(kv) => Ok(kv.0),
-                Ty::Set(elem_ty) => Ok(*elem_ty),
+                Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => Ok(*elem_ty),
                 other => Err(Diagnostic::error(
                     "T0033",
                     format!(

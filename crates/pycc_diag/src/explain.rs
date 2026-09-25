@@ -574,7 +574,8 @@ def f() -> None:
 T0038 fires when a `set[T]` value's element type `T` is anything other than \
 `int` -- pycc's v0.2 set codegen (D-122) implements only `set[int]`'s \
 representation; other element types are type-checked but not yet \
-compilable and are rejected here rather than silently miscompiled.",
+compilable and are rejected here rather than silently miscompiled. \
+`frozenset[T]` shares the gate: only `frozenset[int]` is compiled.",
         example: "\
 def f() -> None:
     xs: set[str] = {\"a\", \"b\"}

@@ -551,6 +551,23 @@ pub enum MirExpr {
     BufferAlloc {
         len: Box<MirExpr>,
     },
+    /// `frozenset()` / `frozenset(x)` (Part 1 of #1319): a fresh
+    /// `frozenset[int]` built by the `frozenset` builtin, split off
+    /// `Call { callee: "frozenset" }` in `expr.rs` under the user-shadow
+    /// guard, exactly as `ObjLen`/`BufferLen` split off `len`.
+    ///
+    /// `source` is `None` for the empty call, otherwise the argument, whose
+    /// own type (`set[int]`, `frozenset[int]` or `list[int]` -- the only
+    /// shapes `pycc_types` admits) selects the runtime copy constructor in
+    /// codegen. [`MirExpr::ty`] answers `frozenset[int]` unconditionally:
+    /// that is the only frozenset type compiled (D-122).
+    ///
+    /// A dedicated node rather than a [`MirExpr::Call`], because no user
+    /// signature backs the call: the ordinary call path would look up a
+    /// `$fn:frozenset` that does not exist.
+    FrozenSetFrom {
+        source: Option<Box<MirExpr>>,
+    },
     /// `x: tuple[float, ..., float] = <object>` at module scope (D-244, Part
     /// 4 of #1026, PR 4c of #1083): the unpack of a foreign CPython object
     /// into a fixed-arity all-`float` tuple.
@@ -842,6 +859,9 @@ impl MirExpr {
             // `MirStmt::BufferSet` all dispatch onto an owned buffer with no
             // change at all. See the variant's own documentation.
             MirExpr::BufferAlloc { .. } => Ty::MemoryView,
+            // Part 1 of #1319: the only compiled frozenset type. See the
+            // variant's own documentation.
+            MirExpr::FrozenSetFrom { .. } => Ty::FrozenSet(Box::new(Ty::Int)),
             // Rebuilt from `arity` rather than read from a field: the
             // annotation this node exists for is a fixed-arity tuple whose
             // every element is `float`, so the arity is the whole type.
@@ -979,6 +999,13 @@ impl MirExpr {
             MirExpr::Instantiate(inst) => {
                 for arg in &inst.args {
                     arg.collect_named_expr_bindings(out);
+                }
+            }
+            // Part 1 of #1319: the argument, when present, is the node's
+            // only child (`frozenset((s := {1}))`).
+            MirExpr::FrozenSetFrom { source } => {
+                if let Some(source) = source {
+                    source.collect_named_expr_bindings(out);
                 }
             }
             MirExpr::AttrGet { base, .. }
@@ -2063,7 +2090,7 @@ pub(crate) fn resolve_comp_source(
                 kill_narrowing(scopes, var);
                 (CompSource::Dict(name.clone()), kv.0)
             }
-            Ty::Set(elem_ty) => {
+            Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => {
                 bind_variable(scopes, var.to_string(), (*elem_ty).clone());
                 kill_narrowing(scopes, var);
                 (CompSource::Set(name.clone()), *elem_ty)

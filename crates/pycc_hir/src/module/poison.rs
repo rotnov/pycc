@@ -260,9 +260,10 @@ pub(crate) fn unknown_annotation_name_message(name: &str) -> String {
 /// name `list`, and a later `x: list` must be suppressed exactly as `x: Foo`
 /// is after a failed `class Foo:`.
 ///
-/// `frozenset` and `type` deliberately keep the generic unknown-name message:
-/// neither has a `Ty` variant, so steering a user toward `frozenset[int]`
-/// would point at a form this version rejects just as hard.
+/// `type` deliberately keeps the generic unknown-name message: it has no
+/// `Ty` variant, so steering a user toward `type[...]` would point at a form
+/// this version rejects just as hard. `frozenset` gets this message since
+/// Part 1 of #1319, because `frozenset[int]` now lowers.
 pub(crate) fn bare_container_annotation_message(name: &str, example: &str) -> String {
     format!("{BARE_CONTAINER_PREFIX}{name}{BARE_CONTAINER_INFIX}{example}{BARE_CONTAINER_SUFFIX}")
 }
