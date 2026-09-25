@@ -379,6 +379,30 @@ fn a_hash_method_returning_a_non_integer_is_t0021() {
 }
 
 #[test]
+fn an_unannotated_hash_method_uses_its_inferred_return_type() {
+    // `__hash__` is private-named, so HIR accepts it without `->`; the
+    // solver's inferred return type drives the verdict, never a placeholder.
+    assert_native_matches_cpython(
+        "e2e_1335_unannotated_int",
+        &class_r(
+            "    def __hash__(self):\n        return 3\n",
+            "print(hash(R()))\n",
+        ),
+        "3\n",
+    );
+    assert_one_error(
+        "e2e_1335_unannotated_str",
+        &class_r(
+            "    def __hash__(self):\n        return \"s\"\n",
+            "print(hash(R()))\n",
+        ),
+        "T0021",
+        "`__hash__` method should return an integer",
+        "`R.__hash__` returns `str`",
+    );
+}
+
+#[test]
 fn a_hash_method_returning_an_optional_integer_is_c0001() {
     // CPython raises only when such a method returns `None` at run time,
     // so the declared return type alone is not a static `TypeError`.
