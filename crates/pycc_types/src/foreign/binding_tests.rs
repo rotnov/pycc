@@ -219,9 +219,12 @@ fn monomorphization_refusal(source: &str) -> pycc_diag::Diagnostic {
 /// a module-level statement the check phase admits is refused there with
 /// `T0021` whenever it *reads* a foreign name: a direct call (pre-existing
 /// since #1313), the binding #1325 admits, and an alias of a foreign import.
-/// A bare-name loop over a foreign import passes, because that walk never
-/// resolves a `ForList` iterable's name. #1325 widens the pre-existing gap
-/// rather than opening it; #1101 tracks it.
+/// A bare-name loop over a foreign import is not refused by the walk
+/// itself: its `ForList` arm's lookup of the iterable misses and types the
+/// loop target `Ty::Infer`, so an empty body passes, but a body that applies
+/// one of #1026's conversions to the target (`str(t)`) is refused with
+/// `C0001`, because the conversion gates admit exactly `Ty::Object`. #1325
+/// widens the pre-existing gap rather than opening it; #1101 tracks it.
 #[test]
 fn a_module_with_a_generic_function_refuses_foreign_reads_in_monomorphization() {
     const GENERIC: &str = "def g[T](a: T) -> T:\n    return a\n\n\n";
@@ -249,4 +252,12 @@ fn a_module_with_a_generic_function_refuses_foreign_reads_in_monomorphization() 
         "from sys import path\n{GENERIC}for t in path:\n    pass\nprint(g(1))\n"
     ));
     crate::check_and_resolve_all_keyed(&hir).expect("a bare-name loop passes monomorphization");
+    let diagnostic = monomorphization_refusal(&format!(
+        "from sys import path\n{GENERIC}for t in path:\n    print(str(t))\nprint(g(1))\n"
+    ));
+    assert_eq!(diagnostic.code, "C0001", "{diagnostic:?}");
+    assert!(
+        diagnostic.message.contains("call to builtin `str`"),
+        "{diagnostic:?}"
+    );
 }

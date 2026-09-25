@@ -985,9 +985,14 @@ fn rewrite_generic_calls_in_stmt(
                 Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => *elem,
                 _ => {
                     // Already validated as iterable by the ordinary check
-                    // pass that ran before `monomorphize`; a scalar or
-                    // missing binding here would mean that validation was
-                    // skipped, which no public entry point allows.
+                    // pass that ran before `monomorphize`. A *missing*
+                    // binding is reachable: this pass's environment lacks
+                    // the foreign names, so a module-level bare-name loop
+                    // over a CPython object (#1325) lands here and types its
+                    // target `Ty::Infer` rather than `Ty::Object` -- the
+                    // #1101 module-body gap `foreign/binding_tests.rs`'s
+                    // `a_module_with_a_generic_function_refuses_foreign_reads_in_monomorphization`
+                    // pins.
                     Ty::Infer
                 }
             };

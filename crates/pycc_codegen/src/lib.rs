@@ -5377,10 +5377,13 @@ fn declare_module_globals<'ctx>(
                 ),
                 // Part 1 of #1026: identical storage and reasoning to
                 // `Ty::Instance(_)` directly above -- an opaque pointer,
-                // null until `pycc_ext_obj_import` stores the imported
-                // module object into it, with the separate `initialized`
+                // null until a producer stores a CPython object reference
+                // into it -- `pycc_ext_obj_import` (the imported module),
+                // `pycc_ext_obj_import_from` (a `from X import a` member,
+                // #1278) or `emit_assign`'s object store (a module-level
+                // `x = <object>`, #1325) -- with the separate `initialized`
                 // flag below trapping any read that reaches it first. No
-                // exit-time release accompanies it: the module object is
+                // exit-time release accompanies it: the reference is
                 // owned for the artifact's lifetime (see
                 // `foreign_import.rs` and `docs/RUNTIME.md`).
                 pycc_mir::Ty::Object => (
