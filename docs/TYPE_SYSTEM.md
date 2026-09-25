@@ -1076,15 +1076,15 @@ hashes with CPython 3.14's xxHash-derived `tuplehash` (`hash((1, 2)) ==
 -3550055125485641917`). A heap bigint hashes like any other int and is not
 consumed; a tuple hash outside the smallint range is itself a heap-bigint
 `int`. The runtime entry points are in [RUNTIME.md](./RUNTIME.md) ("`hash()`
-of an `int`, a `bool` and a tuple").
+of an `int`, a `bool`, a tuple and an instance").
 
 The refusals follow CPython's own split. A `list`, `dict` or `set` argument
 is `T0021` "unhashable type: `<ty>`", the `TypeError` CPython raises,
 reported statically. Every other argument -- `str`, `float`, `None`, a
-tuple with any other element type, a `frozenset[int]`, a user-class
-instance -- is hashable in CPython but not yet here, so it is `C0001`
-"`hash()` of `<ty>` is valid Python but not implemented yet". Any other
-argument count is `T0021`.
+tuple with any other element type, a `frozenset[int]` -- is hashable in
+CPython but not yet here, so it is `C0001` "`hash()` of `<ty>` is valid
+Python but not implemented yet". Any other argument count is `T0021`. A
+user-class instance has its own rule, below.
 
 Both of `pycc_types`' paths check the call through one module
 (`crates/pycc_types/src/hash.rs`): the public-body path and the constraint
@@ -1097,6 +1097,63 @@ spelled `hash` (`import math as hash`) is the module, not the builtin; a
 builtin-named class gets there. Under `--ext` a hash is an ordinary `int`,
 so a hash outside the smallint range cannot be returned across the
 extension boundary (#1040).
+
+#### `hash()` of a user-class instance ([#1335](https://github.com/rotnov/pycc/issues/1335), Part 1 of [#1332](https://github.com/rotnov/pycc/issues/1332))
+
+`pycc_hir::resolve_instance_hash` is the one statement of this rule, shared
+by `pycc_types` (every refusal) and `pycc_mir` (the lowering to
+`MirExpr::InstanceHash`), so the two cannot disagree about a class.
+
+**The verdict** follows CPython's `type_new`: a class whose own dict binds
+`__eq__` but not `__hash__` gets `__hash__ = None`, and every other class
+inherits the hash of the first class on its MRO that binds `__hash__`,
+else `object.__hash__`. The walk stops at the first MRO class that binds
+either name in any of the five ways a class body can: a method, a
+`@property`, a `@staticmethod`, a `@classmethod` or a class attribute
+(CPython checks key presence, whatever the value).
+
+- No binding anywhere: the **identity hash**, CPython's `_Py_HashPointer`
+  of the instance's address (rotated right by 4 bits, `-1` mapped to `-2`).
+  An instance is never moved or freed, so the hash is stable. Only its
+  properties are observable: equal for one object, different for two live
+  objects, unchanged by attribute mutation.
+- A plain `def __hash__(self)` returning `int` or `bool`: the method is
+  called once per `hash()`, left to right, and its result is reduced as
+  CPython's `slot_tp_hash` does: an int that fits 64 bits is the hash as it
+  is (a heap bigint between `2**62` and `2**63 - 1` included), a wider one
+  is reduced like `hash(int)`, `-1` becomes `-2`, and a `bool` is `0`/`1`.
+  A `__hash__` that raises propagates like any other call.
+- `__eq__` without `__hash__` (directly or inherited): `T0021` "unhashable
+  type: `C`", the `TypeError` CPython raises, reported statically.
+- A `__hash__` whose return type is neither `int` nor `bool`: `T0021`
+  "`__hash__` method should return an integer", the `TypeError` CPython
+  raises on every call.
+
+Every other case is valid Python that pycc does not compile yet, `C0001`
+"`hash()` of `C` is valid Python but not implemented yet", with a help line
+naming the reason: a `__hash__` bound as anything but a plain method, or
+taking parameters besides `self`; an enum, exception, protocol or generic
+class anywhere on the MRO; and a `@dataclass` or `@dataclass_transform()`
+class with no `__hash__` of its own. The last one deliberately softens a
+bare `@dataclass`'s CPython `TypeError` (its synthesized `__eq__` sets
+`__hash__ = None`) to `C0001`: pycc marks both decorators the same way, and
+`@dataclass_transform()` synthesizes nothing and keeps the identity hash, so
+pycc cannot yet tell the two apart. A protocol-typed value is not an instance
+type and keeps the generic `C0001` above.
+
+**Subclass agreement.** pycc dispatches a method statically on the declared
+class, which is inexact when a subclass overrides it: an inherited method's
+body is compiled once against the base class, and `self` there may be a
+subclass instance ([#1337](https://github.com/rotnov/pycc/issues/1337)).
+`hash(x)` for a value of static class `C` is therefore admitted only when
+every class deriving from `C` has the same verdict as `C`; otherwise it is
+`C0001` naming the first disagreeing subclass. A class whose own verdict is
+already a refusal keeps its own reason.
+
+The verdict is delivered by the check phase only. The constraint path that
+types an unannotated private helper has no class table, so it admits any
+instance argument and the final check refuses it there, exactly as it does
+in a public body.
 
 ## Error philosophy
 

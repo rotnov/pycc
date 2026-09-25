@@ -23,6 +23,7 @@ mod expr_ty;
 mod frozenset;
 mod hash;
 mod import;
+mod instance_hash;
 mod matching;
 mod narrow;
 mod obj_call;

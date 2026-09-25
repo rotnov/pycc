@@ -2827,7 +2827,8 @@ fn emit_expr_unchecked<'ctx>(
                 return Scalar::Float(to_float(context, builder, rt, scalar));
             }
             // #1331: `hash(x)`, guarded like `float` above; `pycc_types`
-            // admits exactly one argument.
+            // admits exactly one argument. A class instance never arrives
+            // here: `pycc_mir` lowers it to `MirExpr::InstanceHash` (#1335).
             if let ("hash", [arg]) = (callee.as_str(), args.as_slice())
                 && !user_functions.contains_key(callee.as_str())
             {
@@ -3879,6 +3880,16 @@ fn emit_expr_unchecked<'ctx>(
         // whose free is a documented no-op on null. A second guard is emitted
         // *before* the allocator call, for an exception that was already
         // pending when this arm was reached -- see it in place below.
+        MirExpr::InstanceHash { operand, via } => hash::emit_instance_hash(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            operand,
+            *via,
+        ),
         MirExpr::FrozenSetFrom { source } => frozenset::emit_frozenset_from(
             context,
             builder,

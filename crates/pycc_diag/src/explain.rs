@@ -328,7 +328,11 @@ positionally and by keyword, and a parameter left unsupplied. Since #1331 \
 (Part 1 of #1327) it also reports `hash()` of a `list`, `dict` or `set` as \
 \"unhashable type: `<ty>`\", the `TypeError` CPython raises for it, reported \
 statically; `hash()` of a type CPython can hash but pycc cannot yet is \
-`C0001` instead. Different call \
+`C0001` instead. Since #1335 (Part 1 of #1332) it also reports `hash()` of \
+an instance whose class is unhashable (it defines `__eq__` without \
+`__hash__`), as \"unhashable type: `<class>`\", or whose `__hash__` does \
+not return an integer, as \"`__hash__` method should return an integer\". \
+Different call \
 sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \
 that they are all instances of the same underlying category (a name or \
