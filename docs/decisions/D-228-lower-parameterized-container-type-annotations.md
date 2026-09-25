@@ -278,6 +278,12 @@ status: accepted
     (`pycc_codegen/src/lib.rs:4024`/`4036`/`4048`/`4074` and
     `:1528`/`1540`/`1580`) with and without an annotation — so this decision
     adds no new route to them.
+    - Amendment (2026-09-25): for `set[T]` this no longer holds.
+      [#1326](https://github.com/rotnov/pycc/issues/1326) (Part 1 of
+      [#1319](https://github.com/rotnov/pycc/issues/1319)) gives
+      `set[int]` and `frozenset[int]` real truthiness (non-emptiness) and
+      refuses their string conversion as `C0001` before code generation. The
+      `list`, `dict` and `tuple` panics stay as described above.
   - *Irreversible-ish:* `T0053` is now a published diagnostic code, and the
     bare-container `C0001` wording is now a fixture-pinned public contract.
   - *Known inconsistency, recorded rather than fixed:* `type_arg_name_to_ty`
