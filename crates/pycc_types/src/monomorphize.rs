@@ -1248,7 +1248,10 @@ fn rewrite_comp_iter(
             Some(Ty::Dict(kv)) => Ok(kv.0),
             Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => Ok(*elem),
             // Already validated as iterable before `monomorphize` ever
-            // runs; see `ForList`'s own fallback above.
+            // runs. Unlike `ForList`'s fallback above, no foreign name
+            // reaches this arm: a comprehension over a CPython object is
+            // refused by the check phase (`I0404`), so the missing foreign
+            // names of this pass's environment never matter here.
             _ => Ok(Ty::Infer),
         },
     }
