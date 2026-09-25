@@ -260,6 +260,7 @@ extend <enum 'Color'>`, and when it is a member-less docstring-only enum
 -- a shape CPython does allow extending -- the message reads
 `cannot inherit from member-less enum class \`...\` -- ... not supported
 yet`.
+
 A class whose base names one of the eleven builtin types this version
 reports by name -- a subset of the types CPython accepts as a base: `int`,
 `float`, `str`, `bytes`, `bytearray`, `list`, `tuple`, `dict`, `set`,
