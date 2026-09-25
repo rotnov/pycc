@@ -73,15 +73,27 @@ fn the_protocol_fixture_prints_what_cpython_prints() {
     );
 }
 
-/// The issue's own reproduction: a template method on the base calls a hook
-/// the subclass overrides.
+/// The issue's own reproduction, verbatim: an inherited `call_m` calls
+/// `self.m()`, which the subclass overrides. CPython 3.14 prints `2` (the
+/// oracle fixture's `c02_chain` case checks the same shape byte for byte).
 #[test]
 fn the_issue_reproduction_runs_the_override() {
+    let source = "class A:\n    def m(self) -> int:\n        return 1\n\n    \
+                  def call_m(self) -> int:\n        return self.m()\n\n\n\
+                  class B(A):\n    def m(self) -> int:\n        return 2\n\n\n\
+                  print(B().call_m())\n";
+    assert_eq!(build_and_run("e2e_1337_issue", source), "2\n");
+}
+
+/// The template-method shape the issue generalizes: a base method calls a
+/// hook the subclass overrides, and the base itself still runs its own hook.
+#[test]
+fn a_template_method_runs_the_subclass_hook() {
     let source = "class Base:\n    def run(self) -> str:\n        return self.step()\n    \
                   def step(self) -> str:\n        return \"base\"\n\n\
                   class Child(Base):\n    def step(self) -> str:\n        return \"child\"\n\n\
                   print(Child().run())\nprint(Base().run())\n";
-    assert_eq!(build_and_run("e2e_1337_issue", source), "child\nbase\n");
+    assert_eq!(build_and_run("e2e_1337_template", source), "child\nbase\n");
 }
 
 /// A `super()` inside an inherited body continues along the *receiver's*

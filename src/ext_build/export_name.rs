@@ -138,8 +138,9 @@ pub(crate) fn classify_export_name(name: &str) -> Option<ExportName> {
         Some(kind) => {
             // A fourth segment cannot arise: `pycc_hir` refuses a class
             // nested in a class or in a function, so no `A.B.method` name
-            // exists. Refusing it is the fail-closed reading rather than a
-            // reachable branch.
+            // exists; a `super()`-target copy of a setter or classmethod
+            // (`C.k.0super_D.classmethod`, D-254) is never hosted either.
+            // Refusing it is the fail-closed reading.
             if segments.next().is_some() {
                 return None;
             }

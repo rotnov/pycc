@@ -115,6 +115,44 @@ fn a_super_target_copy_uses_the_marker_spelling() {
 }
 
 #[test]
+fn a_super_target_copy_of_a_setter_or_classmethod_keeps_its_kind() {
+    let mut t = tables();
+    // `C` overrides the property `p` and the classmethod `k`, so `A`'s
+    // bodies compiled for `C` take the marker spelling plus the kind suffix.
+    let c = t.get_mut("C").unwrap();
+    c.properties.push(PropertyDef {
+        name: "p".to_string(),
+        getter: "C.p".to_string(),
+        setter: Some("C.p.setter".to_string()),
+    });
+    c.class_methods
+        .push(("k".to_string(), "C.k.classmethod".to_string()));
+    let of = |n: &str| t.get(n);
+    for (origin, expected, kind) in [
+        (
+            "A.p.setter",
+            "C.p.0super_A.setter",
+            CopiedMemberKind::Setter,
+        ),
+        (
+            "A.k.classmethod",
+            "C.k.0super_A.classmethod",
+            CopiedMemberKind::ClassMethod,
+        ),
+        ("A.p", "C.p.0super_A", CopiedMemberKind::Method),
+    ] {
+        let name = inherited_copy_name(&t["C"], "A", origin, &of).unwrap();
+        assert_eq!(name, expected);
+        let copy = inherited_copy_origin(&name, &of).unwrap();
+        assert_eq!(copy.origin_class, "A");
+        assert_eq!(copy.origin_name, origin);
+        assert_eq!(copy.kind, kind);
+    }
+    assert_eq!(inherited_copy_origin("C.p.0super_A.static", &of), None);
+    assert_eq!(inherited_copy_origin("C.p.0super_A.setter.x", &of), None);
+}
+
+#[test]
 fn own_items_and_malformed_names_are_not_copies() {
     let t = tables();
     let of = |n: &str| t.get(n);

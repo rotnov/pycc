@@ -21,7 +21,10 @@
 //! - A *`super()`-target* copy -- a body `T.m` reached from a body compiled
 //!   for `C` through `super()` while `T` is not `m`'s first definer for `C` --
 //!   cannot use `C.m`: that name is `C`'s own `m` or the primary copy. It is
-//!   spelled `C.m.0super_T`. The third segment starts with a digit, so it
+//!   spelled `C.m.0super_T`, followed by the same kind suffix a primary copy
+//!   carries (`C.p.0super_T.setter`, `C.k.0super_T.classmethod`), so every
+//!   kind round-trips through [`inherited_copy_origin`] (today `super()`
+//!   reaches only plain methods). The third segment starts with a digit, so it
 //!   can never be a Python identifier, a `static`/`classmethod`/`setter`
 //!   suffix, or any other name the lowerer emits; both lexical `ext`
 //!   classifiers refuse a third segment other than those suffixes, so such a
@@ -158,8 +161,9 @@ pub fn inherited_copy_name<'c>(
         format!("{}.{member}{}", receiver.name, kind.suffix())
     } else {
         format!(
-            "{}.{member}.{SUPER_TARGET_MARKER}{origin_class}",
-            receiver.name
+            "{}.{member}.{SUPER_TARGET_MARKER}{origin_class}{}",
+            receiver.name,
+            kind.suffix()
         )
     })
 }
@@ -182,11 +186,14 @@ pub fn inherited_copy_origin<'c>(
         .next()
         .and_then(|s| s.strip_prefix(SUPER_TARGET_MARKER))
     {
-        if segments.next().is_some() {
-            return None;
-        }
+        let kind = match (segments.next(), segments.next()) {
+            (None, _) => CopiedMemberKind::Method,
+            (Some("setter"), None) => CopiedMemberKind::Setter,
+            (Some("classmethod"), None) => CopiedMemberKind::ClassMethod,
+            _ => return None,
+        };
         let origin = class_of(origin_class)?;
-        let origin_name = format!("{origin_class}.{member}");
+        let origin_name = format!("{origin_class}.{member}{}", kind.suffix());
         if origin_class == receiver_name
             || !receiver.mro.iter().any(|c| c == origin_class)
             || !owns_item(origin, &origin_name)
@@ -198,7 +205,7 @@ pub fn inherited_copy_origin<'c>(
             origin_class: origin_class.to_string(),
             origin_name,
             member: member.to_string(),
-            kind: CopiedMemberKind::Method,
+            kind,
         });
     }
     if binds_member(receiver, member) {
