@@ -13,7 +13,6 @@
 //! siblings and run under `--include-ignored` in CI.
 
 use pycc_scratch::ScratchDir;
-use std::path::Path;
 use std::process::{Command, Output};
 
 fn pycc() -> Command {
