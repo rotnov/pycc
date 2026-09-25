@@ -95,7 +95,7 @@ features lower to nothing, and a feature name CPython itself rejects is \
 `L0001`, not C0001. Since #1337 (D-254) two more shapes are C0001: an \
 inherited method body compiled once more for a subclass that lacks a \
 capability the body needs (a `print(self)` of a non-dataclass subclass of \
-a dataclass), reported at the origin body's location with a note naming \
+a dataclass), attributed to the origin body's file with a note naming \
 the subclass; and a user exception class whose MRO resolves an \
 instance-protocol dunder (`__str__`, `__bool__`, `__eq__`, ...) to a user \
 class rather than to a builtin exception base, reported at the class \
@@ -343,8 +343,8 @@ not return an integer, as \"`__hash__` method should return an integer\". \
 Since #1337 (D-254) it also fires in an inherited method body compiled \
 once more for a subclass, when that copy passes the subclass receiver where \
 only the base class is accepted (`helper(self)` with `def helper(a: A)`, or \
-a dataclass `==` the subclass lacks); the diagnostic is reported at the \
-origin body's location with a note naming the subclass. \
+a dataclass `==` the subclass lacks); the diagnostic is attributed to the \
+origin body's file with a note naming the subclass. \
 Different call \
 sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \

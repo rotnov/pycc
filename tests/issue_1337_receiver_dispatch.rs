@@ -85,6 +85,46 @@ fn the_issue_reproduction_runs_the_override() {
     assert_eq!(build_and_run("e2e_1337_issue", source), "2\n");
 }
 
+/// The base class lives in an imported module and the subclass in the
+/// program (plan item 15): the copy pass runs over the linked program, so
+/// the inherited `call_m` still runs the subclass's `m`. CPython prints
+/// `1 2`.
+///
+/// A subclass defined in a *second* imported module whose base comes from
+/// a third one is not covered here: that import shape panics in
+/// `pycc_hir::import` on `main` already, independently of #1337.
+#[test]
+fn an_imported_base_runs_the_subclass_override() {
+    let dir = ScratchDir::new("e2e_1337_multi_file").expect("scratch");
+    std::fs::write(
+        dir.join("m1.py"),
+        "class A:\n    def m(self) -> int:\n        return 1\n\n    \
+         def call_m(self) -> int:\n        return self.m()\n",
+    )
+    .expect("write m1");
+    let main = dir.join("main.py");
+    std::fs::write(
+        &main,
+        "from m1 import A\n\n\nclass B(A):\n    def m(self) -> int:\n        return 2\n\n\n\
+         print(A().call_m(), B().call_m())\n",
+    )
+    .expect("write main");
+    let exe = dir.join("main");
+    let build = pycc()
+        .arg("build")
+        .arg(&main)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", text(&build.stderr));
+    let run = Command::new(&exe)
+        .output()
+        .expect("the program should spawn");
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    assert_eq!(text(&run.stdout), "1 2\n");
+}
+
 /// The template-method shape the issue generalizes: a base method calls a
 /// hook the subclass overrides, and the base itself still runs its own hook.
 #[test]
