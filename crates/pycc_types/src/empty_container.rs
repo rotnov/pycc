@@ -90,8 +90,11 @@
 //! An unannotated `self.d = {}` establishing the attribute in `__init__`
 //! stays `C0001` in `pycc_hir` (a later reset in a method is typed from the
 //! slot like `[]`, or left for `T0003` on a shape mismatch): its producer,
-//! `self.d[k] = v`, is not lowerable yet (#891). D-245's 2026-09-24
-//! amendment for #1265 is the canonical statement.
+//! `self.d[k] = v`, is not lowerable yet (#891). A class-body declaration
+//! (`d: dict[str, int]`, #1266) gives the slot its concrete type in
+//! `pycc_hir` instead, so the establishing literal is typed like a reset,
+//! and a wrong-shape one is left for `T0003`. D-245's 2026-09-24 amendments
+//! for #1265 and #1266 are the canonical statement.
 //!
 //! Within a function body the pass walks *every* block statement this HIR has
 //! -- `if`/`else`, `while`, both `for` forms, every `match` case body, and

@@ -10,10 +10,20 @@
 //! `dataclass_fields`, `abstract_methods`) that `lower_class` then folds into
 //! the finished [`HirClassDef`].
 //!
+//! A plain (non-dataclass) body's value-less annotations are instance
+//! attribute declarations (#1266): `super::declared_attrs` collects them
+//! before the pass, the pass skips them, and `collect_init_attrs` takes their
+//! declared types for the slots `__init__` establishes.
+//!
 //! Enum and protocol class bodies never reach this walk -- `lower_class`
 //! returns through `lower_enum_class`/`lower_protocol_class` before it.
 
 use super::attrs::{lower_class_attr, lower_unannotated_class_attr, strip_class_var};
+use super::declared_attrs::{
+    ClassMethodTables, collect_declared_attrs, instance_declaration_name,
+    reject_unestablished_or_colliding,
+};
+use super::init_slot::DeclaredAttrs;
 use super::reserved_names::reject_reserved_method_name;
 use super::{
     ClassAnnotationInfo, ClassAttrValue, HirClassDef, MethodKind, PropertyDef, classify_decorator,
@@ -116,7 +126,8 @@ pub(super) struct ClassBodyOutput {
     pub(super) methods: Vec<(String, String)>,
     /// The lowered `HirItem::Function` for every method in the body.
     pub(super) items: Vec<HirItem>,
-    /// Instance attribute slots derived from `__init__` (D-154).
+    /// Instance attribute slots derived from `__init__` (D-154), each typed
+    /// by its class-body declaration when one exists (#1266).
     pub(super) attrs: Vec<(String, Ty)>,
     /// `@property` getters (and their setters).
     pub(super) properties: Vec<PropertyDef>,
@@ -162,13 +173,22 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
     let mut abstract_methods: Vec<String> = Vec::new();
     let mut class_attrs: Vec<(String, Ty, ClassAttrValue)> = Vec::new();
     let mut init_seen = false;
+    // #1266: a value-less class-body annotation is an instance attribute
+    // declaration. It is collected before the walk because it may follow
+    // `def __init__`, whose pre-scan needs the full list; the walk then skips
+    // every statement collected here. A `@dataclass` body gives the same
+    // spelling its field meaning instead.
+    let declared = if is_dataclass {
+        Vec::new()
+    } else {
+        collect_declared_attrs(body, class_name, type_param, aliases, class_name_defs)?
+    };
     for stmt in body {
         // #378 (PR-18): a `@dataclass` class body accepts `AnnAssign`
         // (`x: int` or `x: int = default`) alongside method definitions.
-        // An annotated field contributes to `dataclass_fields`. A
-        // non-dataclass class still rejects `AnnAssign` (class-level
-        // attribute declarations are a separate feature, out of scope for
-        // this PR).
+        // An annotated field contributes to `dataclass_fields`. In a
+        // non-dataclass body an `AnnAssign` is a class constant (#911) or,
+        // value-less, an instance attribute declaration (#1266).
         if let Stmt::Pass(_) = stmt {
             // `pass` is a no-op in any class body (dataclass or not). A
             // zero-field dataclass (`@dataclass\nclass Empty:\n    pass`)
@@ -192,6 +212,11 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
             let stripped = strip_class_var(&ann.annotation)?;
             let is_class_var = stripped.is_class_var;
             if !is_dataclass {
+                // #1266: already collected by `collect_declared_attrs`, with
+                // the same predicate, so the two cannot drift.
+                if instance_declaration_name(ann).is_some() {
+                    continue;
+                }
                 // PEP 526 (#911, Part 1 of #885): an *annotated* class-level
                 // attribute with a literal initializer is a compile-time
                 // constant. An un-annotated one (`X = 1`, `Stmt::Assign`) is
@@ -521,6 +546,10 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 &method_def.body,
                 &params,
                 receiver_split.name(),
+                &DeclaredAttrs {
+                    attrs: &declared,
+                    class_name,
+                },
                 &|annotation| {
                     crate::annotation_to_ty(
                         annotation,
@@ -822,6 +851,19 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         }
         items.push(item);
     }
+    // #1266: every declaration must be established by the own `__init__`
+    // (an empty `attrs` when there is none) and must not name a method.
+    reject_unestablished_or_colliding(
+        &declared,
+        &attrs,
+        &ClassMethodTables {
+            methods: &methods,
+            properties: &properties,
+            static_methods: &static_methods,
+            class_methods: &class_methods,
+        },
+        class_name,
+    )?;
     Ok(ClassBodyOutput {
         methods,
         items,

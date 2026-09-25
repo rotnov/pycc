@@ -6,7 +6,24 @@ use crate::{ContainerFallback, HirExpr, HirItem, HirStmt, lower_checked};
 
 #[test]
 fn a_non_def_class_body_statement_is_unsupported() {
-    assert_c0001("class C:\n    x: int\n");
+    // #1266 made a value-less `x: int` an instance attribute declaration, so
+    // this pins the catch-all with a statement kind that is still refused.
+    assert_c0001("class C:\n    print(1)\n");
+}
+
+#[test]
+fn a_value_less_annotation_without_an_init_is_an_unestablished_declaration() {
+    // #1266: what this file's catch-all test used to spell is now refused
+    // for a different reason -- nothing establishes the declared attribute.
+    let message = crate::lower_checked(&crate::pycc_parser_test_helper::parse(
+        "class C:\n    x: int\n",
+    ))
+    .unwrap_err()
+    .message;
+    assert!(
+        message.starts_with("instance attribute `x` declared in class `C` is never assigned"),
+        "{message}"
+    );
 }
 
 #[test]
