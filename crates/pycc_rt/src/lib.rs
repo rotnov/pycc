@@ -2790,14 +2790,14 @@ mod tests {
 
     /// Part C of #1038 (#1065): a heap bigint word, the operand every
     /// converted site below rejects.
-    fn a_bigint_word() -> i64 {
+    pub(crate) fn a_bigint_word() -> i64 {
         tag_bigint(bigint_from_i128(1i128 << 80))
     }
 
     /// Part C of #1038 (#1065): asserts the pending exception is the
     /// converted `OverflowError`, carries `context`, and does not carry the
     /// retired `pycc_rt: ` panic prefix (the Part B convention).
-    fn assert_overflow_raised(context: &str) {
+    pub(crate) fn assert_overflow_raised(context: &str) {
         let (tag, message) = pending_tag_and_message();
         assert_eq!(tag, EXCEPTION_TYPE_OVERFLOW_ERROR, "{message}");
         assert!(
@@ -2911,22 +2911,6 @@ mod tests {
         assert_eq!(int_to_float(a_bigint_word()), 0.0);
         assert_overflow_raised("converting");
         pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn a_bigint_value_added_to_an_int_set_raises_and_leaves_the_set_intact() {
-        // The `Cell::take` hazard: `pycc_rt_int_set_add` lifts `items` out
-        // of its cell, so an early return placed after the `take()` would
-        // leave the set permanently empty. Decoding first is what keeps the
-        // already-stored element below observable.
-        pycc_rt_exception_clear();
-        let set = pycc_rt_int_set_new();
-        unsafe { pycc_rt_int_set_add(set, tag_smallint(7)) };
-        unsafe { pycc_rt_int_set_add(set, a_bigint_word()) };
-        assert_overflow_raised("storing in set[int]");
-        assert_eq!(unsafe { pycc_rt_int_set_len(set) }, 1);
-        pycc_rt_exception_clear();
-        unsafe { pycc_rt_int_set_decref(set) };
     }
 
     #[test]
@@ -4916,14 +4900,6 @@ mod tests {
     }
 
     #[test]
-    fn pycc_rt_int_set_check_not_resized_is_a_no_op_when_lengths_match() {
-        // Calls the public wrapper directly (safe for the non-panicking
-        // path, unlike the panic-path test below), so the wrapper's own
-        // call-through line is exercised too, not just the private helper.
-        pycc_rt_int_set_check_not_resized(3, 3);
-    }
-
-    #[test]
     fn check_set_len_unchanged_raises_when_lengths_differ() {
         // Part B of #1038 (#1064): was `#[should_panic]`. The function is
         // `-> ()`, so there is no sentinel: the `ForSet` loop-test codegen
@@ -4958,74 +4934,6 @@ mod tests {
         assert_eq!(tag, EXCEPTION_TYPE_INDEX_ERROR);
         assert_eq!(message, "pop from empty list");
         pycc_rt_exception_clear();
-    }
-
-    #[test]
-    fn pycc_rt_int_set_add_deduplicates_repeated_values() {
-        unsafe {
-            let set = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(set, tag_smallint(1));
-            pycc_rt_int_set_add(set, tag_smallint(1));
-            pycc_rt_int_set_add(set, tag_smallint(2));
-            assert_eq!(pycc_rt_int_set_len(set), 2);
-            pycc_rt_int_set_decref(set);
-        }
-    }
-
-    #[test]
-    fn pycc_rt_int_set_preserves_first_insertion_order() {
-        unsafe {
-            let set = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(set, tag_smallint(2));
-            pycc_rt_int_set_add(set, tag_smallint(1));
-            pycc_rt_int_set_add(set, tag_smallint(2)); // duplicate, ignored, does not move 2's position
-            assert_eq!(pycc_rt_int_set_get(set, 0), tag_smallint(2));
-            assert_eq!(pycc_rt_int_set_get(set, 1), tag_smallint(1));
-            pycc_rt_int_set_decref(set);
-        }
-    }
-
-    #[test]
-    fn int_set_numeric_dedup_preserves_the_first_bool_or_int_encoding() {
-        unsafe {
-            let bool_first = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(bool_first, BOOL_TRUE_MARKER);
-            pycc_rt_int_set_add(bool_first, tag_smallint(1));
-            assert_eq!(pycc_rt_int_set_len(bool_first), 1);
-            assert_eq!(pycc_rt_int_set_get(bool_first, 0), BOOL_TRUE_MARKER);
-            pycc_rt_int_set_decref(bool_first);
-
-            let int_first = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(int_first, tag_smallint(0));
-            pycc_rt_int_set_add(int_first, BOOL_FALSE_MARKER);
-            assert_eq!(pycc_rt_int_set_len(int_first), 1);
-            assert_eq!(pycc_rt_int_set_get(int_first, 0), tag_smallint(0));
-            pycc_rt_int_set_decref(int_first);
-        }
-    }
-
-    #[test]
-    fn pycc_rt_int_set_incref_then_decref_frees_without_leaking() {
-        unsafe {
-            let set = pycc_rt_int_set_new();
-            pycc_rt_int_set_incref(set);
-            pycc_rt_int_set_decref(set);
-            pycc_rt_int_set_decref(set);
-        }
-    }
-
-    #[test]
-    fn pycc_rt_int_set_incref_and_decref_on_a_null_pointer_are_safe_no_ops() {
-        // D-014's 100% line/region coverage gate: without this,
-        // `pycc_rt_int_set_incref`/`_decref`'s `if set.is_null()` early
-        // return is dead code, since none of the tests above ever pass a
-        // null pointer. Mirrors `PyIntListObj`'s own
-        // `int_list_incref_and_decref_on_a_null_pointer_are_safe_no_ops`
-        // test above.
-        unsafe {
-            pycc_rt_int_set_incref(std::ptr::null_mut());
-            pycc_rt_int_set_decref(std::ptr::null_mut());
-        }
     }
 
     /// #1054, coverage-bearing companion to
