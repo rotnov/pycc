@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod exception;
+mod fallthrough;
 use exception::{ExceptionCodegenState, expression_can_set_exception, guard_statement_effects};
 mod exception_value;
 use exception_value::{emit_exception_set_frame, emit_exception_value};
@@ -2019,9 +2020,10 @@ fn emit_expr_unchecked<'ctx>(
                     .build_conditional_branch(is_initialized, ready, unbound)
                     .expect("build_conditional_branch should not fail for an i1 condition");
                 builder.position_at_end(unbound);
-                // #1316: a foreign `object` global read in a function body
-                // before its import ran raises a catchable `NameError`, as
-                // CPython does; every other unbound read keeps the trap.
+                // #1316 / Part 1 of #1333: an `object` global read in a
+                // function body before its import or assignment ran raises
+                // a catchable `NameError`, as CPython does; every other
+                // unbound read keeps the trap.
                 if !foreign_fail::emit_unbound_object_read(context, builder, module, rt, ty, name) {
                     builder
                         .build_call(rt.trap, &[], "unbound_global")
@@ -4337,22 +4339,17 @@ fn build_call_to_with_leading_args<'ctx>(
                 // further conversion, only the same `Into` `BasicMetadataValueEnum`
                 // has for any `StructValue`.
                 Scalar::Optional(v) => v.into(),
-                // NOT a pass-through, unlike every arm above (D-244, Part 2
-                // of #1026): a `Ty::Object` argument would have to be
-                // marshalled into a CPython call, which only a
-                // `pycc_ext_obj_*` shim may perform, and Part 2's attribute
-                // half ships no such shim. `pycc_types` admits no
-                // `object`-annotated parameter (D-137's amendment) and
-                // refuses passing a `Ty::Object` value to a parameter of
-                // any other type, so this arm is defensive.
-                Scalar::Object(_) => {
-                    panic!(
-                        "pycc_codegen: internal error: a CPython object argument is not supported \
-                         yet -- pycc_types should have refused this before codegen"
-                    )
-                }
-                // Defensive for the same reason (Part 2 of #1027): passing
-                // `b` to another function is a bare read of the name, which
+                // Pass-through (Part 1 of #1333): a `Ty::Object` argument
+                // reaches only an unannotated private helper's
+                // solver-inferred `object` parameter -- `object` is
+                // unspellable in an annotation (D-137's amendment) -- so the
+                // callee is another pycc function taking the same `ptr`. The
+                // borrowed pointer is passed through with no refcount
+                // change: the callee never releases it (#1092's leak-only
+                // rule, `docs/RUNTIME.md`).
+                Scalar::Object(v) => v.into(),
+                // Defensive (Part 2 of #1027): passing `b` to another
+                // function is a bare read of the name, which
                 // `reject_memoryview_read` refuses with `C0001` for a
                 // wrapper-borrowed parameter and
                 // `owned_buffer_use_unsupported` for the artifact-owned
@@ -4904,9 +4901,10 @@ fn emit_assign<'ctx>(
         // the previous reference, which is #1092's leak-only rule. A
         // release here would be a use-after-free, not a fix: `y = x`
         // aliases the pointer without an incref, so freeing `x`'s old value
-        // would free an object `y` still points at. Reachable only for a
-        // module global -- `pycc_types`' `check_assignment` still refuses
-        // an object binding inside a function body.
+        // would free an object `y` still points at. Reached for a module
+        // global and, since Part 1 of #1333 (#1362), for a function-local
+        // slot too: `pycc_types`' `check_assignment` admits the binding in
+        // both scopes, and the same leak-only rule governs each.
         Scalar::Object(v) => v.into(),
         // A pass-through since Part 2a of #1142 (#1165), where it was a
         // panic (as `Object`'s arm above was until #1325): storing one
@@ -6292,7 +6290,7 @@ fn compile_to_object_with_observer(
                     .get_terminator()
                     .is_none() =>
                 {
-                    if exception::block_always_terminates(body) {
+                    if fallthrough::block_always_terminates(body) {
                         builder.build_unreachable().expect(
                             "build_unreachable should terminate a statically impossible continuation",
                         );

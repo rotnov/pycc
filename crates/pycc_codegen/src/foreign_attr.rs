@@ -170,8 +170,8 @@ mod tests {
     /// A discarded `ExprStmt` is used rather than an assignment because it
     /// was the shape PR 2a admitted end to end: `pycc_types` then refused
     /// binding a CPython object to a name (`I0404`; admitted at module scope
-    /// since #1325), and the discarded load keeps these tests independent of
-    /// the store.
+    /// since #1325 and in a function body since Part 1 of #1333), and the
+    /// discarded load keeps these tests independent of the store.
     fn load(module: &str, attr: &str) -> Vec<MirItem> {
         vec![
             MirItem::ForeignImport {

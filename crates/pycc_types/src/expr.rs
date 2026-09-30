@@ -234,24 +234,17 @@ pub(crate) fn infer_expr_in(
                     // refuses on its own instead -- `crate::foreign`'s
                     // module doc carries the full rule.
                     let ty = env.narrowed_ty(name).unwrap_or_else(|| ty.clone());
-                    // Inside a *function body* the read is admitted only for
-                    // a module-level foreign import (#1316,
-                    // `env.foreign_globals`). The two reasons PR 2a refused
-                    // it are answered below this layer: a read that runs
-                    // before the import at run time raises `NameError`
-                    // from codegen's unbound-global branch, since D-041
-                    // cannot prove call order here, and a failed operation
-                    // bridges CPython's exception into pycc's pending
-                    // state and branches to the innermost exception target
-                    // (`pycc_codegen`'s `foreign_fail.rs`). Any other
-                    // `object` name in a function body -- an unannotated
-                    // parameter inferred as `object` from a module-level
-                    // call site -- stays refused: reading a function-local
-                    // `object` value -- or a module-level `x = <object>`
-                    // global (#1325) -- is #1333's.
-                    if env.in_function_body && !env.foreign_globals.contains(name) {
-                        crate::foreign::reject_object_read(name, &ty)?;
-                    }
+                    // The read is admitted in both scopes, for any
+                    // definitely-bound `object` name -- a foreign import, a
+                    // module-level `x = <object>` global, a function local
+                    // or a solver-inferred `object` parameter (#1316, Part 1
+                    // of #1333). A read that runs before a module-level
+                    // binding at run time raises `NameError` from codegen's
+                    // unbound-global branch, since D-041 cannot prove call
+                    // order here, and a failed operation bridges CPython's
+                    // exception into pycc's pending state and branches to
+                    // the innermost exception target (`pycc_codegen`'s
+                    // `foreign_fail.rs`).
                     reject_memoryview_read(name, &ty, env.owned_buffers.contains(name))?;
                     Ok(ty)
                 }
@@ -320,12 +313,10 @@ pub(crate) fn infer_expr_in(
                 // positional-scalar argument rule (`crate::foreign`'s module
                 // doc). `lookup` answers `None` for a maybe-bound name, so a
                 // one-arm-`if` import falls through to the `T0041` below.
-                // #1316 admits the same call in a function body when the
-                // callee is a module-level foreign import, exactly as the
+                // #1316 and Part 1 of #1333 admit the same call in a
+                // function body for any `object` callee, exactly as the
                 // `Name` arm admits its read.
-                if matches!(ty, Ty::Object)
-                    && (!env.in_function_body || env.foreign_globals.contains(callee))
-                {
+                if matches!(ty, Ty::Object) {
                     let arg_tys = args
                         .iter()
                         .map(|arg| infer_expr_in(env, local_names, arg))
@@ -333,13 +324,6 @@ pub(crate) fn infer_expr_in(
                     crate::foreign::check_object_call_args(&arg_tys, "call")?;
                     return Ok(Ty::Object);
                 }
-                // Part 1 of #1026, choke point 3: inside a function body a
-                // function-local `object` value (an inferred-`object`
-                // parameter) is not callable (#1333), which is a different
-                // claim from D-110's "this name is bound to a value, and no
-                // value in the current subset is callable" -- say so with
-                // `I0404` rather than the generic `T0021`.
-                crate::foreign::reject_object_read(callee, &ty)?;
                 return Err(non_callable_binding(callee));
             }
             // Issue #118 Part 1: a maybe-bound callee is not callable -- it
@@ -861,12 +845,10 @@ pub(crate) fn infer_expr_in(
                     };
                     return Err(diag);
                 }
-                // #1316: an `object` argument that got this far met a
-                // parameter it is assignable to -- an unannotated private
-                // helper's solver-inferred `object` parameter -- and is
-                // refused here, after the ordinary mismatch so a declared
-                // parameter keeps its `T0021`.
-                crate::foreign::reject_object_operand(arg_ty, crate::foreign::PASSING_TO_A_FUNCTION)?;
+                // Part 1 of #1333: an `object` argument that got this far
+                // met a parameter it is assignable to -- an unannotated
+                // private helper's solver-inferred `object` parameter -- and
+                // is passed through as a borrowed pointer.
             }
             Ok(return_ty.clone())
         }

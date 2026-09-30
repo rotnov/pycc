@@ -89,6 +89,7 @@
 //! only read the value this module threads through them.
 
 mod ann_assign;
+mod assert_stmt;
 mod assign;
 mod aug_assign;
 pub(crate) mod chain_assign;
@@ -220,6 +221,25 @@ pub(crate) fn lower_stmt(
         Stmt::AugAssign(aug) => {
             return lower_stmt(
                 &aug_assign::desugar_aug_assign(aug)?,
+                aliases,
+                in_loop,
+                in_function,
+                in_finally,
+                except_star,
+                class_name,
+                type_param,
+                class_defs,
+                imports,
+                signatures,
+            );
+        }
+        // #1369: `assert test, msg` is lowered as `if test: pass` / `else:
+        // raise AssertionError(msg)` (see `assert_stmt`), through this same
+        // function so the `Stmt::If` truthiness rules and the walrus
+        // placement check below apply to the rewritten statement unchanged.
+        Stmt::Assert(assert) => {
+            return lower_stmt(
+                &assert_stmt::desugar_assert(assert),
                 aliases,
                 in_loop,
                 in_function,

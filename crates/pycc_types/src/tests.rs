@@ -44,6 +44,7 @@ mod protocol_return;
 mod try_definite;
 mod type_checking_marker;
 mod typing_cast;
+mod while_true_return;
 
 #[test]
 fn v0_1_slice_always_type_checks() {

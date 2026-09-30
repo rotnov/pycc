@@ -1,10 +1,11 @@
 //! HIR exception-class metadata and handler shape (PEP 3110, #382).
 
 use super::{HirClassDef, HirItem, HirStmt, Ty};
+use crate::ImportBinding;
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
-pub const BUILTIN_EXCEPTION_CLASSES: [&str; 28] = [
+pub const BUILTIN_EXCEPTION_CLASSES: [&str; 29] = [
     "Exception",
     "ValueError",
     "TypeError",
@@ -54,6 +55,11 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 28] = [
     // before its subclass, as `ConnectionError` does before its children.
     "ImportError",
     "ModuleNotFoundError",
+    // #1369: `AssertionError`, tag 28, appended so every existing tag keeps
+    // its value -- the class a failing `assert` statement raises. Parented
+    // under `Exception`, CPython's real parentage, so this is not a
+    // `D-202`-style hierarchy simplification.
+    "AssertionError",
 ];
 
 /// Part 2 of #541 (D-189): the number of names in [`BUILTIN_EXCEPTION_CLASSES`]
@@ -96,7 +102,8 @@ pub fn is_flat_builtin_exception_class(name: &str) -> bool {
 /// `OSError` family added by Part 2 of #543 (#739); `23..=24` for
 /// `BaseExceptionGroup`/`ExceptionGroup` added by Part 3 of #382 (#542); `25`
 /// for `OverflowError` added by Part A of #1038 (#1063); `26`/`27` for
-/// `ImportError`/`ModuleNotFoundError` added by #1292 -- everything past the
+/// `ImportError`/`ModuleNotFoundError` added by #1292; `28` for
+/// `AssertionError` added by #1369 -- everything past the
 /// flat seven resolved by a fixed tag stored on each class's own
 /// [`HirClassDef`].
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
@@ -172,7 +179,8 @@ pub fn is_builtin_exception_class(name: &str) -> bool {
 /// non-`Exception` name's parent was `Exception`). Part 2 of #543 (#739)
 /// added the real PEP 3151 `OSError` tree: `OSError` and the other six
 /// original names are still direct children of `Exception`, as is Part A of
-/// #1038 (#1063)'s `OverflowError` and #1292's `ImportError`, whose own child
+/// #1038 (#1063)'s `OverflowError`, #1369's `AssertionError`, and #1292's
+/// `ImportError`, whose own child
 /// `ModuleNotFoundError` is one level deeper (CPython's real parentage); ten
 /// more names
 /// are direct children of `OSError`; and four more (`BrokenPipeError`,
@@ -196,9 +204,10 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
         // root that `except Exception:` silently stops catching.
         // #1292: `ImportError` parents to `Exception` and `ModuleNotFoundError`
         // to `ImportError` -- CPython's real hierarchy, not a simplification.
+        // #1369: `AssertionError` parents to `Exception`, as in CPython.
         "OSError" | "ValueError" | "TypeError" | "KeyError" | "IndexError"
         | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" | "OverflowError"
-        | "ImportError" => Some("Exception"),
+        | "ImportError" | "AssertionError" => Some("Exception"),
         "ExceptionGroup" => Some("BaseExceptionGroup"),
         "ModuleNotFoundError" => Some("ImportError"),
         "BlockingIOError" | "ChildProcessError" | "ConnectionError" | "FileExistsError"
@@ -221,7 +230,8 @@ pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 /// #543/#739's PEP 3151 `OSError` family, then to 25 by Part 3 of #382/#542's
 /// `BaseExceptionGroup`/`ExceptionGroup`, then to 26 by Part A of
 /// #1038/#1063's `OverflowError`, then to 28 by #1292's
-/// `ImportError`/`ModuleNotFoundError`).
+/// `ImportError`/`ModuleNotFoundError`, then to 29 by #1369's
+/// `AssertionError`).
 ///
 /// Before this existed, `Exception`/`ValueError`/... were recognized only
 /// by name, through [`is_builtin_exception_class`], with no `HirClassDef`
@@ -395,6 +405,10 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// construction, and keeps new upstream AST nodes covered automatically.
 /// String forward references (`x: "ValueError"`) are not scanned because
 /// `func::annotation_to_ty` does not resolve them either.
+///
+/// The one non-name reference is an `assert` statement (#1369), which
+/// raises `AssertionError` without spelling it; a `visit_stmt` override
+/// counts it and otherwise leaves the generic walk untouched.
 pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bool {
     struct ReferenceScan {
         found: bool,
@@ -414,9 +428,90 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
             }
             visitor::walk_expr(self, expr);
         }
+        // #1369: an `assert` statement raises `AssertionError` without
+        // spelling it, and its lowering names that class by spelling, so it
+        // needs the seeded definitions exactly as `raise AssertionError(..)`
+        // would.
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            if matches!(stmt, Stmt::Assert(_)) {
+                self.found = true;
+                return;
+            }
+            visitor::walk_stmt(self, stmt);
+        }
     }
     let mut scan = ReferenceScan { found: false };
     scan.visit_body(&module.body);
+    scan.found
+}
+
+/// The range of the first live `assert` statement anywhere in `body`,
+/// nested bodies included, or `None` when it has none (#1369).
+///
+/// `module::lower_module` asks this, one top-level item at a time, only when
+/// [`shadowed_builtin_exception_name`] withheld the builtin classes: an
+/// `assert` needs the builtin `AssertionError`, which such a module does not
+/// have, so the first top-level item containing one is refused with one
+/// `C0001` naming the binding responsible rather than at each `assert` with a
+/// message about the call it was rewritten into.
+///
+/// "Live" means lowering keeps it: every `if`/`elif` chain is walked through
+/// `dunder_name::walk_live_if`, so an `assert` in a body the #790
+/// `TYPE_CHECKING` fold discards is never lowered and never counted, while
+/// the `else` (and any other arm) of such a guard is walked in full. A
+/// class body is walked only through its methods' bodies, the only part of
+/// it `class::body` hands to `lower_stmt`: a statement directly in a class
+/// body keeps the class lowering's own refusal. (An `Enum` body accepts no
+/// method at all, and a `Protocol` method accepts only a stub body, so an
+/// `assert` in either is refused here rather than by that class's own
+/// lowering -- a refusal either way, never an admission.)
+/// `imports` must be the whole-module slice `dunder_name::scan_imports`
+/// builds, so an aliased `t.TYPE_CHECKING` guard folds here exactly as it
+/// folds in `lower_stmt`; the one mismatch that slice admits (a guard above
+/// its own `import typing as t`) is a read of an unbound name that is
+/// refused anyway, and an `assert` skipped there would still only reach an
+/// unresolved `AssertionError`, never another class.
+pub(crate) fn first_assert_statement_range(
+    body: &[Stmt],
+    imports: &[ImportBinding],
+) -> Option<std::ops::Range<u32>> {
+    struct AssertScan<'i> {
+        found: Option<std::ops::Range<u32>>,
+        imports: &'i [ImportBinding],
+    }
+    impl<'a> Visitor<'a> for AssertScan<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            match stmt {
+                Stmt::Assert(_) => self.found = Some(pycc_ast::stmt_range(stmt)),
+                Stmt::If(if_stmt) => {
+                    let imports = self.imports;
+                    crate::dunder_name::walk_live_if(self, if_stmt, imports);
+                }
+                // A class body reaches `lower_stmt` only through its method
+                // bodies: `class::body` refuses every other class-body
+                // statement kind with its own diagnostic, a bare `assert`
+                // and a nested `class` included. Only a method's own
+                // statements are scanned, so that refusal is never masked.
+                Stmt::ClassDef(class_def) => {
+                    for method in class_def.body.iter().filter_map(Stmt::as_function_def_stmt) {
+                        self.visit_body(&method.body);
+                    }
+                }
+                _ => visitor::walk_stmt(self, stmt),
+            }
+        }
+    }
+    let mut scan = AssertScan {
+        found: None,
+        imports,
+    };
+    scan.visit_body(body);
     scan.found
 }
 
@@ -732,6 +827,7 @@ mod tests {
             ("OverflowError", 25),
             ("ImportError", 26),
             ("ModuleNotFoundError", 27),
+            ("AssertionError", 28),
         ] {
             assert_eq!(tag_of(name), Some(tag), "`{name}` must carry tag {tag}");
         }

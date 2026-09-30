@@ -19,9 +19,6 @@ fn lower_all_foreign(source: &str) -> pycc_hir::HirModule {
 
 const FROM_FORM: &str = "from itertools import product\n";
 
-/// The phrase `check_assignment`'s function-body guard reports.
-const BINDING: &str = "binding a CPython object to a name";
-
 fn admitted(source: &str) {
     crate::check_all(&lower_all_foreign(source))
         .unwrap_or_else(|diagnostics| panic!("{source:?}: {diagnostics:#?}"));
@@ -106,11 +103,12 @@ fn a_maybe_bound_object_name_is_refused_by_a_read_and_a_loop() {
     }
 }
 
-/// The binding is module-level only: every function-body shape -- an
-/// annotated `def`, a method, an unannotated private helper and a generic
-/// function -- keeps the `I0404` (#1333).
+/// Since Part 1 of #1333 the binding is admitted in every function-body
+/// shape too -- an annotated `def`, a method, an unannotated private helper
+/// and a generic function -- and so is a function-body read of a
+/// module-level `object` name bound by assignment.
 #[test]
-fn a_function_body_binding_is_still_refused() {
+fn a_function_body_binding_is_admitted() {
     for source in [
         format!("{FROM_FORM}def g() -> None:\n    x = product()\n"),
         format!("{FROM_FORM}class C:\n    def m(self) -> None:\n        x = product()\n"),
@@ -118,19 +116,19 @@ fn a_function_body_binding_is_still_refused() {
         format!(
             "{FROM_FORM}def g[T](a: T) -> T:\n    x = product()\n    return a\n\n\nprint(g(1))\n"
         ),
+        format!("{FROM_FORM}x = product()\ndef g() -> None:\n    y = x\n"),
     ] {
-        refused(&source, "I0404", BINDING);
+        admitted(&source);
     }
 }
 
-/// A function body may not read a module-level `object` name the module
-/// bound by assignment rather than by a foreign import, whether to alias it
-/// or to iterate it (#1333); nor may a comprehension iterate it anywhere.
+/// A function-body `for` over a module-level `object` name the module bound
+/// by assignment is still refused (Part 2 of #1333, #1363), and a
+/// comprehension may not iterate it anywhere.
 #[test]
-fn reading_a_bound_object_name_outside_the_admitted_positions_is_refused() {
+fn iterating_a_bound_object_name_outside_the_admitted_positions_is_refused() {
     let phrase = "using `x`, which is bound to a CPython object";
     for tail in [
-        "def g() -> None:\n    y = x\n",
         "def g() -> None:\n    for t in x:\n        pass\n",
         "ys = [t for t in x]\n",
     ] {
@@ -166,7 +164,7 @@ fn an_unannotated_helper_beside_the_binding_still_solves() {
 /// loop over a module-level foreign import's name -- which #1316 made
 /// readable there -- keeps the read refusal in an annotated `def`, a
 /// method and an unannotated helper alike, and a bare module is no
-/// exception (#1333).
+/// exception (Part 2 of #1333, #1363).
 #[test]
 fn a_function_body_bare_name_loop_over_a_foreign_import_is_refused() {
     for (source, name) in [
