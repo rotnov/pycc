@@ -7,6 +7,7 @@
 //! here is always [`InstanceHashLowering::Identity`] or
 //! [`InstanceHashLowering::Method`].
 
+use crate::receiver_exact::exact_callee;
 use crate::{HirClassDef, InstanceHashVia, MirExpr, lookup};
 use pycc_hir::{InstanceHashLowering, Ty, resolve_instance_hash};
 use std::collections::HashMap;
@@ -34,6 +35,14 @@ pub(super) fn lower_instance_hash(
             via: InstanceHashVia::Identity,
         },
         InstanceHashLowering::Method(mangled) => {
+            // #1337 (D-254): an inherited `__hash__` runs its receiver-exact
+            // copy when one exists. Only the callee is routed; the verdict
+            // above is #1335's, unchanged.
+            let owner = mangled
+                .split_once('.')
+                .map_or(class, |(owner, _)| owner)
+                .to_string();
+            let mangled = exact_callee(class, &owner, mangled, scopes, classes);
             let ty = lookup(scopes, &format!("$fn:{mangled}"));
             MirExpr::InstanceHash {
                 operand: Box::new(MirExpr::Call {

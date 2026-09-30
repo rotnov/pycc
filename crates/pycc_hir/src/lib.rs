@@ -21,9 +21,10 @@ pub use boolop::{BoolOpKind, bool_op_result_ty};
 pub use buffer_store::{body_returns_inside_finally, body_returns_slice_of, body_stores_into};
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
-    ClassAttrValue, EnumMemberValue, HashRefusal, HirClassDef, InstanceHash, InstanceHashLowering,
-    PropertyDef, ProtocolMember, declares_name_outside_class_attrs, flat_attr_layout,
-    resolve_instance_hash,
+    ClassAttrValue, CopiedMemberKind, EnumMemberValue, HashRefusal, HirClassDef, InheritedCopy,
+    InstanceHash, InstanceHashLowering, PropertyDef, ProtocolMember, SUPER_TARGET_MARKER,
+    binds_member, dataclass_repr_body, declares_name_outside_class_attrs, first_definer,
+    flat_attr_layout, inherited_copy_name, inherited_copy_origin, resolve_instance_hash,
 };
 pub use compare_chain::{CompareLink, compare_chain_operands};
 pub use container::{check_container_ty, check_tuple_element_ty};

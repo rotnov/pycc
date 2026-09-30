@@ -14,6 +14,7 @@ mod expr;
 mod foreign;
 mod frozenset;
 mod hash;
+mod inherited_copies;
 mod module;
 mod monomorphize;
 mod narrow;
@@ -2668,11 +2669,20 @@ fn check_function_in(
     // class in the MRO. A top-level function name contains no `.`, so
     // `current_class` stays `None` for those (and for the module-level
     // environment, which never goes through `check_function_in`).
-    env.current_class = name
-        .split('.')
-        .next()
-        .filter(|prefix| *prefix != name)
-        .map(String::from);
+    //
+    // #1337 (D-254): a receiver-exact copy of an inherited body is spelled
+    // with its *receiver* prefix, but `super()` anchors at the class that
+    // defines the body -- the copy's origin class. The receiver the
+    // `super()` search follows is `self`'s type (`class::super_call`).
+    env.current_class = match pycc_hir::inherited_copy_origin(name, &|n| module_env.classes.get(n))
+    {
+        Some(copy) => Some(copy.origin_class),
+        None => name
+            .split('.')
+            .next()
+            .filter(|prefix| *prefix != name)
+            .map(String::from),
+    };
     if !signature_was_registered {
         env.bind_function(
             name.clone(),

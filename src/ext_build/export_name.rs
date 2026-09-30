@@ -136,10 +136,11 @@ pub(crate) fn classify_export_name(name: &str) -> Option<ExportName> {
             receiver: ExtReceiver::SelfInstance,
         }),
         Some(kind) => {
-            // A fourth segment cannot arise: `pycc_hir` refuses a class
-            // nested in a class or in a function, so no `A.B.method` name
-            // exists. Refusing it is the fail-closed reading rather than a
-            // reachable branch.
+            // The only four-segment name is a `super()`-target copy of a
+            // setter or classmethod (`C.k.0super_D.classmethod`, D-254),
+            // which is never hosted: `pycc_hir` refuses a class nested in a
+            // class or in a function, so no `A.B.method` name exists.
+            // Refusing every fourth segment is the fail-closed reading.
             if segments.next().is_some() {
                 return None;
             }

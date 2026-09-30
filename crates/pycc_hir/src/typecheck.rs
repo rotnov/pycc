@@ -20,7 +20,10 @@ use crate::{HirExpr, Ty};
 // `Ty::Instance("D")` to be assigned to `Ty::Instance("B")`, so every
 // variable's runtime type is exactly its declared static type. Therefore
 // `isinstance` and `issubclass` can always be evaluated at compile time,
-// emitting constant boolean values. No runtime type tags or RTTI are needed.
+// emitting constant boolean values, with one exception (#1337): a value typed
+// as a seeded builtin exception class is a caught runtime exception object,
+// and `pycc_mir` tests a target outside its static MRO by the object's
+// existing type tag (`MirExpr::ExceptionTypeTest`).
 //
 // These helpers are shared by `pycc_types` (type checker) and `pycc_mir`
 // (MIR lowering) so both compute identical results from the same inputs.

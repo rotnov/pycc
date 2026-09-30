@@ -439,11 +439,12 @@ fn super_property_read_builds_and_runs() {
     );
 }
 
-/// #433 review: diamond inheritance with super() — documents the static
-/// dispatch limitation. B.f() calls super().f() which resolves to A.f()
-/// (not C.f()), because super() skips to the next class in B's own MRO.
+/// #433 review, corrected by #1337 (D-254): diamond inheritance with
+/// super(). `B.f` runs on a `D` receiver through its copy compiled for `D`,
+/// whose `super()` continues along `D`'s MRO `[D, B, C, A]` and so reaches
+/// the sibling `C.f`, exactly as CPython does.
 #[test]
-fn super_in_diamond_skips_sibling_classes() {
+fn super_in_diamond_follows_the_receivers_mro() {
     let dir = ScratchDir::new("issue433_diamond").expect("failed to create scratch dir");
     // MRO for D is [D, B, C, A]. B.f calls super().f → resolves to A.f
     // (B's own MRO is [B, A], so B's super_mro is [A], and A.f is found).
@@ -464,15 +465,11 @@ fn super_in_diamond_skips_sibling_classes() {
     );
 
     let output = Command::new(&out).output().unwrap();
-    // D.f calls super().f → D's super_mro is [B, C, A]. B has f, so B.f.
-    // B.f calls super().f → B's super_mro is [A] (B's own MRO is [B, A],
-    // not [B, C, A] — C is only in D's MRO, not B's). A has f, so A.f.
-    // Result: "D->B->A"
-    // This documents the static dispatch limitation: B's super() resolves
-    // based on B's own MRO, not the derived class's MRO. In CPython with
-    // dynamic dispatch, super() in B would see D's MRO and call C.f.
+    // D.f calls super().f -> D's super_mro is [B, C, A]; B has f, so B.f,
+    // compiled for the `D` receiver. That copy's super().f continues after
+    // B in D's MRO -> [C, A]; C has f, so C.f. Result: "D->B->C".
     assert_eq!(
-        output.stdout, b"D->B->A\n",
-        "diamond super() uses the defining class's own MRO, not the derived class's MRO"
+        output.stdout, b"D->B->C\n",
+        "diamond super() continues along the receiver's MRO, as CPython does"
     );
 }

@@ -7,6 +7,7 @@ status: accepted
 ## D-154: Class instance runtime layout stays opaque with FFI-only accessors (#385, Part 1 of #375)
 
 - Status: accepted
+- Amendment (2026-09-25, [#1337](https://github.com/rotnov/pycc/issues/1337)): a method body is now lowered once for its defining class plus once per receiver subclass whose behaviour for that body differs ([D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md)); the opaque layout and flat-slot model are unchanged.
 - Context: #385 (Part 1 of #375) adds pycc's first user-defined class model — a single class, no
   inheritance, with instance attributes set in `__init__` and plain instance methods. The issue
   and `docs/TYPE_SYSTEM.md` already settle instances as heap-pointer values, matching the

@@ -3,6 +3,7 @@
 //! and the constant-folding of both class-predicate builtins.
 
 use super::exception::exception_type_tag;
+use super::exception_isinstance::{isinstance_tags, tests_by_tag};
 use super::{HirClassDef, MirExpr, lookup, lower_expr, mro_class_def};
 use pycc_hir::{
     HirExpr, Ty, eval_isinstance_single, eval_issubclass_single, extract_class_names,
@@ -205,7 +206,11 @@ pub(super) fn mro_attr_count(
 //
 // Both builtins are evaluated at compile time (pycc's static dispatch model
 // means every variable's runtime type is exactly its declared type), emitting
-// `MirExpr::BoolLiteral(result)` constants. No runtime type tags or RTTI.
+// `MirExpr::BoolLiteral(result)` constants, with one exception (#1337): a
+// value statically typed as a seeded builtin exception class is a runtime
+// exception object whose class may be any subclass, so `isinstance` against a
+// target outside its static MRO reads the object's type tag
+// (`MirExpr::ExceptionTypeTest`, see `exception_isinstance`).
 // ---------------------------------------------------------------------------
 
 /// #435: Lowers `isinstance(obj, class_arg)` to a compile-time boolean
@@ -236,6 +241,10 @@ pub(super) fn lower_isinstance(
             .unwrap_or(&[]),
         _ => &[],
     };
+    // #1337 (WI-6a): a caught builtin exception's dynamic class may be any
+    // subclass, so a target outside its static MRO is tested by tag.
+    let by_tag = matches!(&obj_ty, Ty::Instance(name) if tests_by_tag(name, classes));
+    let mut tags: Vec<u8> = Vec::new();
     let result = class_names.iter().any(|target| {
         // #380 (PR-20, PEP 544): if the target is a protocol class, use
         // structural conformance checking instead of nominal MRO
@@ -246,9 +255,21 @@ pub(super) fn lower_isinstance(
         {
             return eval_isinstance_protocol(&obj_ty, target_def, classes);
         }
-        eval_isinstance_single(&obj_ty, target, obj_mro)
+        let statically = eval_isinstance_single(&obj_ty, target, obj_mro);
+        if !statically && by_tag {
+            tags.extend(isinstance_tags(target, classes));
+        }
+        statically
     });
-    MirExpr::BoolLiteral(result)
+    if result || tags.is_empty() {
+        return MirExpr::BoolLiteral(result);
+    }
+    tags.sort_unstable();
+    tags.dedup();
+    MirExpr::ExceptionTypeTest {
+        obj: Box::new(obj),
+        tags,
+    }
 }
 
 /// #380 (PR-20, PEP 544): Evaluates `isinstance(obj, Protocol)` at
