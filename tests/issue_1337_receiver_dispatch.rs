@@ -125,6 +125,43 @@ fn an_imported_base_runs_the_subclass_override() {
     assert_eq!(text(&run.stdout), "1 2\n");
 }
 
+/// A copy's diagnostic is attributed to the file that defines the origin
+/// body, not to the file whose subclass needed the copy: the escape is
+/// written in `m1.py`, so the rendered span names `m1.py`.
+#[test]
+fn a_copy_diagnostic_names_the_origin_file() {
+    let dir = ScratchDir::new("e2e_1337_multi_file_refusal").expect("scratch");
+    std::fs::write(
+        dir.join("m1.py"),
+        "class A:\n    def m(self) -> int:\n        return 1\n\n    \
+         def me(self) -> A:\n        return self\n",
+    )
+    .expect("write m1");
+    let main = dir.join("main.py");
+    std::fs::write(
+        &main,
+        "from m1 import A\n\n\nclass B(A):\n    def m(self) -> int:\n        return 2\n\n\n\
+         print(B().me().m())\n",
+    )
+    .expect("write main");
+    let output = pycc()
+        .arg("check")
+        .arg("--error-format")
+        .arg("json")
+        .arg(&main)
+        .output()
+        .expect("pycc should spawn");
+    assert!(!output.status.success());
+    let rendered = format!("{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(rendered.contains("\"T0022\""), "{rendered}");
+    assert!(
+        rendered.contains("while compiling `A.me` inherited by subclass `B`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("m1.py"), "{rendered}");
+    assert!(!rendered.contains("main.py"), "{rendered}");
+}
+
 /// The template-method shape the issue generalizes: a base method calls a
 /// hook the subclass overrides, and the base itself still runs its own hook.
 #[test]
