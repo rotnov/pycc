@@ -16,6 +16,17 @@
 //! mismatch. It runs under `cfg(debug_assertions)`, which every test build
 //! has, so the whole test corpus exercises it.
 //!
+//! **Strength.** A lowered call does not record whether it came from
+//! `self.x()` or `super().x()`: both are a `MirExpr::Call` with the
+//! receiver as `args[0]`. Inside a method body the verifier therefore
+//! accepts either the receiver-resolved body or the `super()` target from
+//! the body's anchor, and rejects every other callee. A site that confused
+//! the two routes inside one body would pass this check; that narrower
+//! guarantee is deliberate (threading a call-origin marker through MIR for
+//! a debug-only check is not worth the churn), and
+//! `a_super_target_is_accepted_for_an_ordinary_call_too` in the tests pins
+//! it.
+//!
 //! The walk is exhaustive over [`MirExpr`] and [`MirStmt`] with no
 //! catch-all arm: a new variant fails to compile here instead of being
 //! skipped silently.

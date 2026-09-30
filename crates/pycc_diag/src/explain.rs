@@ -432,7 +432,12 @@ type that does not match the annotation written on the same statement, \
 e.g. `x: int = \"hello\"`. The annotation itself is what determines `x`'s \
 type going forward (not the initializer's inferred type) -- T0025 is the \
 check that the initializer is honest about that annotation at the point it \
-is declared.",
+is declared. It also fires in an inherited method compiled again for a \
+subclass (#1337, D-254) whose body binds `self` to a local annotated with \
+the base class (`x: A = self`): the copy's `self` is the subclass, which \
+the annotation would silently widen, so the program is refused and the \
+diagnostic carries the note \"while compiling `D.m` inherited by subclass \
+`C`\".",
         example: "\
 def f() -> None:
     x: int = \"hello\"

@@ -202,6 +202,13 @@ fn an_untypeable_copy_is_refused_and_names_the_subclass() {
             "while compiling `A.same` inherited by subclass `B`",
         ),
         (
+            "class A:\n    def m(self) -> int:\n        return 1\n    def g(self) -> int:\n        \
+             x: A = self\n        return x.m()\nclass B(A):\n    def m(self) -> int:\n        \
+             return 2\nprint(B().g())\n",
+            "\"T0025\"",
+            "while compiling `A.g` inherited by subclass `B`",
+        ),
+        (
             "class A:\n    def me(self) -> A:\n        return self\nclass B(A):\n    pass\n\
              def chk(a: A) -> bool:\n    return isinstance(a, B)\nprint(chk(B().me()))\n",
             "\"T0022\"",

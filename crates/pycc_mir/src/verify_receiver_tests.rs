@@ -121,6 +121,22 @@ fn a_super_call_from_the_anchor_is_accepted() {
 }
 
 #[test]
+fn a_super_target_is_accepted_for_an_ordinary_call_too() {
+    // The verifier cannot tell `self.m()` from `super().m()` in lowered
+    // MIR (module doc, "Strength"): inside `B.m`, both `B.m` and `A.m` on a
+    // `B` receiver are accepted. Outside a method body only the resolved
+    // member is (`a_call_that_skips_the_receivers_override_panics`).
+    let items = vec![function(
+        "B.m",
+        vec![
+            MirStmt::ExprStmt(call("B.m", recv("B"))),
+            MirStmt::ExprStmt(call("A.m", recv("B"))),
+        ],
+    )];
+    verify(&module(items), &classes());
+}
+
+#[test]
 fn a_super_target_setter_copy_is_accepted_by_its_kind_suffix() {
     // `A` and `B(A)` both define a property `p` with a setter; `C(B)`
     // inherits `B`'s. Inside `C.p.setter` (the copy of `B.p.setter`),
