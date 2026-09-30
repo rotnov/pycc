@@ -846,6 +846,7 @@ fn a_comprehension_of_a_set_of_instances_is_c0001_naming_1344() {
     let comps = [
         ("list", "list[int]", "[r.v for r in s]"),
         ("set", "set[R]", "{r for r in s}"),
+        ("set_if", "set[R]", "{r for r in s if r.v > 0}"),
         ("dict", "dict[str, int]", "{\"k\": r.v for r in s}"),
     ];
     for (path, helper, tail) in [("check", "", ""), ("solver", COMP_HELPER, "print(_g(1))\n")] {
