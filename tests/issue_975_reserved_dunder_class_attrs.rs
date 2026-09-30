@@ -29,8 +29,9 @@
 //!    body, an `Enum` member list, and (from the #978 review round) a
 //!    `@property` getter each reach it by a different path.
 //!
-//! The already-rejected shapes (`__slots__`, a method collision) are pinned
-//! unchanged: this change adds a guard, it does not re-implement them.
+//! The already-rejected shapes (a `__slots__` value CPython itself rejects --
+//! #1368 admits the value-bound spellings -- and a method collision) are
+//! pinned: this change adds a guard, it does not re-implement them.
 
 use pycc_scratch::ScratchDir;
 use std::io::Write;

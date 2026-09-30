@@ -45,6 +45,7 @@ status: accepted
   container's pointer through the same `inttoptr`/`ptrtoint` reinterpretation as `str`, with no
   reference-count calls because both containers are leak-only (D-107, D-124). The slot stays
   one `i64` word; nothing else in this decision changes.
+- Amendment (2026-09-30, [#1368](https://github.com/rotnov/pycc/issues/1368)): `docs/TYPE_SYSTEM.md` no longer says "`__slots__` semantics implicit"; a value-bound `__slots__` is now admitted and checked at compile time without changing this layout (TYPE_SYSTEM.md's `__slots__` section).
 - Decision (method dispatch): a method call resolves to a compile-time-known function pointer —
   static dispatch per D-006's framing for ordinary classes, with the method name mangled as
   `<ClassName>.<method_name>` (a `.` separator, which can never appear in a real Python

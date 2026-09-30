@@ -206,3 +206,24 @@ fn each_unmodelled_spelling_is_c0001() {
         assert!(text.contains(message), "{category}: {text}");
     }
 }
+
+/// A declared slot that is never assigned is accepted, and a read of it is
+/// refused at compile time; CPython raises `AttributeError` only when the
+/// read runs.
+#[test]
+fn a_read_of_a_never_assigned_slot_is_t0044() {
+    let source = "class C:\n    __slots__ = ('a', 'b')\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n\n    def get(self) -> int:\n        return self.b\n\n\n\
+                  print(C().get())\n";
+    let text = fails("e2e_1368_unassigned_read", source);
+    assert!(text.contains("error[T0044]"), "{text}");
+    assert!(
+        text.contains("class `C` has no attribute named `b`"),
+        "{text}"
+    );
+    cpython_rejects(
+        "e2e_1368_unassigned_read_cpython",
+        source,
+        "AttributeError: 'C' object has no attribute 'b'",
+    );
+}
