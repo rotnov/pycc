@@ -201,11 +201,57 @@ fn an_untypeable_copy_is_refused_and_names_the_subclass() {
             "\"T0021\"",
             "while compiling `A.same` inherited by subclass `B`",
         ),
+        (
+            "class A:\n    def me(self) -> A:\n        return self\nclass B(A):\n    pass\n\
+             def chk(a: A) -> bool:\n    return isinstance(a, B)\nprint(chk(B().me()))\n",
+            "\"T0022\"",
+            "while compiling `A.me` inherited by subclass `B`",
+        ),
     ] {
         let rendered = check_json_fails("e2e_1337_refused", source);
         assert!(rendered.contains(code), "{source}: {rendered}");
         assert!(rendered.contains(note), "{source}: {rendered}");
     }
+}
+
+/// A class-attribute read through `self` in an inherited body reads the
+/// receiver's class attribute (plan item 3).
+#[test]
+fn an_inherited_body_reads_the_receivers_class_attribute() {
+    let source = "class A:\n    X: int = 1\n    def g(self) -> int:\n        return self.X\n\
+                  class B(A):\n    X: int = 2\nprint(A().g(), B().g())\n";
+    assert_eq!(build_and_run("e2e_1337_class_attr", source), "1 2\n");
+}
+
+/// An exception raised inside a copy names the method, not a mangled copy
+/// name, in the uncaught-exception frame (plan item 16).
+#[test]
+fn an_exception_raised_in_a_copy_names_the_method_frame() {
+    let dir = ScratchDir::new("e2e_1337_frame").expect("scratch");
+    let path = dir.join("subject.py");
+    std::fs::write(
+        &path,
+        "class A:\n    def m(self) -> int:\n        return 1\n    def g(self) -> int:\n        \
+         if self.m() == 2:\n            raise ValueError(\"boom\")\n        return 0\n\
+         class B(A):\n    def m(self) -> int:\n        return 2\nprint(B().g())\n",
+    )
+    .expect("write the subject");
+    let exe = dir.join("subject");
+    let build = pycc()
+        .arg("build")
+        .arg(&path)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", text(&build.stderr));
+    let run = Command::new(&exe)
+        .output()
+        .expect("the program should spawn");
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = text(&run.stderr);
+    assert!(stderr.contains("in g\n"), "{stderr}");
+    assert!(stderr.ends_with("ValueError: boom\n"), "{stderr}");
 }
 
 /// A diagnostic raised identically in an origin body and its copies is
@@ -223,18 +269,23 @@ const EXT_MODULE: &str = "class A:\n    def __init__(self) -> None:\n        sel
      self.x = self.hook()\n    def hook(self) -> int:\n        return 1\n    def m(self) -> int:\n        \
      return 1\n    def g(self) -> int:\n        return self.m()\n    @classmethod\n    \
      def k(cls) -> int:\n        return cls.base()\n    @classmethod\n    def base(cls) -> int:\n        \
-     return 10\n    def getx(self) -> int:\n        return self.x\n\
+     return 10\n    def getx(self) -> int:\n        return self.x\n    X: int = 1\n    \
+     def cx(self) -> int:\n        return self.X\n    @property\n    def p(self) -> int:\n        \
+     return self.m()\n\
      class B(A):\n    def m(self) -> int:\n        return 2\n    def hook(self) -> int:\n        \
-     return 7\n    @classmethod\n    def base(cls) -> int:\n        return 20\n";
+     return 7\n    @classmethod\n    def base(cls) -> int:\n        return 20\n    X: int = 3\n";
 
 const EXT_SCRIPT: &str = "import pycc_1337_mod as mod\n\
      b = mod.B()\n\
      a = mod.A()\n\
-     print(b.g(), a.g(), b.getx(), a.getx(), mod.B.k(), mod.A.k())\n";
+     print(b.g(), a.g(), b.getx(), a.getx(), mod.B.k(), mod.A.k())\n\
+     print(b.cx(), a.cx(), hasattr(mod.B, \"p\"), hasattr(mod.A, \"p\"))\n";
 
 /// A host calling an inherited method on a published subclass runs the
 /// copy compiled for that subclass, and constructing it runs the copied
-/// `__init__`.
+/// `__init__`, and a copied body reads the subclass's class attribute. A
+/// copied `@property` getter is not published as a plain method: like an
+/// own getter it publishes nothing (`docs/RUNTIME.md`).
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_hosted_subclass_runs_its_receiver_exact_copies() {
@@ -257,7 +308,7 @@ fn a_hosted_subclass_runs_its_receiver_exact_copies() {
         .output()
         .expect("python3 should spawn");
     assert!(run.status.success(), "{}", text(&run.stderr));
-    assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n");
+    assert_eq!(text(&run.stdout), "2 1 7 1 20 10\n3 1 False False\n");
 }
 
 const STR_MIXIN: &str =
