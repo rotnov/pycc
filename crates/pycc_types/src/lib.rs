@@ -1583,9 +1583,10 @@ fn check_match(
     // `HirPattern::Wildcard` returns no bindings and satisfies
     // `check_exhaustive`, so before this guard the statement type-checked
     // and reached `pycc_mir`'s `lower_match`, which has no `Ty::Object`
-    // handling at all. (`HirPattern::Capture` is already covered by
-    // `check_assignment`'s own entry guard through the `bindings` loop
-    // below -- this guard is what covers every other pattern.)
+    // handling at all. This guard refuses the whole subject before any
+    // pattern binds, so it covers `HirPattern::Capture` too: since Part 1
+    // of #1333 (#1362) `check_assignment` admits an object binding in a
+    // function body, so the `bindings` loop below no longer refuses one.
     foreign::reject_object_operand(&subject_ty, "matching on a CPython object")?;
     let mut case_envs = Vec::with_capacity(cases.len());
     for case in cases {
