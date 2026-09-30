@@ -892,7 +892,7 @@ whole past the first layer, so this list is a **lower bound**.
 Sixteen rows remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
-(left only by `return`), was removed by
+(left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
 no longer counts as falling off the function's end.
 
