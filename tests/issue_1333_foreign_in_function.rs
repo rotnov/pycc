@@ -185,6 +185,13 @@ fn inference_through_a_helper_result_local_or_a_parameter_is_part_3() {
             "import json\n\ndef _f(g):\n    return g(\"[1]\")\n\nprint(len(_f(json.loads)))\n",
             "name `g` is bound to a non-callable value",
         ),
+        (
+            "obj_fn_part3_private_method_param",
+            "import json\n\nclass C:\n    def _h(self, o):\n        return len(o)\n\n    \
+             def m(self, s: str) -> int:\n        return self._h(json.loads(s))\n\n\
+             print(C().m(\"[1]\"))\n",
+            "cannot infer type of parameter `o` in private helper `C._h`",
+        ),
     ] {
         assert_one_error(tag, body, "T0021", needle);
     }
@@ -286,8 +293,15 @@ fn unadmitted_operations_on_a_function_local_object_are_diagnosed() {
     ] {
         assert_one_error(tag, &format!("{HEAD}{tail}"), code, needle);
     }
+    // `self.a = y` is refused because `y` is not an `__init__` parameter,
+    // the same C0001 any non-parameter local gets. It does not reach
+    // `init_slot.rs`'s type-keyed "cannot establish an attribute of type"
+    // arm, and an object cannot reach that arm under Part 1. The arm keys
+    // on an `__init__` parameter's annotation: `__init__` is public, so an
+    // unannotated parameter is T0001, and the annotation `object` is itself
+    // C0001.
     assert_one_error(
-        "obj_fn_self_attr",
+        "obj_fn_self_attr_non_parameter",
         "import json\n\nclass C:\n    def __init__(self) -> None:\n        \
          y = json.loads(\"[1]\")\n        self.a = y\n\nC()\n",
         "C0001",
