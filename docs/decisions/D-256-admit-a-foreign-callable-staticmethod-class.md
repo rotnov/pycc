@@ -6,6 +6,25 @@ status: accepted
 
 ## D-256: Admit a foreign-callable `staticmethod` class attribute, re-read at each access
 - Status: accepted
+- Amendment (2026-09-30, [#1346](https://github.com/rotnov/pycc/issues/1346), Part 2 of
+  #1284): a non-name instance receiver (`make().exists(p)`, `FS().exists`) is now admitted.
+  The receiver is evaluated for its effects, and its value retired, before the foreign
+  callable is read or called -- receiver, then arguments, then the call, as CPython does.
+  This replaces the Decision bullet "A non-name instance receiver and a `super()` receiver
+  are refused (#1346)": only the `super()` receiver stays refused, now tracked by
+  [#1358](https://github.com/rotnov/pycc/issues/1358). It also narrows "`pycc_codegen` and
+  `pycc_rt` do not change" and the Consequence "Codegen still sees only the rewritten
+  expression": for a receiver that is not a plain name, `pycc_codegen` now also sees one new
+  node, `MirExpr::Sequence`, wrapping that rewritten expression. `pycc_rt` still does not
+  change, and codegen still never sees the attribute. The same node fixes a silent
+  miscompile of a pycc-native `@staticmethod` called through an instance, which dropped the
+  receiver: `boom().h(1)` returned a value instead of raising. This amendment is the entry
+  the last Consequence asks for, and it re-examines D-213: the foreign callable is still
+  read and called with exactly the arguments, and at exactly the time, Part 1 fixed; only
+  the receiver's own evaluation is added before it. No new foreign-reference shape and no
+  new capture timing are introduced, so D-213's premises are unchanged. No new decision
+  file is needed under D-242 rule 3: the change removes a deviation from CPython rather
+  than adding one, and touches no ABI, artifact format or trust boundary.
 - Context: [D-224](./D-224-restrict-class-level-attributes-to-scalar.md) makes every
   class-level attribute a scalar literal constant that never reaches `pycc_codegen`, and
   its scalar restriction is also what keeps [D-213](./D-213-defer-pep-487-full-invocation-reject-the.md)'s

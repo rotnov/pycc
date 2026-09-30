@@ -1413,7 +1413,10 @@ program, and belongs with the release protocol described above.
 rewritten at every read or call into the reference itself. That rewrite
 reuses the existing helpers at each access: the attribute-load helper, the
 method-call helper, and the #1313 direct-call helper. The chain is re-read
-from the module's foreign import every time. Like every class attribute, it
+from the module's foreign import every time. A receiver that is not a plain
+name (`make().exists(p)`, [#1346](https://github.com/rotnov/pycc/issues/1346))
+is evaluated, and its value retired, before that rewritten access runs; it
+too adds no runtime entry point. Like every class attribute, it
 is not published on an `--ext` extension type. `docs/TYPE_SYSTEM.md`'s
 "Class-level attributes" section owns the rule and its two divergences from
 CPython.

@@ -1515,15 +1515,17 @@ pub(crate) fn infer_expr_in(
             }
             let base_ty = infer_expr_in(env, local_names, base)?;
             // Part 1 of #1284: an instance read reaching a
-            // `staticmethod(<foreign callable>)` class attribute. Runs
-            // before the literal gate below so a non-name receiver gets the
-            // foreign wording, and before `resolve_attr_get`'s property
-            // walk, matching `pycc_mir`'s guard placement.
+            // `staticmethod(<foreign callable>)` class attribute. Must run
+            // before the #911 literal-fold gate below: that gate's
+            // `lookup_class_attr_through_mro` also matches a `ForeignStatic`
+            // entry, so reaching it first would wrongly refuse a non-name
+            // receiver (`FS().exists`, #1346) as a folded constant. Also runs
+            // before `resolve_attr_get`'s property walk, matching
+            // `pycc_mir`'s guard placement.
             if let Ty::Instance(class_name) = &base_ty
                 && let Some(ty) = class::foreign_static::instance_read(
                     env,
                     local_names,
-                    base,
                     class_name,
                     attr,
                 )?
@@ -1666,7 +1668,6 @@ pub(crate) fn infer_expr_in(
                 && let Some(ty) = class::foreign_static::instance_call(
                     env,
                     local_names,
-                    base,
                     class_name,
                     method,
                     args,

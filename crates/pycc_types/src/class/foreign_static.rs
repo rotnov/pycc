@@ -11,14 +11,16 @@
 //!
 //! - the root of the chain must still denote the foreign import where the
 //!   rewrite lands ([`check_use_site`]);
-//! - an instance receiver must be a plain name, since the rewrite discards
-//!   it (#1346);
+//! - an instance receiver of any shape is accepted: its type is inferred,
+//!   and so checked, before the foreign target is resolved, and `pycc_mir`
+//!   evaluates a non-name receiver for its effects ahead of the rewrite
+//!   (#1346);
 //! - an instance read whose positional winner is a method but that has a
 //!   foreign entry later in the MRO is refused (rule 7, #1350);
 //! - an instance receiver whose static class and some subclass disagree on
 //!   the winner is refused, because pycc resolves the member statically
 //!   (#1337, #1350);
-//! - `super()` never takes the foreign path (#1346).
+//! - `super()` never takes the foreign path (#1358).
 
 use crate::{Environment, infer_expr_in};
 use pycc_diag::{Diagnostic, Span};
@@ -69,13 +71,13 @@ pub(crate) fn class_name_call(
     infer_expr_in(env, local_names, &target.call_expr(args.to_vec())).map(Some)
 }
 
-/// `x.attr` through an instance receiver `base` typed `Ty::Instance`:
-/// `Some(ty)` when the foreign path wins, `None` to fall through to the
-/// existing dispatch unchanged.
+/// `x.attr` through an instance receiver typed `Ty::Instance`: `Some(ty)`
+/// when the foreign path wins, `None` to fall through to the existing
+/// dispatch unchanged. The receiver itself has already been inferred by the
+/// caller.
 pub(crate) fn instance_read(
     env: &Environment,
     local_names: &[&str],
-    base: &HirExpr,
     class_name: &str,
     attr: &str,
 ) -> Result<Option<Ty>, Diagnostic> {
@@ -92,7 +94,7 @@ pub(crate) fn instance_read(
                 Span::new(0, 0),
             ));
         }
-        instance_target(env, local_names, base, class_def, attr, "read")?
+        instance_target(env, local_names, class_def, attr, "read")?
             .map(|target| infer_expr_in(env, local_names, &target.read_expr()))
             .transpose()
     })
@@ -104,24 +106,22 @@ pub(crate) fn instance_read(
 pub(crate) fn instance_call(
     env: &Environment,
     local_names: &[&str],
-    base: &HirExpr,
     class_name: &str,
     attr: &str,
     args: &[HirExpr],
 ) -> Result<Option<Ty>, Diagnostic> {
     env.lookup_class(class_name).map_or(Ok(None), |class_def| {
-        instance_target(env, local_names, base, class_def, attr, "call")?
+        instance_target(env, local_names, class_def, attr, "call")?
             .map(|target| infer_expr_in(env, local_names, &target.call_expr(args.to_vec())))
             .transpose()
     })
 }
 
 /// The shared instance-receiver gate: the subclass-divergence refusal,
-/// then the winner, then the plain-name receiver and use-site checks.
+/// then the winner, then the use-site check.
 fn instance_target<'a>(
     env: &'a Environment,
     local_names: &[&str],
-    base: &HirExpr,
     class_def: &'a HirClassDef,
     attr: &str,
     what: &str,
@@ -154,17 +154,6 @@ fn instance_target<'a>(
     let Some(target) = instance_foreign_static(&class_def.mro, lookup, attr) else {
         return Ok(None);
     };
-    if !matches!(base, HirExpr::Name(_)) {
-        return Err(Diagnostic::error(
-            "T0044",
-            format!(
-                "the `staticmethod(...)` class attribute `{class_name}.{attr}` can only be read \
-                 or called through a plain name or the class name -- the foreign call would \
-                 discard the receiver expression (#1346)"
-            ),
-            Span::new(0, 0),
-        ));
-    }
     check_use_site(env, local_names, class_name, attr, target)?;
     Ok(Some(target))
 }
@@ -199,7 +188,7 @@ fn check_use_site(
 
 /// `super().attr` / `super().attr(args)` never takes the foreign path: a
 /// `staticmethod(...)` class attribute that wins positionally over the
-/// `super()` MRO slice is refused (#1346).
+/// `super()` MRO slice is refused (#1358).
 pub(crate) fn refuse_super(
     env: &Environment,
     super_mro: &[String],
@@ -212,7 +201,7 @@ pub(crate) fn refuse_super(
             format!(
                 "`super().{attr}` in class `{current_class}` reaches the `staticmethod(...)` \
                  class attribute `{owner}.{attr}`, which is not supported through `super()` \
-                 yet (#1346); use `{owner}.{attr}` instead"
+                 yet (#1358); use `{owner}.{attr}` instead"
             ),
             Span::new(0, 0),
         )),

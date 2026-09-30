@@ -470,6 +470,7 @@ impl Verifier<'_> {
                     MirCompElt::Dict { key, value } => self.exprs([key, value]),
                 }
             }
+            MirExpr::Sequence { discard, value } => self.exprs([discard.as_ref(), value.as_ref()]),
         }
     }
 }

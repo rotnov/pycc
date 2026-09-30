@@ -1,7 +1,9 @@
 //! Part 1 of #1284: a `staticmethod(<foreign callable>)` class attribute
-//! lowers, at every read and call, to exactly the MIR a hand-written use of
-//! the recorded foreign reference produces -- which pins "codegen
-//! unchanged": no new MIR node reaches `pycc_codegen`.
+//! lowers, at every read and call through the class name or a plain-name
+//! receiver, to exactly the MIR a hand-written use of the recorded foreign
+//! reference produces. A non-name receiver (#1346) arrives at `pycc_codegen`
+//! as `MirExpr::Sequence`, the receiver first and that same MIR as its
+//! value; no other new node reaches codegen.
 
 use crate::*;
 use pycc_diag::Span;
@@ -201,6 +203,48 @@ fn an_instance_call_and_read_lower_like_the_hand_written_foreign_use() {
     assert_eq!(exprs.len(), 4, "{body:?}");
     assert_eq!(exprs[0], exprs[1]);
     assert_eq!(exprs[2], exprs[3]);
+}
+
+/// #1346: through a non-name receiver, the read and the call lower to a
+/// `Sequence` whose `discard` is the receiver's own lowering and whose
+/// `value` is exactly the hand-written foreign use -- while the plain-name
+/// `self` receiver above keeps the Part 1 MIR with no `Sequence`.
+#[test]
+fn a_non_name_receiver_is_sequenced_before_the_foreign_use() {
+    let receiver = || HirExpr::Call {
+        callee: "FS".to_string(),
+        args: Vec::new(),
+    };
+    let mut hir = module(
+        Vec::new(),
+        vec![
+            receiver(),
+            method_call(receiver(), "exists", vec![p()]),
+            method_call(attr(name("os"), "path"), "exists", vec![p()]),
+            attr(receiver(), "exists"),
+            attr(attr(name("os"), "path"), "exists"),
+        ],
+    );
+    // `FS()` needs an `__init__`.
+    hir.class_defs[0].1.methods = vec![("__init__".to_string(), "FS.__init__".to_string())];
+    hir.items.insert(
+        0,
+        HirItem::Function {
+            name: "FS.__init__".to_string(),
+            params: vec![("self".to_string(), Ty::Instance(Box::new("FS".to_string())))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        },
+    );
+    let exprs = top_exprs(&build(&hir));
+    assert_eq!(exprs.len(), 5, "{exprs:?}");
+    let sequenced = |value: &MirExpr| MirExpr::Sequence {
+        discard: Box::new(exprs[0].clone()),
+        value: Box::new(value.clone()),
+    };
+    assert_eq!(exprs[1], sequenced(&exprs[2]));
+    assert_eq!(exprs[3], sequenced(&exprs[4]));
+    assert_eq!(exprs[1].ty(), exprs[2].ty());
 }
 
 /// `pycc_types` refuses `super().exists` when the winner is a
