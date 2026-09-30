@@ -622,8 +622,8 @@ by D-255 in #1343) implements only those elements' representation; other \
 element types are type-checked but not yet compilable and are rejected \
 here rather than silently miscompiled. `frozenset[T]` shares the gate. \
 Whether a particular user class is hashable is a separate question, \
-answered at the set literal or `.add(...)` that inserts it (T0054, or \
-C0001 for a class shape pycc does not compile yet).",
+answered at the set literal, `.add(...)` or set comprehension that inserts \
+it (T0054, or C0001 for a class shape pycc does not compile yet).",
         example: "\
 def f() -> None:
     xs: set[str] = {\"a\", \"b\"}
@@ -1091,7 +1091,8 @@ def f(d: dict[str]) -> None:  # T0053 -- dict takes exactly 2 type arguments
         severity: Severity::Error,
         summary: "set element is an instance of an unhashable user class",
         explanation: "\
-T0054 fires when a set literal or `.add(...)` inserts an instance of a user \
+T0054 fires when a set literal, `.add(...)` or set comprehension (#1344) \
+inserts an instance of a user \
 class that defines `__eq__` (itself or through a base class) but no \
 `__hash__`. CPython sets such a class's `__hash__` to `None`, so the \
 insertion raises `TypeError: unhashable type` at run time; pycc knows the \

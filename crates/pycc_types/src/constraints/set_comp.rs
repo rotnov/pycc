@@ -10,6 +10,12 @@
 //! whatever the program pins the term to wins, and a term nothing pins ends
 //! as today's `int` container, so unannotated-helper inference of `set[int]`
 //! and `frozenset[int]` is unchanged.
+//!
+//! #1344 (Part 2 of #1336) types a set comprehension's container from its
+//! element: `set[C]` for an element the solver resolved to an instance of
+//! `C`. An element it has no term for still ends as `set[int]`, and the
+//! check phase relabels the mismatch that leaves
+//! (`crate::comprehension::inferred_set_return_limit`).
 
 use super::{BinOpConstraint, TypeTerm, fresh_variable, resolved_term, root};
 use pycc_hir::Ty;
@@ -25,8 +31,10 @@ pub(crate) struct DeferredConstraints {
 /// A container term whose element the solver could not fix while collecting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContainerDefault {
-    /// A set comprehension's container; defaults to `set[int]`.
-    SetComp { var: usize },
+    /// A set comprehension's container: `set[C]` once the element term
+    /// `elt` resolves to a user-class instance (#1344), else `set[int]`.
+    /// `elt` is `None` for an element the solver has no variable for.
+    SetComp { var: usize, elt: Option<usize> },
     /// A `frozenset(source)` call's result: `frozenset[e]` once `source`
     /// resolves to `set[e]`/`frozenset[e]`, else `frozenset[int]`. `source`
     /// is `None` for an argument the solver has no term for.
@@ -38,22 +46,29 @@ pub(crate) enum ContainerDefault {
 
 /// The container term of a set comprehension whose element term is `elt`:
 /// `set[int]` for an element already known to be `int` or `bool` (today's
-/// result), and otherwise a fresh term defaulted by
-/// [`apply_container_defaults`].
+/// result), `set[C]` for one already known to be an instance of `C` (#1344),
+/// and otherwise a fresh term defaulted by [`apply_container_defaults`],
+/// which remembers the element's variable so an instance it resolves to
+/// later still types the container.
 pub(crate) fn set_comp_container(
     elt: Option<TypeTerm>,
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
     deferred: &mut DeferredConstraints,
 ) -> TypeTerm {
-    let elt = elt.and_then(|term| resolved_term(term, parents, concrete));
-    if matches!(elt, Some(Ty::Int | Ty::Bool)) {
-        return Ok(Ty::Set(Box::new(Ty::Int)));
+    let elt_var = match elt {
+        Some(Err(var)) => Some(var),
+        _ => None,
+    };
+    match elt.and_then(|term| resolved_term(term, parents, concrete)) {
+        Some(Ty::Int | Ty::Bool) => return Ok(Ty::Set(Box::new(Ty::Int))),
+        Some(instance @ Ty::Instance(_)) => return Ok(Ty::Set(Box::new(instance))),
+        _ => {}
     }
     let var = fresh_variable(parents, concrete);
     deferred
         .container_defaults
-        .push(ContainerDefault::SetComp { var });
+        .push(ContainerDefault::SetComp { var, elt: elt_var });
     Err(var)
 }
 
@@ -74,7 +89,8 @@ pub(crate) fn deferred_frozenset(
 
 /// Applies `defaults` to every root still unresolved, writing each default
 /// to the root so every variable unified into it sees it. Set comprehensions
-/// first (a `set` root cannot share a root with a `frozenset` one without a
+/// first (`set[C]` when the element's root resolved to an instance of `C`,
+/// else `set[int]`) (a `set` root cannot share a root with a `frozenset` one without a
 /// real conflict), then `frozenset(...)` results to a fixpoint -- one
 /// entry's source can be another entry's result, across functions -- and
 /// finally `frozenset[int]` for every result still unresolved. A root the
@@ -86,9 +102,13 @@ pub(super) fn apply_container_defaults(
     concrete: &mut [Option<Ty>],
 ) {
     for default in defaults {
-        if let ContainerDefault::SetComp { var } = default {
+        if let ContainerDefault::SetComp { var, elt } = default {
+            let element = match elt.map(|elt| &concrete[root(parents, elt)]) {
+                Some(Some(instance @ Ty::Instance(_))) => instance.clone(),
+                _ => Ty::Int,
+            };
             let root = root(parents, *var);
-            concrete[root].get_or_insert_with(|| Ty::Set(Box::new(Ty::Int)));
+            concrete[root].get_or_insert_with(|| Ty::Set(Box::new(element)));
         }
     }
     loop {

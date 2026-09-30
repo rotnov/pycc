@@ -717,8 +717,14 @@ pub struct MirComprehension {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirCompElt {
     List(MirExpr),
-    Set(MirExpr),
-    Dict { key: MirExpr, value: MirExpr },
+    /// The element and, as for [`MirExpr::SetLiteral`], its
+    /// [`SetElementOps`]: `None` for an `int` element, the instance class's
+    /// hash and equality for a `set[C]` (#1344, Part 2 of #1336).
+    Set(MirExpr, Option<Box<SetElementOps>>),
+    Dict {
+        key: MirExpr,
+        value: MirExpr,
+    },
 }
 
 impl MirComprehension {
@@ -727,7 +733,7 @@ impl MirComprehension {
     pub fn ty(&self) -> Ty {
         match &self.elt {
             MirCompElt::List(elt) => Ty::List(Box::new(elt.ty())),
-            MirCompElt::Set(elt) => Ty::Set(Box::new(elt.ty())),
+            MirCompElt::Set(elt, _) => Ty::Set(Box::new(elt.ty())),
             MirCompElt::Dict { key, value } => Ty::Dict(Box::new((key.ty(), value.ty()))),
         }
     }
@@ -1276,6 +1282,10 @@ pub enum MirStmt {
     /// `ListCompAssign` exactly -- a set comprehension's own shape is
     /// identical to a list comprehension's, differing only in which
     /// runtime constructor/insert pair `pycc_codegen` ends up calling.
+    ///
+    /// #1344 (Part 2 of #1336): `ops` is `None` for an `int` element and
+    /// carries the instance class's hash and equality for a `set[C]`, as
+    /// [`MirExpr::SetLiteral`]'s own `ops` does.
     SetCompAssign {
         target: String,
         var: String,
@@ -1283,6 +1293,7 @@ pub enum MirStmt {
         source: CompSource,
         cond: Option<Box<MirExpr>>,
         elt: Box<MirExpr>,
+        ops: Option<Box<SetElementOps>>,
     },
     Return(Option<MirExpr>),
     /// `return b[start:stop]` where `b` is a `memoryview` **parameter**
