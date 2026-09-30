@@ -209,6 +209,24 @@ fn subclass_divergence_names_a_subclass_with_a_different_winner() {
 }
 
 #[test]
+fn subclass_divergence_ignores_a_name_the_receiver_class_never_binds() {
+    // `Base` binds no `exists`; only its subclass carries the foreign
+    // attribute. That is an ordinary unknown attribute of `Base`, so the
+    // subclass-override refusal stays out of it.
+    let table = fixture("class Base:\n    pass\n\n\nclass Sub(Base, FS):\n    pass\n");
+    let lookup = |name: &str| table.get(name);
+    let all: Vec<&HirClassDef> = table.values().collect();
+    assert_eq!(
+        instance_winner(mro(&table, "Sub"), lookup, "exists"),
+        InstanceWinner::Foreign("FS")
+    );
+    assert_eq!(
+        subclass_divergence("Base", all.iter().copied(), lookup, "exists"),
+        None
+    );
+}
+
+#[test]
 fn an_instance_winner_classifies_slot_foreign_other_and_missing() {
     let table = fixture(
         "class S:\n    def __init__(self) -> None:\n        self.exists = 1\n\n\n\

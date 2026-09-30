@@ -43,6 +43,8 @@ status: accepted
       MRO, is refused (#1350).
     - An instance access is refused when any subclass of the receiver's static class
       resolves the name to a different winner and either winner is the foreign attribute.
+      A name the receiver's own class never binds keeps the ordinary unknown-attribute
+      refusal instead.
       pycc resolves the member statically, so the subclass case would otherwise
       miscompile (#1337).
     - A non-name instance receiver and a `super()` receiver are refused (#1346).

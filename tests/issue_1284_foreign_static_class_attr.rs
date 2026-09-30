@@ -484,6 +484,37 @@ fn a_subclass_that_resolves_the_name_differently_is_refused() {
     );
 }
 
+/// A name only a subclass binds is an ordinary unknown attribute of the
+/// receiver's declared class, not a subclass-override hazard: the refusal
+/// must not suggest a `Base.typo(...)` call that does not exist.
+#[test]
+fn a_name_only_a_subclass_binds_keeps_the_unknown_attribute_error() {
+    assert_one_error(
+        "fs_subclass_only",
+        &with_fs(
+            "class Base:\n    pass\n\n\nclass Sub(Base):\n    typo = staticmethod(os.path.exists)\n\n\n\
+             def g(b: Base) -> None:\n    print(b.typo(\"/\"))\n",
+        ),
+        "T0044",
+        "class `Base` has no method named `typo`",
+    );
+}
+
+/// A comprehension target named after the foreign root does not shadow it
+/// at the use site: the loop variable is renamed during lowering, so the
+/// rewritten chain still reads the module-level import, as CPython's
+/// captured function would.
+const COMPREHENSION_TARGET: &str = "import os\n\n\n\
+    class FS:\n    exists = staticmethod(os.path.exists)\n\n\n\
+    def f() -> None:\n    print(len([1 for os in range(3) if FS.exists(\"/\")]))\n\n\n\
+    print(len([1 for os in range(2) if FS.exists(\"/definitely/not/a/path/here\")]))\n\
+    f()\n";
+
+#[test]
+fn a_comprehension_target_named_after_the_root_is_accepted() {
+    assert_checks("fs_comprehension_target", COMPREHENSION_TARGET);
+}
+
 /// With several diverging subclasses the refusal names the alphabetically
 /// first, whatever order the class table iterates in.
 #[test]
@@ -791,6 +822,17 @@ fn an_exception_host_runs_like_cpython_in_the_host() {
          probe(\"/\")\nprint(E.exists(\"/definitely/not/a/path/here\"))\n",
     );
     assert_eq!(out, "True\nFalse\nno error\n");
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_comprehension_target_named_after_the_root_runs_like_cpython_in_the_host() {
+    let out = assert_matches_cpython(
+        "fs_hosted_comprehension",
+        "fs_comprehension_mod",
+        COMPREHENSION_TARGET,
+    );
+    assert_eq!(out, "0\n3\nno error\n");
 }
 
 /// `utils.py` defines `FS`; the built module imports it and uses it in a

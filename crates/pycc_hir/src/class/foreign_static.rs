@@ -250,7 +250,8 @@ fn instance_winner<'a>(
 /// `x` may hold a subclass instance at run time. A differing winner would
 /// then be a silent miscompile, so the access is refused. The check fires
 /// only when a foreign attribute is involved, so no program that compiled
-/// before #1345 changes behaviour.
+/// before #1345 changes behaviour. A name `class_name`'s own MRO never binds
+/// yields `None`: that is the ordinary unknown-attribute refusal.
 pub fn subclass_divergence<'a>(
     class_name: &str,
     all_classes: impl IntoIterator<Item = &'a HirClassDef>,
@@ -259,6 +260,12 @@ pub fn subclass_divergence<'a>(
 ) -> Option<&'a str> {
     let own_mro = &lookup(class_name)?.mro;
     let own = instance_winner(own_mro, lookup, name);
+    // A name the receiver's own class never binds is an ordinary unknown
+    // attribute of the declared type, not a subclass-override hazard: the
+    // override wording would point at a class-name call that does not exist.
+    if own == InstanceWinner::Missing {
+        return None;
+    }
     // The alphabetically first diverging subclass, so the refusal names the
     // same class whatever order `all_classes` iterates in.
     all_classes
