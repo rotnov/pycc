@@ -1055,7 +1055,7 @@ fn rewrite_generic_calls_in_stmt(
             elt,
         } => {
             let body = cond.iter_mut().map(|c| c.as_mut()).chain([elt.as_mut()]);
-            comprehension::rewrite_comp_parts(
+            let elt_ty = comprehension::rewrite_comp_parts(
                 env,
                 local_names,
                 var,
@@ -1064,8 +1064,7 @@ fn rewrite_generic_calls_in_stmt(
                 instantiations,
                 seen,
             )?;
-            let container = comprehension::set_comp_container(env, local_names, elt)?;
-            env.bind(target.clone(), container);
+            env.bind(target.clone(), comprehension::set_comp_container(elt_ty));
             Ok(())
         }
         HirStmt::DictCompAssign {

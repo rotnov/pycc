@@ -121,7 +121,7 @@ pub(crate) fn comp_container_ty(
                 return Err(Diagnostic::error(
                     "T0038",
                     format!(
-                        "set comprehension codegen only supports `set[int]` (D-122), got a comprehension producing `set[{}]`",
+                        "set comprehension codegen only supports `set[int]` or a set of a user-class instance (D-122, D-255), got a comprehension producing `set[{}]`",
                         elt_ty.name()
                     ),
                     Span::new(0, 0),
@@ -196,8 +196,9 @@ pub(crate) fn infer_comprehension(
     )
 }
 
-/// The container type a comprehension of this kind produces once its element
-/// gate has passed: `list[int]`, `set[int]` or `dict[str, int]` (D-119).
+/// The `int`-element container type a comprehension of this kind produces:
+/// `list[int]`, `set[int]` or `dict[str, int]` (D-119). A set comprehension of
+/// user-class instances (#1344) is typed by [`comp_container_ty`] instead.
 pub(crate) fn comp_container_of(elt: &CompElt) -> Ty {
     match elt {
         CompElt::List(_) => Ty::List(Box::new(Ty::Int)),

@@ -676,6 +676,112 @@ fn a_set_comprehension_in_a_generic_function_matches_cpython() {
     assert_native_matches_cpython_from("e2e_1344_pep695", PEP_695, "303\n201\n", (3, 12));
 }
 
+/// A non-generic function's set comprehensions in a module that also holds
+/// an unrelated PEP 695 generic, so `monomorphize` rewrites the function's
+/// body too: elements reading a module global, a module-level instance, an
+/// attribute and a method call, in the statement and expression forms.
+const GENERIC_NEIGHBOUR: &str = r#"class R:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def __hash__(self) -> int:
+        return self.v
+
+    def __eq__(self, other: R) -> bool:
+        return self.v == other.v
+
+    def clone(self) -> R:
+        return R(self.v)
+
+
+G: R = R(7)
+N: int = 3
+
+
+def ident[T](x: T) -> T:
+    return x
+
+
+def vsum(s: set[R]) -> int:
+    t = 0
+    for r in s:
+        t += r.v
+    return t
+
+
+def run() -> None:
+    a = {G for i in range(3)}
+    print(len(a), vsum(a))
+    b: set[R] = {R(i + N) for i in range(3)}
+    print(len(b), vsum(b))
+    rs: set[R] = {R(1), R(2)}
+    d = {r.clone() for r in rs}
+    print(len(d), vsum(d))
+    e = {R(r.v * 10) for r in rs}
+    print(len(e), vsum(e))
+    print(vsum({R(r.v) for r in rs}), ident(5))
+
+
+run()
+"#;
+
+#[test]
+fn a_set_comprehension_beside_a_generic_function_matches_cpython() {
+    assert_native_matches_cpython_from(
+        "e2e_1344_generic_neighbour",
+        GENERIC_NEIGHBOUR,
+        "1 7\n3 12\n2 3\n2 30\n3 5\n",
+        (3, 12),
+    );
+}
+
+/// #1105 (open): `monomorphize` seeds no foreign name, so once a module
+/// holds a PEP 695 generic, `pycc build` refuses a foreign read in any
+/// function with `T0021` even though `pycc check` accepts it. A set
+/// comprehension's element fails exactly like a plain statement does: #1344
+/// adds no failure of its own to that pass. This pins today's behaviour
+/// and must flip to a CPython match when #1105 lands.
+#[test]
+fn a_foreign_read_beside_a_generic_function_fails_like_a_plain_statement() {
+    let refusal = |tag: &str, body: &str| {
+        let source = format!(
+            "import fractions\n\n\ndef ident[T](x: T) -> T:\n    return x\n\n\n\
+             def run() -> None:\n{body}\n\n\nrun()\n"
+        );
+        let dir = ScratchDir::new(tag).expect("scratch");
+        std::fs::write(dir.join("a.py"), &source).expect("write the subject");
+        let check = pycc()
+            .arg("check")
+            .arg(dir.join("a.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(check.status.success(), "{}", rendered(&check));
+        let build = pycc()
+            .arg("build")
+            .arg(dir.join("a.py"))
+            .arg("-o")
+            .arg(dir.join("a.bin"))
+            .output()
+            .expect("pycc should spawn");
+        assert_eq!(build.status.code(), Some(1), "{}", rendered(&build));
+        rendered(&build)
+            .lines()
+            .next()
+            .expect("a diagnostic")
+            .to_string()
+    };
+    let comp = refusal(
+        "e2e_1344_1105_comp",
+        "    y = {i for i in range(int(fractions.Fraction(3, 1)))}\n    print(len(y))",
+    );
+    let plain = refusal(
+        "e2e_1344_1105_plain",
+        "    y = int(fractions.Fraction(3, 1))\n    print(y)",
+    );
+    assert_eq!(comp, "error[T0021]: name `fractions` is not defined");
+    assert_eq!(comp, plain);
+}
+
 const HASHED_R: &str = "class R:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n    def __hash__(self) -> int:\n        return self.v % 2\n\n    def __eq__(self, other: R) -> bool:\n        return self.v == other.v\n\n\n";
 
 /// The solver types an unannotated helper's set comprehension from an
@@ -721,6 +827,51 @@ fn an_untypable_inferred_set_return_is_c0001() {
             "#1342",
         );
     }
+}
+
+/// The D-255 residual: an annotated caller of a helper that hits the
+/// #1342 `C0001` also reports a `T0025` against the helper's still-`set[int]`
+/// inferred signature. Inside a function the `C0001` comes first; a
+/// module-scope caller's `T0025` is reported alone.
+#[test]
+fn an_annotated_caller_of_an_untypable_helper_reports_the_d255_residual() {
+    let helper = format!("{HASHED_R}def _h(n):\n    return {{R(i) for i in range(n)}}\n\n\n");
+    let codes = |tag: &str, source: &str| {
+        let dir = ScratchDir::new(tag).expect("scratch");
+        std::fs::write(dir.join("a.py"), with_postponed_annotations(source))
+            .expect("write the subject");
+        let output = pycc()
+            .arg("check")
+            .arg("--error-format")
+            .arg("json")
+            .arg(dir.join("a.py"))
+            .output()
+            .expect("pycc should spawn");
+        assert_eq!(output.status.code(), Some(1), "{}", rendered(&output));
+        rendered(&output)
+            .lines()
+            .map(|line| {
+                let start = line.find("\"code\":\"").expect("a code field") + 8;
+                line[start..start + 5].to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        codes(
+            "e2e_1344_residual_module",
+            &format!("{helper}s: set[R] = _h(4)\nprint(len(s))\n"),
+        ),
+        ["T0025"]
+    );
+    assert_eq!(
+        codes(
+            "e2e_1344_residual_function",
+            &format!(
+                "{helper}def run() -> None:\n    s: set[R] = _h(4)\n    print(len(s))\n\n\nrun()\n"
+            ),
+        ),
+        ["C0001", "T0025"]
+    );
 }
 
 /// A comprehension is an insertion site like a literal, so

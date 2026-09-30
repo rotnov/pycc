@@ -1075,7 +1075,8 @@ module globals carry over.
 `set[T]` or `dict[K, V]` (the loop variable is `T` or the key `K`); a bare
 name of any other type is `T0033`. The result is `list[int]`, `set[int]` or `dict[str, int]`,
 with the element gates of the matching display (`T0034`, `T0038`, `T0036`,
-D-119). An unannotated private helper may take or return a comprehension, and
+D-119); a set comprehension may also produce `set[C]` of a hashable user
+class (#1344; see "Sets of user-class instances" below). An unannotated private helper may take or return a comprehension, and
 its container type is inferred.
 
 **Refused, with `C0001`:**
