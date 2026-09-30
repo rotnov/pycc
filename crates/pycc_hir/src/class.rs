@@ -65,6 +65,15 @@ mod body;
 mod declared_attrs;
 pub(crate) mod enum_call;
 mod enum_class;
+mod exception_dunders;
+mod inherited_copy;
+pub use inherited_copy::{
+    CopiedMemberKind, InheritedCopy, SUPER_TARGET_MARKER, binds_member, first_definer,
+    inherited_copy_name, inherited_copy_origin,
+};
+mod dataclass_methods;
+pub use dataclass_methods::dataclass_repr_body;
+use dataclass_methods::{synthesize_dataclass_eq, synthesize_dataclass_repr};
 pub(crate) mod foreign_static;
 pub use foreign_static::{
     ClassNamespaceWinner, ForeignCallableRef, class_name_foreign_static, class_namespace_winner,
@@ -86,7 +95,7 @@ mod shadow;
 pub use shadow::declares_name_outside_class_attrs;
 
 use crate::expr::keyword_bind::SignatureTable;
-use crate::{HirExpr, HirItem, HirStmt, ImportBinding, Ty, lower_arg_list, unsupported};
+use crate::{HirItem, ImportBinding, Ty, lower_arg_list, unsupported};
 use attrs::{
     ClassAttrCollisionInput, reject_class_attr_collisions,
     reject_dataclass_field_class_var_collisions,
@@ -1406,6 +1415,12 @@ pub(crate) fn lower_class(
     // list well below `walk_class_body`) and every base's own `attrs` final
     // (a base is always defined earlier in the module, so it is).
     validate_mro_slot_layout(&class_def, defined_classes, def.range.into())?;
+    // #1337 (WI-6b): a user dunder a raised exception value would ignore.
+    exception_dunders::reject_ignored_exception_dunders(
+        &class_def,
+        defined_classes,
+        def.range.into(),
+    )?;
     Ok((class_def, items))
 }
 
@@ -1714,98 +1729,6 @@ fn lower_method(
 /// time with `C0001` before it can reach codegen and panic.
 fn is_scalar_slot_type(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))
-}
-
-/// #378 (PR-18): Synthesizes an `__eq__` method for a `@dataclass` class
-/// from its (merged) field list. The synthesized method takes `self` and
-/// `other` (both typed `Ty::Instance(class_name)`), and returns `bool` --
-/// `True` if all fields are equal, `False` otherwise. The body uses a
-/// series of `if self.<field> != other.<field>: return False` checks
-/// followed by `return True`. The synthesis predates `and`/`or` lowering
-/// (#1211), and a chain of early returns needs no field type to be
-/// truth-testable, so it stays as it is. A zero-field dataclass's
-/// `__eq__` always returns `True` (two instances of a fieldless dataclass
-/// are always equal, matching CPython's PEP 557).
-fn synthesize_dataclass_eq(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
-    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-    let params: Vec<(String, Ty)> = vec![
-        ("self".to_string(), self_ty.clone()),
-        ("other".to_string(), self_ty),
-    ];
-    let mut body: Vec<HirStmt> = Vec::new();
-    for (name, _) in fields {
-        // `if self.<field> != other.<field>: return False`
-        body.push(HirStmt::If {
-            test: HirExpr::Compare {
-                op: crate::CmpOpKind::NotEq,
-                left: Box::new(HirExpr::AttrGet {
-                    base: Box::new(HirExpr::Name("self".to_string())),
-                    attr: name.clone(),
-                }),
-                right: Box::new(HirExpr::AttrGet {
-                    base: Box::new(HirExpr::Name("other".to_string())),
-                    attr: name.clone(),
-                }),
-            },
-            body: vec![HirStmt::Return(Some(HirExpr::BoolLiteral(false)))],
-            orelse: Vec::new(),
-        });
-    }
-    // `return True`
-    body.push(HirStmt::Return(Some(HirExpr::BoolLiteral(true))));
-    HirItem::Function {
-        name: format!("{class_name}.__eq__"),
-        params,
-        return_ty: Ty::Bool,
-        body,
-    }
-}
-
-/// #378 (PR-18): Synthesizes a `__repr__` method for a `@dataclass` class
-/// from its (merged) field list. The synthesized method takes `self` and
-/// returns a `str` of the form `ClassName(field1=..., field2=..., ...)`.
-/// Each field value is converted to a string via f-string interpolation
-/// (which routes through the existing `to_str` codegen for scalars). The
-/// string is built by concatenating literal and interpolated parts using
-/// `pycc_rt_str_concat` at codegen time (the f-string codegen already
-/// does this).
-///
-/// For a zero-field dataclass, `__repr__` returns `"ClassName()"`.
-fn synthesize_dataclass_repr(class_name: &str, fields: &[(String, Ty)]) -> HirItem {
-    let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-    let params: Vec<(String, Ty)> = vec![("self".to_string(), self_ty)];
-    // Build the repr string as an f-string with literal and interpolation
-    // parts. The codegen's f-string handling already converts each
-    // interpolated value to a string via `to_str` and concatenates with
-    // `pycc_rt_str_concat`.
-    let body = if fields.is_empty() {
-        vec![HirStmt::Return(Some(HirExpr::StringLiteral(format!(
-            "{class_name}()"
-        ))))]
-    } else {
-        let mut parts: Vec<crate::FStringPart> = Vec::new();
-        parts.push(crate::FStringPart::Literal(format!("{class_name}(")));
-        for (i, (name, _)) in fields.iter().enumerate() {
-            if i > 0 {
-                parts.push(crate::FStringPart::Literal(", ".to_string()));
-            }
-            parts.push(crate::FStringPart::Literal(format!("{name}=")));
-            parts.push(crate::FStringPart::Interpolation(Box::new(
-                HirExpr::AttrGet {
-                    base: Box::new(HirExpr::Name("self".to_string())),
-                    attr: name.clone(),
-                },
-            )));
-        }
-        parts.push(crate::FStringPart::Literal(")".to_string()));
-        vec![HirStmt::Return(Some(HirExpr::FString(parts)))]
-    };
-    HirItem::Function {
-        name: format!("{class_name}.__repr__"),
-        params,
-        return_ty: Ty::Str,
-        body,
-    }
 }
 
 /// #435 (Part B), extended by #585 and unified by #854: Validates that an

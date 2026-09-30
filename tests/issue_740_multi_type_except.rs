@@ -279,7 +279,9 @@ fn user_defined_class_alongside_builtin_without_as_binding_still_compiles_and_ca
 // such a binding now folds to `False` (a conservative false negative, in
 // the same already-accepted-imprecision class as the pre-existing
 // single-type-handler limitation), and `isinstance(e, Exception)` still
-// folds to `True`. This test pins that corrected behavior end to end.
+// folds to `True`. This test pinned that behavior end to end; since #1337
+// the specific-type query reads the runtime type tag instead (D-195's
+// 2026-09-25 amendment), so it now pins CPython's exact answer.
 
 #[test]
 fn isinstance_on_a_multi_type_handler_binding_never_produces_a_false_positive() {
@@ -294,10 +296,10 @@ fn isinstance_on_a_multi_type_handler_binding_never_produces_a_false_positive() 
          main()\n",
     );
     assert!(ok, "program failed: {stderr}");
-    // Both specific-type queries fold to `False` (conservative, no false
-    // positive) even though `TypeError` was the actual runtime exception;
-    // the universal-root query still folds to `True`.
-    assert_eq!(stdout, "False\nFalse\nTrue\n");
+    // Since #1337 a query outside the binding's static MRO reads the
+    // caught object's runtime type tag, so the answer is CPython's: the
+    // `TypeError` actually raised is a `TypeError`, not a `ValueError`.
+    assert_eq!(stdout, "True\nFalse\nTrue\n");
 }
 
 // A single-name handler is unaffected by the multi-type fix: it still binds

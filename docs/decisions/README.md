@@ -263,4 +263,5 @@ current.
 | [D-251](./D-251-static-libpython-link-for-embedded-executables.md) | Link libpython statically into an embedded executable on request, with the whole archive loaded and its symbols exported | accepted |
 | [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) | Admit annotation-only additions to a kill-criterion subject (owner directive) | accepted |
 | [D-253](./D-253-windows-embedded-executable-a-stub-out-loading-a.md) | Windows embedded executable: a stub OUT loading a program DLL from OUT.pycc | accepted |
+| [D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md) | Inherited methods are compiled per receiver class when their behaviour depends on it | accepted |
 | [D-256](./D-256-admit-a-foreign-callable-staticmethod-class.md) | Admit a foreign-callable `staticmethod` class attribute, re-read at each access | accepted |

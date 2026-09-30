@@ -105,8 +105,16 @@ rebinding would make them: `staticmethod(...)` called with other than exactly \
 one positional argument (none, several, a keyword or a starred argument), \
 and a `staticmethod` that is rebound in the module or class body. \
 The one admitted non-literal shape is `name = staticmethod(<foreign import \
-reference>)`. Apart from those two permanent refusals, the construct \
-remains reserved and stops \
+reference>)`. Since #1337 (D-254) two more shapes are C0001: an \
+inherited method body compiled once more for a subclass that lacks a \
+capability the body needs (a `print(self)` of a non-dataclass subclass of \
+a dataclass), attributed to the origin body's file with a note naming \
+the subclass; and a user exception class whose MRO resolves an \
+instance-protocol dunder (`__str__`, `__bool__`, `__eq__`, ...) to a user \
+class rather than to a builtin exception base, reported at the class \
+definition because a raised exception value would silently ignore that \
+dunder (Part 3 of #541). Apart from the two permanent refusals above, the \
+construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \
@@ -346,6 +354,11 @@ statically; `hash()` of a type CPython can hash but pycc cannot yet is \
 an instance whose class is unhashable (it defines `__eq__` without \
 `__hash__`), as \"unhashable type: `<class>`\", or whose `__hash__` does \
 not return an integer, as \"`__hash__` method should return an integer\". \
+Since #1337 (D-254) it also fires in an inherited method body compiled \
+once more for a subclass, when that copy passes the subclass receiver where \
+only the base class is accepted (`helper(self)` with `def helper(a: A)`, or \
+a dataclass `==` the subclass lacks); the diagnostic is attributed to the \
+origin body's file with a note naming the subclass. \
 Different call \
 sites across `pycc_types` and `pycc_hir` construct T0021 with \
 different messages for these distinct situations; the shared code reflects \
@@ -366,7 +379,12 @@ T0022 fires when a function's `return` statement's value has a type that is \
 not assignable to the function's own declared (or, for a private helper, \
 inferred) return type -- including the implicit `None` return type when a \
 function's body falls off the end without an explicit `return` in a path \
-that needs one.",
+that needs one. It also fires in an inherited method compiled again for a \
+subclass (#1337, D-254) whose body returns `self` from a method annotated \
+with the base class: the copy's `self` is the subclass, which the base-typed \
+return slot would silently widen, so the program is refused and the \
+diagnostic carries the note \"while compiling `D.m` inherited by subclass \
+`C`\".",
         example: "\
 def f() -> int:
     return \"not an int\"
@@ -428,7 +446,12 @@ type that does not match the annotation written on the same statement, \
 e.g. `x: int = \"hello\"`. The annotation itself is what determines `x`'s \
 type going forward (not the initializer's inferred type) -- T0025 is the \
 check that the initializer is honest about that annotation at the point it \
-is declared.",
+is declared. It also fires in an inherited method compiled again for a \
+subclass (#1337, D-254) whose body binds `self` to a local annotated with \
+the base class (`x: A = self`): the copy's `self` is the subclass, which \
+the annotation would silently widen, so the program is refused and the \
+diagnostic carries the note \"while compiling `D.m` inherited by subclass \
+`C`\".",
         example: "\
 def f() -> None:
     x: int = \"hello\"

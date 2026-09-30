@@ -156,6 +156,12 @@ pub struct Environment {
     /// `resolve_method_call`/`resolve_attr_get` when the base is `Super` to
     /// resolve the next class in the MRO after this one (D-006 static
     /// dispatch, per the #433 ADR — no vtable, no runtime dispatch).
+    ///
+    /// For a receiver-exact copy of an inherited body (#1337, D-254) this is
+    /// the copy's *anchor* -- the class that defines the source body, read
+    /// through `pycc_hir::inherited_copy_origin` -- never the receiver the
+    /// copy is compiled for; the `super()` arms read the receiver from
+    /// `self`'s type and continue along the receiver's MRO after the anchor.
     pub(crate) current_class: Option<String>,
     /// PEP 591 (#383): names declared `Final` (variable-level only, not
     /// parameters or class attributes). Populated from `HirStmt::AnnAssign`'s
@@ -428,8 +434,9 @@ impl Environment {
 
     /// #433: Returns the name of the class whose method body is currently
     /// being type-checked, if any. Set by `check_function_in` from the
-    /// method's mangled `<ClassName>.<method>` name; `None` for a top-level
-    /// function or the module-level environment.
+    /// method's mangled `<ClassName>.<method>` name (the anchor class for a
+    /// receiver-exact copy, #1337); `None` for a top-level function or the
+    /// module-level environment.
     pub(crate) fn current_class(&self) -> Option<&str> {
         self.current_class.as_deref()
     }

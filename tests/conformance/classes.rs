@@ -574,3 +574,69 @@ fn comprehension_expr_matches_cpython_3_14_7_byte_for_byte() {
         "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/comprehension_expr.py"
     );
 }
+
+// #1337 (D-254): an inherited method runs the body its receiver's class
+// resolves to -- `self.m()`, `super()`, class attributes, properties,
+// `isinstance(self, ...)` and classmethods, each compiled per receiver.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn receiver_exact_dispatch_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/receiver_exact_dispatch.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("receiver_exact_dispatch_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/receiver_exact_dispatch.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("receiver_exact_dispatch_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/receiver_exact_dispatch.py"
+    );
+}
+
+// #1337 (D-254): an inherited method runs the body its receiver's class
+// resolves to -- `self.m()`, `super()`, class attributes, properties,
+// `isinstance(self, ...)` and classmethods, each compiled per receiver.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn receiver_exact_protocol_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/receiver_exact_protocol.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("receiver_exact_protocol_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/receiver_exact_protocol.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("receiver_exact_protocol_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/receiver_exact_protocol.py"
+    );
+}
+
+// #1337 (WI-6a): `isinstance` on a caught builtin exception value is decided
+// from its runtime type tag; an `except*` group and a plain user exception
+// instance keep the compile-time answer.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn exception_isinstance_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exception_isinstance.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("exception_isinstance_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/exception_isinstance.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("exception_isinstance_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/exception_isinstance.py"
+    );
+}

@@ -21,12 +21,13 @@ pub use boolop::{BoolOpKind, bool_op_result_ty};
 pub use buffer_store::{body_returns_inside_finally, body_returns_slice_of, body_stores_into};
 pub use class::enum_call::enum_class_call_message;
 pub use class::{
-    ClassAttrValue, ClassNamespaceWinner, EnumMemberValue, ForeignCallableRef, HashRefusal,
-    HirClassDef, InstanceHash, InstanceHashLowering, PropertyDef, ProtocolMember,
-    class_name_foreign_static, class_namespace_winner, declares_name_outside_class_attrs,
-    flat_attr_layout, instance_foreign_static, method_shadows_foreign_static,
-    mro_has_instance_slot, resolve_instance_hash, slot_behind_foreign_static_meets_property,
-    subclass_divergence,
+    ClassAttrValue, ClassNamespaceWinner, CopiedMemberKind, EnumMemberValue, ForeignCallableRef,
+    HashRefusal, HirClassDef, InheritedCopy, InstanceHash, InstanceHashLowering, PropertyDef,
+    ProtocolMember, SUPER_TARGET_MARKER, binds_member, class_name_foreign_static,
+    class_namespace_winner, dataclass_repr_body, declares_name_outside_class_attrs, first_definer,
+    flat_attr_layout, inherited_copy_name, inherited_copy_origin, instance_foreign_static,
+    method_shadows_foreign_static, mro_has_instance_slot, resolve_instance_hash,
+    slot_behind_foreign_static_meets_property, subclass_divergence,
 };
 pub use compare_chain::{CompareLink, compare_chain_operands};
 pub use container::{check_container_ty, check_tuple_element_ty};

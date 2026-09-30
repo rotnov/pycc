@@ -1,4 +1,6 @@
-pub use pycc_hir::{EnumMemberValue, FromImport, HirClassDef};
+pub use pycc_hir::{
+    EnumMemberValue, FromImport, HirClassDef, InheritedCopy, inherited_copy_origin,
+};
 mod binop;
 use binop::binop_result_ty;
 mod boolop;
@@ -9,6 +11,7 @@ mod class;
 use class::eval_isinstance_protocol;
 use class::{class_def_of, mro_attrs};
 mod exception;
+mod exception_isinstance;
 pub use exception::{MirExceptHandler, MirExceptionValue};
 use exception::{handler_type_tags, lower_raise};
 mod expr;
@@ -17,7 +20,14 @@ mod matching;
 #[cfg(test)]
 use matching::nest_match_alternatives;
 use matching::try_lower_enum_member_attr;
+mod item_names;
+#[cfg(test)]
+use item_names::resolve_method_owner_class;
+use item_names::{item_anchor_class, source_frame_name};
+mod receiver_exact;
 mod stmt;
+#[cfg(debug_assertions)]
+mod verify_receiver;
 use pycc_hir::{CompIter, ForeignImportSite, HirItem, HirModule, HirStmt, ImportBinding};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
@@ -634,6 +644,19 @@ pub enum MirExpr {
     /// `Ty::Str`, exactly like `rewrite_instance_to_repr`'s own
     /// `MirExpr::Call` rewrite.
     ExceptionMessage(Box<MirExpr>),
+    /// `isinstance(obj, T)` decided at run time from a caught exception's type
+    /// tag (#1337, WI-6a): `obj`'s static type is a seeded builtin exception
+    /// class, so its runtime value is a `PyExceptionObj` whose dynamic class
+    /// may be any subclass. The result is whether `pycc_rt_exception_type_matches`
+    /// accepts the object for any tag in `tags` -- the target classes' own
+    /// tags plus every raisable class whose MRO reaches one of them, sorted
+    /// and non-empty. `class::lower_isinstance` is the sole constructor,
+    /// using `pycc_mir::exception_isinstance`'s helpers. `.ty()` is
+    /// `Ty::Bool`.
+    ExceptionTypeTest {
+        obj: Box<MirExpr>,
+        tags: Vec<u8>,
+    },
     /// PEP 572 (#774): `target := value`. Evaluates `value`, stores it into
     /// `name`'s already-predeclared storage slot (see
     /// `pycc_codegen::collect_expr_bindings`, this node's own slot-scanning
@@ -897,6 +920,7 @@ impl MirExpr {
             }
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
+            MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
             MirExpr::Comprehension(comp) => comp.ty(),
         }
@@ -1073,7 +1097,9 @@ impl MirExpr {
                 base.collect_named_expr_bindings(out);
                 index.collect_named_expr_bindings(out);
             }
-            MirExpr::ExceptionMessage(inner) | MirExpr::Not(inner) => {
+            MirExpr::ExceptionMessage(inner)
+            | MirExpr::ExceptionTypeTest { obj: inner, .. }
+            | MirExpr::Not(inner) => {
                 inner.collect_named_expr_bindings(out)
             }
             MirExpr::NamedExpr { name, value, ty } => {
@@ -1511,10 +1537,16 @@ pub fn build(hir: &HirModule) -> MirModule {
         .map(|item| item.expect("every HIR item is either a function or a top-level statement"))
         .collect();
     splice_foreign_imports(&mut items, &hir.imports);
-    MirModule {
+    let module = MirModule {
         items,
         class_defs: hir.class_defs.clone(),
-    }
+    };
+    // #1337 (D-254): every user-method call runs the body its static
+    // receiver class resolves to; re-derived independently of the routing
+    // sites and checked on every debug (so every test) build.
+    #[cfg(debug_assertions)]
+    verify_receiver::verify(&module, &classes);
+    module
 }
 
 /// Part 1 of #1026: inserts a [`MirItem::ForeignImport`] into `items` for
@@ -1584,11 +1616,7 @@ fn lower_item(
             // `<ClassName>.<method>` name so `lower_expr`'s `Super` arm
             // can resolve the next class in the MRO. A top-level function
             // name contains no `.`, so `current_class` is `None` for those.
-            let current_class: Option<&str> = name
-                .split('.')
-                .next()
-                .filter(|prefix| *prefix != name)
-                .map(|prefix| resolve_method_owner_class(prefix, classes));
+            let current_class: Option<&str> = item_anchor_class(name, classes);
             scopes.push(params.iter().cloned().collect());
             let mut body = lower_stmt_sequence(body, scopes, classes, current_class);
             scopes.pop();
@@ -1606,74 +1634,6 @@ fn lower_item(
             set_frame_function(std::slice::from_mut(&mut stmt), "<module>");
             MirItem::TopLevelStmt(stmt)
         }
-    }
-}
-
-/// #953: Recovers the class a mangled method name belongs to.
-///
-/// The first dotted component of `<ClassName>.<method>` is normally the
-/// class itself, and PEP 695's own generic-class methods
-/// (`0gen_C__T_int.method`) keep that property because the *class* is what
-/// carries the `0gen_` prefix there. A protocol-parameter method
-/// specialization mangles the whole method name instead
-/// (`0gen_C.take__P_C`, `pycc_types::monomorphize`), so its first
-/// component is `0gen_C` -- not a registered class. Resolving by lookup
-/// rather than by naive prefix keeps both conventions working:
-/// `classes`'s own key wins when it exists, a `0gen_`-stripped remainder
-/// is tried next, and the raw prefix is returned unchanged otherwise so
-/// this function can never change behavior for a name that resolves
-/// today.
-fn resolve_method_owner_class<'a>(
-    prefix: &'a str,
-    classes: &HashMap<String, HirClassDef>,
-) -> &'a str {
-    if classes.contains_key(prefix) {
-        return prefix;
-    }
-    match prefix
-        .strip_prefix("0gen_")
-        .filter(|stripped| classes.contains_key(*stripped))
-    {
-        Some(stripped) => stripped,
-        None => prefix,
-    }
-}
-
-/// Recovers the plain Python source name of a function from
-/// `pycc_hir`'s internal mangled identifier, for traceback rendering
-/// (#707). `HirItem::Function::name` is `"<module>"` for the module's own
-/// top-level statements, a bare identifier for a top-level `def`, or
-/// `"<ClassName>.<method_name>"` for a method -- with a further
-/// `.classmethod`/`.static`/`.setter` suffix appended for a classmethod,
-/// staticmethod, or property setter (see `pycc_hir::class`'s
-/// `mangled_method_name`, around line 2439). None of that mangling is
-/// meaningful to a Python programmer reading a traceback: CPython's own
-/// traceback frames print a method's plain `co_name` (e.g. `create`), never
-/// the qualified `Class.method` form and never an implementation-internal
-/// suffix. This strips both layers -- the trailing mangling suffix, then
-/// the `<ClassName>.` prefix -- so `pycc_rt_exception_set_frame` receives
-/// the same name CPython would show, while a top-level function name or
-/// `"<module>"` (which contain no `.` after suffix stripping, since
-/// identifiers cannot contain `.`) pass through unchanged.
-fn source_frame_name(mangled: &str) -> String {
-    let without_suffix = mangled
-        .strip_suffix(".classmethod")
-        .or_else(|| mangled.strip_suffix(".static"))
-        .or_else(|| mangled.strip_suffix(".setter"))
-        .unwrap_or(mangled);
-    // #953: a protocol-parameter method specialization is named
-    // `0gen_<Class>.<method>__<P>_<C>`; stripping the leading `0gen_`
-    // keeps the class-qualified split below meaningful instead of
-    // rendering the whole mangled string as the frame name. The
-    // substitution suffix itself stays (the frame reads `take__P_C`):
-    // trimming it by string surgery is not safe for a dunder method,
-    // whose own name already contains `__`.
-    let without_suffix = without_suffix
-        .strip_prefix("0gen_")
-        .unwrap_or(without_suffix);
-    match without_suffix.split_once('.') {
-        Some((_class_name, method_name)) => method_name.to_string(),
-        None => without_suffix.to_string(),
     }
 }
 

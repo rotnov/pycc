@@ -23,6 +23,38 @@ use super::{
     check_call_args, expect_class, foreign_static, t0044_unknown_member, t0047_super_instance_attr,
 };
 
+/// The anchor class and the MRO slice a zero-argument `super()` searches:
+/// the classes *after* the anchor (the class whose body is being checked,
+/// `env.current_class()`) in the **receiver's** MRO (#1337, D-254).
+///
+/// The receiver is the class `self` is typed as. For an ordinary method
+/// body it is the anchor itself, so this is D-160's rule unchanged. For an
+/// inherited body compiled for a subclass `C` (a receiver-exact copy,
+/// D-254), `self` is typed `C` while the anchor stays the defining class,
+/// and the slice follows `C`'s MRO -- CPython's cooperative order, where
+/// `super()` inside `L.f` reaches `R.f` for `class C(L, R)`. Mirrors
+/// `pycc_mir`'s `super()` lowering, so the checker types the same body the
+/// lowering calls.
+fn super_mro(env: &Environment) -> (&str, &[String]) {
+    let anchor = env.current_class().unwrap();
+    let receiver = match env.lookup("self") {
+        Some(Ty::Instance(class)) if env.lookup_class(&class).is_some() => env
+            .classes
+            .get_key_value(class.as_str())
+            .unwrap()
+            .0
+            .as_str(),
+        _ => anchor,
+    };
+    let receiver_def = expect_class(env, receiver);
+    let pos = receiver_def
+        .mro
+        .iter()
+        .position(|c| c == anchor)
+        .expect("a super() anchor is in its receiver's MRO");
+    (anchor, &receiver_def.mro[pos + 1..])
+}
+
 /// #433: Resolves `super().attr` — an attribute read through zero-arg
 /// `super()`. The resolution starts from the class *after* the current
 /// class in the MRO (not the current class itself), matching CPython's own
@@ -68,16 +100,7 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
             Span::new(0, 0),
         ));
     }
-    let current_class = env.current_class().unwrap();
-    let class_def = expect_class(env, current_class);
-    // Find the current class's position in its own MRO, then search
-    // starting from the next position.
-    let current_pos = class_def
-        .mro
-        .iter()
-        .position(|c| c == current_class)
-        .unwrap();
-    let super_mro = &class_def.mro[current_pos + 1..];
+    let (current_class, super_mro) = super_mro(env);
     // Part 1 of #1284: a winning `staticmethod(...)` class attribute is
     // refused rather than typed as the `object` it is recorded as.
     foreign_static::refuse_super(env, super_mro, current_class, attr)?;
@@ -162,14 +185,7 @@ pub(crate) fn resolve_super_method_call(
             Span::new(0, 0),
         ));
     }
-    let current_class = env.current_class().unwrap();
-    let class_def = expect_class(env, current_class);
-    let current_pos = class_def
-        .mro
-        .iter()
-        .position(|c| c == current_class)
-        .unwrap();
-    let super_mro = &class_def.mro[current_pos + 1..];
+    let (current_class, super_mro) = super_mro(env);
     // Part 1 of #1284: the method walk below sees methods only, so a
     // `staticmethod(...)` class attribute that wins positionally must be
     // refused here or the call would reach a later base's method.

@@ -772,6 +772,9 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
         "Grid.width.setter",
         "Grid.scale.other",
         "Grid.scale.static.extra",
+        // D-254: `super()`-target copies, with and without a kind suffix.
+        "Grid.scale.0super_Base",
+        "Grid.scale.0super_Base.classmethod",
         "0gen_identity_int",
         "0gen_f.scale.static",
         "Grid..static",
@@ -783,6 +786,7 @@ fn the_driver_and_codegen_export_predicates_agree_on_every_shape() {
             "predicates disagree on {name:?}"
         );
     }
+    assert!(classify_export_name("Grid.scale.0super_Base.classmethod").is_none());
 }
 
 // --- #1145: instance methods, and the constructibility predicate ---------

@@ -536,6 +536,9 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // expression `int_temporary_word` passes in; it joins the combined
         // "owning" answer for the same reason.
         | MirExpr::ExceptionMessage(_)
+        // `ExceptionTypeTest`'s `.ty()` is always `Ty::Bool` (#1337), never
+        // `Ty::Int`, for the same reason as `ExceptionMessage` above.
+        | MirExpr::ExceptionTypeTest { .. }
         // `OptionalWrap`'s own `.ty()` is always `Ty::Optional(_)`, never
         // `Ty::Int` (D-197, #763), so like every other non-`Ty::Int`
         // variant grouped in this arm it can never reach this function as
