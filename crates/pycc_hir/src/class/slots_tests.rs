@@ -974,3 +974,38 @@ fn a_re_exported_slotted_base_carries_its_slots() {
     assert_eq!(diagnostic.code, "T0044");
     assert_eq!(diagnostic.message, no_slot("C", "z"));
 }
+
+#[test]
+fn a_slots_annotation_outside_the_admitted_spellings_is_refused() {
+    let refused = "this `__slots__` annotation is not supported yet -- annotate it as `str`, \
+                   `tuple`, `list`, `tuple[str, ...]` or `list[str]`, optionally inside \
+                   `ClassVar[...]`";
+    for ann in [
+        "tuple",
+        "tuple[str, ...]",
+        "Tuple[str, ...]",
+        "list",
+        "list[str]",
+        "List[str]",
+        "str",
+        "ClassVar[tuple[str, ...]]",
+    ] {
+        let source = format!(
+            "from typing import ClassVar, List, Tuple\n\n\nclass C:\n    __slots__: {ann} = ('a',)\n"
+        );
+        assert_eq!(slots_of(&source, "C"), names(&["a"]), "{ann}");
+    }
+    for ann in [
+        "int",
+        "Missing",
+        "tuple[str]",
+        "tuple[int, ...]",
+        "tuple[str, int]",
+        "list[int]",
+        "ClassVar[int]",
+        "Sequence[str]",
+    ] {
+        let source = format!("class C:\n    __slots__: {ann} = ('a',)\n");
+        assert_eq!(c0001(&source), refused, "{ann}");
+    }
+}

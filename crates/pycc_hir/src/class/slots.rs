@@ -92,6 +92,46 @@ fn slots_binding_value(stmt: &Stmt) -> Option<&Expr> {
     }
 }
 
+/// Refuses the annotation of an annotated `__slots__` binding unless it is
+/// one of the spellings `docs/TYPE_SYSTEM.md` admits: `str`, `tuple`,
+/// `list`, `tuple[str, ...]` or `list[str]` (the `typing` `Tuple`/`List`
+/// aliases included), optionally wrapped in `ClassVar[...]`. CPython never
+/// evaluates a class-body annotation (PEP 649), but pycc checks every other
+/// annotated class attribute's annotation, and `annotation_to_ty` models no
+/// `str` container of unknown length, so the admitted forms are matched by
+/// shape instead.
+pub(super) fn check_annotation(annotation: &Expr) -> Result<(), Diagnostic> {
+    let inner = match annotation {
+        Expr::Subscript(sub) if is_name(&sub.value, &["ClassVar"]) => sub.slice.as_ref(),
+        other => other,
+    };
+    let admitted = match inner {
+        Expr::Name(_) => is_name(inner, &["str", "tuple", "list", "Tuple", "List"]),
+        Expr::Subscript(sub) if is_name(&sub.value, &["tuple", "Tuple"]) => {
+            matches!(sub.slice.as_ref(), Expr::Tuple(args)
+                if args.elts.len() == 2
+                    && is_name(&args.elts[0], &["str"])
+                    && matches!(args.elts[1], Expr::EllipsisLiteral(_)))
+        }
+        Expr::Subscript(sub) if is_name(&sub.value, &["list", "List"]) => {
+            is_name(&sub.slice, &["str"])
+        }
+        _ => false,
+    };
+    if admitted {
+        return Ok(());
+    }
+    Err(unsupported(
+        "this `__slots__` annotation is not supported yet -- annotate it as `str`, `tuple`, \
+         `list`, `tuple[str, ...]` or `list[str]`, optionally inside `ClassVar[...]`",
+        pycc_ast::expr_range(annotation),
+    ))
+}
+
+fn is_name(expr: &Expr, names: &[&str]) -> bool {
+    matches!(expr, Expr::Name(name) if names.contains(&name.id.as_str()))
+}
+
 fn is_slots_name(target: &Expr) -> bool {
     matches!(target, Expr::Name(name) if name.id.as_str() == "__slots__")
 }

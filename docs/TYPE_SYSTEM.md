@@ -517,8 +517,10 @@ The asymmetry that used to survive here — a class-name-qualified read of an **
 [#1368](https://github.com/rotnov/pycc/issues/1368) admits `__slots__` in a
 class body that is not a `@dataclass`, `Enum` or `Protocol`. The admitted
 spellings bind a value: `__slots__ = 'a'`, `('a', 'b')`, `['a', 'b']`, `()`,
-and the annotated `__slots__: tuple[str, ...] = (...)` or
-`__slots__: ClassVar[...] = (...)`. The value must be a string literal or a
+and the annotated `__slots__: T = (...)`. The annotation `T` must be `str`,
+`tuple`, `list`, `tuple[str, ...]` or `list[str]` (or the `typing`
+`Tuple`/`List` spelling), optionally inside `ClassVar[...]`; any other
+annotation is `C0001`. The value must be a string literal or a
 tuple or list of string literals. The check lives in `pycc_hir`
 (`crates/pycc_hir/src/class/slots.rs`) and changes no layout: an instance's
 attributes are already fixed at compile time from `__init__` (D-154), so the
