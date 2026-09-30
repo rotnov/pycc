@@ -866,7 +866,7 @@ build, CPython 3.14.7) with `pycc build lalr_parser_state.py -o out.abi3.so
 seven errors: one `C0002` for `Dict` (row 1), three `T0021`s (row 2), one
 `C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). With #1366, the
 same build inside the copied package tree with `--foreign-relative-imports`
-(on `main` `3c48dbc4`) reports four errors, rows 1, 3 and 4, and no `T0021`. Everything under them was measured by probes. A probe is a copy with the
+(at this change's head, based on `main` `3c48dbc4`) reports four errors, rows 1, 3 and 4, and no `T0021`. Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled

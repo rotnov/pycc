@@ -14,7 +14,9 @@ use pycc_diag::Span;
 /// the filesystem before
 /// `module::lower_module` runs (#898, D-222). `pycc_hir` itself never
 /// touches the filesystem: this is the request half of the contract, and
-/// [`ResolvedImports`] is the answer half.
+/// [`ResolvedImports`] is the answer half. Under the driver's
+/// `--ext --foreign-relative-imports` mode (#1366) the entry module's
+/// relative requests are answered as foreign without a filesystem probe.
 ///
 /// `names` is empty exactly for a bare `import m` (which binds a module
 /// namespace, a shape Part 1 only recognizes) and lists every imported

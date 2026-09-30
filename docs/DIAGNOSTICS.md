@@ -195,7 +195,8 @@ the wildcard, a dotted `X` (`from xml.dom import minidom`,
 a block body. (A relative import is a project import (D-222) and never reaches
 the foreign channel, unless `pycc build --ext --foreign-relative-imports`
 (#1366) makes the entry module's top-level relative from-imports foreign; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
-rules is its module *and* its name, so `import copy` followed by
+rules is its module, its relative level and its name (so `from .x import a`
+and `from x import a` are two objects), and `import copy` followed by
 `from copy import copy` is the same C0001 as any other rebinding of a foreign
 name. `I0402` and `I0403` are reported once per statement, not once per name:
 `from tkinter import Tk, Label` under a native build is one `I0403`, and its

@@ -1,6 +1,7 @@
 //! Unit tests for foreign-import emission, moved out of
-//! `src/foreign_import.rs` unchanged when #1366 added one (AGENTS.md "Keep
-//! source files decomposable").
+//! `src/foreign_import.rs` when #1366 added one (AGENTS.md "Keep source
+//! files decomposable"); the moved tests changed only for #1366's new
+//! `level` argument.
 
 use super::*;
 use crate::{CompileOptions, EXT_MODULE_EXEC_SYMBOL, compile_to_object_with_observer};

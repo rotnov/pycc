@@ -1,6 +1,7 @@
 //! `try_build`'s `--ext` wiring tests, moved out of `src/build_pipeline.rs`
-//! unchanged when #1366 added one (AGENTS.md "Keep source files
-//! decomposable").
+//! when #1366 added one (AGENTS.md "Keep source files decomposable"); the
+//! moved tests changed only for #1366's new `foreign_relative_imports`
+//! argument.
 
 use super::*;
 use ext_build::{ExtProbe, ExtToolchain};
