@@ -17,8 +17,9 @@ pub const EXCEPTION_TYPE_INDEX_ERROR: u8 = 4;
 pub const EXCEPTION_TYPE_ZERO_DIV_ERROR: u8 = 5;
 pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 /// Part A of #1038 (#1063): `OverflowError`'s tag. Every other builtin tag
-/// past the flat seven (7..=24, and 26..=27 for
-/// `ImportError`/`ModuleNotFoundError`, #1292) belongs to a class this
+/// past the flat seven (7..=24, 26..=27 for
+/// `ImportError`/`ModuleNotFoundError`, #1292, and 28 for `AssertionError`,
+/// #1369) belongs to a class this
 /// crate never raises by name, so it declares no constants for them. This
 /// crate has no `[dependencies]` and cannot see
 /// `pycc_hir::BUILTIN_EXCEPTION_CLASSES`, so the literal is hand-copied and

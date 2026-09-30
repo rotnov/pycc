@@ -135,6 +135,13 @@ raisable and caught by `except ImportError:`. `ImportError`'s `name`/`path`
 keyword arguments and attributes are not supported (a keyword argument is
 `C0001`).
 
+**[#1369](https://github.com/rotnov/pycc/issues/1369)** appends
+`AssertionError` (28) after `ModuleNotFoundError` by the same mechanism, so
+every earlier tag keeps its value. It carries CPython's real parentage
+(`AssertionError` -> `Exception`), so this is again **not** a D-202-style
+simplification: `except AssertionError:` and `except Exception:` both catch
+it, and it resolves through its fixed class-table tag.
+
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
 class whose MRO reaches a builtin exception class is raisable and catchable.
 HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=254`
@@ -144,7 +151,7 @@ the builtins keep the tags below that and either carry `None` (the flat seven,
 resolved by name) or a fixed tag by array index (every builtin past them; the
 groups are always reconstructed with that fixed tag regardless of the raised
 object's dynamic subclass -- see D-202). A module declaring more than
-`MAX_USER_EXCEPTION_CLASSES` (currently 227) such classes is rejected with
+`MAX_USER_EXCEPTION_CLASSES` (currently 226) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -186,7 +193,8 @@ apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
 Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202; to all 26 by
 Part A of #1038, #1063, which appended `OverflowError`; to all 28 by #1292,
-which appended `ImportError`/`ModuleNotFoundError`).** HIR
+which appended `ImportError`/`ModuleNotFoundError`; to all 29 by #1369, which
+appended `AssertionError`).** HIR
 lowering synthesizes a
 real `HirClassDef` for each builtin exception name, seeded before any
 user statement of a module that references one of them is lowered, so they
@@ -257,7 +265,8 @@ Because `ImportError` and `ModuleNotFoundError` joined the seeded set in
 #1292, a module that declares its own `class ImportError(Exception)` now
 withholds seeding and fails with `C0001` "class `ImportError` inherits from
 unknown class `Exception`", exactly as a user `class OverflowError(Exception)`
-already did.
+already did. #1369 extends the same refusal to a user
+`class AssertionError(Exception)`.
 
 **Absence is not shadowing -- but that statement now splits by name-set (Part
 2 of #543, #739).** For the original flat seven, absence from the class table
@@ -963,7 +972,7 @@ table above, and leaves CPython's error indicator clear. The pycc class is
 chosen by `isinstance` against a fixed list, most specific first:
 `ModuleNotFoundError` before `ImportError`, `BrokenPipeError` before
 `ConnectionError` and every `OSError` subclass before `OSError`, then
-`OverflowError`, `ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
+`OverflowError`, `AssertionError` (#1369), `ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
 `TypeError` and `RuntimeError`, and anything else that is an `Exception` —
 `AttributeError`, `NameError` and the rest, which pycc cannot name in an
 `except` clause (`T0021`) — as `Exception`. A `BaseException` that is not an

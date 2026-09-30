@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(crate::EXCEPTION_TYPE_INDEX_ERROR, 4);
         assert_eq!(crate::EXCEPTION_TYPE_ZERO_DIV_ERROR, 5);
         assert_eq!(crate::EXCEPTION_TYPE_RUNTIME_ERROR, 6);
-        // Part A of #1038 (#1063). Tags 7..=24 and 26..=27 are deliberately
+        // Part A of #1038 (#1063). Tags 7..=24 and 26..=28 are deliberately
         // absent: this crate declares no constants for classes it never
         // raises by name, so there is nothing here to pin them against.
         assert_eq!(crate::EXCEPTION_TYPE_OVERFLOW_ERROR, 25);

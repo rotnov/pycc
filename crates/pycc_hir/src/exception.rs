@@ -4,7 +4,7 @@ use super::{HirClassDef, HirItem, HirStmt, Ty};
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
-pub const BUILTIN_EXCEPTION_CLASSES: [&str; 28] = [
+pub const BUILTIN_EXCEPTION_CLASSES: [&str; 29] = [
     "Exception",
     "ValueError",
     "TypeError",
@@ -54,6 +54,11 @@ pub const BUILTIN_EXCEPTION_CLASSES: [&str; 28] = [
     // before its subclass, as `ConnectionError` does before its children.
     "ImportError",
     "ModuleNotFoundError",
+    // #1369: `AssertionError`, tag 28, appended so every existing tag keeps
+    // its value -- the class a failing `assert` statement raises. Parented
+    // under `Exception`, CPython's real parentage, so this is not a
+    // `D-202`-style hierarchy simplification.
+    "AssertionError",
 ];
 
 /// Part 2 of #541 (D-189): the number of names in [`BUILTIN_EXCEPTION_CLASSES`]
@@ -96,7 +101,8 @@ pub fn is_flat_builtin_exception_class(name: &str) -> bool {
 /// `OSError` family added by Part 2 of #543 (#739); `23..=24` for
 /// `BaseExceptionGroup`/`ExceptionGroup` added by Part 3 of #382 (#542); `25`
 /// for `OverflowError` added by Part A of #1038 (#1063); `26`/`27` for
-/// `ImportError`/`ModuleNotFoundError` added by #1292 -- everything past the
+/// `ImportError`/`ModuleNotFoundError` added by #1292; `28` for
+/// `AssertionError` added by #1369 -- everything past the
 /// flat seven resolved by a fixed tag stored on each class's own
 /// [`HirClassDef`].
 pub const FIRST_USER_EXCEPTION_TYPE_TAG: u8 = BUILTIN_EXCEPTION_CLASSES.len() as u8;
@@ -172,7 +178,8 @@ pub fn is_builtin_exception_class(name: &str) -> bool {
 /// non-`Exception` name's parent was `Exception`). Part 2 of #543 (#739)
 /// added the real PEP 3151 `OSError` tree: `OSError` and the other six
 /// original names are still direct children of `Exception`, as is Part A of
-/// #1038 (#1063)'s `OverflowError` and #1292's `ImportError`, whose own child
+/// #1038 (#1063)'s `OverflowError`, #1369's `AssertionError`, and #1292's
+/// `ImportError`, whose own child
 /// `ModuleNotFoundError` is one level deeper (CPython's real parentage); ten
 /// more names
 /// are direct children of `OSError`; and four more (`BrokenPipeError`,
@@ -196,9 +203,10 @@ pub fn builtin_exception_parent(name: &str) -> Option<&'static str> {
         // root that `except Exception:` silently stops catching.
         // #1292: `ImportError` parents to `Exception` and `ModuleNotFoundError`
         // to `ImportError` -- CPython's real hierarchy, not a simplification.
+        // #1369: `AssertionError` parents to `Exception`, as in CPython.
         "OSError" | "ValueError" | "TypeError" | "KeyError" | "IndexError"
         | "ZeroDivisionError" | "RuntimeError" | "BaseExceptionGroup" | "OverflowError"
-        | "ImportError" => Some("Exception"),
+        | "ImportError" | "AssertionError" => Some("Exception"),
         "ExceptionGroup" => Some("BaseExceptionGroup"),
         "ModuleNotFoundError" => Some("ImportError"),
         "BlockingIOError" | "ChildProcessError" | "ConnectionError" | "FileExistsError"
@@ -221,7 +229,8 @@ pub const EXCEPTION_INIT_MANGLED_NAME: &str = "Exception.__init__";
 /// #543/#739's PEP 3151 `OSError` family, then to 25 by Part 3 of #382/#542's
 /// `BaseExceptionGroup`/`ExceptionGroup`, then to 26 by Part A of
 /// #1038/#1063's `OverflowError`, then to 28 by #1292's
-/// `ImportError`/`ModuleNotFoundError`).
+/// `ImportError`/`ModuleNotFoundError`, then to 29 by #1369's
+/// `AssertionError`).
 ///
 /// Before this existed, `Exception`/`ValueError`/... were recognized only
 /// by name, through [`is_builtin_exception_class`], with no `HirClassDef`
@@ -732,6 +741,7 @@ mod tests {
             ("OverflowError", 25),
             ("ImportError", 26),
             ("ModuleNotFoundError", 27),
+            ("AssertionError", 28),
         ] {
             assert_eq!(tag_of(name), Some(tag), "`{name}` must carry tag {tag}");
         }

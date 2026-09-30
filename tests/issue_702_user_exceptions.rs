@@ -308,9 +308,10 @@ fn a_module_with_more_user_exception_classes_than_tags_is_rejected() {
     // of #1038 (#1063) appended `OverflowError`, shrinking it again to 230;
     // #1292 appended `ImportError`/`ModuleNotFoundError`, shrinking it to 228;
     // #1316 reserved tag 255 for a bridged non-`Exception` `BaseException`,
-    // shrinking it to 227.
+    // shrinking it to 227; #1369 appended `AssertionError`, shrinking it to
+    // 226.
     assert!(
-        text.contains("at most 227"),
+        text.contains("at most 226"),
         "unexpected diagnostic: {text}"
     );
 }

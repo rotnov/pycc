@@ -64,7 +64,8 @@ fn every_non_root_builtin_exception_inherits_init_from_its_mro() {
 }
 
 /// Part 2 of #543 (#739): every class whose real parent is `Exception`
-/// directly (the original flat six plus `OSError` and `ImportError`) still gets the
+/// directly (the original flat six plus `OSError`, `ImportError` and
+/// `AssertionError`) still gets the
 /// historical two-entry MRO.
 #[test]
 fn direct_children_of_exception_get_a_two_entry_mro() {
@@ -78,6 +79,7 @@ fn direct_children_of_exception_get_a_two_entry_mro() {
         "RuntimeError",
         "OSError",
         "ImportError",
+        "AssertionError",
     ] {
         let (_, def) = defs
             .iter()
