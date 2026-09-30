@@ -320,6 +320,12 @@ fn an_alias_shadowing_a_resolved_spelling_is_refused() {
         "TypeAlias",
         "NDArray",
         "ndarray",
+        // #1378: the legacy `typing` container aliases.
+        "Dict",
+        "FrozenSet",
+        "List",
+        "Set",
+        "Tuple",
     ] {
         for source in [
             format!("import colorsys as {alias}\n"),
