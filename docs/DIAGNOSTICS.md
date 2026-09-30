@@ -186,16 +186,18 @@ as the top-level form, at the nested statement.
 Since [#1278](https://github.com/rotnov/pycc/issues/1278) an unaliased,
 top-level `from X import a, b` of an undotted module that is neither a
 project module nor a `pycc_std` registration is a foreign import too: each
-listed name binds the CPython object `X.<name>`. A listed name pycc resolves
+listed name binds the CPython object `X.<name>`. Since Part 1 of
+[#1138](https://github.com/rotnov/pycc/issues/1138) `X` may be dotted
+(`from xml.dom import minidom`) when its root is neither a project module
+nor a project package; a dotted `X` under a project root keeps the
+``import of module `X` is not supported yet`` C0001. A listed name pycc resolves
 by its spelling is refused with the from form's own C0001 (``binding the
 CPython object `builtins.range` to `range`, a name pycc resolves by its
 spelling (...), is not supported yet``), against the same canonical lists --
 so `from os import List` is refused like `from os import range`.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
-the wildcard, a dotted `X` (`from xml.dom import minidom`,
-[#1138](https://github.com/rotnov/pycc/issues/1138)), and a from-import inside
-a block body. (A relative import is a project import (D-222) and never reaches
+the wildcard, and a from-import inside a block body. (A relative import is a project import (D-222) and never reaches
 the foreign channel, unless `pycc build --ext --foreign-relative-imports`
 (#1366) makes the entry module's top-level relative from-imports foreign; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
 rules is its module, its relative level and its name (so `from .x import a`

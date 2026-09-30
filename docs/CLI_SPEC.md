@@ -560,8 +560,9 @@ package for it and the program's handler runs.
 - `policy = "allowlist"` permits only the direct CPython-backed import roots
   named by `allow`, and another direct root fails with `I0402`. A locked
   root's transitive closure loads without separate entries for its
-  dependencies (#1242); importing a submodule of an allowed root is still
-  `C0001` today. Each entry is one root name, so an empty or dotted entry is
+  dependencies (#1242); the from form of a submodule of an allowed root
+  (`from json.decoder import X`) is admitted under that root (Part 1 of
+  #1138), and a plain dotted `import` is still `C0001` today. Each entry is one root name, so an empty or dotted entry is
   invalid;
 - `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
   CPython-backed import with `I0402`, so the produced artifact contains no
