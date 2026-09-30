@@ -1,14 +1,14 @@
 //! End-to-end proof for `set[C]`/`frozenset[C]` of a hashable user class
 //! (#1343, Part 1 of #1336).
 //!
-//! `docs/TYPE_SYSTEM.md`'s set section and D-254 are the contract. Every
+//! `docs/TYPE_SYSTEM.md`'s set section and D-255 are the contract. Every
 //! program also runs under whatever `PYCC_PYTHON`/`python3` is available,
 //! and its stdout must equal both CPython's and the pinned text; the
 //! harness is `tests/issue_1335_hash_instance.rs`'s. Set iteration order is
 //! not reproduced (D-123), so every observable is order-insensitive: a
 //! length, a sum, a sum of distinct powers of two, or a call log whose
 //! order CPython and pycc share. Call logs are only printed where the
-//! oracle's probe sequence visits candidates in insertion order (D-254
+//! oracle's probe sequence visits candidates in insertion order (D-255
 //! records the `__eq__` call-count deviation). The `--ext` differentials
 //! are `#[ignore]`d like their siblings and run under `--include-ignored`
 //! in CI.

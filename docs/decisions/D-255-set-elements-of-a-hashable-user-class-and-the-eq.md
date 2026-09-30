@@ -1,10 +1,10 @@
 ---
-id: D-254
+id: D-255
 title: "set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation"
 status: accepted
 ---
 
-## D-254: set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation
+## D-255: set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation
 
 - Status: accepted ([#1343](https://github.com/rotnov/pycc/issues/1343), Part 1 of [#1336](https://github.com/rotnov/pycc/issues/1336); partially supersedes [D-122](./D-122-dict-k-v-set-t-key-element-types-are-scoped-to.md) for set elements only, its `dict` half is unchanged)
 - Context: D-122 shipped exactly one set element type, `int`, and rejected "general hashability inference" because no user type had `__eq__`/`__hash__` then. [#1335](https://github.com/rotnov/pycc/issues/1335) since gave a user-class instance a hash verdict (`pycc_hir::resolve_instance_hash`), and the interop subject needs sets of user-class instances. CPython's `set` hashes each element once per insertion and, for every stored entry whose hash matches, checks identity and then calls `stored.__eq__(new)`; its probe order follows the hash table's slots. `pycc_rt` cannot call user code, and its set object (`PyIntSetObj`) is an append-only vector scanned linearly.

@@ -581,7 +581,7 @@ def f() -> None:
         explanation: "\
 T0038 fires when a `set[T]` value's element type `T` is anything other than \
 `int` or an instance of a user class -- pycc's set codegen (D-122, widened \
-by D-254 in #1343) implements only those elements' representation; other \
+by D-255 in #1343) implements only those elements' representation; other \
 element types are type-checked but not yet compilable and are rejected \
 here rather than silently miscompiled. `frozenset[T]` shares the gate. \
 Whether a particular user class is hashable is a separate question, \
@@ -1060,7 +1060,7 @@ class that defines `__eq__` (itself or through a base class) but no \
 insertion raises `TypeError: unhashable type` at run time; pycc knows the \
 class statically and reports the same error before the program runs. \
 Define `__hash__` on the class that defines `__eq__`, or remove `__eq__` \
-so instances hash by identity (#1343, D-254).",
+so instances hash by identity (#1343, D-255).",
         example: "\
 class P:
     def __init__(self, x: int) -> None:
