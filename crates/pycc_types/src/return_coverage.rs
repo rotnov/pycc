@@ -52,6 +52,11 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
             // `a_while_true_with_break_is_still_rejected` in
             // `tests/issue_1370_while_true_return.rs` pins the current
             // rejection and flips when that happens.
+            //
+            // `pycc_hir::definitely_terminates` (guard-clause narrowing)
+            // is not a mirror of this predicate and stays unchanged: it
+            // deliberately recognizes only `return` and a two-armed `if`
+            // (not even `raise`), which is sound by omission.
             HirStmt::While { test, .. } => is_constant_true(test),
             // A raise transfers control to an exception handler/caller and
             // cannot fall through to the function's implicit return point.
@@ -101,11 +106,11 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
     false
 }
 
-/// True for a loop test CPython treats as always true without evaluating
-/// anything: the literal `True`, or a non-zero integer literal (`while 1:`).
-/// A string, float, or any computed expression is deliberately not
-/// recognized -- the check stays conservative and keeps reporting `T0022`
-/// for those loops.
+/// True for a loop test pycc treats as constant true: the literal `True`,
+/// or a non-zero integer literal (`while 1:`). A string or float literal
+/// test is also always truthy at run time, but pycc does not treat it as
+/// constant, and a computed expression may be false; both keep reporting
+/// `T0022` -- the check stays conservative.
 fn is_constant_true(test: &HirExpr) -> bool {
     matches!(test, HirExpr::BoolLiteral(true)) | matches!(test, HirExpr::IntLiteral(n) if *n != 0)
 }
