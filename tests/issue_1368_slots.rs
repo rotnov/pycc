@@ -221,9 +221,22 @@ fn a_read_of_a_never_assigned_slot_is_t0044() {
         text.contains("class `C` has no attribute named `b`"),
         "{text}"
     );
-    cpython_rejects(
-        "e2e_1368_unassigned_read_cpython",
-        source,
-        "AttributeError: 'C' object has no attribute 'b'",
+    // CPython's text for an unset slot read differs by version: 3.14 says
+    // `'C' object has no attribute 'b'`, while 3.9 (the macOS coverage job's
+    // reference interpreter) says only `AttributeError: b`. Both end the
+    // traceback with an `AttributeError` naming `b`, which is what is pinned.
+    let dir = ScratchDir::new("e2e_1368_unassigned_read_cpython").expect("scratch");
+    std::fs::write(dir.join("a.py"), source).expect("write the subject");
+    let output = python()
+        .arg("a.py")
+        .current_dir(dir.join("."))
+        .output()
+        .expect("python3 should spawn");
+    assert!(!output.status.success(), "CPython accepted {source:?}");
+    let error = rendered(&output);
+    assert!(
+        error.contains("AttributeError: 'C' object has no attribute 'b'")
+            || error.contains("AttributeError: b\n"),
+        "{error}"
     );
 }
