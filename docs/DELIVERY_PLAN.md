@@ -246,8 +246,8 @@ closed on that record. On 2026-09-24
 (owner directive) admitted annotation-only additions to the subject, so row (c)
 governs instead: under the import-closure reading the annotated subject was
 refused on import-closure compiler gaps, and its own `-> Any` return would meet `T0002` (inferred, since
-compilation never reached it; the boundary question is #1285). Both are
-tracked from #1207 until 2026-10-22. On 2026-09-30
+compilation never reached it; the boundary question is #1285). #1207
+tracks the criterion until 2026-10-22. On 2026-09-30
 [D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)
 scoped the criterion's compilation to the subject module, with its sibling
 imports bound as foreign, so the blockers are that module's own frontier
