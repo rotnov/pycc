@@ -533,22 +533,29 @@ CPython's order:
    non-identifier entry are each `C0001` quoting CPython's `TypeError`. A
    non-literal value or entry, a non-ASCII entry, a `__dict__` or
    `__weakref__` entry (pycc instances have neither), a second `__slots__`
-   binding in the body, a private entry `__x` (CPython mangles it to the slot
-   `_C__x`, and pycc does not mangle a private attribute name on an instance,
-   so `self.__x` would not reach that slot), and an entry named
-   `__firstlineno__`, `__static_attributes__` or `__annotations__` (whether it
-   conflicts depends on the CPython version) are `C0001` "not supported yet".
+   binding in the body, and an entry named `__firstlineno__`,
+   `__static_attributes__` or `__annotations__` (whether it conflicts depends
+   on the CPython version) are `C0001` "not supported yet".
 3. **Namespace.** A slot whose name is also bound in the class body (a class
    variable, a method, `__module__`, `__slots__`, or `__doc__` when the class
    has a docstring) is `C0001` quoting CPython's `ValueError: '<name>' in
-   __slots__ conflicts with class variable`.
-4. **Dunder names.** Any other slot named `__x__` (`__hash__`, `__eq__`,
-   `__len__`, `__str__`, `__doc__` without a docstring, `__qualname__`, ...)
-   is `C0001` "not supported yet", at the `__slots__` binding. CPython gives
+   __slots__ conflicts with class variable`. Both sides are compared after
+   private-name mangling: a slot `__x` and a body name `__x` in class `C` are
+   both `_C__x`, the name CPython's message quotes.
+4. **Dunder and private names.** Any other slot named `__x__` (`__hash__`,
+   `__eq__`, `__len__`, `__str__`, `__doc__` without a docstring,
+   `__qualname__`, ...) is `C0001` "not supported yet", at the `__slots__`
+   binding. CPython gives
    many `__x__` names a special meaning, and a slot of such a name changes
    the class's behaviour (a `__hash__` slot makes the class unhashable,
    `TypeError: unhashable type`). pycc does not model which names do, so every
-   dunder entry is refused.
+   dunder entry is refused. Any other private slot, `__x` without a trailing
+   `__`, is `C0001` "not supported yet" there too: CPython mangles it with the
+   declaring class's name to the slot `_C__x`, and pycc does not mangle a
+   private attribute name on an instance
+   ([#1392](https://github.com/rotnov/pycc/issues/1392)), so `self.__x` would
+   not reach that slot. A class named only with underscores mangles nothing,
+   so its private slot is admitted.
 5. **Inherited names.** A slot whose name a class later in the MRO binds at
    class level (a class variable, a method, a static or class method, a
    property) is `C0001` "not supported yet". This covers the class's own
@@ -582,11 +589,11 @@ CPython's order:
    CPython. A builtin exception base has no `__slots__` of its own, so a
    slotted exception class is never checked either.
 
-Because a private entry is refused, every admitted slot is spelled exactly as
-it is stored. A slot spelled in its mangled form, `_C__x`, is admitted, and a
-private class-body name (`__x = 1` in `C`) is compared as `_C__x` in steps 3
-and 5, and a store `self.__x` in `C` as `_C__x` in step 6, as CPython mangles
-them. A slot that is
+Because a private slot is refused in step 4, every slot that reaches steps 5
+and 6 is spelled exactly as it is stored. A slot spelled in its mangled form,
+`_C__x`, is admitted; a private class-level name (`__x = 1` in a class `A`)
+is compared as `_A__x` in step 5, and a store `self.__x` in `C` as `_C__x` in
+step 6, as CPython mangles them. A slot that is
 declared but never assigned is accepted and adds no instance attribute; a read
 of it is refused with `T0044` at compile time, where CPython would raise
 `AttributeError` only when the read runs. Each class's slots are recorded in

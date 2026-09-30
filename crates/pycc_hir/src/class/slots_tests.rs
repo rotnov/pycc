@@ -2,7 +2,7 @@
 //! issue plan's sections 4.1-4.4, each refusal pinned by its code and the
 //! CPython text it quotes.
 
-use super::{ClassSlotsRow, is_ascii_identifier, is_dunder, is_private, mangle};
+use super::{ClassSlotsRow, is_ascii_identifier, is_dunder, mangle};
 use crate::pycc_parser_test_helper::parse;
 use crate::{
     LoweredModule, ResolvedImport, ResolvedImports, ResolvedModule, lower_module,
@@ -283,11 +283,11 @@ fn a_class_body_private_name_is_compared_after_mangling() {
     assert_eq!(c0001(source), conflict("_C__a", "_C__a"));
 }
 
-fn private(slot: &str) -> String {
+fn private(slot: &str, mangled: &str) -> String {
     format!(
-        "the private `__slots__` entry `{slot}` is not supported yet -- CPython mangles it to \
-         `_<class>{slot}`, and pycc does not mangle a private attribute name on an instance, so \
-         `self.{slot}` would not match CPython"
+        "the private `__slots__` entry `{slot}` is not supported yet -- CPython mangles it with \
+         the declaring class's name to the slot `{mangled}`, and pycc does not mangle a private \
+         attribute name on an instance, so `self.{slot}` would not reach it"
     )
 }
 
@@ -299,21 +299,44 @@ fn a_private_slot_entry_is_not_supported_yet() {
                   self.a = 1\n        self.__x = 2\n";
     let diagnostic = error(source);
     assert_eq!(diagnostic.code, "C0001");
-    assert_eq!(diagnostic.message, private("__x"));
-    // A private entry refuses even when the body also binds the name.
+    assert_eq!(diagnostic.message, private("__x", "_C__x"));
     assert_eq!(
-        c0001("class C:\n    __slots__ = ('__a',)\n    __a = 1\n"),
-        private("__a")
+        diagnostic.span.map(|span| span.start),
+        source
+            .find("__slots__")
+            .and_then(|at| u32::try_from(at).ok())
+    );
+    assert_eq!(c0001(&slotted("('__x_',)")), private("__x_", "_C__x_"));
+    assert_eq!(
+        c0001("class __Ab:\n    __slots__ = ('__x',)\n"),
+        private("__x", "_Ab__x")
     );
 }
 
 #[test]
-fn is_private_excludes_dunders() {
-    assert!(is_private("__x"));
-    assert!(is_private("__x_"));
-    assert!(!is_private("__x__"));
-    assert!(!is_private("_x"));
-    assert!(!is_private("x"));
+fn a_private_slot_keeps_the_errors_cpython_raises_first() {
+    // Both sides of the namespace check are mangled: the slot `__a` and the
+    // body's `__a` are both `_C__a`, and CPython's `ValueError` quotes that.
+    assert_eq!(
+        c0001("class C:\n    __slots__ = ('__a',)\n    __a = 1\n"),
+        conflict("__a", "_C__a")
+    );
+    // Every entry is validated before any is mangled, so a later non-string
+    // entry is CPython's `TypeError`.
+    assert_eq!(
+        c0001(&slotted("('__x', 1)")),
+        "every `__slots__` entry must be a string -- CPython raises `TypeError: __slots__ items \
+         must be strings, not 'int'` when the class is created"
+    );
+}
+
+#[test]
+fn a_private_slot_of_a_class_that_mangles_nothing_is_admitted() {
+    // A class named only with underscores mangles nothing, so its `__x` slot
+    // is `__x` in CPython too.
+    let source = "class __:\n    __slots__ = ('__x',)\n\n    def __init__(self) -> None:\n        \
+                  self.__x = 1\n";
+    assert_eq!(slots_of(source, "__"), names(&["__x"]));
 }
 
 #[test]

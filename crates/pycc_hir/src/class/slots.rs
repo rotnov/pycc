@@ -19,7 +19,8 @@
 //!    strings, each an identifier;
 //! 3. refuses a slot that collides with a name in the class's own namespace
 //!    ([`check_namespace_conflicts`]);
-//! 4. refuses every dunder-named slot ([`check_dunder_slots`]);
+//! 4. refuses every dunder-named slot ([`check_dunder_slots`]) and every
+//!    slot CPython would mangle ([`check_private_slots`]);
 //! 5. refuses a slot -- the class's own or a slotted base's -- whose name a
 //!    class later in the MRO binds at class level, which the slot's member
 //!    descriptor would shadow ([`check_inherited_class_names`]);
@@ -36,12 +37,15 @@
 //! the table's threading therefore panics in a test instead of reading as
 //! "has a `__dict__`" and silently admitting a program CPython rejects.
 //!
-//! A private slot entry (`__x`) is refused ([`is_private`]): CPython mangles
-//! it with the declaring class's name, and pycc does not mangle a private
-//! attribute name on an instance. Every admitted slot is therefore its own
-//! mangled form, and only the other side of a comparison is mangled
-//! ([`mangle`]): a class-body name with its class's name, and an instance
-//! attribute with the storing class's name.
+//! A private slot entry (`__x`) is refused ([`check_private_slots`]):
+//! CPython mangles it with the declaring class's name, and pycc does not
+//! mangle a private attribute name on an instance (#1392). The namespace
+//! check runs first and compares both sides mangled ([`mangle`]), so a
+//! private slot that is also bound in the body keeps CPython's own
+//! `ValueError`. Every slot that reaches steps 5 and 6 is therefore its own
+//! mangled form, and only the other side of those comparisons is mangled: a
+//! class-body name with its class's name, and an instance attribute with the
+//! storing class's name.
 
 use super::HirClassDef;
 use crate::exception::is_builtin_exception_class;
@@ -107,6 +111,7 @@ pub(crate) fn check_class(
     if let Some((slots, binding_range)) = &own {
         check_namespace_conflicts(def, slots)?;
         check_dunder_slots(slots, *binding_range)?;
+        check_private_slots(slots, class_def.name.as_str(), *binding_range)?;
     }
     check_inherited_class_names(def, class_def, own.as_ref(), &ancestors)?;
     let Some((slots, binding_range)) = own else {
@@ -362,16 +367,6 @@ fn slot_entry(item: &Expr, range: std::ops::Range<u32>) -> Result<String, Diagno
             range,
         ));
     }
-    if is_private(&entry) {
-        return Err(unsupported(
-            format!(
-                "the private `__slots__` entry `{entry}` is not supported yet -- CPython \
-                 mangles it to `_<class>{entry}`, and pycc does not mangle a private \
-                 attribute name on an instance, so `self.{entry}` would not match CPython"
-            ),
-            range,
-        ));
-    }
     if VERSION_SENSITIVE_SLOT_NAMES.contains(&entry.as_str()) {
         return Err(unsupported(
             format!(
@@ -409,9 +404,11 @@ fn is_ascii_identifier(entry: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-/// Refuses a slot whose (mangled) name is also bound in the class's own
-/// namespace, which CPython reports as `ValueError: '<x>' in __slots__
-/// conflicts with class variable`.
+/// Refuses a slot whose name is also bound in the class's own namespace,
+/// which CPython reports as `ValueError: '<x>' in __slots__ conflicts with
+/// class variable`. Both sides are compared after [`mangle`]: a private
+/// slot `__x` and a private body name `__x` in class `C` are both `_C__x`,
+/// the name CPython's message quotes.
 ///
 /// The namespace is what the class body binds -- every `def` (methods,
 /// properties, static and class methods, `__init__`) and every assigned
@@ -444,11 +441,12 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
         .map(|name| mangle(name, class_name))
         .collect();
     for slot in slots {
-        if namespace.contains(slot) {
+        let mangled = mangle(slot, class_name);
+        if namespace.contains(&mangled) {
             return Err(unsupported(
                 format!(
                     "the `__slots__` entry `{slot}` of class `{class_name}` is also bound in the \
-                     class body -- CPython raises `ValueError: '{slot}' in __slots__ \
+                     class body -- CPython raises `ValueError: '{mangled}' in __slots__ \
                      conflicts with class variable` when the class is created"
                 ),
                 def.range,
@@ -464,7 +462,7 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
 /// unhashable); pycc does not model which names do, so every dunder entry is
 /// refused. It runs after the namespace check, so a dunder slot that is also
 /// bound in the body keeps CPython's own `ValueError`. A private `__x` name
-/// is not a dunder; [`slot_entry`] refuses it separately.
+/// is not a dunder; [`check_private_slots`] refuses it separately.
 fn check_dunder_slots(slots: &[String], binding_range: Span) -> Result<(), Diagnostic> {
     let Some(slot) = slots.iter().find(|slot| is_dunder(slot)) else {
         return Ok(());
@@ -474,6 +472,35 @@ fn check_dunder_slots(slots: &[String], binding_range: Span) -> Result<(), Diagn
             "a `__slots__` entry named `{slot}` is not supported yet -- CPython gives many \
              `__x__` names a special meaning (a `__hash__` slot makes the class unhashable), \
              and pycc does not model which, so every dunder entry is refused"
+        ),
+        binding_range.start..binding_range.end,
+    ))
+}
+
+/// Refuses a slot CPython would mangle (`__x` in class `C` is the slot
+/// `_C__x`). pycc does not mangle a private attribute name on an instance
+/// (#1392), so a compiled `self.__x` would not reach that slot. Like
+/// [`check_dunder_slots`], it runs after every entry is validated and after
+/// the namespace check, so an earlier error CPython raises first -- a
+/// `TypeError` for another entry, or the namespace `ValueError` -- is
+/// reported instead. A spelled-out `_C__x` is not private and is admitted.
+fn check_private_slots(
+    slots: &[String],
+    class_name: &str,
+    binding_range: Span,
+) -> Result<(), Diagnostic> {
+    let Some((slot, mangled)) = slots
+        .iter()
+        .map(|slot| (slot, mangle(slot, class_name)))
+        .find(|(slot, mangled)| *slot != mangled)
+    else {
+        return Ok(());
+    };
+    Err(unsupported(
+        format!(
+            "the private `__slots__` entry `{slot}` is not supported yet -- CPython mangles it \
+             with the declaring class's name to the slot `{mangled}`, and pycc does not mangle \
+             a private attribute name on an instance, so `self.{slot}` would not reach it"
         ),
         binding_range.start..binding_range.end,
     ))
@@ -541,12 +568,11 @@ fn check_inherited_class_names(
             }
         };
         for slot in slots {
-            let mangled = slot.as_str();
             for later in &class_def.mro[index + 1..] {
                 let binds = if ancestors.row(later).is_none() {
-                    builtin_exception_class_names(later).contains(&mangled)
+                    builtin_exception_class_names(later).contains(&slot.as_str())
                 } else {
-                    ancestors.binds_at_class_level(later, mangled)
+                    ancestors.binds_at_class_level(later, slot)
                 };
                 if !binds {
                     continue;
@@ -554,17 +580,17 @@ fn check_inherited_class_names(
                 let message = if index == 0 {
                     format!(
                         "the `__slots__` entry `{slot}` of class `{class_name}` is not supported \
-                         yet -- `{later}` binds `{mangled}` at class level, and CPython's \
+                         yet -- `{later}` binds `{slot}` at class level, and CPython's \
                          member descriptor for the slot shadows the inherited \
-                         `{later}.{mangled}`, so reading the unset slot raises \
+                         `{later}.{slot}`, so reading the unset slot raises \
                          `AttributeError` where pycc would find the inherited binding"
                     )
                 } else {
                     format!(
                         "class `{class_name}` is not supported yet -- its base `{declarer}` \
                          declares the slot `{slot}`, and `{later}`, later in `{class_name}`'s \
-                         MRO, binds `{mangled}` at class level; CPython's member descriptor for \
-                         `{declarer}`'s slot comes first and shadows `{later}.{mangled}`, so \
+                         MRO, binds `{slot}` at class level; CPython's member descriptor for \
+                         `{declarer}`'s slot comes first and shadows `{later}.{slot}`, so \
                          reading the unset slot raises `AttributeError` where pycc would find \
                          `{later}`'s binding"
                     )
@@ -574,13 +600,6 @@ fn check_inherited_class_names(
         }
     }
     Ok(())
-}
-
-/// Whether `name` is class-private -- `__x` without a trailing `__` -- and
-/// so mangled by CPython inside a class body. [`slot_entry`] refuses such
-/// an entry, so every admitted slot name is its own mangled form.
-fn is_private(name: &str) -> bool {
-    name.starts_with("__") && !name.ends_with("__")
 }
 
 /// Whether `name` is a dunder: `__x__` with a non-empty `x`.

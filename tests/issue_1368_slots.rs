@@ -138,6 +138,16 @@ fn each_class_creation_error_quotes_cpython() {
             "ValueError: '_C__x' in __slots__ conflicts with class variable",
         ),
         (
+            "e2e_1368_private_conflict",
+            "class C:\n    __slots__ = ('__x',)\n    __x = 1\n",
+            "ValueError: '_C__x' in __slots__ conflicts with class variable",
+        ),
+        (
+            "e2e_1368_private_then_int",
+            "class C:\n    __slots__ = ('__x', 1)\n",
+            "TypeError: __slots__ items must be strings, not 'int'",
+        ),
+        (
             "e2e_1368_doc",
             "class C:\n    \"\"\"Doc.\"\"\"\n    __slots__ = ('__doc__',)\n",
             "ValueError: '__doc__' in __slots__ conflicts with class variable",
