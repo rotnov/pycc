@@ -4900,9 +4900,10 @@ fn emit_assign<'ctx>(
         // the previous reference, which is #1092's leak-only rule. A
         // release here would be a use-after-free, not a fix: `y = x`
         // aliases the pointer without an incref, so freeing `x`'s old value
-        // would free an object `y` still points at. Reachable only for a
-        // module global -- `pycc_types`' `check_assignment` still refuses
-        // an object binding inside a function body.
+        // would free an object `y` still points at. Reached for a module
+        // global and, since Part 1 of #1333 (#1362), for a function-local
+        // slot too: `pycc_types`' `check_assignment` admits the binding in
+        // both scopes, and the same leak-only rule governs each.
         Scalar::Object(v) => v.into(),
         // A pass-through since Part 2a of #1142 (#1165), where it was a
         // panic (as `Object`'s arm above was until #1325): storing one

@@ -121,10 +121,47 @@ fn an_argument_error_in_a_call_of_a_local_object_binding_propagates() {
     let helper = "def _u(s):\n    g = json.loads\n    r = g(t)\n    t = s\n    return r\n\n\n";
     let source = format!("{IMPORT}{helper}print(len(_u(\"[1]\")))\n");
     let diagnostics = crate::check_all(&lower_all_foreign(&source)).expect_err(&source);
+    assert_eq!(diagnostics.len(), 1, "{source:?}: {diagnostics:#?}");
+    assert_eq!(diagnostics[0].code, "T0021", "{source:?}: {diagnostics:#?}");
     assert!(
-        diagnostics
-            .iter()
-            .any(|d| d.message.contains("`t`") && d.message.contains("before")),
+        diagnostics[0].message.contains("`t`") && diagnostics[0].message.contains("before"),
         "{source:?}: {diagnostics:#?}"
+    );
+}
+
+/// A function-local binding keeps the name's type fixed exactly like a
+/// module-level one (`binding_tests.rs`), so mixing `object` with another
+/// type is the ordinary redefinition refusal in either order and against an
+/// annotation.
+#[test]
+fn a_function_local_type_change_is_refused_like_any_other() {
+    let def = "def g() -> None:\n";
+    refused(
+        &format!("{IMPORT}{def}    x = 1\n    x = json.loads(\"1\")\n"),
+        "T0023",
+        "cannot assign `object` to `x`, previously inferred as `int`",
+    );
+    refused(
+        &format!("{IMPORT}{def}    x = json.loads(\"1\")\n    x = 1\n"),
+        "T0023",
+        "cannot assign `int` to `x`, previously inferred as `object`",
+    );
+    refused(
+        &format!("{IMPORT}{def}    x: int = json.loads(\"1\")\n"),
+        "T0025",
+        "cannot assign `object` to `x: int`",
+    );
+}
+
+/// A function-local binding on only one path leaves the name maybe-bound,
+/// which a later read refuses at compile time.
+#[test]
+fn a_maybe_bound_function_local_object_name_is_refused() {
+    refused(
+        &format!(
+            "{IMPORT}import sys\ndef g() -> None:\n    if len(sys.argv) > 5:\n        x = json.loads(\"1\")\n    y = x\n"
+        ),
+        "T0041",
+        "may not be bound on every path reaching this use",
     );
 }
