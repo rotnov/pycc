@@ -88,8 +88,8 @@ pub(super) fn set_comp_container(elt_ty: Option<Ty>) -> Ty {
 /// `CompIter`'s own rewrite counterpart -- mirrors `resolve_comp_iter`
 /// exactly (same three iterable shapes, same resulting loop-variable `Ty`),
 /// but also rewrites any generic call reachable from a `CompIter::Range`
-/// bound, which `resolve_comp_iter` (a read-only helper reused as-is
-/// elsewhere in this file) has no reason to do.
+/// bound, which `resolve_comp_iter` (a read-only helper the parent
+/// `monomorphize.rs` reuses as-is) has no reason to do.
 pub(super) fn rewrite_comp_iter(
     env: &mut Environment,
     local_names: &[&str],
@@ -109,7 +109,7 @@ pub(super) fn rewrite_comp_iter(
             Some(Ty::Dict(kv)) => Ok(kv.0),
             Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => Ok(*elem),
             // Already validated as iterable before `monomorphize` ever
-            // runs. Unlike `ForList`'s fallback above, no foreign name
+            // runs. Unlike the `ForList` fallback in `monomorphize.rs`, no foreign name
             // reaches this arm: a comprehension over a CPython object is
             // refused by the check phase (`I0404`), so the missing foreign
             // names of this pass's environment never matter here.
