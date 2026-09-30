@@ -170,14 +170,21 @@ test fails. The contract and its deliberate edges:
   `docs/TYPE_SYSTEM.md`'s "Narrowing & flow typing" section.
 - **Name resolution.** CPython's `assert` always raises the builtin class
   (`LOAD_ASSERTION_ERROR`), whereas the rewrite names `AssertionError` by
-  spelling. The two never diverge silently: a module whose top level binds
-  any builtin exception name withholds every builtin class, so it is refused
-  with one `C0001` "an `assert` statement needs the builtin `AssertionError`,
-  which is unavailable because this module binds the builtin exception name
-  `X` at top level"; and a function-local binding of `AssertionError` (a
-  parameter, an assignment) cannot hold a class, so the rewritten call is
-  `T0021` "name `AssertionError` is bound to a non-callable value". Both are
-  refusals of valid Python, not miscompilations.
+  spelling. The two never diverge silently: every program in which the
+  spelling could reach something other than the builtin class is refused
+  before code generation. Two refusals are dedicated to it. A module whose
+  top level binds a builtin exception name by `class`, `def` or assignment
+  withholds every builtin class, so it gets one `C0001` "an `assert`
+  statement needs the builtin `AssertionError`, which is unavailable because
+  this module binds the builtin exception name `X` at top level". A
+  function-local binding of `AssertionError` (a parameter, an assignment)
+  cannot hold a class, so the rewritten call gets `T0021` "name
+  `AssertionError` is bound to a non-callable value". Other binding forms are
+  refused by diagnostics that already existed. For example, a module-level
+  `for AssertionError in ...` or `except ... as AssertionError` gets `T0041`
+  "may not be bound on every path"; `import os as AssertionError` and
+  `from math import sqrt as AssertionError` get `C0001`. All of these reject
+  valid Python; none miscompiles it.
 - **Placement.** An `assert` in a class body stays `C0001`, like every other
   non-definition class-body statement.
 

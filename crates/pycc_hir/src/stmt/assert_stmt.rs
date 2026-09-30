@@ -25,12 +25,16 @@
 //!
 //! The rewrite names `AssertionError` by spelling, while CPython's
 //! `LOAD_ASSERTION_ERROR` always reaches the builtin class. The two agree
-//! whenever the spelling resolves to the builtin, and every way a program
-//! can make it resolve elsewhere is refused before code generation: a
-//! module-level binding of any builtin exception name withholds the builtin
-//! classes, which `module::lower_module` reports up front for a module that
-//! also contains an `assert`; a function-local binding cannot hold a class,
-//! so the call is `T0021` "bound to a non-callable value".
+//! whenever the spelling resolves to the builtin, and every program in
+//! which it could resolve elsewhere is refused before code generation. Two
+//! refusals are dedicated to it. A top-level `class`/`def`/assignment
+//! binding of any builtin exception name withholds the builtin classes,
+//! which `module::lower_module` reports up front for a module that also
+//! contains an `assert`. A function-local binding cannot hold a class, so
+//! the call is `T0021` "bound to a non-callable value". Other binding
+//! forms, such as a module-level `for` target, an `except ... as` name or
+//! an import alias, are refused by diagnostics that already existed;
+//! `docs/RUNTIME.md` lists the ones pinned by tests.
 
 use pycc_ast::{
     Arguments, ElifElseClause, Expr, ExprCall, ExprContext, ExprName, ExprStringLiteral, Stmt,

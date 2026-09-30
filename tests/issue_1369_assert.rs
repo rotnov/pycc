@@ -531,6 +531,50 @@ fn a_function_local_assertion_error_binding_is_refused() {
     }
 }
 
+/// Every other binding form of `AssertionError` is refused by a diagnostic
+/// that already existed, so the rewritten call can never reach something
+/// other than the builtin class: the module fails to compile rather than
+/// compiling and raising something else.
+#[test]
+fn other_assertion_error_binding_forms_are_refused() {
+    for (tag, source, expected) in [
+        (
+            "assert_shadow_for",
+            "for AssertionError in range(1):\n    pass\nassert True\n",
+            "T0041",
+        ),
+        (
+            "assert_shadow_except_as",
+            "try:\n    pass\nexcept ValueError as AssertionError:\n    pass\nassert True\n",
+            "T0041",
+        ),
+        (
+            "assert_shadow_import_as",
+            "import os as AssertionError\nassert True\n",
+            "C0001",
+        ),
+        (
+            "assert_shadow_from_import_as",
+            "from math import sqrt as AssertionError\nassert True\n",
+            "C0001",
+        ),
+    ] {
+        let text = check_error(tag, source);
+        assert!(
+            text.contains(expected),
+            "expected {expected} for {tag}: {text}"
+        );
+        if expected == "T0041" {
+            assert!(
+                text.contains(
+                    "local name `AssertionError` may not be bound on every path reaching this use"
+                ),
+                "unexpected diagnostic for {tag}: {text}"
+            );
+        }
+    }
+}
+
 /// The `ext`-mode half of the statement: a failing `assert` in a compiled
 /// function reaches the host as CPython's own `AssertionError`, with its
 /// message or an empty `str`.
@@ -560,5 +604,35 @@ fn a_failing_assert_in_an_ext_module_raises_cpython_assertion_error() {
     assert_eq!(
         stdout_of(&run),
         "AssertionError ''\nAssertionError 'n is one'\n7\n"
+    );
+}
+
+/// A failing `assert` inside an extension module's own `try` is caught by
+/// the enclosing `except AssertionError as e:` in compiled code, and never
+/// reaches the host; the passing path runs through the same function.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_failing_assert_is_caught_by_an_enclosing_try_in_an_ext_module() {
+    let dir = ScratchDir::new("1369_ext_assert_try").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_assert_try_mod",
+        "def g(n: int) -> str:\n\
+         \x20   try:\n\
+         \x20       assert n != 0\n\
+         \x20       assert n > 0, \"n must be positive\"\n\
+         \x20       return \"ok\"\n\
+         \x20   except AssertionError as e:\n\
+         \x20       return f\"caught: {e}\"\n",
+    );
+    let run = run_host(
+        &dir,
+        "import pycc_assert_try_mod as m\n\
+         for n in (1, 0, -1):\n\
+         \x20   print(repr(m.g(n)))\n",
+    );
+    assert_eq!(
+        stdout_of(&run),
+        "'ok'\n'caught: '\n'caught: n must be positive'\n"
     );
 }
