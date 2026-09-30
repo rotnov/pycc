@@ -62,6 +62,8 @@ def k(c: bool) -> int:
 def t(x: int) -> int:
     try:
         while True:
+            if x < 0:
+                raise ValueError(\"negative\")
             if x > 5:
                 return x
             x += 2
@@ -96,12 +98,12 @@ try:
 except ValueError as e:
     print(\"caught\", e)
 print(k(True), k(False))
-print(t(0))
+print(t(0), t(-1))
 print(A().m(10))
 print(s(0))
 ";
 
-const EXPECTED: &str = "1\n4\n3\ncaught negative\n1 2\n6\n3\ndone\n";
+const EXPECTED: &str = "1\n4\n3\ncaught negative\n1 2\n6 -1\n3\ndone\n";
 
 fn check(dir: &Path, source: &str) -> Output {
     let src = dir.join("m.py");
