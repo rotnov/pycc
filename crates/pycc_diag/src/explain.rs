@@ -105,7 +105,8 @@ rebinding would make them: `staticmethod(...)` called with other than exactly \
 one positional argument (none, several, a keyword or a starred argument), \
 and a `staticmethod` that is rebound in the module or class body. \
 The one admitted non-literal shape is `name = staticmethod(<foreign import \
-reference>)`. The construct remains reserved and stops \
+reference>)`. Apart from those two permanent refusals, the construct \
+remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \
