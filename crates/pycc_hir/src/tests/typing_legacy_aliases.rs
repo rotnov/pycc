@@ -39,6 +39,8 @@ fn each_legacy_alias_lowers_to_the_builtin_containers_ty_in_every_position() {
             "def f() -> None:\n    x: {} = f()\n    return\n",
             // Module-level annotated assignment, through `Final`.
             "def f() -> None:\n    return\n\nx: Final[{}] = f()\n",
+            // A PEP 695 `type` alias whose target is the spelling.
+            "type A = {}\n\ndef f(x: A) -> None:\n    return\n",
         ] {
             let legacy_source = template.replace("{}", legacy);
             let builtin_source = template.replace("{}", builtin);
@@ -51,16 +53,23 @@ fn each_legacy_alias_lowers_to_the_builtin_containers_ty_in_every_position() {
     }
     // A class-body instance attribute declaration lowers only `list[int]` and
     // `dict[str, int]` (#1266), so only those two spellings are compared.
-    for (legacy, builtin) in [
-        ("List[int]", "list[int]"),
-        ("Dict[str, int]", "dict[str, int]"),
+    // The #1264 annotated attribute target admits the same two, each with its
+    // empty literal (`EMPTY`) as the value.
+    for (legacy, builtin, empty) in [
+        ("List[int]", "list[int]", "[]"),
+        ("Dict[str, int]", "dict[str, int]", "{}"),
     ] {
-        let template = "class C:\n    xs: {}\n\n    def __init__(self, xs: {}) -> None:\n        self.xs = xs\n";
-        assert_eq!(
-            lower(&template.replace("{}", legacy)),
-            lower(&template.replace("{}", builtin)),
-            "{legacy}"
-        );
+        for template in [
+            "class C:\n    xs: ANN\n\n    def __init__(self, xs: ANN) -> None:\n        self.xs = xs\n",
+            "class C:\n    def __init__(self) -> None:\n        self.xs: ANN = EMPTY\n",
+        ] {
+            let template = template.replace("EMPTY", empty);
+            assert_eq!(
+                lower(&template.replace("ANN", legacy)),
+                lower(&template.replace("ANN", builtin)),
+                "{legacy} in {template:?}"
+            );
+        }
     }
 }
 

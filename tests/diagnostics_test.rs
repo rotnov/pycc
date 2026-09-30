@@ -1639,3 +1639,10 @@ fn t0002_any_after_typing_import() {
 fn t0053_legacy_dict_one_arg() {
     assert_diagnostic_matches_fixture("t0053_legacy_dict_one_arg");
 }
+
+// The human format never renders `help`, so the JSON twin pins that the
+// structured advice also names the spelling written (`Dict[str, int]`).
+#[test]
+fn t0053_legacy_dict_one_arg_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_legacy_dict_one_arg");
+}
