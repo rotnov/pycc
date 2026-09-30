@@ -465,8 +465,9 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// class body is walked only through its methods' bodies, the only part of
 /// it `class::body` hands to `lower_stmt`: a statement directly in a class
 /// body keeps the class lowering's own refusal. (An `Enum` body accepts no
-/// method at all, so an `assert` in an enum method is refused here rather
-/// than by the enum lowering -- a refusal either way, never an admission.)
+/// method at all, and a `Protocol` method accepts only a stub body, so an
+/// `assert` in either is refused here rather than by that class's own
+/// lowering -- a refusal either way, never an admission.)
 /// `imports` must be the whole-module slice `dunder_name::scan_imports`
 /// builds, so an aliased `t.TYPE_CHECKING` guard folds here exactly as it
 /// folds in `lower_stmt`; the one mismatch that slice admits (a guard above
