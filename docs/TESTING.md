@@ -603,6 +603,14 @@ rule 6); only numbers are published.
   module digests, `subject_sha256` is the digest of the annotated bytes that all
   three arms then share, and the result is labelled "annotated", never
   "unchanged". The **compile-unchanged count** below is not affected by this.
+  **Subject-module scope (2026-09-30,
+  [D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)).**
+  The unit that must compile is the subject module, the module
+  `subject_sha256` digests, and not its import closure. That module's own
+  imports of sibling workload modules may bind CPython's objects from the
+  installed package, as the Cython arm's sibling modules run in the
+  interpreter. D-252's additions may be made anywhere in that module. The
+  result is labelled "subject-module scope" alongside "annotated".
 - **Workload admissibility.** The Subject bullet fixes *which* function is the
   subject once a workload is chosen, but it presumes such a function exists.
   [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
@@ -830,14 +838,62 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps and a boundary question
+### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps and boundary questions
 
 This subsection was titled "the protocol has no admissible subject" until
 2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
 From 2026-09-23 to 2026-09-24 it was titled "the replacement workload is
-selected and the criterion is recorded as not met".
+selected and the criterion is recorded as not met". From 2026-09-24 to
+2026-09-30 it ended "compiler gaps and a boundary question".
 
-**Current state (2026-09-24).** On 2026-09-24 the repository owner directed
+**Current state (2026-09-30): subject-module scope.**
+[D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)
+scopes the kill criterion's "compiles unchanged" to the **subject module**
+(`lark/parsers/lalr_parser_state.py`, annotated digest `4335a199...80d9`,
+unchanged). Its imports of sibling `lark` modules may bind CPython's own
+objects from the installed package, as the Cython arm's sibling modules run in
+the interpreter. The reason is that the whole-closure reading below is
+unreachable: it would require removing two `T0001`s outside D-252's scope and
+two `T0002`s inside a dependency, and pycc refuses both by design. Nothing
+else in the protocol changes. Results carry the label "subject-module scope"
+alongside "annotated". The `lark/utils.py` table below, including #1283 and
+#1284, is therefore **off the subject's critical path**. Those issues stay open
+as breadth work.
+
+The subject module's own frontier was measured at `main` `05bc7805` (release
+build, CPython 3.14.7) with `pycc build lalr_parser_state.py -o out.abi3.so
+--ext`, on the annotated module copied out of its package. That run reports
+seven errors: one `C0002` for `Dict` (row 1), three `T0021`s (row 2), one
+`C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). Everything under them was measured by probes. A probe is a copy with the
+reported lines replaced (for example, the sibling imports pointed at undotted
+stand-in modules), or a minimal module holding one construct inside a method
+body. Probes are never the workload. The subject module was never compiled
+whole past the first layer, so this list is a **lower bound**.
+
+| Blocker in the subject module (line) | Diagnostic | Issue |
+|---|---|---|
+| `from typing import Dict, Any, Generic, List` (2); each name fails at the import, `Any` before any `T0002` | `C0002` | #882 |
+| relative sibling imports (3, 4, 6) | `T0021` "attempted relative import with no known parent package" | [#1366](https://github.com/rotnov/pycc/issues/1366) (needs a live `__package__`, the counterpart of the live `__name__` #1161 seeds) |
+| `from lark.exceptions import UnexpectedToken` (7) | `C0001` import of a dotted module | #1138 |
+| `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
+| `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
+| annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported | [#1367](https://github.com/rotnov/pycc/issues/1367) |
+| method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
+| `__eq__(self, other)`: its only faithful annotation is the unspellable `object` (51) | `T0021` cannot infer parameter | #1367 |
+| `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
+| the subject's `-> Any` (67) | `T0002` (inferred) | #1285 |
+| function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
+| `while True:` left only by `return` (74) | `T0022` (false positive) | [#1370](https://github.com/rotnov/pycc/issues/1370) |
+| `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
+| `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
+| `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
+| `assert` (82, 86, 104) | `C0001` statement kind | [#1369](https://github.com/rotnov/pycc/issues/1369) |
+| `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
+
+Seventeen rows remain. Two of them are boundary questions inside the subject
+module rather than missing features: #1285, and #1367's `object` spelling.
+
+**State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing
 annotation should be added.
 [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
@@ -994,7 +1050,9 @@ which supplies a predicate the protocol presumed rather than revising how a
 chosen subject is measured. (That count held until 2026-09-24, when
 [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
 added the Subject bullet's **Annotation-only additions** paragraph, a second
-amendment.) `subject_sha256` is still `null`; the record's
+amendment, and 2026-09-30, when
+[D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)
+added its **Subject-module scope** paragraph, a third.) `subject_sha256` is still `null`; the record's
 only amended field is `machine.os`, re-pinned on 2026-09-21 and recorded there
 as `machine_os_amendment` (prerequisite 3 below), and no other field has
 changed.
