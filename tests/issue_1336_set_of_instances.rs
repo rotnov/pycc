@@ -442,8 +442,22 @@ fn assert_native_matches_cpython(tag: &str, source: &str, expected: &str) {
         .output()
         .expect("python3 should spawn");
     assert!(oracle.status.success(), "{}", rendered(&oracle));
-    assert_eq!(stdout(&run), stdout(&oracle));
+    if oracle_splits_build_set() {
+        assert_eq!(stdout(&run), stdout(&oracle));
+    }
     assert_eq!(stdout(&run), expected);
+}
+
+/// Whether the oracle evaluates a set literal of more than 30 elements
+/// incrementally, as CPython 3.11+ does and pycc reproduces. An older
+/// oracle (a runner's system `python3` 3.9) evaluates every element first,
+/// so only the pinned 3.11+ text is compared there.
+fn oracle_splits_build_set() -> bool {
+    let probe = python()
+        .args(["-c", "import sys; print(sys.version_info >= (3, 11))"])
+        .output()
+        .expect("python3 should spawn");
+    stdout(&probe).trim() == "True"
 }
 
 /// Builds `source` as the extension module `module`, imports it in CPython,
