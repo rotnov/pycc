@@ -1017,9 +1017,11 @@ pub(crate) fn infer_expr_in(
                     ).with_help(format!("use a `{}` value here", elem_ty.name())));
                 }
             }
-            let set_ty = Ty::Set(Box::new(elem_ty));
+            let set_ty = Ty::Set(Box::new(elem_ty.clone()));
             // Shared with annotation lowering -- see the `ListLiteral` arm.
             pycc_hir::check_container_ty(&set_ty, Span::new(0, 0))?;
+            // #1343: an instance element's class verdict (T0054/C0001).
+            crate::set_element::check_set_element(&elem_ty, env)?;
             Ok(set_ty)
         }
         // PR-11b Task 3 (D-116): unlike `ListLiteral`/`DictLiteral`/
@@ -1449,6 +1451,8 @@ pub(crate) fn infer_expr_in(
                     Span::new(0, 0),
                 ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", elem_ty.name(), value_ty.name())));
             }
+            // #1343: needed for a `set[R]` no literal checked (a parameter).
+            crate::set_element::check_set_element(elem_ty, env)?;
             Ok(Ty::None)
         }
         // D-154 (Part 1 of #375): an instance attribute read/method call --

@@ -311,7 +311,7 @@ fn constraint_collection_carries_none_literal_as_ty_none() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::NoneLiteral;
 
@@ -338,7 +338,7 @@ fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
 
@@ -359,7 +359,7 @@ fn constraint_collection_propagates_an_error_from_a_list_literal_element() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -380,7 +380,7 @@ fn constraint_collection_treats_a_subscript_as_unconstrained_but_recurses_into_b
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -404,7 +404,7 @@ fn constraint_collection_propagates_an_error_from_a_subscript_base() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::Name("missing".to_string())),
@@ -428,7 +428,7 @@ fn constraint_collection_propagates_an_error_from_a_subscript_index() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -455,7 +455,7 @@ fn constraint_collection_carries_a_homogeneous_float_list_literal_as_an_element_
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::FloatLiteral(1.0), HirExpr::FloatLiteral(2.0)]);
 
@@ -478,7 +478,7 @@ fn constraint_collection_carries_a_single_element_scalar_list_literal() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -504,7 +504,7 @@ fn constraint_collection_does_not_carry_a_heterogeneous_list_literal() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::FloatLiteral(2.0)]);
 
@@ -531,7 +531,7 @@ fn constraint_collection_does_not_carry_a_bool_int_heterogeneous_list_literal() 
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
 
@@ -554,7 +554,7 @@ fn constraint_collection_does_not_carry_an_empty_list_literal() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![]);
 
@@ -579,7 +579,7 @@ fn constraint_collection_does_not_carry_a_list_literal_with_a_non_scalar_element
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])]);
 
@@ -604,7 +604,7 @@ fn constraint_collection_does_not_carry_a_list_literal_when_an_element_has_no_te
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListLiteral(vec![
         HirExpr::IntLiteral(1),
@@ -632,7 +632,7 @@ fn constraint_collection_subscript_on_a_list_literal_base_extracts_the_element_t
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -662,7 +662,7 @@ fn constraint_collection_subscript_on_a_non_list_bound_base_keeps_ok_none() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
         ..ConstraintEnvironment::empty(&[])
@@ -693,7 +693,7 @@ fn constraint_collection_subscript_on_an_unresolved_list_base_keeps_ok_none() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), unresolved)]),
@@ -724,7 +724,7 @@ fn constraint_collection_list_pop_on_a_list_typed_bound_name_extracts_the_elemen
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Str))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -753,7 +753,7 @@ fn constraint_collection_list_pop_on_an_unbound_name_keeps_ok_none() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
         list: pycc_hir::ContainerReceiver::Name("xs".to_string()),
@@ -779,7 +779,7 @@ fn constraint_collection_list_pop_on_a_non_list_bound_name_keeps_ok_none() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::Int))]),
         ..ConstraintEnvironment::empty(&[])
@@ -809,7 +809,7 @@ fn constraint_collection_list_append_after_a_list_binding_still_keeps_ok_none() 
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -839,7 +839,7 @@ fn constraint_collection_inline_subscript_on_a_list_literal_extracts_the_element
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Subscript {
         base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -866,7 +866,7 @@ fn constraint_collection_treats_a_slice_as_unconstrained_but_recurses_into_base_
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -894,7 +894,7 @@ fn constraint_collection_treats_a_slice_with_every_bound_omitted_as_unconstraine
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -920,7 +920,7 @@ fn constraint_collection_propagates_an_error_from_a_slice_base() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::Name("missing".to_string())),
@@ -946,7 +946,7 @@ fn constraint_collection_propagates_an_error_from_a_slice_bound() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::Slice {
         base: Box::new(HirExpr::IntLiteral(1)),
@@ -972,7 +972,7 @@ fn constraint_collection_treats_a_list_append_as_unconstrained_but_recurses_into
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListAppend {
         list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
@@ -996,7 +996,7 @@ fn constraint_collection_propagates_an_error_from_a_list_append_value() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::ListAppend {
         list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
@@ -1027,7 +1027,7 @@ fn constraint_collection_treats_a_list_pop_as_unconstrained() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::ListPop {
         list: pycc_hir::ContainerReceiver::Name("lst".to_string()),
@@ -1051,7 +1051,7 @@ fn constraint_collection_treats_a_dict_get_or_default_as_unconstrained_but_recur
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::DictGetOrDefault {
         dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
@@ -1076,7 +1076,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_key() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
         dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
@@ -1101,7 +1101,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_default(
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictGetOrDefault {
         dict: pycc_hir::ContainerReceiver::Name("d".to_string()),
@@ -1126,7 +1126,7 @@ fn constraint_collection_treats_a_set_add_as_unconstrained_but_recurses_into_val
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
@@ -1150,7 +1150,7 @@ fn constraint_collection_propagates_an_error_from_a_set_add_value() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
@@ -1179,7 +1179,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_list() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("lst".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -1211,7 +1211,7 @@ fn constraint_collection_len_call_defers_an_unresolved_argument_to_the_real_chec
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("lst".to_string(), unresolved)]),
@@ -1239,7 +1239,7 @@ fn constraint_collection_len_call_rejects_the_wrong_arity() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -1264,7 +1264,7 @@ fn constraint_collection_len_call_rejects_a_concretely_known_non_list_argument()
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "len".to_string(),
@@ -1295,7 +1295,7 @@ fn constraint_collection_float_call_returns_float_regardless_of_argument_resolut
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
         ..ConstraintEnvironment::empty(&[])
@@ -1326,7 +1326,7 @@ fn constraint_collection_float_call_defers_an_unresolved_argument_to_the_real_ch
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let unresolved = fresh_term(&mut parents, &mut concrete);
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), unresolved)]),
@@ -1354,7 +1354,7 @@ fn constraint_collection_float_call_rejects_the_wrong_arity() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -1379,7 +1379,7 @@ fn constraint_collection_float_call_rejects_a_concretely_known_non_numeric_argum
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -1415,7 +1415,7 @@ fn constraint_collection_honors_a_user_defined_float_signature_over_the_builtin(
     )]);
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "float".to_string(),
@@ -1544,7 +1544,7 @@ fn constraint_collection_classifies_value_error_as_c0001() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
@@ -1567,7 +1567,7 @@ fn constraint_collection_classifies_exception_as_c0001() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "Exception".to_string(),
@@ -1593,7 +1593,7 @@ fn constraint_collection_defers_unknown_callees_to_final_validation() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "totally_undefined".to_string(),
@@ -1621,7 +1621,7 @@ fn constraint_collection_honors_user_defined_value_error_over_c0001() {
     )]);
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "ValueError".to_string(),
@@ -1646,7 +1646,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_dict() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("d".to_string(), Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -1673,7 +1673,7 @@ fn constraint_collection_treats_a_dict_literal_as_unconstrained_but_recurses_int
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
@@ -1697,7 +1697,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_key() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::Name("missing".to_string()),
@@ -1721,7 +1721,7 @@ fn constraint_collection_propagates_an_error_from_a_dict_literal_value() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::DictLiteral(vec![(
         HirExpr::StringLiteral("a".to_string()),
@@ -2698,7 +2698,7 @@ fn constraint_collection_len_call_returns_int_for_a_concretely_bound_set() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("s".to_string(), Ok(Ty::Set(Box::new(Ty::Int))))]),
         ..ConstraintEnvironment::empty(&[])
@@ -2725,7 +2725,7 @@ fn constraint_collection_treats_a_set_literal_as_unconstrained_but_recurses_into
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -2746,7 +2746,7 @@ fn constraint_collection_propagates_an_error_from_a_set_literal_element() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -2767,7 +2767,7 @@ fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_in
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -2788,7 +2788,7 @@ fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&["missing"]);
     let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -3016,7 +3016,7 @@ fn collect_conversion_of_a_foreign_object(
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = foreign_object_env();
     let expr = HirExpr::Call {
         callee: callee.to_string(),
@@ -3053,7 +3053,7 @@ fn constraint_collection_bool_call_keeps_c0001_for_a_non_object_argument() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "bool".to_string(),
@@ -3082,7 +3082,7 @@ fn constraint_collection_honors_a_user_defined_bool_signature_over_the_builtin()
     )]);
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment::empty(&[]);
     let expr = HirExpr::Call {
         callee: "bool".to_string(),
@@ -3122,7 +3122,7 @@ fn constraint_collection_int_and_str_calls_keep_c0001_for_a_non_object_argument(
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut binops = DeferredConstraints::default();
         let env = ConstraintEnvironment::empty(&[]);
         let expr = HirExpr::Call {
             callee: callee.to_string(),
@@ -3153,7 +3153,7 @@ fn constraint_collection_honors_a_user_defined_int_or_str_signature_over_the_bui
         )]);
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut binops = DeferredConstraints::default();
         let env = ConstraintEnvironment::empty(&[]);
         let expr = HirExpr::Call {
             callee: callee.to_string(),

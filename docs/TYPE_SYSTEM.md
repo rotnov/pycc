@@ -368,7 +368,7 @@ element, and panics on an empty one.
 | `None` | unit | LLVM `void` for returns; canonical `i8 0` carrier for the v0.1 user-function parameter ABI plus parameter, local-assignment, and module-assignment storage; the MIR/static `Ty::None` tag keeps that carrier distinct from `False`; `T \| None` = nullable/tagged repr |
 | `tuple[A, B]` | fixed heterogeneous | inline struct (stack when non-escaping) |
 | `list[T]` / `set[T]` / `dict[K, V]` | homogeneous, invariant | native vec / swiss-table (insertion-ordered dict) |
-| `frozenset[T]` | homogeneous, immutable | **Current state ([#1326](https://github.com/rotnov/pycc/issues/1326), Part 1 of [#1319](https://github.com/rotnov/pycc/issues/1319)):** only `frozenset[int]` compiles (the same one-combination `T0038` gate as `set[int]`, D-122). It shares `set[int]`'s runtime object; mutability is the only difference, and `pycc_types` enforces it (`.add()` is `T0033`). A `set[int]` is not assignable to a `frozenset[int]` or the reverse (`T0025` for an annotated initializer, `T0023` for a reassignment, `T0021` for an argument); `frozenset(x)` converts. `frozenset()` is empty, and `frozenset(x)` accepts a `set[int]`, `frozenset[int]` or `list[int]` (anything else is `T0021`). `len`, `for`, a comprehension over it and truthiness work; printing or formatting a set or frozenset is `C0001`, the set operators are `T0021`, and a user `def frozenset` or `class frozenset` shadows the builtin. |
+| `frozenset[T]` | homogeneous, immutable | **Current state ([#1326](https://github.com/rotnov/pycc/issues/1326), Part 1 of [#1319](https://github.com/rotnov/pycc/issues/1319)):** only `frozenset[int]` and, since [#1343](https://github.com/rotnov/pycc/issues/1343), a `frozenset[C]` of a hashable user class compile (the same `T0038` gate as `set`, D-122 widened by [D-255](./decisions/D-255-set-elements-of-a-hashable-user-class-and-the-eq.md); see "Sets of user-class instances" below). It shares `set[int]`'s runtime object; mutability is the only difference, and `pycc_types` enforces it (`.add()` is `T0033`). A `set[int]` is not assignable to a `frozenset[int]` or the reverse (`T0025` for an annotated initializer, `T0023` for a reassignment, `T0021` for an argument); `frozenset(x)` converts. `frozenset()` is empty, and `frozenset(x)` accepts a `set[int]`, `frozenset[int]` or `list[int]`, or a `set[C]`/`frozenset[C]` of a hashable user class (anything else is `T0021`). `len`, `for` and truthiness work, and so does a comprehension over a `frozenset[int]` (one over a `frozenset[C]` is `C0001` until [#1344](https://github.com/rotnov/pycc/issues/1344)); printing or formatting a set or frozenset is `C0001`, the set operators are `T0021`, and a user `def frozenset` or `class frozenset` shadows the builtin. |
 | `class` | nominal | struct; fields fixed at compile time (`__slots__` semantics implicit) |
 | `Protocol` | structural | compile-time-only interface; no runtime vtable or protocol object. **Current state (#380, PR-20):** `class P(Protocol):` with method declarations (`...`/`pass` bodies) and attribute annotations is implemented. Structural conformance is checked at compile time when a concrete class is assigned to a protocol-typed variable or passed to a protocol-typed parameter. A protocol class in *return-annotation* position (`def make() -> P:`) is rejected with `C0001` ([#934](https://github.com/rotnov/pycc/issues/934)): a call to such a function has no concrete type to bind, and D-166 gives a protocol no runtime representation to dispatch through. That includes a protocol member returning its *own* protocol, in either spelling -- `def clone(self) -> P: ...` or `def clone(self) -> Self: ...` inside `class P(Protocol)` ([#948](https://github.com/rotnov/pycc/issues/948)); a self-referential *parameter* or *attribute* is accepted and carries the protocol type. An attribute member is satisfied by an instance attribute, a `@property`, or -- since [#914](https://github.com/rotnov/pycc/issues/914) -- a class-level attribute, with the same type check in all three cases. `@runtime_checkable` enables compile-time `isinstance` against a protocol (presence-only structural check, over the same three attribute sources). Protocol inheritance (`class Q(P):` where `P` is a protocol) is supported. Protocol-typed variables and function parameters use monomorphization — the concrete type is bound for MIR dispatch. `abc.ABC` and `@abstractmethod` are compile-time-only markers. Generic protocols, `issubclass` with protocols, and runtime dispatch are not supported. |
 | unions `A \| B` | tagged | discriminant + payload; niche optimization for `T \| None`. **Current state (D-197, #763, Part 1 of #747; widened by #809, Part 3 of #747):** only `T \| None` (PEP 604, either operand order) is recognized, and only for `T` in `{int, float, bool}` — `Optional[int]`, `Optional[float]`, `Optional[bool]`. A general union `A \| B` with neither side `None`, or any longer `A \| B \| None` chain, is rejected pre-lowering (`T0048`); a recognized `T \| None` shape with `T` outside `{int, float, bool}` (e.g. `str`, a container, or another `Optional[...]`) is rejected with `T0049`. The runtime representation is an explicit `{ payload, present: i8 }` struct passed and stored by value — `payload` is `i64` (D-141 encoded) for `Ty::Int`, plain `f64` for `Ty::Float`, and plain `i8` for `Ty::Bool` (not yet niche-packed into `payload` itself for any inner type, unlike the aspirational "niche optimization" description above — see `crates/pycc_codegen/src/lib.rs`'s `Scalar::Optional`). `Optional[bool]`'s real `{i8, i8}` shape happens to be the same anonymous LLVM struct type as the bare-`None` placeholder's own fixed `{i8, i8}` shape (LLVM literal struct types are uniqued per-field-type-list) — this is a harmless representational coincidence, not a bug: every `coerce_scalar_to_type` call site discriminates on the requested `Ty`, never on introspecting the `StructValue`'s LLVM type alone. `is`/`is not` against a literal `None` operand reads the `present` field as a boolean presence test; general object-identity `is`/`is not` between two arbitrary non-`None` operands remains unimplemented (`C0001`). **Current state (D-205, #769, Part 2 of #747):** a top-level `is`/`is not None` presence test now flow-narrows the value itself — see "Narrowing & flow typing" below for the full scope. |
@@ -1165,6 +1165,55 @@ The verdict is delivered by the check phase only. The constraint path that
 types an unannotated private helper has no class table, so it admits any
 instance argument and the final check refuses it there, exactly as it does
 in a public body.
+
+#### Sets of user-class instances ([#1343](https://github.com/rotnov/pycc/issues/1343), Part 1 of [#1336](https://github.com/rotnov/pycc/issues/1336))
+
+[D-255](./decisions/D-255-set-elements-of-a-hashable-user-class-and-the-eq.md)
+is the decision record. A `set[C]` or `frozenset[C]` compiles for a user
+class `C` whose `hash()` verdict (the section above, which owns it) is the
+identity hash or a compiled `__hash__`, and whose eq verdict is admitted.
+The annotation gate `T0038` admits every instance and still refuses every
+other non-`int` element (`set[str]`, `set[set[C]]`); the class verdict is
+checked where an element is inserted, a set literal and `.add(...)`, by
+`crates/pycc_types/src/set_element.rs`. As for `hash()`, the verdict is
+delivered by the check phase only: the constraint path has no class table,
+admits any instance element, and the final check, which always runs, refuses
+it there.
+
+- **Eq verdict** (`pycc_hir::resolve_instance_eq`): the first MRO class
+  binding `__eq__` decides. None means identity. A plain method is admitted
+  only as `def __eq__(self, other: K) -> bool`, `K` being `C` or one of its
+  bases; any other binding, parameter list or return is `C0001`.
+- **Subclass refusal.** A user `__eq__` on a class that any class derives
+  from is `C0001`: CPython's `do_richcompare` calls a subclass's reflected
+  `__eq__` first, which static dispatch on the declared class cannot
+  reproduce: D-254's receiver-exact copies route by the static receiver
+  class, not the runtime one. The hash
+  side keeps the subclass-agreement rule above.
+- **Inherited dunders.** An inherited `__hash__` or `__eq__` runs the
+  element class's receiver-exact copy
+  ([D-254](./decisions/D-254-inherited-methods-are-compiled-per-receiver-class.md)),
+  as `hash(instance)` does, so a leaf override of a method it calls decides
+  membership. Pinned by `tests/issue_1336_set_of_instances.rs`.
+- **`T0054`**: `C` binding `__eq__` without `__hash__` (directly or
+  inherited) is "cannot use 'C' as a set element (unhashable type: 'C')",
+  CPython's `TypeError` reported statically; the help names the class that
+  binds `__eq__`.
+- **Other refusals** reuse `hash()`'s: a `__hash__` returning a non-integer
+  is `T0021`; an enum, exception, protocol or generic class, a dataclass
+  without its own `__hash__`, or an uncompiled `__hash__` binding is `C0001`
+  "a set element of class `C` is valid Python but not implemented yet".
+
+Each insertion hashes the element once; a display of at most 30 elements
+evaluates all of them before the first hash, as CPython's `BUILD_SET` does,
+and a longer one evaluates and inserts one at a time. A stored entry with an
+equal hash is compared by identity and then by `stored.__eq__(new)`.
+`len`, `for`, truthiness, passing and returning a set, and `frozenset(s)`
+(no `__hash__` or `__eq__` calls) work. How many times `__eq__` runs among
+colliding hashes is D-255's recorded deviation; iteration order is D-123's.
+A comprehension over or producing a set of instances is `C0001` naming
+[#1344](https://github.com/rotnov/pycc/issues/1344) on both paths. A
+`set[C]` in a public `--ext` signature is `C0003`, like every set.
 
 ## Error philosophy
 

@@ -5382,14 +5382,17 @@ fn adding_a_bool_value_to_a_set_of_int_is_accepted_since_bool_is_an_int_subtype(
 }
 
 #[test]
-fn adding_a_value_to_a_set_of_str_infers_none_proving_add_is_not_int_specific() {
+fn adding_to_a_set_of_str_is_refused_by_the_set_element_check() {
+    // #1343: `.add` checks its element (`set_element.rs`) because a `set[R]`
+    // parameter reaches it with no literal checked. `set[str]` never gets
+    // past the annotation gate, so this pins the defensive arm.
     let mut env = Environment::new();
     env.bind("s".to_string(), Ty::Set(Box::new(Ty::Str)));
     let expr = HirExpr::SetAdd {
         set: "s".to_string(),
         value: Box::new(HirExpr::StringLiteral("a".to_string())),
     };
-    assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0038");
 }
 
 #[test]
@@ -7183,7 +7186,7 @@ fn a_homogeneous_non_int_set_literal_is_rejected_as_t0038() {
     assert_eq!(err.code, "T0038");
     assert_eq!(
         err.message,
-        "set[str] is not compiled yet (D-122) -- only set[int] is"
+        "set[str] is not compiled yet (D-122) -- only set[int] and a set of a user-class instance are"
     );
     assert!(err.message.contains("set[str]"));
 }
@@ -16648,7 +16651,7 @@ fn solver_maybe_bound_name_skips_unification_in_name_arm() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
         maybe_bindings: HashSet::from(["x".to_string()]),
@@ -16722,7 +16725,7 @@ fn solver_definitely_bound_name_returns_its_term() {
     let signatures = HashMap::new();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut binops = Vec::new();
+    let mut binops = DeferredConstraints::default();
     let env = ConstraintEnvironment {
         bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
         ..ConstraintEnvironment::empty(&["x"])

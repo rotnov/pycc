@@ -85,7 +85,10 @@ fn a_walrus_in_the_frozenset_argument_is_a_collected_binding() {
     let set_ty = Ty::Set(Box::new(Ty::Int));
     let named = MirExpr::NamedExpr {
         name: "s".to_string(),
-        value: Box::new(MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1)])),
+        value: Box::new(MirExpr::SetLiteral {
+            elements: vec![MirExpr::IntLiteral(1)],
+            ops: None,
+        }),
         ty: set_ty.clone(),
     };
     let mut out = Vec::new();

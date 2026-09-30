@@ -486,7 +486,9 @@ fn open_loop<'ctx>(
             lp
         }
         CompSource::Set(name) => {
-            // Mirrors `MirStmt::ForSet`'s own shape exactly.
+            // Mirrors `MirStmt::ForSet`'s own shape, but binds the word as
+            // an `int`: `pycc_types` refuses a comprehension over a
+            // `set[C]` of instances until #1344 binds the instance here.
             let set_ptr = emit_set_name_read(
                 context,
                 builder,

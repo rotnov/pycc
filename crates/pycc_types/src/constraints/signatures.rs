@@ -471,15 +471,23 @@ pub(crate) fn infer_function_signatures_with_solver_all(
     // every call/operator fact settle first, aggregate all remaining bounds
     // per union-find root, then propagate any selected fallback back through
     // operators. This keeps inference independent of body/declaration order.
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)
+    propagate_binop_constraints(&constraints.deferred.binops, &mut parents, &mut concrete)
         .map_err(module_level)?;
+    // #1343: container defaults run before the annotation defaults, so a
+    // defaulted `set[int]` root is concrete before a scalar annotation
+    // bound could claim it -- the order the hard `set[int]` guess had.
+    super::set_comp::apply_container_defaults(
+        &constraints.deferred.container_defaults,
+        &mut parents,
+        &mut concrete,
+    );
     apply_annotation_defaults(
         &constraints.annotation_defaults,
         &mut parents,
         &mut concrete,
     )
     .map_err(module_level)?;
-    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)
+    propagate_binop_constraints(&constraints.deferred.binops, &mut parents, &mut concrete)
         .map_err(module_level)?;
 
     let non_scalar_local_roots = constraints

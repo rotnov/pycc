@@ -93,7 +93,11 @@ fn mir_expr_ty_covers_every_variant() {
         Ty::Int
     );
     assert_eq!(
-        MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]).ty(),
+        MirExpr::SetLiteral {
+            elements: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+            ops: None,
+        }
+        .ty(),
         Ty::Set(Box::new(Ty::Int))
     );
     assert_eq!(
@@ -135,6 +139,7 @@ fn mir_expr_ty_covers_every_variant() {
         MirExpr::SetAdd {
             set: "s".to_string(),
             value: Box::new(MirExpr::IntLiteral(1)),
+            ops: None,
         }
         .ty(),
         Ty::None

@@ -600,13 +600,16 @@ def f() -> None:
     DiagnosticExplanation {
         code: "T0038",
         severity: Severity::Error,
-        summary: "set codegen only supports `set[int]` in v0.2",
+        summary: "set element type not compiled yet (int or a user-class instance only)",
         explanation: "\
 T0038 fires when a `set[T]` value's element type `T` is anything other than \
-`int` -- pycc's v0.2 set codegen (D-122) implements only `set[int]`'s \
-representation; other element types are type-checked but not yet \
-compilable and are rejected here rather than silently miscompiled. \
-`frozenset[T]` shares the gate: only `frozenset[int]` is compiled.",
+`int` or an instance of a user class -- pycc's set codegen (D-122, widened \
+by D-255 in #1343) implements only those elements' representation; other \
+element types are type-checked but not yet compilable and are rejected \
+here rather than silently miscompiled. `frozenset[T]` shares the gate. \
+Whether a particular user class is hashable is a separate question, \
+answered at the set literal or `.add(...)` that inserts it (T0054, or \
+C0001 for a class shape pycc does not compile yet).",
         example: "\
 def f() -> None:
     xs: set[str] = {\"a\", \"b\"}
@@ -1067,6 +1070,30 @@ container.",
         example: "\
 def f(d: dict[str]) -> None:  # T0053 -- dict takes exactly 2 type arguments
     pass
+",
+    },
+    DiagnosticExplanation {
+        code: "T0054",
+        severity: Severity::Error,
+        summary: "set element is an instance of an unhashable user class",
+        explanation: "\
+T0054 fires when a set literal or `.add(...)` inserts an instance of a user \
+class that defines `__eq__` (itself or through a base class) but no \
+`__hash__`. CPython sets such a class's `__hash__` to `None`, so the \
+insertion raises `TypeError: unhashable type` at run time; pycc knows the \
+class statically and reports the same error before the program runs. \
+Define `__hash__` on the class that defines `__eq__`, or remove `__eq__` \
+so instances hash by identity (#1343, D-255).",
+        example: "\
+class P:
+    def __init__(self, x: int) -> None:
+        self.x = x
+    def __eq__(self, other: P) -> bool:
+        return self.x == other.x
+
+def f() -> int:
+    s = {P(1)}  # T0054 -- P defines __eq__ without __hash__
+    return len(s)
 ",
     },
     DiagnosticExplanation {

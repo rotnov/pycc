@@ -1,7 +1,10 @@
 //! Unit tests for `class/instance_hash.rs` (#1335, Part 1 of #1332): one
 //! test per verdict arm, over class tables lowered from source.
 
-use super::{HashRefusal, InstanceHash, InstanceHashLowering, resolve_instance_hash};
+use super::{
+    EqRefusal, HashRefusal, InstanceEq, InstanceHash, InstanceHashLowering, resolve_instance_eq,
+    resolve_instance_hash,
+};
 use crate::HirClassDef;
 use crate::class::tests::lower_ok;
 use std::collections::HashMap;
@@ -265,4 +268,75 @@ fn every_refusal_has_a_help_line_naming_its_class() {
         assert!(help.contains("`K`"), "{help}");
         assert!(help.contains(needle), "{help}");
     }
+}
+
+// #1343 (Part 1 of #1336): the eq verdict a set element compares by.
+
+fn eq_verdict(source: &str, class: &str) -> InstanceEq {
+    resolve_instance_eq(class, &classes(source))
+}
+
+const EQ_METHOD: &str = "    def __eq__(self, other: A) -> bool:\n        return True\n";
+
+#[test]
+fn a_class_binding_no_eq_compares_by_identity() {
+    let source = format!("class R:\n{INIT}");
+    assert_eq!(eq_verdict(&source, "R"), InstanceEq::Identity);
+}
+
+#[test]
+fn an_own_eq_method_is_called() {
+    let source = format!("class A:\n{INIT}\n{EQ_METHOD}");
+    assert_eq!(eq_verdict(&source, "A"), InstanceEq::Method(s("A.__eq__")));
+}
+
+#[test]
+fn an_inherited_eq_method_is_the_base_method() {
+    let source = format!("class A:\n{INIT}\n{EQ_METHOD}\nclass B(A):\n    pass\n");
+    assert_eq!(eq_verdict(&source, "B"), InstanceEq::Method(s("A.__eq__")));
+}
+
+#[test]
+fn an_eq_bound_any_other_way_is_not_a_method() {
+    for binding in [
+        "    @property\n    def __eq__(self) -> int:\n        return 1\n",
+        "    @staticmethod\n    def __eq__() -> int:\n        return 1\n",
+        // `__eq__ = None` is a class-attribute C0001 before this verdict
+        // runs, so an `int` literal stands in for the class-attribute form.
+        "    __eq__ = 2\n",
+    ] {
+        let source = format!("class A:\n{INIT}\n{binding}");
+        let refusal = match eq_verdict(&source, "A") {
+            InstanceEq::Unsupported(refusal) => refusal,
+            other => panic!("expected a refusal for {binding:?}, got {other:?}"),
+        };
+        assert_eq!(refusal, EqRefusal::NotAMethod { class: s("A") });
+        assert!(
+            refusal.help().contains("`A` binds `__eq__`"),
+            "{}",
+            refusal.help()
+        );
+    }
+}
+
+#[test]
+fn a_user_eq_with_any_subclass_names_the_first_sorted_subclass() {
+    let source =
+        format!("class A:\n{INIT}\n{EQ_METHOD}\nclass Z(A):\n    pass\n\nclass M(A):\n    pass\n");
+    let refusal = match eq_verdict(&source, "A") {
+        InstanceEq::Unsupported(refusal) => refusal,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert_eq!(refusal, EqRefusal::Subclassed { subclass: s("M") });
+    assert!(
+        refusal.help().contains("subclass `M`"),
+        "{}",
+        refusal.help()
+    );
+}
+
+#[test]
+fn an_identity_eq_with_a_subclass_is_not_refused() {
+    let source = format!("class A:\n{INIT}\nclass B(A):\n    pass\n");
+    assert_eq!(eq_verdict(&source, "A"), InstanceEq::Identity);
 }

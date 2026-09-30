@@ -1105,6 +1105,16 @@ fn t0053_list_two_args() {
 }
 
 #[test]
+fn t0054_set_element_unhashable() {
+    assert_diagnostic_matches_fixture("t0054_set_element_unhashable");
+}
+
+#[test]
+fn t0054_set_add_unhashable() {
+    assert_diagnostic_matches_fixture("t0054_set_add_unhashable");
+}
+
+#[test]
 fn t0053_set_two_args() {
     assert_diagnostic_matches_fixture("t0053_set_two_args");
 }
