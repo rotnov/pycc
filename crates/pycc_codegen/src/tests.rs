@@ -36,6 +36,9 @@ mod exception_message_rc;
 // #1325: binding a CPython object value to a module-level name.
 mod object_binding;
 
+// Part 1 of #1333: passing a CPython object to a pycc function.
+mod object_argument;
+
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s
 /// `print` dispatch itself now handles any number of arguments of any
@@ -11470,6 +11473,7 @@ fn a_range_sourced_set_comprehension_with_a_filter_only_keeps_matching_elements(
     let mir = MirModule {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "evens".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11530,6 +11534,7 @@ fn a_list_sourced_set_comprehension_with_no_filter_deduplicates_repeated_element
                 ]),
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11587,6 +11592,7 @@ fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pr
                 },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11653,6 +11659,7 @@ fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_us
                 },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "i".to_string(),
                 var_ty: Ty::Int,
@@ -11719,6 +11726,7 @@ fn a_dict_sourced_set_comprehension_binds_its_key_without_crashing() {
                 ]),
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "zs".to_string(),
                 var: "k".to_string(),
                 var_ty: Ty::Str,
@@ -15535,34 +15543,6 @@ fn compile_ext_items(label: &str, items: Vec<MirItem>) {
 }
 
 #[test]
-#[should_panic(expected = "a CPython object argument is not supported yet")]
-fn passing_a_cpython_object_as_a_call_argument_is_an_internal_error() {
-    // Reached through real MIR rather than a direct call, because this arm
-    // lives inside `build_call_to_with_leading_args`' per-argument loop over
-    // `MirExpr`s and only a `MirExpr` that *evaluates* to `Scalar::Object`
-    // can select it. `pycc_types` admits no `object`-annotated parameter
-    // (D-137's amendment) and refuses passing a `Ty::Object` value to a
-    // parameter of any other type, so the deliberately mistyped `int`
-    // parameter below is a shape no type-checked program can produce.
-    compile_ext_items(
-        "object_call_argument",
-        with_foreign_numpy(vec![
-            MirItem::Function {
-                name: "takes_int".to_string(),
-                params: vec![("n".to_string(), Ty::Int)],
-                return_ty: Ty::None,
-                body: vec![MirStmt::Return(None)],
-            },
-            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
-                callee: "takes_int".to_string(),
-                args: vec![numpy_pi()],
-                ty: Ty::None,
-            })),
-        ]),
-    );
-}
-
-#[test]
 fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
     // The two `Ty::Object` codegen paths that survive PR 2a's narrowing,
     // together in one program: `emit_stmt`'s `MirStmt::Return`
@@ -15574,10 +15554,9 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
     // The returned value is the foreign module global itself rather than a
     // `numpy.pi` load so the test selects exactly these two arms; an
     // `ObjAttrGet` inside a function body has its own failure-edge tests in
-    // `foreign_fail_tests.rs` (#1316). `pycc_types` refuses returning a
-    // CPython object from a function (`I0404`), so the MIR here is past
-    // what the front end admits; it exists to select these two codegen
-    // arms.
+    // `foreign_fail_tests.rs` (#1316). `pycc_types` admits returning a
+    // CPython object from a function since Part 1 of #1333, so this is
+    // also a shape the front end produces.
     //
     // D-137's amendment keeps `object` unspellable in an annotation, so
     // such a helper can never be public and never reaches an `ext` export

@@ -113,7 +113,12 @@ the subclass; and a user exception class whose MRO resolves an \
 instance-protocol dunder (`__str__`, `__bool__`, `__eq__`, ...) to a user \
 class rather than to a builtin exception base, reported at the class \
 definition because a raised exception value would silently ignore that \
-dunder (Part 3 of #541). Apart from the two permanent refusals above, the \
+dunder (Part 3 of #541). Since #1344 an unannotated private helper that \
+returns a set comprehension whose user-class instance element the \
+constraint solver cannot type yet is C0001 too, \"cannot infer an \
+unannotated private helper's `set[C]` return yet\", with help naming #1342 \
+and #1360; annotating the helper's return (`-> set[C]`) compiles today. \
+Apart from the two permanent refusals above, the \
 construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
@@ -622,8 +627,8 @@ by D-255 in #1343) implements only those elements' representation; other \
 element types are type-checked but not yet compilable and are rejected \
 here rather than silently miscompiled. `frozenset[T]` shares the gate. \
 Whether a particular user class is hashable is a separate question, \
-answered at the set literal or `.add(...)` that inserts it (T0054, or \
-C0001 for a class shape pycc does not compile yet).",
+answered at the set literal, `.add(...)` or set comprehension that inserts \
+it (T0054, or C0001 for a class shape pycc does not compile yet).",
         example: "\
 def f() -> None:
     xs: set[str] = {\"a\", \"b\"}
@@ -1091,7 +1096,8 @@ def f(d: dict[str]) -> None:  # T0053 -- dict takes exactly 2 type arguments
         severity: Severity::Error,
         summary: "set element is an instance of an unhashable user class",
         explanation: "\
-T0054 fires when a set literal or `.add(...)` inserts an instance of a user \
+T0054 fires when a set literal, `.add(...)` or set comprehension (#1344) \
+inserts an instance of a user \
 class that defines `__eq__` (itself or through a base class) but no \
 `__hash__`. CPython sets such a class's `__hash__` to `None`, so the \
 insertion raises `TypeError: unhashable type` at run time; pycc knows the \
@@ -1439,14 +1445,16 @@ with admitted arguments. Since #1263 container lowering admits an \
 attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
 `add` is still refused by `C0001`. In a module body every supported \
-operation is admitted only *below the import*. Since #1316 each one except \
-the `for` loop and the binding is also admitted inside a function body when the name is a \
-module-level foreign binding that no local shadows: a call that runs \
-before the import has bound the name raises `NameError` at run time, and \
-a failing operation raises a pycc exception the function can catch. \
-Inside a function body this code still refuses iterating the object with \
-`for` (#1333), binding it to a name, returning it, passing it to a pycc \
-function, and a parameter whose type would be inferred as the object. The \
+operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
+one except the `for` loop is also admitted inside a function body, and a \
+function may bind the object to a local name, return it and pass it to \
+another pycc function: a call that runs before a module-level binding has \
+bound the name raises `NameError` at run time, and a failing operation \
+raises a pycc exception the function can catch. Inside a function body \
+this code still refuses iterating the object with `for` (Part 2 of \
+#1333) and passing it to a generic function. An unannotated helper whose \
+parameter would be inferred as the object and then used as a method-call \
+receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 land -- \
 the boundary conversions -- and this code is retired when they have.",
         example: "\

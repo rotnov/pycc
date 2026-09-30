@@ -59,6 +59,7 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod object_lift;
 mod set_comp;
 mod signatures;
 mod try_stmt;
@@ -1107,6 +1108,16 @@ pub(crate) fn collect_expr_constraints(
             if let Some(term) = env.bindings.get(callee).cloned()
                 && !env.defs_rebound.contains(callee)
             {
+                // Part 1 of #1333: a callee whose term is concretely
+                // `object` is a call of a CPython object, not a D-110
+                // non-callable value. Keyed on the unresolved term, never on
+                // `resolved_term`, so admission cannot depend on source
+                // order (`object_lift`'s module doc).
+                if let Some(result) = object_lift::call_of_object_binding(
+                    signatures, parents, concrete, deferred, env, &term, args,
+                )? {
+                    return Ok(Some(result));
+                }
                 // Part 1 of #1027: this gate, not `infer_expr_in`'s own
                 // D-110 arm, is the one a `memoryview` *parameter* reaches
                 // -- the solver runs first, and a parameter's annotation is
@@ -1135,8 +1146,8 @@ pub(crate) fn collect_expr_constraints(
             // the helper's return to `object` here -- rather than leaving
             // it unresolved, which signature materialization would report
             // as a `T0021` asking for an annotation the type cannot be
-            // spelled in -- and the check phase then reports the
-            // in-function `I0404`.
+            // spelled in. Since Part 1 of #1333 the check phase admits the
+            // helper returning it.
             if env.foreign_objects.contains(callee.as_str()) {
                 for arg in args {
                     collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
@@ -1691,8 +1702,8 @@ pub(crate) fn collect_expr_constraints(
             // discarding the term would leave an unannotated
             // `def _h(): return gc.garbage[0]` reporting a `T0021` asking
             // for an annotation no source can write, in place of the
-            // `I0404` the check phase reports for the read itself. The term
-            // keeps the *diagnostic* right; the helper body stays refused.
+            // `I0404` the check phase once reported for the read itself.
+            // Since Part 1 of #1333 the helper returning it is admitted.
             // Changing this arm without the `AttrGet` one, or the reverse,
             // is the drift both comments exist to prevent.
             if matches!(base_term, Some(Ok(Ty::Object))) {
@@ -1836,11 +1847,9 @@ pub(crate) fn collect_expr_constraints(
             // would report `T0021: ... add an annotation` -- advice no
             // annotation can satisfy, because `object` is unspellable
             // (D-137's amendment rejects it with `C0001`). Offering the
-            // term lets the return materialize as `Ty::Object`, so the
-            // refusal the user sees is the `I0404` the check phase reports
-            // for the read itself. The term therefore keeps the
-            // *diagnostic* right; since PR 2a of #1081 it no longer keeps
-            // the program admitted, because that helper body is refused.
+            // term lets the return materialize as `Ty::Object`. Since Part 1
+            // of #1333 the check phase admits a function body binding or
+            // returning the value, so the term keeps the program admitted.
             //
             // Only `Ty::Object` is lifted. Every other base keeps the
             // container-shaped "no unification term" default described
@@ -1851,11 +1860,15 @@ pub(crate) fn collect_expr_constraints(
             Ok(None)
         }
         HirExpr::MethodCall { base, args, .. } => {
-            collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
+            let base_term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for arg in args {
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
             }
-            Ok(None)
+            // Part 1 of #1333: `o.method(...)` on a concrete `object`
+            // receiver answers `object`, on the `AttrGet` and `Subscript`
+            // arms' own reasoning above; the three arms change together.
+            Ok(object_lift::method_call_on_object(base_term.as_ref()))
         }
         // Issue #1188: this solver never picks a reading and never rejects.
         // An admitted container reading is collected exactly as the
@@ -1943,11 +1956,10 @@ pub(crate) fn collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
             }
-            // #1343: a set comprehension's container is a fresh term with a
-            // `set[int]` default unless its element is already `int`, so a
-            // declared `set[R]` it meets is not a false `T0022`. The element
-            // is the last body expression (`body_exprs` puts the condition
-            // first).
+            // A set comprehension's container term is chosen by
+            // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
+            // rule. The element is the last body expression (`body_exprs`
+            // puts the condition first).
             if let CompElt::Set(_) = comp.elt {
                 return Ok(Some(set_comp::set_comp_container(
                     elt_term, parents, concrete, deferred,
@@ -2198,10 +2210,11 @@ fn bind_comp_loop_var(
 /// container type as its term (#1254). Before this, the solver bound no term
 /// for `target` at all, so any later read of it in a module that also holds
 /// an unannotated private helper (the only case the solver runs for) failed
-/// with a spurious `T0021` "not bound before this use". The container type
-/// is exact: the check phase's element gate (D-119) admits only
-/// `list[int]`, `set[int]` and `dict[str, int]` -- for a set comprehension,
-/// a term defaulted to `set[int]` (#1343, [`set_comp::set_comp_container`]).
+/// with a spurious `T0021` "not bound before this use". The container term
+/// is the one the comprehension's own arm produced: see
+/// [`crate::comprehension::comp_container_ty`] for the element gate the
+/// check phase applies and [`set_comp::set_comp_container`] for a set
+/// comprehension's term.
 fn bind_comp_target(env: &mut ConstraintEnvironment<'_, '_>, target: &str, container: TypeTerm) {
     env.defs_rebound.remove(target);
     env.maybe_bindings.remove(target);

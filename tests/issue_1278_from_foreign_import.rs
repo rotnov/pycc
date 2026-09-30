@@ -132,16 +132,22 @@ fn the_shapes_outside_this_channel_keep_their_c0001() {
 }
 
 /// The bound name is an opaque object like any other foreign binding: a
-/// function body may read it (#1316) but not bind it to a local, and a read
-/// above the import is unbound.
+/// function body may read it (#1316) and, since Part 1 of #1333, bind it to
+/// a local, while a module-level read above the import is unbound.
 #[test]
 fn the_bound_name_follows_the_foreign_object_rules() {
-    assert_one_error(
-        "from_foreign_fn_bind",
+    let dir = ScratchDir::new("from_foreign_fn_bind").expect("scratch");
+    let output = check_with(
+        &dir,
         "from itertools import product\n\n\ndef f() -> None:\n    print(str(product))\n    p = product\n",
         &[],
-        "I0404",
-        "binding a CPython object to a name",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
     );
     assert_one_error(
         "from_foreign_early_read",

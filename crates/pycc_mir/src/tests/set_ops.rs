@@ -248,3 +248,61 @@ fn add_on_a_non_set_is_an_internal_error() {
     };
     build(&module);
 }
+
+/// Both set-comprehension forms over a `set[R]` carry the same element ops
+/// as a literal of `R` (#1344), so codegen inserts through D-255's
+/// hash-once, identity-then-`__eq__` probe.
+#[test]
+fn a_set_comprehension_of_instances_carries_the_element_ops() {
+    let mut module = module(Some(Ty::Int), true);
+    let Some(HirItem::Function { body, .. }) = module.items.last_mut() else {
+        panic!("expected `f` last");
+    };
+    body.truncate(1);
+    let v = || HirExpr::Name(s("v"));
+    body.push(HirStmt::SetCompAssign {
+        target: s("t"),
+        var: s("v"),
+        iter: pycc_hir::CompIter::Name(s("s")),
+        cond: None,
+        elt: Box::new(v()),
+    });
+    body.push(HirStmt::ExprStmt(HirExpr::Comprehension(Box::new(
+        pycc_hir::HirComprehension {
+            var: s("v"),
+            iter: pycc_hir::CompIter::Name(s("s")),
+            cond: None,
+            elt: pycc_hir::CompElt::Set(v()),
+        },
+    ))));
+    let mir = build(&module);
+    let body = f_body(&mir);
+    let MirStmt::Assign {
+        value: MirExpr::SetLiteral { ops: literal, .. },
+        ..
+    } = &body[0]
+    else {
+        panic!("expected the set literal, got {:?}", body[0]);
+    };
+    assert!(literal.is_some());
+    let MirStmt::SetCompAssign { ops, var_ty, .. } = &body[1] else {
+        panic!(
+            "expected the set comprehension statement, got {:?}",
+            body[1]
+        );
+    };
+    assert_eq!(ops, literal);
+    assert_eq!(*var_ty, r_ty());
+    let MirStmt::ExprStmt(expr @ MirExpr::Comprehension(comp)) = &body[2] else {
+        panic!(
+            "expected the set comprehension expression, got {:?}",
+            body[2]
+        );
+    };
+    let MirCompElt::Set(elt, expr_ops) = &comp.elt else {
+        panic!("expected a set element, got {:?}", comp.elt);
+    };
+    assert_eq!(expr_ops, literal);
+    assert_eq!(elt.ty(), r_ty());
+    assert_eq!(expr.ty(), Ty::Set(Box::new(r_ty())));
+}

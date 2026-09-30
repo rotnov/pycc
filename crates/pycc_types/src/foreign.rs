@@ -44,28 +44,34 @@
 //! * a module body, where a read placed *above* the `import` is an
 //!   ordinary unbound-name `T0021` -- see [`bind_foreign_objects_at`] --
 //!   and a failed operation stops the module exec;
-//! * a function body, method body or unannotated helper, for a name in
-//!   [`Environment::foreign_globals`] -- a module-level foreign import no
-//!   local shadows (#1316). D-041 checks a body against the module
+//! * a function body, method body or unannotated helper, for any
+//!   definitely-bound `Ty::Object` name: a module-level foreign import
+//!   (#1316), a module-level name a `x = <object>` statement bound (#1325),
+//!   a function local, or an unannotated helper's solver-inferred `object`
+//!   parameter (Part 1 of #1333). D-041 checks a body against the module
 //!   environment as it stands after all top-level code, so it cannot see
-//!   whether the call site precedes the `import`; `pycc_codegen` answers
-//!   that read at run time with the `NameError` CPython raises, and
-//!   bridges a failed operation into pycc's pending exception so the
-//!   body's own `try` can catch it (`pycc_codegen`'s `foreign_fail.rs`).
+//!   whether the call site precedes the module-level binding;
+//!   `pycc_codegen` answers that read at run time with the `NameError`
+//!   CPython raises, and bridges a failed operation into pycc's pending
+//!   exception so the body's own `try` can catch it (`pycc_codegen`'s
+//!   `foreign_fail.rs`).
 //!
-//! Any other `Ty::Object` name in a function body -- an unannotated
-//! parameter inferred as `object` from a module-level call site, or a
-//! module-level name a `x = <object>` statement bound (#1325) -- stays
-//! refused by [`reject_object_read`], and so do the three shapes that would
-//! let a function hold an object beyond one expression: binding it
-//! (`check_assignment`), returning it, and passing it to a pycc-compiled
-//! callable ([`reject_object_arguments`]). All three are #1333's.
+//! **Part 1 of #1333 admitted holding an object beyond one expression in a
+//! function body**: binding it to a local (`check_assignment`), returning
+//! it, and passing it to an ordinary pycc-compiled function. No reference
+//! is released on scope exit -- the #1092 leak-only rule extends to function
+//! locals unchanged (`docs/RUNTIME.md`). Passing one to a *generic* function
+//! stays refused ([`reject_object_arguments`]), and so does a `for` over an
+//! object inside a function body (Part 2 of #1333, #1363). An unannotated
+//! helper's parameter used as a method-call base or a callee is still a
+//! solver variable when its body is walked, so it reports `T0021` (Part 3 of
+//! #1333, #1364).
 //!
-//! **#1325 admitted binding an object to a name in a module body.**
-//! `check_assignment`'s guard now refuses only inside a function body; at
+//! **#1325 admitted binding an object to a name in a module body.** At
 //! module scope `x = product("ab")` stores the new reference into an
 //! ordinary module global that never releases it (a rebinding leaks the old
-//! reference, #1092). `for t in x:` over such a name is the bare-name form
+//! reference, #1092); Part 1 of #1333 removed `check_assignment`'s
+//! remaining function-body refusal. `for t in x:` over such a name is the bare-name form
 //! of `HirStmt::ForObject`: `check_stmt`'s `ForList` arm routes a
 //! definitely-bound `object` name to the same checks ([`for_loop`]).
 //!
@@ -121,10 +127,9 @@
 //!
 //! Only the **load** is admitted. `o[k] = v` stays refused: it is a
 //! different HIR shape, which `pycc_hir` rejects with `C0001` ("only
-//! assigning to a bare-name subscript target") before this crate sees it,
-//! and `check_assignment`'s own `reject_object_operand` guard keeps
-//! `x = o[k]` an `I0404` inside a function body (a module body admits it
-//! since #1325). A *slice* (`o[a:b]`) is a third shape
+//! assigning to a bare-name subscript target") before this crate sees it.
+//! `x = o[k]` is admitted in a module body since #1325 and in a function
+//! body since Part 1 of #1333. A *slice* (`o[a:b]`) is a third shape
 //! again and keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The positional
 //! bound is inherited unchanged.
 //!
@@ -212,8 +217,8 @@
 //! after `from itertools import product`, or a call of a `for` loop target
 //! bound to an object). `expr::infer_expr_in`'s
 //! `HirExpr::Call` arm answers [`Ty::Object`] for a callee bound to
-//! [`Ty::Object`] in a module body -- and, since #1316, for a
-//! module-level foreign import called from a function body -- under the
+//! [`Ty::Object`] in a module body -- and, since #1316 and Part 1 of #1333,
+//! in a function body too -- under the
 //! same positional-scalar
 //! argument rule as a method call ([`check_object_call_args`]); the
 //! constraint solver's own `Call` arm answers the same term. Part 2 kept
@@ -224,18 +229,12 @@
 //! every other object operation uses: uncatchable in a module body
 //! (#1096), catchable in a function body (#1316).
 //!
-//! [`reject_object_read`] serves the three sites that key on a *named*
-//! binding rather than on a consumed value:
-//!
-//! 1. `lookup_bound_name` (D-105's `ForList`/`ListAppend` HIR shape carries
-//!    its list as a plain `String`, so it never becomes a `HirExpr::Name`),
-//! 2. `expr::infer_expr_in`'s `HirExpr::Call` arm inside a function body,
-//!    where a call of a function-local `object` value (anything but a name
-//!    in [`Environment::foreign_globals`]) is refused for the reason the
-//!    in-function read below is and would otherwise report the generic
-//!    `non_callable_binding` `T0021`,
-//! 3. the in-function read above, which is the one site that keys on
-//!    *position* as well as on the type.
+//! [`reject_object_read`] serves the one site that keys on a *named*
+//! binding rather than on a consumed value: `lookup_bound_name` (D-105's
+//! `ForList`/`ListAppend` HIR shape carries its list as a plain `String`, so
+//! it never becomes a `HirExpr::Name`). Part 1 of #1333 removed the other
+//! two -- the in-function read and the in-function call of an `object`
+//! value -- because both are admitted now.
 
 use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
@@ -283,7 +282,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              scalar-argument method calls and direct calls, `len`, truth \
              testing, a \
              scalar-key subscript load, `for` iteration, binding the \
-             value to a module-level name, printing it and f-string \
+             value to a name, returning it from and passing it to a pycc \
+             function, printing it and f-string \
              interpolation, the `float`, \
              `bool`, `int` and `str` conversions and an annotated \
              module-level assignment to a fixed-arity all-`float` `tuple` \
@@ -318,10 +318,8 @@ pub(crate) fn check_object_call_args(arg_tys: &[Ty], what: &str) -> Result<(), D
 
 /// `Err(I0404)` when `ty` is the opaque object type, `Ok(())` otherwise.
 ///
-/// The guard for the three sites that key on a *named* binding rather than
-/// on a consumed value -- `lookup_bound_name`, the `HirExpr::Call`
-/// value-binding gate inside a function body, and the in-function-body
-/// read (module doc). A
+/// The guard for the one site that keys on a *named* binding rather than
+/// on a consumed value -- `lookup_bound_name` (module doc). A
 /// consuming site calls [`object_operation_unsupported`] directly instead,
 /// because it knows the operation and its operand has no name.
 pub(crate) fn reject_object_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> {
@@ -336,9 +334,9 @@ pub(crate) fn reject_object_read(name: &str, ty: &Ty) -> Result<(), Diagnostic> 
 /// `Err(I0404)` when `ty` is the opaque object type, naming `operation`.
 ///
 /// The consumer-side counterpart of [`reject_object_read`]: one helper so
-/// the three remaining consuming sites -- `check_assignment`
-/// (`lib.rs`), `check_match` (`lib.rs`) and `check_isinstance`
-/// (`class.rs`) -- cannot drift into three spellings of the same rule.
+/// the remaining consuming sites -- `check_match` (`lib.rs`),
+/// `check_isinstance` (`class.rs`) and [`reject_object_arguments`] --
+/// cannot drift into several spellings of the same rule.
 ///
 /// Part 3 of #1026 (PR 3a of #1082) removed the largest group of callers:
 /// the ten `if`/`while`/comprehension-guard condition sites, which refused
@@ -351,33 +349,26 @@ pub(crate) fn reject_object_operand(ty: &Ty, operation: &str) -> Result<(), Diag
     Ok(())
 }
 
-/// Refuses a CPython object as an argument to a pycc-compiled callable --
-/// a function, method, constructor or generic function (#1316).
+/// Refuses a CPython object as an argument to a generic function (#1316).
 ///
-/// Context-free on purpose: `object` is unspellable in an annotation
-/// (D-137's amendment), so the only parameter that could accept one is an
-/// unannotated private helper's, inferred as `object` from this very call
-/// site, and the callee could then only read it as a function-local
-/// `object` -- #1333's territory (#1325 admitted the binding at module
-/// scope only). Before #1316 no type-layer rule refused
-/// the module-level shape either, and `pycc_codegen` aborted on it with an
-/// internal error instead of a diagnostic.
-///
-/// A generic function calls this over every argument before
-/// substitution; an ordinary function applies [`PASSING_TO_A_FUNCTION`]
-/// per argument after its own assignability check instead, so a declared
-/// parameter keeps its `T0021` mismatch. A method or constructor needs
-/// neither: its parameters are declared, or refused as uninferable, so the
-/// ordinary mismatch already refuses an `object` argument.
+/// A generic function calls this over every argument before substitution:
+/// monomorphization only instantiates `int`, `float`, `bool` or `str`, so no
+/// instance could take the object. Since Part 1 of #1333 an *ordinary*
+/// function admits one -- the only parameter that can accept it is an
+/// unannotated private helper's solver-inferred `object` parameter, because
+/// `object` is unspellable in an annotation (D-137's amendment) -- and a
+/// method or constructor needs no check: its parameters are declared, or
+/// refused as uninferable, so the ordinary mismatch already refuses an
+/// `object` argument.
 pub(crate) fn reject_object_arguments(arg_tys: &[Ty]) -> Result<(), Diagnostic> {
     arg_tys
         .iter()
         .try_for_each(|ty| reject_object_operand(ty, PASSING_TO_A_FUNCTION))
 }
 
-/// The `I0404` operation phrase for a CPython object passed to a
-/// pycc-compiled callable (see [`reject_object_arguments`]).
-pub(crate) const PASSING_TO_A_FUNCTION: &str = "passing a CPython object to a function";
+/// The `I0404` operation phrase for a CPython object passed to a generic
+/// function (see [`reject_object_arguments`]).
+pub(crate) const PASSING_TO_A_FUNCTION: &str = "passing a CPython object to a generic function";
 
 /// The local names a module's import table binds to a CPython object, in
 /// source order.
@@ -470,6 +461,8 @@ pub(crate) mod for_loop;
 mod binding_tests;
 #[cfg(test)]
 mod call_tests;
+#[cfg(test)]
+mod function_local_tests;
 #[cfg(test)]
 mod in_function_tests;
 #[cfg(test)]

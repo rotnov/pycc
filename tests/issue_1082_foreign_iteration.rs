@@ -129,8 +129,9 @@ fn the_deferred_iterable_shapes_keep_their_own_refusals() {
 /// *maybe* bound once the loop ends.
 ///
 /// #1316 admits reading a foreign name inside a function body, but not
-/// iterating it: the loop target would bind a function-local `object`,
-/// which is #1333's scope. And a loop that runs zero times never writes
+/// iterating it. Part 1 of #1333 admits a function-local `object`
+/// binding, but a function-body `for` over an object is Part 2 (#1363),
+/// so the loop stays refused there. And a loop that runs zero times never writes
 /// its variable's slot, so a read after the loop is `T0041` rather than a
 /// load of whatever the slot happened to hold.
 #[test]
