@@ -234,6 +234,7 @@ fn every_condition_position_site_reaches_the_shim_helper() {
         }),
         ("setcomp", |test| {
             vec![MirStmt::SetCompAssign {
+                ops: None,
                 target: "ys".to_string(),
                 var: "i".to_string(),
                 var_ty: Ty::Int,

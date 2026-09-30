@@ -2664,6 +2664,7 @@ fn check_function_in(
     // the buffer-egress admission in `check_stmt_in_function`'s
     // `HirStmt::Return` arm; see `crate::buffer::buffer_return_inside_finally`.
     env.returns_inside_finally = pycc_hir::body_returns_inside_finally(body);
+    env.return_inferred = *return_ty == Ty::Infer;
     env.own_type_param = generic_type_param_name(params, return_ty).ok().flatten();
     // #433: extract the class name from a mangled `<ClassName>.<method>`
     // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next
@@ -2986,6 +2987,15 @@ fn check_stmt_in_function(
                 "returning a CPython object from a function",
             )?;
             if !class::is_assignable_env(env, &actual, &return_ty) {
+                // #1344: an inferred `set[int]` return the solver could not
+                // widen to the `set[C]` the body builds is a compiler limit,
+                // not a user error.
+                if env.return_inferred
+                    && let Some(diag) =
+                        crate::comprehension::inferred_set_return_limit(&return_ty, &actual)
+                {
+                    return Err(diag);
+                }
                 // #380 (PR-20): if the mismatch involves a protocol,
                 // produce a detailed T0046 conformance error.
                 let diag =

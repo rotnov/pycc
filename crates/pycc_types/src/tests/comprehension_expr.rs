@@ -62,7 +62,7 @@ fn an_expression_comprehension_applies_the_display_element_gates() {
         ),
         (
             "print(len({1.5 for i in range(3)}))\n",
-            "set comprehension codegen only supports `set[int]` (D-122), got a comprehension producing `set[float]`",
+            "set comprehension codegen only supports `set[int]` or a set of a user-class instance (D-122, D-255), got a comprehension producing `set[float]`",
         ),
         (
             "print(len({i: i for i in range(3)}))\n",

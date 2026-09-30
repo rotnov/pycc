@@ -143,6 +143,7 @@ fn a_range_sourced_set_comprehension_lowers_to_comp_source_range_with_var_ty_int
     assert_eq!(
         mir.items[0],
         MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+            ops: None,
             target: "y".to_string(),
             var: "i".to_string(),
             var_ty: Ty::Int,
@@ -187,6 +188,7 @@ fn a_bare_name_set_sourced_set_comprehension_resolves_comp_source_set() {
     assert_eq!(
         mir.items[1],
         MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+            ops: None,
             target: "y".to_string(),
             var: "v".to_string(),
             var_ty: Ty::Int,
@@ -384,6 +386,14 @@ fn expression_set_and_dict_comprehensions_over_a_dict_bind_the_key_type() {
         panic!("expected an expression statement, got {:?}", mir.items[2]);
     };
     assert_eq!(set_mir.ty(), Ty::Set(Box::new(Ty::Int)));
+    // An `int` element needs no user element ops (#1344).
+    let MirExpr::Comprehension(set_comp) = set_mir else {
+        panic!("expected a comprehension, got {set_mir:?}");
+    };
+    assert!(
+        matches!(set_comp.elt, MirCompElt::Set(_, None)),
+        "{set_comp:?}"
+    );
     assert_eq!(dict_mir.ty(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     let MirExpr::Comprehension(dict_comp) = dict_mir else {
         panic!("expected a comprehension, got {dict_mir:?}");

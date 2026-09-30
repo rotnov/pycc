@@ -11470,6 +11470,7 @@ fn a_range_sourced_set_comprehension_with_a_filter_only_keeps_matching_elements(
     let mir = MirModule {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "evens".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11530,6 +11531,7 @@ fn a_list_sourced_set_comprehension_with_no_filter_deduplicates_repeated_element
                 ]),
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11587,6 +11589,7 @@ fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pr
                 },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "x".to_string(),
                 var_ty: Ty::Int,
@@ -11653,6 +11656,7 @@ fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_us
                 },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "s".to_string(),
                 var: "i".to_string(),
                 var_ty: Ty::Int,
@@ -11719,6 +11723,7 @@ fn a_dict_sourced_set_comprehension_binds_its_key_without_crashing() {
                 ]),
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                ops: None,
                 target: "zs".to_string(),
                 var: "k".to_string(),
                 var_ty: Ty::Str,
