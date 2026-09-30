@@ -539,17 +539,26 @@ CPython's order:
 3. **Namespace.** A slot whose name is also bound in the class body (a class
    variable, a method, `__module__`, `__slots__`, or `__doc__` when the class
    has a docstring) is `C0001` quoting CPython's `ValueError: '<name>' in
-   __slots__ conflicts with class variable`. A class variable of the same name
-   on a base does not conflict.
+   __slots__ conflicts with class variable`.
 4. **Dunder names.** Any other slot named `__x__` (`__hash__`, `__eq__`,
    `__len__`, `__str__`, `__doc__` without a docstring, `__qualname__`, ...)
-   is `C0001` "not supported yet", at the `__slots__` binding. CPython
-   installs a member descriptor under that name, and the instance protocols
-   find it instead of the inherited behaviour: a `__hash__` slot makes the
-   class unhashable (`TypeError: unhashable type`), and a `__str__` slot makes
-   `str(c)` raise `AttributeError`. pycc does not model that shadowing. A
-   private `__x` name is not a dunder and stays admitted.
-5. **Stores.** When every class in the MRO binds `__slots__`, the instance
+   is `C0001` "not supported yet", at the `__slots__` binding. CPython gives
+   many `__x__` names a special meaning, and a slot of such a name changes
+   the class's behaviour (a `__hash__` slot makes the class unhashable,
+   `TypeError: unhashable type`). pycc does not model which names do, so every
+   dunder entry is refused. A private `__x` name is not a dunder and stays
+   admitted.
+5. **Inherited names.** A slot whose name an ancestor binds at class level (a
+   class variable, a method, a static or class method, a property) is `C0001`
+   "not supported yet", at the `__slots__` binding. So is a slot named after
+   an attribute of a builtin exception base (`args`, `with_traceback`,
+   `add_note`, `errno`, `strerror`, `filename`, `filename2`,
+   `characters_written`, and the exception-group names). CPython accepts the
+   class, but the slot's member descriptor shadows the inherited binding, so
+   reading the unset slot raises `AttributeError` where pycc would find the
+   inherited value. An ancestor's instance attribute does not conflict, and
+   re-declaring an ancestor's own slot is admitted.
+6. **Stores.** When every class in the MRO binds `__slots__`, the instance
    has no `__dict__`, so a store `self.<attr> = ...` to a name no MRO class
    declares is `T0044`, at the store, quoting CPython 3.13's `AttributeError`
    wording. If any MRO class lacks `__slots__`, stores are not checked, as in

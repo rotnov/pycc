@@ -303,9 +303,9 @@ fn a_value_less_annotation_and_implicit_names_do_not_conflict() {
 
 fn dunder(slot: &str) -> String {
     format!(
-        "a `__slots__` entry named `{slot}` is not supported yet -- CPython installs a member \
-         descriptor under that name which takes part in the instance protocols (a `__hash__` \
-         slot makes the class unhashable), and pycc does not model it"
+        "a `__slots__` entry named `{slot}` is not supported yet -- CPython gives many `__x__` \
+         names a special meaning (a `__hash__` slot makes the class unhashable), and pycc does \
+         not model which, so every dunder entry is refused"
     )
 }
 
@@ -340,10 +340,102 @@ fn is_dunder_needs_a_non_empty_middle() {
     assert!(!is_dunder("a__"));
 }
 
+fn inherited(slot: &str, class: &str, ancestor: &str, mangled: &str) -> String {
+    format!(
+        "the `__slots__` entry `{slot}` of class `{class}` is not supported yet -- `{ancestor}` \
+         binds `{mangled}` at class level, and CPython's member descriptor for the slot shadows \
+         the inherited `{ancestor}.{mangled}`, so reading the unset slot raises `AttributeError` \
+         where pycc would find the inherited binding"
+    )
+}
+
 #[test]
-fn an_inherited_class_variable_does_not_conflict() {
-    let source = "class B:\n    a = 1\n\n\nclass C(B):\n    __slots__ = ('a',)\n";
-    assert_eq!(slots_of(source, "C"), names(&["a"]));
+fn a_name_an_ancestor_binds_at_class_level_is_refused_at_the_binding() {
+    for (base, slot) in [
+        (
+            "    a = 1
+",
+            "a",
+        ),
+        (
+            "    def a(self) -> int:
+        return 1
+",
+            "a",
+        ),
+        (
+            "    @staticmethod
+    def a() -> int:
+        return 1
+",
+            "a",
+        ),
+        (
+            "    @classmethod
+    def a(cls) -> int:
+        return 1
+",
+            "a",
+        ),
+        (
+            "    @property
+    def a(self) -> int:
+        return 1
+",
+            "a",
+        ),
+    ] {
+        let source = format!(
+            "class A:\n{base}\n\nclass B(A):\n    pass\n\n\nclass C(B):\n    __slots__ = \
+             ('{slot}',)\n"
+        );
+        let diagnostic = error(&source);
+        assert_eq!(diagnostic.code, "C0001", "{base}");
+        assert_eq!(
+            diagnostic.message,
+            inherited(slot, "C", "A", slot),
+            "{base}"
+        );
+        let start = source.find("__slots__").expect("binding") as u32;
+        let end = source.rfind(")\n").expect("binding end") as u32 + 1;
+        assert_eq!(diagnostic.span, Some(Span::new(start, end)), "{base}");
+    }
+}
+
+#[test]
+fn an_inherited_private_name_is_compared_after_mangling() {
+    // `B.__p` is `_B__p`: a `C` slot spelled `_B__p` shadows it, while
+    // `C`'s own `__p` is `_C__p` and does not.
+    let base = "class B:\n    __p = 1\n\n\nclass C(B):\n    __slots__ = ";
+    assert_eq!(
+        c0001(&format!("{base}('_B__p',)\n")),
+        inherited("_B__p", "C", "B", "_B__p")
+    );
+    assert_eq!(slots_of(&format!("{base}('__p',)\n"), "C"), names(&["__p"]));
+}
+
+#[test]
+fn an_ancestor_instance_attribute_or_slot_does_not_conflict() {
+    let instance = "class B:\n    def __init__(self) -> None:\n        self.a = 1\n\n\nclass \
+                    C(B):\n    __slots__ = ('a',)\n";
+    assert_eq!(slots_of(instance, "C"), names(&["a"]));
+    let redeclared = "class B:\n    __slots__ = ('a',)\n\n\nclass C(B):\n    __slots__ = \
+                      ('a',)\n";
+    assert_eq!(slots_of(redeclared, "C"), names(&["a"]));
+}
+
+#[test]
+fn a_builtin_exception_attribute_slot_is_refused() {
+    for (base, slot) in [
+        ("Exception", "args"),
+        ("ValueError", "with_traceback"),
+        ("OSError", "errno"),
+    ] {
+        let source = format!("class C({base}):\n    __slots__ = ('{slot}',)\n");
+        assert_eq!(c0001(&source), inherited(slot, "C", base, slot), "{base}");
+    }
+    let admitted = "class C(Exception):\n    __slots__ = ('code',)\n";
+    assert_eq!(slots_of(admitted, "C"), names(&["code"]));
 }
 
 // -- 4.3: an undeclared store ----------------------------------------------
@@ -626,6 +718,18 @@ fn an_imported_slotted_base_admits_a_declared_store() {
          None:\n        self.x = 1\n",
     )
     .expect("a store to the imported base's slot lowers");
+}
+
+#[test]
+fn an_imported_base_class_variable_is_refused() {
+    let dependency = lower("class A:\n    x = 1\n").expect("dependency lowers");
+    let diagnostic = lower_with_dependency(
+        &dependency,
+        "from dep import A\n\n\nclass C(A):\n    __slots__ = ('x',)\n",
+    )
+    .expect_err("inherited class variable");
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, inherited("x", "C", "A", "x"));
 }
 
 #[test]

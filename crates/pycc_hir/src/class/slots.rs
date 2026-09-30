@@ -19,7 +19,10 @@
 //!    strings, each an identifier;
 //! 3. refuses a slot that collides with a name in the class's own namespace
 //!    ([`check_namespace_conflicts`]);
-//! 4. when every class in the MRO binds `__slots__` and none is an exception
+//! 4. refuses every dunder-named slot ([`check_dunder_slots`]);
+//! 5. refuses a slot whose name an ancestor binds at class level, which the
+//!    slot's member descriptor would shadow ([`check_inherited_class_names`]);
+//! 6. when every class in the MRO binds `__slots__` and none is an exception
 //!    class, refuses an instance attribute `__init__` stores outside the
 //!    union of the MRO's slot lists ([`check_undeclared_stores`]).
 //!
@@ -101,6 +104,7 @@ pub(crate) fn check_class(
     };
     check_namespace_conflicts(def, &slots)?;
     check_dunder_slots(&slots, binding_range)?;
+    check_inherited_class_names(def, class_def, &slots, binding_range, &ancestors)?;
     check_undeclared_stores(def, class_def, &slots, binding_range, &ancestors)?;
     Ok(Some(slots))
 }
@@ -141,6 +145,36 @@ impl Ancestors<'_> {
     /// deriving from another user exception counts too).
     fn is_exception_class(&self, name: &str) -> bool {
         self.mro(name).iter().any(|entry| self.row(entry).is_none())
+    }
+
+    /// Whether user class `name` binds `mangled` at class level: a class
+    /// variable or any other class-body binding
+    /// ([`super::declares_name_outside_class_attrs`]). The HIR keeps names
+    /// as written, so each source spelling that mangles (by `name`) to
+    /// `mangled` is looked up: `mangled` itself, and the private `__x` that
+    /// `_<name>__x` came from.
+    fn binds_at_class_level(&self, name: &str, mangled: &str) -> bool {
+        let class_def = self
+            .defined_classes
+            .iter()
+            .find(|(class_name, _)| class_name == name)
+            .map(|(_, class_def)| class_def)
+            .expect("every class in an MRO is in the class table");
+        let prefix = format!("_{}", name.trim_start_matches('_'));
+        let private = mangled
+            .strip_prefix(prefix.as_str())
+            .filter(|rest| rest.starts_with("__"));
+        [Some(mangled), private]
+            .into_iter()
+            .flatten()
+            .filter(|spelling| mangle(spelling, name) == mangled)
+            .any(|spelling| {
+                class_def
+                    .class_attrs
+                    .iter()
+                    .any(|(bound, _, _)| bound == spelling)
+                    || super::declares_name_outside_class_attrs(class_def, spelling)
+            })
     }
 }
 
@@ -366,9 +400,10 @@ fn is_ascii_identifier(entry: &str) -> bool {
 /// properties, static and class methods, `__init__`) and every assigned
 /// name (including a D-256 foreign static) -- plus `__doc__` when the body
 /// opens with a docstring, and the implicit `__module__` and `__slots__`.
-/// Value-less annotations bind nothing; inherited class variables,
-/// `__qualname__` and `__classcell__` are not in the dictionary CPython
-/// checks.
+/// Value-less annotations bind nothing; `__qualname__`, `__classcell__` and
+/// an ancestor's class-level names are not in the dictionary CPython checks
+/// (an inherited name is refused separately, by
+/// [`check_inherited_class_names`]).
 fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(), Diagnostic> {
     let class_name = def.name.as_str();
     let mut namespace: Vec<String> = vec!["__module__".to_string(), "__slots__".to_string()];
@@ -407,26 +442,89 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
     Ok(())
 }
 
-/// Refuses a dunder-named slot (`__hash__`, `__eq__`, `__len__`, ...).
-/// CPython installs a member descriptor under that name in the class
-/// dictionary, and the instance protocols then find it instead of the
-/// inherited or synthesized behaviour -- a `__hash__` slot makes the class
-/// unhashable, a `__str__` slot makes `str(c)` raise `AttributeError`. pycc
-/// does not model that shadowing. It runs after the namespace check, so a
-/// dunder slot that is also bound in the body keeps CPython's own
-/// `ValueError`; a private `__x` name is not a dunder and stays admitted.
+/// Refuses every dunder-named slot (`__hash__`, `__eq__`, `__len__`, ...).
+/// CPython gives many `__x__` names a special meaning, and a slot of such a
+/// name changes the class's behaviour (a `__hash__` slot makes the class
+/// unhashable); pycc does not model which names do, so every dunder entry is
+/// refused. It runs after the namespace check, so a dunder slot that is also
+/// bound in the body keeps CPython's own `ValueError`; a private `__x` name
+/// is not a dunder and stays admitted.
 fn check_dunder_slots(slots: &[String], binding_range: Span) -> Result<(), Diagnostic> {
     let Some(slot) = slots.iter().find(|slot| is_dunder(slot)) else {
         return Ok(());
     };
     Err(unsupported(
         format!(
-            "a `__slots__` entry named `{slot}` is not supported yet -- CPython installs a \
-             member descriptor under that name which takes part in the instance protocols \
-             (a `__hash__` slot makes the class unhashable), and pycc does not model it"
+            "a `__slots__` entry named `{slot}` is not supported yet -- CPython gives many \
+             `__x__` names a special meaning (a `__hash__` slot makes the class unhashable), \
+             and pycc does not model which, so every dunder entry is refused"
         ),
         binding_range.start..binding_range.end,
     ))
+}
+
+/// The non-dunder class-level names of the builtin exception classes pycc
+/// seeds (`BaseException`'s, `OSError`'s and `BaseExceptionGroup`'s), from
+/// `dir()` on CPython 3.14; 3.9 lacks `add_note` and the group names, which
+/// only makes the list conservative there.
+const BUILTIN_EXCEPTION_CLASS_NAMES: [&str; 13] = [
+    "add_note",
+    "args",
+    "characters_written",
+    "derive",
+    "errno",
+    "exceptions",
+    "filename",
+    "filename2",
+    "message",
+    "split",
+    "strerror",
+    "subgroup",
+    "with_traceback",
+];
+
+/// Refuses a slot whose (mangled) name an ancestor binds at class level --
+/// a class variable, a method, a static or class method, a property, or a
+/// builtin exception class's attribute (`args`, `with_traceback`, ...).
+/// CPython accepts the class, but the slot's member descriptor in the
+/// class's own dictionary shadows the inherited `B.<name>`, so reading the
+/// never-assigned slot raises `AttributeError` where pycc would find the
+/// inherited binding. An ancestor's instance attribute is no class-level
+/// binding and does not conflict, and neither does an ancestor's own slot
+/// of the same name (re-declaring a base slot): an ancestor cannot both
+/// slot a name and bind it at class level, since [`check_namespace_conflicts`]
+/// refused that ancestor already.
+fn check_inherited_class_names(
+    def: &StmtClassDef,
+    class_def: &HirClassDef,
+    slots: &[String],
+    binding_range: Span,
+    ancestors: &Ancestors<'_>,
+) -> Result<(), Diagnostic> {
+    let class_name = def.name.as_str();
+    for slot in slots {
+        let mangled = mangle(slot, class_name);
+        for ancestor in class_def.mro.iter().skip(1) {
+            let binds = if ancestors.row(ancestor).is_none() {
+                BUILTIN_EXCEPTION_CLASS_NAMES.contains(&mangled.as_str())
+            } else {
+                ancestors.binds_at_class_level(ancestor, &mangled)
+            };
+            if binds {
+                return Err(unsupported(
+                    format!(
+                        "the `__slots__` entry `{slot}` of class `{class_name}` is not supported \
+                         yet -- `{ancestor}` binds `{mangled}` at class level, and CPython's \
+                         member descriptor for the slot shadows the inherited \
+                         `{ancestor}.{mangled}`, so reading the unset slot raises \
+                         `AttributeError` where pycc would find the inherited binding"
+                    ),
+                    binding_range.start..binding_range.end,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether `name` is a dunder: `__x__` with a non-empty `x`.

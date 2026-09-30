@@ -241,8 +241,8 @@ fn a_read_of_a_never_assigned_slot_is_t0044() {
     );
 }
 
-/// A dunder-named slot is refused: CPython installs a member descriptor
-/// under the name, and a `__hash__` slot makes the class unhashable.
+/// A dunder-named slot is refused: CPython gives many `__x__` names a
+/// special meaning, and a `__hash__` slot makes the class unhashable.
 #[test]
 fn a_dunder_slot_is_c0001() {
     let source = "class C:\n    __slots__ = ('a', '__hash__')\n\n    def __init__(self) -> None:\n        \
@@ -258,4 +258,20 @@ fn a_dunder_slot_is_c0001() {
         source,
         "TypeError: unhashable type: 'C'",
     );
+}
+
+/// An own slot shadowing an inherited class variable: CPython accepts the
+/// class, but the unset slot's member descriptor hides `B.a`, so the read
+/// raises `AttributeError` (3.9 words it `AttributeError: a`, 3.13+ with the
+/// object's type) where pycc would have found `B.a`.
+#[test]
+fn a_slot_shadowing_an_inherited_class_variable_is_c0001() {
+    let source = "class B:\n    a = 1\n\n\nclass C(B):\n    __slots__ = ('a',)\n\n\nprint(C().a)\n";
+    let text = fails("e2e_1368_inherited", source);
+    assert!(text.contains("error[C0001]"), "{text}");
+    assert!(
+        text.contains("the `__slots__` entry `a` of class `C` is not supported yet"),
+        "{text}"
+    );
+    cpython_rejects("e2e_1368_inherited_cpython", source, "AttributeError");
 }
