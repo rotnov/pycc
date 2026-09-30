@@ -875,7 +875,8 @@ for the out-of-package configuration: the same `--ext
 --foreign-relative-imports` build of the subject copied alone goes from four
 errors to three (rows 1 and 4), while both in-tree counts are unchanged.
 #1378 then clears row 1: the same build of the subject copied alone reports
-two errors (row 4). Everything under them was measured by probes. A probe is a copy with the
+two errors (row 4), while the whole-package copy reports 14 (the `lark/utils.py`
+table below; the skeleton tree was not re-measured). Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled
@@ -998,6 +999,7 @@ edit was made:
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
 | `C0001` attribute-form base class | 1 | #886 (v0.4) |
+| `T0034` `list[tuple[int, int]]` is not compiled yet (line 365, `List[Tuple[int, int]]`; masked by the failed line-5 import before #1378) | 1 | none filed: the D-105 container element gate, in a closure module outside D-257's subject-module scope |
 | `C0001` class inherits from builtin type `frozenset` | 1 | #1319 (Part 2 of #1283) carries support; #1318 (Part 1) only made the message honest -- it now names the builtin type instead of calling `frozenset` an unknown class -- and #1283 stays open. `fzset` is defined only in `lark/utils.py` (line 319) and used in `lark/parsers/grammar_analysis.py` and `lark/parsers/lalr_analysis.py`. The same `pycc build <module> -o <out>.abi3.so --ext` command (release builds of `main` at `d59fde73` and of the #1318 change on top of it, on the unedited subject module from the local 1.3.1 archive) reports 13 errors at both; only this line's text differs. #1319 carries the support in three parts: Part 1 ([#1326](https://github.com/rotnov/pycc/issues/1326)) ships the native `frozenset[int]` value type the subclass will build on, and leaves this line's diagnostic unchanged -- the same command still reports 13 errors, all in `lark/utils.py` |
 | `C0001` class attribute initialised with a non-literal | 0 (was 1) | #1284. Part 1 ([#1345](https://github.com/rotnov/pycc/issues/1345), [D-256](./decisions/D-256-admit-a-foreign-callable-staticmethod-class.md)) admits `exists = staticmethod(os.path.exists)` (line 309), pinned by `tests/issue_1284_foreign_static_class_attr.rs`. The same `pycc build <module> -o <out> --ext` command, run on `lark/utils.py` with a debug build of the #1345 branch at `2e9e0a46` (on top of `main` at `f2d2ae42`), still reports 13 errors. The line-309 error is gone, and a `C0001` `` `**kwargs` is not supported yet `` at line 312:13 of the same class now takes its place: it was masked because the attribute failed first |
 | `C0001` `**kwargs` is not supported yet (line 312, in the class whose attribute #1345 admits) | 1 | #1193 (Part 6 of #884) |
