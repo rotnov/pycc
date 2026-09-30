@@ -140,6 +140,7 @@ fn a_foreign_from_import_carries_its_from_import_into_the_item() {
         name: "chain".to_string(),
         fromlist: vec!["product".to_string(), "chain".to_string()],
         index: 1,
+        level: 0,
     };
     let hir = module_with_stmts(
         1,
