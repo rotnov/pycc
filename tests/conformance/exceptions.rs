@@ -176,6 +176,30 @@ fn builtin_import_error_matches_cpython_3_14_7_byte_for_byte() {
     );
 }
 
+// #1369: the `assert` statement and the `AssertionError` it raises. A
+// passing `assert` does nothing; a failing one raises its message, or an
+// empty one; the message is evaluated only on failure; a non-`bool` test
+// uses `if` truthiness; a walrus in the test binds a name usable afterwards;
+// a user `AssertionError` subclass is caught by `except AssertionError:`;
+// and a passing module-level `assert` falls through.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.7) oracle on PATH"]
+fn assert_statement_matches_cpython_3_14_7_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assert_statement.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("assert_statement_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.7 disagree on tests/fixtures/assert_statement.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("assert_statement_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.7 disagree on tests/fixtures/assert_statement.py"
+    );
+}
+
 // #1298: a caught exception's message survives any number of renderings.
 // `print(e)` and f-string interpolation each borrow the message the
 // exception owns, and a raise whose message is a variable, an attribute or

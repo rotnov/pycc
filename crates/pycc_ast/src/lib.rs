@@ -15,10 +15,10 @@ pub use ruff_python_ast::{
     InterpolatedStringLiteralElement, MatchCase, ModModule, Number, Operator, ParameterWithDefault,
     Parameters, Pattern, PatternArguments, PatternKeyword, PatternMatchAs, PatternMatchClass,
     PatternMatchMapping, PatternMatchOr, PatternMatchSequence, PatternMatchSingleton,
-    PatternMatchStar, PatternMatchValue, Singleton, Stmt, StmtAnnAssign, StmtAssign, StmtAugAssign,
-    StmtClassDef, StmtDelete, StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtImportFrom,
-    StmtMatch, StmtRaise, StmtReturn, StmtTry, StmtTypeAlias, StmtWhile, TypeParam, TypeParams,
-    UnaryOp,
+    PatternMatchStar, PatternMatchValue, Singleton, Stmt, StmtAnnAssign, StmtAssert, StmtAssign,
+    StmtAugAssign, StmtClassDef, StmtDelete, StmtExpr, StmtFor, StmtFunctionDef, StmtIf,
+    StmtImportFrom, StmtMatch, StmtPass, StmtRaise, StmtReturn, StmtTry, StmtTypeAlias, StmtWhile,
+    StringLiteral, StringLiteralFlags, StringLiteralValue, TypeParam, TypeParams, UnaryOp,
 };
 
 /// Returns the byte range of a statement without exposing the upstream

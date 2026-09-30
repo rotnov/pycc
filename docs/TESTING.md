@@ -13,7 +13,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
 | 6. Corpus (OSS projects) *(planned)* | nightly CI *(not yet live)* | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
-| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs`, `tests/issue_1142_ext_buffer_store.rs` and `tests/issue_1292_import_error.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
+| 8. Hosted `ext` boundary | `tests/issue_1067_neg004_ext_conformance.rs`, plus the other end-to-end `ext` harnesses (`tests/issue_1036_ext_wiring.rs`, `tests/issue_1048_ext_scalars.rs`, `tests/issue_1049_ext_str.rs`, `tests/issue_1050_ext_tuple.rs`, `tests/issue_1063_overflow_error.rs`, `tests/issue_1066_ext_user_exceptions.rs`, `tests/issue_1112_ext_memoryview.rs`, `tests/issue_1113_ext_buffer_index.rs`, `tests/issue_1114_numpy_oracle.rs`, `tests/issue_1142_ext_buffer_store.rs`, `tests/issue_1292_import_error.rs` and `tests/issue_1369_assert.rs`) | a built CPython extension module refuses every non-conforming host call exactly as [D-244](./decisions/D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 7 states, on an installed interpreter |
 | 9. Embedded executable | `tests/issue_1223_embedded_executable.rs`, `tests/issue_1242_locked_closure.rs`, `tests/issue_1286_windows_embedded_executable.rs`, `tests/issue_1296_windows_locked_closure.rs`, plus the unit tests under `src/embed/` and `src/lock/build_tests.rs` | a plain build of a standard-library-only program bundles CPython 3.14 and matches CPython 3.14.7 byte-for-byte, relocated and under a shadowing `PYTHONPATH`; on a Windows host, the stub `OUT` plus the program DLL match CPython 3.14.7 for standard-library programs (D-253) and for a pure-Python locked closure (#1296); a third-party root runs from its `pycc.lock` closure in `OUT.pycc/closure/`; every refusal keeps its reason ([D-248](./decisions/D-248-embedded-executable-artifact-layout-and-bridge-split.md), [D-249](./decisions/D-249-pycc-lock-schema-environment-resolver-and-update-command.md)) |
 | 10. Interop policy | `tests/issue_1224_interop_policy.rs`, the `i0402_*` snapshots under `tests/diagnostics/`, plus `src/interop_policy/tests.rs` | `--interop-policy`, `--pure` and `[interop]` admit or reject each CPython-backed root alike in `check`, `build` and `run`, a rejection is `I0402` on every host and precedes any `I0403` (D-128) |
 
@@ -886,15 +886,16 @@ whole past the first layer, so this list is a **lower bound**.
 | `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
-| `assert` (82, 86, 104) | `C0001` statement kind | [#1369](https://github.com/rotnov/pycc/issues/1369) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Sixteen rows remain. Two of them are boundary questions inside the subject
+Fifteen rows remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
-no longer counts as falling off the function's end.
+no longer counts as falling off the function's end. The `assert` row was
+removed by [#1369](https://github.com/rotnov/pycc/issues/1369): the statement
+now compiles.
 
 Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
 binding a CPython object to a function-local name. Its isolated probe, a method

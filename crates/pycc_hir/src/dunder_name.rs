@@ -365,7 +365,10 @@ pub(crate) fn binds_dunder_name_at_module_scope(
 /// `import typing as t` folds here and not there. That module does not compile
 /// either way -- the guard is a read of an unbound name, a `NameError` under
 /// CPython and a diagnostic here -- so the seed never becomes observable.
-fn scan_imports(module: &ModModule, driver_imports: &[ImportBinding]) -> Vec<ImportBinding> {
+pub(crate) fn scan_imports(
+    module: &ModModule,
+    driver_imports: &[ImportBinding],
+) -> Vec<ImportBinding> {
     let mut imports = driver_imports.to_vec();
     for stmt in &module.body {
         let Stmt::Import(import) = stmt else {
@@ -388,7 +391,8 @@ fn scan_imports(module: &ModModule, driver_imports: &[ImportBinding]) -> Vec<Imp
 
 /// Walk exactly the parts of an `if`/`elif`/`else` chain that lowering keeps.
 ///
-/// Both scans route every [`Stmt::If`] through this instead of
+/// Both scans (and #1369's `exception::first_assert_statement_range`) route
+/// every [`Stmt::If`] through this instead of
 /// [`visitor::walk_stmt`], and neither may count what the `TYPE_CHECKING`
 /// fold discards. A guarded body never executes: it binds nothing and reads
 /// nothing, so a `__name__ = 7` there is not a user binding that could collide
@@ -411,7 +415,7 @@ fn scan_imports(module: &ModModule, driver_imports: &[ImportBinding]) -> Vec<Imp
 /// the qualified `typing.TYPE_CHECKING` resolve with no import binding at all;
 /// an aliased `import typing as t` then `t.TYPE_CHECKING` needs the binding,
 /// which [`scan_imports`] supplies.
-fn walk_live_if<'a, V: Visitor<'a>>(
+pub(crate) fn walk_live_if<'a, V: Visitor<'a>>(
     visitor: &mut V,
     if_stmt: &'a pycc_ast::StmtIf,
     imports: &[ImportBinding],

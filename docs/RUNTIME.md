@@ -135,6 +135,65 @@ raisable and caught by `except ImportError:`. `ImportError`'s `name`/`path`
 keyword arguments and attributes are not supported (a keyword argument is
 `C0001`).
 
+**[#1369](https://github.com/rotnov/pycc/issues/1369)** appends
+`AssertionError` (28) after `ModuleNotFoundError` by the same mechanism, so
+every earlier tag keeps its value. It carries CPython's real parentage
+(`AssertionError` -> `Exception`), so this is again **not** a D-202-style
+simplification: `except AssertionError:` and `except Exception:` both catch
+it, and it resolves through its fixed class-table tag.
+
+**The `assert` statement ([#1369](https://github.com/rotnov/pycc/issues/1369)).**
+`assert test, msg` is lowered in HIR (`crates/pycc_hir/src/stmt/assert_stmt.rs`)
+as the AST rewrite `if test: pass` / `else: raise AssertionError(msg)`, and
+`assert test` as the same with the message `""`. The rewrite goes back through
+`lower_stmt`, so it has CPython's semantics by construction: `test` is
+evaluated once with exactly an `if` test's truthiness, and `msg` only when the
+test fails. The contract and its deliberate edges:
+
+- **Always kept.** pycc has no `-O` flag, so no `assert` is ever stripped:
+  `__debug__` is effectively always `True` for a compiled program. An `assert`
+  under `if TYPE_CHECKING:` is dead code like the rest of that body; `assert
+  TYPE_CHECKING` itself always fails, as it does under CPython at runtime.
+- **The message.** A failing `assert` with no message prints a bare
+  `AssertionError` when uncaught and has an empty `str(e)`, as in CPython. The
+  runtime omits the `: ` separator for *any* empty message, so `raise
+  ValueError("")` now prints a bare `ValueError` exactly as CPython does. The
+  message must be a `str`, the same `T0021` every builtin exception
+  constructor applies; CPython's implicit `str()` of another type is not
+  modelled. In `ext` mode the host sees `AssertionError('')` with `args ==
+  ('',)` for a message-less failure where CPython's own has `args == ()`;
+  type, `str(e)` and `repr(str(e))` agree.
+- **Walrus.** A walrus in the test is admitted, as in an `if` test, and the
+  name it binds is usable after the `assert`. A walrus in the message is
+  refused with the same `C0001` a walrus in a `raise` operand gets.
+- **Narrowing.** `assert x is not None` narrows nothing; see
+  `docs/TYPE_SYSTEM.md`'s "Narrowing & flow typing" section.
+- **Name resolution.** CPython's `assert` always raises the builtin class
+  (`LOAD_ASSERTION_ERROR`), whereas the rewrite names `AssertionError` by
+  spelling. The two never diverge silently: every program in which the
+  spelling could reach something other than the builtin class is refused
+  before code generation. Two refusals are dedicated to it. A module whose
+  top level binds a builtin exception name by `class`, `def` or assignment
+  withholds every builtin class, so it gets one `C0001` "an `assert`
+  statement needs the builtin `AssertionError`, which is unavailable because
+  this module binds the builtin exception name `X` at top level"; an
+  `assert` only in an `if`/`elif TYPE_CHECKING:` body, which the #790 fold
+  discards, is never lowered and so is not refused (the `else` arm is live
+  and is). A function-local binding of `AssertionError` (a parameter, an assignment)
+  cannot hold a class, so the rewritten call gets `T0021` "name
+  `AssertionError` is bound to a non-callable value". Other binding forms are
+  refused by diagnostics that already existed. For example, a module-level
+  `for AssertionError in ...` or `except ... as AssertionError` gets `T0041`
+  "may not be bound on every path"; `import os as AssertionError` and
+  `from math import sqrt as AssertionError` get `C0001`. All of these reject
+  valid Python; none miscompiles it.
+- **Placement.** An `assert` in a class body stays `C0001`, like every other
+  non-definition class-body statement.
+
+`tests/issue_1369_assert.rs` covers each of these end to end, and
+`tests/fixtures/assert_statement.py` is the byte-for-byte CPython 3.14.7
+conformance fixture.
+
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
 class whose MRO reaches a builtin exception class is raisable and catchable.
 HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=254`
@@ -144,7 +203,7 @@ the builtins keep the tags below that and either carry `None` (the flat seven,
 resolved by name) or a fixed tag by array index (every builtin past them; the
 groups are always reconstructed with that fixed tag regardless of the raised
 object's dynamic subclass -- see D-202). A module declaring more than
-`MAX_USER_EXCEPTION_CLASSES` (currently 227) such classes is rejected with
+`MAX_USER_EXCEPTION_CLASSES` (currently 226) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -186,7 +245,8 @@ apart and would reinterpret a `PyInstanceObj*` as a `PyExceptionObj*`.
 **Class-table presence (Part 1 of #541, D-188; widened to all 23 names by
 Part 2 of #543, #739; to all 25 by Part 3 of #382, #542, D-202; to all 26 by
 Part A of #1038, #1063, which appended `OverflowError`; to all 28 by #1292,
-which appended `ImportError`/`ModuleNotFoundError`).** HIR
+which appended `ImportError`/`ModuleNotFoundError`; to all 29 by #1369, which
+appended `AssertionError`).** HIR
 lowering synthesizes a
 real `HirClassDef` for each builtin exception name, seeded before any
 user statement of a module that references one of them is lowered, so they
@@ -257,7 +317,8 @@ Because `ImportError` and `ModuleNotFoundError` joined the seeded set in
 #1292, a module that declares its own `class ImportError(Exception)` now
 withholds seeding and fails with `C0001` "class `ImportError` inherits from
 unknown class `Exception`", exactly as a user `class OverflowError(Exception)`
-already did.
+already did. #1369 extends the same refusal to a user
+`class AssertionError(Exception)`.
 
 **Absence is not shadowing -- but that statement now splits by name-set (Part
 2 of #543, #739).** For the original flat seven, absence from the class table
@@ -963,7 +1024,7 @@ table above, and leaves CPython's error indicator clear. The pycc class is
 chosen by `isinstance` against a fixed list, most specific first:
 `ModuleNotFoundError` before `ImportError`, `BrokenPipeError` before
 `ConnectionError` and every `OSError` subclass before `OSError`, then
-`OverflowError`, `ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
+`OverflowError`, `AssertionError` (#1369), `ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
 `TypeError` and `RuntimeError`, and anything else that is an `Exception` —
 `AttributeError`, `NameError` and the rest, which pycc cannot name in an
 `except` clause (`T0021`) — as `Exception`. A `BaseException` that is not an

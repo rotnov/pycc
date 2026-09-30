@@ -384,9 +384,9 @@ static int pycc_ext_bridge_store(PyObject *exc, unsigned char tag, const char *c
  * `BUILTIN_EXCEPTION_CLASSES` array order, which this file cannot see from
  * C: tags 0..=6 are the flat seven, which `pycc_rt::exception` also names as
  * `EXCEPTION_TYPE_*` constants, and tags 7..=22 are the PEP 3151 `OSError`
- * family; 25..=27 are `OverflowError`, `ImportError` and
- * `ModuleNotFoundError`, and 23..=24 (the PEP 654 groups) fall to
- * `default:`. Two tests are this switch's drift guard -- `ext_bridge`'s
+ * family; 25..=28 are `OverflowError`, `ImportError`,
+ * `ModuleNotFoundError` and `AssertionError`, and 23..=24 (the PEP 654
+ * groups) fall to `default:`. Two tests are this switch's drift guard -- `ext_bridge`'s
  * `exception_type_tags_match_the_c_shims_hardcoded_switch` for the seven
  * constants, and `ext_build_tests`'
  * `every_exception_tag_the_c_shim_switches_on_still_names_that_class` for
@@ -505,6 +505,11 @@ static int pycc_ext_raise_pending(void)
     case 27:
         exc_type = PyExc_ModuleNotFoundError;
         break;
+    /* #1369: `AssertionError`, appended past `ModuleNotFoundError` the same
+     * way -- the class a failing `assert` statement raises. */
+    case 28:
+        exc_type = PyExc_AssertionError;
+        break;
     /* #1316: a bridged non-`Exception` `BaseException`. Only a fallback --
      * the bridge-table lookup above normally re-raises the original -- and
      * a named label so the decimal-tag drift guard does not read it as a
@@ -516,7 +521,7 @@ static int pycc_ext_raise_pending(void)
         /*
          * Tag 0 is `Exception`. So, deliberately, are the two remaining
          * builtin tags -- a hole in the otherwise contiguous switched range,
-         * since tags 25..=27 above sit past them -- and every user-defined class:
+         * since tags 25..=28 above sit past them -- and every user-defined class:
          *
          *  - tags 23..=24 are `BaseExceptionGroup`/`ExceptionGroup`. The C
          *    API exposes no `PyExc_ExceptionGroup` at all, and the type it
@@ -1394,6 +1399,7 @@ static unsigned char pycc_ext_obj_error_tag(PyObject *exc, const char **class_na
     PYCC_EXT_OBJ_TAG(PyExc_ModuleNotFoundError, 27, "ModuleNotFoundError")
     PYCC_EXT_OBJ_TAG(PyExc_ImportError, 26, "ImportError")
     PYCC_EXT_OBJ_TAG(PyExc_OverflowError, 25, "OverflowError")
+    PYCC_EXT_OBJ_TAG(PyExc_AssertionError, 28, "AssertionError")
     PYCC_EXT_OBJ_TAG(PyExc_BrokenPipeError, 19, "BrokenPipeError")
     PYCC_EXT_OBJ_TAG(PyExc_ConnectionAbortedError, 20, "ConnectionAbortedError")
     PYCC_EXT_OBJ_TAG(PyExc_ConnectionRefusedError, 21, "ConnectionRefusedError")

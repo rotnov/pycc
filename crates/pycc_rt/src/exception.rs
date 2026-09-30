@@ -17,8 +17,9 @@ pub const EXCEPTION_TYPE_INDEX_ERROR: u8 = 4;
 pub const EXCEPTION_TYPE_ZERO_DIV_ERROR: u8 = 5;
 pub const EXCEPTION_TYPE_RUNTIME_ERROR: u8 = 6;
 /// Part A of #1038 (#1063): `OverflowError`'s tag. Every other builtin tag
-/// past the flat seven (7..=24, and 26..=27 for
-/// `ImportError`/`ModuleNotFoundError`, #1292) belongs to a class this
+/// past the flat seven (7..=24, 26..=27 for
+/// `ImportError`/`ModuleNotFoundError`, #1292, and 28 for `AssertionError`,
+/// #1369) belongs to a class this
 /// crate never raises by name, so it declares no constants for them. This
 /// crate has no `[dependencies]` and cannot see
 /// `pycc_hir::BUILTIN_EXCEPTION_CLASSES`, so the literal is hand-copied and
@@ -530,10 +531,18 @@ fn render_single_exception(exc: &PyExceptionObj) -> String {
         out.push_str(&format!("  File \"<compiled>\", in {frame}\n"));
     }
     let type_name = exception_type_name(exc);
-    if exc.message.is_null() {
+    // CPython's traceback prints a bare `ValueError` for `raise
+    // ValueError("")` and a bare `AssertionError` for a failing `assert`
+    // with no message (#1369, which lowers that to `AssertionError("")`):
+    // the `: ` separator is omitted whenever `str(exc)` is empty.
+    let msg_bytes: &[u8] = if exc.message.is_null() {
+        &[]
+    } else {
+        unsafe { (*exc.message).bytes() }
+    };
+    if msg_bytes.is_empty() {
         out.push_str(type_name);
     } else {
-        let msg_bytes = unsafe { (*exc.message).bytes() };
         out.push_str(&format!(
             "{type_name}: {}",
             String::from_utf8_lossy(msg_bytes)
@@ -827,6 +836,14 @@ mod tests {
             "ValueError".len(),
             std::ptr::null_mut(),
         );
+        assert_eq!(render_single_exception(unsafe { &*obj }), "ValueError");
+    }
+
+    /// #1369: an empty message renders like no message at all, matching
+    /// CPython's bare `ValueError` for `raise ValueError("")`.
+    #[test]
+    fn render_single_exception_with_an_empty_message_omits_the_colon() {
+        let obj = alloc_named(EXCEPTION_TYPE_VALUE_ERROR, "ValueError", "");
         assert_eq!(render_single_exception(unsafe { &*obj }), "ValueError");
     }
 

@@ -64,7 +64,8 @@ fn every_non_root_builtin_exception_inherits_init_from_its_mro() {
 }
 
 /// Part 2 of #543 (#739): every class whose real parent is `Exception`
-/// directly (the original flat six plus `OSError` and `ImportError`) still gets the
+/// directly (the original flat six plus `OSError`, `ImportError` and
+/// `AssertionError`) still gets the
 /// historical two-entry MRO.
 #[test]
 fn direct_children_of_exception_get_a_two_entry_mro() {
@@ -78,6 +79,7 @@ fn direct_children_of_exception_get_a_two_entry_mro() {
         "RuntimeError",
         "OSError",
         "ImportError",
+        "AssertionError",
     ] {
         let (_, def) = defs
             .iter()
@@ -408,10 +410,146 @@ fn every_spelling_that_can_reach_the_class_table_counts_as_a_reference() {
     }
 }
 
+/// #1369: an `assert` raises `AssertionError` without spelling any
+/// builtin exception name, so it must count as a reference on its own --
+/// at module level and nested in a function -- or its lowering's
+/// `AssertionError(...)` call would find no class.
+#[test]
+fn an_assert_statement_alone_counts_as_a_reference() {
+    assert!(references("assert True\n"));
+    assert!(references(
+        "def f(x: int) -> None:\n    assert x > 0, \"x\"\n"
+    ));
+    assert!(!references("def f(x: int) -> None:\n    print(x)\n"));
+    assert!(lower("def f(x: int) -> None:\n    assert x > 0\n").seeded_builtin_exception_classes);
+}
+
+/// #1369: the scan `module::lower_module` uses to refuse an `assert` in a
+/// module whose shadow gate withheld the builtin classes finds the first
+/// `assert` at any depth, spanned on the statement.
+#[test]
+fn the_first_assert_statement_is_found_at_any_depth() {
+    use crate::exception::first_assert_statement_range;
+    assert_eq!(
+        first_assert_statement_range(&parse("x = 1\n").body, &[]),
+        None
+    );
+    assert_eq!(
+        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n").body, &[]),
+        Some(6..14)
+    );
+    assert_eq!(
+        first_assert_statement_range(
+            &parse("def f() -> None:\n    if 1:\n        assert 0\n").body,
+            &[]
+        ),
+        Some(35..43)
+    );
+}
+
+/// #1369: a class body reaches `lower_stmt` only through its methods, so an
+/// `assert` directly in a class body (or in a nested class, which the class
+/// lowering refuses too) is not scanned, while one inside a method is.
+#[test]
+fn the_assert_scan_enters_a_class_only_through_its_methods() {
+    use crate::exception::first_assert_statement_range;
+    for refused_by_the_class in [
+        "class A:\n    assert True\n",
+        "class A:\n    class B:\n        def m(self) -> None:\n            assert True\n",
+    ] {
+        assert_eq!(
+            first_assert_statement_range(&parse(refused_by_the_class).body, &[]),
+            None,
+            "{refused_by_the_class}"
+        );
+    }
+    assert_eq!(
+        first_assert_statement_range(
+            &parse("class A:\n    x = 1\n\n    def m(self) -> None:\n        assert True\n").body,
+            &[]
+        ),
+        Some(53..64)
+    );
+}
+
+/// #1369: an `assert` the #790 `TYPE_CHECKING` fold discards is never
+/// lowered, so the scan skips it -- in an `if` and in an `elif` arm, the
+/// bare and the qualified spelling -- while every live arm of the same
+/// chain, the `else` included, is still scanned.
+#[test]
+fn the_assert_scan_skips_only_the_bodies_the_type_checking_fold_discards() {
+    use crate::exception::first_assert_statement_range;
+    for dead in [
+        "if TYPE_CHECKING:\n    assert 0\n",
+        "if typing.TYPE_CHECKING:\n    assert 0\n",
+        "if x:\n    pass\nelif TYPE_CHECKING:\n    assert 0\n",
+        "def f() -> None:\n    if TYPE_CHECKING:\n        assert 0\n",
+    ] {
+        assert_eq!(
+            first_assert_statement_range(&parse(dead).body, &[]),
+            None,
+            "{dead}"
+        );
+    }
+    for live in [
+        "if TYPE_CHECKING:\n    pass\nelse:\n    assert 0\n",
+        "if TYPE_CHECKING:\n    pass\nelif x:\n    assert 0\n",
+        "if x:\n    assert 0\n",
+    ] {
+        assert!(
+            first_assert_statement_range(&parse(live).body, &[]).is_some(),
+            "{live}"
+        );
+    }
+}
+
+/// #1369: a module that binds a builtin exception name at top level
+/// withholds every builtin class, so an `assert` in it is refused once, on
+/// the first `assert`, naming the binding responsible.
+#[test]
+fn an_assert_in_a_module_that_withheld_seeding_is_refused() {
+    let source = "class ValueError:\n    pass\n\n\ndef f() -> None:\n    assert 1\n";
+    let diagnostic = lower_checked(&parse(source)).expect_err("must be refused");
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains(
+            "an `assert` statement needs the builtin `AssertionError`, which is unavailable \
+             because this module binds the builtin exception name `ValueError` at top level"
+        ),
+        "{}",
+        diagnostic.message
+    );
+}
+
+/// #1369 under #867/D-233's per-item collection: the refusal is the
+/// diagnostic of the first top-level item containing an `assert`, emitted in
+/// source order, so an earlier independently failing item still reports
+/// first (D-217 rule 2) and the loop keeps going -- a later `assert` adds no
+/// second refusal.
+#[test]
+fn the_assert_refusal_is_collected_in_source_order_after_an_earlier_failure() {
+    let source = "x = 1 @ 2\nclass ValueError:\n    pass\n\n\ndef f() -> None:\n    \
+                  assert True\n\n\ndef g() -> None:\n    assert False\n";
+    let diagnostics = crate::lower_all(&parse(source)).expect_err("must be refused");
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(diagnostics.len(), 2, "{messages:?}");
+    assert!(messages[0].contains("binary operator `@`"), "{messages:?}");
+    assert!(
+        messages[1].contains("an `assert` statement needs the builtin `AssertionError`"),
+        "{messages:?}"
+    );
+    assert_eq!(
+        diagnostics[1].span,
+        Some(pycc_diag::Span::new(60, 71)),
+        "spanned on `f`'s `assert`"
+    );
+}
+
 #[test]
 fn a_bare_shadowing_class_is_not_seeded_on_the_shadow_gate_alone() {
     // The shadow gate alone decides this source: the reference scan never
-    // sees it. `ReferenceScan` overrides only `visit_expr`, and this source
+    // sees it. `ReferenceScan` counts an `Expr::Name` (or an `assert`,
+    // #1369, which this source does not contain), and this source
     // contains no `Expr::Name` at all -- a `ClassDef`'s own name is a bare
     // `Identifier` on the statement node, and the `-> None` annotation
     // parses as `Expr::NoneLiteral`, not as a name.
