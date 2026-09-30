@@ -883,15 +883,18 @@ whole past the first layer, so this list is a **lower bound**.
 | `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
 | the subject's `-> Any` (67) | `T0002` (inferred) | #1285 |
 | function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
-| `while True:` left only by `return` (74) | `T0022` (false positive) | [#1370](https://github.com/rotnov/pycc/issues/1370) |
 | `action, arg = states[state][token.type]` (77) | `C0001` tuple target | #891 |
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `assert` (82, 86, 104) | `C0001` statement kind | [#1369](https://github.com/rotnov/pycc/issues/1369) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Seventeen rows remain. Two of them are boundary questions inside the subject
+Sixteen rows remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
+A seventeenth row, the false `T0022` on the `while True:` loop at line 74
+(left only by `return` or `raise`), was removed by
+[#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
+no longer counts as falling off the function's end.
 
 Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
 binding a CPython object to a function-local name. Its isolated probe, a method
