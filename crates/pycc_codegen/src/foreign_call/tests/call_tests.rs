@@ -16,6 +16,7 @@ fn direct_call(args: Vec<MirExpr>) -> Vec<MirItem> {
                 name: "product".to_string(),
                 fromlist: vec!["product".to_string()],
                 index: 0,
+                level: 0,
             }),
         },
         MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ObjCall {

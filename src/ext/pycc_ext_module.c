@@ -195,6 +195,28 @@ typedef struct {
 
 static Py_tss_t *pycc_ext_bridge_key = NULL;
 
+/*
+ * #1366: the module object whose `Py_mod_exec` body is running on this
+ * thread, or NULL outside one. `pycc_ext_obj_import_from` reads it for a
+ * relative import, whose package CPython computes from the importing
+ * module's own globals (`__package__`, then `__spec__.parent`), exactly as
+ * `IMPORT_NAME` passes the frame's globals. Only a build under
+ * `--foreign-relative-imports` emits such an import, and only as a
+ * module-body item, which runs inside `Py_mod_exec`.
+ *
+ * Per thread, and saved and restored around each exec rather than just set
+ * and cleared, because one artifact's exec can run beneath itself: the same
+ * shared object imported under a second name (`top.pkg.m` and `m` share
+ * one dlopen handle, so one file static) or reloaded from its own body, and
+ * a second thread can import it while the first has released the GIL
+ * inside the body's own `__import__`. The key is file-static, and each
+ * artifact compiles its own copy of this shim, so another pycc artifact's
+ * exec never touches it. Created once per process next to
+ * `pycc_ext_bridge_key`, on the same never-replaced rule; the embedded
+ * launcher never emits a relative import, so it never reads it.
+ */
+static Py_tss_t *pycc_ext_exec_target_key = NULL;
+
 /* This thread's table, or NULL when it has never bridged. */
 static pycc_ext_bridge_table *pycc_ext_bridge_current(void)
 {
@@ -1238,6 +1260,17 @@ done:
  *    CPython's circular-import and stdlib-shadowing variants of the
  *    message are not reproduced; `docs/RUNTIME.md` records both.
  *
+ * `level` is `0` for an absolute import, which passes `None` as the
+ * globals. A relative one (#1366; `level` is its dot count, and `module` is
+ * the name as written after the dots, `""` for `from . import x`) is only
+ * emitted under `pycc build --ext --foreign-relative-imports`, and only as a
+ * module-body item, so it runs inside `Py_mod_exec`: it passes the executing
+ * module's own dict as the globals, which CPython's `_calc___package__`
+ * reads the package from, so a missing sibling, a climb beyond the
+ * top-level package and a top-level import with no parent package raise
+ * exactly what the `.py` form raises. Outside an exec (never emitted) it
+ * raises `SystemError` rather than resolve against the wrong package.
+ *
  * Not `static`: LLVM-generated code declares and calls it by this name
  * (`EXT_OBJ_IMPORT_FROM_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  * `module` and every `fromlist` entry are NUL-terminated UTF-8 constants
@@ -1246,8 +1279,9 @@ done:
  * same leak-only rule as `pycc_ext_obj_import`.
  */
 PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *fromlist,
-                                   long long nfrom, long long index)
+                                   long long nfrom, long long index, long long level)
 {
+    PyObject *globals = Py_None;
     PyObject *import = NULL;
     PyObject *names = NULL;
     PyObject *module = NULL;
@@ -1258,6 +1292,22 @@ PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *f
     long long i;
     int found;
 
+    if (level > 0) {
+        PyObject *target = NULL;
+
+        if (pycc_ext_exec_target_key != NULL) {
+            target = (PyObject *)PyThread_tss_get(pycc_ext_exec_target_key);
+        }
+        if (target == NULL) {
+            PyErr_SetString(PyExc_SystemError, "pycc: relative import outside Py_mod_exec");
+            return NULL;
+        }
+        /* Borrowed: the module outlives its own exec. */
+        globals = PyModule_GetDict(target);
+        if (globals == NULL) {
+            return NULL;
+        }
+    }
     found = PyDict_GetItemStringRef(PyEval_GetBuiltins(), "__import__", &import);
     if (found < 0) {
         return NULL;
@@ -1280,7 +1330,8 @@ PyObject *pycc_ext_obj_import_from(const char *module_name, const char *const *f
             goto done;
         }
     }
-    module = PyObject_CallFunction(import, "sOOOi", module_name, Py_None, Py_None, names, 0);
+    module = PyObject_CallFunction(import, "sOOOi", module_name, globals, Py_None, names,
+                                   (int)level);
     if (module == NULL) {
         goto done;
     }
@@ -2698,6 +2749,8 @@ static PyObject *pycc_ext_pack_memoryview_borrowed_slice(PyObject *owner, const 
 static int pycc_ext_exec_module(PyObject *module)
 {
     Py_ssize_t mark;
+    void *saved_target;
+    long long exec_status;
 
     /*
      * The synthesized user exception classes are created and published as
@@ -2762,6 +2815,20 @@ static int pycc_ext_exec_module(PyObject *module)
         }
         pycc_ext_bridge_key = key;
     }
+    /* #1366: the exec-target key, on the same create-once rule. */
+    if (pycc_ext_exec_target_key == NULL) {
+        Py_tss_t *key = PyThread_tss_alloc();
+        if (key == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        if (PyThread_tss_create(key) != 0) {
+            PyThread_tss_free(key);
+            PyErr_SetString(PyExc_RuntimeError, "pycc: cannot create the exec-target key");
+            return -1;
+        }
+        pycc_ext_exec_target_key = key;
+    }
     /*
      * The watermark, not a whole-table clear: when this exec runs beneath a
      * live wrapper on the same thread (a handler whose foreign helper
@@ -2769,7 +2836,21 @@ static int pycc_ext_exec_module(PyObject *module)
      * is the outermost frame the mark is 0, which empties the table.
      */
     mark = pycc_ext_bridge_mark();
-    if (pycc_ext_module_exec() != 0) {
+    /*
+     * #1366: this module is the one a relative import in its body resolves
+     * against, for exactly the duration of the body. The previous value is
+     * restored on both exits, so an exec running beneath another one on
+     * this thread (see `pycc_ext_exec_target_key`) hands the outer one's
+     * target back.
+     */
+    saved_target = PyThread_tss_get(pycc_ext_exec_target_key);
+    if (PyThread_tss_set(pycc_ext_exec_target_key, module) != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "pycc: cannot record the executing module");
+        return -1;
+    }
+    exec_status = pycc_ext_module_exec();
+    (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);
+    if (exec_status != 0) {
         /*
          * The generic `ImportError` is a last resort, not the default. A
          * failing body reports through one of two channels: `pycc_rt`'s

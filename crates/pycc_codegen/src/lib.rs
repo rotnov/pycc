@@ -87,10 +87,10 @@ use slot_bindings::collect_expr_bindings;
 use slot_bindings::{collect_module_bindings, collect_stmt_bindings};
 mod target_machine;
 pub use ext::{
-    CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_THUNK_PREFIX,
-    body_returns_buffer_slice, buffer_slice_out_names, ext_boundary_slots, ext_thunk_out_tys,
-    ext_thunk_param_tys, ext_thunk_required, ext_thunk_symbol, is_ext_exportable_name,
-    mangle_ext_name,
+    CompileOptions, EXT_MODULE_EXEC_FAILED, EXT_MODULE_EXEC_SYMBOL, EXT_OBJ_IMPORT_FROM_SYMBOL,
+    EXT_THUNK_PREFIX, body_returns_buffer_slice, buffer_slice_out_names, ext_boundary_slots,
+    ext_thunk_out_tys, ext_thunk_param_tys, ext_thunk_required, ext_thunk_symbol,
+    is_ext_exportable_name, mangle_ext_name,
 };
 use ext::{
     EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,

@@ -1483,8 +1483,11 @@ pub enum MirItem {
     ///
     /// `from` is `None` for `import X`, and for one name of a top-level
     /// `from X import a, b` (#1278) it is that binding's name, its index,
-    /// and the statement's whole fromlist, which the
+    /// the statement's whole fromlist and its relative `level`, which the
     /// `pycc_ext_obj_import_from` call passes to CPython's `__import__`.
+    /// `level` is `0` except for the entry module's relative
+    /// `from .x import a, b` under `--ext --foreign-relative-imports`
+    /// (#1366).
     ForeignImport {
         local_name: String,
         module_path: String,

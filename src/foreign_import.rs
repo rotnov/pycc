@@ -424,6 +424,7 @@ mod tests {
                 name: names[index].to_string(),
                 fromlist: names.iter().map(ToString::to_string).collect(),
                 index,
+                level: 0,
             }),
             site: pycc_hir::ForeignImportSite::Item(0),
             span,
@@ -448,6 +449,7 @@ mod tests {
                         name: "Tk".to_string(),
                         fromlist: vec!["Tk".to_string(), "Label".to_string()],
                         index: 0,
+                        level: 0,
                     }),
                     I0403Reason::ExcludedStdlibRoot
                 )

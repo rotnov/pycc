@@ -44,6 +44,7 @@ fn main() -> ExitCode {
             target,
             release,
             ext,
+            foreign_relative_imports,
             static_libpython,
             interop,
         } => {
@@ -86,6 +87,7 @@ fn main() -> ExitCode {
                 toolchain.as_ref(),
                 &embed::EmbedToolchain::from_env().with_link(link),
                 interop.into_cli(),
+                foreign_relative_imports,
             ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
@@ -378,6 +380,7 @@ fn run(path: &Path, args: &[std::ffi::OsString], interop: interop_policy::Intero
         None,
         &embed,
         interop,
+        false,
     ) {
         return code;
     }

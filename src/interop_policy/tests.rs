@@ -405,6 +405,7 @@ fn from_foreign(module: &str, names: &[&str], index: usize) -> ImportBinding {
             name: names[index].to_string(),
             fromlist: names.iter().map(ToString::to_string).collect(),
             index,
+            level: 0,
         }),
         site: pycc_hir::ForeignImportSite::Item(0),
         span: Span::new(0, 29),
