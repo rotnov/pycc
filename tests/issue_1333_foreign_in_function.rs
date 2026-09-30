@@ -247,6 +247,61 @@ fn the_shapes_outside_part_1_are_refused() {
     );
 }
 
+/// Operations on a function-local object that no Part 1 consumer admits
+/// keep an ordinary check-phase diagnostic; none of them panics.
+#[test]
+fn unadmitted_operations_on_a_function_local_object_are_diagnosed() {
+    const HEAD: &str = "import json\n\ndef f() -> None:\n    y = json.loads(\"[1]\")\n";
+    for (tag, tail, code, needle) in [
+        (
+            "obj_fn_add_int",
+            "    print(y + 1)\n",
+            "T0021",
+            "operator Add is not defined for `object` and `int`",
+        ),
+        (
+            "obj_fn_str_add",
+            "    print(\"a\" + y)\n",
+            "T0021",
+            "operator Add is not defined for `str` and `object`",
+        ),
+        (
+            "obj_fn_range",
+            "    for i in range(y):\n        pass\n",
+            "T0021",
+            "range stop expects `int`, got `object`",
+        ),
+        (
+            "obj_fn_eq",
+            "    print(y == 1)\n",
+            "T0021",
+            "cannot compare `object` and `int`",
+        ),
+        (
+            "obj_fn_in",
+            "    print(1 in y)\n",
+            "C0001",
+            "comparison operator not supported yet: In",
+        ),
+    ] {
+        assert_one_error(tag, &format!("{HEAD}{tail}"), code, needle);
+    }
+    assert_one_error(
+        "obj_fn_self_attr",
+        "import json\n\nclass C:\n    def __init__(self) -> None:\n        \
+         y = json.loads(\"[1]\")\n        self.a = y\n\nC()\n",
+        "C0001",
+        "`self.<attr> = y` must reference one of `__init__`'s own parameters",
+    );
+    assert_one_error(
+        "obj_fn_list_return",
+        "import json\n\ndef _h():\n    y = json.loads(\"[1]\")\n    return [y]\n\n\
+         print(len(_h()))\n",
+        "T0021",
+        "cannot infer return type of private helper `_h`",
+    );
+}
+
 /// Builds `body` as the extension module `module` in `dir` (the source
 /// stays at `dir/m.py`, where the oracle runs it too).
 fn build_ext(dir: &Path, module: &str, body: &str) {
@@ -440,6 +495,45 @@ fn an_embedded_build_runs_function_local_objects_like_cpython() {
     assert_ok(&oracle);
     assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
     assert_eq!(stdout_of(&embedded), SUCCESS_OUT);
+}
+
+/// A plain (embedded) build catches the `NameError` of a function-body
+/// read of an object global before its binding runs, like CPython. The
+/// handler names `Exception`, as in the `--ext` twin above: `except
+/// NameError` is not a recognized handler class in the current subset.
+#[cfg(not(windows))]
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_embedded_build_catches_an_unbound_object_global_like_cpython() {
+    let dir = ScratchDir::new("obj_fn_embedded_unbound").expect("scratch");
+    let source = write(
+        &dir,
+        "m.py",
+        "from itertools import product\n\n\
+         def _read() -> bool:\n    try:\n        return bool(P)\n    except Exception:\n        \
+         print(\"unbound\")\n        return False\n\n\
+         print(_read())\nP = product(\"ab\", \"c\")\nprint(_read())\n",
+    );
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(dir.join("app"))
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    let embedded = Command::new(dir.join("app"))
+        .output()
+        .expect("the embedded binary runs");
+    assert_ok(&embedded);
+    let oracle = host_python()
+        .arg(&source)
+        .output()
+        .expect("python3 should spawn");
+    assert_ok(&oracle);
+    let normalized = |output: &Output| stdout_of(output).replace("\r\n", "\n");
+    assert_eq!(normalized(&embedded), normalized(&oracle));
+    assert_eq!(normalized(&embedded), "unbound\nFalse\nTrue\n");
 }
 
 /// A mortal object the probe reads through a foreign module attribute; see
