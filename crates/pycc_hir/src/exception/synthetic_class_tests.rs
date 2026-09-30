@@ -410,10 +410,60 @@ fn every_spelling_that_can_reach_the_class_table_counts_as_a_reference() {
     }
 }
 
+/// #1369: an `assert` raises `AssertionError` without spelling any
+/// builtin exception name, so it must count as a reference on its own --
+/// at module level and nested in a function -- or its lowering's
+/// `AssertionError(...)` call would find no class.
+#[test]
+fn an_assert_statement_alone_counts_as_a_reference() {
+    assert!(references("assert True\n"));
+    assert!(references(
+        "def f(x: int) -> None:\n    assert x > 0, \"x\"\n"
+    ));
+    assert!(!references("def f(x: int) -> None:\n    print(x)\n"));
+    assert!(lower("def f(x: int) -> None:\n    assert x > 0\n").seeded_builtin_exception_classes);
+}
+
+/// #1369: the scan `module::lower_module` uses to refuse an `assert` in a
+/// module whose shadow gate withheld the builtin classes finds the first
+/// `assert` at any depth, spanned on the statement.
+#[test]
+fn the_first_assert_statement_is_found_at_any_depth() {
+    use crate::exception::first_assert_statement_range;
+    assert_eq!(first_assert_statement_range(&parse("x = 1\n")), None);
+    assert_eq!(
+        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n")),
+        Some(6..14)
+    );
+    assert_eq!(
+        first_assert_statement_range(&parse("def f() -> None:\n    if 1:\n        assert 0\n")),
+        Some(35..43)
+    );
+}
+
+/// #1369: a module that binds a builtin exception name at top level
+/// withholds every builtin class, so an `assert` in it is refused once, on
+/// the first `assert`, naming the binding responsible.
+#[test]
+fn an_assert_in_a_module_that_withheld_seeding_is_refused() {
+    let source = "class ValueError:\n    pass\n\n\ndef f() -> None:\n    assert 1\n";
+    let diagnostic = lower_checked(&parse(source)).expect_err("must be refused");
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains(
+            "an `assert` statement needs the builtin `AssertionError`, which is unavailable \
+             because this module binds the builtin exception name `ValueError` at top level"
+        ),
+        "{}",
+        diagnostic.message
+    );
+}
+
 #[test]
 fn a_bare_shadowing_class_is_not_seeded_on_the_shadow_gate_alone() {
     // The shadow gate alone decides this source: the reference scan never
-    // sees it. `ReferenceScan` overrides only `visit_expr`, and this source
+    // sees it. `ReferenceScan` counts an `Expr::Name` (or an `assert`,
+    // #1369, which this source does not contain), and this source
     // contains no `Expr::Name` at all -- a `ClassDef`'s own name is a bare
     // `Identifier` on the statement node, and the `-> None` annotation
     // parses as `Expr::NoneLiteral`, not as a name.

@@ -404,6 +404,10 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// construction, and keeps new upstream AST nodes covered automatically.
 /// String forward references (`x: "ValueError"`) are not scanned because
 /// `func::annotation_to_ty` does not resolve them either.
+///
+/// The one non-name reference is an `assert` statement (#1369), which
+/// raises `AssertionError` without spelling it; a `visit_stmt` override
+/// counts it and otherwise leaves the generic walk untouched.
 pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bool {
     struct ReferenceScan {
         found: bool,
@@ -423,8 +427,52 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
             }
             visitor::walk_expr(self, expr);
         }
+        // #1369: an `assert` statement raises `AssertionError` without
+        // spelling it, and its lowering names that class by spelling, so it
+        // needs the seeded definitions exactly as `raise AssertionError(..)`
+        // would.
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found {
+                return;
+            }
+            if matches!(stmt, Stmt::Assert(_)) {
+                self.found = true;
+                return;
+            }
+            visitor::walk_stmt(self, stmt);
+        }
     }
     let mut scan = ReferenceScan { found: false };
+    scan.visit_body(&module.body);
+    scan.found
+}
+
+/// The range of the first `assert` statement anywhere in `module`, nested
+/// bodies included, or `None` when it has none (#1369).
+///
+/// `module::lower_module` asks this only when
+/// [`shadowed_builtin_exception_name`] withheld the builtin classes: an
+/// `assert` needs the builtin `AssertionError`, which such a module does not
+/// have, so it is refused up front with one `C0001` naming the binding
+/// responsible rather than at each `assert` with a message about the call it
+/// was rewritten into.
+pub(crate) fn first_assert_statement_range(module: &ModModule) -> Option<std::ops::Range<u32>> {
+    struct AssertScan {
+        found: Option<std::ops::Range<u32>>,
+    }
+    impl<'a> Visitor<'a> for AssertScan {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if self.found.is_some() {
+                return;
+            }
+            if matches!(stmt, Stmt::Assert(_)) {
+                self.found = Some(pycc_ast::stmt_range(stmt));
+                return;
+            }
+            visitor::walk_stmt(self, stmt);
+        }
+    }
+    let mut scan = AssertScan { found: None };
     scan.visit_body(&module.body);
     scan.found
 }

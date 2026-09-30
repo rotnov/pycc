@@ -142,6 +142,49 @@ every earlier tag keeps its value. It carries CPython's real parentage
 simplification: `except AssertionError:` and `except Exception:` both catch
 it, and it resolves through its fixed class-table tag.
 
+**The `assert` statement ([#1369](https://github.com/rotnov/pycc/issues/1369)).**
+`assert test, msg` is lowered in HIR (`crates/pycc_hir/src/stmt/assert_stmt.rs`)
+as the AST rewrite `if test: pass` / `else: raise AssertionError(msg)`, and
+`assert test` as the same with the message `""`. The rewrite goes back through
+`lower_stmt`, so it has CPython's semantics by construction: `test` is
+evaluated once with exactly an `if` test's truthiness, and `msg` only when the
+test fails. The contract and its deliberate edges:
+
+- **Always kept.** pycc has no `-O` flag, so no `assert` is ever stripped:
+  `__debug__` is effectively always `True` for a compiled program. An `assert`
+  under `if TYPE_CHECKING:` is dead code like the rest of that body; `assert
+  TYPE_CHECKING` itself always fails, as it does under CPython at runtime.
+- **The message.** A failing `assert` with no message prints a bare
+  `AssertionError` when uncaught and has an empty `str(e)`, as in CPython. The
+  runtime omits the `: ` separator for *any* empty message, so `raise
+  ValueError("")` now prints a bare `ValueError` exactly as CPython does. The
+  message must be a `str`, the same `T0021` every builtin exception
+  constructor applies; CPython's implicit `str()` of another type is not
+  modelled. In `ext` mode the host sees `AssertionError('')` with `args ==
+  ('',)` for a message-less failure where CPython's own has `args == ()`;
+  type, `str(e)` and `repr(str(e))` agree.
+- **Walrus.** A walrus in the test is admitted, as in an `if` test, and the
+  name it binds is usable after the `assert`. A walrus in the message is
+  refused with the same `C0001` a walrus in a `raise` operand gets.
+- **Narrowing.** `assert x is not None` narrows nothing; see
+  `docs/TYPE_SYSTEM.md`'s "Narrowing & flow typing" section.
+- **Name resolution.** CPython's `assert` always raises the builtin class
+  (`LOAD_ASSERTION_ERROR`), whereas the rewrite names `AssertionError` by
+  spelling. The two never diverge silently: a module whose top level binds
+  any builtin exception name withholds every builtin class, so it is refused
+  with one `C0001` "an `assert` statement needs the builtin `AssertionError`,
+  which is unavailable because this module binds the builtin exception name
+  `X` at top level"; and a function-local binding of `AssertionError` (a
+  parameter, an assignment) cannot hold a class, so the rewritten call is
+  `T0021` "name `AssertionError` is bound to a non-callable value". Both are
+  refusals of valid Python, not miscompilations.
+- **Placement.** An `assert` in a class body stays `C0001`, like every other
+  non-definition class-body statement.
+
+`tests/issue_1369_assert.rs` covers each of these end to end, and
+`tests/fixtures/assert_statement.py` is the byte-for-byte CPython 3.14.7
+conformance fixture.
+
 **User-defined exception classes (Part 2 of #541, D-189).** A user-declared
 class whose MRO reaches a builtin exception class is raisable and catchable.
 HIR lowering assigns it a type tag from `FIRST_USER_EXCEPTION_TYPE_TAG..=254`

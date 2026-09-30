@@ -1,5 +1,11 @@
-//! End-to-end coverage for #1369: the appended `AssertionError` builtin
-//! exception class (tag 28).
+//! End-to-end coverage for #1369: the `assert` statement and the appended
+//! `AssertionError` builtin exception class (tag 28) it raises.
+//!
+//! Expected outputs are CPython 3.14.7's, checked by hand against the same
+//! sources; `tests/fixtures/assert_statement.py` is the byte-for-byte oracle
+//! comparison. An uncaught exception is compared only on its final stderr
+//! line and a non-zero exit, because pycc's traceback frames differ from
+//! CPython's by design.
 //!
 //! Everything here goes through the public `pycc` CLI, mirroring
 //! `tests/issue_1292_import_error.rs`'s harness. The whole-program tests show
@@ -7,10 +13,6 @@
 //! `builtin_exception_parent`'s new arm, MIR handler tag sets and the
 //! runtime's name-carrying `PyExceptionObj` agree on CPython's real
 //! hierarchy, `AssertionError` -> `Exception`.
-//!
-//! Every program raises with a literal message and prints each bound
-//! exception at most once, for the same pre-existing `pycc_rt_str_decref`
-//! reason `tests/issue_1292_import_error.rs` records.
 //!
 //! The `ext`-mode tests are `#[ignore]`d because they ask an installed
 //! CPython 3.13+ to import a built artifact, which is a property of the
@@ -275,4 +277,288 @@ fn a_foreign_assertion_error_is_caught_by_except_assertion_error() {
     );
     let run = run_host(&dir, "import pycc_1369_bridge as m\nprint(m.f())\n");
     assert_eq!(stdout_of(&run), "2\n");
+}
+
+// -- the `assert` statement ---------------------------------------------
+
+/// A passing `assert` does nothing; a failing one raises `AssertionError`
+/// carrying its message, or an empty one when there is none.
+#[test]
+fn a_failing_assert_raises_assertion_error_with_its_message() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_basic",
+        "def check(x: int) -> None:\n\
+         \x20   assert x > 0\n\
+         \x20   assert x > 1, \"need more than one\"\n\
+         \x20   print(\"ok\", x)\n\n\n\
+         def main() -> None:\n\
+         \x20   check(5)\n\
+         \x20   try:\n\
+         \x20       check(1)\n\
+         \x20   except AssertionError as e:\n\
+         \x20       print(f\"message [{e}]\")\n\
+         \x20   try:\n\
+         \x20       check(0)\n\
+         \x20   except Exception as e:\n\
+         \x20       print(f\"empty [{e}]\")\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "ok 5\nmessage [need more than one]\nempty []\n");
+}
+
+/// The message is evaluated only when the test fails, and the test exactly
+/// once -- CPython's order, which the `if`/`else` rewrite gives by
+/// construction.
+#[test]
+fn the_message_is_evaluated_only_on_failure() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_lazy",
+        "def note(tag: str) -> str:\n\
+         \x20   print(\"evaluated\", tag)\n\
+         \x20   return tag\n\n\n\
+         def probe() -> bool:\n\
+         \x20   print(\"tested\")\n\
+         \x20   return False\n\n\n\
+         def main() -> None:\n\
+         \x20   assert True, note(\"passing\")\n\
+         \x20   try:\n\
+         \x20       assert probe(), note(\"failing\")\n\
+         \x20   except AssertionError as e:\n\
+         \x20       print(f\"caught {e}\")\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "tested\nevaluated failing\ncaught failing\n");
+}
+
+/// The test uses `if` truthiness, so a non-`bool` test works as it does in
+/// CPython: a non-empty `str`, a non-zero `int` or `float` passes, and the
+/// empty/zero values fail.
+#[test]
+fn a_non_bool_test_uses_python_truthiness() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_truthiness",
+        "def fails(label: str, s: str, n: int, f: float) -> None:\n\
+         \x20   try:\n\
+         \x20       assert s, \"str\"\n\
+         \x20       assert n, \"int\"\n\
+         \x20       assert f, \"float\"\n\
+         \x20       print(label, \"passed\")\n\
+         \x20   except AssertionError as e:\n\
+         \x20       print(label, f\"failed on {e}\")\n\n\n\
+         def main() -> None:\n\
+         \x20   fails(\"a\", \"x\", 3, 0.5)\n\
+         \x20   fails(\"b\", \"\", 3, 0.5)\n\
+         \x20   fails(\"c\", \"x\", 0, 0.5)\n\
+         \x20   fails(\"d\", \"x\", 3, 0.0)\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(
+        stdout,
+        "a passed\nb failed on str\nc failed on int\nd failed on float\n"
+    );
+}
+
+/// An uncaught failing `assert` with no message ends in a bare
+/// `AssertionError` line, exactly CPython's; with a message, in
+/// `AssertionError: <message>`. Both at module level.
+#[test]
+fn an_uncaught_module_level_assert_reports_like_cpython() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_uncaught_bare",
+        "assert 1 < 2\nprint(\"before\")\nassert 2 < 1\nprint(\"after\")\n",
+    );
+    assert!(!ok, "the program should have exited non-zero");
+    assert_eq!(stdout, "before\n");
+    assert_eq!(stderr.lines().last(), Some("AssertionError"), "{stderr}");
+
+    let (ok, _stdout, stderr) =
+        build_and_run("assert_uncaught_msg", "assert 2 < 1, \"two is not less\"\n");
+    assert!(!ok, "the program should have exited non-zero");
+    assert_eq!(
+        stderr.lines().last(),
+        Some("AssertionError: two is not less"),
+        "{stderr}"
+    );
+}
+
+/// The runtime half of the no-message case: CPython prints a bare
+/// `ValueError` for `raise ValueError("")`, so an empty message drops the
+/// `: ` separator for every class, not just `AssertionError`.
+#[test]
+fn an_uncaught_empty_message_prints_the_bare_class_name() {
+    let (ok, _stdout, stderr) = build_and_run("empty_value_error", "raise ValueError(\"\")\n");
+    assert!(!ok, "the program should have exited non-zero");
+    assert_eq!(stderr.lines().last(), Some("ValueError"), "{stderr}");
+}
+
+/// A walrus in the test is admitted, as it is in an `if` test, and the name
+/// it binds is usable after the `assert`.
+#[test]
+fn a_walrus_in_the_test_binds_a_name_usable_afterwards() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_walrus_test",
+        "def main() -> None:\n\
+         \x20   assert (y := 4) > 3\n\
+         \x20   print(y + 1)\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "5\n");
+}
+
+/// A walrus in the message is refused exactly as it is in a `raise`
+/// operand, which the message becomes.
+#[test]
+fn a_walrus_in_the_message_is_refused() {
+    let text = check_error(
+        "assert_walrus_msg",
+        "def main() -> None:\n    assert False, (m := \"x\")\n\n\nmain()\n",
+    );
+    assert!(text.contains("C0001"), "unexpected diagnostic: {text}");
+    assert!(
+        text.contains("a walrus assignment (`:=`) is only supported in an `if`/`while`"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+/// `AssertionError` takes a `str` message, like every builtin exception
+/// pycc constructs, so a non-`str` message is `T0021` rather than an
+/// implicit `str()` conversion.
+#[test]
+fn a_non_str_message_is_rejected() {
+    let text = check_error(
+        "assert_int_msg",
+        "def main() -> None:\n    assert False, 3\n\n\nmain()\n",
+    );
+    assert!(
+        text.contains("T0021")
+            && text.contains("`AssertionError` expects a `str` message argument, got `int`"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+/// `assert TYPE_CHECKING` always fails at runtime, as in CPython: the
+/// constant is `False` there, and the rewrite's `if TYPE_CHECKING:` fold
+/// keeps only the raising `else` branch.
+#[test]
+fn assert_type_checking_always_fails() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_type_checking",
+        "from typing import TYPE_CHECKING\n\n\n\
+         def main() -> None:\n\
+         \x20   try:\n\
+         \x20       assert TYPE_CHECKING, \"not at runtime\"\n\
+         \x20   except AssertionError as e:\n\
+         \x20       print(f\"{e}\")\n\n\n\
+         main()\n",
+    );
+    assert!(ok, "program failed: {stderr}");
+    assert_eq!(stdout, "not at runtime\n");
+}
+
+/// An `assert` in a class body stays refused with the class-body `C0001`,
+/// like every other non-definition statement there.
+#[test]
+fn an_assert_in_a_class_body_is_refused() {
+    let text = check_error("assert_class_body", "class C:\n    assert True\n");
+    assert!(
+        text.contains("C0001")
+            && text.contains("a class body statement must be a method definition"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
+/// A module whose top level binds a builtin exception name withholds every
+/// builtin class, so an `assert` in it is refused with one clear `C0001`
+/// naming that binding -- including a top-level binding of
+/// `AssertionError` itself, which CPython's `assert` would ignore.
+#[test]
+fn an_assert_in_a_module_that_binds_a_builtin_exception_name_is_refused() {
+    for (tag, source, name) in [
+        (
+            "assert_shadow_value_error",
+            "class ValueError:\n    pass\n\n\ndef f() -> None:\n    assert True\n",
+            "ValueError",
+        ),
+        (
+            "assert_shadow_assign",
+            "AssertionError = 3\nassert False\n",
+            "AssertionError",
+        ),
+        (
+            "assert_shadow_def",
+            "def AssertionError() -> None:\n    pass\n\n\nassert False\n",
+            "AssertionError",
+        ),
+    ] {
+        let text = check_error(tag, source);
+        assert!(
+            text.contains("C0001")
+                && text.contains(&format!(
+                    "an `assert` statement needs the builtin `AssertionError`, which is \
+                     unavailable because this module binds the builtin exception name \
+                     `{name}` at top level"
+                )),
+            "unexpected diagnostic for {tag}: {text}"
+        );
+    }
+}
+
+/// A function-local binding of `AssertionError` cannot hold a class, so the
+/// rewritten call is refused with `T0021` rather than calling something
+/// other than the builtin -- never a miscompilation.
+#[test]
+fn a_function_local_assertion_error_binding_is_refused() {
+    for (tag, source) in [
+        (
+            "assert_local_assign",
+            "def f() -> None:\n    AssertionError = 3\n    assert False\n\n\nf()\n",
+        ),
+        (
+            "assert_param",
+            "def f(AssertionError: int) -> None:\n    assert False\n\n\nf(1)\n",
+        ),
+    ] {
+        let text = check_error(tag, source);
+        assert!(
+            text.contains("T0021")
+                && text.contains("name `AssertionError` is bound to a non-callable value"),
+            "unexpected diagnostic for {tag}: {text}"
+        );
+    }
+}
+
+/// The `ext`-mode half of the statement: a failing `assert` in a compiled
+/// function reaches the host as CPython's own `AssertionError`, with its
+/// message or an empty `str`.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_failing_assert_in_an_ext_module_raises_cpython_assertion_error() {
+    let dir = ScratchDir::new("1369_ext_assert").expect("scratch");
+    build_ext(
+        &dir,
+        "pycc_assert_mod",
+        "def f(n: int) -> int:\n\
+         \x20   assert n != 0\n\
+         \x20   assert n != 1, \"n is one\"\n\
+         \x20   return n\n",
+    );
+    let run = run_host(
+        &dir,
+        "import pycc_assert_mod as m\n\
+         for n in (0, 1):\n\
+         \x20   try:\n\
+         \x20       m.f(n)\n\
+         \x20       raise RuntimeError('expected an AssertionError')\n\
+         \x20   except AssertionError as e:\n\
+         \x20       print(type(e).__name__, repr(str(e)))\n\
+         print(m.f(7))\n",
+    );
+    assert_eq!(
+        stdout_of(&run),
+        "AssertionError ''\nAssertionError 'n is one'\n7\n"
+    );
 }

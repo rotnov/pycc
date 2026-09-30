@@ -274,6 +274,21 @@ pub fn lower_module(
     if seeded_builtin_exception_classes {
         state.class_defs.extend(builtin_exception_class_defs());
     }
+    // #1369: an `assert` raises the builtin `AssertionError`, which a module
+    // that withheld seeding does not have. Refused here, once, naming the
+    // binding responsible -- see `exception::first_assert_statement_range`.
+    if let Some(shadowed) = &shadowed_builtin_exception_name
+        && let Some(range) = exception::first_assert_statement_range(module)
+    {
+        return Err(vec![unsupported(
+            format!(
+                "an `assert` statement needs the builtin `AssertionError`, which is \
+                 unavailable because this module binds the builtin exception name \
+                 `{shadowed}` at top level"
+            ),
+            range,
+        )]);
+    }
     // W0 of #882 (#1156): the compiler-provided `__name__` binding, pushed
     // into the still-empty item list so it is the module's *first* top-level
     // statement -- an ordinary `str` global every downstream pass already
