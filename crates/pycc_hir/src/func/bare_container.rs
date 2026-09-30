@@ -1,6 +1,7 @@
 //! Bare-container annotation advice (D-228, issue #918): upgrading
 //! [`crate::annotation_to_ty`]'s generic unknown-name `C0001` for a bare
-//! `list`/`set`/`dict`/`tuple` into a message naming the parameterized form
+//! `list`/`set`/`dict`/`tuple` (or a legacy `typing` alias such as `List`,
+//! #1378) into a message naming the parameterized form
 //! to write, in the positions that lower one. Extracted from `func.rs` per
 //! AGENTS.md's file-decomposition rule when #1264 added
 //! [`with_bare_list_or_dict_advice`]. The moved items keep their code
@@ -16,11 +17,38 @@ use pycc_diag::Diagnostic;
 /// representation. (D-109's 16-byte `size_of::<Ty>()` ceiling is not the
 /// obstacle: a thin-pointer variant such as `Ty::FrozenSet(Box<Ty>)`
 /// measurably keeps `Ty` at 16 bytes.)
-pub(super) const CONTAINER_ANNOTATION_NAMES: [&str; 5] =
-    ["list", "set", "frozenset", "dict", "tuple"];
+const CONTAINER_ANNOTATION_NAMES: [&str; 5] = ["list", "set", "frozenset", "dict", "tuple"];
+
+/// The pre-PEP 585 `typing` aliases of the builtin containers (#1378), each
+/// paired with the builtin family it lowers as. `typing.Type` is absent for
+/// the same reason `type` is absent above.
+const LEGACY_TYPING_CONTAINER_ALIASES: [(&str, &str); 5] = [
+    ("List", "list"),
+    ("Set", "set"),
+    ("FrozenSet", "frozenset"),
+    ("Dict", "dict"),
+    ("Tuple", "tuple"),
+];
+
+/// The builtin container family a parameterized annotation base spells --
+/// the name itself for a builtin container, the aliased builtin for a legacy
+/// `typing` alias (`Dict` -> `dict`) -- or `None` for any other name.
+pub(super) fn container_family(spelling: &str) -> Option<&'static str> {
+    CONTAINER_ANNOTATION_NAMES
+        .into_iter()
+        .find(|name| *name == spelling)
+        .or_else(|| {
+            LEGACY_TYPING_CONTAINER_ALIASES
+                .into_iter()
+                .find(|(alias, _)| *alias == spelling)
+                .map(|(_, family)| family)
+        })
+}
 
 /// A worked parameterized example for a bare container annotation's `C0001`,
-/// or `None` for a name that is not one of the five. `tuple` gets its own
+/// or `None` for a name that is not one of the five builtin containers or
+/// their five legacy `typing` aliases. Each example keeps the spelling it was
+/// asked about (`List[int]` for `List`, #1378). `tuple` gets its own
 /// two-argument example: `tuple[int]` is legal but atypical, and a
 /// single-element example would read as if `tuple` were homogeneous.
 pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
@@ -30,6 +58,11 @@ pub(super) fn bare_container_example(name: &str) -> Option<&'static str> {
         "frozenset" => Some("frozenset[int]"),
         "dict" => Some("dict[str, int]"),
         "tuple" => Some("tuple[int, int]"),
+        "List" => Some("List[int]"),
+        "Set" => Some("Set[int]"),
+        "FrozenSet" => Some("FrozenSet[int]"),
+        "Dict" => Some("Dict[str, int]"),
+        "Tuple" => Some("Tuple[int, int]"),
         _ => None,
     }
 }
@@ -79,14 +112,15 @@ pub(crate) fn with_bare_container_advice(error: Diagnostic, annotation: &Expr) -
     }
 }
 
-/// [`with_bare_container_advice`] restricted to a bare `list`/`dict`, for
+/// [`with_bare_container_advice`] restricted to a bare `list`/`dict` (or
+/// their `typing` spellings `List`/`Dict`, #1378), for
 /// a position that lowers only those two parameterized forms (an annotated
 /// attribute target, #1264, or a class-body instance attribute declaration,
 /// #1266): a bare `set`/`tuple` there keeps `error`, so the
 /// advice never names a form the position refuses too.
 pub(crate) fn with_bare_list_or_dict_advice(error: Diagnostic, annotation: &Expr) -> Diagnostic {
     match strip_transparent_wrappers(annotation) {
-        Expr::Name(name) if matches!(name.id.as_str(), "list" | "dict") => {
+        Expr::Name(name) if matches!(name.id.as_str(), "list" | "dict" | "List" | "Dict") => {
             with_bare_container_advice(error, annotation)
         }
         _ => error,

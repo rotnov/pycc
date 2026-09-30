@@ -21,7 +21,10 @@
 ///   siblings), the decorator and field markers `class::classify_decorator`,
 ///   `class::classify_class_decorator`, `class::body` and
 ///   `class::enum_class` match, and the annotation names `func` and
-///   `class::attrs` recognise without an import.
+///   `class::attrs` recognise without an import -- including the pre-PEP 585
+///   `typing` container aliases `Dict`/`List`/`Set`/`FrozenSet`/`Tuple`
+///   (#1378), which `func::annotation_to_ty` lowers as the builtin
+///   containers they alias.
 ///
 /// The marker table was derived from the bare-spelling comparisons in
 /// `crates/pycc_hir/src` and `crates/pycc_types/src` (non-test files):
@@ -210,13 +213,18 @@ pub(super) const SPELLING_MARKERS: &[&str] = &[
     "Annotated",
     "Any",
     "ClassVar",
+    "Dict",
     "Enum",
     "Final",
+    "FrozenSet",
+    "List",
     "NDArray",
     "Protocol",
     "Self",
+    "Set",
     "StrEnum",
     "TYPE_CHECKING",
+    "Tuple",
     "TypeAlias",
     "abstractmethod",
     "auto",
@@ -249,5 +257,13 @@ mod tests {
             assert!(shadows_a_resolved_spelling(name), "{name}");
         }
         assert!(!shadows_a_resolved_spelling("np"));
+    }
+
+    /// #1378: the pre-PEP 585 `typing` container aliases are resolved by
+    /// their spelling in annotations, so a foreign binding of one is refused
+    /// like `Final`'s.
+    #[test]
+    fn the_legacy_typing_container_aliases_are_resolved_spellings() {
+        assert!(shadows_a_resolved_spelling("List"));
     }
 }

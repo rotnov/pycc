@@ -217,8 +217,25 @@ fn type_checking_marker_is_not_a_value(name: &str) -> Diagnostic {
     )
 }
 
+/// A typing-form marker (#1378: `typing.Dict`, `List`, `Set`, `FrozenSet`,
+/// `Tuple`, `Any`, `Generic`) referenced as a first-class value or called
+/// directly. The container aliases are only meaningful as annotation
+/// subscripts, `Any` only as an annotation, and `Generic` only as a base, so
+/// no single usage example fits all seven -- this message carries none,
+/// rather than borrowing `annotation_marker_is_not_a_value`'s `{name}[int]`
+/// advice that is wrong for `Dict`/`Tuple` arity and false for `Any`.
+fn typing_form_is_not_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!(
+            "`{name}` is a typing construct, not a first-class value — pycc does not support using it as a value"
+        ),
+        Span::new(0, 0),
+    )
+}
+
 /// Returns `true` if `kind` is any marker symbol kind (Enum, Protocol, ABC,
-/// Decorator, Annotation, Cast, or TypeChecking). Used by call-site and
+/// Decorator, Annotation, Cast, TypeChecking, or TypingForm). Used by call-site and
 /// value-reference guards to reject marker symbols used as first-class
 /// values with a consistent diagnostic.
 fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
@@ -232,6 +249,7 @@ fn is_marker_kind(kind: pycc_std::StdSymbolKind) -> bool {
             | pycc_std::StdSymbolKind::AnnotationMarker
             | pycc_std::StdSymbolKind::CastMarker
             | pycc_std::StdSymbolKind::TypeCheckingMarker
+            | pycc_std::StdSymbolKind::TypingFormMarker
     )
 }
 
