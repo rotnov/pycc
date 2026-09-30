@@ -205,8 +205,10 @@ pub enum Ty {
     /// that the value is a `PyObject *` owned by the CPython runtime, so
     /// every operation on it is refused by `pycc_types` (`I0404`) except
     /// the read that produces it. The variant is deliberately unit-shaped
-    /// and unspellable in an annotation: `object` is not a builtin type
-    /// name `annotation_to_ty` accepts, so no source program can name it.
+    /// and `object` itself is unspellable in an annotation: it is not a
+    /// builtin type name `annotation_to_ty` accepts. Since Part 1 of #1367
+    /// the name of a class a foreign import binds resolves to this variant
+    /// in an annotation (`docs/TYPE_SYSTEM.md`'s `object` row).
     /// A unit variant adds no payload, so `size_of::<Ty>()` stays at the
     /// D-109 16-byte ceiling.
     Object,

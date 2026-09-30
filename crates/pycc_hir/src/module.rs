@@ -667,6 +667,23 @@ fn lower_top_level_item<'a>(
             state.imported_alias_indices.push(state.aliases.len());
             state.aliases.push(entry);
         }
+        // Part 1 of #1367: a name a foreign import binds -- through any of
+        // its channels, `import X`, #1278's `from m import C`, #1366's
+        // relative and #1138's dotted from-import -- is spellable in every
+        // annotation position the alias table serves, as the opaque
+        // `Ty::Object` (`docs/TYPE_SYSTEM.md`, the `object` row). CPython
+        // never checks an annotation, so no run-time check follows. The
+        // entry is recorded as imported, so `strip_imported` keeps it out of
+        // `HirModule::type_aliases`: the name neither re-exports nor leaks,
+        // while a D-135 alias built from it is an ordinary alias of `object`.
+        for binding in &lowered.bindings {
+            if let ImportBinding::Foreign { local_name, .. } = binding
+                && !state.aliases.iter().any(|(name, _)| name == local_name)
+            {
+                state.imported_alias_indices.push(state.aliases.len());
+                state.aliases.push((local_name.clone(), Ty::Object));
+            }
+        }
         state.imports.append(&mut lowered.bindings);
         return Ok(());
     }
@@ -740,10 +757,18 @@ fn lower_top_level_item<'a>(
                 def.range,
             ));
         }
+        // Part 1 of #1367: the alias entry a foreign import records for its
+        // bound name is not a type alias the source wrote, so a class of the
+        // same name keeps the import-collision message below.
+        let foreign_bound = |alias: &str| {
+            state.imports.iter().any(|binding| {
+                matches!(binding, ImportBinding::Foreign { local_name, .. } if local_name == alias)
+            })
+        };
         if state
             .aliases
             .iter()
-            .any(|(name, _)| name == &class_def.name)
+            .any(|(name, _)| name == &class_def.name && !foreign_bound(name))
         {
             return Err(unsupported(
                 format!(

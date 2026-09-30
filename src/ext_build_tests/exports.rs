@@ -441,10 +441,11 @@ fn every_gap_in_a_program_is_collected_before_the_build_gives_up() {
 /// consulted, which is what the `Ty::Object => false` arm in
 /// `refusal_completeness.rs` pins from the other side.
 ///
-/// Unreachable from Python source today: `object` is not spellable in an
-/// annotation, and a parameter needs one. The HIR is built directly here
-/// for exactly that reason -- the boundary's answer must be stated before
-/// a later part of #1026 makes the shape reachable, not after.
+/// Reachable from Python source since Part 1 of #1367: a public parameter
+/// annotated with a class a foreign import binds is `object`, and
+/// `tests/issue_1367_foreign_class_annotations.rs` pins the CLI's `C0003`.
+/// The HIR is built directly here so the boundary's own answer stays pinned
+/// independently of the front end (carrying it is #1386).
 #[test]
 fn an_object_typed_parameter_is_refused_at_the_export_boundary() {
     let hir = module(vec![func("wrap", &[("x", Ty::Object)], Ty::Int)]);

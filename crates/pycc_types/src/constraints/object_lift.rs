@@ -18,10 +18,11 @@ use super::*;
 
 /// `o.method(...)` on a concrete `object` receiver is an `object` producer,
 /// exactly like the `AttrGet` arm's `o.name` and the `Subscript` arm's
-/// `o[k]`: `object` is unspellable in an annotation (D-137's amendment), so
-/// leaving the term out would make an unannotated `def _c(): return
-/// json.loads(s)` report a `T0021` asking for an annotation no source can
-/// write. Any other receiver keeps the arm's historical `Ok(None)`.
+/// `o[k]`: `object` is unspellable in an annotation (`docs/TYPE_SYSTEM.md`'s
+/// `object` row -- since Part 1 of #1367 only a class a foreign import binds
+/// resolves to it), so leaving the term out would make an unannotated
+/// `def _c(): return json.loads(s)` report a `T0021` asking for an
+/// annotation the source may have no name to write. Any other receiver keeps the arm's historical `Ok(None)`.
 pub(super) fn method_call_on_object(base_term: Option<&TypeTerm>) -> Option<TypeTerm> {
     matches!(base_term, Some(Ok(Ty::Object))).then_some(Ok(Ty::Object))
 }

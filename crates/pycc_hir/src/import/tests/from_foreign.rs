@@ -7,7 +7,10 @@ use crate::{FromImport, foreign_bound_object, foreign_import_statement, opens_fo
 
 /// Lowers `source`, answering every request for a module in `foreign` with
 /// `ResolvedImport::Foreign` and leaving every other request unanswered.
-fn lower_foreign(source: &str, foreign: &[&str]) -> Result<LoweredModule, Vec<Diagnostic>> {
+pub(super) fn lower_foreign(
+    source: &str,
+    foreign: &[&str],
+) -> Result<LoweredModule, Vec<Diagnostic>> {
     let parsed = parse(source);
     let mut resolved = ResolvedImports::default();
     for request in project_import_requests(&parsed) {
@@ -22,7 +25,7 @@ fn lower_foreign(source: &str, foreign: &[&str]) -> Result<LoweredModule, Vec<Di
     lower_module(&parsed, &resolved, None)
 }
 
-fn only_error(result: Result<LoweredModule, Vec<Diagnostic>>) -> Diagnostic {
+pub(super) fn only_error(result: Result<LoweredModule, Vec<Diagnostic>>) -> Diagnostic {
     let diagnostics = result.expect_err("fixture must fail to lower");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     diagnostics.into_iter().next().expect("one diagnostic")
@@ -223,7 +226,10 @@ fn the_statement_and_object_renderings_cover_both_forms() {
 /// driver does for the entry module under `pycc build --ext
 /// --foreign-relative-imports` (#1366), and every absolute one in `foreign`
 /// too.
-fn lower_relative(source: &str, foreign: &[&str]) -> Result<LoweredModule, Vec<Diagnostic>> {
+pub(super) fn lower_relative(
+    source: &str,
+    foreign: &[&str],
+) -> Result<LoweredModule, Vec<Diagnostic>> {
     let parsed = parse(source);
     let mut resolved = ResolvedImports::default();
     for request in project_import_requests(&parsed) {
