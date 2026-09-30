@@ -270,6 +270,28 @@ fn a_repeated_foreign_import_records_one_alias_entry() {
     assert_eq!(signature(&module, "_f").0, object_params(&["t"]));
 }
 
+/// A type alias spelled before a foreign import of the same name stays the
+/// name's alias-table entry, but the module-wide foreign-shadow check that
+/// runs after the per-item loop refuses the rebinding (`C0001`), so the
+/// lowering it typed with the stale alias is discarded rather than returned.
+#[test]
+fn a_type_alias_before_a_foreign_import_of_its_name_is_refused() {
+    let diagnostic = only_error(lower_foreign(
+        "type Fraction = int\n\
+         from fractions import Fraction\n\
+         def _f(t: Fraction) -> int:\n    return 1\n",
+        &["fractions"],
+    ));
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .contains("shadowing a foreign import is not supported yet"),
+        "{}",
+        diagnostic.message
+    );
+}
+
 /// A foreign name nested in a legacy `typing` container (#1378) resolves
 /// as an element through the alias table, so `Dict[str, C]` is a
 /// `dict[str, object]` and meets the same element-type refusal
