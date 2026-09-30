@@ -35,8 +35,8 @@
 //!    the binding form rather than carrying one string per spelling.
 //! 2. **The right account, from both sides.** The message must describe
 //!    `type.__new__` iterating `__slots__` at class creation, and must *not*
-//!    borrow the plain attribute route's D-154 explanation ("a class's
-//!    instance layout is fixed at compile time from its `__init__`"), which
+//!    borrow the plain attribute route's explanation (since #1368, "only a
+//!    value-bound `__slots__` ... is"; before it, D-154's layout account), which
 //!    would be a false account of a class that is never created. A
 //!    `contains`-only assertion would not catch that substitution.
 //! 3. **Both class-body walks.** A `Protocol` body never reaches
@@ -120,9 +120,9 @@ fn assert_accepted(tag: &str, source: &str) {
 /// spelling below.
 const NEEDLE: &str = "a `def __slots__` in a class body is not supported yet";
 
-/// The plain attribute route's D-154 explanation, which must never appear on
+/// The plain attribute route's explanation (#1368; D-154's before it), never on
 /// this route.
-const D154_FRAGMENT: &str = "fixed at compile time from its `__init__`";
+const D154_FRAGMENT: &str = "only a value-bound `__slots__`";
 
 /// Asserts the whole message for one spelling: the shared opening, the
 /// carrier CPython itself names, and the absence of D-154's account.

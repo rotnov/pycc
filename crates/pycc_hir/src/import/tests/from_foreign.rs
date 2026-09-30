@@ -183,6 +183,7 @@ fn re_exporting_a_dependency_s_foreign_from_import_is_refused() {
         origin: lower_module(&parsed, &resolved, None)
             .expect("a dependency fixture must lower")
             .hir,
+        class_slots: Vec::new(),
     };
     let diagnostic = fixture.first_error("from dep import product\n", &[]);
     assert_eq!(diagnostic.code, "C0001");

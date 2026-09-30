@@ -249,7 +249,11 @@ impl Loader {
 
         let mut resolved = ResolvedImports::default();
         for loaded in &self.modules {
-            resolved.add_module(loaded.display_path.clone(), &loaded.module.hir);
+            resolved.add_module(
+                loaded.display_path.clone(),
+                &loaded.module.hir,
+                &loaded.module.class_slots,
+            );
         }
         for (span, answer) in answers {
             match answer {

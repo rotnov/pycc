@@ -888,7 +888,6 @@ whole past the first layer, so this list is a **lower bound**.
 | relative sibling imports (3, 4, 6) | cleared: `T0021` "attempted relative import with no known parent package" at `05bc7805`, none under `--ext --foreign-relative-imports` | [#1366](https://github.com/rotnov/pycc/issues/1366) (the flag binds them as CPython objects of the host's package, resolved from the module's own `__package__`/`__spec__` at import time; #1161's live `__name__` is not a prerequisite) |
 | `from lark.exceptions import UnexpectedToken` (7) | cleared out of package; in a package tree `lark.exceptions` is a project import (a `C0001` in a skeleton tree; in the full tree it links and the build fails in `lark/utils.py`) | #1138 (Part 1); in-tree: [#1382](https://github.com/rotnov/pycc/issues/1382) |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
-| `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
 | annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported at `05bc7805`; Part 1 of #1367 resolves them to `object` (subscripts erased), and a probe with only the `Generic[...]` bases removed moves its first diagnostic from this row (line 14) to line 20, where `Dict[StateT, Dict[str, tuple]]` now resolves `StateT` and stops at the bare `tuple`; the whole subject still reports row 4's two errors. Still refused: the `__init__` assignments from non-parameter expressions (25-27, 43-44, [#1388](https://github.com/rotnov/pycc/issues/1388)) and `ParseConf[StateT]`, an attribute holding a pycc class instance (35, 40-41, [#1389](https://github.com/rotnov/pycc/issues/1389)) | [#1367](https://github.com/rotnov/pycc/issues/1367) (Part 1); [#1388](https://github.com/rotnov/pycc/issues/1388), [#1389](https://github.com/rotnov/pycc/issues/1389) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
 | `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 leaves unspellable (51) | `T0021` cannot infer parameter | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
@@ -900,16 +899,31 @@ whole past the first layer, so this list is a **lower bound**.
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Fifteen rows are listed. #1366 has cleared the relative-import row,
+Fourteen rows are listed. #1366 has cleared the relative-import row,
 Part 1 of #1138 the line-7 row out of package, and #1378 the `typing` import
-row, so twelve remain. Two of them are boundary questions inside the subject
+row, so eleven remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
 no longer counts as falling off the function's end. The `assert` row was
 removed by [#1369](https://github.com/rotnov/pycc/issues/1369): the statement
-now compiles.
+now compiles. The
+`C0001` refusing `__slots__` on both classes (lines 12 and 33) was removed by
+[#1368](https://github.com/rotnov/pycc/issues/1368): a value-bound
+`__slots__` of string literals is admitted and checked at compile time. In the
+subject module the refusal sat under the rows above it: #1367's annotation
+refusals (row 5) fire first and hid it (the whole-module
+`--foreign-relative-imports` build at the #1368 head, merged with `main`
+`2e0fb67a`, still reports the same four errors), so the result was
+measured on a probe, not on the workload, at the #1368 branch rebased on
+`main` `3c48dbc4`. The probe deletes the sibling and `lark.exceptions`
+imports, trims the `typing` import to `Any, List`, drops the two
+`Generic[StateT]` bases, and gives every class-body declaration an `int`
+annotation; the `__slots__` bindings and the methods are unchanged. It reports
+no `__slots__` diagnostic. Past row 1's `C0002` for `Any`, its next diagnostic
+is `C0001` "type annotation `ParseTableBase` is not supported yet" on the
+`parse_table: ParseTableBase[StateT]` parameter at line 22 (row 5, #1367).
 
 Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
 binding a CPython object to a function-local name. Its isolated probe, a method

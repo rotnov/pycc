@@ -242,7 +242,7 @@ fn a_bare_list_or_dict_declaration_names_the_parameterized_form() {
 fn a_reserved_name_is_refused_before_anything_else() {
     let message = c0001("class C:\n    __slots__: int\n    __slots__: int\n");
     assert!(
-        message.starts_with("`__slots__` in a class body is not supported yet"),
+        message.starts_with("this `__slots__` spelling is not supported yet"),
         "{message}"
     );
 }

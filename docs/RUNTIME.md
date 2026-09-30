@@ -1526,7 +1526,8 @@ is evaluated, and its value retired, before that rewritten access runs; it
 too adds no runtime entry point. Like every class attribute, it
 is not published on an `--ext` extension type. `docs/TYPE_SYSTEM.md`'s
 "Class-level attributes" section owns the rule and its two divergences from
-CPython.
+CPython. A class-body `__slots__` ([#1368](https://github.com/rotnov/pycc/issues/1368))
+is enforced at compile time and is not published on the extension type either.
 
 **The bound name does not cross a module boundary yet.** The binding is
 positional — a top-level `ImportBinding::Foreign` carries the index of the

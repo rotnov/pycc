@@ -19,20 +19,29 @@ const DEP: &str = "dep.py";
 /// Lowers `source` as a standalone module (no project imports), the way
 /// the driver lowers a dependency before its importer.
 fn lower_dependency(source: &str) -> HirModule {
+    lower_dependency_module(source).hir
+}
+
+/// [`lower_dependency`], keeping the whole [`LoweredModule`] (its
+/// `__slots__` side table in particular, #1368).
+fn lower_dependency_module(source: &str) -> LoweredModule {
     lower_module(&parse(source), &ResolvedImports::default(), None)
         .expect("a dependency fixture must lower")
-        .hir
 }
 
 /// One already-loaded dependency, registered under [`DEP`].
 struct Fixture {
     origin: HirModule,
+    /// The dependency's `__slots__` side table (#1368).
+    class_slots: Vec<ClassSlotsRow>,
 }
 
 impl Fixture {
     fn new(source: &str) -> Self {
+        let lowered = lower_dependency_module(source);
         Self {
-            origin: lower_dependency(source),
+            origin: lowered.hir,
+            class_slots: lowered.class_slots,
         }
     }
 
@@ -41,7 +50,7 @@ impl Fixture {
     fn lower(&self, source: &str, submodules: &[&str]) -> Result<LoweredModule, Vec<Diagnostic>> {
         let parsed = parse(source);
         let mut resolved = ResolvedImports::default();
-        resolved.add_module(DEP.to_string(), &self.origin);
+        resolved.add_module(DEP.to_string(), &self.origin, &self.class_slots);
         for request in project_import_requests(&parsed) {
             resolved.insert(
                 request.span,
@@ -278,13 +287,14 @@ fn defining_a_class_the_module_already_imported_collides_with_the_import() {
 
 #[test]
 fn a_re_export_is_followed_one_hop_to_the_module_that_defines_the_name() {
-    let base = lower_dependency(DEFINITIONS);
+    let base_module = lower_dependency_module(DEFINITIONS);
+    let base = base_module.hir;
     // `pkg/__init__.py` re-exports every kind of binding, including a
     // stdlib symbol it imported itself.
     let package_source = "from base import Point, Alias, helper, value\nfrom math import sqrt\n";
     let parsed = parse(package_source);
     let mut package_resolved = ResolvedImports::default();
-    package_resolved.add_module("base.py".to_string(), &base);
+    package_resolved.add_module("base.py".to_string(), &base, &base_module.class_slots);
     for request in project_import_requests(&parsed) {
         package_resolved.insert(
             request.span,
@@ -295,16 +305,20 @@ fn a_re_export_is_followed_one_hop_to_the_module_that_defines_the_name() {
             }),
         );
     }
-    let package = lower_module(&parsed, &package_resolved, None)
-        .expect("the package fixture must lower")
-        .hir;
+    let package_module =
+        lower_module(&parsed, &package_resolved, None).expect("the package fixture must lower");
+    let package = package_module.hir;
 
     let importer_source = "from pkg import Point, Alias, helper, value, sqrt\n\np = Point(1)\nn: Alias = \
          helper(value)\nr: float = sqrt(4.0)\n";
     let importer = parse(importer_source);
     let mut resolved = ResolvedImports::default();
-    resolved.add_module("base.py".to_string(), &base);
-    resolved.add_module("pkg/__init__.py".to_string(), &package);
+    resolved.add_module("base.py".to_string(), &base, &base_module.class_slots);
+    resolved.add_module(
+        "pkg/__init__.py".to_string(),
+        &package,
+        &package_module.class_slots,
+    );
     for request in project_import_requests(&importer) {
         resolved.insert(
             request.span,
@@ -453,7 +467,7 @@ fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
     let reexport = {
         let parsed = parse("from defs import Alias, helper\n");
         let mut resolved = ResolvedImports::default();
-        resolved.add_module("defs.py".to_string(), &defining);
+        resolved.add_module("defs.py".to_string(), &defining, &[]);
         for request in project_import_requests(&parsed) {
             resolved.insert(
                 request.span,
@@ -471,8 +485,8 @@ fn a_type_alias_reached_through_two_modules_lowers_and_binds() {
     let parsed =
         parse("from defs import Alias\nfrom mid import Alias, helper\n\nn: Alias = helper(1)\n");
     let mut resolved = ResolvedImports::default();
-    resolved.add_module("defs.py".to_string(), &defining);
-    resolved.add_module("mid.py".to_string(), &reexport);
+    resolved.add_module("defs.py".to_string(), &defining, &[]);
+    resolved.add_module("mid.py".to_string(), &reexport, &[]);
     for request in project_import_requests(&parsed) {
         let (display_path, hir) = match request.module.as_deref() {
             Some("defs") => ("defs.py", &defining),
@@ -564,6 +578,7 @@ fn re_exporting_a_dependency_s_foreign_import_is_refused() {
             "def a() -> int:\n    return 1\n\n\nimport json\n",
             "import json",
         ),
+        class_slots: Vec::new(),
     };
     let source = "from dep import json\n";
     let diagnostic = fixture.first_error(source, &[]);
@@ -590,6 +605,7 @@ fn a_dependency_with_no_preceding_items_is_refused_the_same_way() {
     // refusal has to cover this shape too.
     let fixture = Fixture {
         origin: foreign_dependency("import json\n", "import json"),
+        class_slots: Vec::new(),
     };
     let diagnostic = fixture.first_error("from dep import json\n", &[]);
     assert_eq!(diagnostic.code, "C0001");
@@ -609,6 +625,7 @@ fn a_dependency_s_other_names_are_still_importable_alongside_a_foreign_import() 
             "import json\n\n\ndef helper(n: int) -> int:\n    return n\n",
             "import json",
         ),
+        class_slots: Vec::new(),
     };
     let lowered = fixture.lower_ok("from dep import helper\n\nn: int = helper(1)\n");
     assert_eq!(
