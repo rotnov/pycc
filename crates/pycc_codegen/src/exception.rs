@@ -113,6 +113,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // of `0` or a `1 // 0` element -- so it is always fallible, exactly
         // like the statement form the loop body already guards.
         | MirExpr::Comprehension(_) => true,
+        // #1346: the node itself raises nothing. `sequence::emit_sequence`
+        // emits both children through the guarded `emit_expr`, so each
+        // child's own guard has already handled a raise by the time the
+        // sequence yields.
+        MirExpr::Sequence { .. } => false,
         // #1210: a shift raises `ValueError` for a negative count and
         // `OverflowError` for a result too large to allocate; `&`, `|` and
         // `^` never raise.
