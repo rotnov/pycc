@@ -56,9 +56,9 @@ mod foreign_len;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod sequence;
 /// Set insertion, length and iteration helpers, and the insert of a set of
 /// user-class instances (#1343, Part 1 of #1336).
-mod sequence;
 mod set_instance;
 use set_instance::{
     SetEmitter, build_int_set_add, build_int_set_check_not_resized, build_int_set_get,
