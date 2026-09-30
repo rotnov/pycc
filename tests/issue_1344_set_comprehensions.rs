@@ -829,6 +829,62 @@ fn an_untypable_inferred_set_return_is_c0001() {
     }
 }
 
+/// A helper whose untypable `set[R]` local never escapes: it returns an
+/// `int`, so no inferred `set[int]` return meets a `set[R]` and nothing is
+/// refused. Iterated by a `for` loop and by a list comprehension.
+#[test]
+fn an_untypable_local_used_only_inside_its_helper_matches_cpython() {
+    let source = format!(
+        "{HASHED_R}def _h(n):\n    t = {{R(i) for i in range(n)}}\n    s = 0\n    for r in t:\n        s += r.v\n    return s\n\n\n\
+         def _h2(n):\n    t = {{R(i) for i in range(n)}}\n    xs = [r.v for r in t]\n    s = 0\n    for x in xs:\n        s += x\n    return s + len(xs)\n\n\n\
+         print(_h(4))\nprint(_h2(4))\n"
+    );
+    assert_native_matches_cpython("e2e_1344_internal_local", &source, "6\n10\n");
+}
+
+/// `inferred_set_return_limit`'s `frozenset` arm: `frozenset(...)` of an
+/// untypable set comprehension is the same honest `C0001`, never a `T0022`,
+/// in the expression and the statement forms.
+#[test]
+fn an_untypable_inferred_frozenset_return_is_c0001() {
+    for (tag, body) in [
+        (
+            "expr",
+            "def _h(n):\n    return frozenset({R(i) for i in range(n)})\n",
+        ),
+        (
+            "stmt",
+            "def _h(n):\n    t = {R(i) for i in range(n)}\n    return frozenset(t)\n",
+        ),
+    ] {
+        assert_one_error(
+            &format!("e2e_1344_inferred_frozenset_{tag}"),
+            &format!("{HASHED_R}{body}\n\nprint(len(_h(3)))\n"),
+            "C0001",
+            "cannot infer an unannotated private helper's `frozenset[R]` return yet",
+            "#1342",
+        );
+    }
+}
+
+/// The annotated-return workaround the `C0001` help names, for every shape
+/// it refuses: a constructor element (#1342) as a `frozenset[R]`, and a
+/// set-typed name's element (#1360), bare and through a method call.
+#[test]
+fn the_annotated_return_workaround_compiles_every_refused_shape() {
+    let source = format!(
+        "{HASHED_R}    def m(self) -> R:\n        return R(self.v + 1)\n\n\n\
+         G: set[R] = {{R(1), R(2), R(3)}}\n\n\n\
+         def _f(n) -> frozenset[R]:\n    return frozenset({{R(i) for i in range(n)}})\n\n\n\
+         def _f2(n) -> frozenset[R]:\n    t = {{R(i) for i in range(n)}}\n    return frozenset(t)\n\n\n\
+         def _g(n) -> set[R]:\n    return {{p for p in G}}\n\n\n\
+         def _g2(n) -> set[R]:\n    return {{p.m() for p in G}}\n\n\n\
+         print(len(_f(3)), len(_f2(5)))\nb = _g2(1)\nprint(len(_g(1)), len(b))\n\
+         s = 0\nfor p in b:\n    s += p.v\nprint(s)\n"
+    );
+    assert_native_matches_cpython("e2e_1344_workarounds", &source, "3 5\n3 3\n9\n");
+}
+
 /// The D-255 residual: an annotated caller of a helper that hits the
 /// #1342 `C0001` also reports a `T0025` against the helper's still-`set[int]`
 /// inferred signature. Inside a function the `C0001` comes first; a
