@@ -561,6 +561,16 @@ pub(crate) fn producer_gaps_the_check_admits(
 /// this set stays a *subset* of what
 /// `pycc_types::buffer::producer_assignment_ty` declines -- a wider set
 /// would hide a gap the checker did not refuse.
+///
+/// A foreign import of the spelling (`import ndarray`) is the one entry of
+/// that helper that is load-bearing rather than a mirror (Part 1 of #1333).
+/// Since that part admits binding a CPython object in a function body,
+/// `a = ndarray(n)` over a foreign `ndarray` passes its own check as an
+/// ordinary CPython call, so [`producer_gaps_the_check_admits`] keeps the
+/// gap, and without the entry a native build reported `I0405` for a program
+/// that allocates no buffer. The entry is still inside the decline set: the
+/// checker binds every foreign import as `Ty::Object` before the call is
+/// classified.
 fn shadowed_producer_spellings(hir: &HirModule) -> HashSet<&str> {
     let mut shadowed: HashSet<&str> = HashSet::new();
     shadowed.extend(pycc_types::imported_producer_spellings(&hir.imports));
@@ -1124,6 +1134,34 @@ mod tests {
             .class_defs
             .push(("NDArray".to_string(), plain_class_def("NDArray")));
         assert!(refuse_buffer_producers_in_native_mode(&own_class).is_ok());
+
+        // A foreign import of the spelling (Part 1 of #1333): the checker
+        // admits `a = ndarray(4)` as a CPython call, so this gate must not
+        // report an allocation the program does not make.
+        let mut foreign_import = hir(vec![body_func("f", vec![alloc("ndarray")])]);
+        foreign_import
+            .imports
+            .push(pycc_hir::ImportBinding::Foreign {
+                local_name: "ndarray".to_string(),
+                module_path: "ndarray".to_string(),
+                from: None,
+                site: pycc_hir::ForeignImportSite::Item(0),
+                span: pycc_diag::Span::new(0, 0),
+            });
+        assert!(refuse_buffer_producers_in_native_mode(&foreign_import).is_ok());
+
+        // A foreign import of some *other* name shadows nothing.
+        let mut other_foreign = hir(vec![body_func("f", vec![alloc("ndarray")])]);
+        other_foreign
+            .imports
+            .push(pycc_hir::ImportBinding::Foreign {
+                local_name: "numpy".to_string(),
+                module_path: "numpy".to_string(),
+                from: None,
+                site: pycc_hir::ForeignImportSite::Item(0),
+                span: pycc_diag::Span::new(0, 0),
+            });
+        assert!(refuse_buffer_producers_in_native_mode(&other_foreign).is_err());
 
         // An unrelated top-level statement contributes no shadow and stops
         // no refusal.

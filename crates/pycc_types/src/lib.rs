@@ -1110,30 +1110,18 @@ fn check_range_operand_in(
 }
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
-    // #1325: binding a CPython object to a name is admitted in a module
-    // body and stays refused in a function body. Placed at the entry,
-    // *before* the `env.lookup_any(target)` branch below, because that
-    // branch is the only thing that runs `class::is_assignable_env` -- a
-    // *first* `x = numpy.pi` in a function has no previous binding and would
-    // otherwise be bound with no check at all. The entry placement also
-    // covers `AnnAssign` and the `HirPattern::Capture` caller further down,
-    // which are the same rule.
+    // #1325 / Part 1 of #1333: binding a CPython object to a name is
+    // admitted in both scopes, so no refusal sits here. The rest of this
+    // function applies unchanged: rebinding the name to another type is
+    // `T0023`, an annotation it does not satisfy is `T0025`, and a one-armed
+    // `if` leaves it possibly unbound.
     //
     // At module scope the name is an ordinary module global
-    // (`pycc_codegen`'s `collect_module_bindings`), so the rest of this
-    // function applies unchanged: rebinding it to another type is `T0023`,
-    // an annotation it does not satisfy is `T0025`, and a one-armed `if`
-    // leaves it possibly unbound. The global owns the reference its
+    // (`pycc_codegen`'s `collect_module_bindings`); in a function body it is
+    // a function-local slot. Either way the binding owns the reference its
     // producer returned and never releases it; a rebinding leaks the old
     // one (#1092), because `y = x` aliases the pointer with no incref and a
     // release would free an object `y` still points at (`docs/RUNTIME.md`).
-    //
-    // A function body keeps the refusal: the name would be a function-local
-    // slot, and a function-local object has no ownership story yet --
-    // binding, returning and passing one are #1333's.
-    if env.in_function_body {
-        foreign::reject_object_operand(&ty, "binding a CPython object to a name")?;
-    }
     // Part 2a of #1142 (#1165): assigning to a name bound to a buffer
     // *parameter* is refused. See `buffer::buffer_parameter_rebinding` for
     // the two independent grounds; the one that matters most here is that
@@ -1595,9 +1583,10 @@ fn check_match(
     // `HirPattern::Wildcard` returns no bindings and satisfies
     // `check_exhaustive`, so before this guard the statement type-checked
     // and reached `pycc_mir`'s `lower_match`, which has no `Ty::Object`
-    // handling at all. (`HirPattern::Capture` is already covered by
-    // `check_assignment`'s own entry guard through the `bindings` loop
-    // below -- this guard is what covers every other pattern.)
+    // handling at all. This guard refuses the whole subject before any
+    // pattern binds, so it covers `HirPattern::Capture` too: since Part 1
+    // of #1333 (#1362) `check_assignment` admits an object binding in a
+    // function body, so the `bindings` loop below no longer refuses one.
     foreign::reject_object_operand(&subject_ty, "matching on a CPython object")?;
     let mut case_envs = Vec::with_capacity(cases.len());
     for case in cases {
@@ -2976,16 +2965,10 @@ fn check_stmt_in_function(
                     return Ok(());
                 }
             }
+            // Part 1 of #1333: returning a CPython object is admitted; the
+            // ordinary assignability check below governs it, so `-> str`
+            // returning an object stays the `T0022` mismatch.
             let actual = infer_expr_in(env, local_names, expr)?;
-            // #1316: a function body may read a module-level foreign
-            // `object`, but not hand one to its caller -- the caller could
-            // only bind or pass it, which is #1333's. Context-free, so an
-            // unannotated helper whose return type the solver inferred as
-            // `object` is refused here too.
-            crate::foreign::reject_object_operand(
-                &actual,
-                "returning a CPython object from a function",
-            )?;
             if !class::is_assignable_env(env, &actual, &return_ty) {
                 // #1344: an inferred `set[int]` return the solver could not
                 // widen to the `set[C]` the body builds is a compiler limit,
@@ -3218,12 +3201,11 @@ fn check_stmt_in_function(
             Ok(())
         }
         // PR 3c of #1082: refused unconditionally inside a function body.
-        // Since #1316 a function body may read a module-level foreign
-        // object, but the loop would bind its target to a function-local
-        // `object` value, which is #1333's; the module body's own loop
-        // target is a module global instead. The iterable is therefore
-        // never inferred here -- there is no shape of it this arm could
-        // accept.
+        // A function-body `for` over a CPython object needs its loop and
+        // iterator emission moved onto the function failure edge, which is
+        // Part 2 of #1333 (#1363); the module body's own loop runs on the
+        // module-exec edge instead. The iterable is therefore never inferred
+        // here -- there is no shape of it this arm could accept yet.
         //
         // The message states that bound and stops there. `pycc_hir` routes
         // *every* attribute and attribute-callee-call iterable to
@@ -3235,8 +3217,7 @@ fn check_stmt_in_function(
         HirStmt::ForObject { .. } => Err(Diagnostic::error(
             "I0404",
             "`for ... in <attribute or method call>` is not supported inside a function body \
-             -- its loop variable would bind a function-local CPython object, so the statement \
-             is refused here whatever the iterable turns out to be"
+             yet, so the statement is refused here whatever the iterable turns out to be"
                 .to_string(),
             Span::new(0, 0),
         )),

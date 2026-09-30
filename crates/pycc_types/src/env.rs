@@ -264,15 +264,14 @@ pub struct Environment {
     /// minus the names a function body declares locally
     /// ([`Self::child_for_function`] removes them).
     ///
-    /// A function body may read such a name: `expr.rs`'s `Name` and `Call`
-    /// arms admit a `Ty::Object` read inside a function body only for a
-    /// member of this set, so a function-local `object` value -- an
-    /// unannotated parameter inferred as `object` from a module-level call
-    /// site, or a module-level `x = <object>` global (#1325) -- keeps its
-    /// `I0404` (#1333's territory).
+    /// Since Part 1 of #1333 `expr.rs` no longer gates a function-body read
+    /// on this set: every definitely-bound `Ty::Object` name is readable
+    /// there. The one remaining consumer is `class/foreign_static.rs`'s
+    /// `check_use_site`, whose shadowing test asks whether a class body's
+    /// receiver root is a module-level foreign import no local shadows.
     ///
-    /// Position-blind on purpose, like pass 3 itself (D-041): a member is
-    /// readable only while `bindings` also holds it `Definitely` as
+    /// Position-blind on purpose, like pass 3 itself (D-041): a member
+    /// counts only while `bindings` also holds it `Definitely` as
     /// `Ty::Object`, so a maybe-bound import still fails `T0041` and a read
     /// that runs before the import at run time raises `NameError` from
     /// codegen's unbound-global branch (`pycc_codegen`'s `foreign_fail.rs`).

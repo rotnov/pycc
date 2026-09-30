@@ -94,30 +94,30 @@ fn a_local_rebinding_shadows_the_foreign_global() {
     ));
 }
 
-/// What stays refused: a CPython object never becomes a function-local
-/// value, a loop or comprehension iterable, a return value or an argument
-/// (the #1333 boundary; #1325 admitted the binding at module scope only).
+/// Part 1 of #1333: a CPython object may become a function-local value, a
+/// return value and an argument to an ordinary pycc function.
 #[test]
-fn a_foreign_object_never_becomes_a_function_local_value() {
+fn a_foreign_object_may_become_a_function_local_value() {
+    for body in [
+        "def f() -> None:\n    x = copy\n",
+        "def _f():\n    return copy\n",
+        "def _g(x):\n    pass\n\n\ndef f() -> None:\n    _g(copy)\n",
+    ] {
+        admitted(&format!("{IMPORT}{body}"));
+    }
+}
+
+/// What stays refused: a function-body `for` over an object (Part 2 of
+/// #1333, #1363) and passing an object to a generic function.
+#[test]
+fn a_function_body_loop_or_generic_argument_stays_refused() {
     for (phrase, body) in [
-        (
-            "binding a CPython object to a name",
-            "def f() -> None:\n    x = copy\n",
-        ),
         (
             "is not supported inside a function body",
             "def f() -> None:\n    for x in copy.xs:\n        pass\n",
         ),
         (
-            "returning a CPython object from a function",
-            "def _f():\n    return copy\n",
-        ),
-        (
-            "passing a CPython object to a function",
-            "def _g(x):\n    pass\n\n\ndef f() -> None:\n    _g(copy)\n",
-        ),
-        (
-            "passing a CPython object to a function",
+            "passing a CPython object to a generic function",
             "def _gen[T](x: T) -> T:\n    return x\n\n\ndef f() -> None:\n    _gen(copy)\n",
         ),
     ] {
@@ -135,13 +135,14 @@ fn a_comprehension_over_a_foreign_object_stays_refused() {
     assert_eq!(diagnostics[0].code, "I0404", "{diagnostics:#?}");
 }
 
-/// An unannotated parameter is never inferred as `object`: the only way to
-/// make it one is to pass a CPython object, and that call is refused, so
-/// the parameter read `len(x)` never sees an `object`.
+/// An unannotated parameter is inferred as `object` from a call that
+/// passes a CPython object (Part 1 of #1333), so `len(x)` on it is the
+/// dynamic CPython call.
 #[test]
-fn an_inferred_parameter_is_never_an_object() {
-    let source = format!("{IMPORT}def _g(x) -> int:\n    return len(x)\n\n\n_g(copy)\n");
-    refused(&source, "I0404", "passing a CPython object to a function");
+fn an_inferred_parameter_may_be_an_object() {
+    admitted(&format!(
+        "{IMPORT}def _g(x) -> int:\n    return len(x)\n\n\n_g(copy)\n"
+    ));
 }
 
 #[test]

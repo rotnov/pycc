@@ -95,17 +95,12 @@ fn check_accepts_a_module_level_object_binding_and_loop() {
     }
 }
 
-/// The binding is module-level only (#1333 carries the function body), a
-/// type change is the ordinary redefinition refusal, and a comprehension
-/// over the bound name keeps its `I0404`.
+/// A type change is the ordinary redefinition refusal, and a comprehension
+/// over the bound name keeps its `I0404`. The function-body binding this
+/// test used to refuse is admitted since Part 1 of #1333; see
+/// `tests/issue_1333_foreign_in_function.rs`.
 #[test]
-fn the_shapes_outside_the_module_level_binding_are_refused() {
-    assert_one_error(
-        "obj_bind_fn_body",
-        "from itertools import product\n\n\ndef f() -> None:\n    p = product(\"ab\")\n",
-        "I0404",
-        "binding a CPython object to a name",
-    );
+fn the_shapes_outside_the_admitted_binding_are_refused() {
     assert_one_error(
         "obj_bind_retype",
         "from itertools import product\nx = product(\"ab\")\nx = 1\n",

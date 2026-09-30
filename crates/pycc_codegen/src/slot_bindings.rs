@@ -101,8 +101,10 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
                     // CPython object to a module global, which needs its
                     // predeclared slot exactly like every type above;
                     // missing from this list, `emit_assign` panics on the
-                    // absent slot. A function-local object binding never
-                    // reaches here -- `pycc_types` refuses it.
+                    // absent slot. Since Part 1 of #1333 (#1362) a
+                    // function-local object binding reaches here too, through
+                    // the same walk over the function body, and needs its
+                    // predeclared slot for the identical reason.
                     | pycc_mir::Ty::Object
             ) {
                 bindings.entry(target.clone()).or_insert(ty);

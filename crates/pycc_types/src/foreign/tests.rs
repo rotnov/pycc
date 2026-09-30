@@ -265,10 +265,6 @@ fn a_foreign_import_after_an_unrolled_enum_loop_is_repositioned_past_it() {
 /// The label [`both_producer_shapes`] gives the helper-call shape.
 const HELPER_SHAPE: &str = "a private helper returning `object`";
 
-/// The `I0404` phrase `crate::lib`'s `Return` arm reports (#1316): a
-/// function may read a module-level foreign name but not hand it back.
-const RETURNING: &str = "returning a CPython object from a function";
-
 /// `snippet` in each of the two producer shapes: literally, and with every
 /// `numpy.pi` replaced by a call to a private helper that returns one.
 ///
@@ -276,10 +272,9 @@ const RETURNING: &str = "returning a CPython object from a function";
 /// makes `object` unspellable in one, so a solver-inferred return is the
 /// only way a call expression can have this type at all.
 ///
-/// #1316 admits the helper's foreign read but refuses its `return` of a
-/// CPython object, so the helper can never really produce one; the shape
-/// stays in the table because the module-body consumer refusal is still
-/// the diagnostic a caller of such a helper sees first.
+/// #1316 admits the helper's foreign read and Part 1 of #1333 its `return`
+/// of a CPython object, so the helper really produces one and a caller sees
+/// the consumer's own refusal.
 fn both_producer_shapes(snippet: &str) -> [(&'static str, String); 2] {
     [
         ("`numpy.pi`", snippet.to_string()),
@@ -332,45 +327,36 @@ fn a_module_scope_attribute_load_on_a_cpython_object_is_admitted() {
     assert!(check_foreign(source).is_none(), "{source}");
 }
 
-/// #1316: a function body may read a module-level foreign name, but a
-/// CPython object never leaves the function through `return`. The read
-/// itself is admitted (`numpy.pi` as a discarded statement), so each
-/// refusal is the consumer's own. Rendering it is admitted since #1340.
+/// #1316: a function body may read a module-level foreign name, and since
+/// Part 1 of #1333 a CPython object may leave the function through
+/// `return`. The read itself is admitted (`numpy.pi` as a discarded
+/// statement), and so is rendering it (#1340).
 #[test]
-fn a_function_body_reads_and_renders_a_foreign_object_but_may_not_return_it() {
-    assert!(
-        check_foreign("def f() -> None:\n    numpy.pi\n").is_none(),
-        "a discarded in-function attribute load is admitted"
-    );
+fn a_function_body_reads_renders_and_returns_a_foreign_object() {
     for source in [
+        "def f() -> None:\n    numpy.pi\n",
         "def _h():\n    return numpy.pi\n\n\n_h()\n",
         "def _h():\n    return numpy.pi\n\n\nx = 1\n",
         "def _h():\n    return numpy\n\n\nx = 1\n",
-    ] {
-        assert_refused(HELPER_SHAPE, source, "I0404", RETURNING);
-    }
-    for source in [
         "def f() -> None:\n    print(numpy)\n",
         "def f() -> None:\n    print(numpy.pi, 1, \"x\", None)\n",
         "def f() -> None:\n    print(f\"<{numpy.pi}>\")\n",
     ] {
-        assert!(
-            check_foreign(source).is_none(),
-            "an in-function render: {source}"
-        );
+        assert!(check_foreign(source).is_none(), "{source}");
     }
 }
 
-/// The lift is keyed on the foreign import, not on the `object` type: an
-/// `object` global the module did not bind by a foreign import stays the
-/// function-body read refusal, for a plain read and for a call alike.
+/// Since Part 1 of #1333 the function-body read is keyed on the `object`
+/// type, not on the foreign import: an `object` global the module did not
+/// bind by a foreign import is read and called like one, and both have
+/// type `object`.
 ///
-/// No source program reaches this today -- every other module-level
-/// `object` binding (a `for` loop variable over a CPython object) may be
-/// unbound and is `T0041` first, which the second half pins -- so the
-/// gate is pinned on a hand-built function environment.
+/// The first half is pinned on a hand-built function environment, so it
+/// does not depend on how the global came to be bound. A module-level `for`
+/// loop variable over a CPython object may be unbound after the loop and is
+/// `T0041` first, which the second half pins.
 #[test]
-fn a_non_import_object_global_stays_refused_in_a_function_body() {
+fn a_non_import_object_global_is_read_in_a_function_body() {
     let mut module = crate::env::Environment::new();
     module.bind("x".to_string(), Ty::Object);
     module.foreign_globals.insert("numpy".to_string());
@@ -382,15 +368,9 @@ fn a_non_import_object_global_stays_refused_in_a_function_body() {
             args: vec![],
         },
     ] {
-        let diagnostic = crate::expr::infer_expr_in(&body, &[], &expr)
-            .expect_err("a non-import `object` global is refused");
-        assert_eq!(diagnostic.code, "I0404", "{diagnostic:?}");
-        assert!(
-            diagnostic
-                .message
-                .contains("using `x`, which is bound to a CPython object"),
-            "{diagnostic:?}"
-        );
+        let ty = crate::expr::infer_expr_in(&body, &[], &expr)
+            .expect("a non-import `object` global is admitted");
+        assert_eq!(ty, Ty::Object, "{expr:?}");
     }
     assert_refused(
         "a module-level `for` loop variable",
@@ -472,8 +452,8 @@ fn every_module_scope_consuming_site_refuses_a_cpython_object_in_both_producer_s
 /// number of other `print` arguments, because `pycc_codegen` renders the
 /// object through the shim (`crates/pycc_codegen/src/string_render.rs`).
 ///
-/// In the helper shape the helper's own `return` is still refused, so that
-/// is the one diagnostic left: the render adds none of its own.
+/// The helper shape is admitted too, since Part 1 of #1333 admits the
+/// helper's own `return`.
 #[test]
 fn rendering_a_cpython_object_is_admitted_in_both_producer_shapes() {
     for snippet in [
@@ -481,9 +461,9 @@ fn rendering_a_cpython_object_is_admitted_in_both_producer_shapes() {
         "print(numpy.pi, 1, \"x\", None, True)\n",
         "print(f\"pi={numpy.pi}!\")\n",
     ] {
-        let [(_, direct), (helper_shape, helper)] = both_producer_shapes(snippet);
-        assert!(check_foreign(&direct).is_none(), "{direct}");
-        assert_refused(helper_shape, &helper, "I0404", RETURNING);
+        for (shape, source) in both_producer_shapes(snippet) {
+            assert!(check_foreign(&source).is_none(), "{shape}: {source}");
+        }
     }
 }
 
@@ -647,23 +627,17 @@ fn a_subscript_store_on_a_cpython_object_is_still_refused() {
 
 /// The solver-side mirror (C4 of the #1082 plan): `constraints.rs`'s own
 /// `Subscript` arm lifts a `Ty::Object` base to a `Ty::Object` term, so an
-/// unannotated private helper returning one materializes its signature and
-/// the user sees the real `I0404` for the in-function read.
+/// unannotated private helper returning one materializes its signature.
 ///
 /// Without the lift the helper's return variable stays unresolved and
 /// signature materialization reports a `T0021` asking for an annotation
 /// `object` cannot be spelled in (D-137) -- the exact dead end the
-/// `AttrGet` arm's own comment describes. The assertion is therefore on
-/// *which diagnostic* the user gets, not on the program being admitted:
-/// #1316's `return` refusal still refuses the helper body.
+/// `AttrGet` arm's own comment describes. Since Part 1 of #1333 admits the
+/// `return`, the program type-checks.
 #[test]
-fn a_private_helper_returning_a_subscript_load_reports_the_return_refusal() {
-    assert_refused(
-        HELPER_SHAPE,
-        "def _h():\n    return numpy.pi[0]\n\n\nx = 1\n",
-        "I0404",
-        RETURNING,
-    );
+fn a_private_helper_returning_a_subscript_load_is_admitted() {
+    let source = "def _h():\n    return numpy.pi[0]\n\n\nx = 1\n";
+    assert!(check_foreign(source).is_none(), "{source}");
 }
 
 // -- PR 3c of #1082: `for` over an `object` value --------------------------

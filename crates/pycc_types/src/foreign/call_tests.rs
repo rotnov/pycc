@@ -98,18 +98,22 @@ fn a_local_rebinding_shadows_the_foreign_callee() {
     );
 }
 
-/// A CPython object is never passed into a pycc-compiled function, at
-/// module scope or inside a function body.
+/// Since Part 1 of #1333 a CPython object may be passed into a
+/// pycc-compiled function, at module scope or inside a function body. A
+/// generic function is the one callee that still refuses it, because a type
+/// variable bound to `object` would need an instantiation that carries the
+/// reference.
 #[test]
-fn passing_a_foreign_object_to_a_pycc_function_is_refused() {
+fn passing_a_foreign_object_to_a_pycc_function_is_admitted() {
     let helper = "def _g(x) -> None:\n    pass\n";
     for tail in ["_g(product)\n", "def f() -> None:\n    _g(product)\n"] {
-        refused(
-            &format!("{FROM_FORM}{helper}{tail}"),
-            "I0404",
-            "passing a CPython object to a function",
-        );
+        admitted(&format!("{FROM_FORM}{helper}{tail}"));
     }
+    refused(
+        &format!("{FROM_FORM}def ident[T](x: T) -> T:\n    return x\n\n\nident(product)\n"),
+        "I0404",
+        "passing a CPython object to a generic function",
+    );
 }
 
 /// Above its import the name is not bound yet, so the call takes the
