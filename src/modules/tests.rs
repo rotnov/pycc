@@ -723,6 +723,7 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
         root: None,
         manifest: None,
         entry_module_name: None,
+        relative_imports: RelativeImports::Project,
     };
     let request = ProjectImportRequest {
         level: 1,
@@ -739,5 +740,113 @@ fn a_bare_file_name_importer_renders_its_directory_as_a_single_dot() {
     assert!(
         rejection.contains("`.` has no `__init__.py`"),
         "unexpected rejection: {rejection}"
+    );
+}
+
+/// Loads `entry` under `pycc build --ext --foreign-relative-imports`'s mode
+/// (#1366).
+fn load_foreign(entry: &Path) -> Result<LoadedProgram, FrontendFailure> {
+    load_with(entry, None, RelativeImports::ForeignFromEntry)
+}
+
+/// The `(module_path, name, level)` of every foreign from-import binding of
+/// the loaded program's entry module.
+fn entry_foreign_from_imports(program: &LoadedProgram) -> Vec<(String, String, u32)> {
+    program
+        .modules
+        .last()
+        .expect("the entry is loaded last")
+        .module
+        .hir
+        .imports
+        .iter()
+        .filter_map(|binding| match binding {
+            pycc_hir::ImportBinding::Foreign {
+                module_path,
+                from: Some(from),
+                ..
+            } => Some((module_path.clone(), from.name.clone(), from.level)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #1366: under `ForeignFromEntry` the entry's relative import is foreign
+/// without any filesystem probe: a same-named sibling file is never loaded,
+/// and no `__init__.py` is needed. The dots travel as `level`, never in
+/// `module_path`, which is `""` for `from . import x`.
+#[test]
+fn the_entry_relative_imports_are_foreign_under_foreign_from_entry() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "sib.py", "x = 1\n");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from .sib import x\nfrom . import other\nfrom ..a.b import c\n\n\n\
+         def main() -> None:\n    print(1)\n",
+    );
+    let program =
+        load_foreign(&entry).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+    assert_eq!(program.modules.len(), 1, "no sibling file is loaded");
+    assert_eq!(
+        entry_foreign_from_imports(&program),
+        vec![
+            ("sib".to_string(), "x".to_string(), 1),
+            (String::new(), "other".to_string(), 1),
+            ("a.b".to_string(), "c".to_string(), 2),
+        ]
+    );
+}
+
+/// #1366: the opt-in is the entry module's alone. A dependency's relative
+/// import stays a project import (D-222), both when it resolves and when it
+/// is `T0021` outside a package.
+#[test]
+fn a_dependency_relative_import_stays_a_project_import_under_foreign_from_entry() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    write(&scratch, "pkg/inner.py", HELPER);
+    write(
+        &scratch,
+        "pkg/helper.py",
+        "from .inner import helper\n\n\ndef twice(x: int) -> int:\n    return helper(x) * 2\n",
+    );
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from pkg.helper import twice\n\n\ndef main() -> None:\n    print(twice(1))\n",
+    );
+    let names: Vec<String> = load_foreign(&entry)
+        .unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)))
+        .modules
+        .iter()
+        .map(|module| {
+            Path::new(&module.display_path)
+                .file_name()
+                .expect("a loaded module has a file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec!["__init__.py", "inner.py", "helper.py", "main.py"]
+    );
+
+    let outside = ScratchDir::new("modules_tests").expect("scratch");
+    write(&outside, "helper.py", "from .nowhere import thing\n");
+    let entry = write(
+        &outside,
+        "main.py",
+        "from helper import thing\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let failure = load_foreign(&entry)
+        .map(|_| ())
+        .expect_err("the dependency's relative import is outside a package");
+    let rendered = describe(&failure);
+    assert!(
+        rendered.contains("helper.py: T0021")
+            && rendered.contains("attempted relative import with no known parent package"),
+        "{rendered}"
     );
 }

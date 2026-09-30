@@ -625,3 +625,36 @@ fn an_identical_foreign_from_pair_across_modules_links_and_keeps_its_from() {
         ]
     );
 }
+
+/// #1366: a relative foreign from-import's identity includes its level, so
+/// `from .x import a` and `from x import a` in two modules are two objects.
+/// The relative binding sits in the *earlier* module, the owner, so the
+/// message renders it through `dotted()`'s relative arm; a real build links
+/// the entry last, so only this arrangement reaches it.
+#[test]
+fn a_relative_and_an_absolute_from_import_across_modules_are_two_objects() {
+    let (index, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "from . import a\n"),
+        all_foreign_input("main.py", "from x import a\n"),
+    ]);
+    assert_eq!(index, 1);
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `a` to the CPython object `x.a`, which `dep.py` binds to `.a`; \
+         shadowing a foreign import across modules is not supported yet"
+    );
+    let (_, diagnostic) = first_error(vec![
+        all_foreign_input("dep.py", "from ..x import a\n"),
+        all_foreign_input("main.py", "from .x import a\n"),
+    ]);
+    assert_eq!(
+        diagnostic.message,
+        "module `main.py` binds `a` to the CPython object `.x.a`, which `dep.py` binds to \
+         `..x.a`; shadowing a foreign import across modules is not supported yet"
+    );
+    link_and_finalize(vec![
+        all_foreign_input("dep.py", "from .x import a\n"),
+        all_foreign_input("main.py", "from .x import a\n"),
+    ])
+    .expect("the same relative object in two modules must link");
+}

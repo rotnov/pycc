@@ -6,6 +6,7 @@ status: accepted
 
 ## D-222: Project modules link at the HIR level into one whole-program `HirModule`
 - Status: accepted
+- Amendment (2026-09-30): #1366 adds the opt-in D-257 names. Under `pycc build --ext --foreign-relative-imports`, the entry module's top-level relative from-imports bind CPython objects of the package the artifact is imported under, not project modules. Dependencies, and every build without the flag, are unchanged.
 - Context: pycc compiled exactly one file. Every `from <project module> import ...`
   was rejected with `C0001`, so no real multi-file Python project could be checked
   or built (#881, Part 1 delivered as #898). The pipeline downstream of `pycc_hir`

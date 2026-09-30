@@ -204,7 +204,10 @@ pub enum ResolvedImport<'a> {
     /// `if`/`try` block (#1291), and for a top-level `from X import a, b`
     /// with an undotted `X` (#1278), whose names bind the module's
     /// attributes -- see `src/modules.rs`'s own `missing` for why every
-    /// other foreign shape stays unanswered.
+    /// other absolute foreign shape stays unanswered. Under `pycc build
+    /// --ext --foreign-relative-imports` (#1366) it is also recorded for
+    /// every relative `from` import of the entry module, dotted or not,
+    /// which binds attributes of the package the artifact is imported under.
     Foreign,
 }
 
@@ -533,10 +536,13 @@ fn lower_import_alias(
 }
 
 /// The foreign arm of [`lower_import_stmt`] (#1278): `from X import a, b`
-/// where the driver answered the undotted `X` as a CPython module. Each name
-/// binds, in source order, the opaque CPython object `X.<name>` that
-/// `pycc_ext_obj_import_from` fetches with CPython's own `IMPORT_FROM`
-/// semantics when the statement runs, spliced at `site` like `import X`.
+/// where the driver answered the undotted `X` as a CPython module, or --
+/// under `pycc build --ext --foreign-relative-imports` (#1366) -- the entry
+/// module's relative `from .x import a, b`, whose dots travel as
+/// [`FromImport::level`]. Each name binds, in source order, the opaque
+/// CPython object `X.<name>` that `pycc_ext_obj_import_from` fetches with
+/// CPython's own `IMPORT_FROM` semantics when the statement runs, spliced
+/// at `site` like `import X`.
 ///
 /// The wildcard and `as` aliasing keep their shared `C0001`s (#963/#883).
 /// A name pycc resolves by its spelling -- a builtin, a `pycc_std` module,
@@ -552,18 +558,28 @@ fn lower_foreign_from_import(
     site: ForeignImportSite,
 ) -> Result<LoweredImport, Diagnostic> {
     check_from_import_shape(import)?;
-    let module_path = import
-        .module
-        .as_ref()
-        .expect("the driver answers `Foreign` only for an absolute, named module")
-        .to_string();
-    for alias in &import.names {
+    // An absolute answer always names its module; only a relative one
+    // (#1366, `from . import x`) can omit it, and records `""`.
+    let module_path = import.module.as_deref().unwrap_or("").to_string();
+    let fromlist: Vec<String> = import
+        .names
+        .iter()
+        .map(|alias| alias.name.to_string())
+        .collect();
+    for (index, alias) in import.names.iter().enumerate() {
         check_alias_shape(import, alias)?;
         let name = alias.name.as_str();
         if spelling::shadows_a_resolved_spelling(name) {
+            let object = FromImport {
+                name: name.to_string(),
+                fromlist: fromlist.clone(),
+                index,
+                level: import.level,
+            }
+            .spelled_object(&module_path);
             return Err(unsupported(
                 format!(
-                    "binding the CPython object `{module_path}.{name}` to `{name}`, a name pycc \
+                    "binding the CPython object `{object}` to `{name}`, a name pycc \
                      resolves by its spelling (a Python builtin, a stdlib module, or a typing, \
                      decorator or base-class marker), is not supported yet"
                 ),
@@ -571,11 +587,6 @@ fn lower_foreign_from_import(
             ));
         }
     }
-    let fromlist: Vec<String> = import
-        .names
-        .iter()
-        .map(|alias| alias.name.to_string())
-        .collect();
     let span = statement_span(import.range);
     let bindings = fromlist
         .iter()
@@ -587,6 +598,7 @@ fn lower_foreign_from_import(
                 name: name.clone(),
                 fromlist: fromlist.clone(),
                 index,
+                level: import.level,
             }),
             site,
             span,

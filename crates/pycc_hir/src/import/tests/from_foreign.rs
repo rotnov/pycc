@@ -33,6 +33,7 @@ fn from_import(name: &str, fromlist: &[&str], index: usize) -> FromImport {
         name: name.to_string(),
         fromlist: fromlist.iter().map(ToString::to_string).collect(),
         index,
+        level: 0,
     }
 }
 
@@ -199,4 +200,168 @@ fn the_statement_and_object_renderings_cover_both_forms() {
         &["product", "chain"],
         0
     ))));
+}
+
+/// Lowers `source`, answering every relative request `Foreign`, as the
+/// driver does for the entry module under `pycc build --ext
+/// --foreign-relative-imports` (#1366), and every absolute one in `foreign`
+/// too.
+fn lower_relative(source: &str, foreign: &[&str]) -> Result<LoweredModule, Vec<Diagnostic>> {
+    let parsed = parse(source);
+    let mut resolved = ResolvedImports::default();
+    for request in project_import_requests(&parsed) {
+        if request.level > 0
+            || request
+                .module
+                .as_deref()
+                .is_some_and(|module| foreign.contains(&module))
+        {
+            resolved.insert(request.span, ResolvedImport::Foreign);
+        }
+    }
+    lower_module(&parsed, &resolved, None)
+}
+
+fn relative_from_import(name: &str, fromlist: &[&str], index: usize, level: u32) -> FromImport {
+    FromImport {
+        level,
+        ..from_import(name, fromlist, index)
+    }
+}
+
+/// #1366: a relative foreign from-import records its dots as `level`, and
+/// the module as written without them -- `""` for `from . import x`.
+#[test]
+fn a_relative_foreign_from_import_records_its_level() {
+    let source = "from . import sib\nfrom ..a.b import c, d\n";
+    let lowered = lower_relative(source, &[]).expect("must lower");
+    let first = Span::new(0, 17);
+    let second = Span::new(18, source.trim_end().len() as u32);
+    let expected = vec![
+        ImportBinding::Foreign {
+            local_name: "sib".to_string(),
+            module_path: String::new(),
+            from: Some(relative_from_import("sib", &["sib"], 0, 1)),
+            site: crate::ForeignImportSite::Item(0),
+            span: first,
+        },
+        ImportBinding::Foreign {
+            local_name: "c".to_string(),
+            module_path: "a.b".to_string(),
+            from: Some(relative_from_import("c", &["c", "d"], 0, 2)),
+            site: crate::ForeignImportSite::Item(0),
+            span: second,
+        },
+        ImportBinding::Foreign {
+            local_name: "d".to_string(),
+            module_path: "a.b".to_string(),
+            from: Some(relative_from_import("d", &["c", "d"], 1, 2)),
+            site: crate::ForeignImportSite::Item(0),
+            span: second,
+        },
+    ];
+    assert_eq!(lowered.hir.imports, expected);
+}
+
+/// #1366: the spelling refusal renders the relative object with its dots,
+/// and no doubled separator for `from . import len`.
+#[test]
+fn a_relative_name_pycc_resolves_by_its_spelling_is_refused_with_its_dots() {
+    let diagnostic = only_error(lower_relative("from . import len\n", &[]));
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .starts_with("binding the CPython object `.len` to `len`,"),
+        "{}",
+        diagnostic.message
+    );
+    let diagnostic = only_error(lower_relative("from ..a.b import x, range\n", &[]));
+    assert!(
+        diagnostic
+            .message
+            .starts_with("binding the CPython object `..a.b.range` to `range`,"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn a_relative_aliased_or_wildcard_foreign_from_import_keeps_its_c0001() {
+    let diagnostic = only_error(lower_relative("from .sib import x as y\n", &[]));
+    assert_eq!(
+        diagnostic.message,
+        "`from ... import x as y` aliasing is not supported yet"
+    );
+    let diagnostic = only_error(lower_relative("from .sib import *\n", &[]));
+    assert_eq!(
+        diagnostic.message,
+        "`from ... import *` (wildcard import) is not supported yet"
+    );
+}
+
+/// #1366: `from .x import a` and `from x import a` are two objects, so
+/// binding both to `a` is refused; the same relative statement twice is the
+/// identical pair.
+#[test]
+fn a_relative_and_an_absolute_import_of_one_name_are_two_objects() {
+    let diagnostic = only_error(lower_relative(
+        "from .x import a\nfrom x import a\n",
+        &["x"],
+    ));
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic.message.contains("shadowing a foreign import"),
+        "{}",
+        diagnostic.message
+    );
+    let diagnostic = only_error(lower_relative("from .x import a\nfrom ..x import a\n", &[]));
+    assert!(
+        diagnostic.message.contains("shadowing a foreign import"),
+        "{}",
+        diagnostic.message
+    );
+    let lowered = lower_relative("from .x import a\nfrom .x import a\n", &[]).expect("must lower");
+    assert_eq!(lowered.hir.imports.len(), 2);
+}
+
+/// Without a `Foreign` answer a relative import keeps its `C0001`.
+#[test]
+fn an_unanswered_relative_import_keeps_its_c0001() {
+    let diagnostic = only_error(lower_foreign("from .sib import x\n", &[]));
+    assert_eq!(
+        diagnostic.message,
+        "a relative import (`from . import ...`) is not supported yet"
+    );
+}
+
+/// #1366: every rendering spells the relative module with its dots, and
+/// writes the separating dot only when there is a module name.
+#[test]
+fn the_relative_renderings_spell_the_dots() {
+    let absolute = from_import("x", &["x"], 0);
+    let bare = relative_from_import("sib", &["sib", "other"], 0, 1);
+    let dotted = relative_from_import("c", &["c"], 0, 2);
+    assert_eq!(absolute.spelled_module("m"), "m");
+    assert_eq!(absolute.spelled_object("m"), "m.x");
+    assert_eq!(bare.spelled_module(""), ".");
+    assert_eq!(bare.spelled_object(""), ".sib");
+    assert_eq!(dotted.spelled_module("a.b"), "..a.b");
+    assert_eq!(dotted.spelled_object("a.b"), "..a.b.c");
+    assert_eq!(
+        foreign_import_statement("", Some(&bare)),
+        "from . import sib, other"
+    );
+    assert_eq!(
+        foreign_import_statement("a.b", Some(&dotted)),
+        "from ..a.b import c"
+    );
+    assert_eq!(
+        foreign_bound_object("", Some(&bare)),
+        "the CPython object `.sib`"
+    );
+    assert_eq!(
+        foreign_bound_object("a.b", Some(&dotted)),
+        "the CPython object `..a.b.c`"
+    );
 }

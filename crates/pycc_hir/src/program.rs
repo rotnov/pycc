@@ -43,15 +43,22 @@ struct ForeignLocal<'a> {
 }
 
 impl ForeignLocal<'_> {
-    fn attr(&self) -> Option<&str> {
-        self.from.map(|from| from.name.as_str())
+    /// The object's identity: the module, its relative level (#1366; `0`
+    /// for `import X` and every absolute from-import) and, for a
+    /// from-import, the attribute name.
+    fn key(&self) -> (&str, u32, Option<&str>) {
+        (
+            self.module_path,
+            self.from.map_or(0, |from| from.level),
+            self.from.map(|from| from.name.as_str()),
+        )
     }
 
-    /// `numpy`, or `itertools.product` for a from-import.
+    /// `numpy`, or `itertools.product` / `.sib` for a from-import.
     fn dotted(&self) -> String {
-        match self.attr() {
+        match self.from {
             None => self.module_path.to_string(),
-            Some(attr) => format!("{}.{attr}", self.module_path),
+            Some(from) => from.spelled_object(self.module_path),
         }
     }
 }
@@ -164,9 +171,7 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
     // and `from copy import copy` in another are two objects.
     for local in &foreign_locals {
         if let Some(owner) = foreign_locals.iter().find(|other| {
-            other.name == local.name
-                && (other.module_path, other.attr()) != (local.module_path, local.attr())
-                && other.index < local.index
+            other.name == local.name && other.key() != local.key() && other.index < local.index
         }) {
             return Err(vec![(
                 local.index,

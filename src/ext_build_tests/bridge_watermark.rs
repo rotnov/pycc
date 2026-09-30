@@ -72,9 +72,20 @@ fn the_watermark_helpers_are_defined_above_the_generated_include() {
 fn module_exec_releases_to_its_own_mark_instead_of_clearing_the_table() {
     let shim = shim_c();
     assert!(!shim.contains("pycc_ext_bridge_table_clear"));
-    assert!(
-        shim.contains("    mark = pycc_ext_bridge_mark();\n    if (pycc_ext_module_exec() != 0) {")
-    );
+    // The mark is taken at exec entry; #1366's exec-target save/set sits
+    // between it and the body, and adds no bridge entry of its own.
+    let taken = "    mark = pycc_ext_bridge_mark();\n";
+    let mark = shim.find(taken).expect("the mark is taken") + taken.len();
+    let exec = shim
+        .find("    exec_status = pycc_ext_module_exec();\n")
+        .expect("the body runs");
+    assert!(mark < exec);
+    assert!(!shim[mark..exec].contains("pycc_ext_bridge_"));
+    assert!(shim[exec..].starts_with(
+        "    exec_status = pycc_ext_module_exec();\n    \
+         (void)PyThread_tss_set(pycc_ext_exec_target_key, saved_target);\n    \
+         if (exec_status != 0) {"
+    ));
     assert_eq!(
         shim.matches("        pycc_ext_bridge_release_to(mark);\n        return -1;\n    }\n    pycc_ext_bridge_release_to(mark);\n    return 0;\n").count(),
         1

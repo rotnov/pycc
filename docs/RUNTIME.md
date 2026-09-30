@@ -867,7 +867,8 @@ binding, so `from itertools import product` holds CPython's own
 (`from X import a as b`), the wildcard, a dotted module (`from X.Y import a`,
 [#1138](https://github.com/rotnov/pycc/issues/1138)) and a from-import inside a
 block body keep their `C0001` (a relative import is a project import, D-222,
-and never reaches this channel), and so does a name pycc
+and never reaches this channel, except the entry module's top-level relative
+from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
 `from numpy import ndarray`), because binding it to a CPython object would
 change what every later use of that spelling means. Each name is its own
@@ -955,7 +956,7 @@ is translated into a pycc exception first (#1293, above); when it goes
 uncaught, the host still receives CPython's original exception object.
 
 **The from form.** Each name of `from X import a, b` is one call to
-`pycc_ext_obj_import_from(module, fromlist, nfrom, index)`, in source order at
+`pycc_ext_obj_import_from(module, fromlist, nfrom, index, level)`, in source order at
 the statement's position, and it takes the top-level `NULL` edge: the
 direct return, never the #1293 bridge. A from-import is admitted only at the
 top level of the module body, where no `try` can enclose it, so a failed one
@@ -963,8 +964,9 @@ is never catchable; a from-import inside a `try` block is still the
 block-body `C0001`. The helper mirrors
 CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
 
-1. It calls `builtins.__import__(X, None, None, fromlist, 0)` with the
-   statement's *whole* fromlist, as `IMPORT_NAME` does, so a package whose
+1. It calls `builtins.__import__(X, None, None, fromlist, 0)`, or for a
+   relative import `builtins.__import__(X, globals, None, fromlist, level)`
+   (see below), with the statement's *whole* fromlist, as `IMPORT_NAME` does, so a package whose
    submodule import sets another listed name still works. When `__import__` is
    missing from the builtins it raises CPython's `ImportError("__import__ not
    found")`.
@@ -998,6 +1000,32 @@ remain:
 - CPython 3.13's "(consider renaming '…' since it has the same name as the
   standard library module …)" variant, for a local file shadowing a
   standard-library module, is not reproduced either.
+
+**The relative from form** ([#1366](https://github.com/rotnov/pycc/issues/1366)).
+Only `pycc build --ext --foreign-relative-imports` emits it, and only for the
+entry module's top-level relative from-imports. `level` is the statement's dot
+count and `module` the name after the dots (`""` for `from . import x`); an
+absolute import passes `level` `0` and `globals` `None`, unchanged. For
+`level > 0` the helper passes the *executing module's own dict* as `globals`,
+exactly as CPython's `IMPORT_NAME` passes the frame's globals, so importlib's
+`_calc___package__` reads the package from the module's `__package__` (then
+`__spec__.parent`), which importlib set from the import spec before
+`Py_mod_exec` ran. The compiled `__name__` constant is never consulted. A
+missing sibling, a climb beyond the top-level package, and the artifact
+imported as a top-level module (`__package__ == ''`) therefore raise exactly
+what the same statement in a `.py` module installed at that path raises, and
+`from . import sib` binds the submodule, because
+`__import__("", globals, None, ("sib",), 1)` returns the package itself
+with `sib` loaded onto it. The
+executing module is kept in a per-thread slot (`pycc_ext_exec_target_key`)
+that `pycc_ext_exec_module` saves, sets for the duration of the body, and
+restores on both exits, so the same shared object executing beneath itself
+(imported under a second name, or reloaded) or on a second thread resolves
+against its own module; no test exercises those two cases yet. A relative call outside an exec, which pycc never
+emits, raises `SystemError` rather than resolve against the wrong package.
+`tests/issue_1366_relative_foreign_import.rs` installs the `.py` source and
+then the artifact at the same path of one package tree and compares their
+output and final traceback line for every case.
 
 An attribute load fails the same way and takes the same edge.
 `pycc_ext_obj_getattr` returns `NULL` with CPython's error indicator set, and

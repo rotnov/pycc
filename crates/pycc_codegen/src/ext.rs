@@ -118,12 +118,15 @@ pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 
 /// The fixed C shim's from-import helper (#1278): `PyObject
 /// *pycc_ext_obj_import_from(const char *module, const char *const
-/// *fromlist, long long nfrom, long long index)` runs CPython's
-/// `IMPORT_NAME` with the statement's whole fromlist, then `IMPORT_FROM` of
-/// `fromlist[index]`, and returns a *new* reference to that object, or
-/// `NULL` with the CPython exception (an `ImportError` for a missing name)
-/// already set. Spelled once here for exactly the reason
-/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
+/// *fromlist, long long nfrom, long long index, long long level)` runs
+/// CPython's `IMPORT_NAME` with the statement's whole fromlist, then
+/// `IMPORT_FROM` of `fromlist[index]`, and returns a *new* reference to that
+/// object, or `NULL` with the CPython exception (an `ImportError` for a
+/// missing name) already set. `level` is `0` for an absolute import; a
+/// relative one (#1366, `pycc build --ext --foreign-relative-imports`)
+/// passes its dot count, and the shim resolves it against the executing
+/// module's own dict. Spelled once here for exactly the reason
+/// `EXT_OBJ_IMPORT_SYMBOL` is.
 pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
 
 /// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called

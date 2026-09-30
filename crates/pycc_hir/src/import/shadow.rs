@@ -95,7 +95,8 @@ pub(crate) fn reject_shadowed_foreign_imports(
                     candidate,
                     ImportBinding::Foreign { module_path: other_path, from: other_from, .. }
                         if other_path == module_path
-                            && other_from.as_ref().map(|f| &f.name) == from.as_ref().map(|f| &f.name)
+                            && other_from.as_ref().map(|f| (&f.name, f.level))
+                                == from.as_ref().map(|f| (&f.name, f.level))
                 )
         });
         let Some(span) = definition.or(shadowed_by_import.then_some(*span)) else {

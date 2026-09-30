@@ -425,6 +425,12 @@ pub enum ImportBinding {
     /// `pycc_ext_obj_import_from`; `local_name` is the name, and
     /// `module_path` stays the module, so every gate that classifies by the
     /// module root (the lock, the interop policy, `I0403`) keeps reading it.
+    /// Under `pycc build --ext --foreign-relative-imports` (#1366) the entry
+    /// module's relative `from .sib import x` is foreign too: `module_path`
+    /// is then the name as written *without* its leading dots (`""` for
+    /// `from . import x`), and [`FromImport::level`] carries the dots. Those
+    /// root gates never see such a binding, because the flag requires
+    /// `--ext`, which skips all three.
     ///
     /// `site` says where the import runs; see [`ForeignImportSite`].
     ///
@@ -455,11 +461,19 @@ pub enum ImportBinding {
 /// the import call; the driver's per-statement diagnostics (`I0402`,
 /// `I0403`) render it and report once per statement, on the binding whose
 /// `index` is `0` (see [`FromImport::opens_statement`]).
+///
+/// `level` is the statement's count of leading dots (#1366): `0` for an
+/// absolute `from X import n`, and `1` or more for a relative one, which
+/// only the entry module of a `pycc build --ext --foreign-relative-imports`
+/// binds this way. The module name the binding records never includes the
+/// dots; [`FromImport::spelled_module`] and [`FromImport::spelled_object`]
+/// render them back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FromImport {
     pub name: String,
     pub fromlist: Vec<String>,
     pub index: usize,
+    pub level: u32,
 }
 
 impl FromImport {
@@ -474,6 +488,26 @@ impl FromImport {
     pub fn opens_statement(&self) -> bool {
         self.index == 0
     }
+
+    /// The module as the statement spells it (#1366): `module_path` behind
+    /// `level` dots, so `itertools`, `.sib`, `..a.b`, or `.` for `from .
+    /// import x`.
+    pub fn spelled_module(&self, module_path: &str) -> String {
+        format!("{}{module_path}", ".".repeat(self.level as usize))
+    }
+
+    /// The object this binding binds, spelled as a dotted path (#1366):
+    /// `itertools.product`, `.sib.x`, `..a.b.c`, or `.sib` for `from .
+    /// import sib`. The separating dot is written only when there is a module
+    /// name to separate the attribute from.
+    pub fn spelled_object(&self, module_path: &str) -> String {
+        let module = self.spelled_module(module_path);
+        if module_path.is_empty() {
+            format!("{module}{}", self.name)
+        } else {
+            format!("{module}.{}", self.name)
+        }
+    }
 }
 
 /// Whether a foreign binding is the one a statement-level diagnostic about
@@ -485,21 +519,27 @@ pub fn opens_foreign_statement(from: Option<&FromImport>) -> bool {
 }
 
 /// The source form of a foreign import as diagnostics quote it:
-/// `import numpy`, or `from tkinter import Tk, Label` (#1278).
+/// `import numpy`, or `from tkinter import Tk, Label` (#1278), or `from
+/// ..lexer import Token` for a relative one (#1366).
 pub fn foreign_import_statement(module_path: &str, from: Option<&FromImport>) -> String {
     match from {
         None => format!("import {module_path}"),
-        Some(from) => format!("from {module_path} import {}", from.fromlist.join(", ")),
+        Some(from) => format!(
+            "from {} import {}",
+            from.spelled_module(module_path),
+            from.fromlist.join(", ")
+        ),
     }
 }
 
 /// What a foreign binding binds, as diagnostics name it: `the CPython module
 /// `numpy`` for `import numpy`, `the CPython object `itertools.product``
-/// for `from itertools import product` (#1278).
+/// for `from itertools import product` (#1278), `the CPython object
+/// `.sib`` for a relative `from . import sib` (#1366).
 pub fn foreign_bound_object(module_path: &str, from: Option<&FromImport>) -> String {
     match from {
         None => format!("the CPython module `{module_path}`"),
-        Some(from) => format!("the CPython object `{module_path}.{}`", from.name),
+        Some(from) => format!("the CPython object `{}`", from.spelled_object(module_path)),
     }
 }
 

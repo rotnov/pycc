@@ -97,6 +97,14 @@ pub enum Command {
         /// rule 3).
         #[arg(long, conflicts_with_all = ["interop_policy", "pure"])]
         ext: bool,
+        /// Bind the entry module's relative `from .x import a` statements
+        /// as CPython objects of the package the `--ext` artifact is
+        /// imported under, resolved when it is imported, instead of as
+        /// project modules (D-222's opt-in, #1366). Applies to the entry
+        /// module's top-level relative from-imports only; a dependency's
+        /// relative imports stay project imports. Requires `--ext`.
+        #[arg(long, requires = "ext")]
+        foreign_relative_imports: bool,
         /// Link libpython into the executable from the embed interpreter's
         /// static archive instead of bundling its shared library, and
         /// export its C-API symbols so a standard-library extension loads
@@ -573,6 +581,52 @@ mod tests {
                 "{argv:?}"
             );
         }
+    }
+
+    /// #1366: `--foreign-relative-imports` is an `--ext`-only opt-in, off
+    /// by default, and parses in either order next to `--ext`.
+    #[test]
+    fn foreign_relative_imports_requires_ext() {
+        let cli = Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out", "--ext"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Build {
+                foreign_relative_imports: false,
+                ..
+            }
+        ));
+        for order in [
+            ["--ext", "--foreign-relative-imports"],
+            ["--foreign-relative-imports", "--ext"],
+        ] {
+            let argv: Vec<&str> = ["pycc", "build", "in.py", "-o", "out"]
+                .into_iter()
+                .chain(order)
+                .collect();
+            let cli = Cli::try_parse_from(&argv).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Build {
+                    ext: true,
+                    foreign_relative_imports: true,
+                    ..
+                }
+            ));
+        }
+        let error = Cli::try_parse_from([
+            "pycc",
+            "build",
+            "in.py",
+            "-o",
+            "out",
+            "--foreign-relative-imports",
+        ])
+        .err()
+        .expect("a usage error");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     #[test]

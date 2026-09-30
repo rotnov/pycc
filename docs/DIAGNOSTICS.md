@@ -26,7 +26,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |
-| `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch; also the project-import failures CPython itself rejects (D-222): a name the imported module does not define, a relative import with no parent package or climbing above the top-level package, and a relative target that resolves to no module; also `hash()` of a `list`, `dict` or `set`, reported as "unhashable type: `<ty>`", the `TypeError` CPython raises (#1331); also `hash()` of an instance whose class is unhashable (it defines `__eq__` without `__hash__`), or whose `__hash__` does not return an integer, "`__hash__` method should return an integer" (#1335) |
+| `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch; also the project-import failures CPython itself rejects (D-222): a name the imported module does not define, a relative import with no parent package or climbing above the top-level package, and a relative target that resolves to no module (none of these for the entry module's relative from-imports under `pycc build --ext --foreign-relative-imports`, #1366, which CPython resolves when the artifact is imported); also `hash()` of a `list`, `dict` or `set`, reported as "unhashable type: `<ty>`", the `TypeError` CPython raises (#1331); also `hash()` of an instance whose class is unhashable (it defines `__eq__` without `__hash__`), or whose `__hash__` does not return an integer, "`__hash__` method should return an integer" (#1335) |
 | `T0022` | error | return type mismatch — a written return annotation the body contradicts reads *return type mismatch: expected `int`, found `P`* and carries a `help` suggestion (D-152), while an *unannotated* private helper whose inferred return type gets pinned two incompatible ways reads *private helper return type: conflicting inferred types `int` and `str`* with no `help` (neither side is canonical). The discriminator is the return annotation, not the function's visibility — the solver walks every module-level function, not only `_`-prefixed helpers (#949). A function with a non-`None` return type whose body can reach its end reads *function `f` can exit without returning `int`*. A `while True:` or `while <non-zero int literal>:` loop never reaches the statement after it, so a body ending in one, left only through `return` or a raise, does not reach its end; any other loop test is conservatively assumed to fall through: `while False:`, `while 0:` and a computed test because the test may be false on entry or later, and a string or float literal test because pycc does not treat it as constant (#1370). The rule relies on `break` being rejected with `C0001` today |
 | `T0023` | error | incompatible assignment |
 | `T0024` | error | `return` outside a function |
@@ -193,8 +193,10 @@ name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963))
 the wildcard, a dotted `X` (`from xml.dom import minidom`,
 [#1138](https://github.com/rotnov/pycc/issues/1138)), and a from-import inside
 a block body. (A relative import is a project import (D-222) and never reaches
-the foreign channel; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
-rules is its module *and* its name, so `import copy` followed by
+the foreign channel, unless `pycc build --ext --foreign-relative-imports`
+(#1366) makes the entry module's top-level relative from-imports foreign; its failures are the `T0021` row above.) A foreign import's identity for the shadowing
+rules is its module, its relative level and its name (so `from .x import a`
+and `from x import a` are two objects), and `import copy` followed by
 `from copy import copy` is the same C0001 as any other rebinding of a foreign
 name. `I0402` and `I0403` are reported once per statement, not once per name:
 `from tkinter import Tk, Label` under a native build is one `I0403`, and its
