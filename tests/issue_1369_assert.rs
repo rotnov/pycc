@@ -507,6 +507,24 @@ fn an_assert_in_a_module_that_binds_a_builtin_exception_name_is_refused() {
     }
 }
 
+/// The refusal joins the per-item diagnostic collection in source order: a
+/// module with an earlier independently failing top-level statement reports
+/// that one first, then the `assert` refusal, and nothing is skipped.
+#[test]
+fn an_earlier_failure_is_reported_before_the_assert_refusal() {
+    let text = check_error(
+        "assert_shadow_after_failure",
+        "x = 1 @ 2\nclass ValueError:\n    pass\n\n\nassert True\n",
+    );
+    let earlier = text
+        .find("binary operator `@` is not supported yet")
+        .unwrap_or_else(|| panic!("missing the earlier diagnostic: {text}"));
+    let refusal = text
+        .find("an `assert` statement needs the builtin `AssertionError`")
+        .unwrap_or_else(|| panic!("missing the assert refusal: {text}"));
+    assert!(earlier < refusal, "wrong order: {text}");
+}
+
 /// A function-local binding of `AssertionError` cannot hold a class, so the
 /// rewritten call is refused with `T0021` rather than calling something
 /// other than the builtin -- never a miscompilation.

@@ -447,16 +447,16 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
     scan.found
 }
 
-/// The range of the first `assert` statement anywhere in `module`, nested
+/// The range of the first `assert` statement anywhere in `body`, nested
 /// bodies included, or `None` when it has none (#1369).
 ///
-/// `module::lower_module` asks this only when
+/// `module::lower_module` asks this, one top-level item at a time, only when
 /// [`shadowed_builtin_exception_name`] withheld the builtin classes: an
 /// `assert` needs the builtin `AssertionError`, which such a module does not
-/// have, so it is refused up front with one `C0001` naming the binding
-/// responsible rather than at each `assert` with a message about the call it
-/// was rewritten into.
-pub(crate) fn first_assert_statement_range(module: &ModModule) -> Option<std::ops::Range<u32>> {
+/// have, so the first top-level item containing one is refused with one
+/// `C0001` naming the binding responsible rather than at each `assert` with a
+/// message about the call it was rewritten into.
+pub(crate) fn first_assert_statement_range(body: &[Stmt]) -> Option<std::ops::Range<u32>> {
     struct AssertScan {
         found: Option<std::ops::Range<u32>>,
     }
@@ -473,7 +473,7 @@ pub(crate) fn first_assert_statement_range(module: &ModModule) -> Option<std::op
         }
     }
     let mut scan = AssertScan { found: None };
-    scan.visit_body(&module.body);
+    scan.visit_body(body);
     scan.found
 }
 

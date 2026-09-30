@@ -275,20 +275,33 @@ pub fn lower_module(
         state.class_defs.extend(builtin_exception_class_defs());
     }
     // #1369: an `assert` raises the builtin `AssertionError`, which a module
-    // that withheld seeding does not have. Refused here, once, naming the
-    // binding responsible -- see `exception::first_assert_statement_range`.
-    if let Some(shadowed) = &shadowed_builtin_exception_name
-        && let Some(range) = exception::first_assert_statement_range(module)
-    {
-        return Err(vec![unsupported(
-            format!(
-                "an `assert` statement needs the builtin `AssertionError`, which is \
-                 unavailable because this module binds the builtin exception name \
-                 `{shadowed}` at top level"
-            ),
-            range,
-        )]);
-    }
+    // that withheld seeding does not have. Refused once, naming the binding
+    // responsible, as the diagnostic of the first top-level item containing
+    // an `assert` -- see `exception::first_assert_statement_range`. It is
+    // emitted in the loop below *in place of* that item's own lowering
+    // rather than returned from here, so D-217 rule 2 holds: every earlier
+    // item is still lowered and reports first, and the loop keeps going
+    // after it (#867/D-233's per-item collection). Replacing, not adding to,
+    // the item's lowering keeps its other diagnostic from being a
+    // consequence of the missing class. The item bound nothing, so its
+    // names are poisoned like any other failing item's.
+    let mut assert_refusal: Option<(usize, Diagnostic)> = shadowed_builtin_exception_name
+        .as_ref()
+        .and_then(|shadowed| {
+            module.body.iter().enumerate().find_map(|(index, stmt)| {
+                exception::first_assert_statement_range(std::slice::from_ref(stmt)).map(|range| {
+                    let diagnostic = unsupported(
+                        format!(
+                            "an `assert` statement needs the builtin `AssertionError`, \
+                                 which is unavailable because this module binds the builtin \
+                                 exception name `{shadowed}` at top level"
+                        ),
+                        range,
+                    );
+                    (index, diagnostic)
+                })
+            })
+        });
     // W0 of #882 (#1156): the compiler-provided `__name__` binding, pushed
     // into the still-empty item list so it is the module's *first* top-level
     // statement -- an ordinary `str` global every downstream pass already
@@ -363,7 +376,11 @@ pub fn lower_module(
         } else {
             FuturePosition::Body
         };
-        match lower_top_level_item(stmt, &mut state, resolved, position) {
+        let outcome = match assert_refusal.take_if(|(refused, _)| *refused == index) {
+            Some((_, diagnostic)) => Err(diagnostic),
+            None => lower_top_level_item(stmt, &mut state, resolved, position),
+        };
+        match outcome {
             Ok(()) => {
                 // P5: an item that binds a poisoned name and lowers
                 // un-poisons it. `retain`, never `position` + `remove`, so a

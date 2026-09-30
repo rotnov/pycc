@@ -430,13 +430,15 @@ fn an_assert_statement_alone_counts_as_a_reference() {
 #[test]
 fn the_first_assert_statement_is_found_at_any_depth() {
     use crate::exception::first_assert_statement_range;
-    assert_eq!(first_assert_statement_range(&parse("x = 1\n")), None);
+    assert_eq!(first_assert_statement_range(&parse("x = 1\n").body), None);
     assert_eq!(
-        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n")),
+        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n").body),
         Some(6..14)
     );
     assert_eq!(
-        first_assert_statement_range(&parse("def f() -> None:\n    if 1:\n        assert 0\n")),
+        first_assert_statement_range(
+            &parse("def f() -> None:\n    if 1:\n        assert 0\n").body
+        ),
         Some(35..43)
     );
 }
@@ -456,6 +458,30 @@ fn an_assert_in_a_module_that_withheld_seeding_is_refused() {
         ),
         "{}",
         diagnostic.message
+    );
+}
+
+/// #1369 under #867/D-233's per-item collection: the refusal is the
+/// diagnostic of the first top-level item containing an `assert`, emitted in
+/// source order, so an earlier independently failing item still reports
+/// first (D-217 rule 2) and the loop keeps going -- a later `assert` adds no
+/// second refusal.
+#[test]
+fn the_assert_refusal_is_collected_in_source_order_after_an_earlier_failure() {
+    let source = "x = 1 @ 2\nclass ValueError:\n    pass\n\n\ndef f() -> None:\n    \
+                  assert True\n\n\ndef g() -> None:\n    assert False\n";
+    let diagnostics = crate::lower_all(&parse(source)).expect_err("must be refused");
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(diagnostics.len(), 2, "{messages:?}");
+    assert!(messages[0].contains("binary operator `@`"), "{messages:?}");
+    assert!(
+        messages[1].contains("an `assert` statement needs the builtin `AssertionError`"),
+        "{messages:?}"
+    );
+    assert_eq!(
+        diagnostics[1].span,
+        Some(pycc_diag::Span::new(60, 71)),
+        "spanned on `f`'s `assert`"
     );
 }
 

@@ -29,8 +29,9 @@
 //! which it could resolve elsewhere is refused before code generation. Two
 //! refusals are dedicated to it. A top-level `class`/`def`/assignment
 //! binding of any builtin exception name withholds the builtin classes,
-//! which `module::lower_module` reports up front for a module that also
-//! contains an `assert`. A function-local binding cannot hold a class, so
+//! which `module::lower_module` reports, in source order among the other
+//! per-item diagnostics, on the first top-level item containing an
+//! `assert`. A function-local binding cannot hold a class, so
 //! the call is `T0021` "bound to a non-callable value". Other binding
 //! forms, such as a module-level `for` target, an `except ... as` name or
 //! an import alias, are refused by diagnostics that already existed;
