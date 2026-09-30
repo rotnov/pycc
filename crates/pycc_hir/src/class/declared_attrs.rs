@@ -126,14 +126,23 @@ pub(super) fn collect_declared_attrs(
         .map_err(|error| crate::func::with_bare_list_or_dict_advice(error, &ann.annotation))?;
         if !matches!(
             ty,
-            Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_) | Ty::List(_) | Ty::Dict(..)
+            Ty::Int
+                | Ty::Float
+                | Ty::Bool
+                | Ty::Str
+                | Ty::Param(_)
+                | Ty::List(_)
+                | Ty::Dict(..)
+                // Part 1 of #1367: a class a foreign import binds, stored as
+                // its `PyObject*` pointer word (D-154's pointer rule).
+                | Ty::Object
         ) {
             return Err(unsupported(
                 format!(
                     "instance attribute `{name}` declared in class `{class_name}` has type `{}`, \
                      which has no instance-slot representation -- a class-body declaration \
                      admits only `int`, `float`, `bool`, `str`, a type parameter, `list[int]`, \
-                     or `dict[str, int]`",
+                     `dict[str, int]`, or a class a foreign import binds",
                     ty.name()
                 ),
                 ann.range,

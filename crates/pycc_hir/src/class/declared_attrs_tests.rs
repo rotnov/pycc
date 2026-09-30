@@ -183,7 +183,8 @@ fn a_declared_type_without_a_slot_representation_is_refused() {
         c0001("class C:\n    x: None\n"),
         "instance attribute `x` declared in class `C` has type `None`, which has no \
          instance-slot representation -- a class-body declaration admits only `int`, `float`, \
-         `bool`, `str`, a type parameter, `list[int]`, or `dict[str, int]`"
+         `bool`, `str`, a type parameter, `list[int]`, `dict[str, int]`, or a class a foreign \
+         import binds"
     );
     for annotation in [
         "set[int]",

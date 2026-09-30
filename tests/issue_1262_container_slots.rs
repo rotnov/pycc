@@ -145,7 +145,8 @@ fn a_set_or_tuple_parameter_is_refused() {
         assert!(
             text.contains(&format!(
                 "cannot establish an attribute of type `{annotation}` yet -- only a scalar \
-                 (int/float/bool/str), `list[int]` or `dict[str, int]` parameter is supported"
+                 (int/float/bool/str), `list[int]`, `dict[str, int]` or foreign-imported class \
+                 parameter is supported"
             )),
             "{text}"
         );

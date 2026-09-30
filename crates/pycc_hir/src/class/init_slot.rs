@@ -22,6 +22,10 @@
 //! That is also what admits an establishing `{}` -- under a `dict[K, V]`
 //! declaration the slot is concrete, and `pycc_types`' existing reset
 //! rewrite types the literal.
+//!
+//! Part 1 of #1367 admits a parameter annotated with a class a foreign
+//! import binds (`Ty::Object`), declared or not; its right-hand side still
+//! passes the same shape gate.
 
 use super::declared_attrs::DeclaredAttr;
 use crate::{Ty, unsupported};
@@ -217,7 +221,10 @@ fn receiver_attr(target: &Expr, receiver_name: &str) -> Option<String> {
 /// empty list display is accepted. A parameter may be a scalar
 /// (int/float/bool/str), a PEP 695 type parameter, or -- since #1262 -- a
 /// `list[int]`/`dict[str, int]` container, which the slot stores as its
-/// pointer word. For an attribute a class-body declaration types (#1266),
+/// pointer word, or -- since Part 1 of #1367 -- a class a foreign import
+/// binds (`Ty::Object`), stored as its `PyObject*` word. The shape gate is
+/// what keeps an `object` slot from being read before it is assigned:
+/// widening it to any expression is #1388. For an attribute a class-body declaration types (#1266),
 /// this is only the shape gate: `declared_slot_ty` discards the type it
 /// returns in favor of the declared one.
 ///
@@ -305,11 +312,16 @@ fn slot_ty_from_init_rhs(
                 // the same object (CPython's aliasing). `check_container_ty`
                 // has already validated the parameter's annotation, so any
                 // `Ty::List`/`Ty::Dict` reaching here is one of those two
-                // admitted shapes. Every other non-scalar type -- a
-                // `set[T]`, a by-value `tuple[...]`, an `Optional`, an
-                // `object`, or a class instance (including the receiver
-                // itself, `self.link = self`) -- has an ownership or
-                // carrier question of its own and stays refused.
+                // admitted shapes. Part 1 of #1367: a `Ty::Object`
+                // parameter -- one annotated with a class a foreign import
+                // binds -- seeds a slot holding its `PyObject*`, the same
+                // pointer word; every `object` producer hands back a
+                // reference that is never released, so the store needs no
+                // refcount traffic either. Every other non-scalar type -- a
+                // `set[T]`, a by-value `tuple[...]`, an `Optional`, or a
+                // pycc class instance (including the receiver itself,
+                // `self.link = self`; #1389) -- has an ownership or carrier
+                // question of its own and stays refused.
                 //
                 // PEP 695 (#387): `Ty::Param` is also accepted — a generic
                 // class's `__init__` parameter typed `T` seeds a slot with
@@ -325,13 +337,14 @@ fn slot_ty_from_init_rhs(
                     | Ty::Str
                     | Ty::Param(_)
                     | Ty::List(_)
-                    | Ty::Dict(..)),
+                    | Ty::Dict(..)
+                    | Ty::Object),
                 ) => Ok(ty),
                 Some(other) => Err(unsupported(
                     format!(
                         "`{receiver_name}.<attr> = {}` cannot establish an attribute of type \
-                         `{}` yet -- only a scalar (int/float/bool/str), `list[int]` or \
-                         `dict[str, int]` parameter is supported",
+                         `{}` yet -- only a scalar (int/float/bool/str), `list[int]`, \
+                         `dict[str, int]` or foreign-imported class parameter is supported",
                         name.id,
                         other.name()
                     ),
@@ -392,8 +405,8 @@ mod tests {
             c0001_message("class C:\n    def __init__(self) -> None:\n        self.link = self\n");
         assert!(
             message.ends_with(
-                "yet -- only a scalar (int/float/bool/str), `list[int]` or `dict[str, int]` \
-                 parameter is supported"
+                "yet -- only a scalar (int/float/bool/str), `list[int]`, `dict[str, int]` or \
+                 foreign-imported class parameter is supported"
             ),
             "{message}"
         );
@@ -443,8 +456,8 @@ mod tests {
             );
             assert!(
                 message.contains(
-                    "only a scalar (int/float/bool/str), `list[int]` or `dict[str, int]` \
-                     parameter is supported"
+                    "only a scalar (int/float/bool/str), `list[int]`, `dict[str, int]` or \
+                     foreign-imported class parameter is supported"
                 ),
                 "{message}"
             );

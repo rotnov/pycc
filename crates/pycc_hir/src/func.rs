@@ -1060,7 +1060,12 @@ pub(crate) fn annotation_to_ty(
                         aliases,
                         class_defs,
                     )?;
-                    if resolved == Ty::MemoryView {
+                    // Part 1 of #1367: a name a foreign import binds resolves
+                    // to the opaque `Ty::Object`, and its subscript
+                    // (`Queue[int]`, `ParseTableBase[StateT]`) is erased the
+                    // same way, its arguments never resolved -- CPython 3.14
+                    // never evaluates an annotation (PEP 649).
+                    if resolved == Ty::MemoryView || resolved == Ty::Object {
                         return Ok(resolved);
                     }
                     Err(Diagnostic::error(
