@@ -46,11 +46,13 @@ use super::bigint_rc::{
     release_scalar_if_int_temporary,
 };
 use super::rt_fns::RtFns;
+use super::set_instance::{SetEmitter, set_element_scalar};
 use super::{
     Scalar, StorageSlot, UserFunction, build_at_entry_block, build_dict_len, build_dict_set,
     build_int_list_append, build_int_list_get, build_int_list_len, build_int_set_add,
-    build_int_set_get, build_int_set_len, build_untag_checked, emit_assign, emit_dict_name_read,
-    emit_expr, emit_list_name_read, emit_range_operands_with_exception_safety, emit_set_name_read,
+    build_int_set_check_not_resized, build_int_set_get, build_int_set_len, build_untag_checked,
+    emit_assign, emit_dict_name_read, emit_expr, emit_list_name_read,
+    emit_range_operands_with_exception_safety, emit_set_name_read, guard_statement_effects,
     incref_if_str_duplicate, to_encoded_int, truthy, ty_to_basic_type,
 };
 use inkwell::IntPredicate;
@@ -59,7 +61,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::values::{FunctionValue, IntValue, PhiValue, PointerValue};
-use pycc_mir::{CompSource, MirCompElt, MirComprehension, MirExpr, Ty};
+use pycc_mir::{CompSource, MirCompElt, MirComprehension, MirExpr, SetElementOps, Ty};
 use std::collections::HashMap;
 
 /// The element expressions of one comprehension, by produced container.
@@ -67,8 +69,11 @@ use std::collections::HashMap;
 pub(super) enum CompElts<'a> {
     /// `[elt for ...]`, producing `list[int]` (T0034).
     List(&'a MirExpr),
-    /// `{elt for ...}`, producing `set[int]` (T0038).
-    Set(&'a MirExpr),
+    /// `{elt for ...}`, producing `set[int]` (T0038) or, with `Some` ops, a
+    /// `set[C]` of user-class instances (#1344, D-255): the ops are the
+    /// element class's `__hash__`/`__eq__`, and the insertion is
+    /// `SetEmitter::add`'s, exactly as for a set literal or `.add(...)`.
+    Set(&'a MirExpr, Option<&'a SetElementOps>),
     /// `{key: value for ...}`, producing `dict[str, int]` (T0036).
     Dict(&'a MirExpr, &'a MirExpr),
 }
@@ -78,7 +83,7 @@ impl CompElts<'_> {
     fn names(self) -> (&'static str, &'static str) {
         match self {
             CompElts::List(_) => ("listcomp", "list"),
-            CompElts::Set(_) => ("setcomp", "set"),
+            CompElts::Set(..) => ("setcomp", "set"),
             CompElts::Dict(..) => ("dictcomp", "dict"),
         }
     }
@@ -121,11 +126,13 @@ struct CompLoop<'ctx> {
 
 /// Emits the whole comprehension loop and returns the produced container
 /// (`Scalar::List`/`Set`/`Dict`). The builder is left at the end of the
-/// loop's `after` block. `var` is the D-117 synthesized loop variable, whose
+/// loop's `after` block (past its exception checkpoint, for a set source).
+/// `var` is the D-117 synthesized loop variable of type `var_ty`, whose
 /// slot must already exist in `cx.locals`.
 pub(super) fn emit_comprehension<'ctx>(
     cx: &CompCx<'_, 'ctx>,
     var: &str,
+    var_ty: &Ty,
     source: &CompSource,
     cond: Option<&MirExpr>,
     elts: CompElts<'_>,
@@ -134,7 +141,7 @@ pub(super) fn emit_comprehension<'ctx>(
     let function = cx.builder.get_insert_block().unwrap().get_parent().unwrap();
     let (new_fn, what) = match elts {
         CompElts::List(_) => (cx.rt.int_list_new, "pycc_rt_int_list_new"),
-        CompElts::Set(_) => (cx.rt.int_set_new, "pycc_rt_int_set_new"),
+        CompElts::Set(..) => (cx.rt.int_set_new, "pycc_rt_int_set_new"),
         CompElts::Dict(..) => (cx.rt.dict_new, "pycc_rt_dict_new"),
     };
     let container = cx
@@ -145,7 +152,7 @@ pub(super) fn emit_comprehension<'ctx>(
         .expect_basic(&format!("{what} returns a non-void pointer"))
         .into_pointer_value();
 
-    let lp = open_loop(cx, function, prefix, var, source);
+    let lp = open_loop(cx, function, prefix, var, var_ty, source);
 
     // The filter: with `cond`, a small `if_taken`/`if_skip` block pair
     // (mirroring `MirStmt::If`'s two-block shape) where `if_skip` doubles as
@@ -185,10 +192,18 @@ pub(super) fn emit_comprehension<'ctx>(
     }
 
     close_loop(cx, prefix, lp);
+    if matches!(source, CompSource::Set(_)) {
+        // #1344: a set source's loop also exits early on a pending
+        // exception (see `open_loop`'s `CompSource::Set` arm), so the
+        // container must not reach the enclosing statement or expression
+        // while that exception is pending -- the same checkpoint
+        // `MirStmt::ForSet` takes at its own `after` block.
+        guard_statement_effects(cx.context, cx.builder, cx.rt);
+    }
 
     match elts {
         CompElts::List(_) => Scalar::List(container),
-        CompElts::Set(_) => Scalar::Set(container),
+        CompElts::Set(..) => Scalar::Set(container),
         CompElts::Dict(..) => Scalar::Dict(container),
     }
 }
@@ -244,10 +259,17 @@ pub(super) fn emit_comprehension_expr<'ctx>(
     };
     let elts = match &comp.elt {
         MirCompElt::List(elt) => CompElts::List(elt),
-        MirCompElt::Set(elt) => CompElts::Set(elt),
+        MirCompElt::Set(elt, ops) => CompElts::Set(elt, ops.as_deref()),
         MirCompElt::Dict { key, value } => CompElts::Dict(key, value),
     };
-    let container = emit_comprehension(&inner, &comp.var, &comp.source, comp.cond.as_ref(), elts);
+    let container = emit_comprehension(
+        &inner,
+        &comp.var,
+        &comp.var_ty,
+        &comp.source,
+        comp.cond.as_ref(),
+        elts,
+    );
     if comp.var_ty == Ty::Int {
         let last = cx
             .builder
@@ -283,7 +305,18 @@ fn emit_element<'ctx>(
         )
     };
     match elts {
-        CompElts::List(elt) | CompElts::Set(elt) => {
+        CompElts::Set(elt, Some(ops)) => {
+            let emitter = SetEmitter {
+                context: cx.context,
+                builder: cx.builder,
+                module: cx.module,
+                rt: cx.rt,
+                user_functions: cx.user_functions,
+                locals: cx.locals,
+            };
+            emitter.add(container, elt, ops);
+        }
+        CompElts::List(elt) | CompElts::Set(elt, None) => {
             let encoded = to_encoded_int(cx.context, cx.builder, emit_one(elt));
             let _ = build_untag_checked(
                 cx.builder,
@@ -331,6 +364,7 @@ fn open_loop<'ctx>(
     function: FunctionValue<'ctx>,
     prefix: &str,
     var: &str,
+    var_ty: &Ty,
     source: &CompSource,
 ) -> CompLoop<'ctx> {
     let (context, builder, rt) = (cx.context, cx.builder, cx.rt);
@@ -429,7 +463,9 @@ fn open_loop<'ctx>(
                 cx.locals,
                 name,
             );
-            let (lp, current) = open_indexed_loop(cx, function, prefix, |b| {
+            // CPython lets a list grow while it is iterated, so the length is
+            // re-read on every trip with no resize guard.
+            let (lp, current) = open_indexed_loop(cx, function, prefix, None, |b| {
                 build_int_list_len(b, rt, list_ptr)
             });
             let encoded_element = build_int_list_get(builder, rt, list_ptr, current);
@@ -463,8 +499,10 @@ fn open_loop<'ctx>(
                 cx.locals,
                 name,
             );
-            let (lp, current) =
-                open_indexed_loop(cx, function, prefix, |b| build_dict_len(b, rt, dict_ptr));
+            // A dict grown during the loop is not guarded yet (#1361).
+            let (lp, current) = open_indexed_loop(cx, function, prefix, None, |b| {
+                build_dict_len(b, rt, dict_ptr)
+            });
             let key_ptr = builder
                 .build_call(
                     rt.dict_key_at,
@@ -486,9 +524,13 @@ fn open_loop<'ctx>(
             lp
         }
         CompSource::Set(name) => {
-            // Mirrors `MirStmt::ForSet`'s own shape, but binds the word as
-            // an `int`: `pycc_types` refuses a comprehension over a
-            // `set[C]` of instances until #1344 binds the instance here.
+            // Mirrors `MirStmt::ForSet`'s own shape, including its binding
+            // of the element word through `set_element_scalar` -- an `int`
+            // or, for a `set[C]`, the instance pointer (#1344) -- and its
+            // resize guard: the length is snapshotted here, in the
+            // preheader, and a set grown by the element step (a user
+            // `__hash__`, `__eq__` or call) raises CPython's `RuntimeError:
+            // Set changed size during iteration` instead of looping forever.
             let set_ptr = emit_set_name_read(
                 context,
                 builder,
@@ -498,8 +540,10 @@ fn open_loop<'ctx>(
                 cx.locals,
                 name,
             );
-            let (lp, current) =
-                open_indexed_loop(cx, function, prefix, |b| build_int_set_len(b, rt, set_ptr));
+            let initial_len = build_int_set_len(builder, rt, set_ptr);
+            let (lp, current) = open_indexed_loop(cx, function, prefix, Some(initial_len), |b| {
+                build_int_set_len(b, rt, set_ptr)
+            });
             let encoded_element = build_int_set_get(builder, rt, set_ptr, current);
             emit_assign(
                 context,
@@ -507,7 +551,7 @@ fn open_loop<'ctx>(
                 rt,
                 cx.locals,
                 var,
-                Scalar::Int(encoded_element),
+                set_element_scalar(context, builder, var_ty, encoded_element),
             );
             lp
         }
@@ -533,10 +577,19 @@ fn append_loop_blocks<'ctx>(
 /// The container-source loop skeleton: a raw `i64` index `phi` tested
 /// against a length `len` re-reads on every trip. Leaves the builder at the
 /// start of the body and returns the index for the caller's element read.
+///
+/// `set_resize_guard` is a set source's preheader length snapshot (#1344).
+/// With it the test also mirrors `MirStmt::ForSet`'s: every fresh length is
+/// checked against the snapshot (`pycc_rt_int_set_check_not_resized`, which
+/// raises the D-173 `RuntimeError`), and the loop continues only while no
+/// exception is pending -- without that conjunct a raise that returns
+/// normally would leave `index < len` true forever. See `ForSet`'s own
+/// comments for why the resize check cannot relabel a pending exception.
 fn open_indexed_loop<'ctx>(
     cx: &CompCx<'_, 'ctx>,
     function: FunctionValue<'ctx>,
     prefix: &str,
+    set_resize_guard: Option<IntValue<'ctx>>,
     len: impl FnOnce(&Builder<'ctx>) -> IntValue<'ctx>,
 ) -> (CompLoop<'ctx>, IntValue<'ctx>) {
     let (context, builder) = (cx.context, cx.builder);
@@ -553,9 +606,32 @@ fn open_indexed_loop<'ctx>(
     induction.add_incoming(&[(&zero, preheader)]);
     let current = induction.as_basic_value().into_int_value();
     let len = len(builder);
-    let cont = builder
+    let in_range = builder
         .build_int_compare(IntPredicate::SLT, current, len, &format!("{prefix}_cont"))
         .expect("build_int_compare should not fail comparing two i64 operands");
+    let cont = match set_resize_guard {
+        None => in_range,
+        Some(initial_len) => {
+            build_int_set_check_not_resized(builder, cx.rt, len, initial_len);
+            let exc_active = builder
+                .build_call(cx.rt.exception_active, &[], &format!("{prefix}_exc_active"))
+                .expect("build_call should not fail for exception_active")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_exception_active returns i8")
+                .into_int_value();
+            let no_exception = builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    exc_active,
+                    exc_active.get_type().const_zero(),
+                    &format!("{prefix}_no_exc"),
+                )
+                .expect("build_int_compare should not fail comparing an i8 against zero");
+            builder
+                .build_and(in_range, no_exception, &format!("{prefix}_cont_ok"))
+                .expect("build_and should not fail for two i1 operands")
+        }
+    };
     builder
         .build_conditional_branch(cont, body_bb, after_bb)
         .expect("build_conditional_branch should not fail for a well-formed i1 condition");

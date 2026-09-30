@@ -545,13 +545,6 @@ fn class_a_with_eq(eq_sig: &str, eq_body: &str) -> String {
     )
 }
 
-/// `pycc build` of `source` fails with exactly one `code` diagnostic whose
-/// message contains `needle`: a comprehension refusal must reach the user
-/// on the solver path too, never as `T0022`.
-fn assert_comp_refused(tag: &str, source: &str, needle: &str) {
-    assert_one_error(tag, source, "C0001", needle, "tracked by #1344");
-}
-
 #[test]
 fn set_of_instance_programs_match_cpython() {
     assert_native_matches_cpython("e2e_1343_success", SUCCESS, SUCCESS_STDOUT);
@@ -874,81 +867,13 @@ fn an_uncompiled_set_element_type_is_still_refused() {
 }
 
 const COMP_R: &str = "class R:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n\n";
-const COMP_HELPER: &str = "def _g(x):\n    return x + 1\n\n\n";
 
-/// Every comprehension over or producing a set of instances is `C0001`
-/// naming #1344, on the check path and, with an unannotated helper in the
-/// module, on the solver path, for each iterable kind the solver treats
-/// differently and in both the expression and the statement form.
+/// A set comprehension of instances is admitted since #1344
+/// (`tests/issue_1344_set_comprehensions.rs` carries its differentials);
+/// an unannotated helper returning one from a class-constructor element
+/// still cannot be inferred and is one honest `C0001` naming #1342.
 #[test]
-fn a_comprehension_of_a_set_of_instances_is_c0001_naming_1344() {
-    let sources = [
-        ("param", "def f(s: set[R]) -> {ret}:\n    return {comp}\n"),
-        (
-            "param_stmt",
-            "def f(s: set[R]) -> {ret}:\n    t = {comp}\n    return t\n",
-        ),
-        (
-            "literal",
-            "def f() -> {ret}:\n    s = {{R(1), R(2)}}\n    return {comp}\n",
-        ),
-        (
-            "annotated",
-            "def f() -> {ret}:\n    s: set[R] = {{R(1), R(2)}}\n    return {comp}\n",
-        ),
-        (
-            "global",
-            "S: set[R] = {{R(1)}}\n\n\ndef f() -> {ret}:\n    s = S\n    return {comp}\n",
-        ),
-        (
-            "frozen",
-            "def f(s: frozenset[R]) -> {ret}:\n    return {comp}\n",
-        ),
-    ];
-    let comps = [
-        ("list", "list[int]", "[r.v for r in s]"),
-        ("set", "set[R]", "{r for r in s}"),
-        ("set_if", "set[R]", "{r for r in s if r.v > 0}"),
-        ("dict", "dict[str, int]", "{\"k\": r.v for r in s}"),
-    ];
-    for (path, helper, tail) in [("check", "", ""), ("solver", COMP_HELPER, "print(_g(1))\n")] {
-        for (kind, template) in sources {
-            for (comp_kind, ret, comp) in comps {
-                let body = template
-                    .replace("{ret}", ret)
-                    .replace("{comp}", comp)
-                    .replace("{{", "{")
-                    .replace("}}", "}");
-                let source = format!("{COMP_R}{helper}{body}\n\n{tail}");
-                let over = if kind == "frozen" {
-                    "frozenset[R]"
-                } else {
-                    "set[R]"
-                };
-                assert_comp_refused(
-                    &format!("e2e_1343_comp_{path}_{kind}_{comp_kind}"),
-                    &source,
-                    &format!("a comprehension over `{over}` is not compiled yet"),
-                );
-            }
-        }
-        for (kind, body) in [
-            (
-                "produce",
-                "def f() -> set[R]:\n    return {R(i) for i in range(3)}\n",
-            ),
-            (
-                "mk",
-                "def mk(i: int) -> R:\n    return R(i)\n\n\ndef f() -> set[R]:\n    return {mk(i) for i in range(3)}\n",
-            ),
-        ] {
-            assert_comp_refused(
-                &format!("e2e_1343_comp_{path}_{kind}"),
-                &format!("{COMP_R}{helper}{body}\n\n{tail}"),
-                "a set comprehension of `R` is not compiled yet",
-            );
-        }
-    }
+fn an_unannotated_helper_returning_a_set_comprehension_of_instances_is_c0001() {
     for (kind, body) in [
         ("expr", "def _h():\n    return {R(i) for i in range(3)}\n"),
         (
@@ -956,10 +881,12 @@ fn a_comprehension_of_a_set_of_instances_is_c0001_naming_1344() {
             "def _h():\n    t = {R(i) for i in range(3)}\n    return t\n",
         ),
     ] {
-        assert_comp_refused(
+        assert_one_error(
             &format!("e2e_1343_comp_unannotated_{kind}"),
             &format!("{COMP_R}{body}\n\nprint(len(_h()))\n"),
-            "a set comprehension of `R` is not compiled yet",
+            "C0001",
+            "cannot infer an unannotated private helper's `set[R]` return yet",
+            "#1342",
         );
     }
 }

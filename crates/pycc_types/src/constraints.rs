@@ -1956,11 +1956,10 @@ pub(crate) fn collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
             }
-            // #1343: a set comprehension's container is a fresh term with a
-            // `set[int]` default unless its element is already `int`, so a
-            // declared `set[R]` it meets is not a false `T0022`. The element
-            // is the last body expression (`body_exprs` puts the condition
-            // first).
+            // A set comprehension's container term is chosen by
+            // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
+            // rule. The element is the last body expression (`body_exprs`
+            // puts the condition first).
             if let CompElt::Set(_) = comp.elt {
                 return Ok(Some(set_comp::set_comp_container(
                     elt_term, parents, concrete, deferred,
@@ -2211,10 +2210,11 @@ fn bind_comp_loop_var(
 /// container type as its term (#1254). Before this, the solver bound no term
 /// for `target` at all, so any later read of it in a module that also holds
 /// an unannotated private helper (the only case the solver runs for) failed
-/// with a spurious `T0021` "not bound before this use". The container type
-/// is exact: the check phase's element gate (D-119) admits only
-/// `list[int]`, `set[int]` and `dict[str, int]` -- for a set comprehension,
-/// a term defaulted to `set[int]` (#1343, [`set_comp::set_comp_container`]).
+/// with a spurious `T0021` "not bound before this use". The container term
+/// is the one the comprehension's own arm produced: see
+/// [`crate::comprehension::comp_container_ty`] for the element gate the
+/// check phase applies and [`set_comp::set_comp_container`] for a set
+/// comprehension's term.
 fn bind_comp_target(env: &mut ConstraintEnvironment<'_, '_>, target: &str, container: TypeTerm) {
     env.defs_rebound.remove(target);
     env.maybe_bindings.remove(target);

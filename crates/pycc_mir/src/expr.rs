@@ -21,7 +21,7 @@ mod foreign_static;
 mod instance_hash;
 mod receiver_dispatch;
 mod sequence;
-mod set_ops;
+pub(crate) mod set_ops;
 
 use instance_hash::lower_instance_hash;
 use sequence::sequence_after;
@@ -1452,7 +1452,14 @@ pub(super) fn lower_expr(
                 .map(|c| lower_expr(c, &inner, classes, current_class));
             let elt = match &comp.elt {
                 CompElt::List(e) => MirCompElt::List(lower_expr(e, &inner, classes, current_class)),
-                CompElt::Set(e) => MirCompElt::Set(lower_expr(e, &inner, classes, current_class)),
+                CompElt::Set(e) => {
+                    let e = lower_expr(e, &inner, classes, current_class);
+                    // #1344: a `set[C]` element carries its class's hash and
+                    // equality, exactly as a set literal's does.
+                    let ops =
+                        set_ops::lower_set_element_ops(&e.ty(), &inner, classes).map(Box::new);
+                    MirCompElt::Set(e, ops)
+                }
                 CompElt::Dict { key, value } => MirCompElt::Dict {
                     key: lower_expr(key, &inner, classes, current_class),
                     value: lower_expr(value, &inner, classes, current_class),

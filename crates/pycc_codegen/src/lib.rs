@@ -8268,7 +8268,7 @@ fn emit_stmt<'ctx>(
         MirStmt::ListCompAssign {
             target,
             var,
-            var_ty: _,
+            var_ty,
             source,
             cond,
             elt,
@@ -8283,6 +8283,7 @@ fn emit_stmt<'ctx>(
                     locals,
                 },
                 var,
+                var_ty,
                 source,
                 cond.as_deref(),
                 CompElts::List(elt),
@@ -8293,10 +8294,11 @@ fn emit_stmt<'ctx>(
         MirStmt::SetCompAssign {
             target,
             var,
-            var_ty: _,
+            var_ty,
             source,
             cond,
             elt,
+            ops,
         } => {
             let container = emit_comprehension(
                 &CompCx {
@@ -8308,9 +8310,10 @@ fn emit_stmt<'ctx>(
                     locals,
                 },
                 var,
+                var_ty,
                 source,
                 cond.as_deref(),
-                CompElts::Set(elt),
+                CompElts::Set(elt, ops.as_deref()),
             );
             emit_assign(context, builder, rt, locals, target, container);
             Ok(())
@@ -8318,7 +8321,7 @@ fn emit_stmt<'ctx>(
         MirStmt::DictCompAssign {
             target,
             var,
-            var_ty: _,
+            var_ty,
             source,
             cond,
             key,
@@ -8334,6 +8337,7 @@ fn emit_stmt<'ctx>(
                     locals,
                 },
                 var,
+                var_ty,
                 source,
                 cond.as_deref(),
                 CompElts::Dict(key, value),
