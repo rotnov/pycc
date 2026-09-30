@@ -25,6 +25,7 @@ pub use request::{ProjectImportRequest, project_import_requests};
 pub(crate) use shadow::{import_local_name, reject_shadowed_foreign_imports};
 pub(crate) use type_alias::{lower_legacy_type_alias_ann_assign, lower_type_alias_stmt};
 
+use crate::class::slots::ClassSlotsRow;
 use crate::{
     ForeignImportSite, FromImport, HirClassDef, HirItem, HirModule, ImportBinding,
     ProjectBindingKind, Ty, is_builtin_exception_class, top_level_bound_names, unresolved_symbol,
@@ -219,7 +220,7 @@ pub enum ResolvedImport<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedImports<'a> {
     by_span: HashMap<Span, ResolvedImport<'a>>,
-    modules: HashMap<String, &'a HirModule>,
+    modules: HashMap<String, RegisteredModule<'a>>,
     /// Issue #1188: the container method names (`append`, `pop`, `get`,
     /// `add`) that a class in the module's transitive import closure defines
     /// as a method. The driver unions its direct dependencies'
@@ -250,8 +251,18 @@ impl<'a> ResolvedImports<'a> {
 
     /// Registers an already-lowered module under its display path so
     /// `ImportBinding::Project` re-exports pointing at it can be followed.
-    pub fn add_module(&mut self, display_path: String, hir: &'a HirModule) {
-        self.modules.insert(display_path, hir);
+    /// `class_slots` is that module's [`crate::LoweredModule::class_slots`]
+    /// (#1368): an imported class carries its `__slots__` row into the
+    /// importer, where a subclass's layout and stores are checked against
+    /// it.
+    pub fn add_module(
+        &mut self,
+        display_path: String,
+        hir: &'a HirModule,
+        class_slots: &'a [ClassSlotsRow],
+    ) {
+        self.modules
+            .insert(display_path, RegisteredModule { hir, class_slots });
     }
 
     fn get(&self, span: Span) -> Option<&ResolvedImport<'a>> {
@@ -263,12 +274,20 @@ impl<'a> ResolvedImports<'a> {
     /// driver loads and registers a dependency before the module importing
     /// it), so the lookup cannot miss for a binding the driver produced;
     /// the `.expect` follows the crate's coverage convention.
-    fn origin(&self, module_path: &str) -> &'a HirModule {
+    fn origin(&self, module_path: &str) -> RegisteredModule<'a> {
         self.modules
             .get(module_path)
             .copied()
             .expect("a Project binding's origin module is registered before its importer lowers")
     }
+}
+
+/// A module registered with [`ResolvedImports::add_module`]: its lowered
+/// HIR and its `__slots__` side table (#1368).
+#[derive(Debug, Clone, Copy)]
+struct RegisteredModule<'a> {
+    hir: &'a HirModule,
+    class_slots: &'a [ClassSlotsRow],
 }
 
 /// What one import statement contributes to the importing module's tables:
@@ -283,6 +302,8 @@ pub(crate) struct LoweredImport {
     pub(crate) bindings: Vec<ImportBinding>,
     pub(crate) classes: Vec<(String, HirClassDef)>,
     pub(crate) aliases: Vec<(String, Ty)>,
+    /// #1368: the `__slots__` rows of the user classes in `classes`.
+    pub(crate) class_slots: Vec<ClassSlotsRow>,
 }
 
 /// Recognizes a module-level `Stmt::Import`/`Stmt::ImportFrom` and resolves
@@ -671,7 +692,11 @@ fn bind_project_name(
         .iter()
         .any(|(class_name, _)| class_name == name && !is_synthetic(class_name))
     {
-        copy_class_with_ancestors(origin, name, &mut lowered.classes);
+        // The module being imported from is registered like every loaded
+        // module (the driver registers each one as it lowers), so its
+        // `__slots__` rows are found under its display path.
+        let registered = resolved.origin(&module.display_path);
+        copy_class_with_ancestors(registered, name, lowered);
         lowered.bindings.push(project(ProjectBindingKind::Class));
         return Ok(true);
     }
@@ -711,10 +736,11 @@ fn bind_project_name(
             let defining = resolved.origin(module_path);
             match kind {
                 ProjectBindingKind::Class => {
-                    copy_class_with_ancestors(defining, name, &mut lowered.classes);
+                    copy_class_with_ancestors(defining, name, lowered);
                 }
                 ProjectBindingKind::TypeAlias => {
                     let alias = defining
+                        .hir
                         .type_aliases
                         .iter()
                         .find(|(alias_name, _)| alias_name == name)
@@ -784,12 +810,16 @@ fn bind_project_name(
 /// be in defined_classes")`), so a class cannot be imported without its
 /// ancestors; the seeded builtin exception ancestors come along too and
 /// `module::lower_module` reconciles them with the importer's own seeding.
+/// Each copied user class brings its `__slots__` row (#1368); a seeded
+/// builtin exception class has none.
 fn copy_class_with_ancestors(
-    origin: &HirModule,
+    origin: RegisteredModule<'_>,
     name: &str,
-    classes: &mut Vec<(String, HirClassDef)>,
+    lowered: &mut LoweredImport,
 ) {
+    let classes = &mut lowered.classes;
     let (_, def) = origin
+        .hir
         .class_defs
         .iter()
         .find(|(class_name, _)| class_name == name)
@@ -799,11 +829,19 @@ fn copy_class_with_ancestors(
             continue;
         }
         let entry = origin
+            .hir
             .class_defs
             .iter()
             .find(|(class_name, _)| class_name == ancestor)
             .expect("every class in an MRO is in its module's class table");
         classes.push(entry.clone());
+        if let Some(row) = origin
+            .class_slots
+            .iter()
+            .find(|(class_name, _)| class_name == ancestor)
+        {
+            lowered.class_slots.push(row.clone());
+        }
     }
 }
 

@@ -93,6 +93,9 @@ struct ModuleState<'a> {
     // absence as "nothing further to validate", matching how this crate
     // already handles bases it cannot introspect elsewhere.
     class_asts: Vec<(String, &'a pycc_ast::StmtClassDef)>,
+    // #1368: one `__slots__` row per user class in `class_defs` (lowered
+    // here or copied in by an import); see `class::slots`.
+    class_slots: Vec<class::slots::ClassSlotsRow>,
     items: Vec<HirItem>,
     // #898: positions in `class_defs`/`aliases` that a project import
     // copied in from another module so this module's annotations and
@@ -164,6 +167,12 @@ pub struct LoweredModule {
     /// needs it, so the driver fills it from [`crate::mentioned_names`] in
     /// exactly that case, before calling `program::link`.
     pub mentioned_names: Option<BTreeSet<String>>,
+    /// #1368: one row per class this module authors -- its name and, when
+    /// its body binds `__slots__`, its own slot list (`class::slots`). The
+    /// driver hands it to every importing module alongside `hir`, so a
+    /// subclass there checks its layout and stores against the base's
+    /// slots.
+    pub class_slots: Vec<class::slots::ClassSlotsRow>,
 }
 
 /// Lowers every top-level item of a parsed module, collecting one
@@ -235,6 +244,7 @@ pub fn lower_module(
         imports: Vec::new(),
         class_defs: Vec::new(),
         class_asts: Vec::new(),
+        class_slots: Vec::new(),
         items: Vec::with_capacity(module.body.len()),
         imported_class_indices: Vec::new(),
         imported_alias_indices: Vec::new(),
@@ -487,6 +497,7 @@ pub fn lower_module(
         imports,
         class_defs,
         class_asts: _,
+        mut class_slots,
         items,
         imported_class_indices,
         imported_alias_indices,
@@ -499,6 +510,7 @@ pub fn lower_module(
     let mut class_defs = strip_imported(class_defs, &imported_class_indices);
     let aliases = strip_imported(aliases, &imported_alias_indices);
     class_defs.rotate_left(synthetic_class_count);
+    class_slots.retain(|(name, _)| class_defs.iter().any(|(class, _)| class == name));
     Ok(LoweredModule {
         hir: HirModule {
             items,
@@ -513,6 +525,7 @@ pub fn lower_module(
         container_method_names,
         deleted_top_level,
         mentioned_names: None,
+        class_slots,
     })
 }
 
@@ -641,6 +654,11 @@ fn lower_top_level_item<'a>(
             }
             state.imported_class_indices.push(state.class_defs.len());
             state.class_defs.push(entry);
+        }
+        for row in lowered.class_slots {
+            if !state.class_slots.iter().any(|(name, _)| *name == row.0) {
+                state.class_slots.push(row);
+            }
         }
         for entry in lowered.aliases {
             if state.aliases.iter().any(|(name, _)| *name == entry.0) {
@@ -784,6 +802,9 @@ fn lower_top_level_item<'a>(
                 def.range,
             ));
         }
+        let own_slots =
+            class::slots::check_class(def, &class_def, &state.class_defs, &state.class_slots)?;
+        state.class_slots.push((class_def.name.clone(), own_slots));
         state
             .definition_spans
             .push((class_def.name.clone(), statement_span(stmt)));

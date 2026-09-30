@@ -1,0 +1,632 @@
+//! Unit tests for `class/slots.rs` (#1368): one test per rule of the
+//! issue plan's sections 4.1-4.4, each refusal pinned by its code and the
+//! CPython text it quotes.
+
+use super::{ClassSlotsRow, is_ascii_identifier, mangle};
+use crate::pycc_parser_test_helper::parse;
+use crate::{
+    LoweredModule, ResolvedImport, ResolvedImports, ResolvedModule, lower_module,
+    project_import_requests,
+};
+use pycc_diag::{Diagnostic, Span};
+
+fn lower(source: &str) -> Result<LoweredModule, Diagnostic> {
+    lower_module(&parse(source), &ResolvedImports::default(), None)
+        .map_err(|mut diagnostics| diagnostics.remove(0))
+}
+
+fn rows(source: &str) -> Vec<ClassSlotsRow> {
+    lower(source).expect("fixture must lower").class_slots
+}
+
+fn slots_of(source: &str, class: &str) -> Option<Vec<String>> {
+    rows(source)
+        .into_iter()
+        .find(|(name, _)| name == class)
+        .expect("the class has a row")
+        .1
+}
+
+fn names(list: &[&str]) -> Option<Vec<String>> {
+    Some(list.iter().map(|name| (*name).to_string()).collect())
+}
+
+fn error(source: &str) -> Diagnostic {
+    lower(source).expect_err("fixture must be refused")
+}
+
+fn c0001(source: &str) -> String {
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "C0001", "source: {source:?}");
+    diagnostic.message
+}
+
+fn t0044(source: &str) -> Diagnostic {
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "T0044", "source: {source:?}");
+    diagnostic
+}
+
+/// `class C:` binding `__slots__ = <value>`, storing `self.a` in `__init__`.
+fn slotted(value: &str) -> String {
+    format!(
+        "class C:\n    __slots__ = {value}\n\n    def __init__(self) -> None:\n        self.a = 1\n"
+    )
+}
+
+// -- 4.1: the accepted spellings -------------------------------------------
+
+#[test]
+fn every_admitted_spelling_records_its_slot_list() {
+    for (value, expected) in [
+        ("'a'", names(&["a"])),
+        ("('a',)", names(&["a"])),
+        ("'a', 'b'", names(&["a", "b"])),
+        ("['a', 'b']", names(&["a", "b"])),
+        ("('a', 'a')", names(&["a", "a"])),
+        ("('a', 'class')", names(&["a", "class"])),
+    ] {
+        assert_eq!(slots_of(&slotted(value), "C"), expected, "{value}");
+    }
+}
+
+#[test]
+fn an_empty_slot_list_is_recorded_as_slotted_and_empty() {
+    for value in ["()", "[]"] {
+        let source = format!("class C:\n    __slots__ = {value}\n");
+        assert_eq!(slots_of(&source, "C"), Some(Vec::new()), "{value}");
+    }
+}
+
+#[test]
+fn a_class_without_slots_has_an_unslotted_row() {
+    let source = "class C:\n    def __init__(self) -> None:\n        self.a = 1\n";
+    assert_eq!(slots_of(source, "C"), None);
+}
+
+#[test]
+fn the_annotated_binding_is_admitted_including_class_var() {
+    let plain = "class C:\n    __slots__: tuple = ('a',)\n\n    def __init__(self) -> None:\n        \
+                 self.a = 1\n";
+    assert_eq!(slots_of(plain, "C"), names(&["a"]));
+    let class_var = "from typing import ClassVar\n\n\nclass C:\n    __slots__: ClassVar[tuple] = \
+                     ('a',)\n\n    def __init__(self) -> None:\n        self.a = 1\n";
+    assert_eq!(slots_of(class_var, "C"), names(&["a"]));
+}
+
+#[test]
+fn the_lark_shape_slots_alongside_value_less_declarations_is_admitted() {
+    let source = "class ParseConf:\n    __slots__ = 'parse_table', 'start'\n\n    parse_table: \
+                  int\n    start: int\n\n    def __init__(self, parse_table: int, start: int) -> \
+                  None:\n        self.parse_table = parse_table\n        self.start = start\n";
+    assert_eq!(
+        slots_of(source, "ParseConf"),
+        names(&["parse_table", "start"])
+    );
+}
+
+#[test]
+fn a_declared_slot_that_is_never_assigned_is_accepted() {
+    assert_eq!(slots_of(&slotted("('a', 'b')"), "C"), names(&["a", "b"]));
+}
+
+#[test]
+fn a_pep_695_generic_class_is_admitted_the_same_way() {
+    let source = "class C[T]:\n    __slots__ = ('a',)\n\n    def __init__(self, a: T) -> None:\n        \
+                  self.a = a\n";
+    assert_eq!(slots_of(source, "C"), names(&["a"]));
+}
+
+// -- 4.1: the refused values -----------------------------------------------
+
+#[test]
+fn a_non_iterable_literal_quotes_cpythons_type_error() {
+    for (value, type_name) in [
+        ("1", "int"),
+        ("1.5", "float"),
+        ("1j", "complex"),
+        ("True", "bool"),
+        ("None", "NoneType"),
+    ] {
+        assert_eq!(
+            c0001(&slotted(value)),
+            format!(
+                "`__slots__` must be a string or an iterable of strings -- CPython raises \
+                 `TypeError: '{type_name}' object is not iterable` when the class is created"
+            ),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn a_non_literal_value_is_not_supported_yet() {
+    for (value, kind) in [("x", "name"), ("{'a': 1}", "dict"), ("{'a'}", "set")] {
+        let source = format!("x = ('a',)\n\n\n{}", slotted(value));
+        let message = c0001(&source);
+        assert!(
+            message.starts_with(
+                "a `__slots__` value that is not a string literal or a tuple or list of string \
+                 literals is not supported yet"
+            ),
+            "{value}: {message}"
+        );
+        assert!(message.contains(kind), "{value}: {message}");
+    }
+}
+
+#[test]
+fn a_non_string_item_quotes_cpythons_type_error() {
+    assert_eq!(
+        c0001(&slotted("('a', 1)")),
+        "every `__slots__` entry must be a string -- CPython raises `TypeError: __slots__ items \
+         must be strings, not 'int'` when the class is created"
+    );
+}
+
+#[test]
+fn a_non_literal_item_is_not_supported_yet() {
+    let message = c0001(&format!("x = 'a'\n\n\n{}", slotted("(x,)")));
+    assert!(
+        message
+            .starts_with("a `__slots__` entry that is not a string literal is not supported yet"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_non_identifier_item_quotes_cpythons_type_error() {
+    for value in ["('a b',)", "('',)", "('1a',)"] {
+        let message = c0001(&slotted(value));
+        assert!(
+            message.ends_with(
+                "is not an identifier -- CPython raises `TypeError: __slots__ must be \
+                 identifiers` when the class is created"
+            ),
+            "{value}: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_non_ascii_item_is_not_supported_yet() {
+    assert_eq!(
+        c0001(&slotted("('\u{e9}',)")),
+        "the non-ASCII `__slots__` entry `\u{e9}` is not supported yet"
+    );
+}
+
+#[test]
+fn dict_and_weakref_entries_are_not_supported_yet() {
+    for entry in ["__dict__", "__weakref__"] {
+        assert_eq!(
+            c0001(&slotted(&format!("('a', '{entry}')"))),
+            format!(
+                "a `{entry}` entry in `__slots__` is not supported yet -- pycc instances have \
+                 neither a `__dict__` nor weak-reference support"
+            )
+        );
+    }
+}
+
+#[test]
+fn each_version_sensitive_name_is_not_supported_yet() {
+    for entry in [
+        "__firstlineno__",
+        "__static_attributes__",
+        "__annotations__",
+    ] {
+        assert_eq!(
+            c0001(&slotted(&format!("('a', '{entry}')"))),
+            format!(
+                "a `__slots__` entry named `{entry}` is not supported yet -- whether it \
+                 conflicts with the class namespace differs between CPython versions"
+            )
+        );
+    }
+}
+
+#[test]
+fn a_second_binding_is_not_supported_yet() {
+    let source = "class C:\n    __slots__ = ('a',)\n    __slots__ = ('a',)\n\n    def \
+                  __init__(self) -> None:\n        self.a = 1\n";
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "a second `__slots__` binding in one class body is not supported yet"
+    );
+    let second = source.rfind("__slots__").expect("second binding") as u32;
+    assert_eq!(diagnostic.span.map(|span| span.start), Some(second));
+}
+
+// -- 4.2: the class namespace ----------------------------------------------
+
+fn conflict(slot: &str, mangled: &str) -> String {
+    format!(
+        "the `__slots__` entry `{slot}` of class `C` is also bound in the class body -- CPython \
+         raises `ValueError: '{mangled}' in __slots__ conflicts with class variable` when the \
+         class is created"
+    )
+}
+
+#[test]
+fn a_slot_named_like_a_class_body_binding_quotes_cpythons_value_error() {
+    for (body, slot) in [
+        ("    a = 1\n", "a"),
+        ("    a: int = 1\n", "a"),
+        ("    def a(self) -> int:\n        return 1\n", "a"),
+        (
+            "    @property\n    def a(self) -> int:\n        return 1\n",
+            "a",
+        ),
+        (
+            "    @staticmethod\n    def a() -> int:\n        return 1\n",
+            "a",
+        ),
+        (
+            "    def __init__(self) -> None:\n        pass\n",
+            "__init__",
+        ),
+        ("    pass\n", "__module__"),
+        ("    pass\n", "__slots__"),
+    ] {
+        let source = format!("class C:\n    __slots__ = ('{slot}',)\n{body}");
+        assert_eq!(c0001(&source), conflict(slot, slot), "{body}");
+    }
+}
+
+#[test]
+fn a_private_slot_is_compared_after_mangling() {
+    let source = "class C:\n    __slots__ = ('__a',)\n    __a = 1\n";
+    assert_eq!(c0001(source), conflict("__a", "_C__a"));
+}
+
+#[test]
+fn a_doc_slot_conflicts_only_with_a_docstring() {
+    let with_docstring = "class C:\n    \"\"\"Doc.\"\"\"\n    __slots__ = ('__doc__',)\n";
+    assert_eq!(c0001(with_docstring), conflict("__doc__", "__doc__"));
+    let without = "class C:\n    __slots__ = ('__doc__',)\n";
+    assert_eq!(slots_of(without, "C"), names(&["__doc__"]));
+}
+
+#[test]
+fn a_value_less_annotation_and_implicit_names_do_not_conflict() {
+    let source = "class C:\n    __slots__ = ('a', '__qualname__')\n    a: int\n\n    def \
+                  __init__(self) -> None:\n        self.a = 1\n";
+    assert_eq!(slots_of(source, "C"), names(&["a", "__qualname__"]));
+}
+
+#[test]
+fn an_inherited_class_variable_does_not_conflict() {
+    let source = "class B:\n    a = 1\n\n\nclass C(B):\n    __slots__ = ('a',)\n";
+    assert_eq!(slots_of(source, "C"), names(&["a"]));
+}
+
+// -- 4.3: an undeclared store ----------------------------------------------
+
+fn no_slot(class: &str, attr: &str, mangled: &str) -> String {
+    format!(
+        "class `{class}` has no slot for attribute `{attr}` -- every class in its MRO binds \
+         `__slots__`, so its instances have no `__dict__`, and CPython raises \
+         `AttributeError: '{class}' object has no attribute '{mangled}' and no __dict__ for \
+         setting new attributes` (3.13+ wording) at this store"
+    )
+}
+
+#[test]
+fn a_store_outside_the_slot_list_is_t0044_at_the_store() {
+    let source = "class C:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n        self.b = 2\n";
+    let diagnostic = t0044(source);
+    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    let start = source.find("self.b").expect("store") as u32;
+    assert_eq!(diagnostic.span, Some(Span::new(start, start + 6)));
+}
+
+#[test]
+fn an_annotated_store_outside_the_slot_list_is_t0044_at_the_store() {
+    let source = "class C:\n    __slots__ = ()\n\n    def __init__(me) -> None:\n        me.b: \
+                  list[int] = []\n";
+    let diagnostic = t0044(source);
+    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    let start = source.find("me.b").expect("store") as u32;
+    assert_eq!(diagnostic.span, Some(Span::new(start, start + 4)));
+}
+
+#[test]
+fn the_store_span_skips_earlier_init_statements() {
+    let source = "class C:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \
+                  print(1)\n        self.a = 1\n        self.b = 2\n";
+    let diagnostic = t0044(source);
+    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    let start = source.find("self.b").expect("store") as u32;
+    assert_eq!(diagnostic.span, Some(Span::new(start, start + 6)));
+}
+
+#[test]
+fn a_store_behind_an_abc_base_is_still_t0044() {
+    let source = "from abc import ABC\n\n\nclass C(ABC):\n    __slots__ = ('a',)\n\n    def \
+                  __init__(self, a: int) -> None:\n        self.b = a\n";
+    assert_eq!(t0044(source).message, no_slot("C", "b", "b"));
+}
+
+#[test]
+fn a_slotted_subclass_of_a_slotted_base_may_store_the_base_slots() {
+    let source = "class B:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n\n\nclass C(B):\n    __slots__ = ('b',)\n\n    def __init__(self) \
+                  -> None:\n        self.a = 1\n        self.b = 2\n";
+    assert_eq!(slots_of(source, "C"), names(&["b"]));
+}
+
+#[test]
+fn a_subclass_private_store_misses_the_base_private_slot() {
+    let source = "class B:\n    __slots__ = ('__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
+                  def __init__(self) -> None:\n        self.__p = 1\n";
+    assert_eq!(t0044(source).message, no_slot("C", "__p", "_C__p"));
+}
+
+#[test]
+fn a_private_store_matches_the_own_private_slot() {
+    let source = "class C:\n    __slots__ = ('__p',)\n\n    def __init__(self) -> None:\n        \
+                  self.__p = 1\n";
+    assert_eq!(slots_of(source, "C"), names(&["__p"]));
+}
+
+#[test]
+fn an_unslotted_ancestor_keeps_a_dict_so_nothing_is_checked() {
+    let unslotted_base = "class B:\n    pass\n\n\nclass C(B):\n    __slots__ = ('a',)\n\n    def \
+                          __init__(self) -> None:\n        self.b = 1\n";
+    assert_eq!(slots_of(unslotted_base, "C"), names(&["a"]));
+    let unslotted_sub = "class B:\n    __slots__ = ('a',)\n\n\nclass C(B):\n    def \
+                         __init__(self) -> None:\n        self.b = 1\n";
+    assert_eq!(slots_of(unslotted_sub, "C"), None);
+}
+
+#[test]
+fn an_exception_class_keeps_a_dict_so_nothing_is_checked() {
+    let source = "class E(Exception):\n    __slots__ = ('a',)\n\n    def __init__(self) -> \
+                  None:\n        self.b = 1\n";
+    assert_eq!(slots_of(source, "E"), names(&["a"]));
+}
+
+#[test]
+fn an_unslotted_value_less_declaration_never_stored_stays_refused() {
+    let message = c0001("class C:\n    x: int\n\n    def __init__(self) -> None:\n        pass\n");
+    assert!(message.contains("is never assigned"), "{message}");
+}
+
+// -- 4.4: the layout ---------------------------------------------------------
+
+fn layout_conflict(class: &str, first: &str) -> String {
+    format!(
+        "class `{class}` cannot be created: its bases have incompatible `__slots__` layouts -- \
+         `{first}` declares slots and is not on the same inheritance chain as another slotted \
+         or exception base, so CPython raises `TypeError: multiple bases have instance lay-out \
+         conflict`"
+    )
+}
+
+#[test]
+fn two_independent_slotted_bases_conflict() {
+    let shared = "class A:\n    __slots__ = ('x',)\n\n    def __init__(self) -> None:\n        \
+                  self.x = 1\n\n\nclass B:\n    __slots__ = ('x',)\n\n    def __init__(self) -> \
+                  None:\n        self.x = 1\n\n\nclass D(A, B):\n    pass\n";
+    assert_eq!(c0001(shared), layout_conflict("D", "A"));
+    let stateless = "class A:\n    __slots__ = ('x',)\n\n\nclass B:\n    __slots__ = ('y',)\n\n\n\
+                     class D(A, B):\n    pass\n";
+    assert_eq!(c0001(stateless), layout_conflict("D", "A"));
+}
+
+#[test]
+fn a_slotted_base_reached_through_an_unslotted_subclass_still_conflicts() {
+    let source = "class A:\n    __slots__ = ('x',)\n\n\nclass A2(A):\n    pass\n\n\nclass B:\n    \
+                  __slots__ = ('y',)\n\n\nclass D(A2, B):\n    pass\n";
+    assert_eq!(c0001(source), layout_conflict("D", "A"));
+}
+
+#[test]
+fn a_diamond_with_an_empty_slotted_sibling_is_accepted() {
+    let source = "class A:\n    __slots__ = ('x',)\n\n\nclass B(A):\n    __slots__ = ('y',)\n\n\n\
+                  class C(A):\n    __slots__ = ()\n\n\nclass D(B, C):\n    __slots__ = ()\n";
+    assert_eq!(slots_of(source, "D"), Some(Vec::new()));
+}
+
+#[test]
+fn an_exception_base_beside_a_slotted_class_conflicts() {
+    let source = "class A:\n    __slots__ = ('x',)\n\n\nclass D(Exception, A):\n    pass\n";
+    assert_eq!(c0001(source), layout_conflict("D", "A"));
+}
+
+#[test]
+fn a_slotted_exception_beside_a_foreign_exception_base_is_not_supported_yet() {
+    for other in ["OSError", "KeyError"] {
+        let source = format!(
+            "class E(ValueError):\n    __slots__ = ('a',)\n\n\nclass F(E, {other}):\n    pass\n"
+        );
+        assert_eq!(
+            c0001(&source),
+            "class `F` combines the slotted exception class `E` with a builtin exception base \
+             outside `E`'s own ancestry; this is not supported yet -- builtin exception classes \
+             have different instance layouts, and pycc does not model which of them CPython can \
+             combine with `__slots__`",
+            "{other}"
+        );
+    }
+}
+
+#[test]
+fn a_slotted_exception_subclass_on_its_own_chain_is_accepted() {
+    let source = "class E(ValueError):\n    __slots__ = ('a',)\n\n\nclass F(E):\n    __slots__ = \
+                  ('b',)\n";
+    assert_eq!(slots_of(source, "F"), names(&["b"]));
+}
+
+// -- Unchanged routes --------------------------------------------------------
+
+#[test]
+fn a_value_less_slots_annotation_keeps_the_plain_refusal() {
+    let message = c0001("class C:\n    __slots__: tuple\n");
+    assert!(
+        message.starts_with("this `__slots__` spelling is not supported yet"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_dataclass_slots_binding_stays_refused() {
+    let source = "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    __slots__ = \
+                  ('a',)\n    a: int\n";
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "C0001");
+}
+
+#[test]
+fn enum_and_protocol_slots_stay_refused() {
+    let enum_message =
+        c0001("from enum import Enum\n\n\nclass C(Enum):\n    __slots__ = ()\n    A = 1\n");
+    assert!(
+        enum_message.starts_with("`__slots__` in an `Enum` body is not supported yet"),
+        "{enum_message}"
+    );
+    let protocol =
+        error("from typing import Protocol\n\n\nclass P(Protocol):\n    __slots__ = ()\n");
+    assert_eq!(protocol.code, "C0001");
+    assert!(
+        !protocol.message.contains("__slots__` entry"),
+        "{}",
+        protocol.message
+    );
+}
+
+// -- Helpers -----------------------------------------------------------------
+
+#[test]
+fn mangle_follows_cpythons_private_name_rule() {
+    assert_eq!(mangle("__a", "C"), "_C__a");
+    assert_eq!(mangle("__a", "__C"), "_C__a");
+    assert_eq!(mangle("__a__", "C"), "__a__");
+    assert_eq!(mangle("_a", "C"), "_a");
+    assert_eq!(mangle("__a", "_"), "__a");
+    assert_eq!(mangle("__a", "__"), "__a");
+}
+
+#[test]
+fn is_ascii_identifier_matches_str_isidentifier_on_ascii() {
+    assert!(is_ascii_identifier("_a1"));
+    assert!(is_ascii_identifier("class"));
+    assert!(!is_ascii_identifier(""));
+    assert!(!is_ascii_identifier("1a"));
+    assert!(!is_ascii_identifier("a-b"));
+}
+
+// -- Cross-module ------------------------------------------------------------
+
+/// Lowers `importer` with every project import answered by `dependency`,
+/// registered as `dep.py`, the way `src/modules.rs` does.
+fn lower_with_dependency(dependency: &LoweredModule, importer: &str) -> Result<(), Diagnostic> {
+    let parsed = parse(importer);
+    let mut resolved = ResolvedImports::default();
+    resolved.add_module(
+        "dep.py".to_string(),
+        &dependency.hir,
+        &dependency.class_slots,
+    );
+    for request in project_import_requests(&parsed) {
+        resolved.insert(
+            request.span,
+            ResolvedImport::Module(ResolvedModule {
+                display_path: "dep.py".to_string(),
+                hir: &dependency.hir,
+                submodule_names: Vec::new(),
+            }),
+        );
+    }
+    lower_module(&parsed, &resolved, None)
+        .map(drop)
+        .map_err(|mut diagnostics| diagnostics.remove(0))
+}
+
+const IMPORTED_BASES: &str = "class A:\n    __slots__ = ('x',)\n\n\nclass B:\n    __slots__ = \
+                              ('y',)\n";
+
+#[test]
+fn an_imported_slotted_base_checks_a_local_subclass_store() {
+    let dependency = lower(IMPORTED_BASES).expect("dependency lowers");
+    let diagnostic = lower_with_dependency(
+        &dependency,
+        "from dep import A\n\n\nclass C(A):\n    __slots__ = ()\n\n    def __init__(self) -> \
+         None:\n        self.z = 1\n",
+    )
+    .expect_err("undeclared store");
+    assert_eq!(diagnostic.code, "T0044");
+    assert_eq!(diagnostic.message, no_slot("C", "z", "z"));
+}
+
+#[test]
+fn two_imported_slotted_bases_conflict() {
+    let dependency = lower(IMPORTED_BASES).expect("dependency lowers");
+    let diagnostic = lower_with_dependency(
+        &dependency,
+        "from dep import A, B\n\n\nclass D(A, B):\n    pass\n",
+    )
+    .expect_err("layout conflict");
+    assert_eq!(diagnostic.message, layout_conflict("D", "A"));
+}
+
+#[test]
+fn an_imported_slotted_base_admits_a_declared_store() {
+    let dependency = lower(IMPORTED_BASES).expect("dependency lowers");
+    lower_with_dependency(
+        &dependency,
+        "from dep import A\n\n\nclass C(A):\n    __slots__ = ()\n\n    def __init__(self) -> \
+         None:\n        self.x = 1\n",
+    )
+    .expect("a store to the imported base's slot lowers");
+}
+
+#[test]
+fn a_re_exported_slotted_base_carries_its_slots() {
+    let defining = lower(IMPORTED_BASES).expect("dependency lowers");
+    let reexport_source = parse("from defs import A\n");
+    let mut reexport_resolved = ResolvedImports::default();
+    reexport_resolved.add_module("defs.py".to_string(), &defining.hir, &defining.class_slots);
+    for request in project_import_requests(&reexport_source) {
+        reexport_resolved.insert(
+            request.span,
+            ResolvedImport::Module(ResolvedModule {
+                display_path: "defs.py".to_string(),
+                hir: &defining.hir,
+                submodule_names: Vec::new(),
+            }),
+        );
+    }
+    let reexport =
+        lower_module(&reexport_source, &reexport_resolved, None).expect("re-export lowers");
+    // The re-exporting module authors no class, so its own table is empty:
+    // the importer must reach `defs.py`'s rows through the recorded binding.
+    assert!(reexport.class_slots.is_empty());
+
+    let importer = parse(
+        "from mid import A\n\n\nclass C(A):\n    __slots__ = ()\n\n    def __init__(self) -> \
+         None:\n        self.z = 1\n",
+    );
+    let mut resolved = ResolvedImports::default();
+    resolved.add_module("defs.py".to_string(), &defining.hir, &defining.class_slots);
+    resolved.add_module("mid.py".to_string(), &reexport.hir, &reexport.class_slots);
+    for request in project_import_requests(&importer) {
+        resolved.insert(
+            request.span,
+            ResolvedImport::Module(ResolvedModule {
+                display_path: "mid.py".to_string(),
+                hir: &reexport.hir,
+                submodule_names: Vec::new(),
+            }),
+        );
+    }
+    let diagnostic = lower_module(&importer, &resolved, None)
+        .expect_err("undeclared store")
+        .remove(0);
+    assert_eq!(diagnostic.code, "T0044");
+    assert_eq!(diagnostic.message, no_slot("C", "z", "z"));
+}

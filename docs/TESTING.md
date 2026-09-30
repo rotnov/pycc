@@ -876,7 +876,6 @@ whole past the first layer, so this list is a **lower bound**.
 | relative sibling imports (3, 4, 6) | `T0021` "attempted relative import with no known parent package" | [#1366](https://github.com/rotnov/pycc/issues/1366) (needs a live `__package__`, the counterpart of the live `__name__` #1161 seeds) |
 | `from lark.exceptions import UnexpectedToken` (7) | `C0001` import of a dotted module | #1138 |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
-| `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
 | annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported | [#1367](https://github.com/rotnov/pycc/issues/1367) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
 | `__eq__(self, other)`: its only faithful annotation is the unspellable `object` (51) | `T0021` cannot infer parameter | #1367 |
@@ -888,14 +887,26 @@ whole past the first layer, so this list is a **lower bound**.
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Fifteen rows remain. Two of them are boundary questions inside the subject
+Fourteen rows remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
 [#1370](https://github.com/rotnov/pycc/issues/1370): a constant-true loop
 no longer counts as falling off the function's end. The `assert` row was
 removed by [#1369](https://github.com/rotnov/pycc/issues/1369): the statement
-now compiles.
+now compiles. The
+`C0001` refusing `__slots__` on both classes (lines 12 and 33) was removed by
+[#1368](https://github.com/rotnov/pycc/issues/1368): a value-bound
+`__slots__` of string literals is admitted and checked at compile time. In the
+subject module the refusal sat under the rows above it, so the result was
+measured on a probe, not on the workload, at the #1368 branch rebased on
+`main` `3c48dbc4`. The probe deletes the sibling and `lark.exceptions`
+imports, trims the `typing` import to `Any, List`, drops the two
+`Generic[StateT]` bases, and gives every class-body declaration an `int`
+annotation; the `__slots__` bindings and the methods are unchanged. It reports
+no `__slots__` diagnostic. Past row 1's `C0002` for `Any`, its next diagnostic
+is `C0001` "type annotation `ParseTableBase` is not supported yet" on the
+`parse_table: ParseTableBase[StateT]` parameter at line 22 (row 5, #1367).
 
 Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
 binding a CPython object to a function-local name. Its isolated probe, a method

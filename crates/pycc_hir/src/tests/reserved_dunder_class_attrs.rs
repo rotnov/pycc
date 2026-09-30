@@ -234,12 +234,12 @@ fn an_enum_member_named_after_an_unreserved_dunder_is_rejected() {
 }
 
 /// #910 regression pin: `__slots__` keeps its own message and is not absorbed
-/// into the new set.
+/// into the new set. Since #1368 only the value-less spelling reaches it.
 #[test]
 fn the_slots_message_is_unchanged() {
     assert_capability_error_message(
-        "class C:\n    __slots__ = 8\n",
-        "`__slots__` in a class body is not supported yet",
+        "class C:\n    __slots__: int\n",
+        "this `__slots__` spelling is not supported yet",
     );
 }
 
@@ -263,7 +263,7 @@ fn the_enum_slots_message_describes_the_enum_route() {
     assert!(
         !diagnostic
             .message
-            .contains("fixed at compile time from its `__init__`"),
+            .contains("only a value-bound `__slots__`"),
         "the enum route must not borrow D-154's plain-class explanation, got: {}",
         diagnostic.message
     );
@@ -374,7 +374,7 @@ fn a_property_getter_named_slots_is_rejected() {
     assert!(
         !diagnostic
             .message
-            .contains("fixed at compile time from its `__init__`"),
+            .contains("only a value-bound `__slots__`"),
         "the property route must not borrow D-154's plain-class explanation, got: {}",
         diagnostic.message
     );
@@ -475,10 +475,10 @@ const SLOTS_METHOD_SPELLINGS: [(&str, &str); 3] = [
     ),
 ];
 
-/// The account the #984 message must *not* borrow: D-154's plain attribute
-/// route explanation, which describes a redundant declaration on a class that
-/// is created rather than a class creation that fails.
-const D154_FRAGMENT: &str = "fixed at compile time from its `__init__`";
+/// The account the #984 message must *not* borrow: the plain attribute route's
+/// explanation (#1368; D-154's before it), which describes an unmodelled
+/// spelling on a class that is created rather than a class creation that fails.
+const D154_FRAGMENT: &str = "only a value-bound `__slots__`";
 
 /// Asserts the #984 message from both sides: the carrier-specific needle is
 /// present and D-154's instance-layout account is absent. A `contains`-only

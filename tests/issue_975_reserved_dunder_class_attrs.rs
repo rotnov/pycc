@@ -430,10 +430,11 @@ fn an_enum_member_named_after_an_unreserved_dunder_is_rejected() {
 
 // -- regression pins for shapes that were already rejected -----------------
 
-/// #910's `__slots__` message, unchanged. It shares the guard function but
-/// not the name set.
+/// #910's `__slots__` guard shares the function but not the name set. Since
+/// #1368 a bound `__slots__` is parsed by `class::slots`, so a non-iterable
+/// value reports CPython's own `TypeError` text.
 #[test]
-fn the_slots_rejection_is_unchanged() {
+fn the_slots_rejection_quotes_cpythons_type_error() {
     assert_rejected(
         "975_slots",
         "class C:\n\
@@ -443,7 +444,7 @@ fn the_slots_rejection_is_unchanged() {
          def main() -> int:\n\
          \x20   return 0\n",
         "C0001",
-        "`__slots__` in a class body is not supported yet",
+        "CPython raises `TypeError: 'int' object is not iterable`",
     );
 }
 

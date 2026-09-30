@@ -810,22 +810,17 @@ mod tests {
         );
     }
 
-    // -- #910: `__slots__`, rejected identically in both spellings ---------
+    // -- #910/#1368: the `__slots__` spellings `class::slots` does not admit -
 
     #[test]
-    fn an_unannotated_slots_assignment_is_rejected() {
-        assert_collision(
-            "class C:\n    __slots__ = \"a\"\n",
-            "`__slots__` in a class body",
-        );
-    }
-
-    #[test]
-    fn an_annotated_slots_declaration_is_rejected() {
-        assert_collision(
-            "class C:\n    __slots__: str = \"a\"\n",
-            "`__slots__` in a class body",
-        );
+    fn a_value_less_or_dataclass_slots_binding_is_rejected() {
+        for source in [
+            "class C:\n    __slots__: str\n",
+            "from dataclasses import dataclass\nfrom typing import ClassVar\n\n\n@dataclass\n\
+             class C:\n    __slots__: ClassVar[str] = \"a\"\n",
+        ] {
+            assert_collision(source, "this `__slots__` spelling is not supported yet");
+        }
     }
 
     // -- #916: `Final[...]` on a class-body attribute ----------------------

@@ -216,6 +216,13 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         {
             continue;
         }
+        // #1368: a `__slots__` binding (bare, or annotated with a value) is
+        // not a class attribute; `super::slots::check_class` parses and
+        // checks it once the class is lowered. A `@dataclass` body keeps
+        // today's refusals.
+        if !is_dataclass && super::slots::is_slots_binding(stmt) {
+            continue;
+        }
         if let Stmt::AnnAssign(ann) = stmt {
             // #911: `ClassVar[T]` is a class-body-only annotation wrapper.
             // The shared `annotation_to_ty` rejects it outright, so it is

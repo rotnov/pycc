@@ -9,8 +9,12 @@
 //! Three independent sets live here:
 //!
 //! * `__slots__` (#910), which Python reads as a declaration of the instance
-//!   layout. This compiler fixes that layout at compile time from `__init__`
-//!   (D-154), so the declaration would be silently discarded. Its message is
+//!   layout. Since #1368 a value-bound `__slots__` in a non-`@dataclass` body
+//!   never reaches this module: `super::body` hands it to `super::slots`,
+//!   which checks it against CPython's class-creation rules. What still
+//!   arrives here is the value-less `__slots__: T` annotation (it binds
+//!   nothing, so CPython keeps the instance `__dict__`) and the `@dataclass`
+//!   route, neither of which is modelled. Its message is
 //!   route-dependent ([`slots_message`]): an `Enum` body has no `__init__` and
 //!   no instance layout at all, and CPython's `_EnumDict` turns the name into
 //!   an ordinary class attribute there, so D-154's explanation would be false
@@ -470,9 +474,10 @@ pub(super) enum ClassBodyRoute<'a> {
 /// reasons, and stating the wrong one is a false explanation rather than a
 /// stylistic slip:
 ///
-/// * A plain (or `@dataclass`) class has an instance layout, and pycc fixes it
-///   at compile time from `__init__` (D-154), which is exactly what `__slots__`
-///   declares -- so the declaration is redundant and would be discarded.
+/// * A plain (or `@dataclass`) class has an instance layout. A value-bound
+///   `__slots__` in a plain body is admitted by `super::slots` (#1368) and
+///   never reaches here; the spellings that do -- a value-less annotation,
+///   and any `__slots__` in a `@dataclass` body -- are not modelled.
 /// * An enum has neither. `lower_enum_class` produces no `__init__` and no
 ///   instance layout at all; its members are a compile-time table. The name is
 ///   rejected there because CPython gives it a *third* meaning again -- an
@@ -487,10 +492,10 @@ pub(super) enum ClassBodyRoute<'a> {
 fn slots_message(route: ClassBodyRoute<'_>) -> &'static str {
     match route {
         ClassBodyRoute::Plain => {
-            "`__slots__` in a class body is not supported yet -- a class's instance layout is \
-             fixed at compile time from its `__init__` (the `__slots__` semantics are already \
-             implicit), so a `__slots__` assignment would be silently ignored rather than \
-             honored"
+            "this `__slots__` spelling is not supported yet -- only a value-bound `__slots__` \
+             (`__slots__ = ('a', 'b')`) in a class body that is not a `@dataclass` is; a \
+             value-less `__slots__` annotation binds nothing in CPython (the class keeps its \
+             `__dict__`), and `__slots__` in a `@dataclass` body is not modelled"
         }
         ClassBodyRoute::Enum { .. } => {
             "`__slots__` in an `Enum` body is not supported yet -- CPython's `_EnumDict` keeps \

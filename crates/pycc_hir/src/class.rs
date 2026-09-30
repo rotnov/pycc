@@ -95,6 +95,7 @@ mod protocol_return_tests;
 mod receiver;
 mod reserved_names;
 mod shadow;
+pub(crate) mod slots;
 pub use shadow::declares_name_outside_class_attrs;
 
 use crate::expr::keyword_bind::SignatureTable;

@@ -265,6 +265,9 @@ pub fn link(inputs: Vec<LinkInput>) -> Result<HirModule, Vec<(usize, Diagnostic)
             // Consumed by the `del` pre-pass above (#1244).
             deleted_top_level: _,
             mentioned_names: _,
+            // Consumed by the driver too (#1368): it feeds each importer's
+            // `__slots__` checks, and linking has no use for it.
+            class_slots: _,
         } = input.module;
         let mut own: HashSet<&str> = HashSet::new();
         for (name, span) in &definition_spans {

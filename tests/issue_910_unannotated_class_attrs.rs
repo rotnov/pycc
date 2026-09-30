@@ -145,20 +145,28 @@ fn a_bare_assignment_in_a_dataclass_body_stays_unsupported() {
     );
 }
 
-/// `__slots__` declares an instance layout that this compiler already fixes
-/// at compile time from `__init__`, so binding it as an ordinary constant
-/// would silently discard the declaration. Both spellings are rejected.
+/// Since #1368 both value-bound spellings of `__slots__` are admitted and
+/// checked by `class::slots` rather than lowered as an ordinary constant; the
+/// value-less annotation binds nothing in CPython and stays refused.
 #[test]
-fn slots_is_rejected_in_both_spellings() {
+fn slots_is_admitted_in_both_value_bound_spellings() {
+    for (tag, binding) in [
+        ("910_slots_bare", "__slots__ = \"a\""),
+        ("910_slots_annotated", "__slots__: str = \"a\""),
+    ] {
+        assert_runs(
+            tag,
+            &format!(
+                "class C:\n    {binding}\n\n    def __init__(self) -> None:\n        self.a = \
+                 1\n\n\nprint(C().a)\n"
+            ),
+            "1\n",
+        );
+    }
     assert_rejected(
-        "910_slots_bare",
-        "class C:\n    __slots__ = \"a\"\n\n    def __init__(self) -> None:\n        self.a = 1\n",
-        "`__slots__` in a class body is not supported yet",
-    );
-    assert_rejected(
-        "910_slots_annotated",
-        "class C:\n    __slots__: str = \"a\"\n\n    def __init__(self) -> None:\n        self.a = 1\n",
-        "`__slots__` in a class body is not supported yet",
+        "910_slots_value_less",
+        "class C:\n    __slots__: str\n\n    def __init__(self) -> None:\n        self.a = 1\n",
+        "this `__slots__` spelling is not supported yet",
     );
 }
 
