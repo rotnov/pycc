@@ -593,11 +593,12 @@ fn builtin_exception_class_names(name: &str) -> &'static [&'static str] {
 /// descriptor: CPython accepts the class, but reading the never-assigned
 /// slot raises `AttributeError` where pycc would find the later binding. A
 /// binding earlier in the MRO (`class C(A, B)`, or `C`'s own body) shadows
-/// the descriptor instead: CPython finds it first, so when the instances
-/// have no `__dict__` (every MRO entry binds `__slots__`) a store to the
-/// slot raises `AttributeError` where pycc's flat layout writes the slot.
-/// With a `__dict__` the store lands in it, and an earlier binding is
-/// admitted.
+/// the descriptor instead: CPython finds it first, so a store to the slot
+/// raises `AttributeError` where pycc's flat layout writes the slot -- a
+/// read-only property always, a plain value when the instances have no
+/// `__dict__` -- or, with a `__dict__`, lands in the dictionary. pycc models
+/// neither lookup order, so an earlier binding is refused whether or not the
+/// instances have a `__dict__`.
 ///
 /// An instance attribute is no class-level binding and does not conflict,
 /// and neither does another class's own slot of the same name (re-declaring
@@ -611,12 +612,6 @@ fn check_inherited_class_names(
 ) -> Result<(), Diagnostic> {
     let class_name = def.name.as_str();
     let own_namespace = class_body_namespace(def);
-    // Whether the class's instances have no `__dict__`: every MRO entry
-    // binds `__slots__`, and none is a builtin exception class.
-    let no_dict = own.is_some()
-        && class_def.mro[1..]
-            .iter()
-            .all(|ancestor| matches!(ancestors.row(ancestor), Some(Some(_))));
     for (index, declarer) in class_def.mro.iter().enumerate() {
         let (slots, span) = if index == 0 {
             match own {
@@ -634,7 +629,7 @@ fn check_inherited_class_names(
         };
         for slot in slots {
             for (other_index, other) in class_def.mro.iter().enumerate() {
-                let binds = if other_index == index || (other_index < index && !no_dict) {
+                let binds = if other_index == index {
                     false
                 } else if other_index == 0 {
                     // The class's own body; its own slots were checked
@@ -656,9 +651,8 @@ fn check_inherited_class_names(
                         "class `{class_name}` is not supported yet -- its base `{declarer}` \
                          declares the slot `{slot}`, and `{other}`, earlier in `{class_name}`'s \
                          MRO, binds `{slot}` at class level; CPython finds `{other}.{slot}` \
-                         before `{declarer}`'s member descriptor, so storing to the slot \
-                         through an instance without a `__dict__` raises `AttributeError` \
-                         where pycc would write the slot"
+                         before `{declarer}`'s member descriptor, so a store to the slot \
+                         does not reach it, where pycc would write the slot"
                     )
                 } else if index == 0 {
                     format!(

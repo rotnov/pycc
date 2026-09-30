@@ -591,11 +591,11 @@ CPython's order:
    reading the unset slot raises `AttributeError` where pycc would find the
    later value. A base's slot whose name a class *earlier* in the MRO binds
    at class level (`class C(A, B)` with a slotted `B`, or `C`'s own body) is
-   refused too when the instances have no `__dict__` (every MRO class binds
-   `__slots__`): CPython finds the earlier binding first, so a store to the
-   slot raises `AttributeError: ... is read-only` where pycc's flat layout
-   would write the slot. With a `__dict__` the store lands there, and the
-   class is admitted. An instance attribute does not conflict, and
+   refused too: CPython finds the earlier binding first, so a store to the
+   slot never reaches it. It raises `AttributeError` for a read-only
+   property, or for a plain value when the instances have no `__dict__`,
+   and otherwise lands in the `__dict__`; pycc's flat layout would write the
+   slot in every case. An instance attribute does not conflict, and
    re-declaring an ancestor's own slot is admitted.
 6. **Stores.** When every class in the MRO binds `__slots__`, the instance
    has no `__dict__`, so a store `self.<attr> = ...` to a name no MRO class
