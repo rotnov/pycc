@@ -27,10 +27,12 @@ status: accepted
     reference itself. That rewritten expression is type-checked and lowered by the
     existing object paths (`ObjAttrGet`, `ObjMethodCall`, `ObjCall`). `pycc_codegen` and
     `pycc_rt` do not change.
-  - Every other non-literal shape gets a `C0001` that names its tracking issue. That
-    covers a call, a name or attribute reference, a container, `classmethod(...)`, a pycc
-    function root, a conditional import, the annotated spelling, a rebound
-    `staticmethod`, and a dunder, class-private or container-dispatched name.
+  - Every other non-literal shape gets its own `C0001`. A deferred shape names its
+    tracking issue: a call, a name or attribute reference, a container, `classmethod(...)`,
+    a pycc function root, a conditional import, the annotated spelling, and a dunder,
+    class-private or container-dispatched name. Two shapes stay refused with no tracking
+    issue, because CPython itself rejects or rebinds them: the wrong argument count or kind
+    for `staticmethod(...)`, and a rebound `staticmethod`.
   - The MRO rule is positional. Both `pycc_types` and `pycc_mir` apply it through the
     shared `pycc_hir` helpers (`crates/pycc_hir/src/class/foreign_static.rs`).
     - A class-name read or call reaches the attribute when the attribute is the first

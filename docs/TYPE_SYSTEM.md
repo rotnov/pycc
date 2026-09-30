@@ -467,7 +467,7 @@ Because the value is folded, the accepted surface is deliberately narrow:
 - **A foreign-callable `staticmethod` attribute** ([#1345](https://github.com/rotnov/pycc/issues/1345), Part 1 of [#1284](https://github.com/rotnov/pycc/issues/1284), [D-256](./decisions/D-256-admit-a-foreign-callable-staticmethod-class.md)).
   - **The admitted shape.** `exists = staticmethod(os.path.exists)` and `plus = staticmethod(add)` are the one non-literal initializer admitted. The shape is un-annotated and has exactly one positional argument, which is a bare name or a dotted chain. The chain's root must be an unconditional module-level foreign import that precedes the class.
   - **Representation.** The value is `ClassAttrValue::ForeignStatic`, typed `object`. It has no storage. A read or call through it is rewritten at the use site into the reference itself (`os.path.exists(p)`). That rewritten expression type-checks and lowers exactly like the hand-written spelling, so each access re-reads the chain from the module's foreign import.
-  - **Refused variants.** Each has its own `C0001` naming the tracking issue:
+  - **Refused variants.** Each has its own `C0001`. A deferred variant names its tracking issue; the rebound `staticmethod` and the wrong-argument shapes stay refused and name none:
     - the annotated or `Final` spelling;
     - a conditional (`if`/`try`) import root;
     - a pycc function, class, or module root, or a root bound earlier in the class body (#1347);
