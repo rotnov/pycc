@@ -15558,9 +15558,10 @@ fn a_private_helper_may_return_a_cpython_object_and_its_result_is_discarded() {
     // CPython object from a function since Part 1 of #1333, so this is
     // also a shape the front end produces.
     //
-    // D-137's amendment keeps `object` unspellable in an annotation, so
-    // such a helper can never be public and never reaches an `ext` export
-    // thunk.
+    // A public function returning `object` -- spellable since Part 1 of
+    // #1367 through a class a foreign import binds -- is refused `C0003` at
+    // the `--ext` boundary (#1386), so such a helper never reaches an `ext`
+    // export thunk.
     compile_ext_items(
         "object_returning_helper",
         with_foreign_numpy(vec![

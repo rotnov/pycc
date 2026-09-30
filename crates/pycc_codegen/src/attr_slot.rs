@@ -23,12 +23,14 @@ use inkwell::values::{IntValue, PointerValue};
 /// `list[int]` or `dict[str, int]` reinterprets the word as the container's
 /// pointer, the same `inttoptr` `str` uses. Containers are leak-only (D-107,
 /// D-124), so the read hands back the very object the slot holds, which is
-/// CPython's aliasing. Only these six `Ty`s can ever reach here:
+/// CPython's aliasing. Since Part 1 of #1367 an `object` (a class a foreign
+/// import binds) reinterprets the word as its `PyObject*` the same way. Only
+/// these seven `Ty`s can ever reach here:
 /// `pycc_hir::class::init_slot::slot_ty_from_init_rhs` admits a scalar
 /// (int/float/bool/str) parameter or literal, or a `list[int]`/`dict[str,
-/// int]` parameter, at `__init__`'s own first-assignment pre-scan, so a
-/// `Set`/`Tuple`/`Instance`/`Param`/`Infer`-typed attribute can never be
-/// constructed from real, type-checked source.
+/// int]`/`object` parameter, at `__init__`'s own first-assignment pre-scan,
+/// so a `Set`/`Tuple`/`Instance`/`Param`/`Infer`/`MemoryView`-typed
+/// attribute can never be constructed from real, type-checked source.
 pub(crate) fn slot_word_to_scalar<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -61,7 +63,17 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
         // wrapper choice -- two sibling arms would be the structurally
         // identical regions that have lost coverage counts in this code
         // before (see `init_slot::slot_ty_from_init_rhs`'s own comment).
-        pycc_mir::Ty::List(_) | pycc_mir::Ty::Dict(..) => {
+        //
+        // Part 1 of #1367: a foreign object (`Ty::Object`) shares the same
+        // `inttoptr` -- D-154 already stores `str`/instance pointers
+        // reinterpreted as `i64`, and a `PyObject*` is one more pointer.
+        // Every `object` producer hands back a reference that is never
+        // released and `pycc_rt::instance` never releases a slot word, so
+        // the read needs no refcount traffic. A slot read before its
+        // `__init__` assignment is a NULL word, which the foreign operation
+        // reports as `SystemError` where CPython raises `AttributeError`
+        // (the pre-existing uninitialised-slot hazard, #1148).
+        pycc_mir::Ty::List(_) | pycc_mir::Ty::Dict(..) | pycc_mir::Ty::Object => {
             let ptr = builder
                 .build_int_to_ptr(
                     raw,
@@ -69,10 +81,10 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
                     "attr_container_inttoptr",
                 )
                 .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer");
-            if matches!(ty, pycc_mir::Ty::List(_)) {
-                Scalar::List(ptr)
-            } else {
-                Scalar::Dict(ptr)
+            match ty {
+                pycc_mir::Ty::List(_) => Scalar::List(ptr),
+                pycc_mir::Ty::Dict(..) => Scalar::Dict(ptr),
+                _ => Scalar::Object(ptr),
             }
         }
         other => panic!(
@@ -87,8 +99,8 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
 
 /// Mirror image of [`slot_word_to_scalar`]: encodes a `Scalar` as the raw
 /// `i64` word `pycc_rt_instance_set_slot` stores. See that function's own
-/// doc comment for why only `Int`/`Bool`/`Float`/`Str`/`List`/`Dict` are
-/// ever reachable here.
+/// doc comment for why only `Int`/`Bool`/`Float`/`Str`/`List`/`Dict`/`Object`
+/// are ever reachable here.
 pub(crate) fn scalar_to_slot_word<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -110,7 +122,10 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         // pointer. No refcount traffic: containers are leak-only (D-107,
         // D-124), and `MirStmt::AttrSet`'s release calls are gated on a
         // `str`/`int` value type.
-        Scalar::List(v) | Scalar::Dict(v) => builder
+        // Part 1 of #1367: a foreign object's `PyObject*` is stored the
+        // same way, and needs no refcount traffic either (see
+        // `slot_word_to_scalar`).
+        Scalar::List(v) | Scalar::Dict(v) | Scalar::Object(v) => builder
             .build_ptr_to_int(v, context.i64_type(), "attr_container_ptrtoint")
             .expect("build_ptr_to_int should not fail reinterpreting a pointer as i64"),
         Scalar::Set(_)
@@ -123,21 +138,13 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         // present/absent byte, and this PR ships no class-attribute use of
         // `Optional[int]` for `slot_ty_from_init_rhs` to have exercised.
         | Scalar::Optional(_)
-        // D-244, Part 2 of #1026: a foreign CPython object joins the same
-        // or-pattern for the identical reason the aggregate variants above
-        // do -- `slot_ty_from_init_rhs` admits only a scalar or a
-        // `list[int]`/`dict[str, int]` slot, so a `Ty::Object` attribute is
-        // never built. Folded
-        // into the existing group rather than given its own arm so it adds
-        // no separate, permanently-unexecutable region.
         // Part 2 of #1027: a `memoryview` joins the same or-pattern for
         // the identical reason -- `slot_ty_from_init_rhs` admits no
         // `memoryview` slot. Part 2a of #1142 (#1165) gave
         // the type its one storable position, a *local* slot bound by
         // `a = ndarray(n)`; an instance attribute is not that position and
         // stays refused, so no such attribute is ever built.
-        | Scalar::MemoryView(_)
-        | Scalar::Object(_) => panic!(
+        | Scalar::MemoryView(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
              attribute slot -- pycc_hir::class::init_slot::slot_ty_from_init_rhs should \
              have rejected this before codegen"
@@ -237,11 +244,13 @@ mod tests {
     }
 
     /// The IR of the one function that stores and reads the container
-    /// slots, compiled through the real pipeline.
+    /// slots (and, since Part 1 of #1367, a foreign `object` slot), compiled
+    /// through the real pipeline.
     fn container_slot_function_ir() -> String {
         let self_ty = Ty::Instance(Box::new("Holder".to_string()));
         let list_ty = Ty::List(Box::new(Ty::Int));
         let dict_ty = Ty::Dict(Box::new((Ty::Str, Ty::Int)));
+        let object_ty = Ty::Object;
         let get = |slot: usize, ty: &Ty| MirExpr::AttrGet {
             base: Box::new(name("self", self_ty.clone())),
             slot,
@@ -253,6 +262,7 @@ mod tests {
                 ("self".to_string(), self_ty.clone()),
                 ("xs".to_string(), list_ty.clone()),
                 ("d".to_string(), dict_ty.clone()),
+                ("o".to_string(), object_ty.clone()),
             ],
             return_ty: Ty::None,
             body: vec![
@@ -266,6 +276,11 @@ mod tests {
                     slot: 1,
                     value: name("d", dict_ty.clone()),
                 },
+                MirStmt::AttrSet {
+                    base: name("self", self_ty.clone()),
+                    slot: 2,
+                    value: name("o", object_ty.clone()),
+                },
                 MirStmt::Assign {
                     target: "ys".to_string(),
                     value: get(0, &list_ty),
@@ -273,6 +288,10 @@ mod tests {
                 MirStmt::Assign {
                     target: "e".to_string(),
                     value: get(1, &dict_ty),
+                },
+                MirStmt::Assign {
+                    target: "p".to_string(),
+                    value: get(2, &object_ty),
                 },
                 MirStmt::Return(None),
             ],
@@ -308,15 +327,19 @@ mod tests {
         // pointer word (one `ptrtoint` per store, one `inttoptr` per read).
         // Containers are leak-only (D-107, D-124), so neither store may
         // release the slot's previous value: `MirStmt::AttrSet` gates its
-        // `str` decref and `int` release on the value's type.
+        // `str` decref and `int` release on the value's type. Part 1 of
+        // #1367: an `object` slot holds its `PyObject*` the same way, with
+        // no refcount traffic either (every `object` producer's reference
+        // is never released).
         let ir = container_slot_function_ir();
         let defined = |prefix: &str| {
             ir.lines()
                 .filter(|line| line.trim_start().starts_with(prefix))
                 .count()
         };
-        assert_eq!(defined("%attr_container_ptrtoint"), 2, "{ir}");
-        assert_eq!(defined("%attr_container_inttoptr"), 2, "{ir}");
+        assert_eq!(defined("%attr_container_ptrtoint"), 3, "{ir}");
+        assert_eq!(defined("%attr_container_inttoptr"), 3, "{ir}");
+        assert!(!ir.contains("Py_DecRef"), "{ir}");
         assert!(!ir.contains("pycc_rt_str_decref"), "{ir}");
         assert!(!ir.contains("pycc_rt_bigint_release"), "{ir}");
     }

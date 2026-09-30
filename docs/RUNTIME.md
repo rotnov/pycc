@@ -1337,6 +1337,10 @@ and an argument is passed through `Scalar::Object(v) => v.into()` in
 `build_call_to_with_leading_args` as a borrowed pointer the callee never
 releases. The #1092 leak-only rule therefore extends to function locals
 unchanged -- the only reference that leaks is the one each producer returns.
+Since Part 1 of [#1367](https://github.com/rotnov/pycc/issues/1367) an object
+may also live in an instance slot, established from an `__init__` parameter
+annotated with a class a foreign import binds: the slot word is the same
+borrowed pointer (D-154), stored and read with no reference-count change.
 `tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
 attribute at two trip counts `N`:
 

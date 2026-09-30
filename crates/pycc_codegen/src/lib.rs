@@ -4340,10 +4340,12 @@ fn build_call_to_with_leading_args<'ctx>(
                 // has for any `StructValue`.
                 Scalar::Optional(v) => v.into(),
                 // Pass-through (Part 1 of #1333): a `Ty::Object` argument
-                // reaches only an unannotated private helper's
-                // solver-inferred `object` parameter -- `object` is
-                // unspellable in an annotation (D-137's amendment) -- so the
-                // callee is another pycc function taking the same `ptr`. The
+                // reaches an unannotated private helper's solver-inferred
+                // `object` parameter or, since Part 1 of #1367, a parameter
+                // annotated with a class a foreign import binds -- either
+                // way the callee is another pycc function taking the same
+                // `ptr` (a public one is refused `C0003` at the `--ext`
+                // boundary, #1386). The
                 // borrowed pointer is passed through with no refcount
                 // change: the callee never releases it (#1092's leak-only
                 // rule, `docs/RUNTIME.md`).

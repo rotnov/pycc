@@ -224,9 +224,10 @@ fn a_type_error_is_reported_before_the_native_foreign_refusal() {
 
 /// Finding 1 of the same review: a private helper that returns the bound
 /// module object must never get a `T0021` telling the user to add a return
-/// annotation. No annotation can satisfy that advice -- the foreign object
-/// type is deliberately unspellable -- so the solver's `Name` arm hands back
-/// the concrete `Ty::Object` term. The check phase refused the `return`
+/// annotation. The helper is unannotated, and its return needs no
+/// annotation to be typed (since Part 1 of #1367 a `-> <module>` one would
+/// also spell it), so the solver's `Name` arm hands back the concrete
+/// `Ty::Object` term. The check phase refused the `return`
 /// with `I0404` until Part 1 of #1333 admitted returning a CPython object;
 /// the program now type-checks, and the term is what makes that possible.
 #[test]

@@ -889,9 +889,9 @@ whole past the first layer, so this list is a **lower bound**.
 | `from lark.exceptions import UnexpectedToken` (7) | cleared out of package; in a package tree `lark.exceptions` is a project import (a `C0001` in a skeleton tree; in the full tree it links and the build fails in `lark/utils.py`) | #1138 (Part 1); in-tree: [#1382](https://github.com/rotnov/pycc/issues/1382) |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
 | `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
-| annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported | [#1367](https://github.com/rotnov/pycc/issues/1367) |
+| annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported at `05bc7805`; Part 1 of #1367 resolves them to `object` (subscripts erased), and a probe with only the `Generic[...]` bases removed moves its first diagnostic from this row (line 14) to line 20, where `Dict[StateT, Dict[str, tuple]]` now resolves `StateT` and stops at the bare `tuple`; the whole subject still reports row 4's two errors. Still refused: the `__init__` assignments from non-parameter expressions (25-27, 43-44, [#1388](https://github.com/rotnov/pycc/issues/1388)) and `ParseConf[StateT]`, an attribute holding a pycc class instance (35, 40-41, [#1389](https://github.com/rotnov/pycc/issues/1389)) | [#1367](https://github.com/rotnov/pycc/issues/1367) (Part 1); [#1388](https://github.com/rotnov/pycc/issues/1388), [#1389](https://github.com/rotnov/pycc/issues/1389) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
-| `__eq__(self, other)`: its only faithful annotation is the unspellable `object` (51) | `T0021` cannot infer parameter | #1367 |
+| `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 leaves unspellable (51) | `T0021` cannot infer parameter | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
 | `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
 | the subject's `-> Any` (67) | `T0002` (inferred) | #1285 |
 | function-local bindings of objects (`state_stack = self.state_stack`, 68-72) | `I0404` | #1333 / #1362 |
@@ -915,10 +915,13 @@ Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
 binding a CPython object to a function-local name. Its isolated probe, a method
 body binding a producer's result to a local and aliasing it, now compiles and
 runs. The table above stays the `05bc7805` measurement. In the subject, lines
-68-72 bind `self` attributes, and a pycc class cannot yet hold an object
-attribute: `self.<attr>` must come from an `__init__` parameter, and such a
-parameter cannot be spelled `object` (#1367). So that row is not re-measured
-as cleared until the subject module is compiled again.
+68-72 bind `self` attributes. Part 1 of #1367 lets a pycc class hold an object
+attribute established from an `__init__` parameter annotated with a foreign
+class, but `self.<attr>` must still come from a bare parameter, and the
+subject establishes `state_stack` and `value_stack` from `or` expressions
+(43-44), which stay refused
+([#1388](https://github.com/rotnov/pycc/issues/1388)). So that row is not
+re-measured as cleared until the subject module is compiled again.
 
 **State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing

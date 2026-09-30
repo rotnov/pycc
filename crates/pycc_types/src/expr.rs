@@ -468,8 +468,9 @@ pub(crate) fn infer_expr_in(
                 // time to the host -- `len(o)` on an operand with no
                 // `__len__` raises `TypeError` there. The diagnostic text
                 // deliberately stays as it is: `object` is not spellable in
-                // an annotation, so naming it in the message a user sees for
-                // `len(5)` would point at a type they cannot write.
+                // an annotation (only a foreign-imported class resolves to
+                // it, Part 1 of #1367), so naming it in the message a user
+                // sees for `len(5)` would point at a type they cannot write.
                 if !matches!(
                     arg_tys[0],
                     Ty::List(_) | Ty::Dict(_) | Ty::Set(_) | Ty::FrozenSet(_) | Ty::Object
@@ -579,8 +580,10 @@ pub(crate) fn infer_expr_in(
                 // row.
                 //
                 // The message below deliberately does *not* enumerate
-                // `object`: it is unspellable in an annotation (D-137) and
-                // exists only because a foreign `import` bound it, so
+                // `object`: it is unspellable in an annotation
+                // (`docs/TYPE_SYSTEM.md`'s `object` row) and exists only
+                // because a foreign `import` bound it -- or, since Part 1 of
+                // #1367, a class such an import binds annotated it -- so
                 // "pass an `object`" is advice nobody can act on by writing a
                 // type. `tests::float_of_a_str_is_rejected_as_t0021` pins the
                 // exact text, so the omission reads as deliberate rather than

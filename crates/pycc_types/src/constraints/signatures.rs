@@ -299,9 +299,10 @@ pub(crate) fn infer_function_signatures_with_solver_all(
     // fall through to the "not a solver-tracked local" case; without the
     // foreign marker a helper returning the module object would keep an
     // unresolved return variable and signature materialization would report
-    // a misleading `T0021: ... add an annotation` -- advice no annotation
-    // can satisfy, since the foreign object type is deliberately
-    // unspellable -- before the check phase's `I0404` could fire. The names
+    // a misleading `T0021: ... add an annotation` for a helper that is
+    // unannotated by design and whose return the marker already types as
+    // `object` (since Part 1 of #1367 a `-> <module>` annotation would
+    // also spell it). The names
     // deliberately do not go into `bindings`: see the `Name` arm in
     // `super::collect_expr_constraints` for why.
     for name in crate::foreign::foreign_object_names(&hir.imports) {
