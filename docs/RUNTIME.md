@@ -1043,7 +1043,14 @@ module body keeps its direct `-1` edge, so what this section says about the
 module body is unchanged. `tests/issue_1316_foreign_in_function.rs` compares
 each of these against CPython running the same source. The type checker
 admits a foreign name read in a function body on the terms
-[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s `object` row states.
+[TYPE_SYSTEM.md](./TYPE_SYSTEM.md)'s `object` row states. Since Part 1 of
+[#1333](https://github.com/rotnov/pycc/issues/1333)
+([#1362](https://github.com/rotnov/pycc/issues/1362)) that read extends to a
+module-level name bound to an object value (`P = product("ab")`), with the same
+`NameError` before the binding runs, and the function body may also bind an
+object to a local name, return it, and pass it to another pycc function; the
+reference rule for those is the binding paragraph below.
+`tests/issue_1333_foreign_in_function.rs` compares each against CPython.
 
 **A method call fails on that same edge.** PR 2b
 of [#1081](https://github.com/rotnov/pycc/issues/1081) added
@@ -1136,9 +1143,11 @@ iterator that raises mid-iteration — and no more.
 The out-parameter the item is written through is a single pointer slot hoisted
 into the module-exec entry block, so a loop does not grow the host's stack. The
 loop is still admitted only in a module body: #1316 did not extend it, because
-its target would bind a function-local `object`, and binding a CPython object
-to a name inside a function is
-[#1333](https://github.com/rotnov/pycc/issues/1333)'s scope. Since
+its target would bind a function-local `object`. Part 1 of
+[#1333](https://github.com/rotnov/pycc/issues/1333)
+([#1362](https://github.com/rotnov/pycc/issues/1362)) admits that binding, but
+not the loop: a `for` over an object in a function body is Part 2
+([#1363](https://github.com/rotnov/pycc/issues/1363)). Since
 [#1325](https://github.com/rotnov/pycc/issues/1325) the iterable may also be a
 bare name bound to an `object` (`for t in x:`): `pycc_mir` lowers the checker's
 `ForList` over such a name to the same `MirStmt::ForObject`, with a `Name` load
@@ -1270,10 +1279,31 @@ direction: the producer's new reference simply moves into the global. A
 rebinding (`x = product("c")`) likewise stores without releasing the previous
 value, because an alias `y = x` shares that pointer without an increment, so a
 release on rebind could free an object `y` still names -- a use-after-free
-where the leak is only a leak. The binding is module-global only (a
-function-local `object` is [#1333](https://github.com/rotnov/pycc/issues/1333)),
-so each binding statement leaks at most one reference per execution, on the
-same terms as the producers above.
+where the leak is only a leak. Each binding statement therefore leaks at most
+one reference per execution, on the same terms as the producers above.
+
+**A function body adds no reference traffic of its own.** Since Part 1 of
+[#1333](https://github.com/rotnov/pycc/issues/1333)
+([#1362](https://github.com/rotnov/pycc/issues/1362)) a function body may bind
+an object to a local name, alias it, return it, pass it to another pycc
+function, and read a module-level object global. None of these touches a
+reference count: a local's store is the same pointer store as any other
+scalar local, a `return` hands the callee's pointer to the caller unchanged,
+and an argument is passed through `Scalar::Object(v) => v.into()` in
+`build_call_to_with_leading_args` as a borrowed pointer the callee never
+releases. The #1092 leak-only rule therefore extends to function locals
+unchanged -- the only reference that leaks is the one each producer returns.
+`tests/issue_1333_foreign_in_function.rs` pins it against a mortal stub
+attribute at two trip counts `N`:
+
+| Shape, run `N` times in a function body | `sys.getrefcount` delta |
+|---|---|
+| `y = stub.MESH; z = y` (producer, bind, alias) | `N`, one per producing load |
+| `len(_get())` where `_get` returns `stub.MESH` | `N`, one per producing load |
+| `_keep(y)` with `y` bound once before the loop | `1`, the single load before the loop |
+| `w = G` where `G = stub.MESH` at module level | `0` |
+
+When #1092 lands the producing loads stop leaking and every row becomes `0`.
 
 **The key slot repeats the argument slot's rule rather than inventing a second
 one.** `pycc_ext_obj_getitem` *borrows* the object and **consumes the key

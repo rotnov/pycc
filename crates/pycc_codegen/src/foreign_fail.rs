@@ -200,10 +200,11 @@ fn name_error_fn<'ctx>(
     )
 }
 
-/// Emits the unbound branch of a module-global read of `name` when it is a
-/// foreign `object` read inside a function other than the module-exec
-/// entry, and answers whether it did; the caller emits its `llvm.trap`
-/// otherwise.
+/// Emits the unbound branch of a module-global read of `name` when it is an
+/// `object` read inside a function other than the module-exec entry, and
+/// answers whether it did; the caller emits its `llvm.trap` otherwise. The
+/// global may be a foreign import or, since Part 1 of #1333, a module-level
+/// `x = <object>` binding read before its assignment ran.
 ///
 /// A function body is checked against the final module environment, so
 /// `def f(): return copy.__name__` called above `import copy` type-checks

@@ -113,15 +113,22 @@ fn check_accepts_a_call_of_a_foreign_loop_target() {
     );
 }
 
-/// A function body may call the object (#1316) but not bind its result to
-/// a local, and above its import the name is not yet bound.
+/// A function body may call the object (#1316) and, since Part 1 of #1333,
+/// bind its result to a local, while above its import the name is not yet
+/// bound.
 #[test]
 fn the_callee_follows_the_foreign_object_rules() {
-    assert_one_error(
-        "obj_call_fn_body",
+    let dir = ScratchDir::new("obj_call_fn_body").expect("scratch");
+    let output = check_with(
+        &dir,
         "from itertools import product\n\n\ndef f() -> None:\n    product(\"ab\")\n    p = product(\"ab\")\n",
-        "I0404",
-        "binding a CPython object to a name",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
     );
     assert_one_error(
         "obj_call_early",

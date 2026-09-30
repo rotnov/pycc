@@ -16,7 +16,7 @@
 //! immediate branch to the innermost exception target inside any other
 //! function (#1316). `emit_iter_loop` alone keeps the
 //! `expect_module_exec_entry` assertion, because `pycc_types` still admits
-//! `for x in <object>:` only in a module body (#1333).
+//! `for x in <object>:` only in a module body (Part 2 of #1333).
 //! What is new here is *argument marshalling*: each already-evaluated pycc
 //! scalar becomes a `PyObject *` through one of the shim's
 //! `pycc_ext_obj_pack_*` helpers, the results go into a stack array, and
