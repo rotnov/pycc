@@ -15,6 +15,7 @@
 //! resolving unchanged.
 
 mod bare_container;
+mod container_annotation;
 pub(crate) mod params;
 #[cfg(test)]
 mod params_tests;
@@ -22,8 +23,9 @@ mod params_tests;
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
 use crate::{HirItem, ImportBinding, Ty, stmt, unsupported};
-use bare_container::{CONTAINER_ANNOTATION_NAMES, bare_container_example};
+use bare_container::container_family;
 pub(crate) use bare_container::{with_bare_container_advice, with_bare_list_or_dict_advice};
+use container_annotation::container_annotation_to_ty;
 use params::DefaultPolicy;
 use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
@@ -323,7 +325,11 @@ pub(crate) fn lower_return_annotation(
 /// `ClassVar[...]` at the top of its own match, so it never reaches this
 /// helper. The carrier's two ordinary-identifier spellings `ndarray` (#1129)
 /// and `NDArray` (#1134) are deliberately absent too -- both are ordinary
-/// identifiers resolved *after* both tables (D-244 statement (h)).
+/// identifiers resolved *after* both tables (D-244 statement (h)). The
+/// legacy `typing` container aliases `Dict`/`List`/`Set`/`FrozenSet`/`Tuple`
+/// (#1378) are deliberately absent as well: like the builtin `dict`/`list`
+/// they alias, they are lowered only after the known-class ladder, so a user
+/// class named `List` wins over the typing form.
 fn name_resolves_before_class_defs(base: &str) -> bool {
     matches!(
         base,
@@ -365,151 +371,6 @@ pub(crate) fn subscripted_base_description(
             _ => format!("type alias `{base}`"),
         }
     }
-}
-
-/// Lowers a parameterized builtin container annotation -- `list[T]`,
-/// `set[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its `Ty` (D-228,
-/// issue #918).
-///
-/// Three checks run in a fixed order, so the reported diagnostic always
-/// describes the outermost thing that is wrong:
-///
-/// 1. an `...` type argument (the homogeneous-variadic `tuple[int, ...]`),
-///    rejected with `T0053` because a runtime-length tuple has no fixed-arity
-///    `Ty::Tuple` representation;
-/// 2. arity -- `list`/`set` take exactly one argument, `dict` exactly two,
-///    `tuple` at least one (so the empty `tuple[()]`, which reaches here as a
-///    zero-element `Expr::Tuple`, is rejected here rather than silently
-///    lowering to a zero-field tuple);
-/// 3. each argument's own type, recursively through [`annotation_to_ty`],
-///    then the shared element-type capability gate
-///    ([`crate::container::check_container_ty`]) that container *literals*
-///    also run.
-///
-/// Between 3's recursion and the capability gate, a `Ty::Param` element is
-/// rejected with `T0042` -- the same code and wording `pycc_types`' own
-/// signature scan uses, but carrying the annotation's real span instead of
-/// that scan's `Span::new(0, 0)`. Catching it here rather than relying on the
-/// downstream scan is not just a nicer caret: `substitute_ty` is not
-/// recursive, so a `Ty::Param` buried inside a container would not be
-/// substituted at a call site even where the scan did let it through.
-fn container_annotation_to_ty(
-    family: &str,
-    slice: &Expr,
-    annotation: &Expr,
-    type_param: Option<&str>,
-    class_name: Option<&str>,
-    aliases: &[(String, Ty)],
-    class_defs: &[ClassAnnotationInfo],
-) -> Result<Ty, Diagnostic> {
-    let span = {
-        let range = pycc_ast::expr_range(annotation);
-        Span::new(range.start, range.end)
-    };
-    // A single type argument arrives as the bare expression; two or more (and
-    // the empty `tuple[()]`) arrive as an `Expr::Tuple`.
-    let args: Vec<&Expr> = match slice {
-        Expr::Tuple(tuple) => tuple.elts.iter().collect(),
-        other => vec![other],
-    };
-    if args
-        .iter()
-        .any(|arg| matches!(arg, Expr::EllipsisLiteral(_)))
-    {
-        // The advice is per family. `tuple[X, ...]` is the one spelling that
-        // means something in Python -- a homogeneous variadic tuple -- so it
-        // gets the length explanation and a fixed-arity `tuple`. For
-        // `list`/`set`/`dict`, `...` is simply not a type, and recommending a
-        // `tuple` there would change the container the user asked for.
-        //
-        // The advice is split into the reason and the imperative fix, because
-        // the fix is also published as structured `help` (D-152's "the message
-        // already embeds the fix" family): the message keeps the whole
-        // sentence, while `help` carries the imperative alone so a JSON or IDE
-        // consumer reads an instruction rather than a restatement.
-        let (advice, help) = if family == "tuple" {
-            let help = "write an explicit fixed-arity annotation such as `tuple[int, int]`";
-            (
-                format!(
-                    "a homogeneous-variadic container has no compile-time length, so {help} instead"
-                ),
-                help.to_string(),
-            )
-        } else {
-            let example = bare_container_example(family)
-                .expect("`family` is one of `CONTAINER_ANNOTATION_NAMES`");
-            let help = format!("write the element type, e.g. `{example}`");
-            (format!("`...` is not a type argument here; {help}"), help)
-        };
-        return Err(Diagnostic::error(
-            "T0053",
-            format!("the `...` type argument in `{family}[...]` is not supported yet -- {advice}"),
-            span,
-        )
-        .with_help(help));
-    }
-    let exact_arity = match family {
-        "list" | "set" | "frozenset" => Some(1usize),
-        "dict" => Some(2usize),
-        // `tuple` is variadic in arity: any count of one or more.
-        _ => None,
-    };
-    match exact_arity {
-        Some(expected) if args.len() != expected => {
-            let example = bare_container_example(family)
-                .expect("`family` is one of `CONTAINER_ANNOTATION_NAMES`");
-            return Err(Diagnostic::error(
-                "T0053",
-                format!(
-                    "container type annotation `{family}[...]` takes exactly {expected} type argument{}, got {}",
-                    if expected == 1 { "" } else { "s" },
-                    args.len()
-                ),
-                span,
-            )
-            .with_help(format!(
-                "write exactly {expected} type argument{}, e.g. `{example}`",
-                if expected == 1 { "" } else { "s" }
-            )));
-        }
-        None if args.is_empty() => {
-            return Err(Diagnostic::error(
-                "T0053",
-                "container type annotation `tuple[...]` takes at least 1 type argument -- the empty tuple `tuple[()]` is not supported yet".to_string(),
-                span,
-            )
-            .with_help("write at least one element type, e.g. `tuple[int]`"));
-        }
-        _ => {}
-    }
-    let mut elements = Vec::with_capacity(args.len());
-    for arg in &args {
-        let element = annotation_to_ty(arg, type_param, class_name, aliases, class_defs)?;
-        if let Ty::Param(name) = &element {
-            return Err(Diagnostic::error(
-                "T0042",
-                format!(
-                    "type parameter `{name}` used inside a container position is not supported yet -- v0.2 only instantiates a bare type-parameter position, matching D-105's own fixed-container-element-type restriction"
-                ),
-                span,
-            ));
-        }
-        elements.push(element);
-    }
-    let mut elements = elements.into_iter();
-    let ty = match family {
-        "list" => Ty::List(Box::new(elements.next().expect("arity checked above"))),
-        "set" => Ty::Set(Box::new(elements.next().expect("arity checked above"))),
-        "frozenset" => Ty::FrozenSet(Box::new(elements.next().expect("arity checked above"))),
-        "dict" => {
-            let key = elements.next().expect("arity checked above");
-            let value = elements.next().expect("arity checked above");
-            Ty::Dict(Box::new((key, value)))
-        }
-        _ => Ty::Tuple(Box::new(elements.collect())),
-    };
-    crate::container::check_container_ty(&ty, span)?;
-    Ok(ty)
 }
 
 /// The type an annotation naming the enclosing class resolves to.
@@ -1002,8 +863,17 @@ pub(crate) fn annotation_to_ty(
                     // rather than naming the builtin. Lowering it as
                     // `Ty::List(Int)` would silently drop the function's
                     // genericity.
+                    //
+                    // #1378: the pre-PEP 585 `typing` aliases (`Dict[K, V]`,
+                    // `List[T]`, `Set[T]`, `FrozenSet[T]`, `Tuple[...]`)
+                    // take this same step through `container_family`, and the
+                    // three guards test the spelling *as written*, so a type
+                    // parameter, a `type` alias or a user class named `Dict`
+                    // still wins over the typing form exactly as one named
+                    // `dict` wins over the builtin. Like `Final`, the legacy
+                    // spellings resolve with or without `from typing import`.
                     if Some(base) != type_param
-                        && CONTAINER_ANNOTATION_NAMES.contains(&base)
+                        && container_family(base).is_some()
                         && !aliases.iter().any(|(name, _)| name == base)
                     {
                         return container_annotation_to_ty(

@@ -22,6 +22,9 @@ use crate::expr::{lower_comprehension_header, rename_name_in_expr};
 // private helpers through `use super::*`.
 mod subscript_annotations;
 
+// The pre-PEP 585 `typing` container aliases (#1378), same reason.
+mod typing_legacy_aliases;
+
 // Comprehensions in expression position (#1254, D-250).
 mod comprehension_expr;
 

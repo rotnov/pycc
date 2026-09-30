@@ -44,6 +44,7 @@ mod protocol_return;
 mod try_definite;
 mod type_checking_marker;
 mod typing_cast;
+mod typing_legacy_aliases;
 mod while_true_return;
 
 #[test]

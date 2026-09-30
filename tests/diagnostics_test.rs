@@ -1626,3 +1626,23 @@ fn i0402_cli_deny_overrides_manifest_allowlist() {
         &["--interop-policy", "deny"],
     );
 }
+
+// #1378: `from typing import Any` resolves, but `Any` in an annotation is
+// still the single `T0002` refusal -- no `C0002` import error beside it.
+#[test]
+fn t0002_any_after_typing_import() {
+    assert_diagnostic_matches_fixture("t0002_any_after_typing_import");
+}
+
+// #1378: a legacy `typing` alias's arity message names the spelling written.
+#[test]
+fn t0053_legacy_dict_one_arg() {
+    assert_diagnostic_matches_fixture("t0053_legacy_dict_one_arg");
+}
+
+// The human format never renders `help`, so the JSON twin pins that the
+// structured advice also names the spelling written (`Dict[str, int]`).
+#[test]
+fn t0053_legacy_dict_one_arg_json_publishes_help() {
+    assert_json_diagnostic_matches_fixture("t0053_legacy_dict_one_arg");
+}

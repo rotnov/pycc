@@ -159,6 +159,20 @@ pub enum StdSymbolKind {
     /// TYPE_CHECKING and x:`) is out of this issue's scope and is rejected
     /// by the type checker exactly like every other marker kind.
     TypeCheckingMarker,
+    /// A typing-form marker symbol (#1378): the pre-PEP 585 container
+    /// aliases `typing.Dict`, `List`, `Set`, `FrozenSet`, `Tuple`, plus
+    /// `typing.Any` and `typing.Generic`. Like `Final`, the container
+    /// aliases and `Any` are resolved by their bare spelling in annotation
+    /// position (`pycc_hir::func::annotation_to_ty` lowers `Dict[K, V]` as
+    /// `dict[K, V]`, and `Any` keeps its by-design `T0002`) whether or not
+    /// this registry entry exists; registering the symbols here only makes
+    /// `from typing import Dict, List, Any, Generic, ...` itself resolve
+    /// instead of failing with `C0002`. `Generic` is import-only: nothing
+    /// resolves it by spelling, and a `Generic` base keeps the unknown-base
+    /// `C0001`. None of them is a first-class value -- referencing one as
+    /// a value or calling it is rejected by the type checker with its own
+    /// "typing construct" message.
+    TypingFormMarker,
 }
 
 /// A single registered stdlib symbol: which module it lives in, its source
@@ -171,8 +185,8 @@ pub struct StdSymbol {
 }
 
 /// The full registry of hand-recognized stdlib symbols (D-136). A plain
-/// `const` slice, linearly scanned by [`resolve_symbol`] -- fewer than two
-/// dozen entries, so no `HashMap`/`OnceCell`/macro-generated dispatch table
+/// `const` slice, linearly scanned by [`resolve_symbol`] -- a few dozen
+/// entries at most, so no `HashMap`/`OnceCell`/macro-generated dispatch table
 /// is warranted, and a linear scan keeps every branch trivially unit-tested
 /// (D-014's 100% line/region coverage gate applies to this crate too).
 const REGISTRY: &[StdSymbol] = &[
@@ -265,6 +279,41 @@ const REGISTRY: &[StdSymbol] = &[
         module: StdModule::Typing,
         name: "TYPE_CHECKING",
         kind: StdSymbolKind::TypeCheckingMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Dict",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "List",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Set",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "FrozenSet",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Tuple",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Any",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "Generic",
+        kind: StdSymbolKind::TypingFormMarker,
     },
 ];
 
@@ -491,7 +540,28 @@ mod tests {
     #[test]
     fn resolve_symbol_rejects_unregistered_symbol_in_typing_module() {
         assert_eq!(resolve_symbol(StdModule::Typing, "TypeVar"), None);
-        assert_eq!(resolve_symbol(StdModule::Typing, "Generic"), None);
+        assert_eq!(resolve_symbol(StdModule::Typing, "Callable"), None);
+    }
+
+    const TYPING_FORM_NAMES: [&str; 7] = [
+        "Dict",
+        "List",
+        "Set",
+        "FrozenSet",
+        "Tuple",
+        "Any",
+        "Generic",
+    ];
+
+    #[test]
+    fn resolve_symbol_finds_every_typing_form_marker() {
+        for name in TYPING_FORM_NAMES {
+            let sym = resolve_symbol(StdModule::Typing, name)
+                .unwrap_or_else(|| panic!("typing.{name} is registered"));
+            assert_eq!(sym.module, StdModule::Typing);
+            assert_eq!(sym.name, name);
+            assert_eq!(sym.kind, StdSymbolKind::TypingFormMarker);
+        }
     }
 
     #[test]
@@ -670,6 +740,15 @@ mod tests {
         let type_checking_sym2 = type_checking_sym;
         assert_eq!(type_checking_sym, type_checking_sym2);
         assert!(format!("{type_checking_sym:?}").contains("TypeCheckingMarker"));
+
+        let typing_form_sym = StdSymbol {
+            module: StdModule::Typing,
+            name: "Dict",
+            kind: StdSymbolKind::TypingFormMarker,
+        };
+        let typing_form_sym2 = typing_form_sym;
+        assert_eq!(typing_form_sym, typing_form_sym2);
+        assert!(format!("{typing_form_sym:?}").contains("TypingFormMarker"));
     }
 
     #[test]
@@ -692,5 +771,8 @@ mod tests {
         let typing: Vec<_> = module_symbol_names(StdModule::Typing).collect();
         assert!(typing.contains(&"cast"), "{typing:?}");
         assert!(!typing.contains(&"sqrt"), "{typing:?}");
+        for name in TYPING_FORM_NAMES {
+            assert!(typing.contains(&name), "{name} missing from {typing:?}");
+        }
     }
 }
