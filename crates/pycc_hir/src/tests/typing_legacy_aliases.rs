@@ -240,6 +240,22 @@ fn a_generic_base_keeps_the_unknown_base_c0001() {
 }
 
 #[test]
+fn a_subscripted_generic_base_keeps_its_c0001() {
+    // `Generic[...]` as a base stays #886's refusal: registering `Generic`
+    // makes only its import resolve.
+    let diagnostic =
+        lower_err("from typing import Generic\n\n\nclass X(Generic[int]):\n    pass\n");
+    assert_eq!(diagnostic.code, "C0001");
+    assert!(
+        diagnostic
+            .message
+            .starts_with("a base class must be a bare name"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn a_legacy_alias_poisoned_by_a_failed_import_still_resolves_by_its_spelling() {
     // `Callable` is unregistered, so the whole `from typing import` fails and
     // poisons its names; `List` still lowers by spelling (as `Final` does),
