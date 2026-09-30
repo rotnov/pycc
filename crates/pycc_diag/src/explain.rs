@@ -1439,7 +1439,7 @@ with admitted arguments. Since #1263 container lowering admits an \
 attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
 `add` is still refused by `C0001`. In a module body every supported \
-operation is admitted only *below the import*. Since #1316 and #1333 each \
+operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
 one except the `for` loop is also admitted inside a function body, and a \
 function may bind the object to a local name, return it and pass it to \
 another pycc function: a call that runs before a module-level binding has \

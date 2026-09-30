@@ -165,3 +165,17 @@ fn a_maybe_bound_function_local_object_name_is_refused() {
         "may not be bound on every path reaching this use",
     );
 }
+
+/// An unannotated private method may return the object itself, like a
+/// private helper: the solver resolves its return to `object`.
+#[test]
+fn a_private_method_returning_an_object_resolves_to_object() {
+    let class = "class C:\n    def _o(self):\n        return json.loads(\"[1]\")\n\n    \
+                 def m(self) -> int:\n        return len(self._o())\n\n\n";
+    admitted(&format!("{IMPORT}{class}print(C().m())\n"));
+    refused(
+        &format!("{IMPORT}{class}print(C()._o() + 1)\n"),
+        "T0021",
+        RESOLVED_TO_OBJECT,
+    );
+}

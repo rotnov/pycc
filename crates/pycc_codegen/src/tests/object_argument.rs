@@ -72,6 +72,7 @@ fn a_function_body_may_pass_a_cpython_object_on() {
                 !ir.contains("DecRef"),
                 "a passed object is not released: {ir}"
             );
+            assert!(!ir.contains("IncRef"), "a passed object is borrowed: {ir}");
         },
     );
 }

@@ -299,7 +299,8 @@ fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
 /// #1333 admits returning the object, so the whole program is accepted. At
 /// run time the call raises CPython's own `NameError`, as CPython does;
 /// `tests/issue_1333_foreign_in_function.rs` matches that against the host
-/// interpreter for this exact shape.
+/// interpreter for a helper called before the import it reads (an annotated
+/// helper over a call producer, not this unannotated attribute return).
 #[test]
 fn a_helper_reading_a_foreign_object_before_its_import_type_checks() {
     let dir = ScratchDir::new("foreign_helper_before_import").expect("scratch");

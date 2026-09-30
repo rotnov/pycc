@@ -76,7 +76,8 @@ fn assert_one_error(tag: &str, body: &str, code: &str, needle: &str) {
 
 /// The success program: a local binding and alias, a helper that returns
 /// the object, a helper that receives it, a recursive helper that passes it
-/// on, a method body, a module-level object global read in a function, a
+/// on, a method body, an unannotated private method that returns the object
+/// to a sibling method, a module-level object global read in a function, a
 /// module-level foreign-callable global called in a function, and a local
 /// bound to a foreign callable and called.
 const SUCCESS: &str = "import json\n\
@@ -94,7 +95,9 @@ const SUCCESS: &str = "import json\n\
     \n\
     def _r(o, n: int) -> int:\n    if n == 0:\n        return len(o)\n    return _r(o, n - 1)\n\
     \n\
-    class C:\n    def m(self) -> int:\n        y = json.loads(\"[1]\")\n        return len(y)\n\
+    class C:\n    def m(self) -> int:\n        y = json.loads(\"[1]\")\n        return len(y)\n\n    \
+    def _o(self):\n        return json.loads(\"[1, 2]\")\n\n    \
+    def n(self) -> int:\n        return len(self._o())\n\
     \n\
     def _p() -> bool:\n    return bool(P)\n\
     \n\
@@ -106,12 +109,13 @@ const SUCCESS: &str = "import json\n\
     print(g())\n\
     print(_r(json.loads(\"[1, 2, 3]\"), 3))\n\
     print(C().m())\n\
+    print(C().n())\n\
     print(_p())\n\
     print(_global_call(\"[1, 2, 3, 4, 5]\"))\n\
     print(len(_h(\"[1]\")))\n";
 
 /// What `SUCCESS` prints under CPython.
-const SUCCESS_OUT: &str = "2\n4\n3\n1\nTrue\n5\n1\n";
+const SUCCESS_OUT: &str = "2\n4\n3\n1\n2\nTrue\n5\n1\n";
 
 #[test]
 fn check_accepts_binding_returning_and_passing_an_object_in_a_function() {
