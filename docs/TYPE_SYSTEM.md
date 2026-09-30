@@ -533,9 +533,11 @@ CPython's order:
    non-identifier entry are each `C0001` quoting CPython's `TypeError`. A
    non-literal value or entry, a non-ASCII entry, a `__dict__` or
    `__weakref__` entry (pycc instances have neither), a second `__slots__`
-   binding in the body, and an entry named `__firstlineno__`,
-   `__static_attributes__` or `__annotations__` (whether it conflicts depends
-   on the CPython version) are `C0001` "not supported yet".
+   binding in the body, a private entry `__x` (CPython mangles it to the slot
+   `_C__x`, and pycc does not mangle a private attribute name on an instance,
+   so `self.__x` would not reach that slot), and an entry named
+   `__firstlineno__`, `__static_attributes__` or `__annotations__` (whether it
+   conflicts depends on the CPython version) are `C0001` "not supported yet".
 3. **Namespace.** A slot whose name is also bound in the class body (a class
    variable, a method, `__module__`, `__slots__`, or `__doc__` when the class
    has a docstring) is `C0001` quoting CPython's `ValueError: '<name>' in
@@ -546,8 +548,7 @@ CPython's order:
    many `__x__` names a special meaning, and a slot of such a name changes
    the class's behaviour (a `__hash__` slot makes the class unhashable,
    `TypeError: unhashable type`). pycc does not model which names do, so every
-   dunder entry is refused. A private `__x` name is not a dunder and stays
-   admitted.
+   dunder entry is refused.
 5. **Inherited names.** A slot whose name a class later in the MRO binds at
    class level (a class variable, a method, a static or class method, a
    property) is `C0001` "not supported yet". This covers the class's own
@@ -581,8 +582,11 @@ CPython's order:
    CPython. A builtin exception base has no `__slots__` of its own, so a
    slotted exception class is never checked either.
 
-Private names are mangled in every step: `__x` in class `C`'s slots is the
-slot `_C__x`, and a subclass storing `self.__x` stores `_D__x`. A slot that is
+Because a private entry is refused, every admitted slot is spelled exactly as
+it is stored. A slot spelled in its mangled form, `_C__x`, is admitted, and a
+private class-body name (`__x = 1` in `C`) is compared as `_C__x` in steps 3
+and 5, and a store `self.__x` in `C` as `_C__x` in step 6, as CPython mangles
+them. A slot that is
 declared but never assigned is accepted and adds no instance attribute; a read
 of it is refused with `T0044` at compile time, where CPython would raise
 `AttributeError` only when the read runs. Each class's slots are recorded in

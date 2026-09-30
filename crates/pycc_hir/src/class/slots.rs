@@ -36,8 +36,11 @@
 //! the table's threading therefore panics in a test instead of reading as
 //! "has a `__dict__`" and silently admitting a program CPython rejects.
 //!
-//! Names are compared after CPython's private-name mangling ([`mangle`]): a
-//! slot entry is mangled with the declaring class's name, and an instance
+//! A private slot entry (`__x`) is refused ([`is_private`]): CPython mangles
+//! it with the declaring class's name, and pycc does not mangle a private
+//! attribute name on an instance. Every admitted slot is therefore its own
+//! mangled form, and only the other side of a comparison is mangled
+//! ([`mangle`]): a class-body name with its class's name, and an instance
 //! attribute with the storing class's name.
 
 use super::HirClassDef;
@@ -359,6 +362,16 @@ fn slot_entry(item: &Expr, range: std::ops::Range<u32>) -> Result<String, Diagno
             range,
         ));
     }
+    if is_private(&entry) {
+        return Err(unsupported(
+            format!(
+                "the private `__slots__` entry `{entry}` is not supported yet -- CPython \
+                 mangles it to `_<class>{entry}`, and pycc does not mangle a private \
+                 attribute name on an instance, so `self.{entry}` would not match CPython"
+            ),
+            range,
+        ));
+    }
     if VERSION_SENSITIVE_SLOT_NAMES.contains(&entry.as_str()) {
         return Err(unsupported(
             format!(
@@ -431,12 +444,11 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
         .map(|name| mangle(name, class_name))
         .collect();
     for slot in slots {
-        let mangled = mangle(slot, class_name);
-        if namespace.contains(&mangled) {
+        if namespace.contains(slot) {
             return Err(unsupported(
                 format!(
                     "the `__slots__` entry `{slot}` of class `{class_name}` is also bound in the \
-                     class body -- CPython raises `ValueError: '{mangled}' in __slots__ \
+                     class body -- CPython raises `ValueError: '{slot}' in __slots__ \
                      conflicts with class variable` when the class is created"
                 ),
                 def.range,
@@ -451,8 +463,8 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
 /// name changes the class's behaviour (a `__hash__` slot makes the class
 /// unhashable); pycc does not model which names do, so every dunder entry is
 /// refused. It runs after the namespace check, so a dunder slot that is also
-/// bound in the body keeps CPython's own `ValueError`; a private `__x` name
-/// is not a dunder and stays admitted.
+/// bound in the body keeps CPython's own `ValueError`. A private `__x` name
+/// is not a dunder; [`slot_entry`] refuses it separately.
 fn check_dunder_slots(slots: &[String], binding_range: Span) -> Result<(), Diagnostic> {
     let Some(slot) = slots.iter().find(|slot| is_dunder(slot)) else {
         return Ok(());
@@ -529,12 +541,12 @@ fn check_inherited_class_names(
             }
         };
         for slot in slots {
-            let mangled = mangle(slot, declarer);
+            let mangled = slot.as_str();
             for later in &class_def.mro[index + 1..] {
                 let binds = if ancestors.row(later).is_none() {
-                    builtin_exception_class_names(later).contains(&mangled.as_str())
+                    builtin_exception_class_names(later).contains(&mangled)
                 } else {
-                    ancestors.binds_at_class_level(later, &mangled)
+                    ancestors.binds_at_class_level(later, mangled)
                 };
                 if !binds {
                     continue;
@@ -562,6 +574,13 @@ fn check_inherited_class_names(
         }
     }
     Ok(())
+}
+
+/// Whether `name` is class-private -- `__x` without a trailing `__` -- and
+/// so mangled by CPython inside a class body. [`slot_entry`] refuses such
+/// an entry, so every admitted slot name is its own mangled form.
+fn is_private(name: &str) -> bool {
+    name.starts_with("__") && !name.ends_with("__")
 }
 
 /// Whether `name` is a dunder: `__x__` with a non-empty `x`.
@@ -594,16 +613,16 @@ fn check_undeclared_stores(
     ancestors: &Ancestors<'_>,
 ) -> Result<(), Diagnostic> {
     let class_name = class_def.name.as_str();
-    let mut declared: Vec<String> = own.iter().map(|slot| mangle(slot, class_name)).collect();
+    let mut declared: Vec<&String> = own.iter().collect();
     for ancestor in &class_def.mro[1..] {
         let Some(Some(slots)) = ancestors.row(ancestor) else {
             return Ok(());
         };
-        declared.extend(slots.iter().map(|slot| mangle(slot, ancestor)));
+        declared.extend(slots);
     }
     for (attr, _) in &class_def.attrs {
         let mangled = mangle(attr, class_name);
-        if declared.contains(&mangled) {
+        if declared.contains(&&mangled) {
             continue;
         }
         let span = init_store_span(def, attr).unwrap_or(binding_range);

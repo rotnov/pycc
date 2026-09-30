@@ -2,7 +2,7 @@
 //! issue plan's sections 4.1-4.4, each refusal pinned by its code and the
 //! CPython text it quotes.
 
-use super::{ClassSlotsRow, is_ascii_identifier, is_dunder, mangle};
+use super::{ClassSlotsRow, is_ascii_identifier, is_dunder, is_private, mangle};
 use crate::pycc_parser_test_helper::parse;
 use crate::{
     LoweredModule, ResolvedImport, ResolvedImports, ResolvedModule, lower_module,
@@ -277,9 +277,43 @@ fn a_slot_named_like_a_class_body_binding_quotes_cpythons_value_error() {
 }
 
 #[test]
-fn a_private_slot_is_compared_after_mangling() {
-    let source = "class C:\n    __slots__ = ('__a',)\n    __a = 1\n";
-    assert_eq!(c0001(source), conflict("__a", "_C__a"));
+fn a_class_body_private_name_is_compared_after_mangling() {
+    // The body's `__a` is `_C__a`, which the explicitly spelled slot matches.
+    let source = "class C:\n    __slots__ = ('_C__a',)\n    __a = 1\n";
+    assert_eq!(c0001(source), conflict("_C__a", "_C__a"));
+}
+
+fn private(slot: &str) -> String {
+    format!(
+        "the private `__slots__` entry `{slot}` is not supported yet -- CPython mangles it to \
+         `_<class>{slot}`, and pycc does not mangle a private attribute name on an instance, so \
+         `self.{slot}` would not match CPython"
+    )
+}
+
+#[test]
+fn a_private_slot_entry_is_not_supported_yet() {
+    // CPython stores `self.__x` as `_C__x`, and a module-level `C().__x` is
+    // an `AttributeError` there; pycc keeps the name unmangled.
+    let source = "class C:\n    __slots__ = ('a', '__x')\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n        self.__x = 2\n";
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, private("__x"));
+    // A private entry refuses even when the body also binds the name.
+    assert_eq!(
+        c0001("class C:\n    __slots__ = ('__a',)\n    __a = 1\n"),
+        private("__a")
+    );
+}
+
+#[test]
+fn is_private_excludes_dunders() {
+    assert!(is_private("__x"));
+    assert!(is_private("__x_"));
+    assert!(!is_private("__x__"));
+    assert!(!is_private("_x"));
+    assert!(!is_private("x"));
 }
 
 #[test]
@@ -404,14 +438,17 @@ fn a_name_an_ancestor_binds_at_class_level_is_refused_at_the_binding() {
 
 #[test]
 fn an_inherited_private_name_is_compared_after_mangling() {
-    // `B.__p` is `_B__p`: a `C` slot spelled `_B__p` shadows it, while
-    // `C`'s own `__p` is `_C__p` and does not.
+    // `B.__p` is `_B__p`: a `C` slot spelled `_B__p` shadows it, while one
+    // spelled `_C__p` does not.
     let base = "class B:\n    __p = 1\n\n\nclass C(B):\n    __slots__ = ";
     assert_eq!(
         c0001(&format!("{base}('_B__p',)\n")),
         inherited("_B__p", "C", "B", "_B__p")
     );
-    assert_eq!(slots_of(&format!("{base}('__p',)\n"), "C"), names(&["__p"]));
+    assert_eq!(
+        slots_of(&format!("{base}('_C__p',)\n"), "C"),
+        names(&["_C__p"])
+    );
 }
 
 #[test]
@@ -495,17 +532,14 @@ fn a_slotted_base_shadowing_a_later_sibling_binding_is_refused() {
             "{binding}"
         );
     }
-    // With the sibling first, its binding precedes the slot and wins, and a
-    // private slot is compared after mangling by the declaring base.
+    // With the sibling first, its binding precedes the slot and wins, and the
+    // sibling's private name is compared after mangling by the sibling.
     let reversed = "class A:\n    a = 1\n\n\nclass B:\n    __slots__ = ('a',)\n\n\nclass \
                     C(A, B):\n    pass\n";
     assert_eq!(slots_of(reversed, "C"), None);
-    let private = "class A:\n    __p = 1\n\n\nclass B:\n    __slots__ = ('__p',)\n\n\nclass \
+    let mangled = "class A:\n    __p = 1\n\n\nclass B:\n    __slots__ = ('_A__p',)\n\n\nclass \
                    C(B, A):\n    pass\n";
-    assert_eq!(slots_of(private, "C"), None);
-    let mangled = "class A:\n    _B__p = 1\n\n\nclass B:\n    __slots__ = ('__p',)\n\n\nclass \
-                   C(B, A):\n    pass\n";
-    assert_eq!(c0001(mangled), sibling("C", "B", "__p", "A", "_B__p"));
+    assert_eq!(c0001(mangled), sibling("C", "B", "_A__p", "A", "_A__p"));
 }
 
 // -- 4.3: an undeclared store ----------------------------------------------
@@ -566,16 +600,16 @@ fn a_slotted_subclass_of_a_slotted_base_may_store_the_base_slots() {
 
 #[test]
 fn a_subclass_private_store_misses_the_base_private_slot() {
-    let source = "class B:\n    __slots__ = ('__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
+    let source = "class B:\n    __slots__ = ('_B__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
                   def __init__(self) -> None:\n        self.__p = 1\n";
     assert_eq!(t0044(source).message, no_slot("C", "__p", "_C__p"));
 }
 
 #[test]
 fn a_private_store_matches_the_own_private_slot() {
-    let source = "class C:\n    __slots__ = ('__p',)\n\n    def __init__(self) -> None:\n        \
+    let source = "class C:\n    __slots__ = ('_C__p',)\n\n    def __init__(self) -> None:\n        \
                   self.__p = 1\n";
-    assert_eq!(slots_of(source, "C"), names(&["__p"]));
+    assert_eq!(slots_of(source, "C"), names(&["_C__p"]));
 }
 
 #[test]

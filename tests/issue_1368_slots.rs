@@ -133,8 +133,8 @@ fn each_class_creation_error_quotes_cpython() {
             "ValueError: '__init__' in __slots__ conflicts with class variable",
         ),
         (
-            "e2e_1368_private",
-            "class C:\n    __slots__ = ('__x',)\n    __x = 1\n",
+            "e2e_1368_mangled",
+            "class C:\n    __slots__ = ('_C__x',)\n    __x = 1\n",
             "ValueError: '_C__x' in __slots__ conflicts with class variable",
         ),
         (
@@ -309,4 +309,20 @@ fn a_slotted_base_shadowing_a_sibling_binding_is_c0001() {
             "AttributeError",
         );
     }
+}
+
+/// A private slot entry is refused: CPython mangles `__x` to `_C__x`, so a
+/// module-level `C().__x` raises `AttributeError`, while pycc keeps the
+/// attribute name unmangled and would print the value.
+#[test]
+fn a_private_slot_entry_is_c0001() {
+    let source = "class C:\n    __slots__ = ('__x',)\n\n    def __init__(self) -> None:\n        \
+                  self.__x = 1\n\n\nprint(C().__x)\n";
+    let text = fails("e2e_1368_private", source);
+    assert!(text.contains("error[C0001]"), "{text}");
+    assert!(
+        text.contains("the private `__slots__` entry `__x` is not supported yet"),
+        "{text}"
+    );
+    cpython_rejects("e2e_1368_private_cpython", source, "AttributeError");
 }
