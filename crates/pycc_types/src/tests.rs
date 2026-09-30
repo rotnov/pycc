@@ -5796,8 +5796,9 @@ fn float_with_two_arguments_is_rejected_as_t0021() {
 
 /// Also the pin for PR 4a of #1083's deliberate omission: `float`'s gate now
 /// admits `Ty::Object` too, but the message still enumerates only the three
-/// spellable types, because `object` is unspellable in an annotation (D-137)
-/// and "pass an `object`" is advice nobody can act on.
+/// spellable types, because `object` is unspellable in an annotation
+/// (`docs/TYPE_SYSTEM.md`'s `object` row) and "pass an `object`" is advice
+/// nobody can act on.
 #[test]
 fn float_of_a_str_is_rejected_as_t0021() {
     let mut env = Environment::new();

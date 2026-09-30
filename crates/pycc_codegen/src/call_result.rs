@@ -170,11 +170,11 @@ pub(super) fn call_result_scalar<'ctx>(
         //
         // Part 2 of #1026 moved `Ty::Object` out of that panic group and
         // gave it the real extraction Part 1's comment said it would need.
-        // It is no longer unreachable: `object` is still unspellable in an
-        // annotation (D-137's amendment, `C0001`), but an *unannotated*
-        // private helper whose body returns a foreign attribute now infers
-        // a `Ty::Object` return, so a call to it is a `Ty::Object`-typed
-        // call result. The value is an opaque `PyObject *` and stays one --
+        // It is no longer unreachable: an *unannotated* private helper
+        // whose body returns a foreign attribute infers a `Ty::Object`
+        // return, and since Part 1 of #1367 a return annotated with a class
+        // a foreign import binds declares one, so a call to either is a
+        // `Ty::Object`-typed call result. The value is an opaque `PyObject *` and stays one --
         // `Scalar::Object` is the pointer and nothing here inspects it.
         Ty::Object => Scalar::Object(
             call_site

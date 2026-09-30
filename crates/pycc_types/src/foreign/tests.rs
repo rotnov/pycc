@@ -268,9 +268,10 @@ const HELPER_SHAPE: &str = "a private helper returning `object`";
 /// `snippet` in each of the two producer shapes: literally, and with every
 /// `numpy.pi` replaced by a call to a private helper that returns one.
 ///
-/// The helper carries no return annotation on purpose -- D-137's amendment
-/// makes `object` unspellable in one, so a solver-inferred return is the
-/// only way a call expression can have this type at all.
+/// The helper carries no return annotation on purpose: `object` is
+/// unspellable in one (`docs/TYPE_SYSTEM.md`'s `object` row), and `numpy.pi`
+/// is no class a foreign import binds that could name it (Part 1 of #1367),
+/// so a solver-inferred return is how this helper's call gets the type.
 ///
 /// #1316 admits the helper's foreign read and Part 1 of #1333 its `return`
 /// of a CPython object, so the helper really produces one and a caller sees
@@ -631,7 +632,8 @@ fn a_subscript_store_on_a_cpython_object_is_still_refused() {
 ///
 /// Without the lift the helper's return variable stays unresolved and
 /// signature materialization reports a `T0021` asking for an annotation
-/// `object` cannot be spelled in (D-137) -- the exact dead end the
+/// `object` cannot be spelled in (`docs/TYPE_SYSTEM.md`'s `object` row) --
+/// the exact dead end the
 /// `AttrGet` arm's own comment describes. Since Part 1 of #1333 admits the
 /// `return`, the program type-checks.
 #[test]

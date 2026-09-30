@@ -299,11 +299,10 @@ fn unadmitted_operations_on_a_function_local_object_are_diagnosed() {
     }
     // `self.a = y` is refused because `y` is not an `__init__` parameter,
     // the same C0001 any non-parameter local gets. It does not reach
-    // `init_slot.rs`'s type-keyed "cannot establish an attribute of type"
-    // arm, and an object cannot reach that arm under Part 1. The arm keys
-    // on an `__init__` parameter's annotation: `__init__` is public, so an
-    // unannotated parameter is T0001, and the annotation `object` is itself
-    // C0001.
+    // `init_slot.rs`'s type-keyed parameter arm. Since Part 1 of #1367 that
+    // arm admits a parameter annotated with a class a foreign import binds
+    // (`tests/issue_1367_foreign_class_annotations.rs`); a local is still no
+    // parameter.
     assert_one_error(
         "obj_fn_self_attr_non_parameter",
         "import json\n\nclass C:\n    def __init__(self) -> None:\n        \

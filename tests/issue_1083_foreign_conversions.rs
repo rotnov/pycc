@@ -163,7 +163,8 @@ fn bool_of_a_non_object_keeps_its_unchanged_refusal() {
 /// `float` on a non-numeric, non-object argument keeps its `T0021` message
 /// unchanged, including the enumeration that deliberately omits `object`.
 ///
-/// `object` is unspellable in an annotation (D-137), so "pass an `object`"
+/// `object` is unspellable in an annotation (`docs/TYPE_SYSTEM.md`'s
+/// `object` row), so "pass an `object`"
 /// would be advice nobody can act on by writing a type. The omission is a
 /// decision, and this is its outside pin;
 /// `pycc_types::tests::float_of_a_str_is_rejected_as_t0021` is the inside

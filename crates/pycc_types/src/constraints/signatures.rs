@@ -301,7 +301,8 @@ pub(crate) fn infer_function_signatures_with_solver_all(
     // unresolved return variable and signature materialization would report
     // a misleading `T0021: ... add an annotation` -- advice no annotation
     // can satisfy, since the foreign object type is deliberately
-    // unspellable -- before the check phase's `I0404` could fire. The names
+    // unspellable (a module object has no class a foreign import binds to
+    // name it by, Part 1 of #1367) -- before the check phase's `I0404` could fire. The names
     // deliberately do not go into `bindings`: see the `Name` arm in
     // `super::collect_expr_constraints` for why.
     for name in crate::foreign::foreign_object_names(&hir.imports) {

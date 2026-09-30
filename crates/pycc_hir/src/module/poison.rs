@@ -40,7 +40,10 @@ use pycc_diag::Diagnostic;
 /// `validate_bases` also reads the type-alias, import and module-item tables, but only
 /// to choose the unresolved-base message's wording -- so a later annotation naming it
 /// fails today either way, and that diagnostic is a genuine,
-/// independent gap that must stay reported.
+/// independent gap that must stay reported. The exception is a foreign
+/// binding (Part 1 of #1367): its lowering records the name in the alias
+/// table as `object`, and the `Ok` arm's `retain` below un-poisons it, so a
+/// later annotation naming it resolves.
 ///
 /// Recorded divergence (Part 1 of #1026): `lower_import_stmt` has a third
 /// success condition this mirror deliberately does not model. An
