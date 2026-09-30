@@ -269,3 +269,49 @@ fn a_repeated_foreign_import_records_one_alias_entry() {
     );
     assert_eq!(signature(&module, "_f").0, object_params(&["t"]));
 }
+
+/// A foreign name nested in a legacy `typing` container (#1378) resolves
+/// as an element through the alias table, so `Dict[str, C]` is a
+/// `dict[str, object]` and meets the same element-type refusal
+/// (`T0036`) as the lowercase `dict[str, C]` spelling, rather than an
+/// erasure of the container itself.
+#[test]
+fn a_foreign_name_inside_a_legacy_typing_container_is_an_object_element() {
+    let diagnostic = only_error(lower_foreign(
+        "from typing import Dict\n\
+         from fractions import Fraction\n\
+         def _a(d: Dict[str, Fraction]) -> int:\n    return 1\n",
+        &["fractions"],
+    ));
+    assert_eq!(diagnostic.code, "T0036");
+    assert!(
+        diagnostic
+            .message
+            .starts_with("dict[str, object] is not compiled yet"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+/// A foreign import whose local name is a legacy `typing` container
+/// spelling (`Dict`) is refused at the import itself, so no alias entry
+/// can shadow the container: the annotation keeps meeting the legacy
+/// container's own arity check.
+#[test]
+fn a_foreign_import_named_like_a_typing_container_is_refused_at_the_import() {
+    let diagnostics = lower_foreign(
+        "from somelib import Dict\n\
+         def _a(d: Dict[int]) -> int:\n    return 1\n",
+        &["somelib"],
+    )
+    .expect_err("fixture must fail to lower");
+    let codes: Vec<&str> = diagnostics.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["C0001", "T0053"], "{diagnostics:#?}");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("a name pycc resolves by its spelling"),
+        "{}",
+        diagnostics[0].message
+    );
+}
