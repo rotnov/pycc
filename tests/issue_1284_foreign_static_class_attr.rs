@@ -1,8 +1,10 @@
 //! Part 1 of #1284 (#1345): a class attribute bound to
 //! `staticmethod(<foreign callable>)` -- `exists = staticmethod(os.path.exists)`
-//! -- is read and called through the class name or a plain-name instance, and
-//! every use is rewritten to the recorded foreign reference, so the result is
-//! CPython's own.
+//! -- is read and called through the class name or an instance, and every use
+//! is rewritten to the recorded foreign reference, so the result is CPython's
+//! own. Part 2 (#1346) admits any instance receiver, not only a plain name:
+//! `make().exists(p)` evaluates `make()` first, then the arguments, then the
+//! call.
 //!
 //! The `check` tests pin every refusal the admission and the use-site rules
 //! report. The hosted tests compare an `--ext` build's import against the
@@ -428,22 +430,49 @@ fn a_local_shadowing_the_root_is_refused() {
     );
 }
 
+/// Part 2 of #1284 (#1346): a non-name instance receiver -- a constructor
+/// call, a helper returning the class, one that raises, one holding a walrus
+/// -- is evaluated before the foreign read or call, at module scope and in a
+/// function body. The helpers returning `FS` are underscore-prefixed because
+/// `--ext` refuses a public function returning a class instance (C0003).
+const NON_NAME_RECEIVERS: &str = "import os\n\n\n\
+    class FS:\n    exists = staticmethod(os.path.exists)\n\n\
+    \x20   def __init__(self) -> None:\n        print(\"init\")\n\n\n\
+    def _make() -> FS:\n    print(\"make\")\n    return FS()\n\n\n\
+    def _boom() -> FS:\n    raise ValueError(\"boom\")\n\n\n\
+    def _mk(n: int) -> FS:\n    print(\"mk\", n)\n    return FS()\n\n\n\
+    def _side() -> str:\n    print(\"side\")\n    return \"/\"\n\n\n\
+    def probe(p: str) -> None:\n\
+    \x20   print(FS().exists(p))\n\
+    \x20   print(_make().exists(_side()))\n\
+    \x20   print(FS().exists.__name__.endswith(\"exists\"))\n\
+    \x20   try:\n        print(_boom().exists(p))\n    except ValueError:\n        print(\"caught\")\n\
+    \x20   print(_mk((n := 3)).exists(p))\n\
+    \x20   print(n)\n\n\n\
+    print(FS().exists(\"/\"))\n\
+    print(_make().exists(_side()))\n\
+    print(FS().exists.__name__.endswith(\"exists\"))\n\
+    try:\n    print(_boom().exists(\"/\"))\nexcept ValueError:\n    print(\"caught\")\n\
+    print(_mk((m := 3)).exists(\"/\"))\n\
+    print(m)\n\
+    probe(\"/definitely/not/a/path/here\")\n";
+
+/// CPython 3.14.7's output for [`NON_NAME_RECEIVERS`].
+const NON_NAME_RECEIVERS_OUT: &str = "init\nTrue\nmake\ninit\nside\nTrue\ninit\nTrue\ncaught\n\
+    mk 3\ninit\nTrue\n3\n\
+    init\nFalse\nmake\ninit\nside\nTrue\ninit\nTrue\ncaught\nmk 3\ninit\nFalse\n3\n";
+
 #[test]
-fn a_non_name_or_super_receiver_is_refused() {
-    let needle = "can only be read or called through a plain name or the class name";
-    assert_one_error(
-        "fs_receiver_call",
-        &with_fs("print(FS().exists(\"/\"))\n"),
-        "T0044",
-        needle,
-    );
-    assert_one_error(
-        "fs_receiver_read",
-        &with_fs("print(FS().exists)\n"),
-        "T0044",
-        needle,
-    );
-    let needle = "`super().exists` in class `D` reaches the `staticmethod(...)` class attribute";
+fn a_non_name_receiver_is_accepted() {
+    assert_checks("fs_receiver_non_name", NON_NAME_RECEIVERS);
+    assert_checks("fs_receiver_call", &with_fs("print(FS().exists(\"/\"))\n"));
+    assert_checks("fs_receiver_read", &with_fs("print(FS().exists)\n"));
+}
+
+#[test]
+fn a_super_receiver_is_refused() {
+    let needle = "`super().exists` in class `D` reaches the `staticmethod(...)` class attribute \
+                  `FS.exists`, which is not supported through `super()` yet (#1358)";
     assert_one_error(
         "fs_super_read",
         &with_fs("class D(FS):\n    def m(self) -> None:\n        print(super().exists)\n"),
@@ -835,6 +864,13 @@ fn a_comprehension_target_named_after_the_root_runs_like_cpython_in_the_host() {
     assert_eq!(out, "0\n3\nno error\n");
 }
 
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_non_name_receiver_runs_like_cpython_in_the_host() {
+    let out = assert_matches_cpython("fs_hosted_non_name", "fs_non_name_mod", NON_NAME_RECEIVERS);
+    assert_eq!(out, format!("{NON_NAME_RECEIVERS_OUT}no error\n"));
+}
+
 /// `utils.py` defines `FS`; the built module imports it and uses it in a
 /// function and in its own body.
 #[test]
@@ -898,30 +934,38 @@ fn the_attribute_is_absent_on_the_host_type() {
 }
 
 /// A plain (embedded) build compiles its module with `ext` set, so the
-/// class-name and instance calls run there too, matching CPython's own
-/// output.
+/// class-name and instance calls -- including through a non-name receiver
+/// (#1346) -- run there too, matching CPython's own output.
 #[cfg(not(windows))]
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn an_embedded_build_runs_like_cpython() {
-    let dir = ScratchDir::new("fs_embedded").expect("scratch");
-    let source = write(&dir, "m.py", MRO_WINS);
-    let build = pycc()
-        .arg("build")
-        .arg(&source)
-        .arg("-o")
-        .arg(dir.join("app"))
-        .output()
-        .expect("pycc should spawn");
-    assert!(build.status.success(), "{}", stderr_of(&build));
-    let embedded = Command::new(dir.join("app"))
-        .output()
-        .expect("the embedded binary runs");
-    assert_ok(&embedded);
-    let oracle = host_python()
-        .arg(&source)
-        .output()
-        .expect("python3 should spawn");
-    assert_ok(&oracle);
-    assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
+    for (tag, body) in [
+        ("fs_embedded", MRO_WINS),
+        ("fs_embedded_non_name", NON_NAME_RECEIVERS),
+    ] {
+        let dir = ScratchDir::new(tag).expect("scratch");
+        let source = write(&dir, "m.py", body);
+        let build = pycc()
+            .arg("build")
+            .arg(&source)
+            .arg("-o")
+            .arg(dir.join("app"))
+            .output()
+            .expect("pycc should spawn");
+        assert!(build.status.success(), "{}", stderr_of(&build));
+        let embedded = Command::new(dir.join("app"))
+            .output()
+            .expect("the embedded binary runs");
+        assert_ok(&embedded);
+        let oracle = host_python()
+            .arg(&source)
+            .output()
+            .expect("python3 should spawn");
+        assert_ok(&oracle);
+        assert_eq!(stdout_of(&embedded), stdout_of(&oracle));
+        if body == NON_NAME_RECEIVERS {
+            assert_eq!(stdout_of(&embedded), NON_NAME_RECEIVERS_OUT);
+        }
+    }
 }

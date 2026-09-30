@@ -143,6 +143,46 @@ fn a_static_method_call_through_instance_lowers_without_a_receiver() {
     );
 }
 
+/// #1346: a static method called through a non-name receiver evaluates
+/// the receiver first -- `C().create(42)` lowers to a `Sequence` whose
+/// `discard` is `C()`'s own lowering and whose `value` is the receiver-less
+/// call the plain-name form above produces.
+#[test]
+fn a_static_method_call_through_a_call_receiver_sequences_the_receiver() {
+    let receiver = || HirExpr::Call {
+        callee: "C".to_string(),
+        args: vec![],
+    };
+    let hir = static_class_hir(vec![
+        HirItem::TopLevelStmt(HirStmt::ExprStmt(receiver())),
+        HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::MethodCall {
+            base: Box::new(receiver()),
+            method: "create".to_string(),
+            args: vec![HirExpr::IntLiteral(42)],
+        })),
+    ]);
+    let mir = build(&hir);
+    let [
+        ..,
+        MirItem::TopLevelStmt(MirStmt::ExprStmt(lowered_receiver)),
+        last,
+    ] = mir.items.as_slice()
+    else {
+        panic!("two trailing expression statements: {:?}", mir.items);
+    };
+    assert_eq!(
+        last,
+        &MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Sequence {
+            discard: Box::new(lowered_receiver.clone()),
+            value: Box::new(MirExpr::Call {
+                callee: "C.create.static".to_string(),
+                args: vec![MirExpr::IntLiteral(42)],
+                ty: Ty::Int,
+            }),
+        }))
+    );
+}
+
 #[test]
 fn a_class_method_call_through_instance_lowers_with_instance_as_cls() {
     let hir = static_class_hir(vec![

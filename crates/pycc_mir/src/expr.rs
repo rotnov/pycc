@@ -20,9 +20,11 @@ use std::collections::HashMap;
 mod foreign_static;
 mod instance_hash;
 mod receiver_dispatch;
+mod sequence;
 pub(crate) mod set_ops;
 
 use instance_hash::lower_instance_hash;
+use sequence::sequence_after;
 
 pub(super) fn lower_expr(
     expr: &HirExpr,
@@ -999,10 +1001,11 @@ pub(super) fn lower_expr(
             let class_def = class_def_of(&base, classes);
             // Part 1 of #1284: `x.name` reaching a
             // `staticmethod(<foreign callable>)` class attribute reads the
-            // foreign callable. `pycc_types` restricts the receiver to a
-            // bare name, so discarding the lowered `base` is unobservable.
+            // foreign callable. The receiver is not part of the read, but a
+            // non-name receiver is still evaluated first (#1346).
             if let Some(target) = foreign_static::instance_target(class_def, classes, attr) {
-                return lower_expr(&target.read_expr(), scopes, classes, current_class);
+                let value = lower_expr(&target.read_expr(), scopes, classes, current_class);
+                return sequence_after(base, value);
             }
             // #432: walk the MRO for property lookup first (matching
             // CPython's descriptor protocol precedence), then for regular
@@ -1281,19 +1284,24 @@ pub(super) fn lower_expr(
             let class_def = class_def_of(&base, classes);
             // Part 1 of #1284: `x.name(args)` reaching a
             // `staticmethod(<foreign callable>)` class attribute calls the
-            // foreign callable; the bare-name receiver is not an argument.
+            // foreign callable. The receiver is not an argument, but a
+            // non-name receiver is still evaluated first, before the
+            // arguments (#1346).
             if let Some(target) = foreign_static::instance_target(class_def, classes, method) {
-                return lower_expr(
+                let value = lower_expr(
                     &target.call_expr(args.clone()),
                     scopes,
                     classes,
                     current_class,
                 );
+                return sequence_after(base, value);
             }
             // #436: check static_methods and class_methods before regular
             // method resolution. Static methods can be called on both
             // classes and instances; class methods can too. When called on
-            // an instance, the instance is passed as `cls`/`self`.
+            // an instance, a class method receives the instance as `cls`,
+            // while a static method receives nothing -- its receiver is
+            // evaluated for its effects only (#1346).
             let static_mangled = class_def.mro.iter().find_map(|mro_class| {
                 let mro_def = mro_class_def(mro_class, classes);
                 mro_def
@@ -1308,11 +1316,12 @@ pub(super) fn lower_expr(
                     .iter()
                     .map(|a| lower_expr(a, scopes, classes, current_class))
                     .collect();
-                return MirExpr::Call {
+                let call = MirExpr::Call {
                     callee: mangled,
                     args: call_args,
                     ty,
                 };
+                return sequence_after(base, call);
             }
             let class_mangled = class_def.mro.iter().find_map(|mro_class| {
                 let mro_def = mro_class_def(mro_class, classes);

@@ -697,6 +697,18 @@ pub enum MirExpr {
     /// `pycc_hir::HirExpr::Comprehension`. Boxed for the same
     /// `large_enum_variant` reason as [`InstantiateExpr`].
     Comprehension(Box<MirComprehension>),
+    /// Evaluate `discard` for its effects, retire its value, then evaluate
+    /// and yield `value` (#1346). This is CPython's receiver-then-call order
+    /// for `recv.attr` / `recv.attr(args)` when the attribute does not
+    /// consume its receiver: a `@staticmethod` or a
+    /// `staticmethod(<foreign callable>)` class attribute reached through an
+    /// instance. `pycc_mir::expr`'s `sequence_after` builds it only for a
+    /// receiver that is not a plain `Name` read, whose evaluation has no
+    /// effect to preserve.
+    Sequence {
+        discard: Box<MirExpr>,
+        value: Box<MirExpr>,
+    },
 }
 
 /// [`MirExpr::Comprehension`]'s payload (#1254, D-250). The fields mirror
@@ -947,6 +959,7 @@ impl MirExpr {
             MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
             MirExpr::NamedExpr { ty, .. } => ty.clone(),
             MirExpr::Comprehension(comp) => comp.ty(),
+            MirExpr::Sequence { value, .. } => value.ty(),
         }
     }
 
@@ -1134,6 +1147,12 @@ impl MirExpr {
             // comprehension, and the loop variable is node-scoped, so there
             // is no enclosing-scope binding to predeclare.
             MirExpr::Comprehension(_) => {}
+            // #1346: a walrus inside a discarded receiver
+            // (`mk((k := 4)).h(2)`) still binds its target.
+            MirExpr::Sequence { discard, value } => {
+                discard.collect_named_expr_bindings(out);
+                value.collect_named_expr_bindings(out);
+            }
         }
     }
 }

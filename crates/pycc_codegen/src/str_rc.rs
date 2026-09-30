@@ -60,6 +60,11 @@ use super::*;
 /// release a reference it never took, so the second `print(e)` read freed
 /// memory.
 pub(super) fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
+    // #1346: a sequence yields its `value`'s pointer unchanged, so it is a
+    // duplicate exactly when `value` is.
+    if let MirExpr::Sequence { value, .. } = expr {
+        return str_value_is_a_duplicate_reference(value);
+    }
     matches!(
         expr,
         MirExpr::Name {
