@@ -1,7 +1,7 @@
 //! A fake CPython installation for the embedded mode's effectful tests, in
-//! the `ext_build_wiring_tests` header-less-toolchain tradition: every step
-//! up to the compiler spawn runs for real, with no CPython installed, and a
-//! stub `Python.h` then fails the compile deterministically.
+//! the `build_pipeline::ext_wiring_tests` header-less-toolchain tradition:
+//! every step up to the compiler spawn runs for real, with no CPython
+//! installed, and a stub `Python.h` then fails the compile deterministically.
 //!
 //! On macOS the libraries are real Mach-O images built with `cc`, so the
 //! `otool`/`install_name_tool`/`codesign` spawns run against them.

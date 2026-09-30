@@ -52,12 +52,17 @@ pub(crate) struct LoadedProgram {
 /// already renders.
 ///
 /// `None` in [`LoadedProgram::manifest`] means "no manifest" only because
-/// every `ImportBinding::Foreign` depends on discovery having run: the
-/// loader answers `Resolution::Foreign` only for a non-relative base, and
-/// that base always comes from `Loader::source_root`. A future change that
-/// produced a foreign binding without discovery would make the policy fall
-/// back to `auto` silently; `tests/issue_1224_interop_policy.rs`'s
-/// configured-`deny` tests pin that dependency.
+/// every `ImportBinding::Foreign` the policy can see depends on discovery
+/// having run: the loader answers `Resolution::Foreign` for a non-relative
+/// base, which always comes from `Loader::source_root`, and otherwise only
+/// for the entry module's relative imports under
+/// [`RelativeImports::ForeignFromEntry`] (#1366). That mode is passed only
+/// by `pycc build --ext`, which discards the manifest and never runs the
+/// policy, so discovery being skipped for such an import is unobservable
+/// there. A future change that produced a policy-visible foreign binding
+/// without discovery would make the policy fall back to `auto` silently;
+/// `tests/issue_1224_interop_policy.rs`'s configured-`deny` tests pin that
+/// dependency.
 pub(crate) struct DiscoveredManifest {
     /// The manifest path as diagnostics render it (relative to the entry's
     /// own spelling, never the canonical absolute path).
@@ -105,7 +110,30 @@ enum Resolution {
     /// not knowable here -- the answer lives in the `sys.path` of the
     /// interpreter that loads the artifact, so the failure is a runtime
     /// `ModuleNotFoundError`, never a compile-time diagnostic.
+    ///
+    /// Under [`RelativeImports::ForeignFromEntry`] (#1366) it is also the
+    /// answer to every relative `from` import of the entry module, dotted or
+    /// not, without any filesystem probe: the names bind attributes of the
+    /// package the artifact is imported under, resolved when its `Py_mod_exec`
+    /// runs.
     Foreign,
+}
+
+/// How the loader answers a relative import (#1366).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelativeImports {
+    /// D-222: a relative import is a project import, resolved against the
+    /// importer's own directory. Every command but `pycc build --ext
+    /// --foreign-relative-imports` uses this.
+    Project,
+    /// `pycc build --ext --foreign-relative-imports`: the *entry* module's
+    /// relative imports are answered [`Resolution::Foreign`] without
+    /// touching the disk, and bind CPython objects of the package the
+    /// artifact is imported under. A dependency's relative imports keep
+    /// D-222: its body runs inside the entry module's `Py_mod_exec`, so a
+    /// foreign relative import there would resolve against the entry's
+    /// package, not its own.
+    ForeignFromEntry,
 }
 
 /// Loads the whole program reachable from `entry`.
@@ -116,9 +144,21 @@ enum Resolution {
 /// one flat namespace, so seeding a `__name__` global per module would collide
 /// -- withholding it from dependencies is the fail-closed choice until
 /// per-module namespaces land.
+///
+/// Relative imports are project imports (D-222); see [`load_with`].
+#[cfg(test)]
 pub(crate) fn load(
     entry: &Path,
     entry_module_name: Option<&str>,
+) -> Result<LoadedProgram, FrontendFailure> {
+    load_with(entry, entry_module_name, RelativeImports::Project)
+}
+
+/// [`load`] with the relative-import mode chosen by the caller (#1366).
+pub(crate) fn load_with(
+    entry: &Path,
+    entry_module_name: Option<&str>,
+    relative_imports: RelativeImports,
 ) -> Result<LoadedProgram, FrontendFailure> {
     let display = entry.to_string_lossy().into_owned();
     let canonical = canonicalize(entry, &display)?;
@@ -135,6 +175,7 @@ pub(crate) fn load(
         root: None,
         manifest: None,
         entry_module_name: entry_module_name.map(str::to_string),
+        relative_imports,
     };
     loader.load_module(&canonical, display, true)?;
     Ok(LoadedProgram {
@@ -160,6 +201,8 @@ struct Loader {
     /// The `__name__` value the entry module is compiled with, or `None` when
     /// the caller supplied none (#1156). Only the entry module ever sees it.
     entry_module_name: Option<String>,
+    /// How the entry module's relative imports are answered (#1366).
+    relative_imports: RelativeImports,
 }
 
 impl Loader {
@@ -189,7 +232,10 @@ impl Loader {
         let requests = pycc_hir::project_import_requests(&parsed);
         let mut answers = Vec::with_capacity(requests.len());
         for request in &requests {
-            answers.push((request.span, self.resolve(request, &display, canonical)?));
+            answers.push((
+                request.span,
+                self.resolve(request, &display, canonical, is_entry)?,
+            ));
         }
         self.in_progress.pop();
 
@@ -286,12 +332,23 @@ impl Loader {
     /// Answers one import request: finds the target file, reports every
     /// CPython-rejected or not-yet-supported shape, and otherwise loads the
     /// dependency (plus the package `__init__.py`s on the way to it).
+    ///
+    /// `importer_is_entry` is whether the importer is the entry module: under
+    /// [`RelativeImports::ForeignFromEntry`] its relative imports are foreign
+    /// before any base directory is resolved (#1366).
     fn resolve(
         &mut self,
         request: &ProjectImportRequest,
         importer_display: &str,
         importer_canonical: &Path,
+        importer_is_entry: bool,
     ) -> Result<Resolution, FrontendFailure> {
+        if importer_is_entry
+            && self.relative_imports == RelativeImports::ForeignFromEntry
+            && request.level > 0
+        {
+            return Ok(Resolution::Foreign);
+        }
         let base = self.base_dir(request, importer_display, importer_canonical)?;
         let segments: Vec<&str> = match &request.module {
             Some(module) => module.split('.').collect(),
