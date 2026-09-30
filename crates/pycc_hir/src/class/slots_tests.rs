@@ -567,11 +567,11 @@ fn a_slotted_base_shadowing_a_later_sibling_binding_is_refused() {
 
 // -- 4.3: an undeclared store ----------------------------------------------
 
-fn no_slot(class: &str, attr: &str, mangled: &str) -> String {
+fn no_slot(class: &str, attr: &str) -> String {
     format!(
         "class `{class}` has no slot for attribute `{attr}` -- every class in its MRO binds \
          `__slots__`, so its instances have no `__dict__`, and CPython raises \
-         `AttributeError: '{class}' object has no attribute '{mangled}' and no __dict__ for \
+         `AttributeError: '{class}' object has no attribute '{attr}' and no __dict__ for \
          setting new attributes` (3.13+ wording) at this store"
     )
 }
@@ -581,7 +581,7 @@ fn a_store_outside_the_slot_list_is_t0044_at_the_store() {
     let source = "class C:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \
                   self.a = 1\n        self.b = 2\n";
     let diagnostic = t0044(source);
-    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    assert_eq!(diagnostic.message, no_slot("C", "b"));
     let start = source.find("self.b").expect("store") as u32;
     assert_eq!(diagnostic.span, Some(Span::new(start, start + 6)));
 }
@@ -591,7 +591,7 @@ fn an_annotated_store_outside_the_slot_list_is_t0044_at_the_store() {
     let source = "class C:\n    __slots__ = ()\n\n    def __init__(me) -> None:\n        me.b: \
                   list[int] = []\n";
     let diagnostic = t0044(source);
-    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    assert_eq!(diagnostic.message, no_slot("C", "b"));
     let start = source.find("me.b").expect("store") as u32;
     assert_eq!(diagnostic.span, Some(Span::new(start, start + 4)));
 }
@@ -601,7 +601,7 @@ fn the_store_span_skips_earlier_init_statements() {
     let source = "class C:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \
                   print(1)\n        self.a = 1\n        self.b = 2\n";
     let diagnostic = t0044(source);
-    assert_eq!(diagnostic.message, no_slot("C", "b", "b"));
+    assert_eq!(diagnostic.message, no_slot("C", "b"));
     let start = source.find("self.b").expect("store") as u32;
     assert_eq!(diagnostic.span, Some(Span::new(start, start + 6)));
 }
@@ -610,7 +610,7 @@ fn the_store_span_skips_earlier_init_statements() {
 fn a_store_behind_an_abc_base_is_still_t0044() {
     let source = "from abc import ABC\n\n\nclass C(ABC):\n    __slots__ = ('a',)\n\n    def \
                   __init__(self, a: int) -> None:\n        self.b = a\n";
-    assert_eq!(t0044(source).message, no_slot("C", "b", "b"));
+    assert_eq!(t0044(source).message, no_slot("C", "b"));
 }
 
 #[test]
@@ -621,18 +621,43 @@ fn a_slotted_subclass_of_a_slotted_base_may_store_the_base_slots() {
     assert_eq!(slots_of(source, "C"), names(&["b"]));
 }
 
-#[test]
-fn a_subclass_private_store_misses_the_base_private_slot() {
-    let source = "class B:\n    __slots__ = ('_B__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
-                  def __init__(self) -> None:\n        self.__p = 1\n";
-    assert_eq!(t0044(source).message, no_slot("C", "__p", "_C__p"));
+fn private_store(class: &str, attr: &str, mangled: &str) -> String {
+    format!(
+        "the private instance attribute `{attr}` of class `{class}` is not supported yet (#1392) \
+         -- `{class}` binds `__slots__`, CPython mangles the store with the class's name to \
+         `{mangled}`, and pycc does not mangle a private attribute name on an instance, so \
+         `self.{attr}` would not match CPython's slot"
+    )
 }
 
 #[test]
-fn a_private_store_matches_the_own_private_slot() {
-    let source = "class C:\n    __slots__ = ('_C__p',)\n\n    def __init__(self) -> None:\n        \
+fn a_private_store_is_not_supported_yet_even_with_the_mangled_slot() {
+    // CPython stores `self.__p` in the slot `_C__p`, and a module-level
+    // `C().__p` raises `AttributeError`; pycc would lay the attribute out as
+    // `__p` and read it back.
+    let source = "class C:\n    __slots__ = ('a', '_C__p')\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n        self.__p = 1\n";
+    let diagnostic = error(source);
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(diagnostic.message, private_store("C", "__p", "_C__p"));
+    let start = source.find("self.__p").expect("store") as u32;
+    assert_eq!(diagnostic.span, Some(Span::new(start, start + 8)));
+}
+
+#[test]
+fn a_private_store_without_a_slot_is_refused_before_t0044() {
+    // With no slot at all CPython raises `AttributeError` naming `_C__p`;
+    // the private refusal comes first, so T0044 only sees unmangled names.
+    let source = "class B:\n    __slots__ = ('_B__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
+                  def __init__(self) -> None:\n        self.__p = 1\n";
+    assert_eq!(c0001(source), private_store("C", "__p", "_C__p"));
+}
+
+#[test]
+fn a_private_store_of_a_class_that_mangles_nothing_is_checked_as_written() {
+    let source = "class __:\n    __slots__ = ()\n\n    def __init__(self) -> None:\n        \
                   self.__p = 1\n";
-    assert_eq!(slots_of(source, "C"), names(&["_C__p"]));
+    assert_eq!(t0044(source).message, no_slot("__", "__p"));
 }
 
 #[test]
@@ -822,7 +847,7 @@ fn an_imported_slotted_base_checks_a_local_subclass_store() {
     )
     .expect_err("undeclared store");
     assert_eq!(diagnostic.code, "T0044");
-    assert_eq!(diagnostic.message, no_slot("C", "z", "z"));
+    assert_eq!(diagnostic.message, no_slot("C", "z"));
 }
 
 #[test]
@@ -902,5 +927,5 @@ fn a_re_exported_slotted_base_carries_its_slots() {
         .expect_err("undeclared store")
         .remove(0);
     assert_eq!(diagnostic.code, "T0044");
-    assert_eq!(diagnostic.message, no_slot("C", "z", "z"));
+    assert_eq!(diagnostic.message, no_slot("C", "z"));
 }

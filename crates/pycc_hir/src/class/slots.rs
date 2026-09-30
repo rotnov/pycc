@@ -19,8 +19,9 @@
 //!    strings, each an identifier;
 //! 3. refuses a slot that collides with a name in the class's own namespace
 //!    ([`check_namespace_conflicts`]);
-//! 4. refuses every dunder-named slot ([`check_dunder_slots`]) and every
-//!    slot CPython would mangle ([`check_private_slots`]);
+//! 4. refuses every dunder-named slot ([`check_dunder_slots`]), every slot
+//!    CPython would mangle ([`check_private_slots`]), and every instance
+//!    store CPython would mangle ([`check_private_stores`]);
 //! 5. refuses a slot -- the class's own or a slotted base's -- whose name a
 //!    class later in the MRO binds at class level, which the slot's member
 //!    descriptor would shadow ([`check_inherited_class_names`]);
@@ -42,10 +43,12 @@
 //! mangle a private attribute name on an instance (#1392). The namespace
 //! check runs first and compares both sides mangled ([`mangle`]), so a
 //! private slot that is also bound in the body keeps CPython's own
-//! `ValueError`. Every slot that reaches steps 5 and 6 is therefore its own
-//! mangled form, and only the other side of those comparisons is mangled: a
-//! class-body name with its class's name, and an instance attribute with the
-//! storing class's name.
+//! `ValueError`. A private instance store in a class that binds `__slots__`
+//! is refused for the same reason ([`check_private_stores`]), even when a
+//! slot spells the mangled name out (`_C__x`): pycc would lay the attribute
+//! out as `__x`. Every slot and every store that reaches steps 5 and 6 is
+//! therefore its own mangled form; only a class-level name is mangled there,
+//! with its own class's name.
 
 use super::HirClassDef;
 use crate::exception::is_builtin_exception_class;
@@ -112,6 +115,7 @@ pub(crate) fn check_class(
         check_namespace_conflicts(def, slots)?;
         check_dunder_slots(slots, *binding_range)?;
         check_private_slots(slots, class_def.name.as_str(), *binding_range)?;
+        check_private_stores(def, class_def, *binding_range)?;
     }
     check_inherited_class_names(def, class_def, own.as_ref(), &ancestors)?;
     let Some((slots, binding_range)) = own else {
@@ -506,6 +510,42 @@ fn check_private_slots(
     ))
 }
 
+/// Refuses an instance attribute store CPython would mangle (`self.__x` in
+/// class `C` stores `_C__x`) in a class that binds `__slots__`. pycc does
+/// not mangle a private attribute name on an instance (#1392) and lays the
+/// attribute out as `__x`, so even a slot that spells the mangled name out
+/// (`__slots__ = ('_C__x',)`) would leave `C().__x` readable in pycc where
+/// CPython raises `AttributeError`. A store with no slot is refused here
+/// too rather than as [`check_undeclared_stores`]'s `T0044`: every store
+/// that reaches that check is spelled as CPython stores it.
+fn check_private_stores(
+    def: &StmtClassDef,
+    class_def: &HirClassDef,
+    binding_range: Span,
+) -> Result<(), Diagnostic> {
+    let class_name = class_def.name.as_str();
+    let Some((attr, mangled)) = class_def
+        .attrs
+        .iter()
+        .map(|(attr, _)| (attr, mangle(attr, class_name)))
+        .find(|(attr, mangled)| *attr != mangled)
+    else {
+        return Ok(());
+    };
+    Err(unsupported(
+        format!(
+            "the private instance attribute `{attr}` of class `{class_name}` is not supported \
+             yet (#1392) -- `{class_name}` binds `__slots__`, CPython mangles the store with the \
+             class's name to `{mangled}`, and pycc does not mangle a private attribute name on \
+             an instance, so `self.{attr}` would not match CPython's slot"
+        ),
+        {
+            let span = init_store_span(def, attr).unwrap_or(binding_range);
+            span.start..span.end
+        },
+    ))
+}
+
 /// The non-dunder names builtin exception class `name` binds in its own
 /// class dictionary, from `vars()` on CPython 3.14.7. pycc's root
 /// `Exception` stands in for CPython's `BaseException`, which defines
@@ -640,8 +680,7 @@ fn check_undeclared_stores(
         declared.extend(slots);
     }
     for (attr, _) in &class_def.attrs {
-        let mangled = mangle(attr, class_name);
-        if declared.contains(&&mangled) {
+        if declared.contains(&attr) {
             continue;
         }
         let span = init_store_span(def, attr).unwrap_or(binding_range);
@@ -650,7 +689,7 @@ fn check_undeclared_stores(
             format!(
                 "class `{class_name}` has no slot for attribute `{attr}` -- every class in its \
                  MRO binds `__slots__`, so its instances have no `__dict__`, and CPython \
-                 raises `AttributeError: '{class_name}' object has no attribute '{mangled}' \
+                 raises `AttributeError: '{class_name}' object has no attribute '{attr}' \
                  and no __dict__ for setting new attributes` (3.13+ wording) at this store"
             ),
             span,

@@ -554,8 +554,13 @@ CPython's order:
    declaring class's name to the slot `_C__x`, and pycc does not mangle a
    private attribute name on an instance
    ([#1392](https://github.com/rotnov/pycc/issues/1392)), so `self.__x` would
-   not reach that slot. A class named only with underscores mangles nothing,
-   so its private slot is admitted.
+   not reach that slot. For the same reason, a class that binds `__slots__`
+   and stores a private instance attribute (`self.__x = ...`) is `C0001` "not
+   supported yet" at the store until #1392, even when a slot spells the
+   mangled name out (`__slots__ = ('_C__x',)`): pycc would lay the attribute
+   out as `__x`, so `C().__x` would read the value where CPython raises
+   `AttributeError`. A class named only with underscores mangles nothing, so
+   its private slots and stores are admitted and checked as written.
 5. **Inherited names.** A slot whose name a class later in the MRO binds at
    class level (a class variable, a method, a static or class method, a
    property) is `C0001` "not supported yet". This covers the class's own
@@ -589,11 +594,11 @@ CPython's order:
    CPython. A builtin exception base has no `__slots__` of its own, so a
    slotted exception class is never checked either.
 
-Because a private slot is refused in step 4, every slot that reaches steps 5
-and 6 is spelled exactly as it is stored. A slot spelled in its mangled form,
-`_C__x`, is admitted; a private class-level name (`__x = 1` in a class `A`)
-is compared as `_A__x` in step 5, and a store `self.__x` in `C` as `_C__x` in
-step 6, as CPython mangles them. A slot that is
+Because private slots and private stores are refused in step 4, every slot
+and store that reaches steps 5 and 6 is spelled exactly as CPython stores it.
+A slot spelled in its mangled form, `_C__x`, is admitted, and a private
+class-level name (`__x = 1` in a class `A`) is compared as `_A__x` in step 5,
+as CPython mangles it. A slot that is
 declared but never assigned is accepted and adds no instance attribute; a read
 of it is refused with `T0044` at compile time, where CPython would raise
 `AttributeError` only when the read runs. Each class's slots are recorded in

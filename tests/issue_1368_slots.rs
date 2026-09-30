@@ -336,3 +336,20 @@ fn a_private_slot_entry_is_c0001() {
     );
     cpython_rejects("e2e_1368_private_cpython", source, "AttributeError");
 }
+
+/// A private instance store in a slotted class is refused even when a slot
+/// spells the mangled name out: CPython stores `self.__x` in the slot
+/// `_C__x`, so a module-level `C().__x` raises `AttributeError`, while pycc
+/// would lay the attribute out as `__x` and print the value (#1392).
+#[test]
+fn a_private_store_with_a_hand_mangled_slot_is_c0001() {
+    let source = "class C:\n    __slots__ = ('_C__x',)\n\n    def __init__(self) -> None:\n        \
+                  self.__x = 1\n\n\nprint(C().__x)\n";
+    let text = fails("e2e_1368_private_store", source);
+    assert!(text.contains("error[C0001]"), "{text}");
+    assert!(
+        text.contains("the private instance attribute `__x` of class `C` is not supported yet"),
+        "{text}"
+    );
+    cpython_rejects("e2e_1368_private_store_cpython", source, "AttributeError");
+}
