@@ -548,16 +548,32 @@ CPython's order:
    `TypeError: unhashable type`). pycc does not model which names do, so every
    dunder entry is refused. A private `__x` name is not a dunder and stays
    admitted.
-5. **Inherited names.** A slot whose name an ancestor binds at class level (a
-   class variable, a method, a static or class method, a property) is `C0001`
-   "not supported yet", at the `__slots__` binding. So is a slot named after
-   an attribute of a builtin exception base (`args`, `with_traceback`,
-   `add_note`, `errno`, `strerror`, `filename`, `filename2`,
-   `characters_written`, and the exception-group names). CPython accepts the
-   class, but the slot's member descriptor shadows the inherited binding, so
+5. **Inherited names.** A slot whose name a class later in the MRO binds at
+   class level (a class variable, a method, a static or class method, a
+   property) is `C0001` "not supported yet". This covers the class's own
+   slots, reported at the `__slots__` binding, and a slotted base's slots
+   checked against the classes after that base in this class's MRO, reported
+   at the `class` statement. The second case includes a sibling base:
+   `class C(B, A)`, with a slotted `B` and an `A` that binds the name. A slot
+   named after an attribute a builtin exception class in the MRO defines is
+   refused the same way. Each name is matched against the builtin that
+   defines it, with pycc's root `Exception` standing in for CPython's
+   `BaseException`:
+   - `BaseException`: `args`, `with_traceback`, `add_note`;
+   - `OSError`: `errno`, `strerror`, `filename`, `filename2`,
+     `characters_written`;
+   - `ImportError`: `msg`, `name`, `name_from`, `path`;
+   - `BaseExceptionGroup`: `message`, `exceptions`, `split`, `subgroup`,
+     `derive`.
+
+   So `class C(ValueError): __slots__ = ('errno',)` is admitted, as in
+   CPython. CPython accepts every refused class. The slot's member
+   descriptor comes first in the MRO and shadows the later binding, so
    reading the unset slot raises `AttributeError` where pycc would find the
-   inherited value. An ancestor's instance attribute does not conflict, and
-   re-declaring an ancestor's own slot is admitted.
+   later value. The check is conservative in one respect: a class-level
+   binding of the same name earlier in the MRO than the slot would win in
+   CPython, and the class is still refused. An instance attribute does not
+   conflict, and re-declaring an ancestor's own slot is admitted.
 6. **Stores.** When every class in the MRO binds `__slots__`, the instance
    has no `__dict__`, so a store `self.<attr> = ...` to a name no MRO class
    declares is `T0044`, at the store, quoting CPython 3.13's `AttributeError`

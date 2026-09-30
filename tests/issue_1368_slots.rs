@@ -275,3 +275,38 @@ fn a_slot_shadowing_an_inherited_class_variable_is_c0001() {
     );
     cpython_rejects("e2e_1368_inherited_cpython", source, "AttributeError");
 }
+
+/// A slotted base shadowing a later sibling's class-level binding: in
+/// `class C(B, A)` the slot descriptor `B` declares precedes `A` in `C`'s MRO,
+/// so CPython's read of the unset slot raises `AttributeError` even though
+/// `C` binds no `__slots__` itself; pycc would have found `A`'s binding.
+#[test]
+fn a_slotted_base_shadowing_a_sibling_binding_is_c0001() {
+    for (index, (binding, read)) in [
+        ("    a = 1\n", "C().a"),
+        ("    def a(self) -> int:\n        return 1\n", "C().a()"),
+        (
+            "    @property\n    def a(self) -> int:\n        return 1\n",
+            "C().a",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!(
+            "class A:\n{binding}\n\nclass B:\n    __slots__ = ('a',)\n\n\nclass C(B, A):\n    \
+             pass\n\n\nprint({read})\n"
+        );
+        let text = fails(&format!("e2e_1368_sibling_{index}"), &source);
+        assert!(text.contains("error[C0001]"), "{text}");
+        assert!(
+            text.contains("its base `B` declares the slot `a`, and `A`, later in `C`'s MRO"),
+            "{text}"
+        );
+        cpython_rejects(
+            &format!("e2e_1368_sibling_{index}_cpython"),
+            &source,
+            "AttributeError",
+        );
+    }
+}

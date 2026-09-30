@@ -426,16 +426,86 @@ fn an_ancestor_instance_attribute_or_slot_does_not_conflict() {
 
 #[test]
 fn a_builtin_exception_attribute_slot_is_refused() {
-    for (base, slot) in [
-        ("Exception", "args"),
-        ("ValueError", "with_traceback"),
-        ("OSError", "errno"),
+    // Each name is reported against the builtin that defines it: pycc's root
+    // `Exception` stands in for CPython's `BaseException`.
+    for (base, slot, definer) in [
+        ("Exception", "args", "Exception"),
+        ("ValueError", "with_traceback", "Exception"),
+        ("OSError", "errno", "OSError"),
+        ("FileNotFoundError", "filename", "OSError"),
+        ("ImportError", "name", "ImportError"),
+        ("ModuleNotFoundError", "path", "ImportError"),
+        ("ExceptionGroup", "message", "BaseExceptionGroup"),
     ] {
         let source = format!("class C({base}):\n    __slots__ = ('{slot}',)\n");
-        assert_eq!(c0001(&source), inherited(slot, "C", base, slot), "{base}");
+        assert_eq!(
+            c0001(&source),
+            inherited(slot, "C", definer, slot),
+            "{base}"
+        );
     }
-    let admitted = "class C(Exception):\n    __slots__ = ('code',)\n";
-    assert_eq!(slots_of(admitted, "C"), names(&["code"]));
+    // A name only another builtin defines does not conflict: CPython accepts
+    // `class C(ValueError): __slots__ = ('errno',)`.
+    for (base, slot) in [
+        ("Exception", "code"),
+        ("ValueError", "errno"),
+        ("OSError", "name"),
+        ("KeyError", "message"),
+    ] {
+        let admitted = format!("class C({base}):\n    __slots__ = ('{slot}',)\n");
+        assert_eq!(slots_of(&admitted, "C"), names(&[slot]), "{base}");
+    }
+}
+
+fn sibling(class: &str, declarer: &str, slot: &str, later: &str, mangled: &str) -> String {
+    format!(
+        "class `{class}` is not supported yet -- its base `{declarer}` declares the slot \
+         `{slot}`, and `{later}`, later in `{class}`'s MRO, binds `{mangled}` at class level; \
+         CPython's member descriptor for `{declarer}`'s slot comes first and shadows \
+         `{later}.{mangled}`, so reading the unset slot raises `AttributeError` where pycc \
+         would find `{later}`'s binding"
+    )
+}
+
+#[test]
+fn a_slotted_base_shadowing_a_later_sibling_binding_is_refused() {
+    // `class C(B, A)`: `B`'s slot descriptor precedes `A` in `C`'s MRO, so
+    // CPython's `C().a` reads the unset slot even though `C` binds no
+    // `__slots__` itself.
+    for binding in [
+        "    a = 1\n",
+        "    def a(self) -> int:\n        return 1\n",
+        "    @property\n    def a(self) -> int:\n        return 1\n",
+    ] {
+        let source = format!(
+            "class A:\n{binding}\n\nclass B:\n    __slots__ = ('a',)\n\n\nclass C(B, A):\n    \
+             pass\n"
+        );
+        let diagnostic = error(&source);
+        assert_eq!(diagnostic.code, "C0001", "{binding}");
+        assert_eq!(
+            diagnostic.message,
+            sibling("C", "B", "a", "A", "a"),
+            "{binding}"
+        );
+        let start = source.find("class C").expect("class C") as u32;
+        assert_eq!(
+            diagnostic.span.map(|span| span.start),
+            Some(start),
+            "{binding}"
+        );
+    }
+    // With the sibling first, its binding precedes the slot and wins, and a
+    // private slot is compared after mangling by the declaring base.
+    let reversed = "class A:\n    a = 1\n\n\nclass B:\n    __slots__ = ('a',)\n\n\nclass \
+                    C(A, B):\n    pass\n";
+    assert_eq!(slots_of(reversed, "C"), None);
+    let private = "class A:\n    __p = 1\n\n\nclass B:\n    __slots__ = ('__p',)\n\n\nclass \
+                   C(B, A):\n    pass\n";
+    assert_eq!(slots_of(private, "C"), None);
+    let mangled = "class A:\n    _B__p = 1\n\n\nclass B:\n    __slots__ = ('__p',)\n\n\nclass \
+                   C(B, A):\n    pass\n";
+    assert_eq!(c0001(mangled), sibling("C", "B", "__p", "A", "_B__p"));
 }
 
 // -- 4.3: an undeclared store ----------------------------------------------
