@@ -221,9 +221,6 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         // checks it once the class is lowered. A `@dataclass` body keeps
         // today's refusals.
         if !is_dataclass && super::slots::is_slots_binding(stmt) {
-            if let Stmt::AnnAssign(ann) = stmt {
-                super::slots::check_annotation(&ann.annotation)?;
-            }
             continue;
         }
         if let Stmt::AnnAssign(ann) = stmt {

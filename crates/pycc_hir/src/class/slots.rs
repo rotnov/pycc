@@ -99,8 +99,9 @@ fn slots_binding_value(stmt: &Stmt) -> Option<&Expr> {
 /// evaluates a class-body annotation (PEP 649), but pycc checks every other
 /// annotated class attribute's annotation, and `annotation_to_ty` models no
 /// `str` container of unknown length, so the admitted forms are matched by
-/// shape instead.
-pub(super) fn check_annotation(annotation: &Expr) -> Result<(), Diagnostic> {
+/// shape instead. It runs after every check that mirrors a CPython
+/// class-creation error, so those keep their order.
+fn check_annotation(annotation: &Expr) -> Result<(), Diagnostic> {
     let inner = match annotation {
         Expr::Subscript(sub) if is_name(&sub.value, &["ClassVar"]) => sub.slice.as_ref(),
         other => other,
@@ -164,6 +165,15 @@ pub(crate) fn check_class(
         return Ok(None);
     };
     check_undeclared_stores(def, class_def, &slots, binding_range, &ancestors)?;
+    // Last: CPython never evaluates the annotation, so every error CPython
+    // raises when it creates the class comes first.
+    for stmt in &def.body {
+        if let Stmt::AnnAssign(ann) = stmt
+            && slots_binding_value(stmt).is_some()
+        {
+            check_annotation(&ann.annotation)?;
+        }
+    }
     Ok(Some(slots))
 }
 

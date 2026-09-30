@@ -1008,4 +1008,12 @@ fn a_slots_annotation_outside_the_admitted_spellings_is_refused() {
         let source = format!("class C:\n    __slots__: {ann} = ('a',)\n");
         assert_eq!(c0001(&source), refused, "{ann}");
     }
+    // CPython's class-creation errors come first: a layout conflict and an
+    // undeclared store are reported over the annotation.
+    let layout = "class A:\n    __slots__ = ('a',)\n\n\nclass B:\n    __slots__ = ('b',)\n\n\nclass \
+                  C(A, B):\n    __slots__: int = ()\n";
+    assert_ne!(c0001(layout), refused);
+    let store = "class C:\n    __slots__: int = ()\n\n    def __init__(self) -> None:\n        \
+                 self.x = 1\n";
+    assert_eq!(t0044(store).message, no_slot("C", "x"));
 }
