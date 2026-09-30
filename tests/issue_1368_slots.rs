@@ -95,6 +95,38 @@ fn cpython_rejects(category: &str, source: &str, error: &str) {
     assert!(rendered(&output).contains(error), "{}", rendered(&output));
 }
 
+/// A store spelled in mangled form (`self._C__p`) is not private: it is
+/// admitted against the matching slot, and the program prints what CPython
+/// prints.
+#[test]
+fn a_store_spelled_in_mangled_form_runs_as_cpython() {
+    let source = "class C:\n    __slots__ = ('_C__p',)\n\n    def __init__(self) -> None:\n        \
+                  self._C__p = 1\n\n\nprint(C()._C__p)\n";
+    let dir = ScratchDir::new("e2e_1368_mangled_store").expect("scratch");
+    std::fs::write(dir.join("a.py"), source).expect("write the subject");
+    let build = pycc()
+        .arg("build")
+        .arg("a.py")
+        .arg("-o")
+        .arg("app")
+        .current_dir(dir.join("."))
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", rendered(&build));
+    let run = Command::new(dir.join("app"))
+        .output()
+        .expect("the program should spawn");
+    assert!(run.status.success(), "{}", rendered(&run));
+    assert_eq!(stdout(&run), "1\n");
+    let oracle = python()
+        .arg("a.py")
+        .current_dir(dir.join("."))
+        .output()
+        .expect("python3 should spawn");
+    assert!(oracle.status.success(), "{}", rendered(&oracle));
+    assert_eq!(stdout(&oracle), stdout(&run));
+}
+
 #[test]
 fn an_undeclared_store_is_t0044() {
     let source = "class C:\n    __slots__ = ('a',)\n\n    def __init__(self) -> None:\n        \

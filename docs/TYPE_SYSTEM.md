@@ -561,8 +561,12 @@ CPython's order:
    supported yet" at the store until #1392, even when a slot spells the
    mangled name out (`__slots__ = ('_C__x',)`): pycc would lay the attribute
    out as `__x`, so `C().__x` would read the value where CPython raises
-   `AttributeError`. A class named only with underscores mangles nothing, so
-   its private slots and stores are admitted and checked as written.
+   `AttributeError`. The refusal is deliberately blanket: a private store
+   that matches no slot is refused as well, although CPython would raise its
+   own `AttributeError` for it, which step 6 would otherwise quote. A store
+   spelled out in mangled form (`self._C__x`) is not private and is checked
+   as written. A class named only with underscores mangles nothing, so its
+   private slots and stores are admitted and checked as written.
 5. **Inherited names.** A slot whose name a class later in the MRO binds at
    class level (a class variable, a method, a static or class method, a
    property) is `C0001` "not supported yet". This covers the class's own

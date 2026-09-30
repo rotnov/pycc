@@ -46,7 +46,9 @@
 //! `ValueError`. A private instance store in a class that binds `__slots__`
 //! is refused for the same reason ([`check_private_stores`]), even when a
 //! slot spells the mangled name out (`_C__x`): pycc would lay the attribute
-//! out as `__x`. Every slot and every store that reaches steps 5 and 6 is
+//! out as `__x`, and even when no slot matches it, where CPython would raise
+//! its own `AttributeError` (a conservative trade-off until #1392). Every
+//! slot and every store that reaches steps 5 and 6 is
 //! therefore its own mangled form; only a class-level name is mangled there,
 //! with its own class's name.
 
@@ -515,9 +517,13 @@ fn check_private_slots(
 /// not mangle a private attribute name on an instance (#1392) and lays the
 /// attribute out as `__x`, so even a slot that spells the mangled name out
 /// (`__slots__ = ('_C__x',)`) would leave `C().__x` readable in pycc where
-/// CPython raises `AttributeError`. A store with no slot is refused here
-/// too rather than as [`check_undeclared_stores`]'s `T0044`: every store
-/// that reaches that check is spelled as CPython stores it.
+/// CPython raises `AttributeError`. The refusal is blanket and deliberately
+/// conservative until #1392: a private store that matches no slot is refused
+/// here too, as `C0001` "not supported yet", although CPython would raise
+/// its own `AttributeError` for it, which [`check_undeclared_stores`]'s
+/// `T0044` would otherwise have quoted. In exchange, every store that
+/// reaches that check is spelled as CPython stores it. A store spelled out
+/// in mangled form (`self._C__x`) is not private and is checked as written.
 fn check_private_stores(
     def: &StmtClassDef,
     class_def: &HirClassDef,
@@ -537,7 +543,7 @@ fn check_private_stores(
             "the private instance attribute `{attr}` of class `{class_name}` is not supported \
              yet (#1392) -- `{class_name}` binds `__slots__`, CPython mangles the store with the \
              class's name to `{mangled}`, and pycc does not mangle a private attribute name on \
-             an instance, so `self.{attr}` would not match CPython's slot"
+             an instance, so `self.{attr}` would not reach the storage CPython uses"
         ),
         {
             let span = init_store_span(def, attr).unwrap_or(binding_range);

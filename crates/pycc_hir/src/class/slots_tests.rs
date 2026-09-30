@@ -626,7 +626,7 @@ fn private_store(class: &str, attr: &str, mangled: &str) -> String {
         "the private instance attribute `{attr}` of class `{class}` is not supported yet (#1392) \
          -- `{class}` binds `__slots__`, CPython mangles the store with the class's name to \
          `{mangled}`, and pycc does not mangle a private attribute name on an instance, so \
-         `self.{attr}` would not match CPython's slot"
+         `self.{attr}` would not reach the storage CPython uses"
     )
 }
 
@@ -645,12 +645,21 @@ fn a_private_store_is_not_supported_yet_even_with_the_mangled_slot() {
 }
 
 #[test]
-fn a_private_store_without_a_slot_is_refused_before_t0044() {
-    // With no slot at all CPython raises `AttributeError` naming `_C__p`;
-    // the private refusal comes first, so T0044 only sees unmangled names.
+fn a_private_store_with_no_matching_slot_is_refused_before_t0044() {
+    // `B`'s `_B__p` does not match `C`'s mangled `_C__p`, so CPython raises
+    // `AttributeError` naming `_C__p`; the blanket private refusal comes
+    // first (a conservative trade-off until #1392), so T0044 only sees names
+    // spelled as CPython stores them.
     let source = "class B:\n    __slots__ = ('_B__p',)\n\n\nclass C(B):\n    __slots__ = ()\n\n    \
                   def __init__(self) -> None:\n        self.__p = 1\n";
     assert_eq!(c0001(source), private_store("C", "__p", "_C__p"));
+}
+
+#[test]
+fn a_store_spelled_in_mangled_form_matches_the_mangled_slot() {
+    let source = "class C:\n    __slots__ = ('_C__p',)\n\n    def __init__(self) -> None:\n        \
+                  self._C__p = 1\n";
+    assert_eq!(slots_of(source, "C"), names(&["_C__p"]));
 }
 
 #[test]
