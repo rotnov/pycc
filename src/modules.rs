@@ -136,6 +136,17 @@ pub(crate) enum RelativeImports {
     ForeignFromEntry,
 }
 
+/// Loads the whole program reachable from `entry`, with relative imports as
+/// project imports (D-222). Test-only: production callers choose the mode
+/// through [`load_with`], which documents the contract.
+#[cfg(test)]
+pub(crate) fn load(
+    entry: &Path,
+    entry_module_name: Option<&str>,
+) -> Result<LoadedProgram, FrontendFailure> {
+    load_with(entry, entry_module_name, RelativeImports::Project)
+}
+
 /// Loads the whole program reachable from `entry`.
 ///
 /// `entry_module_name` is the `__name__` value the *entry* module is compiled
@@ -145,16 +156,9 @@ pub(crate) enum RelativeImports {
 /// -- withholding it from dependencies is the fail-closed choice until
 /// per-module namespaces land.
 ///
-/// Relative imports are project imports (D-222); see [`load_with`].
-#[cfg(test)]
-pub(crate) fn load(
-    entry: &Path,
-    entry_module_name: Option<&str>,
-) -> Result<LoadedProgram, FrontendFailure> {
-    load_with(entry, entry_module_name, RelativeImports::Project)
-}
-
-/// [`load`] with the relative-import mode chosen by the caller (#1366).
+/// `relative_imports` is how the entry module's relative imports resolve
+/// (#1366): [`RelativeImports::Project`] everywhere but a `pycc build --ext
+/// --foreign-relative-imports`.
 pub(crate) fn load_with(
     entry: &Path,
     entry_module_name: Option<&str>,

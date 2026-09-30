@@ -342,9 +342,11 @@ pub(crate) fn resolve_frontend(
     resolve_frontend_with(path, module_name, RelativeImports::Project)
 }
 
-/// [`resolve_frontend`] with the relative-import mode chosen by the caller:
-/// `pycc build --ext --foreign-relative-imports` passes
-/// [`RelativeImports::ForeignFromEntry`] (#1366).
+/// Link and type-check the entry file's program, the `pycc build --ext`
+/// frontend. `relative_imports` is how the entry module's relative imports
+/// resolve: `--foreign-relative-imports` passes
+/// [`RelativeImports::ForeignFromEntry`] (#1366), every other caller
+/// [`RelativeImports::Project`].
 pub(crate) fn resolve_frontend_with(
     path: &Path,
     module_name: Option<&str>,
@@ -355,7 +357,7 @@ pub(crate) fn resolve_frontend_with(
         .map_err(|keyed| sources.group(attribute(&sources, keyed)))
 }
 
-/// [`resolve_frontend`] plus the native-mode artifact gates, for a
+/// [`resolve_frontend_with`] plus the native-mode artifact gates, for a
 /// `pycc build` without `--ext`: the foreign-import gate (Part 1 of #1026,
 /// narrowed by Part 1 of #1028) and the `memoryview`-annotation gate
 /// (Part 1 of #1027).

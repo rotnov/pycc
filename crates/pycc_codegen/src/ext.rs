@@ -126,7 +126,7 @@ pub const EXT_OBJ_IMPORT_SYMBOL: &str = "pycc_ext_obj_import";
 /// relative one (#1366, `pycc build --ext --foreign-relative-imports`)
 /// passes its dot count, and the shim resolves it against the executing
 /// module's own dict. Spelled once here for exactly the reason
-/// [`EXT_OBJ_IMPORT_SYMBOL`] is.
+/// `EXT_OBJ_IMPORT_SYMBOL` is.
 pub const EXT_OBJ_IMPORT_FROM_SYMBOL: &str = "pycc_ext_obj_import_from";
 
 /// The fixed C shim's failed-import bridge (#1293, Part 3 of #1282): called
