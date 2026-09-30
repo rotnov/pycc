@@ -348,6 +348,11 @@ fn retain_if_int_duplicate_reporting<'ctx>(
             // `if let Scalar::Int` has already established the payload word
             // this arm is deciding whether to retain.
             MirExpr::OptionalUnwrap(_, _) => true,
+            // #1346: a sequence yields its `value`'s word, so it is a
+            // duplicate exactly when `value` is.
+            MirExpr::Sequence { value, .. } => {
+                return retain_if_int_duplicate_reporting(context, builder, rt, value, scalar);
+            }
             _ => false,
         };
         if is_duplicate {
@@ -447,6 +452,9 @@ pub(super) fn retain_if_int_duplicate_and_track_for_exception_edge<'ctx>(
 /// is an unconditional runtime no-op.
 fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     match expr {
+        // #1346: a sequence yields its `value`'s word unchanged, so it owns
+        // exactly what `value` owns.
+        MirExpr::Sequence { value, .. } => int_value_is_a_duplicate_reference(value),
         MirExpr::Name {
             ty: pycc_mir::Ty::Int,
             ..

@@ -58,6 +58,7 @@ mod frozenset;
 mod hash;
 /// Set insertion, length and iteration helpers, and the insert of a set of
 /// user-class instances (#1343, Part 1 of #1336).
+mod sequence;
 mod set_instance;
 use set_instance::{
     SetEmitter, build_int_set_add, build_int_set_check_not_resized, build_int_set_get,
@@ -1811,6 +1812,17 @@ fn emit_expr_unchecked<'ctx>(
     use pycc_mir::Ty;
     match expr {
         MirExpr::IntLiteral(n) => Scalar::Int(emit_int_constant(context, builder, rt, *n)),
+        // #1346: a receiver evaluated for its effects, then the attribute.
+        MirExpr::Sequence { discard, value } => sequence::emit_sequence(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            discard,
+            value,
+        ),
         // #1254 (D-250): a comprehension in any expression position.
         MirExpr::Comprehension(comp) => emit_comprehension_expr(
             &CompCx {

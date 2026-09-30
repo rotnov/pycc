@@ -1541,7 +1541,6 @@ pub(crate) fn infer_expr_in(
                 && let Some(ty) = class::foreign_static::instance_read(
                     env,
                     local_names,
-                    base,
                     class_name,
                     attr,
                 )?
@@ -1684,7 +1683,6 @@ pub(crate) fn infer_expr_in(
                 && let Some(ty) = class::foreign_static::instance_call(
                     env,
                     local_names,
-                    base,
                     class_name,
                     method,
                     args,
