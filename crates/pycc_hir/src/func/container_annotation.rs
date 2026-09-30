@@ -82,8 +82,9 @@ pub(super) fn container_annotation_to_ty(
         // The advice is per family. `tuple[X, ...]` is the one spelling that
         // means something in Python -- a homogeneous variadic tuple -- so it
         // gets the length explanation and a fixed-arity `tuple`. For
-        // `list`/`set`/`dict`, `...` is simply not a type, and recommending a
-        // `tuple` there would change the container the user asked for.
+        // `list`/`set`/`frozenset`/`dict`, `...` is simply not a type, and
+        // recommending a `tuple` there would change the container the user
+        // asked for.
         //
         // The advice is split into the reason and the imperative fix, because
         // the fix is also published as structured `help` (D-152's "the message

@@ -1,7 +1,7 @@
 //! Bare-container annotation advice (D-228, issue #918): upgrading
 //! [`crate::annotation_to_ty`]'s generic unknown-name `C0001` for a bare
-//! `list`/`set`/`dict`/`tuple` (or a legacy `typing` alias such as `List`,
-//! #1378) into a message naming the parameterized form
+//! `list`/`set`/`frozenset`/`dict`/`tuple` (or a legacy `typing` alias such
+//! as `List`, #1378) into a message naming the parameterized form
 //! to write, in the positions that lower one. Extracted from `func.rs` per
 //! AGENTS.md's file-decomposition rule when #1264 added
 //! [`with_bare_list_or_dict_advice`]. The moved items keep their code
