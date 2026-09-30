@@ -1050,6 +1050,7 @@ fn a_slots_annotation_through_a_shadowed_name_is_refused() {
         "class tuple:\n    pass\n\n\nclass C:\n    __slots__: tuple[str, ...] = ('a',)\n",
         "type List = int\n\n\nclass C:\n    __slots__: List[str] = ['a']\n",
         "class C[list]:\n    __slots__: list = ['a']\n",
+        "class list:\n    __slots__: list[str] = ['a']\n",
     ] {
         assert_eq!(c0001(source), refused, "{source}");
     }

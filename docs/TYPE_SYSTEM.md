@@ -521,7 +521,7 @@ and the annotated `__slots__: T = (...)`. The annotation `T` must be `str`,
 `tuple`, `list`, `tuple[str, ...]` or `list[str]` (or the `typing`
 `Tuple`/`List` spelling), optionally inside `ClassVar[...]`; any other
 annotation is `C0001`, and so is one of those names rebound by a user
-class, a type alias or a class type parameter. The value must be a string
+class (the annotated class itself included), a type alias or a class type parameter. The value must be a string
 literal or a
 tuple or list of string literals. The check lives in `pycc_hir`
 (`crates/pycc_hir/src/class/slots.rs`) and changes no layout: an instance's

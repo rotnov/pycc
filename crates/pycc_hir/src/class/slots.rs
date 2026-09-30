@@ -177,7 +177,8 @@ pub(crate) fn check_class(
             && slots_binding_value(stmt).is_some()
         {
             check_annotation(&ann.annotation, &|name| {
-                defined_classes.iter().any(|(class, _)| class == name)
+                class_def.name == name
+                    || defined_classes.iter().any(|(class, _)| class == name)
                     || aliases.contains(&name)
                     || def
                         .type_params
