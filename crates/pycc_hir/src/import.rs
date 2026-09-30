@@ -276,7 +276,11 @@ impl<'a> ResolvedImports<'a> {
     /// binding was created from a module already registered here (the
     /// driver loads and registers a dependency before the module importing
     /// it), so the lookup cannot miss for a binding the driver produced;
-    /// the `.expect` follows the crate's coverage convention.
+    /// the `.expect` follows the crate's coverage convention. It is also
+    /// called with a `ResolvedModule`'s own `display_path`, when a class is
+    /// imported from it, to find that module's `__slots__` rows (#1368); the
+    /// driver registers every loaded module, so that lookup cannot miss
+    /// either.
     fn origin(&self, module_path: &str) -> RegisteredModule<'a> {
         self.modules
             .get(module_path)
