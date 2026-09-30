@@ -17,6 +17,7 @@
 
 mod attr_set;
 mod binding;
+pub(crate) mod foreign_static;
 mod method_call;
 mod static_call;
 mod super_call;
@@ -174,6 +175,25 @@ pub(crate) fn check_protocol_conformance(
                 // of the two a read resolves to.
                 let found = lookup_attr_through_mro(env, &class_def.mro, attr_name)
                     .or_else(|| lookup_class_attr_through_mro(env, class_name, attr_name));
+                // Part 1 of #1284: a `staticmethod(<foreign callable>)` class
+                // attribute has no object path through a protocol-typed
+                // read, so it does not satisfy an attribute member.
+                if lookup_attr_through_mro(env, &class_def.mro, attr_name).is_none()
+                    && foreign_static::is_foreign_static_class_attr(env, class_name, attr_name)
+                {
+                    return Err(Diagnostic::error(
+                        "T0046",
+                        format!(
+                            "class `{class_name}` does not conform to protocol \
+                             `{protocol_name}`: missing attribute `{attr_name}`"
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(format!(
+                        "`{class_name}.{attr_name}` is a `staticmethod(...)` class attribute, \
+                         which does not satisfy a protocol attribute member (#1284)"
+                    )));
+                }
                 let Some(concrete_attr_ty) = found else {
                     return Err(Diagnostic::error(
                         "T0046",

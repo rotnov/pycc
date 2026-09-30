@@ -265,3 +265,4 @@ current.
 | [D-253](./D-253-windows-embedded-executable-a-stub-out-loading-a.md) | Windows embedded executable: a stub OUT loading a program DLL from OUT.pycc | accepted |
 | [D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md) | Inherited methods are compiled per receiver class when their behaviour depends on it | accepted |
 | [D-255](./D-255-set-elements-of-a-hashable-user-class-and-the-eq.md) | set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation | accepted |
+| [D-256](./D-256-admit-a-foreign-callable-staticmethod-class.md) | Admit a foreign-callable `staticmethod` class attribute, re-read at each access | accepted |

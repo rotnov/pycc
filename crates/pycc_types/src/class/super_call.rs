@@ -19,7 +19,9 @@ use crate::Environment;
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::Ty;
 
-use super::{check_call_args, expect_class, t0044_unknown_member, t0047_super_instance_attr};
+use super::{
+    check_call_args, expect_class, foreign_static, t0044_unknown_member, t0047_super_instance_attr,
+};
 
 /// The anchor class and the MRO slice a zero-argument `super()` searches:
 /// the classes *after* the anchor (the class whose body is being checked,
@@ -99,6 +101,9 @@ pub(crate) fn resolve_super_attr_get(env: &Environment, attr: &str) -> Result<Ty
         ));
     }
     let (current_class, super_mro) = super_mro(env);
+    // Part 1 of #1284: a winning `staticmethod(...)` class attribute is
+    // refused rather than typed as the `object` it is recorded as.
+    foreign_static::refuse_super(env, super_mro, current_class, attr)?;
     // #915: walk the slice once, checking every class-level member kind on
     // each class before moving to the next -- a CPython `super` object
     // resolves against one class `__dict__` at a time, so the *MRO
@@ -181,6 +186,10 @@ pub(crate) fn resolve_super_method_call(
         ));
     }
     let (current_class, super_mro) = super_mro(env);
+    // Part 1 of #1284: the method walk below sees methods only, so a
+    // `staticmethod(...)` class attribute that wins positionally must be
+    // refused here or the call would reach a later base's method.
+    foreign_static::refuse_super(env, super_mro, current_class, method)?;
     // #966: `super().__init__()` ranks constructors the same way
     // instantiation does, so a D-225 implicit constructor on an earlier
     // base must not out-rank a real one further along -- skip flagged

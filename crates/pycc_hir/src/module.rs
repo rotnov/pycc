@@ -111,6 +111,9 @@ struct ModuleState<'a> {
     /// one written below it, and deliberately lowering-internal: it never
     /// reaches [`LoweredModule`] or `program::link`.
     signatures: SignatureTable,
+    /// Whether the module body binds `staticmethod` anywhere (#1345),
+    /// computed once before the item loop and handed to every class.
+    staticmethod_rebound: bool,
 }
 
 /// One module's lowering, before `program::link`/`program::finalize`
@@ -237,6 +240,10 @@ pub fn lower_module(
         imported_alias_indices: Vec::new(),
         definition_spans: Vec::new(),
         signatures: SignatureTable::collect(&module.body),
+        // No import is known yet, so only the unaliased `TYPE_CHECKING`
+        // guards are recognized; a binding under an aliased guard counts,
+        // which can only refuse a program, never admit one.
+        staticmethod_rebound: class::foreign_static::binds_name(&module.body, &[], "staticmethod"),
     };
     state
         .signatures
@@ -447,6 +454,7 @@ pub fn lower_module(
         imported_alias_indices,
         definition_spans,
         signatures: _,
+        staticmethod_rebound: _,
     } = state;
     // The imported copies were pushed after the synthetic set, so
     // stripping them leaves the synthetic entries still at the front.
@@ -615,6 +623,7 @@ fn lower_top_level_item<'a>(
             &state.class_asts,
             &state.imports,
             &state.signatures,
+            state.staticmethod_rebound,
         )?;
         // D-154 Part 1's own post-merge review finding: two module-level
         // classes sharing a name would each lower their own `__init__`

@@ -92,7 +92,20 @@ y` aliasing gap (issue #963; CPython binds a `_Feature` object pycc never \
 models -- a stdlib module behind `import X as Y` lowers since issue #962, \
 D-231); the nine no-op \
 features lower to nothing, and a feature name CPython itself rejects is \
-`L0001`, not C0001. Since #1337 (D-254) two more shapes are C0001: an \
+`L0001`, not C0001. A class-attribute initializer that is not a literal \
+is C0001 too (issue #1345, D-256), with one message per shape; a deferred \
+shape names its tracking issue: a call, a name or attribute reference, and a container \
+(#1348), `staticmethod(...)` of a call, lambda, subscript or other \
+non-reference expression (#1348), `classmethod(...)` or a `staticmethod` whose \
+root is a pycc function, class or module, or an undefined name (#1347), a `staticmethod` whose root name an earlier \
+statement of the same class body binds (#1347), the annotated spelling, a \
+conditional import root, and a dunder, class-private or container-dispatched \
+name (#1348). Two shapes stay refused, as CPython's own `TypeError` or \
+rebinding would make them: `staticmethod(...)` called with other than exactly \
+one positional argument (none, several, a keyword or a starred argument), \
+and a `staticmethod` that is rebound in the module or class body. \
+The one admitted non-literal shape is `name = staticmethod(<foreign import \
+reference>)`. Since #1337 (D-254) two more shapes are C0001: an \
 inherited method body compiled once more for a subclass that lacks a \
 capability the body needs (a `print(self)` of a non-dataclass subclass of \
 a dataclass), attributed to the origin body's file with a note naming \
@@ -100,7 +113,8 @@ the subclass; and a user exception class whose MRO resolves an \
 instance-protocol dunder (`__str__`, `__bool__`, `__eq__`, ...) to a user \
 class rather than to a builtin exception base, reported at the class \
 definition because a raised exception value would silently ignore that \
-dunder (Part 3 of #541). The construct remains reserved and stops \
+dunder (Part 3 of #541). Apart from the two permanent refusals above, the \
+construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \
 until then the diagnostic's span points at the unsupported node and the \
 message names the construct in Python terms, so it stays actionable rather \

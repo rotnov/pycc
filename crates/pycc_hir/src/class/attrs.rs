@@ -8,10 +8,14 @@
 //! compile-time constant from its right-hand side, and rejecting a class
 //! attribute whose name collides with something else the class exposes.
 
+use super::attr_initializer::{
+    InitializerScope, Spelling, class_attr_value, classify_non_literal, infer_class_attr_ty,
+    no_class_attr_value,
+};
 use super::reserved_names::{ClassBodyRoute, reject_reserved_class_attr_name};
 use super::{ClassAnnotationInfo, ClassAttrValue, HirClassDef, PropertyDef, is_scalar_slot_type};
 use crate::{Ty, unsupported};
-use pycc_ast::{Expr, Number, UnaryOp};
+use pycc_ast::Expr;
 use pycc_diag::Diagnostic;
 
 /// #911: Strips a class-body-only `ClassVar[...]` wrapper from an annotation.
@@ -136,7 +140,10 @@ fn is_class_var_annotation(annotation: &Expr) -> bool {
 /// non-scalar annotation rejects a descriptor-valued class attribute
 /// (`x: SomeDescriptor = SomeDescriptor()`) along with it, so
 /// `__set_name__`'s own precondition never arises. Relaxing this
-/// restriction requires revisiting #585 in the same change.
+/// restriction requires revisiting #585 in the same change. The annotated
+/// spelling of #1345's foreign `staticmethod` shape is refused by
+/// [`classify_non_literal`], so this path still only ever yields a scalar.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lower_class_attr(
     ann: &pycc_ast::StmtAnnAssign,
     stripped: StrippedAnnotation<'_>,
@@ -145,6 +152,7 @@ pub(super) fn lower_class_attr(
     aliases: &[(String, Ty)],
     class_name_defs: &[ClassAnnotationInfo],
     already: &[(String, Ty, ClassAttrValue)],
+    scope: &InitializerScope<'_>,
 ) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
     let Expr::Name(target_name) = ann.target.as_ref() else {
         return Err(unsupported(
@@ -154,6 +162,16 @@ pub(super) fn lower_class_attr(
         ));
     };
     let attr_name = target_name.id.to_string();
+    let non_literal = |value: &Expr| {
+        classify_non_literal(
+            value,
+            &attr_name,
+            Spelling::Annotated,
+            scope,
+            ann.range.into(),
+        )
+        .expect_err("the annotated spelling never admits a non-literal initializer")
+    };
     reject_reserved_class_attr_name(&attr_name, ClassBodyRoute::Plain, ann.range.into())?;
     if already.iter().any(|(name, _, _)| name == &attr_name) {
         return Err(unsupported(
@@ -252,7 +270,7 @@ pub(super) fn lower_class_attr(
                 return Err(no_class_attr_value(&attr_name, ann.range.into()));
             };
             let Some(attr_ty) = infer_class_attr_ty(value) else {
-                return Err(bad_class_attr_shape(&attr_name, ann.range.into()));
+                return Err(non_literal(value));
             };
             attr_ty
         }
@@ -260,7 +278,16 @@ pub(super) fn lower_class_attr(
     let Some(value) = &ann.value else {
         return Err(no_class_attr_value(&attr_name, ann.range.into()));
     };
-    let attr_value = class_attr_value(value, &attr_ty, &attr_name, ann.range.into())?;
+    // #1345: a non-literal initializer gets the classifier's precise
+    // message from inside the extractor; a literal one keeps its own checks.
+    let attr_value = class_attr_value(
+        value,
+        &attr_ty,
+        &attr_name,
+        Spelling::Annotated,
+        scope,
+        ann.range.into(),
+    )?;
     Ok((attr_name, attr_ty, attr_value))
 }
 
@@ -276,13 +303,18 @@ pub(super) fn lower_class_attr(
 /// spellings accept and reject exactly the same programs.
 ///
 /// The #585/D-224 scalar-only invariant documented on [`lower_class_attr`]
-/// holds here by construction rather than by a check: `infer_class_attr_ty`
-/// only ever yields a scalar, so an un-annotated attribute can never name a
-/// descriptor and `__set_name__`'s precondition never arises.
+/// holds for every *literal* attribute by construction: `infer_class_attr_ty`
+/// only ever yields a scalar. A non-literal initializer goes to
+/// [`classify_non_literal`], whose one admitted shape,
+/// `name = staticmethod(<foreign ref>)` (#1345, D-256), is the single
+/// non-scalar exception: a `staticmethod` object is a descriptor but has no
+/// `__set_name__` (measured on CPython 3.14.7), so `__set_name__`'s
+/// precondition still never arises.
 pub(super) fn lower_unannotated_class_attr(
     assign: &pycc_ast::StmtAssign,
     class_name: &str,
     already: &[(String, Ty, ClassAttrValue)],
+    scope: &InitializerScope<'_>,
 ) -> Result<(String, Ty, ClassAttrValue), Diagnostic> {
     // `a = b = 1` binds both names to one value. Modelling it would mean
     // pushing two entries from one statement, each needing its own duplicate
@@ -315,156 +347,24 @@ pub(super) fn lower_unannotated_class_attr(
     }
     let value = assign.value.as_ref();
     let Some(attr_ty) = infer_class_attr_ty(value) else {
-        return Err(bad_class_attr_shape(&attr_name, assign.range.into()));
+        let target = classify_non_literal(
+            value,
+            &attr_name,
+            Spelling::Unannotated,
+            scope,
+            assign.range.into(),
+        )?;
+        return Ok((attr_name, Ty::Object, ClassAttrValue::ForeignStatic(target)));
     };
-    let attr_value = class_attr_value(value, &attr_ty, &attr_name, assign.range.into())?;
+    let attr_value = class_attr_value(
+        value,
+        &attr_ty,
+        &attr_name,
+        Spelling::Unannotated,
+        scope,
+        assign.range.into(),
+    )?;
     Ok((attr_name, attr_ty, attr_value))
-}
-
-/// #910: The natural type of an un-annotated class attribute's literal
-/// right-hand side, or `None` when the shape is not one this pass folds.
-///
-/// A unary `+`/`-` is unwrapped first, because `X = -1` parses as
-/// `UnaryOp(USub, NumberLiteral(1))` and is not a literal at all. Only
-/// `USub`/`UAdd` are unwrapped: `~1` and `not True` are constant-foldable in
-/// principle but are deliberately out of scope, so they yield `None` here and
-/// are reported as an unsupported initializer shape.
-///
-/// This deliberately mirrors, and never widens, [`class_attr_value`]'s
-/// accepted set. A complex literal (`1j`) has no `Ty` in this compiler and
-/// yields `None` rather than a type `class_attr_value` would then reject with
-/// a second, less specific message.
-fn infer_class_attr_ty(value: &Expr) -> Option<Ty> {
-    let inner = match value {
-        Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::USub | UnaryOp::UAdd) => {
-            unary.operand.as_ref()
-        }
-        other => other,
-    };
-    match inner {
-        Expr::NumberLiteral(number) => match number.value {
-            Number::Int(_) => Some(Ty::Int),
-            Number::Float(_) => Some(Ty::Float),
-            Number::Complex { .. } => None,
-        },
-        // `BooleanLiteral` is matched before `NumberLiteral` cannot apply --
-        // Python's `True`/`False` parse as their own node, not as an int.
-        Expr::BooleanLiteral(_) => Some(Ty::Bool),
-        Expr::StringLiteral(_) => Some(Ty::Str),
-        _ => None,
-    }
-}
-
-/// The `C0001` for a class-attribute declaration with no initializer.
-///
-/// Shared by the annotated path's own check and #916's bare-`Final` arm,
-/// which must reach the same conclusion before it has a type to infer.
-fn no_class_attr_value(attr_name: &str, range: std::ops::Range<u32>) -> Diagnostic {
-    unsupported(
-        format!(
-            "class attribute `{attr_name}` has no value -- a class attribute is a \
-             compile-time constant and must be initialized with a literal \
-             (`{attr_name}: int = 1`)"
-        ),
-        range,
-    )
-}
-
-/// The `C0001` for a class-attribute initializer whose shape this pass does
-/// not fold, shared by both spellings so they report identically.
-fn bad_class_attr_shape(attr_name: &str, range: std::ops::Range<u32>) -> Diagnostic {
-    unsupported(
-        format!(
-            "class attribute `{attr_name}` must be initialized with a literal -- only an \
-             `int`, `float`, `str`, or `bool` literal (optionally with a unary `+`/`-` on a \
-             number) is supported, because a class attribute is a compile-time constant"
-        ),
-        range,
-    )
-}
-
-/// #911: Extracts the compile-time constant value of a class attribute from
-/// its right-hand side, checking it against the declared annotation.
-///
-/// Accepted shapes are deliberately wider than the enum-member extractor's
-/// (`class/enum_class.rs`): a unary `+`/`-` applied to a numeric literal is
-/// accepted too, because the motivating example in #885 is
-/// `MIN_WIDTH: int = -1024`, which parses as `UnaryOp(USub,
-/// NumberLiteral(1024))` and not as a literal at all.
-fn class_attr_value(
-    value: &Expr,
-    attr_ty: &Ty,
-    attr_name: &str,
-    range: std::ops::Range<u32>,
-) -> Result<ClassAttrValue, Diagnostic> {
-    let bad_shape = || bad_class_attr_shape(attr_name, range.clone());
-    let mismatch = |found: &str| {
-        unsupported(
-            format!(
-                "class attribute `{attr_name}` is annotated `{}` but is initialized with a \
-                 `{found}` literal",
-                attr_ty.name()
-            ),
-            range.clone(),
-        )
-    };
-    // Unary `+`/`-` on a numeric literal, unwrapped to a signed number.
-    let (negate, literal) = match value {
-        Expr::UnaryOp(unary) => {
-            let sign = match unary.op {
-                pycc_ast::UnaryOp::USub => true,
-                pycc_ast::UnaryOp::UAdd => false,
-                _ => return Err(bad_shape()),
-            };
-            if !matches!(unary.operand.as_ref(), Expr::NumberLiteral(_)) {
-                return Err(bad_shape());
-            }
-            (sign, unary.operand.as_ref())
-        }
-        other => (false, other),
-    };
-    match literal {
-        Expr::NumberLiteral(number) => match &number.value {
-            Number::Int(i) => {
-                let Some(magnitude) = i.as_i64() else {
-                    return Err(unsupported(
-                        format!(
-                            "class attribute `{attr_name}` has an integer value that does not \
-                             fit in i64 -- only i64-range values are supported"
-                        ),
-                        range,
-                    ));
-                };
-                let signed = if negate { -magnitude } else { magnitude };
-                match attr_ty {
-                    Ty::Int => Ok(ClassAttrValue::Int(signed)),
-                    // An `int` literal under a `float` annotation widens,
-                    // matching Python's own numeric tower (`x: float = 1`).
-                    Ty::Float => Ok(ClassAttrValue::Float(signed as f64)),
-                    _ => Err(mismatch("int")),
-                }
-            }
-            Number::Float(f) => {
-                let signed = if negate { -*f } else { *f };
-                match attr_ty {
-                    Ty::Float => Ok(ClassAttrValue::Float(signed)),
-                    _ => Err(mismatch("float")),
-                }
-            }
-            Number::Complex { .. } => Err(bad_shape()),
-        },
-        // `negate` is `true` only when the operand was a `NumberLiteral`
-        // (checked above), so no sign can reach these two arms.
-        Expr::BooleanLiteral(b) => match attr_ty {
-            Ty::Bool => Ok(ClassAttrValue::Bool(b.value)),
-            _ => Err(mismatch("bool")),
-        },
-        Expr::StringLiteral(s) => match attr_ty {
-            Ty::Str => Ok(ClassAttrValue::Str(s.value.to_str().to_string())),
-            _ => Err(mismatch("str")),
-        },
-        _ => Err(bad_shape()),
-    }
 }
 
 /// The class-level tables [`reject_class_attr_collisions`] checks a class
@@ -536,7 +436,8 @@ pub(super) fn reject_class_attr_collisions(
         defined_classes,
         ref range,
     } = input;
-    for (attr_name, _, _) in class_attrs {
+    for (attr_name, _, value) in class_attrs {
+        let foreign = matches!(value, ClassAttrValue::ForeignStatic(_));
         if let Some(what) = collision_kind(
             attr_name,
             attrs,
@@ -549,6 +450,7 @@ pub(super) fn reject_class_attr_collisions(
                 class_name,
                 attr_name,
                 what,
+                foreign,
                 range.clone(),
             ));
         }
@@ -573,6 +475,7 @@ pub(super) fn reject_class_attr_collisions(
                     class_name,
                     attr_name,
                     &format!("{what} inherited from `{base}`"),
+                    foreign,
                     range.clone(),
                 ));
             }
@@ -616,18 +519,30 @@ fn collision_kind(
 }
 
 /// The single `C0001` a [`reject_class_attr_collisions`] collision produces.
+///
+/// `foreign` selects the reason: a literal attribute is folded to a
+/// constant at every read, while a `staticmethod(<foreign callable>)`
+/// attribute (Part 1 of #1284) is rewritten to its foreign reference at
+/// every read and call -- either way the read never consults the other
+/// binding, so the two cannot share a name.
 fn class_attr_collision(
     class_name: &str,
     attr_name: &str,
     what: &str,
+    foreign: bool,
     range: std::ops::Range<u32>,
 ) -> Diagnostic {
+    let reason = if foreign {
+        "a `staticmethod(...)` class attribute is rewritten to its foreign callable at every \
+         read and call"
+    } else {
+        "a class attribute is folded to a constant at every read"
+    };
     unsupported(
         format!(
             "class attribute `{class_name}.{attr_name}` collides with {what} of the same \
-             name -- a class attribute is folded to a constant at every read, so it can never \
-             share a name with a value that lives in an instance slot, behind a descriptor, or \
-             in the class's method table"
+             name -- {reason}, so it can never share a name with a value that lives in an \
+             instance slot, behind a descriptor, or in the class's method table"
         ),
         range,
     )
@@ -802,87 +717,6 @@ mod tests {
         );
     }
 
-    // -- #910: un-annotated class attributes, pure-rejection paths ---------
-    //
-    // The accepted surface and its constant folding are pinned end to end
-    // through the CLI in `tests/issue_910_unannotated_class_attrs.rs`; these
-    // cover the shapes that never produce a program to run.
-
-    #[test]
-    fn an_unannotated_complex_literal_is_rejected() {
-        assert_collision(
-            "class C:\n    X = 1j\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_bitwise_not_is_rejected() {
-        assert_collision(
-            "class C:\n    X = ~1\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_logical_not_is_rejected() {
-        assert_collision(
-            "class C:\n    X = not True\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_call_initializer_is_rejected() {
-        assert_collision(
-            "def f() -> int:\n    return 1\n\n\nclass C:\n    X = f()\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_negated_call_initializer_is_rejected() {
-        assert_collision(
-            "def f() -> int:\n    return 1\n\n\nclass C:\n    X = -f()\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_bare_name_initializer_is_rejected() {
-        assert_collision(
-            "Y: int = 1\n\n\nclass C:\n    X = Y\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_arithmetic_initializer_is_rejected() {
-        assert_collision(
-            "class C:\n    X = 1 + 2\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    /// A unary `-` is unwrapped before inference, so `-"a"` infers `str` and
-    /// is caught by the literal extractor's own numeric-operand check rather
-    /// than by inference. Both report the same message.
-    #[test]
-    fn an_unannotated_negated_string_is_rejected() {
-        assert_collision(
-            "class C:\n    X = -\"a\"\n",
-            "must be initialized with a literal",
-        );
-    }
-
-    #[test]
-    fn an_unannotated_int_outside_i64_is_rejected() {
-        assert_collision(
-            "class C:\n    X = 99999999999999999999999\n",
-            "does not fit in i64",
-        );
-    }
-
     #[test]
     fn an_unannotated_multi_target_assignment_is_rejected() {
         assert_collision("class C:\n    a = b = 1\n", "not multiple targets");
@@ -909,17 +743,6 @@ mod tests {
         assert_collision(
             "class C:\n    def __init__(self) -> None:\n        self.n = 0\n\n\nclass D:\n    C.x: int = 1\n",
             "must target a bare name",
-        );
-    }
-
-    /// The annotated path resolves its type first and then checks the literal
-    /// against it, so a well-shaped literal of the wrong type is rejected by
-    /// the shared value lowering rather than by annotation resolution.
-    #[test]
-    fn an_annotated_class_attribute_with_a_mismatched_literal_is_rejected() {
-        assert_collision(
-            "class C:\n    X: int = \"a\"\n",
-            "is annotated `int` but is initialized with a `str` literal",
         );
     }
 
@@ -985,43 +808,6 @@ mod tests {
             "class C:\n    f = 2\n\n    @classmethod\n    def f(cls) -> int:\n        return 1\n",
             "collides with a `@classmethod`",
         );
-    }
-
-    // -- #910: every inferred literal shape, at the lowering seam ---------
-
-    #[test]
-    fn every_unannotated_literal_shape_infers_its_natural_type() {
-        let module = crate::pycc_parser_test_helper::parse(
-            "class C:\n    I = 1\n    F = 1.5\n    B = True\n    S = \"cfg\"\n    NI = -1024\n    PI = +2048\n    NF = -1.5\n    NB = False\n",
-        );
-        let hir = lower_checked(&module).expect("the class body must lower");
-        let (_, class_def) = hir
-            .class_defs
-            .iter()
-            .find(|(name, _)| name == "C")
-            .expect("class `C` must be lowered");
-
-        assert_eq!(
-            class_def.class_attrs,
-            vec![
-                ("I".to_string(), Ty::Int, ClassAttrValue::Int(1)),
-                ("F".to_string(), Ty::Float, ClassAttrValue::Float(1.5)),
-                ("B".to_string(), Ty::Bool, ClassAttrValue::Bool(true)),
-                (
-                    "S".to_string(),
-                    Ty::Str,
-                    ClassAttrValue::Str("cfg".to_string())
-                ),
-                ("NI".to_string(), Ty::Int, ClassAttrValue::Int(-1024)),
-                ("PI".to_string(), Ty::Int, ClassAttrValue::Int(2048)),
-                ("NF".to_string(), Ty::Float, ClassAttrValue::Float(-1.5)),
-                ("NB".to_string(), Ty::Bool, ClassAttrValue::Bool(false)),
-            ]
-        );
-        // D-154 / D-224: an inferred class attribute is a compile-time
-        // constant, so it takes no instance slot -- the same invariant the
-        // annotated spelling carries.
-        assert!(class_def.attrs.is_empty());
     }
 
     // -- #910: `__slots__`, rejected identically in both spellings ---------
