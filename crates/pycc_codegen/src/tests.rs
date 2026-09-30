@@ -2350,12 +2350,10 @@ fn emit_expr_evaluates_not_over_a_non_literal_int_operand() {
 fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
     // `def f() -> int:\n    while True:\n        return 1\n    return 2`
     // ; `print(f())` -- must print `1`. The trailing `return 2` is
-    // unreachable dead code, present only because `pycc_types`' T0022
-    // fallthrough check (`block_always_returns`) always treats a
-    // `while`/`for` loop as *not* provably exhaustive on its own
-    // (deferred to issue #118, per D-055), so a bare `while True: return
-    // 1` with nothing after it would never actually be accepted source
-    // -- this shape is what real accepted source produces instead.
+    // unreachable dead code. Since #1370 a bare `while True: return 1`
+    // with nothing after it is accepted source too (see
+    // `fallthrough::block_always_terminates`); this shape, with an
+    // explicit trailing `return`, remains valid source as well.
     // Distinct region from every other `while` test in this file, all
     // of whose *loop bodies* fall through normally and so always take
     // `emit_body_then_branch`'s own trailing

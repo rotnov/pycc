@@ -8,7 +8,7 @@
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule.
 
-use pycc_hir::HirStmt;
+use pycc_hir::{HirExpr, HirStmt};
 
 pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
     for stmt in body {
@@ -20,7 +20,6 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
             HirStmt::ExprStmt(_)
             | HirStmt::Assign { .. }
             | HirStmt::AnnAssign { .. }
-            | HirStmt::While { .. }
             | HirStmt::ForRange { .. }
             | HirStmt::ForList { .. }
             | HirStmt::ForObject { .. }
@@ -39,6 +38,21 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::ListCompAssign { .. }
             | HirStmt::SetCompAssign { .. }
             | HirStmt::DictCompAssign { .. } => false,
+            // #1370: a loop whose test is a constant true value never
+            // completes normally -- control leaves it only through a
+            // `return` or a raise inside its body, both terminal here.
+            // Any other test may be false on entry or later, so the loop
+            // falls through.
+            //
+            // Sound only because HIR has no `break`: lowering rejects a
+            // `break` inside a loop with `C0001` (`pycc_hir::stmt`'s
+            // `Stmt::Break` arm), so no body statement can leave the loop
+            // normally. When `break` lowering lands, this arm must also
+            // require that the body holds no `break` bound to this loop;
+            // `a_while_true_with_break_is_still_rejected` in
+            // `tests/issue_1370_while_true_return.rs` pins the current
+            // rejection and flips when that happens.
+            HirStmt::While { test, .. } => is_constant_true(test),
             // A raise transfers control to an exception handler/caller and
             // cannot fall through to the function's implicit return point.
             HirStmt::Raise { .. } => true,
@@ -85,4 +99,13 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
         }
     }
     false
+}
+
+/// True for a loop test CPython treats as always true without evaluating
+/// anything: the literal `True`, or a non-zero integer literal (`while 1:`).
+/// A string, float, or any computed expression is deliberately not
+/// recognized -- the check stays conservative and keeps reporting `T0022`
+/// for those loops.
+fn is_constant_true(test: &HirExpr) -> bool {
+    matches!(test, HirExpr::BoolLiteral(true)) | matches!(test, HirExpr::IntLiteral(n) if *n != 0)
 }

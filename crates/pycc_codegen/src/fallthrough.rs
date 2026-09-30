@@ -2,7 +2,7 @@
 //!
 //! Extracted from `exception.rs` per AGENTS.md's file-decomposition rule.
 
-use pycc_mir::MirStmt;
+use pycc_mir::{MirExpr, MirStmt};
 
 /// Mirrors the type checker's fallthrough proof at MIR level. Structured
 /// exception code generation sometimes leaves an LLVM continuation block
@@ -27,6 +27,11 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
                 !orelse.is_empty() & block_always_terminates(body) & block_always_terminates(orelse)
             }
             MirStmt::Seq(stmts) => block_always_terminates(stmts),
+            // #1370: mirrors `pycc_types::return_coverage`'s `While` arm. A
+            // constant-true loop leaves only through a `return` or a raise
+            // in its body (MIR has no `break`), so the block after it is
+            // unreachable and gets an `unreachable` terminator.
+            MirStmt::While { test, .. } => is_constant_true(test),
             MirStmt::Try {
                 body,
                 handlers,
@@ -57,7 +62,6 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
             MirStmt::ExprStmt(_)
             | MirStmt::Assign { .. }
             | MirStmt::NoOp
-            | MirStmt::While { .. }
             | MirStmt::ForRange { .. }
             | MirStmt::ForList { .. }
             | MirStmt::ForObject { .. }
@@ -79,4 +83,42 @@ pub(crate) fn block_always_terminates(body: &[MirStmt]) -> bool {
         }
     }
     false
+}
+
+/// The MIR form of `pycc_types::return_coverage`'s constant-true test: the
+/// literal `True` or a non-zero integer literal.
+fn is_constant_true(test: &MirExpr) -> bool {
+    matches!(test, MirExpr::BoolLiteral(true)) | matches!(test, MirExpr::IntLiteral(n) if *n != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loop_returning(test: MirExpr) -> Vec<MirStmt> {
+        vec![MirStmt::While {
+            test,
+            body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+        }]
+    }
+
+    /// #1370: only a constant-true loop test makes the loop terminal.
+    #[test]
+    fn only_a_constant_true_loop_test_terminates() {
+        assert!(block_always_terminates(&loop_returning(
+            MirExpr::BoolLiteral(true)
+        )));
+        assert!(block_always_terminates(&loop_returning(
+            MirExpr::IntLiteral(1)
+        )));
+        assert!(!block_always_terminates(&loop_returning(
+            MirExpr::BoolLiteral(false)
+        )));
+        assert!(!block_always_terminates(&loop_returning(
+            MirExpr::IntLiteral(0)
+        )));
+        assert!(!block_always_terminates(&loop_returning(
+            MirExpr::FloatLiteral(1.0)
+        )));
+    }
 }
