@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 mod exception;
+mod fallthrough;
 use exception::{ExceptionCodegenState, expression_can_set_exception, guard_statement_effects};
 mod exception_value;
 use exception_value::{emit_exception_set_frame, emit_exception_value};
@@ -6292,7 +6293,7 @@ fn compile_to_object_with_observer(
                     .get_terminator()
                     .is_none() =>
                 {
-                    if exception::block_always_terminates(body) {
+                    if fallthrough::block_always_terminates(body) {
                         builder.build_unreachable().expect(
                             "build_unreachable should terminate a statically impossible continuation",
                         );

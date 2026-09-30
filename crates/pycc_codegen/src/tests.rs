@@ -3120,7 +3120,7 @@ fn a_non_none_function_whose_try_raise_finally_body_always_terminates_compiles_c
     // that carries no LLVM terminator of its own -- structurally the
     // function body always terminates (the `try`'s only path raises),
     // but nothing has yet placed a `ret`/`unreachable` in that trailing
-    // block. This exercises the `exception::block_always_terminates(body)
+    // block. This exercises the `fallthrough::block_always_terminates(body)
     // == true` branch's `builder.build_unreachable()` call directly
     // (distinct from `a_non_none_function_falling_through_is_an_internal_
     // error_not_bad_ir` above, which covers the sibling `false` branch --
@@ -13328,17 +13328,17 @@ fn exception_terminal_analysis_covers_structured_paths() {
     let returned = || MirStmt::Return(Some(MirExpr::IntLiteral(1)));
     let falls_through = || MirStmt::NoOp;
 
-    assert!(exception::block_always_terminates(&[MirStmt::If {
+    assert!(fallthrough::block_always_terminates(&[MirStmt::If {
         test: MirExpr::BoolLiteral(true),
         body: vec![returned()],
         orelse: vec![returned()],
     }]));
-    assert!(!exception::block_always_terminates(&[MirStmt::If {
+    assert!(!fallthrough::block_always_terminates(&[MirStmt::If {
         test: MirExpr::BoolLiteral(true),
         body: vec![returned()],
         orelse: vec![],
     }]));
-    assert!(exception::block_always_terminates(&[MirStmt::Seq(vec![
+    assert!(fallthrough::block_always_terminates(&[MirStmt::Seq(vec![
         returned(),
     ])]));
 
@@ -13348,25 +13348,25 @@ fn exception_terminal_analysis_covers_structured_paths() {
         binding_ty: None,
         body: vec![returned()],
     };
-    assert!(exception::block_always_terminates(&[MirStmt::Try {
+    assert!(fallthrough::block_always_terminates(&[MirStmt::Try {
         body: vec![falls_through()],
         handlers: vec![terminal_handler.clone()],
         orelse: vec![returned()],
         finalbody: vec![],
     }]));
-    assert!(!exception::block_always_terminates(&[MirStmt::Try {
+    assert!(!fallthrough::block_always_terminates(&[MirStmt::Try {
         body: vec![falls_through()],
         handlers: vec![terminal_handler],
         orelse: vec![],
         finalbody: vec![],
     }]));
-    assert!(exception::block_always_terminates(&[MirStmt::Try {
+    assert!(fallthrough::block_always_terminates(&[MirStmt::Try {
         body: vec![falls_through()],
         handlers: vec![],
         orelse: vec![],
         finalbody: vec![returned()],
     }]));
-    assert!(!exception::block_always_terminates(&[falls_through()]));
+    assert!(!fallthrough::block_always_terminates(&[falls_through()]));
 
     // `except*` (#542) shares `Try`'s exact fallthrough shape via the
     // combined `MirStmt::Try { .. } | MirStmt::TryStar { .. }` arm above --
@@ -13380,13 +13380,13 @@ fn exception_terminal_analysis_covers_structured_paths() {
         binding_ty: None,
         body: vec![returned()],
     };
-    assert!(exception::block_always_terminates(&[MirStmt::TryStar {
+    assert!(fallthrough::block_always_terminates(&[MirStmt::TryStar {
         body: vec![falls_through()],
         handlers: vec![terminal_handler.clone()],
         orelse: vec![returned()],
         finalbody: vec![],
     }]));
-    assert!(!exception::block_always_terminates(&[MirStmt::TryStar {
+    assert!(!fallthrough::block_always_terminates(&[MirStmt::TryStar {
         body: vec![falls_through()],
         handlers: vec![terminal_handler],
         orelse: vec![],
