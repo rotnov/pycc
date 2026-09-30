@@ -225,6 +225,18 @@ pub struct Environment {
     /// clones this struct takes across branch joins carry it unchanged and
     /// no join rule is owed for it.
     pub(crate) returns_inside_finally: bool,
+    /// #1344 (Part 2 of #1336): the function's own HIR return type is
+    /// `Ty::Infer` -- an unannotated private helper whose return the solver
+    /// inferred.
+    ///
+    /// Set once per function in `crate::check_function_in`, and read only in
+    /// `crate::check_stmt_in_function`'s `HirStmt::Return` arm, where
+    /// `crate::comprehension::inferred_set_return_limit` relabels the false
+    /// `T0022` an inferred `set[int]` return meets against a `set[C]` value
+    /// as an honest `C0001`. `false` in the module-level environment, which
+    /// has no return. A whole-function constant, like
+    /// `returns_inside_finally`, so no join rule is owed for it.
+    pub(crate) return_inferred: bool,
     /// Part 2a of #1142 (#1165): the names whose `Ty::MemoryView` binding is
     /// storage **this artifact allocated** (`a = ndarray(n)`), as opposed to
     /// a buffer parameter the `pycc build --ext` wrapper borrowed from the

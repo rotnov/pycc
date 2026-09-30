@@ -1,5 +1,6 @@
 //! The element ops of a set literal or `.add(...)` (#1343, Part 1 of
-//! #1336), resolved from the class table codegen does not see.
+//! #1336) and of a set comprehension's element (#1344, Part 2), resolved
+//! from the class table codegen does not see.
 //!
 //! `pycc_types::set_element` admitted the insertion only when both verdicts
 //! below were compilable, from the same resolvers, so every `expect` here is

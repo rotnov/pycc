@@ -17,10 +17,6 @@ use crate::{
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{CompElt, CompIter, HirComprehension, HirExpr, Ty};
 
-/// The `help` of both #1343 comprehension refusals.
-const INSTANCE_SET_COMP_HELP: &str = "use a `for` statement (with `.add(...)` to build a set) \
-     instead; comprehensions over or producing a set of user-class instances are tracked by #1344";
-
 /// The element expressions of one comprehension, by kind.
 pub(crate) enum CompElts<'a> {
     /// `[elt for ...]`.
@@ -45,7 +41,9 @@ pub(crate) struct CompView<'a> {
 /// resolution exactly (`check_stmt`/`check_stmt_in_function`'s existing
 /// `ForList` arms), reused rather than duplicated a third time (PR-12,
 /// D-117). Range/list/dict/set element-type resolution is identical to
-/// `ForList`'s; a comprehension adds nothing new here.
+/// `ForList`'s; a comprehension adds nothing new here. Since #1344 that
+/// includes a `set[C]`/`frozenset[C]` of user-class instances, whose loop
+/// variable is the instance.
 pub(crate) fn resolve_comp_iter(
     env: &Environment,
     local_names: &[&str],
@@ -60,23 +58,6 @@ pub(crate) fn resolve_comp_iter(
         }
         CompIter::Name(name) => {
             let base_ty = lookup_bound_name(env, local_names, name)?;
-            // #1343 (Part 1 of #1336): a set of user-class instances is not a
-            // comprehension source yet -- the comprehension codegen binds
-            // each element as an `int` word -- so it is refused here rather
-            // than miscompiled (Part 2, #1344).
-            if let Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) = &base_ty
-                && matches!(**elem_ty, Ty::Instance(_))
-            {
-                return Err(Diagnostic::error(
-                    "C0001",
-                    format!(
-                        "a comprehension over `{}` is not compiled yet",
-                        base_ty.name()
-                    ),
-                    Span::new(0, 0),
-                )
-                .with_help(INSTANCE_SET_COMP_HELP));
-            }
             match base_ty {
                 Ty::List(elem_ty) => Ok(*elem_ty),
                 Ty::Dict(kv) => Ok(kv.0),
@@ -99,6 +80,9 @@ pub(crate) fn resolve_comp_iter(
 /// The element gate is the one the matching display already applies (D-119
 /// reuses `T0034`/`T0038`/`T0036`, identical to `ListLiteral`/`SetLiteral`/
 /// `DictLiteral`'s own gates; no new diagnostic code is minted).
+/// A set comprehension may also produce a `set[C]` of a hashable user class
+/// (#1344), through the same `crate::set_element::check_set_element` gate a
+/// set literal uses.
 pub(crate) fn comp_container_ty(
     env: &Environment,
     local_names: &[&str],
@@ -125,21 +109,19 @@ pub(crate) fn comp_container_ty(
         }
         CompElts::Set(elt) => {
             let elt_ty = infer_expr_in(env, local_names, elt)?;
-            // #1343: a set of user-class instances is compiled from a
-            // literal and `.add`, but not from a comprehension yet (#1344).
-            if let Ty::Instance(class) = &elt_ty {
-                return Err(Diagnostic::error(
-                    "C0001",
-                    format!("a set comprehension of `{class}` is not compiled yet"),
-                    Span::new(0, 0),
-                )
-                .with_help(INSTANCE_SET_COMP_HELP));
+            // #1344 (Part 2 of #1336): a set of user-class instances, gated
+            // exactly like a set literal's or `.add(...)`'s element (D-255):
+            // `T0054` for an unhashable class, `C0001` for a class shape
+            // whose hashing is not compiled yet.
+            if let Ty::Instance(_) = &elt_ty {
+                crate::set_element::check_set_element(&elt_ty, env)?;
+                return Ok(Ty::Set(Box::new(elt_ty)));
             }
             if elt_ty != Ty::Int {
                 return Err(Diagnostic::error(
                     "T0038",
                     format!(
-                        "set comprehension codegen only supports `set[int]` (D-122), got a comprehension producing `set[{}]`",
+                        "set comprehension codegen only supports `set[int]` or a set of a user-class instance (D-122, D-255), got a comprehension producing `set[{}]`",
                         elt_ty.name()
                     ),
                     Span::new(0, 0),
@@ -214,12 +196,89 @@ pub(crate) fn infer_comprehension(
     )
 }
 
-/// The container type a comprehension of this kind produces once its element
-/// gate has passed: `list[int]`, `set[int]` or `dict[str, int]` (D-119).
+/// The `int`-element container type a comprehension of this kind produces:
+/// `list[int]`, `set[int]` or `dict[str, int]` (D-119). A set comprehension of
+/// user-class instances (#1344) is typed by [`comp_container_ty`] instead.
 pub(crate) fn comp_container_of(elt: &CompElt) -> Ty {
     match elt {
         CompElt::List(_) => Ty::List(Box::new(Ty::Int)),
         CompElt::Set(_) => Ty::Set(Box::new(Ty::Int)),
         CompElt::Dict { .. } => Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+    }
+}
+
+/// The `help` of [`inferred_set_return_limit`]'s `C0001`.
+const INFERRED_SET_RETURN_HELP: &str = "annotate the helper's return, for example `-> set[C]`; \
+     inferring it needs solver typing of a class-constructor call (#1342) and of a set-typed \
+     name's element in a comprehension (#1360)";
+
+/// #1344 (Part 2 of #1336): the honest `C0001` for an unannotated private
+/// helper whose solver-inferred return is `set[int]`/`frozenset[int]` while
+/// its body returns a `set[C]`/`frozenset[C]` of user-class instances.
+///
+/// The solver types a set comprehension's container from its element term
+/// (`crate::constraints::set_comp`), and falls back to `set[int]` when it
+/// has no term for the element: a class-constructor call (#1342), or the
+/// loop variable of a comprehension over a set-typed name (#1360). The
+/// check phase does type that element, so without this relabel the program
+/// would meet a false `T0022` "expected return type `set[int]`". Returns
+/// `None` for every other mismatch, which keeps its own diagnostic; the
+/// caller consults it only for an inferred return (`Environment::
+/// return_inferred`), so an annotated `-> set[int]` keeps `T0022`.
+pub(crate) fn inferred_set_return_limit(declared: &Ty, actual: &Ty) -> Option<Diagnostic> {
+    let declared_int = matches!(declared, Ty::Set(e) | Ty::FrozenSet(e) if **e == Ty::Int);
+    let actual_instances =
+        matches!(actual, Ty::Set(e) | Ty::FrozenSet(e) if matches!(**e, Ty::Instance(_)));
+    if !(declared_int && actual_instances) {
+        return None;
+    }
+    Some(
+        Diagnostic::error(
+            "C0001",
+            format!(
+                "cannot infer an unannotated private helper's `{}` return yet",
+                actual.name()
+            ),
+            Span::new(0, 0),
+        )
+        .with_help(INFERRED_SET_RETURN_HELP),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inferred_set_return_limit;
+    use pycc_hir::Ty;
+
+    fn set_of(elem: Ty) -> Ty {
+        Ty::Set(Box::new(elem))
+    }
+
+    #[test]
+    fn an_inferred_int_set_return_holding_instances_is_c0001() {
+        let r = Ty::Instance(Box::new("R".to_string()));
+        for declared in [set_of(Ty::Int), Ty::FrozenSet(Box::new(Ty::Int))] {
+            for actual in [set_of(r.clone()), Ty::FrozenSet(Box::new(r.clone()))] {
+                let diag = inferred_set_return_limit(&declared, &actual)
+                    .expect("an instance set against an inferred int set is relabelled");
+                assert_eq!(diag.code, "C0001");
+                assert!(diag.message.contains(&actual.name()), "{}", diag.message);
+                let help = diag.help.as_deref().unwrap_or_default();
+                assert!(help.contains("#1342") && help.contains("#1360"), "{help}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_other_mismatch_keeps_its_own_diagnostic() {
+        let r = Ty::Instance(Box::new("R".to_string()));
+        for (declared, actual) in [
+            (set_of(Ty::Str), set_of(r.clone())),
+            (set_of(Ty::Int), set_of(Ty::Str)),
+            (Ty::Int, set_of(r.clone())),
+            (set_of(Ty::Int), r),
+        ] {
+            assert!(inferred_set_return_limit(&declared, &actual).is_none());
+        }
     }
 }

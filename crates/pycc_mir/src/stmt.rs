@@ -575,6 +575,10 @@ pub(super) fn lower_stmt(
                 .as_deref()
                 .map(|c| lower_expr(c, scopes, classes, current_class));
             let elt = lower_expr(elt, scopes, classes, current_class);
+            // #1344: a `set[C]` element carries its class's hash and
+            // equality, exactly as a set literal's does.
+            let ops = crate::expr::set_ops::lower_set_element_ops(&elt.ty(), scopes, classes)
+                .map(Box::new);
             bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
             // D-068 re-review of #780 (sixth round): see `ListCompAssign`'s
             // identical comment above.
@@ -586,6 +590,7 @@ pub(super) fn lower_stmt(
                 source,
                 cond: cond.map(Box::new),
                 elt: Box::new(elt),
+                ops,
             }
         }
         HirStmt::DictCompAssign {

@@ -43,6 +43,7 @@ use pycc_hir::{
     HirItem, HirModule, HirStmt, ImportBinding, PropertyDef, Ty,
 };
 
+mod comprehension;
 mod protocol_method;
 pub(crate) use protocol_method::specialize_protocol_method_call;
 
@@ -888,12 +889,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         // digit-led name is unique per source offset and no user code can
         // name it.
         HirExpr::Comprehension(comp) => {
-            let var_ty = rewrite_comp_iter(env, local_names, &mut comp.iter, instantiations, seen)?;
-            env.bind(comp.var.clone(), var_ty);
-            for sub in comp.body_exprs_mut() {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
-            }
-            Ok(crate::comprehension::comp_container_of(&comp.elt))
+            comprehension::rewrite_comprehension_expr(env, local_names, comp, instantiations, seen)
         }
         HirExpr::IntLiteral(_)
         | HirExpr::FloatLiteral(_)
@@ -1038,15 +1034,16 @@ fn rewrite_generic_calls_in_stmt(
             cond,
             elt,
         } => {
-            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
-            env.bind(var.clone(), var_ty);
-            for sub in cond
-                .iter_mut()
-                .map(|c| c.as_mut())
-                .chain(std::iter::once(elt.as_mut()))
-            {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
-            }
+            let body = cond.iter_mut().map(|c| c.as_mut()).chain([elt.as_mut()]);
+            comprehension::rewrite_comp_parts(
+                env,
+                local_names,
+                var,
+                iter,
+                body,
+                instantiations,
+                seen,
+            )?;
             env.bind(target.clone(), Ty::List(Box::new(Ty::Int)));
             Ok(())
         }
@@ -1057,16 +1054,17 @@ fn rewrite_generic_calls_in_stmt(
             cond,
             elt,
         } => {
-            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
-            env.bind(var.clone(), var_ty);
-            for sub in cond
-                .iter_mut()
-                .map(|c| c.as_mut())
-                .chain(std::iter::once(elt.as_mut()))
-            {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
-            }
-            env.bind(target.clone(), Ty::Set(Box::new(Ty::Int)));
+            let body = cond.iter_mut().map(|c| c.as_mut()).chain([elt.as_mut()]);
+            let elt_ty = comprehension::rewrite_comp_parts(
+                env,
+                local_names,
+                var,
+                iter,
+                body,
+                instantiations,
+                seen,
+            )?;
+            env.bind(target.clone(), comprehension::set_comp_container(elt_ty));
             Ok(())
         }
         HirStmt::DictCompAssign {
@@ -1077,15 +1075,19 @@ fn rewrite_generic_calls_in_stmt(
             key,
             value,
         } => {
-            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
-            env.bind(var.clone(), var_ty);
-            for sub in cond
+            let body = cond
                 .iter_mut()
                 .map(|c| c.as_mut())
-                .chain([key.as_mut(), value.as_mut()])
-            {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
-            }
+                .chain([key.as_mut(), value.as_mut()]);
+            comprehension::rewrite_comp_parts(
+                env,
+                local_names,
+                var,
+                iter,
+                body,
+                instantiations,
+                seen,
+            )?;
             env.bind(target.clone(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
             Ok(())
         }
@@ -1225,39 +1227,6 @@ fn rewrite_generic_calls_in_raise_operand(
     }
     rewrite_generic_calls_in_expr(env, local_names, expr, instantiations, seen)?;
     Ok(())
-}
-
-/// `CompIter`'s own rewrite counterpart -- mirrors `resolve_comp_iter`
-/// exactly (same three iterable shapes, same resulting loop-variable `Ty`),
-/// but also rewrites any generic call reachable from a `CompIter::Range`
-/// bound, which `resolve_comp_iter` (a read-only helper reused as-is
-/// elsewhere in this file) has no reason to do.
-fn rewrite_comp_iter(
-    env: &mut Environment,
-    local_names: &[&str],
-    iter: &mut CompIter,
-    instantiations: &mut Vec<GenericInstantiation>,
-    seen: &mut HashSet<String>,
-) -> Result<Ty, Diagnostic> {
-    match iter {
-        CompIter::Range { start, stop, step } => {
-            for sub in [start, stop, step] {
-                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
-            }
-            Ok(Ty::Int)
-        }
-        CompIter::Name(name) => match env.lookup_any(name) {
-            Some(Ty::List(elem)) => Ok(*elem),
-            Some(Ty::Dict(kv)) => Ok(kv.0),
-            Some(Ty::Set(elem) | Ty::FrozenSet(elem)) => Ok(*elem),
-            // Already validated as iterable before `monomorphize` ever
-            // runs. Unlike `ForList`'s fallback above, no foreign name
-            // reaches this arm: a comprehension over a CPython object is
-            // refused by the check phase (`I0404`), so the missing foreign
-            // names of this pass's environment never matter here.
-            _ => Ok(Ty::Infer),
-        },
-    }
 }
 
 /// PR-13 Task 3 (D-133/D-134): the monomorphization pass that turns a

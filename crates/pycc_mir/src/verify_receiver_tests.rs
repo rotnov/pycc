@@ -233,3 +233,65 @@ fn a_specialized_copy_is_found_by_its_specialized_name() {
     ];
     verify(&module(items), &classes());
 }
+
+// -- #1344: set-comprehension element ops --
+
+/// Element ops whose `__hash__` is `hash` and whose `__eq__` is `eq`.
+fn set_ops(hash: &str, eq: &str) -> Box<SetElementOps> {
+    Box::new(SetElementOps {
+        hash: SetHashOp::Method {
+            callee: hash.to_string(),
+            ret: Ty::Int,
+        },
+        eq: SetEqOp::Method {
+            callee: eq.to_string(),
+        },
+    })
+}
+
+/// `t = {self for _ in s}` over a `B` receiver, as a statement.
+fn set_comp_stmt(ops: Box<SetElementOps>) -> MirStmt {
+    MirStmt::SetCompAssign {
+        ops: Some(ops),
+        target: "t".to_string(),
+        var: "v".to_string(),
+        var_ty: Ty::Int,
+        source: CompSource::Set("s".to_string()),
+        cond: None,
+        elt: Box::new(recv("B")),
+    }
+}
+
+/// `{self for _ in s}` over a `B` receiver, as an expression.
+fn set_comp_expr(ops: Box<SetElementOps>) -> MirStmt {
+    MirStmt::ExprStmt(MirExpr::Comprehension(Box::new(crate::MirComprehension {
+        var: "v".to_string(),
+        var_ty: Ty::Int,
+        source: CompSource::Set("s".to_string()),
+        cond: None,
+        elt: MirCompElt::Set(recv("B"), Some(ops)),
+    })))
+}
+
+#[test]
+fn set_comprehension_ops_resolved_for_the_element_pass() {
+    let body = vec![
+        set_comp_stmt(set_ops("B.m", "A.g")),
+        set_comp_expr(set_ops("B.m", "A.g")),
+    ];
+    verify(&module(vec![function("f", body)]), &classes());
+}
+
+#[test]
+#[should_panic(expected = "receiver-exact dispatch violated")]
+fn a_set_comprehension_statement_hash_skipping_the_override_panics() {
+    let body = vec![set_comp_stmt(set_ops("A.m", "A.g"))];
+    verify(&module(vec![function("f", body)]), &classes());
+}
+
+#[test]
+#[should_panic(expected = "receiver-exact dispatch violated")]
+fn a_set_comprehension_expression_eq_skipping_the_override_panics() {
+    let body = vec![set_comp_expr(set_ops("B.m", "A.m"))];
+    verify(&module(vec![function("f", body)]), &classes());
+}

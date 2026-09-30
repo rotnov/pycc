@@ -279,13 +279,24 @@ impl Verifier<'_> {
             MirStmt::BufferSet { base, index, value } => self.exprs([base, index, value]),
             MirStmt::ListCompAssign {
                 source, cond, elt, ..
-            }
-            | MirStmt::SetCompAssign {
-                source, cond, elt, ..
             } => {
                 self.source(source);
                 self.exprs(cond.as_deref());
                 self.expr(elt);
+            }
+            MirStmt::SetCompAssign {
+                source,
+                cond,
+                elt,
+                ops,
+                ..
+            } => {
+                self.source(source);
+                self.exprs(cond.as_deref());
+                self.expr(elt);
+                if let Some(ops) = ops {
+                    self.check_set_ops(ops, &elt.ty());
+                }
             }
             MirStmt::DictCompAssign {
                 source,
@@ -466,7 +477,13 @@ impl Verifier<'_> {
                 self.source(&comp.source);
                 self.exprs(&comp.cond);
                 match &comp.elt {
-                    MirCompElt::List(elt) | MirCompElt::Set(elt) => self.expr(elt),
+                    MirCompElt::List(elt) => self.expr(elt),
+                    MirCompElt::Set(elt, ops) => {
+                        self.expr(elt);
+                        if let Some(ops) = ops {
+                            self.check_set_ops(ops, &elt.ty());
+                        }
+                    }
                     MirCompElt::Dict { key, value } => self.exprs([key, value]),
                 }
             }

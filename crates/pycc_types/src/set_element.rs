@@ -3,8 +3,9 @@
 //! A `set[T]`/`frozenset[T]` element is an `int` or (#1343) an instance of a
 //! hashable user class. The annotation gate (`pycc_hir::check_container_ty`,
 //! `T0038`) has no class table, so it admits every instance; this module
-//! delivers the class verdict at the two insertion sites, a set literal and
-//! `.add(...)`, from the same `pycc_hir` resolvers MIR lowers with:
+//! delivers the class verdict at the three insertion sites, a set literal,
+//! `.add(...)` and (#1344) a set comprehension's element, from the same
+//! `pycc_hir` resolvers MIR lowers with:
 //!
 //! - [`pycc_hir::resolve_instance_hash`]: a class binding `__eq__` without
 //!   `__hash__` is `T0054`, CPython's own `TypeError` reported statically;
@@ -144,13 +145,15 @@ fn check_eq_method(class: &str, mangled: &str, env: &Environment) -> Result<(), 
 
 /// Checks that a value of type `element` may be inserted into a set: an
 /// `int`, or an instance of a class whose hash and eq verdicts and method
-/// signatures pycc compiles. Called by a set literal and by `.add(...)`.
+/// signatures pycc compiles. Called by a set literal, by `.add(...)` and by
+/// a set comprehension's element (`crate::comprehension::comp_container_ty`).
 pub(crate) fn check_set_element(element: &Ty, env: &Environment) -> Result<(), Diagnostic> {
     let class = match element {
         Ty::Int => return Ok(()),
         Ty::Instance(class) => class.as_str(),
-        // Unreachable from both callers: a literal's type passed
-        // `check_container_ty` first, and `.add` sees an admitted set.
+        // Unreachable from every caller: a literal's type passed
+        // `check_container_ty` first, `.add` sees an admitted set, and a
+        // comprehension calls this only for a `Ty::Instance` element.
         other => {
             let set = Ty::Set(Box::new(other.clone()));
             return Err(Diagnostic::error(
