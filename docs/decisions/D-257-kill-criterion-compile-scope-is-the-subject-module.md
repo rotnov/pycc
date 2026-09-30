@@ -6,6 +6,7 @@ status: accepted
 
 ## D-257: The kill criterion's "compiles unchanged" covers the subject module, with sibling imports bound as foreign
 - Status: accepted (resolves how [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6's kill criterion scopes compilation, first applied to the #1207 workload; widens [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) rule 1 to the subject module)
+- Amendment (2026-09-30): #1366 delivers the D-222 opt-in this decision leaves to it as the `pycc build --ext` flag `--foreign-relative-imports`. It applies to the entry module's top-level relative from-imports only, and resolves them at import time against the package the artifact is imported under (`docs/CLI_SPEC.md`).
 - Context: The #1207 workload is `lark` 1.3.1. Its subject is `ParserState.feed_token` in
   `lark/parsers/lalr_parser_state.py`, annotated under D-252. The annotated module's SHA-256 is
   `4335a1995da91fa264b3f16ebbb0c882863d0aba5d7d219205752fbf8a8680d9`. Every measurement up to

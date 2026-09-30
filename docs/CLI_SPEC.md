@@ -267,6 +267,33 @@ directory once project mode exists.
                     Conflicts with `--interop-policy` and
                     `--pure` (exit 2, D-244 rule 3); will conflict with
                     `--lib` once that flag exists.
+--foreign-relative-imports
+                    `--ext` only (exit 2 without it): the entry module's
+                    top-level relative from-imports (`from .x import a`,
+                    `from .. import m`, `from .sub.leaf import z`) bind
+                    CPython objects of the package the artifact is imported
+                    under, typed `object` like any other foreign
+                    from-import (#1278), instead of project modules (the
+                    D-222 opt-in D-257 names; #1366). They resolve when the
+                    artifact's `Py_mod_exec` runs, from the module's own
+                    `__package__`/`__spec__`, exactly as the same statement
+                    in a `.py` module installed at that path: a missing
+                    sibling is a runtime `ModuleNotFoundError`, a climb
+                    beyond the top-level package or an import of the
+                    artifact as a top-level module is CPython's own
+                    `ImportError`. The driver never probes the disk for
+                    such an import, so a same-named `.py` beside the source
+                    changes nothing. A dependency module's relative imports
+                    stay project imports (its body runs with the entry
+                    module's globals, so it has no package of its own), and
+                    aliasing, `*`, and a relative import nested in a block
+                    keep their `C0001`s. `check`, `run`, `lock` and a native
+                    `build` have no counterpart and keep D-222, so `pycc
+                    check` of such a module still reports `T0021` or links
+                    the sibling. An entry module whose only non-`pycc_std`
+                    imports are relative skips `pycc.toml` source-root
+                    discovery, so a malformed manifest beside it is not
+                    reported; `--ext` never reads the manifest anyway.
 --static-libpython  embedded build only: link libpython into the executable
                     from the embed interpreter's static archive
                     (`sysconfig` `LIBPL/LIBRARY`, e.g.

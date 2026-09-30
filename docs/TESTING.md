@@ -864,7 +864,9 @@ The subject module's own frontier was measured at `main` `05bc7805` (release
 build, CPython 3.14.7) with `pycc build lalr_parser_state.py -o out.abi3.so
 --ext`, on the annotated module copied out of its package. That run reports
 seven errors: one `C0002` for `Dict` (row 1), three `T0021`s (row 2), one
-`C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). Everything under them was measured by probes. A probe is a copy with the
+`C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). With #1366, the
+same build inside the copied package tree with `--foreign-relative-imports`
+(on `main` `3c48dbc4`) reports four errors, rows 1, 3 and 4, and no `T0021`. Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled
@@ -873,7 +875,7 @@ whole past the first layer, so this list is a **lower bound**.
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
 | `from typing import Dict, Any, Generic, List` (2); each name fails at the import, `Any` before any `T0002` | `C0002` | #882 |
-| relative sibling imports (3, 4, 6) | `T0021` "attempted relative import with no known parent package" | [#1366](https://github.com/rotnov/pycc/issues/1366) (needs a live `__package__`, the counterpart of the live `__name__` #1161 seeds) |
+| relative sibling imports (3, 4, 6) | cleared: `T0021` "attempted relative import with no known parent package" at `05bc7805`, none under `--ext --foreign-relative-imports` | [#1366](https://github.com/rotnov/pycc/issues/1366) (the flag binds them as CPython objects of the host's package, resolved from the module's own `__package__`/`__spec__` at import time; #1161's live `__name__` is not a prerequisite) |
 | `from lark.exceptions import UnexpectedToken` (7) | `C0001` import of a dotted module | #1138 |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
 | `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
@@ -888,7 +890,8 @@ whole past the first layer, so this list is a **lower bound**.
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Fifteen rows remain. Two of them are boundary questions inside the subject
+Fifteen rows are listed, and #1366 has cleared the relative-import row, so
+fourteen remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
