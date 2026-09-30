@@ -893,6 +893,15 @@ whole past the first layer, so this list is a **lower bound**.
 Seventeen rows remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 
+Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362)) admits
+binding a CPython object to a function-local name. Its isolated probe, a method
+body binding a producer's result to a local and aliasing it, now compiles and
+runs. The table above stays the `05bc7805` measurement. In the subject, lines
+68-72 bind `self` attributes, and a pycc class cannot yet hold an object
+attribute: `self.<attr>` must come from an `__init__` parameter, and such a
+parameter cannot be spelled `object` (#1367). So that row is not re-measured
+as cleared until the subject module is compiled again.
+
 **State on 2026-09-24 (import-closure reading, rescoped 2026-09-30 by D-257).** On 2026-09-24 the repository owner directed
 that the row (b) outcome below is a chicken-and-egg result and that the missing
 annotation should be added.
