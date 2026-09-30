@@ -433,6 +433,79 @@ fn a_relative_import_s_class_and_typevar_annotate() {
     }
 }
 
+/// A private helper in a sibling project module takes and returns a
+/// foreign-class-annotated value across the module boundary.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_cross_module_helper_takes_a_foreign_class_parameter() {
+    let compiled_dir = ScratchDir::new("1367_hosted_cross_module").expect("scratch");
+    let source_dir = ScratchDir::new("1367_hosted_cross_module_src").expect("scratch");
+    let dep = "from fractions import Fraction\n\
+        def _num(f: Fraction) -> Fraction:\n    print(f.numerator)\n    return f\n";
+    for dir in [&compiled_dir, &source_dir] {
+        write(dir, "dep.py", dep);
+    }
+    let source = write(
+        &source_dir,
+        "m.py",
+        "from fractions import Fraction\nfrom dep import _num\nprint(_num(Fraction(3, 4)))\n",
+    );
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(compiled_dir.join("m"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    for (what, dir) in [("pycc", &compiled_dir), ("cpython", &source_dir)] {
+        let run = import_m(dir);
+        assert!(run.status.success(), "{what}: {}", stderr_of(&run));
+        assert_eq!(stdout_of(&run), "3\n3/4\n", "{what}");
+    }
+}
+
+/// Pins a known divergence, the uninitialised-slot hazard (#1148): a
+/// foreign-class slot read before `__init__` assigns it holds a NULL word,
+/// which the foreign operation reports as `SystemError` where CPython raises
+/// `AttributeError`. Only the exception type names are compared.
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn a_foreign_slot_read_before_its_assignment_raises_system_error() {
+    let compiled_dir = ScratchDir::new("1367_hosted_null_slot").expect("scratch");
+    let source_dir = ScratchDir::new("1367_hosted_null_slot_src").expect("scratch");
+    let source = write(
+        &source_dir,
+        "m.py",
+        "from fractions import Fraction\n\
+         class _Box:\n\
+         \x20   def __init__(self, f: Fraction) -> None:\n\
+         \x20       self.show()\n        self.f = f\n\
+         \x20   def show(self) -> None:\n        print(self.f.numerator)\n\
+         _Box(Fraction(1, 2))\n",
+    );
+    let build = pycc()
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(compiled_dir.join("m"))
+        .arg("--ext")
+        .output()
+        .expect("pycc should spawn");
+    assert!(build.status.success(), "{}", stderr_of(&build));
+    for (dir, expected) in [
+        (&compiled_dir, "SystemError"),
+        (&source_dir, "AttributeError"),
+    ] {
+        let run = import_m(dir);
+        assert!(!run.status.success(), "{expected}: {}", stdout_of(&run));
+        let stderr = stderr_of(&run);
+        let last = stderr.lines().last().unwrap_or_default();
+        assert!(last.starts_with(&format!("{expected}:")), "{stderr}");
+    }
+}
+
 /// A PEP 695 type parameter resolves before the alias table, so `[Fraction]`
 /// shadows the foreign `Fraction` inside that generic, as in CPython: the
 /// call instantiates it at `int`.
