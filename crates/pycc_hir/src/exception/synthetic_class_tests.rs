@@ -447,6 +447,31 @@ fn the_first_assert_statement_is_found_at_any_depth() {
     );
 }
 
+/// #1369: a class body reaches `lower_stmt` only through its methods, so an
+/// `assert` directly in a class body (or in a nested class, which the class
+/// lowering refuses too) is not scanned, while one inside a method is.
+#[test]
+fn the_assert_scan_enters_a_class_only_through_its_methods() {
+    use crate::exception::first_assert_statement_range;
+    for refused_by_the_class in [
+        "class A:\n    assert True\n",
+        "class A:\n    class B:\n        def m(self) -> None:\n            assert True\n",
+    ] {
+        assert_eq!(
+            first_assert_statement_range(&parse(refused_by_the_class).body, &[]),
+            None,
+            "{refused_by_the_class}"
+        );
+    }
+    assert_eq!(
+        first_assert_statement_range(
+            &parse("class A:\n    x = 1\n\n    def m(self) -> None:\n        assert True\n").body,
+            &[]
+        ),
+        Some(53..64)
+    );
+}
+
 /// #1369: an `assert` the #790 `TYPE_CHECKING` fold discards is never
 /// lowered, so the scan skips it -- in an `if` and in an `elif` arm, the
 /// bare and the qualified spelling -- while every live arm of the same

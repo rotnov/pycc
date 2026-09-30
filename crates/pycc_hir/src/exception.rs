@@ -461,7 +461,12 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// "Live" means lowering keeps it: every `if`/`elif` chain is walked through
 /// `dunder_name::walk_live_if`, so an `assert` in a body the #790
 /// `TYPE_CHECKING` fold discards is never lowered and never counted, while
-/// the `else` (and any other arm) of such a guard is walked in full.
+/// the `else` (and any other arm) of such a guard is walked in full. A
+/// class body is walked only through its methods' bodies, the only part of
+/// it `class::body` hands to `lower_stmt`: a statement directly in a class
+/// body keeps the class lowering's own refusal. (An `Enum` body accepts no
+/// method at all, so an `assert` in an enum method is refused here rather
+/// than by the enum lowering -- a refusal either way, never an admission.)
 /// `imports` must be the whole-module slice `dunder_name::scan_imports`
 /// builds, so an aliased `t.TYPE_CHECKING` guard folds here exactly as it
 /// folds in `lower_stmt`; the one mismatch that slice admits (a guard above
@@ -486,6 +491,16 @@ pub(crate) fn first_assert_statement_range(
                 Stmt::If(if_stmt) => {
                     let imports = self.imports;
                     crate::dunder_name::walk_live_if(self, if_stmt, imports);
+                }
+                // A class body reaches `lower_stmt` only through its method
+                // bodies: `class::body` refuses every other class-body
+                // statement kind with its own diagnostic, a bare `assert`
+                // and a nested `class` included. Only a method's own
+                // statements are scanned, so that refusal is never masked.
+                Stmt::ClassDef(class_def) => {
+                    for method in class_def.body.iter().filter_map(Stmt::as_function_def_stmt) {
+                        self.visit_body(&method.body);
+                    }
                 }
                 _ => visitor::walk_stmt(self, stmt),
             }

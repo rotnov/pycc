@@ -569,6 +569,31 @@ fn an_assert_in_the_else_of_a_type_checking_guard_is_refused() {
     );
 }
 
+/// An `assert` directly in a class body never reaches statement lowering,
+/// so a shadowing module reports the class lowering's own refusal for it,
+/// not the `AssertionError` one; an `assert` in a method of the same kind of
+/// module still gets the `AssertionError` refusal.
+#[test]
+fn a_class_body_assert_keeps_its_own_diagnostic_in_a_shadowing_module() {
+    let text = check_error(
+        "assert_shadow_class_body",
+        "class ValueError:\n    assert True\n",
+    );
+    assert!(
+        text.contains("a class body statement must be a method definition")
+            && !text.contains("needs the builtin `AssertionError`"),
+        "unexpected diagnostic: {text}"
+    );
+    let text = check_error(
+        "assert_shadow_method",
+        "class ValueError:\n    def m(self) -> None:\n        assert True\n",
+    );
+    assert!(
+        text.contains("C0001") && text.contains("needs the builtin `AssertionError`"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
 /// A function-local binding of `AssertionError` cannot hold a class, so the
 /// rewritten call is refused with `T0021` rather than calling something
 /// other than the builtin -- never a miscompilation.
