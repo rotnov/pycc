@@ -2,7 +2,7 @@
 //! issue plan's sections 4.1-4.4, each refusal pinned by its code and the
 //! CPython text it quotes.
 
-use super::{ClassSlotsRow, is_ascii_identifier, mangle};
+use super::{ClassSlotsRow, is_ascii_identifier, is_dunder, mangle};
 use crate::pycc_parser_test_helper::parse;
 use crate::{
     LoweredModule, ResolvedImport, ResolvedImports, ResolvedModule, lower_module,
@@ -287,14 +287,57 @@ fn a_doc_slot_conflicts_only_with_a_docstring() {
     let with_docstring = "class C:\n    \"\"\"Doc.\"\"\"\n    __slots__ = ('__doc__',)\n";
     assert_eq!(c0001(with_docstring), conflict("__doc__", "__doc__"));
     let without = "class C:\n    __slots__ = ('__doc__',)\n";
-    assert_eq!(slots_of(without, "C"), names(&["__doc__"]));
+    assert_eq!(c0001(without), dunder("__doc__"));
 }
 
 #[test]
 fn a_value_less_annotation_and_implicit_names_do_not_conflict() {
-    let source = "class C:\n    __slots__ = ('a', '__qualname__')\n    a: int\n\n    def \
-                  __init__(self) -> None:\n        self.a = 1\n";
-    assert_eq!(slots_of(source, "C"), names(&["a", "__qualname__"]));
+    let source = "class C:\n    __slots__ = ('a',)\n    a: int\n\n    def __init__(self) -> \
+                  None:\n        self.a = 1\n";
+    assert_eq!(slots_of(source, "C"), names(&["a"]));
+    // `__qualname__` is not in the namespace CPython checks, so it reaches
+    // the dunder refusal rather than the conflict `ValueError`.
+    let qualname = "class C:\n    __slots__ = ('__qualname__',)\n";
+    assert_eq!(c0001(qualname), dunder("__qualname__"));
+}
+
+fn dunder(slot: &str) -> String {
+    format!(
+        "a `__slots__` entry named `{slot}` is not supported yet -- CPython installs a member \
+         descriptor under that name which takes part in the instance protocols (a `__hash__` \
+         slot makes the class unhashable), and pycc does not model it"
+    )
+}
+
+#[test]
+fn a_dunder_slot_is_refused_at_the_binding() {
+    for slot in ["__hash__", "__eq__", "__len__", "__str__"] {
+        let source = format!(
+            "class C:\n    __slots__ = ('a', '{slot}')\n\n    def __init__(self) -> None:\n        \
+             self.a = 1\n"
+        );
+        let diagnostic = error(&source);
+        assert_eq!(diagnostic.code, "C0001", "{slot}");
+        assert_eq!(diagnostic.message, dunder(slot));
+        let start = source.find("__slots__").expect("binding") as u32;
+        let end = source.find(")\n").expect("binding end") as u32 + 1;
+        assert_eq!(diagnostic.span, Some(Span::new(start, end)), "{slot}");
+    }
+}
+
+#[test]
+fn a_dunder_slot_bound_in_the_body_keeps_the_conflict_error() {
+    let source = "class C:\n    __slots__ = ('__eq__',)\n\n    def __eq__(self, other: int) -> \
+                  bool:\n        return True\n";
+    assert_eq!(c0001(source), conflict("__eq__", "__eq__"));
+}
+
+#[test]
+fn is_dunder_needs_a_non_empty_middle() {
+    assert!(is_dunder("__a__"));
+    assert!(!is_dunder("____"));
+    assert!(!is_dunder("__a"));
+    assert!(!is_dunder("a__"));
 }
 
 #[test]

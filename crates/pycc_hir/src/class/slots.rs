@@ -100,6 +100,7 @@ pub(crate) fn check_class(
         return Ok(None);
     };
     check_namespace_conflicts(def, &slots)?;
+    check_dunder_slots(&slots, binding_range)?;
     check_undeclared_stores(def, class_def, &slots, binding_range, &ancestors)?;
     Ok(Some(slots))
 }
@@ -404,6 +405,33 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// Refuses a dunder-named slot (`__hash__`, `__eq__`, `__len__`, ...).
+/// CPython installs a member descriptor under that name in the class
+/// dictionary, and the instance protocols then find it instead of the
+/// inherited or synthesized behaviour -- a `__hash__` slot makes the class
+/// unhashable, a `__str__` slot makes `str(c)` raise `AttributeError`. pycc
+/// does not model that shadowing. It runs after the namespace check, so a
+/// dunder slot that is also bound in the body keeps CPython's own
+/// `ValueError`; a private `__x` name is not a dunder and stays admitted.
+fn check_dunder_slots(slots: &[String], binding_range: Span) -> Result<(), Diagnostic> {
+    let Some(slot) = slots.iter().find(|slot| is_dunder(slot)) else {
+        return Ok(());
+    };
+    Err(unsupported(
+        format!(
+            "a `__slots__` entry named `{slot}` is not supported yet -- CPython installs a \
+             member descriptor under that name which takes part in the instance protocols \
+             (a `__hash__` slot makes the class unhashable), and pycc does not model it"
+        ),
+        binding_range.start..binding_range.end,
+    ))
+}
+
+/// Whether `name` is a dunder: `__x__` with a non-empty `x`.
+fn is_dunder(name: &str) -> bool {
+    name.len() > 4 && name.starts_with("__") && name.ends_with("__")
 }
 
 fn bound_name(target: &Expr) -> Option<String> {

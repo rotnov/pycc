@@ -541,7 +541,15 @@ CPython's order:
    has a docstring) is `C0001` quoting CPython's `ValueError: '<name>' in
    __slots__ conflicts with class variable`. A class variable of the same name
    on a base does not conflict.
-4. **Stores.** When every class in the MRO binds `__slots__`, the instance
+4. **Dunder names.** Any other slot named `__x__` (`__hash__`, `__eq__`,
+   `__len__`, `__str__`, `__doc__` without a docstring, `__qualname__`, ...)
+   is `C0001` "not supported yet", at the `__slots__` binding. CPython
+   installs a member descriptor under that name, and the instance protocols
+   find it instead of the inherited behaviour: a `__hash__` slot makes the
+   class unhashable (`TypeError: unhashable type`), and a `__str__` slot makes
+   `str(c)` raise `AttributeError`. pycc does not model that shadowing. A
+   private `__x` name is not a dunder and stays admitted.
+5. **Stores.** When every class in the MRO binds `__slots__`, the instance
    has no `__dict__`, so a store `self.<attr> = ...` to a name no MRO class
    declares is `T0044`, at the store, quoting CPython 3.13's `AttributeError`
    wording. If any MRO class lacks `__slots__`, stores are not checked, as in

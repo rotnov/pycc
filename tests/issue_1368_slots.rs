@@ -240,3 +240,22 @@ fn a_read_of_a_never_assigned_slot_is_t0044() {
         "{error}"
     );
 }
+
+/// A dunder-named slot is refused: CPython installs a member descriptor
+/// under the name, and a `__hash__` slot makes the class unhashable.
+#[test]
+fn a_dunder_slot_is_c0001() {
+    let source = "class C:\n    __slots__ = ('a', '__hash__')\n\n    def __init__(self) -> None:\n        \
+                  self.a = 1\n\n\nc = C()\nprint(hash(c) == hash(c))\n";
+    let text = fails("e2e_1368_dunder", source);
+    assert!(text.contains("error[C0001]"), "{text}");
+    assert!(
+        text.contains("a `__slots__` entry named `__hash__` is not supported yet"),
+        "{text}"
+    );
+    cpython_rejects(
+        "e2e_1368_dunder_cpython",
+        source,
+        "TypeError: unhashable type: 'C'",
+    );
+}
