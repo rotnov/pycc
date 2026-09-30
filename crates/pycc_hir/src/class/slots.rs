@@ -100,8 +100,15 @@ fn slots_binding_value(stmt: &Stmt) -> Option<&Expr> {
 /// annotated class attribute's annotation, and `annotation_to_ty` models no
 /// `str` container of unknown length, so the admitted forms are matched by
 /// shape instead. It runs after every check that mirrors a CPython
-/// class-creation error, so those keep their order.
-fn check_annotation(annotation: &Expr) -> Result<(), Diagnostic> {
+/// class-creation error, so those keep their order. A name `shadowed`
+/// reports as rebound (a user class, a type alias or a class type
+/// parameter) is not the builtin form, exactly as annotation resolution
+/// lets the user binding win, so it is refused too.
+fn check_annotation(annotation: &Expr, shadowed: &dyn Fn(&str) -> bool) -> Result<(), Diagnostic> {
+    let is_name = |expr: &Expr, names: &[&str]| {
+        matches!(expr, Expr::Name(name)
+            if names.contains(&name.id.as_str()) && !shadowed(name.id.as_str()))
+    };
     let inner = match annotation {
         Expr::Subscript(sub) if is_name(&sub.value, &["ClassVar"]) => sub.slice.as_ref(),
         other => other,
@@ -129,10 +136,6 @@ fn check_annotation(annotation: &Expr) -> Result<(), Diagnostic> {
     ))
 }
 
-fn is_name(expr: &Expr, names: &[&str]) -> bool {
-    matches!(expr, Expr::Name(name) if names.contains(&name.id.as_str()))
-}
-
 fn is_slots_name(target: &Expr) -> bool {
     matches!(target, Expr::Name(name) if name.id.as_str() == "__slots__")
 }
@@ -141,12 +144,14 @@ fn is_slots_name(target: &Expr) -> bool {
 /// rules and returns its row for the module's side table.
 ///
 /// `class_slots` holds a row for every user class lowered (or imported)
-/// before this one; `defined_classes` is the matching class table.
+/// before this one; `defined_classes` is the matching class table, and
+/// `aliases` names the module's type aliases bound so far.
 pub(crate) fn check_class(
     def: &StmtClassDef,
     class_def: &HirClassDef,
     defined_classes: &[(String, HirClassDef)],
     class_slots: &[ClassSlotsRow],
+    aliases: &[&str],
 ) -> Result<Option<Vec<String>>, Diagnostic> {
     let ancestors = Ancestors {
         defined_classes,
@@ -171,7 +176,15 @@ pub(crate) fn check_class(
         if let Stmt::AnnAssign(ann) = stmt
             && slots_binding_value(stmt).is_some()
         {
-            check_annotation(&ann.annotation)?;
+            check_annotation(&ann.annotation, &|name| {
+                defined_classes.iter().any(|(class, _)| class == name)
+                    || aliases.contains(&name)
+                    || def
+                        .type_params
+                        .iter()
+                        .flat_map(|params| params.iter())
+                        .any(|param| param.name().as_str() == name)
+            })?;
         }
     }
     Ok(Some(slots))

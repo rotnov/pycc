@@ -827,8 +827,17 @@ fn lower_top_level_item<'a>(
                 def.range,
             ));
         }
-        let own_slots =
-            class::slots::check_class(def, &class_def, &state.class_defs, &state.class_slots)?;
+        let own_slots = class::slots::check_class(
+            def,
+            &class_def,
+            &state.class_defs,
+            &state.class_slots,
+            &state
+                .aliases
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+        )?;
         state.class_slots.push((class_def.name.clone(), own_slots));
         state
             .definition_spans

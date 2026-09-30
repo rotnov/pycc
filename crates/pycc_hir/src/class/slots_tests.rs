@@ -1038,3 +1038,19 @@ fn slots_over_unrelated_builtin_exception_bases_are_refused() {
     // Related builtins (one in the other's MRO) share a layout chain.
     lower("class C(OSError, Exception):\n    __slots__ = ()\n").expect("related builtins");
 }
+
+#[test]
+fn a_slots_annotation_through_a_shadowed_name_is_refused() {
+    let refused = "this `__slots__` annotation is not supported yet -- annotate it as `str`, \
+                   `tuple`, `list`, `tuple[str, ...]` or `list[str]`, optionally inside \
+                   `ClassVar[...]`";
+    // A user class, a type alias or a class type parameter wins over the
+    // builtin spelling, exactly as annotation resolution lets it.
+    for source in [
+        "class tuple:\n    pass\n\n\nclass C:\n    __slots__: tuple[str, ...] = ('a',)\n",
+        "type List = int\n\n\nclass C:\n    __slots__: List[str] = ['a']\n",
+        "class C[list]:\n    __slots__: list = ['a']\n",
+    ] {
+        assert_eq!(c0001(source), refused, "{source}");
+    }
+}
