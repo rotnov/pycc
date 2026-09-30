@@ -430,17 +430,52 @@ fn an_assert_statement_alone_counts_as_a_reference() {
 #[test]
 fn the_first_assert_statement_is_found_at_any_depth() {
     use crate::exception::first_assert_statement_range;
-    assert_eq!(first_assert_statement_range(&parse("x = 1\n").body), None);
     assert_eq!(
-        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n").body),
+        first_assert_statement_range(&parse("x = 1\n").body, &[]),
+        None
+    );
+    assert_eq!(
+        first_assert_statement_range(&parse("x = 1\nassert x\nassert y\n").body, &[]),
         Some(6..14)
     );
     assert_eq!(
         first_assert_statement_range(
-            &parse("def f() -> None:\n    if 1:\n        assert 0\n").body
+            &parse("def f() -> None:\n    if 1:\n        assert 0\n").body,
+            &[]
         ),
         Some(35..43)
     );
+}
+
+/// #1369: an `assert` the #790 `TYPE_CHECKING` fold discards is never
+/// lowered, so the scan skips it -- in an `if` and in an `elif` arm, the
+/// bare and the qualified spelling -- while every live arm of the same
+/// chain, the `else` included, is still scanned.
+#[test]
+fn the_assert_scan_skips_only_the_bodies_the_type_checking_fold_discards() {
+    use crate::exception::first_assert_statement_range;
+    for dead in [
+        "if TYPE_CHECKING:\n    assert 0\n",
+        "if typing.TYPE_CHECKING:\n    assert 0\n",
+        "if x:\n    pass\nelif TYPE_CHECKING:\n    assert 0\n",
+        "def f() -> None:\n    if TYPE_CHECKING:\n        assert 0\n",
+    ] {
+        assert_eq!(
+            first_assert_statement_range(&parse(dead).body, &[]),
+            None,
+            "{dead}"
+        );
+    }
+    for live in [
+        "if TYPE_CHECKING:\n    pass\nelse:\n    assert 0\n",
+        "if TYPE_CHECKING:\n    pass\nelif x:\n    assert 0\n",
+        "if x:\n    assert 0\n",
+    ] {
+        assert!(
+            first_assert_statement_range(&parse(live).body, &[]).is_some(),
+            "{live}"
+        );
+    }
 }
 
 /// #1369: a module that binds a builtin exception name at top level

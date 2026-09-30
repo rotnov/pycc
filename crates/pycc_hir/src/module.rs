@@ -285,21 +285,27 @@ pub fn lower_module(
     // the item's lowering keeps its other diagnostic from being a
     // consequence of the missing class. The item bound nothing, so its
     // names are poisoned like any other failing item's.
+    // An `assert` the `TYPE_CHECKING` fold discards is never lowered, so it
+    // is never refused; the scan sees the whole module's stdlib imports, as
+    // the `__name__` scans below do.
     let mut assert_refusal: Option<(usize, Diagnostic)> = shadowed_builtin_exception_name
         .as_ref()
         .and_then(|shadowed| {
+            let imports = dunder_name::scan_imports(module, &state.imports);
             module.body.iter().enumerate().find_map(|(index, stmt)| {
-                exception::first_assert_statement_range(std::slice::from_ref(stmt)).map(|range| {
-                    let diagnostic = unsupported(
-                        format!(
-                            "an `assert` statement needs the builtin `AssertionError`, \
+                exception::first_assert_statement_range(std::slice::from_ref(stmt), &imports).map(
+                    |range| {
+                        let diagnostic = unsupported(
+                            format!(
+                                "an `assert` statement needs the builtin `AssertionError`, \
                                  which is unavailable because this module binds the builtin \
                                  exception name `{shadowed}` at top level"
-                        ),
-                        range,
-                    );
-                    (index, diagnostic)
-                })
+                            ),
+                            range,
+                        );
+                        (index, diagnostic)
+                    },
+                )
             })
         });
     // W0 of #882 (#1156): the compiler-provided `__name__` binding, pushed

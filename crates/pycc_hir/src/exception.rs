@@ -1,6 +1,7 @@
 //! HIR exception-class metadata and handler shape (PEP 3110, #382).
 
 use super::{HirClassDef, HirItem, HirStmt, Ty};
+use crate::ImportBinding;
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt};
 
@@ -447,8 +448,8 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
     scan.found
 }
 
-/// The range of the first `assert` statement anywhere in `body`, nested
-/// bodies included, or `None` when it has none (#1369).
+/// The range of the first live `assert` statement anywhere in `body`,
+/// nested bodies included, or `None` when it has none (#1369).
 ///
 /// `module::lower_module` asks this, one top-level item at a time, only when
 /// [`shadowed_builtin_exception_name`] withheld the builtin classes: an
@@ -456,23 +457,44 @@ pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bo
 /// have, so the first top-level item containing one is refused with one
 /// `C0001` naming the binding responsible rather than at each `assert` with a
 /// message about the call it was rewritten into.
-pub(crate) fn first_assert_statement_range(body: &[Stmt]) -> Option<std::ops::Range<u32>> {
-    struct AssertScan {
+///
+/// "Live" means lowering keeps it: every `if`/`elif` chain is walked through
+/// `dunder_name::walk_live_if`, so an `assert` in a body the #790
+/// `TYPE_CHECKING` fold discards is never lowered and never counted, while
+/// the `else` (and any other arm) of such a guard is walked in full.
+/// `imports` must be the whole-module slice `dunder_name::scan_imports`
+/// builds, so an aliased `t.TYPE_CHECKING` guard folds here exactly as it
+/// folds in `lower_stmt`; the one mismatch that slice admits (a guard above
+/// its own `import typing as t`) is a read of an unbound name that is
+/// refused anyway, and an `assert` skipped there would still only reach an
+/// unresolved `AssertionError`, never another class.
+pub(crate) fn first_assert_statement_range(
+    body: &[Stmt],
+    imports: &[ImportBinding],
+) -> Option<std::ops::Range<u32>> {
+    struct AssertScan<'i> {
         found: Option<std::ops::Range<u32>>,
+        imports: &'i [ImportBinding],
     }
-    impl<'a> Visitor<'a> for AssertScan {
+    impl<'a> Visitor<'a> for AssertScan<'_> {
         fn visit_stmt(&mut self, stmt: &'a Stmt) {
             if self.found.is_some() {
                 return;
             }
-            if matches!(stmt, Stmt::Assert(_)) {
-                self.found = Some(pycc_ast::stmt_range(stmt));
-                return;
+            match stmt {
+                Stmt::Assert(_) => self.found = Some(pycc_ast::stmt_range(stmt)),
+                Stmt::If(if_stmt) => {
+                    let imports = self.imports;
+                    crate::dunder_name::walk_live_if(self, if_stmt, imports);
+                }
+                _ => visitor::walk_stmt(self, stmt),
             }
-            visitor::walk_stmt(self, stmt);
         }
     }
-    let mut scan = AssertScan { found: None };
+    let mut scan = AssertScan {
+        found: None,
+        imports,
+    };
     scan.visit_body(body);
     scan.found
 }

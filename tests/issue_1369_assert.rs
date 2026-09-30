@@ -525,6 +525,50 @@ fn an_earlier_failure_is_reported_before_the_assert_refusal() {
     assert!(earlier < refusal, "wrong order: {text}");
 }
 
+/// An `assert` inside an `if TYPE_CHECKING:` body is dead code the #790 fold
+/// discards, so a module that shadows a builtin exception name still
+/// compiles and runs when its only `assert`s sit there -- at top level, in an
+/// `elif` arm, or inside a function.
+#[test]
+fn an_assert_under_a_type_checking_guard_is_not_refused() {
+    let (ok, stdout, stderr) = build_and_run(
+        "assert_shadow_type_checking",
+        "from typing import TYPE_CHECKING\n\
+         class ValueError:\n\
+         \x20   pass\n\
+         if TYPE_CHECKING:\n\
+         \x20   assert False\n\
+         x = 1\n\
+         if x:\n\
+         \x20   pass\n\
+         elif TYPE_CHECKING:\n\
+         \x20   assert False\n\
+         def f() -> None:\n\
+         \x20   if TYPE_CHECKING:\n\
+         \x20       assert False\n\
+         \x20   print(\"ok\")\n\
+         f()\n",
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(stdout, "ok\n");
+}
+
+/// The `else:` of a `TYPE_CHECKING` guard is live at runtime, so an `assert`
+/// there in a shadowing module is still refused.
+#[test]
+fn an_assert_in_the_else_of_a_type_checking_guard_is_refused() {
+    let text = check_error(
+        "assert_shadow_type_checking_else",
+        "from typing import TYPE_CHECKING\nclass ValueError:\n    pass\n\
+         if TYPE_CHECKING:\n    pass\nelse:\n    assert False\n",
+    );
+    assert!(
+        text.contains("C0001")
+            && text.contains("an `assert` statement needs the builtin `AssertionError`"),
+        "unexpected diagnostic: {text}"
+    );
+}
+
 /// A function-local binding of `AssertionError` cannot hold a class, so the
 /// rewritten call is refused with `T0021` rather than calling something
 /// other than the builtin -- never a miscompilation.

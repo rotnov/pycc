@@ -176,8 +176,10 @@ test fails. The contract and its deliberate edges:
   top level binds a builtin exception name by `class`, `def` or assignment
   withholds every builtin class, so it gets one `C0001` "an `assert`
   statement needs the builtin `AssertionError`, which is unavailable because
-  this module binds the builtin exception name `X` at top level". A
-  function-local binding of `AssertionError` (a parameter, an assignment)
+  this module binds the builtin exception name `X` at top level"; an
+  `assert` only in an `if`/`elif TYPE_CHECKING:` body, which the #790 fold
+  discards, is never lowered and so is not refused (the `else` arm is live
+  and is). A function-local binding of `AssertionError` (a parameter, an assignment)
   cannot hold a class, so the rewritten call gets `T0021` "name
   `AssertionError` is bound to a non-callable value". Other binding forms are
   refused by diagnostics that already existed. For example, a module-level
