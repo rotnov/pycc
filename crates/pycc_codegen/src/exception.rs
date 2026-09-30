@@ -175,6 +175,9 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // re-inspected here either, matching every other arm's own
         // "classify only this node's operation" rule.
         | MirExpr::ExceptionMessage(_)
+        // #1337 (WI-6a): reading a caught exception's type tag is a plain
+        // field load, like `ExceptionMessage` above.
+        | MirExpr::ExceptionTypeTest { .. }
         // `OptionalWrap` (D-197, #763) only re-tags a value that has
         // already been evaluated for `.ty()`'s benefit; like
         // `IntBoundary` immediately above, the struct-building work in

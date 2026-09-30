@@ -570,6 +570,42 @@ fn set_of_instance_constraint_path_module_bodies_match_cpython_as_extensions() {
     );
 }
 
+/// An inherited `__hash__`/`__eq__` runs the element class's receiver-exact
+/// copy (D-254), so a leaf override of the key they call decides membership
+/// in a set, a frozenset, and at `.add`.
+const LEAF_OVERRIDE: &str = r#"class Base:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def key(self) -> int:
+        return self.v
+
+    def __hash__(self) -> int:
+        return self.key()
+
+    def __eq__(self, other: Base) -> bool:
+        return self.key() == other.key()
+
+
+class Leaf(Base):
+    def key(self) -> int:
+        return self.v % 3
+
+
+s: set[Leaf] = {Leaf(1), Leaf(4), Leaf(2)}
+print(len(s))
+s.add(Leaf(7))
+s.add(Leaf(5))
+print(len(s))
+f: frozenset[Leaf] = frozenset(s)
+print(len(f))
+"#;
+
+#[test]
+fn an_inherited_hash_and_eq_honour_a_leaf_override_like_cpython() {
+    assert_native_matches_cpython("e2e_1343_leaf", LEAF_OVERRIDE, "2\n2\n2\n");
+}
+
 /// An uncaught `__eq__` raise stops the program after the same output, with
 /// the same exit status and final exception line, as CPython. A native
 /// build prints only the frame that raised, an existing native convention.

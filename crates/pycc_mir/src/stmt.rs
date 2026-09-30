@@ -709,9 +709,16 @@ pub(super) fn lower_stmt(
                              assignment before it reached pycc_mir"
                         )
                     });
+                    let setter = crate::receiver_exact::exact_callee(
+                        &class_def.name,
+                        mro_class,
+                        setter.clone(),
+                        scopes,
+                        classes,
+                    );
                     let ty = lookup(scopes, &format!("$fn:{setter}"));
                     return MirStmt::ExprStmt(MirExpr::Call {
-                        callee: setter.clone(),
+                        callee: setter,
                         args: vec![base, value],
                         ty,
                     });

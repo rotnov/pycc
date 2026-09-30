@@ -285,7 +285,7 @@ impl EqRefusal {
             EqRefusal::Subclassed { subclass } => format!(
                 "subclass `{subclass}` derives from the element class, and a set compares \
                  through a user `__eq__` by static dispatch on the declared class, which \
-                 cannot reproduce CPython's subclass-first reflected comparison (#1337)"
+                 cannot reproduce CPython's subclass-first reflected comparison"
             ),
         }
     }

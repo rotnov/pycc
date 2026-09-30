@@ -6,6 +6,7 @@ status: accepted
 
 ## D-006: Generics: monomorphization; vtable dispatch only for explicit dynamic-Protocol use
 - Status: accepted
+- Amendment (2026-09-25, [#1337](https://github.com/rotnov/pycc/issues/1337)): the Context's statement below that `super()` resolves to the defining class's own MRO, and that cooperative multiple inheritance is therefore an accepted limitation, is superseded by [D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md): an inherited body is compiled again per receiver class when its behaviour differs, so `super()` follows the receiver's MRO, still statically dispatched and with no runtime type tag.
 - Context: pycc is an AOT compiler for statically-typed Python. The core
   question for generics and protocol-typed values is whether method dispatch
   is resolved at compile time (monomorphization — one specialized copy per

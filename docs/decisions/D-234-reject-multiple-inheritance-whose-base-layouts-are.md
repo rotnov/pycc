@@ -7,6 +7,7 @@ status: accepted
 ## D-234: Reject multiple inheritance whose base layouts are not prefixes of the derived layout
 
 - Status: accepted
+- Amendment (2026-09-25, [#1337](https://github.com/rotnov/pycc/issues/1337)): the per-derived-class re-lowering of inherited methods this entry names as the real fix now exists ([D-254](./D-254-inherited-methods-are-compiled-per-receiver-class.md)). It routes bodies, not slot layouts, so this entry's refusal of multiple inheritance with incompatible base layouts is not lifted.
 - Context:
   [D-154](./D-154-class-instance-runtime-layout-stays-opaque.md) makes an
   instance a flat array of attribute slots and lowers every method exactly

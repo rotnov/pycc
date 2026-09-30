@@ -625,17 +625,26 @@ pub(crate) fn collect_exports(module: &HirModule) -> Result<Vec<ExtExport>, Vec<
             receiver: ExtReceiver::SelfInstance,
         } = &spelling
         {
-            // A `@property` getter shares the bare spelling with an
-            // ordinary instance method. `HirClassDef::properties` holds the
-            // getter's own mangled name, so this is an identity test rather
-            // than a name pattern.
-            if module.class_defs.iter().any(|(held, def)| {
-                held == class && def.properties.iter().any(|prop| prop.getter == *name)
-            }) {
-                continue;
-            }
-            if !instance_method_reachable(module, class, method) {
-                continue;
+            // #1337 (D-254): a receiver-exact copy of an inherited body is
+            // absent from the class tables both filters below read, so it
+            // is judged by its own rule (`inherited::copy_export_verdict`).
+            match inherited::copy_export_verdict(module, name) {
+                inherited::CopyVerdict::Drop => continue,
+                inherited::CopyVerdict::Publish => {}
+                inherited::CopyVerdict::NotACopy => {
+                    // A `@property` getter shares the bare spelling with an
+                    // ordinary instance method. `HirClassDef::properties`
+                    // holds the getter's own mangled name, so this is an
+                    // identity test rather than a name pattern.
+                    if module.class_defs.iter().any(|(held, def)| {
+                        held == class && def.properties.iter().any(|prop| prop.getter == *name)
+                    }) {
+                        continue;
+                    }
+                    if !instance_method_reachable(module, class, method) {
+                        continue;
+                    }
+                }
             }
         }
         // A `@classmethod`'s leading `cls` never crosses the boundary (the
@@ -825,7 +834,10 @@ pub(crate) fn resolved_init<'a>(module: &'a HirModule, class: &str) -> Option<Re
                 .map(|(_, mangled)| mangled.as_str())
         })
     };
-    let mangled = resolve(true).or_else(|| resolve(false))?;
+    // #1337 (D-254): an inherited constructor runs the copy compiled for
+    // `class` when it needed one, as `pycc_mir`'s instantiation does.
+    let mangled =
+        inherited::receiver_exact_init(module, class, resolve(true).or_else(|| resolve(false))?);
     module.items.iter().find_map(|item| match item {
         HirItem::Function {
             name,
@@ -979,6 +991,13 @@ fn class_publishable(class_def: &HirClassDef, class: &str) -> bool {
 /// body returns nothing while its `return_ty` says otherwise, so exporting
 /// it from an `is_abstract` base would emit a wrapper over a body that
 /// never returns, and an exception class publishes no type object at all.
+///
+/// A receiver-exact copy of an inherited body (#1337, D-254) never reaches
+/// this predicate: it is judged by `inherited::copy_export_verdict` in
+/// this predicate's place, and a witness subclass that has a copy of
+/// `method` binds that copy instead of this body
+/// (`inherited::receiver_exact_export`), so a publishable witness here is
+/// one that genuinely runs the body compiled for `class`.
 fn instance_method_reachable(module: &HirModule, class: &str, method: &str) -> bool {
     let Some((_, class_def)) = module.class_defs.iter().find(|(held, _)| held == class) else {
         return false;
@@ -1245,7 +1264,11 @@ pub(crate) fn collect_class_publications(
                 // `(class, method)` dedup leaves that entry at most one
                 // export under it.
                 if namespace_owner(module, &class_def.mro, method) == Some(ancestor.as_str()) {
-                    methods.push(export.clone());
+                    // #1337 (D-254): an inherited member binds the copy
+                    // compiled for this class when one exists.
+                    methods.push(
+                        inherited::receiver_exact_export(module, class, export, exports).clone(),
+                    );
                 }
             }
         }
@@ -1443,6 +1466,7 @@ fn namespace_owner<'a>(module: &HirModule, mro: &'a [String], method: &str) -> O
 mod carrier;
 pub(crate) use carrier::*;
 mod export_name;
+mod inherited;
 pub(crate) use export_name::*;
 mod method_types;
 pub(crate) use method_types::*;

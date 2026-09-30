@@ -551,9 +551,11 @@ pub struct HirExceptHandler {
 /// genuine ancestor of anything that handler can catch). Binding to
 /// `"Exception"` instead means `"Exception"`'s own MRO contains no
 /// descendant name, so `isinstance(e, AnySpecificType)` on a multi-type
-/// handler's binding folds to `False` -- a conservative false negative, in
-/// the same already-accepted-imprecision class as the single-type case,
-/// never a false positive. `raise e` (bare-name re-raise) is unaffected by
+/// handler's binding is never folded to a wrong `True`. Since #1337 such a
+/// query (any target outside the static MRO) is no longer folded at all: it
+/// reads the caught object's runtime type tag (`MirExpr::ExceptionTypeTest`),
+/// so both the single- and the multi-type binding answer exactly as CPython
+/// does, and the `"Exception"` binding costs nothing. `raise e` (bare-name re-raise) is unaffected by
 /// this choice either way: it lowers to `MirExceptionValue::Existing`,
 /// which preserves the actual runtime exception object and tag rather than
 /// reconstructing from this static binding type

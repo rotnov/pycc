@@ -10,6 +10,7 @@ use super::{
     HirClassDef, InstantiateExpr, MirCompElt, MirComprehension, MirContainerReceiver, MirExpr,
     MirFStringPart, binop_result_ty, lookup, mro_class_def, try_lower_enum_member_attr,
 };
+use crate::receiver_exact::{exact_callee, receiver_class};
 use pycc_hir::{
     BinOpKind, ClassAttrValue, CompElt, ContainerReceiver, FStringPart, HirExpr, Ty, UnaryOpKind,
     declares_name_outside_class_attrs,
@@ -248,13 +249,13 @@ pub(super) fn lower_expr(
                             return None;
                         }
                         if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
-                            Some(format!("{mro_class}.__init__"))
+                            Some((mro_class, format!("{mro_class}.__init__")))
                         } else {
                             None
                         }
                     })
                 };
-                let ctor = ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
+                let (owner, ctor) = ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
                     panic!(
                         "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
                          MRO -- pycc_hir guarantees an `__init__` for every non-enum class it \
@@ -263,6 +264,9 @@ pub(super) fn lower_expr(
                          it at the call (#944) with pycc_types' guard behind it (#921)"
                     )
                 });
+                // #1337 (D-254): an inherited constructor runs its
+                // receiver-exact copy when one exists.
+                let ctor = exact_callee(callee, owner, ctor, scopes, classes);
                 return MirExpr::Instantiate(Box::new(InstantiateExpr {
                     ctor,
                     // #432: allocate slots for all unique attributes across the
@@ -831,12 +835,18 @@ pub(super) fn lower_expr(
                     ),
                 };
                 let self_expr = self_expr(scopes);
-                let class_def = &classes[current];
+                // #1337 (D-254): the MRO `super()` continues is the
+                // *receiver's* -- a copy's `self` is typed as the subclass it
+                // was compiled for -- after the body's own class, as in
+                // CPython.
+                let self_ty = self_expr.ty();
+                let receiver = receiver_class(&self_ty).unwrap_or(current);
+                let class_def = &classes[receiver];
                 let current_pos = class_def
                     .mro
                     .iter()
                     .position(|c| c == current)
-                    .expect("pycc_mir: internal error: class not found in its own MRO");
+                    .expect("pycc_mir: internal error: class not found in its receiver's MRO");
                 let super_mro = &class_def.mro[current_pos + 1..];
                 // #915: one pass over the slice, checking every class-level
                 // member kind on each class before moving to the next --
@@ -856,9 +866,11 @@ pub(super) fn lower_expr(
                 for mro_class in super_mro {
                     let mro_def = &classes[mro_class.as_str()];
                     if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
-                        let ty = lookup(scopes, &format!("$fn:{}", prop.getter));
+                        let getter =
+                            exact_callee(receiver, mro_class, prop.getter.clone(), scopes, classes);
+                        let ty = lookup(scopes, &format!("$fn:{getter}"));
                         return MirExpr::Call {
-                            callee: prop.getter.clone(),
+                            callee: getter,
                             args: vec![self_expr],
                             ty,
                         };
@@ -984,9 +996,16 @@ pub(super) fn lower_expr(
             for mro_class in &class_def.mro {
                 let mro_def = mro_class_def(mro_class, classes);
                 if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
-                    let ty = lookup(scopes, &format!("$fn:{}", prop.getter));
+                    let getter = exact_callee(
+                        &class_def.name,
+                        mro_class,
+                        prop.getter.clone(),
+                        scopes,
+                        classes,
+                    );
+                    let ty = lookup(scopes, &format!("$fn:{getter}"));
                     return MirExpr::Call {
-                        callee: prop.getter.clone(),
+                        callee: getter,
                         args: vec![base],
                         ty,
                     };
@@ -1091,12 +1110,16 @@ pub(super) fn lower_expr(
                     ),
                 };
                 let self_expr = self_expr(scopes);
-                let class_def = &classes[current];
+                // #1337 (D-254): the receiver's MRO after the body's own
+                // class, as in the `super().attr` arm above.
+                let self_ty = self_expr.ty();
+                let receiver = receiver_class(&self_ty).unwrap_or(current);
+                let class_def = &classes[receiver];
                 let current_pos = class_def
                     .mro
                     .iter()
                     .position(|c| c == current)
-                    .expect("pycc_mir: internal error: class not found in its own MRO");
+                    .expect("pycc_mir: internal error: class not found in its receiver's MRO");
                 let super_mro = &class_def.mro[current_pos + 1..];
                 // #966: `super().__init__()` ranks constructors exactly as
                 // `Instantiate` does, so it takes the same skip -- for
@@ -1119,16 +1142,17 @@ pub(super) fn lower_expr(
                             .methods
                             .iter()
                             .find(|(name, _)| name == method)
-                            .map(|(_, mangled)| mangled.clone())
+                            .map(|(_, mangled)| (mro_class, mangled.clone()))
                     })
                 };
-                let mangled = super_method(skip_implicit_init)
+                let (owner, mangled) = super_method(skip_implicit_init)
                     .or_else(|| super_method(false))
                     .expect(
                         "pycc_mir: internal error: method not declared on class or any base in its \
                      MRO after the current class -- pycc_types::check should have rejected this \
                      HIR before it reached pycc_mir",
                     );
+                let mangled = exact_callee(receiver, owner, mangled, scopes, classes);
                 let ty = lookup(scopes, &format!("$fn:{mangled}"));
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(self_expr);
@@ -1185,9 +1209,10 @@ pub(super) fn lower_expr(
                         .class_methods
                         .iter()
                         .find(|(name, _)| name == method)
-                        .map(|(_, mangled)| mangled.clone())
+                        .map(|(_, mangled)| (mro_class, mangled.clone()))
                 });
-                if let Some(mangled) = class_mangled {
+                if let Some((owner, mangled)) = class_mangled {
+                    let mangled = exact_callee(class_name, owner, mangled, scopes, classes);
                     let ty = lookup(scopes, &format!("$fn:{mangled}"));
                     let mut call_args = Vec::with_capacity(args.len() + 1);
                     call_args.push(MirExpr::NullInstance {
@@ -1258,9 +1283,10 @@ pub(super) fn lower_expr(
                     .class_methods
                     .iter()
                     .find(|(name, _)| name == method)
-                    .map(|(_, mangled)| mangled.clone())
+                    .map(|(_, mangled)| (mro_class, mangled.clone()))
             });
-            if let Some(mangled) = class_mangled {
+            if let Some((owner, mangled)) = class_mangled {
+                let mangled = exact_callee(&class_def.name, owner, mangled, scopes, classes);
                 let ty = lookup(scopes, &format!("$fn:{mangled}"));
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(base);
@@ -1275,7 +1301,7 @@ pub(super) fn lower_expr(
                 };
             }
             // #432: walk the MRO to find the method's mangled name.
-            let mangled = class_def
+            let (owner, mangled) = class_def
                 .mro
                 .iter()
                 .find_map(|mro_class| {
@@ -1284,7 +1310,7 @@ pub(super) fn lower_expr(
                         .methods
                         .iter()
                         .find(|(name, _)| name == method)
-                        .map(|(_, mangled)| mangled.clone())
+                        .map(|(_, mangled)| (mro_class, mangled.clone()))
                 })
                 .unwrap_or_else(|| {
                     panic!(
@@ -1294,6 +1320,8 @@ pub(super) fn lower_expr(
                         class_def.name
                     )
                 });
+            // #1337 (D-254): the receiver-exact copy when one exists.
+            let mangled = exact_callee(&class_def.name, owner, mangled, scopes, classes);
             let ty = lookup(scopes, &format!("$fn:{mangled}"));
             let mut call_args = Vec::with_capacity(args.len() + 1);
             call_args.push(base);
