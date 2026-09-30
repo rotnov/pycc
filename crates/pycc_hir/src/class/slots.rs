@@ -323,6 +323,40 @@ fn check_layout(
             ));
         }
     }
+    // Builtin exception classes carry their own instance layouts (OSError's
+    // errno fields, ImportError's name/path, ...), and pycc does not model
+    // which pairs CPython can combine, so a `__slots__` class over two
+    // unrelated builtin exception bases is refused whatever its slots are.
+    let uses_slots = def
+        .body
+        .iter()
+        .any(|stmt| slots_binding_value(stmt).is_some())
+        || ancestry
+            .iter()
+            .any(|name| ancestors.row(name).is_some_and(Option::is_some));
+    let builtins: Vec<&String> = ancestry
+        .iter()
+        .filter(|name| ancestors.row(name).is_none())
+        .collect();
+    if uses_slots
+        && let Some((first, second)) = builtins.iter().enumerate().find_map(|(index, first)| {
+            builtins[index + 1..]
+                .iter()
+                .find(|second| !related(first, second) && !related(second, first))
+                .map(|second| (first, second))
+        })
+    {
+        return Err(unsupported(
+            format!(
+                "class `{}` uses `__slots__` over the unrelated builtin exception bases `{first}` \
+                 and `{second}`; this is not supported yet -- builtin exception classes have \
+                 different instance layouts, and pycc does not model which of them CPython can \
+                 combine",
+                class_def.name
+            ),
+            def.range,
+        ));
+    }
     Ok(())
 }
 

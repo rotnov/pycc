@@ -1017,3 +1017,24 @@ fn a_slots_annotation_outside_the_admitted_spellings_is_refused() {
                  self.x = 1\n";
     assert_eq!(t0044(store).message, no_slot("C", "x"));
 }
+
+#[test]
+fn slots_over_unrelated_builtin_exception_bases_are_refused() {
+    let refused = |class: &str| {
+        format!(
+            "class `{class}` uses `__slots__` over the unrelated builtin exception bases \
+             `OSError` and `ImportError`; this is not supported yet -- builtin exception classes \
+             have different instance layouts, and pycc does not model which of them CPython can \
+             combine"
+        )
+    };
+    // CPython: `TypeError: multiple bases have instance lay-out conflict`.
+    let own = "class C(OSError, ImportError):\n    __slots__ = ()\n";
+    assert_eq!(c0001(own), refused("C"));
+    // A slotted user base brings `__slots__` in without an own binding.
+    let inherited =
+        "class E(OSError):\n    __slots__ = ()\n\n\nclass C(E, ImportError):\n    pass\n";
+    assert_eq!(c0001(inherited), refused("C"));
+    // Related builtins (one in the other's MRO) share a layout chain.
+    lower("class C(OSError, Exception):\n    __slots__ = ()\n").expect("related builtins");
+}

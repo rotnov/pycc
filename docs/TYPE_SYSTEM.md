@@ -532,7 +532,10 @@ CPython's order:
    CPython's `TypeError: multiple bases have instance lay-out conflict`. A
    diamond whose slotted classes share one chain is admitted. A slotted
    exception class combined with a builtin exception base outside its own
-   ancestry is refused as not supported yet.
+   ancestry is refused as not supported yet, and so is a class that uses
+   `__slots__` (its own or a base's) over two builtin exception bases neither
+   of which is in the other's MRO (`class C(OSError, ImportError)`), since
+   pycc does not model which builtin exception layouts CPython can combine.
 2. **Entries.** A non-iterable literal value, a non-string entry and a
    non-identifier entry are each `C0001` quoting CPython's `TypeError`. A
    non-literal value or entry, a non-ASCII entry, a `__dict__` or
