@@ -589,10 +589,14 @@ CPython's order:
    CPython. CPython accepts every refused class. The slot's member
    descriptor comes first in the MRO and shadows the later binding, so
    reading the unset slot raises `AttributeError` where pycc would find the
-   later value. The check is conservative in one respect: a class-level
-   binding of the same name earlier in the MRO than the slot would win in
-   CPython, and the class is still refused. An instance attribute does not
-   conflict, and re-declaring an ancestor's own slot is admitted.
+   later value. A base's slot whose name a class *earlier* in the MRO binds
+   at class level (`class C(A, B)` with a slotted `B`, or `C`'s own body) is
+   refused too when the instances have no `__dict__` (every MRO class binds
+   `__slots__`): CPython finds the earlier binding first, so a store to the
+   slot raises `AttributeError: ... is read-only` where pycc's flat layout
+   would write the slot. With a `__dict__` the store lands there, and the
+   class is admitted. An instance attribute does not conflict, and
+   re-declaring an ancestor's own slot is admitted.
 6. **Stores.** When every class in the MRO binds `__slots__`, the instance
    has no `__dict__`, so a store `self.<attr> = ...` to a name no MRO class
    declares is `T0044`, at the store, quoting CPython 3.13's `AttributeError`

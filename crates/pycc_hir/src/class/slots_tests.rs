@@ -565,6 +565,38 @@ fn a_slotted_base_shadowing_a_later_sibling_binding_is_refused() {
     assert_eq!(c0001(mangled), sibling("C", "B", "_A__p", "A", "_A__p"));
 }
 
+fn shadowed(class: &str, declarer: &str, slot: &str, earlier: &str) -> String {
+    format!(
+        "class `{class}` is not supported yet -- its base `{declarer}` declares the slot \
+         `{slot}`, and `{earlier}`, earlier in `{class}`'s MRO, binds `{slot}` at class level; \
+         CPython finds `{earlier}.{slot}` before `{declarer}`'s member descriptor, so storing \
+         to the slot through an instance without a `__dict__` raises `AttributeError` where \
+         pycc would write the slot"
+    )
+}
+
+#[test]
+fn an_earlier_binding_over_a_base_slot_is_refused_without_a_dict() {
+    // `class C(A, B)` with every class slotted: CPython finds `A.a` before
+    // `B`'s member descriptor, and `B.__init__`'s `self.a = 2` raises
+    // `AttributeError` because `C` has no `__dict__`.
+    let sibling_first = "class A:\n    __slots__ = ()\n    a = 1\n\n\nclass B:\n    __slots__ = \
+                         ('a',)\n\n    def __init__(self) -> None:\n        self.a = 2\n\n\nclass \
+                         C(A, B):\n    __slots__ = ()\n";
+    assert_eq!(c0001(sibling_first), shadowed("C", "B", "a", "A"));
+    // The class's own body is the earliest MRO entry.
+    let own_body = "class B:\n    __slots__ = ('a',)\n\n\nclass C(B):\n    __slots__ = ()\n    \
+                    a = 1\n";
+    assert_eq!(c0001(own_body), shadowed("C", "B", "a", "C"));
+    // An unslotted `C` keeps a `__dict__`, so its own binding is admitted.
+    let unslotted = "class B:\n    __slots__ = ('a',)\n\n\nclass C(B):\n    a = 1\n";
+    assert_eq!(slots_of(unslotted, "C"), None);
+    // With an unslotted class in the MRO the store lands in `__dict__`.
+    let with_dict = "class A:\n    a = 1\n\n\nclass B:\n    __slots__ = ('a',)\n\n\nclass \
+                     C(A, B):\n    __slots__ = ()\n";
+    assert_eq!(slots_of(with_dict, "C"), names(&[]));
+}
+
 // -- 4.3: an undeclared store ----------------------------------------------
 
 fn no_slot(class: &str, attr: &str) -> String {

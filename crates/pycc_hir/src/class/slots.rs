@@ -426,6 +426,27 @@ fn is_ascii_identifier(entry: &str) -> bool {
 /// [`check_inherited_class_names`]).
 fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(), Diagnostic> {
     let class_name = def.name.as_str();
+    let namespace = class_body_namespace(def);
+    for slot in slots {
+        let mangled = mangle(slot, class_name);
+        if namespace.contains(&mangled) {
+            return Err(unsupported(
+                format!(
+                    "the `__slots__` entry `{slot}` of class `{class_name}` is also bound in the \
+                     class body -- CPython raises `ValueError: '{mangled}' in __slots__ \
+                     conflicts with class variable` when the class is created"
+                ),
+                def.range,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The names the class body binds, after [`mangle`], as
+/// [`check_namespace_conflicts`] describes them.
+fn class_body_namespace(def: &StmtClassDef) -> Vec<String> {
+    let class_name = def.name.as_str();
     let mut namespace: Vec<String> = vec!["__module__".to_string(), "__slots__".to_string()];
     if let Some(Stmt::Expr(first)) = def.body.first()
         && matches!(*first.value, Expr::StringLiteral(_))
@@ -442,24 +463,10 @@ fn check_namespace_conflicts(def: &StmtClassDef, slots: &[String]) -> Result<(),
             _ => {}
         }
     }
-    let namespace: Vec<String> = namespace
+    namespace
         .iter()
         .map(|name| mangle(name, class_name))
-        .collect();
-    for slot in slots {
-        let mangled = mangle(slot, class_name);
-        if namespace.contains(&mangled) {
-            return Err(unsupported(
-                format!(
-                    "the `__slots__` entry `{slot}` of class `{class_name}` is also bound in the \
-                     class body -- CPython raises `ValueError: '{mangled}' in __slots__ \
-                     conflicts with class variable` when the class is created"
-                ),
-                def.range,
-            ));
-        }
-    }
-    Ok(())
+        .collect()
 }
 
 /// Refuses every dunder-named slot (`__hash__`, `__eq__`, `__len__`, ...).
@@ -574,23 +581,28 @@ fn builtin_exception_class_names(name: &str) -> &'static [&'static str] {
     }
 }
 
-/// Refuses a slot that shadows a class-level binding later in the class's
-/// MRO -- a class variable, a method, a static or class method, a property,
-/// or a builtin exception class's attribute (`args`, `errno`, ...). Every
-/// MRO entry with a non-empty slot list is checked against every entry
-/// after it in *this* class's MRO, so a slotted base is also checked
-/// against a sibling base that follows it (`class C(B, A)` with a slotted
-/// `B` and an `A` that defines the method): CPython accepts the class, but
-/// the slot's member descriptor comes first in the MRO and shadows the
-/// later binding, so reading the never-assigned slot raises
-/// `AttributeError` where pycc would find the later binding.
+/// Refuses a slot whose name another class in the class's MRO binds at
+/// class level -- a class variable, a method, a static or class method, a
+/// property, or a builtin exception class's attribute (`args`, `errno`,
+/// ...). Every MRO entry with a non-empty slot list is checked against every
+/// other entry of *this* class's MRO, the class's own body included, so a
+/// slotted base is also checked against a sibling base on either side of it.
 ///
-/// It is conservative in one way: a class-level binding of the same name
-/// earlier in the MRO than the slot would win in CPython, and the class is
-/// still refused. An instance attribute is no class-level binding and does
-/// not conflict, and neither does another class's own slot of the same name
-/// (re-declaring a base slot): no class can both slot a name and bind it at
-/// class level, since [`check_namespace_conflicts`] refuses that class.
+/// A binding later in the MRO than the slot (`class C(B, A)` with a slotted
+/// `B` and an `A` that defines the method) is shadowed by the slot's member
+/// descriptor: CPython accepts the class, but reading the never-assigned
+/// slot raises `AttributeError` where pycc would find the later binding. A
+/// binding earlier in the MRO (`class C(A, B)`, or `C`'s own body) shadows
+/// the descriptor instead: CPython finds it first, so when the instances
+/// have no `__dict__` (every MRO entry binds `__slots__`) a store to the
+/// slot raises `AttributeError` where pycc's flat layout writes the slot.
+/// With a `__dict__` the store lands in it, and an earlier binding is
+/// admitted.
+///
+/// An instance attribute is no class-level binding and does not conflict,
+/// and neither does another class's own slot of the same name (re-declaring
+/// a base slot): no class can both slot a name and bind it at class level,
+/// since [`check_namespace_conflicts`] refuses that class.
 fn check_inherited_class_names(
     def: &StmtClassDef,
     class_def: &HirClassDef,
@@ -598,6 +610,13 @@ fn check_inherited_class_names(
     ancestors: &Ancestors<'_>,
 ) -> Result<(), Diagnostic> {
     let class_name = def.name.as_str();
+    let own_namespace = class_body_namespace(def);
+    // Whether the class's instances have no `__dict__`: every MRO entry
+    // binds `__slots__`, and none is a builtin exception class.
+    let no_dict = own.is_some()
+        && class_def.mro[1..]
+            .iter()
+            .all(|ancestor| matches!(ancestors.row(ancestor), Some(Some(_))));
     for (index, declarer) in class_def.mro.iter().enumerate() {
         let (slots, span) = if index == 0 {
             match own {
@@ -614,31 +633,49 @@ fn check_inherited_class_names(
             }
         };
         for slot in slots {
-            for later in &class_def.mro[index + 1..] {
-                let binds = if ancestors.row(later).is_none() {
-                    builtin_exception_class_names(later).contains(&slot.as_str())
+            for (other_index, other) in class_def.mro.iter().enumerate() {
+                let binds = if other_index == index || (other_index < index && !no_dict) {
+                    false
+                } else if other_index == 0 {
+                    // The class's own body; its own slots were checked
+                    // against it by `check_namespace_conflicts`.
+                    own_namespace.contains(slot)
+                } else if ancestors.row(other).is_none() {
+                    builtin_exception_class_names(other).contains(&slot.as_str())
                 } else {
-                    ancestors.binds_at_class_level(later, slot)
+                    ancestors.binds_at_class_level(other, slot)
                 };
                 if !binds {
                     continue;
                 }
-                let message = if index == 0 {
+                // An earlier entry is never under the class's own slot: the
+                // class is MRO entry 0, so an earlier `other` means a base
+                // declares the slot.
+                let message = if other_index < index {
+                    format!(
+                        "class `{class_name}` is not supported yet -- its base `{declarer}` \
+                         declares the slot `{slot}`, and `{other}`, earlier in `{class_name}`'s \
+                         MRO, binds `{slot}` at class level; CPython finds `{other}.{slot}` \
+                         before `{declarer}`'s member descriptor, so storing to the slot \
+                         through an instance without a `__dict__` raises `AttributeError` \
+                         where pycc would write the slot"
+                    )
+                } else if index == 0 {
                     format!(
                         "the `__slots__` entry `{slot}` of class `{class_name}` is not supported \
-                         yet -- `{later}` binds `{slot}` at class level, and CPython's \
+                         yet -- `{other}` binds `{slot}` at class level, and CPython's \
                          member descriptor for the slot shadows the inherited \
-                         `{later}.{slot}`, so reading the unset slot raises \
+                         `{other}.{slot}`, so reading the unset slot raises \
                          `AttributeError` where pycc would find the inherited binding"
                     )
                 } else {
                     format!(
                         "class `{class_name}` is not supported yet -- its base `{declarer}` \
-                         declares the slot `{slot}`, and `{later}`, later in `{class_name}`'s \
+                         declares the slot `{slot}`, and `{other}`, later in `{class_name}`'s \
                          MRO, binds `{slot}` at class level; CPython's member descriptor for \
-                         `{declarer}`'s slot comes first and shadows `{later}.{slot}`, so \
+                         `{declarer}`'s slot comes first and shadows `{other}.{slot}`, so \
                          reading the unset slot raises `AttributeError` where pycc would find \
-                         `{later}`'s binding"
+                         `{other}`'s binding"
                     )
                 };
                 return Err(unsupported(message, span.start..span.end));
