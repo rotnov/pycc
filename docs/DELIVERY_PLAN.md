@@ -244,8 +244,8 @@ recorded D-244 rule 6's criterion as not met without a timed run, and #1039
 closed on that record. On 2026-09-24
 [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
 (owner directive) admitted annotation-only additions to the subject, so row (c)
-governs instead: the annotated subject is refused on import-closure compiler
-gaps, and its own `-> Any` return would meet `T0002` (inferred, since
+governs instead: under the import-closure reading the annotated subject was
+refused on import-closure compiler gaps, and its own `-> Any` return would meet `T0002` (inferred, since
 compilation never reached it; the boundary question is #1285). Both are
 tracked from #1207 until 2026-10-22. On 2026-09-30
 [D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)

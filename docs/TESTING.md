@@ -838,12 +838,13 @@ rule 6); only numbers are published.
   is the interpreter to time against, falling back to `PYCC_PYTHON`.
 
 
-### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps and a boundary question
+### Status: the replacement workload is selected and its annotated subject is blocked on compiler gaps and boundary questions
 
 This subsection was titled "the protocol has no admissible subject" until
 2026-09-23; D-244's 2026-09-17 amendment for #1116 cites it by that title.
 From 2026-09-23 to 2026-09-24 it was titled "the replacement workload is
-selected and the criterion is recorded as not met".
+selected and the criterion is recorded as not met". From 2026-09-24 to
+2026-09-30 it ended "compiler gaps and a boundary question".
 
 **Current state (2026-09-30): subject-module scope.**
 [D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)
@@ -872,7 +873,7 @@ whole past the first layer, so this list is a **lower bound**.
 | Blocker in the subject module (line) | Diagnostic | Issue |
 |---|---|---|
 | `from typing import Dict, Any, Generic, List` (2); each name fails at the import, `Any` before any `T0002` | `C0002` | #882 |
-| relative sibling imports (3, 4, 6) | `T0021` "attempted relative import with no known parent package" | [#1366](https://github.com/rotnov/pycc/issues/1366) (needs #1161's live `__package__`) |
+| relative sibling imports (3, 4, 6) | `T0021` "attempted relative import with no known parent package" | [#1366](https://github.com/rotnov/pycc/issues/1366) (needs a live `__package__`, the counterpart of the live `__name__` #1161 seeds) |
 | `from lark.exceptions import UnexpectedToken` (7) | `C0001` import of a dotted module | #1138 |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
 | `__slots__` on both classes (12, 33) | `C0001` | [#1368](https://github.com/rotnov/pycc/issues/1368) |
