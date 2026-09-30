@@ -2007,9 +2007,10 @@ fn emit_expr_unchecked<'ctx>(
                     .build_conditional_branch(is_initialized, ready, unbound)
                     .expect("build_conditional_branch should not fail for an i1 condition");
                 builder.position_at_end(unbound);
-                // #1316: a foreign `object` global read in a function body
-                // before its import ran raises a catchable `NameError`, as
-                // CPython does; every other unbound read keeps the trap.
+                // #1316 / Part 1 of #1333: an `object` global read in a
+                // function body before its import or assignment ran raises
+                // a catchable `NameError`, as CPython does; every other
+                // unbound read keeps the trap.
                 if !foreign_fail::emit_unbound_object_read(context, builder, module, rt, ty, name) {
                     builder
                         .build_call(rt.trap, &[], "unbound_global")
@@ -4325,22 +4326,17 @@ fn build_call_to_with_leading_args<'ctx>(
                 // further conversion, only the same `Into` `BasicMetadataValueEnum`
                 // has for any `StructValue`.
                 Scalar::Optional(v) => v.into(),
-                // NOT a pass-through, unlike every arm above (D-244, Part 2
-                // of #1026): a `Ty::Object` argument would have to be
-                // marshalled into a CPython call, which only a
-                // `pycc_ext_obj_*` shim may perform, and Part 2's attribute
-                // half ships no such shim. `pycc_types` admits no
-                // `object`-annotated parameter (D-137's amendment) and
-                // refuses passing a `Ty::Object` value to a parameter of
-                // any other type, so this arm is defensive.
-                Scalar::Object(_) => {
-                    panic!(
-                        "pycc_codegen: internal error: a CPython object argument is not supported \
-                         yet -- pycc_types should have refused this before codegen"
-                    )
-                }
-                // Defensive for the same reason (Part 2 of #1027): passing
-                // `b` to another function is a bare read of the name, which
+                // Pass-through (Part 1 of #1333): a `Ty::Object` argument
+                // reaches only an unannotated private helper's
+                // solver-inferred `object` parameter -- `object` is
+                // unspellable in an annotation (D-137's amendment) -- so the
+                // callee is another pycc function taking the same `ptr`. The
+                // borrowed pointer is passed through with no refcount
+                // change: the callee never releases it (#1092's leak-only
+                // rule, `docs/RUNTIME.md`).
+                Scalar::Object(v) => v.into(),
+                // Defensive (Part 2 of #1027): passing `b` to another
+                // function is a bare read of the name, which
                 // `reject_memoryview_read` refuses with `C0001` for a
                 // wrapper-borrowed parameter and
                 // `owned_buffer_use_unsupported` for the artifact-owned

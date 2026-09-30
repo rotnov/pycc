@@ -365,15 +365,28 @@ pub fn function_local_producer_spellings<'a>(
 /// and has no environment to ask, so this export gives it the same
 /// computation rather than a second walk that agrees today.
 ///
-/// The predicate is deliberately *exactly* `bind_std_module_aliases`' -- an
-/// `ImportBinding::Module` whose `local_name` is not the module's canonical
-/// spelling -- and must never be widened to the other `ImportBinding`
-/// variants. Membership in that gate's shadow set means "skip the refusal",
-/// so a set wider than the checker's decline set is under-refusal: an
-/// artifact-owned allocation reaching a native executable.
-/// `ImportBinding::Symbol` (`from math import sqrt as ndarray`) and
-/// `ImportBinding::Foreign` (`import ndarray`) are refused upstream
-/// (`C0001` and `I0404`), so neither needs an entry here.
+/// The module-alias arm is deliberately *exactly* `bind_std_module_aliases`'
+/// predicate -- an `ImportBinding::Module` whose `local_name` is not the
+/// module's canonical spelling. Membership in that gate's shadow set means
+/// "skip the refusal", so a set wider than the checker's decline set is
+/// under-refusal: an artifact-owned allocation reaching a native executable.
+///
+/// `ImportBinding::Foreign` (`import ndarray`, `from x import ndarray`) is
+/// the second arm (Part 1 of #1333). It used to need no entry, because a
+/// foreign name bound in a function body was refused upstream with
+/// `I0404` before the native gate ran. Part 1 of #1333 admits that binding,
+/// so `a = ndarray(n)` over a foreign import now type-checks as an
+/// ordinary CPython call, and without this arm the gate reported `I0405`
+/// ("rebuild with `--ext`") for a program with no buffer allocation at all.
+/// The arm stays inside the checker's decline set: the check phase binds
+/// every foreign import in `Environment::bindings` (via
+/// `crate::foreign::bind_foreign_objects_at`), which is
+/// `producer_assignment_ty`'s third arm, and the solver's
+/// `constraints::resolved_producer_call` declines on its `foreign_objects`
+/// table, which is seeded from the same
+/// `crate::foreign::foreign_object_names` this arm reads.
+/// `ImportBinding::Symbol` (`from math import sqrt as
+/// ndarray`) stays out: it is refused upstream with `C0001`.
 pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&str> {
     imports
         .iter()
@@ -385,6 +398,7 @@ pub fn imported_producer_spellings(imports: &[pycc_hir::ImportBinding]) -> Vec<&
             }
             _ => None,
         })
+        .chain(crate::foreign::foreign_object_names(imports))
         .filter(|name| is_producer_spelling(name))
         .collect()
 }

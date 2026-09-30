@@ -1439,14 +1439,16 @@ with admitted arguments. Since #1263 container lowering admits an \
 attribute receiver for `append`, `pop` and `get`, so one of those called on \
 an attribute of the object (`o.attr.append(v)`) is refused by this code; \
 `add` is still refused by `C0001`. In a module body every supported \
-operation is admitted only *below the import*. Since #1316 each one except \
-the `for` loop and the binding is also admitted inside a function body when the name is a \
-module-level foreign binding that no local shadows: a call that runs \
-before the import has bound the name raises `NameError` at run time, and \
-a failing operation raises a pycc exception the function can catch. \
-Inside a function body this code still refuses iterating the object with \
-`for` (#1333), binding it to a name, returning it, passing it to a pycc \
-function, and a parameter whose type would be inferred as the object. The \
+operation is admitted only *below the import*. Since #1316 and #1333 each \
+one except the `for` loop is also admitted inside a function body, and a \
+function may bind the object to a local name, return it and pass it to \
+another pycc function: a call that runs before a module-level binding has \
+bound the name raises `NameError` at run time, and a failing operation \
+raises a pycc exception the function can catch. Inside a function body \
+this code still refuses iterating the object with `for` (Part 2 of \
+#1333) and passing it to a generic function. An unannotated helper whose \
+parameter would be inferred as the object and then used as a method-call \
+receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 land -- \
 the boundary conversions -- and this code is retired when they have.",
         example: "\

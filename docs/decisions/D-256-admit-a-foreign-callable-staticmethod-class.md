@@ -17,6 +17,10 @@ status: accepted
   alone. A function body cannot yet read a module-level CPython object global
   ([#1333](https://github.com/rotnov/pycc/issues/1333)), so the attribute cannot be
   captured once into hidden storage.
+- Amendment (2026-09-30): Part 1 of #1333 ([#1362](https://github.com/rotnov/pycc/issues/1362))
+  admits a function-body read of a module-level CPython object global, so the premise
+  above no longer holds. The decision is unchanged; the eager-capture alternative is now
+  unblocked and remains Part 5 (#1349).
 - Decision:
   - One non-literal class-attribute shape is admitted. It is the un-annotated
     `name = staticmethod(<ref>)`, where `<ref>` is a bare name or a dotted attribute
@@ -66,6 +70,8 @@ status: accepted
   - *Capture the callable eagerly at class creation into a hidden module global.* This
     matches CPython exactly, but a function body cannot read a module-level object global
     yet (#1333). It is deferred to Part 5 (#1349).
+    - Amendment (2026-09-30): that blocker is gone since Part 1 of #1333 (#1362), which
+      admits the read; the capture itself is still Part 5 (#1349).
   - *Give class attributes real per-class storage.* This is D-224's rejected
     alternative, and nothing about it has changed.
   - *Admit `staticmethod` of a pycc function, or `classmethod`.* A pycc callable has no

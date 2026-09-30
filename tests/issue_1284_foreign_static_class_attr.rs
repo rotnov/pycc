@@ -649,12 +649,16 @@ fn other_call_shapes_keep_the_existing_rules() {
         "fs_unannotated_call",
         &with_fs("def _h(p):\n    print(FS.exists(p))\n\n\n_h(\"/\")\n"),
     );
-    // Binding the result in a function is #1333's `I0404`, unchanged.
-    assert_one_error(
+    // Binding the attribute or the call's result in a function body is
+    // admitted since Part 1 of #1333: both are CPython objects, and a
+    // function-local object binding is an ordinary binding.
+    assert_checks(
         "fs_bind_in_function",
         &with_fs("def f() -> None:\n    e = FS.exists\n"),
-        "I0404",
-        "binding a CPython object to a name",
+    );
+    assert_checks(
+        "fs_bind_result_in_function",
+        &with_fs("def f() -> None:\n    e = FS.exists(\"/\")\n    print(bool(e))\n"),
     );
     // A `Protocol`-derived host cannot be instantiated in pycc at all.
     assert_one_error(

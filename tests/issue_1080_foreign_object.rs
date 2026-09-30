@@ -223,22 +223,27 @@ fn a_type_error_is_reported_before_the_native_foreign_refusal() {
 }
 
 /// Finding 1 of the same review: a private helper that returns the bound
-/// module object must be refused with the documented `I0404`, not with a
-/// `T0021` telling the user to add a return annotation. No annotation can
-/// satisfy that advice -- the foreign object type is deliberately
-/// unspellable -- so the solver's `Name` arm hands back the concrete
-/// `Ty::Object` term and lets the check phase report the real refusal.
+/// module object must never get a `T0021` telling the user to add a return
+/// annotation. No annotation can satisfy that advice -- the foreign object
+/// type is deliberately unspellable -- so the solver's `Name` arm hands back
+/// the concrete `Ty::Object` term. The check phase refused the `return`
+/// with `I0404` until Part 1 of #1333 admitted returning a CPython object;
+/// the program now type-checks, and the term is what makes that possible.
 #[test]
-fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
+fn an_unannotated_helper_returning_a_foreign_module_type_checks_without_t0021() {
     let dir = ScratchDir::new("foreign_helper_return").expect("scratch");
     let output = check(
         &dir,
         "import numpy\n\ndef _helper():\n    return numpy\n\nx = _helper()\n",
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[I0404]"), "{rendered}");
     assert!(!rendered.contains("T0021"), "{rendered}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{rendered}{}",
+        stderr_of(&output)
+    );
 }
 
 /// Part 2 of #1026 (#1081): the same helper, returning an *attribute* of
@@ -249,21 +254,25 @@ fn an_unannotated_helper_returning_a_foreign_module_is_i0404_not_t0021() {
 /// without the term, signature materialization reports the `T0021` this
 /// test rules out. Which pass reports the refusal has moved twice: PR 2a
 /// of #1081 refused the in-function read itself, and #1316 admits the read
-/// but refuses the helper's `return` of a CPython object, so the consuming
-/// site is still never reached. The assertion is unchanged, deliberately:
-/// both halves of it are still the contract, and the solver term is still
-/// what makes the second half true.
+/// but refused the helper's `return` of a CPython object, and Part 1 of
+/// #1333 admits that `return`, so the program now type-checks. "No
+/// `T0021`" is still the contract, and the solver term is still what makes
+/// it true.
 #[test]
-fn an_unannotated_helper_returning_a_foreign_attribute_is_i0404_not_t0021() {
+fn an_unannotated_helper_returning_a_foreign_attribute_type_checks_without_t0021() {
     let dir = ScratchDir::new("foreign_helper_attr_return").expect("scratch");
     let output = check(
         &dir,
         "import numpy\n\ndef _helper():\n    return numpy.pi\n\nx = _helper()\n",
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[I0404]"), "{rendered}");
     assert!(!rendered.contains("T0021"), "{rendered}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{rendered}{}",
+        stderr_of(&output)
+    );
 }
 
 /// The one operation Part 2 of #1026 adds: a discarded attribute load.
@@ -280,27 +289,31 @@ fn a_discarded_attribute_load_on_a_foreign_module_is_accepted() {
     assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
 }
 
-/// A helper that returns a foreign attribute is refused, even when it is
+/// A helper that returns a foreign attribute type-checks even when it is
 /// called above the `import`.
 ///
 /// PR 2a of #1081 refused the in-function read here, because D-041 checks
 /// a body against the module environment as it stands after all top-level
 /// code and the artifact then trapped (`SIGTRAP`) on the unbound global.
-/// #1316 admits the read and gives it a failure edge instead: a helper
-/// that reads the name before the `import` has run raises CPython's own
-/// `NameError` at run time (`tests/issue_1316_foreign_in_function.rs`).
-/// This shape stays refused for a different reason -- a CPython object is
-/// never returned from a function.
+/// #1316 admits the read and gives it a failure edge instead, and Part 1 of
+/// #1333 admits returning the object, so the whole program is accepted. At
+/// run time the call raises CPython's own `NameError`, as CPython does;
+/// `tests/issue_1333_foreign_in_function.rs` matches that against the host
+/// interpreter for this exact shape.
 #[test]
-fn a_helper_reading_a_foreign_object_before_its_import_is_refused() {
+fn a_helper_reading_a_foreign_object_before_its_import_type_checks() {
     let dir = ScratchDir::new("foreign_helper_before_import").expect("scratch");
     let output = check(
         &dir,
         "def _pi():\n    return numpy.pi\n\n_pi()\n\nimport numpy\n",
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
-    let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[I0404]"), "{rendered}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
 }
 
 /// The direct form of the same regression: a module-body read placed above
@@ -519,20 +532,28 @@ fn an_assignment_above_a_foreign_import_is_refused_before_the_call() {
 }
 
 /// The refusal is bounded by the shadowing: a foreign import whose name
-/// nothing else in the module binds keeps Part 1's documented `I0404`, and
-/// it reaches that refusal through the solver's own pass, before signature
-/// materialization can report a `T0021` no annotation could satisfy.
+/// nothing else in the module binds is an ordinary `object` callee, and the
+/// solver's own pass types the call before signature materialization can
+/// report a `T0021` no annotation could satisfy. Part 1's `I0404` for the
+/// helper's `return` is gone since Part 1 of #1333, so the program
+/// type-checks; at run time the call raises CPython's own
+/// `TypeError: 'module' object is not callable`, which
+/// `tests/issue_1333_foreign_in_function.rs` matches against the host.
 #[test]
-fn an_unshadowed_foreign_import_keeps_its_refusal() {
+fn an_unshadowed_foreign_import_is_an_ordinary_object_callee() {
     let dir = ScratchDir::new("foreign_unshadowed_helper").expect("scratch");
     let output = check(
         &dir,
         "import json\n\ndef _helper():\n    return json()\n\n\ny = _helper()\n",
     );
-    assert_eq!(output.status.code(), Some(1), "{}", stderr_of(&output));
     let rendered = stdout_of(&output);
-    assert!(rendered.contains("error[I0404]"), "{rendered}");
     assert!(!rendered.contains("T0021"), "{rendered}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{rendered}{}",
+        stderr_of(&output)
+    );
 }
 
 /// A second `import` binding the same local name shadows the foreign one
