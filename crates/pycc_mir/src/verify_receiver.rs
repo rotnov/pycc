@@ -39,7 +39,7 @@ use crate::compare_chain::MirCompareKind;
 use crate::exception::MirExceptionValue;
 use crate::{
     CompSource, MirCompElt, MirContainerReceiver, MirExpr, MirFStringPart, MirItem, MirModule,
-    MirStmt, Ty,
+    MirStmt, SetElementOps, SetEqOp, SetHashOp, Ty,
 };
 
 /// Panics when a call in `module` violates the receiver-exact dispatch
@@ -134,6 +134,17 @@ impl Verifier<'_> {
             }
         }
         out
+    }
+
+    /// Checks the hash and equality callees a set of `elem_ty` elements
+    /// runs on each insertion: each receives the element as `self`.
+    fn check_set_ops(&self, ops: &SetElementOps, elem_ty: &Ty) {
+        if let SetHashOp::Method { callee, .. } = &ops.hash {
+            self.check_call(callee, elem_ty);
+        }
+        if let SetEqOp::Method { callee } = &ops.eq {
+            self.check_call(callee, elem_ty);
+        }
     }
 
     /// Checks one call of `callee` whose receiver has type `receiver_ty`.
@@ -363,8 +374,13 @@ impl Verifier<'_> {
             }
             | MirExpr::InstanceHash { operand: inner, .. }
             | MirExpr::ObjUnpackFloatTuple { base: inner, .. }
-            | MirExpr::NamedExpr { value: inner, .. }
-            | MirExpr::SetAdd { value: inner, .. } => self.expr(inner),
+            | MirExpr::NamedExpr { value: inner, .. } => self.expr(inner),
+            MirExpr::SetAdd { value, ops, .. } => {
+                if let Some(ops) = ops {
+                    self.check_set_ops(ops, &value.ty());
+                }
+                self.expr(value);
+            }
             MirExpr::BinOp { left, right, .. }
             | MirExpr::Compare { left, right, .. }
             | MirExpr::BoolOp { left, right, .. }
@@ -401,9 +417,13 @@ impl Verifier<'_> {
                     }
                 }
             }
-            MirExpr::ListLiteral(items)
-            | MirExpr::SetLiteral(items)
-            | MirExpr::TupleLiteral(items) => self.exprs(items),
+            MirExpr::ListLiteral(items) | MirExpr::TupleLiteral(items) => self.exprs(items),
+            MirExpr::SetLiteral { elements, ops } => {
+                if let (Some(ops), Some(first)) = (ops, elements.first()) {
+                    self.check_set_ops(ops, &first.ty());
+                }
+                self.exprs(elements);
+            }
             MirExpr::DictLiteral(entries) => {
                 for (key, value) in entries {
                     self.exprs([key, value]);

@@ -30,6 +30,7 @@
 //! past AGENTS.md's ~1,000-line decomposition threshold.
 
 use crate::env::Environment;
+use crate::set_element::check_hash_method;
 use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{HirClassDef, InstanceHash, Ty, resolve_instance_hash};
 use std::collections::HashMap;
@@ -99,46 +100,9 @@ fn check_instance(
     match resolve_instance_hash(class, classes) {
         InstanceHash::Identity => Ok(Ty::Int),
         InstanceHash::Method(mangled) => {
-            // A method's registered parameters start with `self`.
-            let (params, returns) = functions
-                .get(&mangled)
-                .expect("a class method is registered as a function");
-            if params.len() != 1 {
-                return Err(not_implemented(
-                    ty,
-                    format!(
-                        "`{mangled}` takes parameters besides `self`; pycc compiles only \
-                         `def __hash__(self)`"
-                    ),
-                ));
-            }
-            if let Ty::Optional(inner) = returns
-                && matches!(**inner, Ty::Int | Ty::Bool)
-            {
-                // CPython raises only when the method returns `None` at
-                // run time, so this is not a static `TypeError`. A
-                // `float | None` result raises on every call and stays
-                // `T0021` below.
-                return Err(not_implemented(
-                    ty,
-                    format!(
-                        "`{mangled}` returns `{}`; pycc compiles only a `__hash__` returning \
-                         `int` or `bool`",
-                        returns.name()
-                    ),
-                ));
-            }
-            if !matches!(returns, Ty::Int | Ty::Bool) {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    "`__hash__` method should return an integer",
-                    Span::new(0, 0),
-                )
-                .with_help(format!(
-                    "CPython raises `TypeError` when `{mangled}` returns `{}`; return an `int`",
-                    returns.name()
-                )));
-            }
+            // #1343: the signature rule is shared with a set element.
+            check_hash_method(&mangled, functions)
+                .map_err(|refusal| refusal.into_diagnostic(|help| not_implemented(ty, help)))?;
             Ok(Ty::Int)
         }
         InstanceHash::Unhashable { class: binder } => Err(Diagnostic::error(

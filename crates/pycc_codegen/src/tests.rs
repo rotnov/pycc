@@ -4019,11 +4019,14 @@ fn collect_expr_bindings_walks_into_a_list_and_set_literal_element() {
     collect_expr_bindings(&list_expr, &mut bindings);
     assert_eq!(bindings.get("l"), Some(&Ty::Int));
 
-    let set_expr = MirExpr::SetLiteral(vec![MirExpr::NamedExpr {
-        name: "s".to_string(),
-        value: Box::new(MirExpr::IntLiteral(1)),
-        ty: Ty::Int,
-    }]);
+    let set_expr = MirExpr::SetLiteral {
+        elements: vec![MirExpr::NamedExpr {
+            name: "s".to_string(),
+            value: Box::new(MirExpr::IntLiteral(1)),
+            ty: Ty::Int,
+        }],
+        ops: None,
+    };
     let mut bindings = BTreeMap::new();
     collect_expr_bindings(&set_expr, &mut bindings);
     assert_eq!(bindings.get("s"), Some(&Ty::Int));
@@ -4231,6 +4234,7 @@ fn collect_stmt_bindings_binds_a_for_set_loop_variable_as_int_and_recurses_into_
     // `ForList`/`ForDict`/`ForRange`/`If`/`While` above, so a nested,
     // ordinary statement's binding is not silently dropped.
     let stmt = MirStmt::ForSet {
+        var_ty: pycc_mir::Ty::Int,
         var: "v".to_string(),
         set: "s".to_string(),
         body: vec![MirStmt::Assign {
@@ -5891,12 +5895,15 @@ fn set_literal_construction_dedups_and_reports_correct_len() {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(1),
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(3),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(print_expr(MirExpr::Call {
                 callee: "len".to_string(),
@@ -5937,13 +5944,17 @@ fn for_x_in_set_iterates_in_first_insertion_order() {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(1),
-                    MirExpr::IntLiteral(2),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::ForSet {
+                var_ty: pycc_mir::Ty::Int,
                 var: "v".to_string(),
                 set: "x".to_string(),
                 body: vec![print_expr(MirExpr::Name {
@@ -5979,6 +5990,7 @@ fn for_set_over_a_non_set_local_is_an_internal_error() {
             value: MirExpr::IntLiteral(1),
         },
         MirStmt::ForSet {
+            var_ty: pycc_mir::Ty::Int,
             var: "v".to_string(),
             set: "n".to_string(),
             body: vec![],
@@ -6000,6 +6012,7 @@ fn for_set_over_an_unbound_name_is_an_internal_error() {
     // `for_set_over_a_non_set_local_is_an_internal_error` above does
     // not reach.
     let mir = list_fixture_module(vec![MirStmt::ForSet {
+        var_ty: pycc_mir::Ty::Int,
         var: "v".to_string(),
         set: "never_bound".to_string(),
         body: vec![],
@@ -6100,9 +6113,13 @@ fn an_error_inside_a_for_set_body_propagates_out_of_codegen() {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
-                value: MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1)]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![MirExpr::IntLiteral(1)],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::ForSet {
+                var_ty: pycc_mir::Ty::Int,
                 var: "v".to_string(),
                 set: "x".to_string(),
                 body: vec![call_user_fn("missing")],
@@ -8142,13 +8159,17 @@ fn a_return_inside_a_for_set_body_returns_immediately_without_looping() {
                 body: vec![
                     MirStmt::Assign {
                         target: "xs".to_string(),
-                        value: MirExpr::SetLiteral(vec![
-                            MirExpr::IntLiteral(1),
-                            MirExpr::IntLiteral(2),
-                            MirExpr::IntLiteral(3),
-                        ]),
+                        value: MirExpr::SetLiteral {
+                            elements: vec![
+                                MirExpr::IntLiteral(1),
+                                MirExpr::IntLiteral(2),
+                                MirExpr::IntLiteral(3),
+                            ],
+                            ops: None,
+                        },
                     },
                     MirStmt::ForSet {
+                        var_ty: pycc_mir::Ty::Int,
                         var: "v".to_string(),
                         set: "xs".to_string(),
                         body: vec![MirStmt::Return(Some(MirExpr::Name {
@@ -10930,7 +10951,7 @@ fn print_each_int(list: &str) -> MirStmt {
     }
 }
 
-/// `MirStmt::ForSet { var: "v", set: <set>, body: [print(v)] }` -- the
+/// `MirStmt::ForSet { var: "v", var_ty: int, set: <set>, body: [print(v)] }` -- the
 /// `SetCompAssign` test suite's own analog of `print_each_int` above,
 /// for the identical reason (container `to_str`/`truthy` remain
 /// unimplemented, D-107/D-124, so a produced `set[int]` cannot be
@@ -10940,6 +10961,7 @@ fn print_each_int(list: &str) -> MirStmt {
 /// immediately_without_looping` test already pins).
 fn print_each_int_from_set(set: &str) -> MirStmt {
     MirStmt::ForSet {
+        var_ty: pycc_mir::Ty::Int,
         var: "v".to_string(),
         set: set.to_string(),
         body: vec![MirStmt::ExprStmt(MirExpr::Call {
@@ -11274,11 +11296,14 @@ fn a_set_sourced_list_comprehension_with_no_filter_visits_every_element() {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "some_set".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(1),
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(3),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::ListCompAssign {
                 target: "zs".to_string(),
@@ -11552,11 +11577,14 @@ fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pr
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "s".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(1),
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(3),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
                 target: "s".to_string(),
@@ -11613,13 +11641,16 @@ fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_us
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "s".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(1),
-                    MirExpr::IntLiteral(2),
-                    MirExpr::IntLiteral(3),
-                    MirExpr::IntLiteral(4),
-                    MirExpr::IntLiteral(5),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                        MirExpr::IntLiteral(4),
+                        MirExpr::IntLiteral(5),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::SetCompAssign {
                 target: "s".to_string(),
@@ -11957,12 +11988,15 @@ fn a_set_sourced_dict_comprehension_with_a_filter_only_keeps_matching_entries() 
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "ys".to_string(),
-                value: MirExpr::SetLiteral(vec![
-                    MirExpr::IntLiteral(5),
-                    MirExpr::IntLiteral(6),
-                    MirExpr::IntLiteral(7),
-                    MirExpr::IntLiteral(10),
-                ]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![
+                        MirExpr::IntLiteral(5),
+                        MirExpr::IntLiteral(6),
+                        MirExpr::IntLiteral(7),
+                        MirExpr::IntLiteral(10),
+                    ],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::DictCompAssign {
                 target: "named3".to_string(),
@@ -12784,9 +12818,13 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
         items: vec![
             MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "s".to_string(),
-                value: MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]),
+                value: MirExpr::SetLiteral {
+                    elements: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+                    ops: None,
+                },
             }),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
+                ops: None,
                 set: "s".to_string(),
                 value: Box::new(MirExpr::IntLiteral(3)),
             })),
@@ -12796,6 +12834,7 @@ fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
                 ty: Ty::Int,
             })),
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
+                ops: None,
                 set: "s".to_string(),
                 value: Box::new(MirExpr::IntLiteral(1)),
             })),
@@ -15312,7 +15351,10 @@ fn a_set_typed_call_result_is_returned_as_a_pointer() {
     let stdout = run_container_return(
         "call_returns_set",
         set_int(),
-        MirExpr::SetLiteral(vec![MirExpr::IntLiteral(4), MirExpr::IntLiteral(5)]),
+        MirExpr::SetLiteral {
+            elements: vec![MirExpr::IntLiteral(4), MirExpr::IntLiteral(5)],
+            ops: None,
+        },
         MirExpr::Call {
             callee: "len".to_string(),
             args: vec![set_name("x")],

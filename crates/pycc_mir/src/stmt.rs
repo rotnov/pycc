@@ -416,8 +416,8 @@ pub(super) fn lower_stmt(
             // set case), not hardcoded to `Ty::Int`. Empirically only a
             // `Ty::List(Box::new(Ty::Int))`, `Ty::Dict(Box::new((Ty::Str,
             // Ty::Int)))`, `Ty::Set(Box::new(Ty::Int))`, or
-            // `Ty::FrozenSet(Box::new(Ty::Int))` binding ever
-            // reaches this arm today (`pycc_types`' T0034/T0036/T0037/T0038
+            // `Ty::FrozenSet(Box::new(Ty::Int))` binding, or (#1343) a set or
+            // frozenset of a user-class instance, ever reaches this arm today (`pycc_types`' T0034/T0036/T0037/T0038
             // gates reject every other element/key-value combination before
             // HIR ever constructs one -- see those gates' own comments and
             // this crate's own genericity tests), but deriving here keeps
@@ -468,13 +468,15 @@ pub(super) fn lower_stmt(
                 // `Ty::Set(elem_ty) => *elem_ty` arm (added in that crate's
                 // Task 7 fix round).
                 Ty::Set(elem_ty) | Ty::FrozenSet(elem_ty) => {
-                    bind_variable(scopes, var.clone(), *elem_ty);
+                    let var_ty = *elem_ty;
+                    bind_variable(scopes, var.clone(), var_ty.clone());
                     // D-068 re-review of #780 (sixth round): see the
                     // `ForRange` arm's identical comment above.
                     super::kill_narrowing(scopes, var);
                     let body = lower_loop_body(body, scopes, classes, current_class);
                     MirStmt::ForSet {
                         var: var.clone(),
+                        var_ty,
                         set: list.clone(),
                         body,
                     }

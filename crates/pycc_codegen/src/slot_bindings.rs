@@ -235,25 +235,18 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
         }
         // `MirStmt::ForSet`, produced when a `for x in s:` HIR loop's base
         // resolves to a set-typed binding (mirrors `MirStmt::ForDict`
-        // immediately above, which is produced for the dict-typed case).
-        // `Ty::Int` for the same reason `ForList`'s own comment gives for
-        // its identical hardcode, not by analogy: a `for` target's type is
-        // the iterated element type, and `pycc_types`' T0038 gate means
-        // that element type is always exactly `Ty::Int` for every `Ty::Set`
-        // value that ever reaches this crate (no other element type is
-        // compiled). PR-11 Task 9's own codegen (`emit_stmt`'s
-        // `MirStmt::ForSet` arm) binds the loop variable to a `Scalar::Int`
-        // every iteration, so its slot must already exist before that arm
-        // runs, exactly like `ForList`'s own `var` slot -- unlike Task 8's
-        // version of this arm (which deliberately left this binding out,
-        // since what the slot should look like was this task's own codegen
-        // design decision), this is no longer a deferred decision.
-        // Recursing into `body` is unchanged: it is what lets a nested,
-        // ordinary statement (e.g. `for x in s:\n y = 1\n`) still get `y`'s
-        // own binding collected, exactly like every other container arm
-        // above.
-        MirStmt::ForSet { var, body, .. } => {
-            bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Int);
+        // immediately above). The target binds the set's element type,
+        // which lowering carries as `var_ty`: `int`, or a user-class
+        // instance since #1343. `emit_stmt`'s `MirStmt::ForSet` arm writes
+        // that slot every iteration, so it must exist before the arm runs.
+        // Recursing into `body` collects a nested statement's own bindings,
+        // exactly like every other container arm above.
+        MirStmt::ForSet {
+            var, var_ty, body, ..
+        } => {
+            bindings
+                .entry(var.clone())
+                .or_insert_with(|| var_ty.clone());
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }

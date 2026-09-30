@@ -56,6 +56,13 @@ mod foreign_len;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+/// Set insertion, length and iteration helpers, and the insert of a set of
+/// user-class instances (#1343, Part 1 of #1336).
+mod set_instance;
+use set_instance::{
+    SetEmitter, build_int_set_add, build_int_set_check_not_resized, build_int_set_get,
+    build_int_set_len, expect_set_pointer, set_element_scalar,
+};
 
 /// One Part 4 conversion emitter in `foreign_len.rs` (PR 4b of #1083).
 ///
@@ -482,12 +489,11 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // storage/parameter representation `List(_)`/`Dict(_)` get
         // immediately above, for the identical reason (the element type
         // only affects what this crate's `pycc_rt_int_set_*` calls do with
-        // the pointee, never this representation choice). Only
-        // `Ty::Set(Box::new(Ty::Int))` ever reaches this arm today
+        // the pointee, never this representation choice). An `int` or,
+        // since #1343, a user-class instance element reaches this arm
         // (`pycc_types`' T0038 gate rejects every other element type before
-        // codegen runs), but the arm itself is not narrowed to that one
-        // element type, matching `List(_)`/`Dict(_)`'s own
-        // element/key/value-agnostic shape.
+        // codegen runs); the arm is element-agnostic, matching
+        // `List(_)`/`Dict(_)`'s own element/key/value-agnostic shape.
         pycc_mir::Ty::Set(_) | pycc_mir::Ty::FrozenSet(_) => {
             context.ptr_type(inkwell::AddressSpace::default()).into()
         }
@@ -1106,109 +1112,6 @@ fn build_dict_len<'ctx>(
         .expect("build_call should not fail for a well-formed dict length read")
         .try_as_basic_value()
         .expect_basic("pycc_rt_dict_len returns a non-void i64")
-        .into_int_value()
-}
-
-/// Extracts a `PyIntSetObj` pointer from an already-evaluated operand that
-/// every upstream check says must be a `set[T]`: `len`'s argument and
-/// `emit_set_name_read`'s named local. `what` names the offending operand
-/// for the message. Mirrors `expect_list_pointer`/`expect_dict_pointer`
-/// exactly, for the identical reason (see `expect_list_pointer`'s own doc
-/// comment): one shared helper rather than a `let Scalar::Set(..) = ..
-/// else` at each site, so the check stays genuinely covered by the site
-/// that is naturally reachable with a non-set operand (a non-set local
-/// named by `for`, and a non-set argument to `len`).
-fn expect_set_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'ctx> {
-    let Scalar::Set(ptr) = scalar else {
-        panic!(
-            "pycc_codegen: internal error: {what} did not evaluate to a set -- \
-             pycc_types::check (T0033/T0037/T0038) should have rejected this before codegen"
-        )
-    };
-    ptr
-}
-
-/// Inserts one already-validated encoded D-141 value into a `PyIntSetObj`,
-/// shared by `MirExpr::SetLiteral`'s per-element construction and
-/// `MirExpr::SetAdd`'s own user-facing `s.add(value)` call (PR-12 Task 11,
-/// D-119 -- the second call site; `SetLiteral`'s per-element construction
-/// was the first and, until this task, only one). Returns nothing:
-/// `pycc_rt_int_set_add` is declared `void`, exactly like
-/// `build_int_list_append`/`build_dict_set` above. The dedup check that
-/// makes a repeated element collapse to one (D-121) lives entirely inside
-/// `pycc_rt_int_set_add` itself -- both callers just call it per value,
-/// unconditionally, with no dedup logic of their own.
-fn build_int_set_add<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    set_ptr: PointerValue<'ctx>,
-    encoded_value: IntValue<'ctx>,
-) {
-    builder
-        .build_call(
-            rt.int_set_add,
-            &[set_ptr.into(), encoded_value.into()],
-            "set_add",
-        )
-        .expect("build_call should not fail for a well-formed set add");
-}
-
-/// A `PyIntSetObj`'s current element count, as a raw `i64` counter, shared
-/// by the `len(s)` builtin's `Ty::Set` branch, `MirStmt::ForSet`'s own loop
-/// bound and `frozenset::set_truthy` -- mirrors `build_int_list_len`/
-/// `build_dict_len` exactly, for the identical reason.
-fn build_int_set_len<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    set_ptr: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    builder
-        .build_call(rt.int_set_len, &[set_ptr.into()], "set_len")
-        .expect("build_call should not fail for a well-formed set length read")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_int_set_len returns a non-void i64")
-        .into_int_value()
-}
-
-/// Panics (via `pycc_rt_int_set_check_not_resized`) if `current_len` no
-/// longer matches `expected_len` -- called once per `ForSet` loop-test
-/// evaluation, comparing a freshly re-read length against the length
-/// captured once in the preheader. See that runtime function's own doc
-/// comment for why `set.add()` (PR-12, D-119) made this reachable.
-fn build_int_set_check_not_resized<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    current_len: IntValue<'ctx>,
-    expected_len: IntValue<'ctx>,
-) {
-    builder
-        .build_call(
-            rt.int_set_check_not_resized,
-            &[current_len.into(), expected_len.into()],
-            "set_check_not_resized",
-        )
-        .expect("build_call should not fail for a well-formed set resize check");
-}
-
-/// Reads one element out of a `PyIntSetObj` by insertion-order index, used
-/// only by `MirStmt::ForSet`'s own per-iteration element read. The index is
-/// a raw counter and the result is an encoded D-141 value, mirroring
-/// `build_int_list_get`.
-fn build_int_set_get<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
-    rt: &RtFns<'ctx>,
-    set_ptr: PointerValue<'ctx>,
-    raw_index: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    builder
-        .build_call(
-            rt.int_set_get,
-            &[set_ptr.into(), raw_index.into()],
-            "set_get",
-        )
-        .expect("build_call should not fail for a well-formed set read")
-        .try_as_basic_value()
-        .expect_basic("pycc_rt_int_set_get returns a non-void i64")
         .into_int_value()
 }
 
@@ -3303,7 +3206,27 @@ fn emit_expr_unchecked<'ctx>(
         // `pycc_rt_int_set_add` itself (see `build_int_set_add`'s own doc
         // comment) -- this arm calls it per element, unconditionally, with
         // no dedup logic of its own.
-        MirExpr::SetLiteral(elements) => {
+        //
+        // A set of user-class instances (#1343) carries `ops` and is built
+        // by `set_instance.rs`, which drives the user `__hash__`/`__eq__`.
+        MirExpr::SetLiteral {
+            elements,
+            ops: Some(ops),
+        } => {
+            let emitter = SetEmitter {
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+            };
+            Scalar::Set(emitter.literal(elements, ops))
+        }
+        MirExpr::SetLiteral {
+            elements,
+            ops: None,
+        } => {
             let set_ptr = builder
                 .build_call(rt.int_set_new, &[], "set_new")
                 .expect("build_call should not fail for a well-formed set construction")
@@ -3650,9 +3573,23 @@ fn emit_expr_unchecked<'ctx>(
         // -- verified empirically: see the crate's `tests` module and its
         // `set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs`
         // end-to-end test.
-        MirExpr::SetAdd { set, value } => {
+        MirExpr::SetAdd { set, value, ops } => {
             let set_ptr =
                 emit_set_name_read(context, builder, module, rt, user_functions, locals, set);
+            if let Some(ops) = ops {
+                // An instance element (#1343): `set_instance.rs` drives the
+                // user `__hash__`/`__eq__`.
+                let emitter = SetEmitter {
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                };
+                emitter.add(set_ptr, value, ops);
+                return Scalar::Bool(context.i8_type().const_int(0, false));
+            }
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
             let encoded = to_encoded_int(context, builder, value_scalar);
@@ -8143,7 +8080,12 @@ fn emit_stmt<'ctx>(
         //
         // D-141 mirrors `ForList`: the induction variable and `len` are raw
         // private counters, while the element is an encoded user value.
-        MirStmt::ForSet { var, set, body } => {
+        MirStmt::ForSet {
+            var,
+            var_ty,
+            set,
+            body,
+        } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
             // Read once, in the preheader, not per iteration -- identical
             // reasoning to `ForList`'s own preheader read (see that arm's
@@ -8252,7 +8194,7 @@ fn emit_stmt<'ctx>(
                 rt,
                 locals,
                 var,
-                Scalar::Int(encoded_element),
+                set_element_scalar(context, builder, var_ty, encoded_element),
             );
             emit_body(
                 context,

@@ -35,8 +35,39 @@ fn hash_int_word<'ctx>(
         .into_int_value()
 }
 
+/// `pycc_rt_hash_slot_int(word)`: CPython's `slot_tp_hash` reduction of a
+/// user `__hash__`'s `int` result. Shared by `hash(instance)` and a set
+/// insertion; each caller retires the word itself.
+pub(super) fn hash_slot_int_word<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    word: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.hash_slot_int, &[word.into()], "hash_slot_int")
+        .expect("build_call should not fail for pycc_rt_hash_slot_int")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_hash_slot_int returns an i64")
+        .into_int_value()
+}
+
+/// `pycc_rt_hash_pointer(pointer)`: `object.__hash__`, an instance's
+/// identity hash. Shared by `hash(instance)` and a set insertion.
+pub(super) fn hash_identity<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    pointer: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.hash_pointer, &[pointer.into()], "hash_pointer")
+        .expect("build_call should not fail for pycc_rt_hash_pointer")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_hash_pointer returns an i64")
+        .into_int_value()
+}
+
 /// A bool's hash: the `i8` `0`/`1` widened to `i64`.
-fn hash_bool<'ctx>(
+pub(super) fn hash_bool<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     value: IntValue<'ctx>,
@@ -169,24 +200,14 @@ pub(super) fn emit_instance_hash<'ctx>(
     let raw = match (via, scalar) {
         (pycc_mir::InstanceHashVia::Identity, scalar) => {
             let pointer = expect_instance_pointer(scalar, "a `hash()` identity operand");
-            builder
-                .build_call(rt.hash_pointer, &[pointer.into()], "hash_pointer")
-                .expect("build_call should not fail for pycc_rt_hash_pointer")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_hash_pointer returns an i64")
-                .into_int_value()
+            hash_identity(builder, rt, pointer)
         }
         (pycc_mir::InstanceHashVia::Method, Scalar::Bool(value)) => {
             hash_bool(context, builder, value)
         }
         (pycc_mir::InstanceHashVia::Method, other) => {
             let word = to_encoded_int(context, builder, other);
-            let hash = builder
-                .build_call(rt.hash_slot_int, &[word.into()], "hash_slot_int")
-                .expect("build_call should not fail for pycc_rt_hash_slot_int")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_hash_slot_int returns an i64")
-                .into_int_value();
+            let hash = hash_slot_int_word(builder, rt, word);
             release_if_int_temporary(context, builder, rt, operand, word);
             hash
         }

@@ -119,25 +119,36 @@ pub fn check_container_ty(ty: &Ty, span: Span) -> Result<(), Diagnostic> {
     }
 }
 
-/// The `T0038` gate shared by `set[T]` and `frozenset[T]`: only an `int`
-/// element is compiled. `family` names the admitted form in the message.
+/// The `T0038` gate shared by `set[T]` and `frozenset[T]`: an `int` element
+/// and (#1343) a user-class instance element are compiled. Whether that
+/// class is actually hashable is checked where an element is inserted
+/// (`pycc_types::set_element`), which has the class table this gate lacks.
+/// `family` names the admitted forms in the message.
 fn check_int_set_element(
     ty: &Ty,
     element: &Ty,
     family: &str,
     span: Span,
 ) -> Result<(), Diagnostic> {
-    if *element != Ty::Int {
+    if !matches!(element, Ty::Int | Ty::Instance(_)) {
         return Err(Diagnostic::error(
             "T0038",
-            format!(
-                "{} is not compiled yet (D-122) -- only {family}[int] is",
-                ty.name()
-            ),
+            set_element_message(ty, family),
             span,
         ));
     }
     Ok(())
+}
+
+/// The `T0038` message for a `set[T]`/`frozenset[T]` whose element is not
+/// compiled, naming both admitted element forms.
+#[must_use]
+pub fn set_element_message(ty: &Ty, family: &str) -> String {
+    format!(
+        "{} is not compiled yet (D-122) -- only {family}[int] and a {family} of a user-class \
+         instance are",
+        ty.name()
+    )
 }
 
 #[cfg(test)]

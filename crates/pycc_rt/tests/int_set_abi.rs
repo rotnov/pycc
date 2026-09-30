@@ -1,6 +1,8 @@
 //! Part 1 of #1319: the `pycc_rt_int_set_*` entry points `set[int]` and
 //! `frozenset[int]` share, called through the `rlib` exactly as generated
-//! code links them from the `staticlib`.
+//! code links them from the `staticlib`, plus the #1343 `pycc_rt_obj_set_*`
+//! probe, push and identity-insert points a `set[C]` of a hashable user
+//! class shares with them.
 //!
 //! The unit tests in `crates/pycc_rt/src/int_set.rs` own the semantics; this file pins the exported ABI from outside the crate. It is
 //! also where the diff-coverage gate sees these functions: the
@@ -14,7 +16,8 @@ use pycc_rt::{
     pycc_rt_ext_pending_type, pycc_rt_int_list_append, pycc_rt_int_list_new, pycc_rt_int_lshift,
     pycc_rt_int_set_add, pycc_rt_int_set_check_not_resized, pycc_rt_int_set_copy,
     pycc_rt_int_set_decref, pycc_rt_int_set_from_int_list, pycc_rt_int_set_get,
-    pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new,
+    pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new, pycc_rt_obj_set_add_identity,
+    pycc_rt_obj_set_candidate, pycc_rt_obj_set_push,
 };
 
 /// D-061's inline smallint word for `value`.
@@ -154,6 +157,32 @@ fn from_int_list_raises_on_a_bigint_word_and_stops() {
         );
         assert_eq!(items(set), vec![small(4)]);
         pycc_rt_exception_clear();
+        pycc_rt_int_set_decref(set);
+    }
+}
+
+/// #1343: the instance-set entry points `set[C]` of a hashable user class
+/// uses. The item word is an opaque instance pointer, so plain integers
+/// stand in for it here; the unit tests own the full semantics.
+#[test]
+fn instance_set_entry_points_probe_push_and_dedup_by_identity() {
+    unsafe {
+        let set = pycc_rt_int_set_new();
+        assert_eq!(pycc_rt_obj_set_candidate(set, 5, 0), -1);
+        pycc_rt_obj_set_push(set, 100, 5);
+        pycc_rt_obj_set_push(set, 200, 6);
+        pycc_rt_obj_set_push(set, 300, 5);
+        assert_eq!(pycc_rt_obj_set_candidate(set, 5, 0), 0);
+        assert_eq!(pycc_rt_obj_set_candidate(set, 5, 1), 2);
+        assert_eq!(pycc_rt_obj_set_candidate(set, 5, 3), -1);
+        assert_eq!(pycc_rt_obj_set_candidate(set, 7, 0), -1);
+        // The same word with the same hash is kept once; an equal hash on
+        // another word and a different hash are both new entries.
+        pycc_rt_obj_set_add_identity(set, 100, 5);
+        pycc_rt_obj_set_add_identity(set, 400, 5);
+        pycc_rt_obj_set_add_identity(set, 500, 9);
+        assert_eq!(items(set), vec![100, 200, 300, 400, 500]);
+        assert_eq!(pycc_rt_obj_set_candidate(set, 9, 0), 4);
         pycc_rt_int_set_decref(set);
     }
 }

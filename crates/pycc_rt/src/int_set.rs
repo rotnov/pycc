@@ -17,9 +17,17 @@ use super::*;
 /// D-107 gave for `Scalar::List` needing its own variant instead of
 /// reusing `Scalar::Str`: distinct semantics deserve a distinct type so
 /// the compiler enforces every call site acknowledges the difference).
+///
+/// #1343 (Part 1 of #1336) reuses it for a set of user-class instances: each
+/// `items` word is then an instance pointer and `hashes[i]` its reduced
+/// `__hash__`, computed once at insertion as CPython does. `hashes` stays
+/// empty for every `int` set, and no `pycc_rt_int_set_*` insert touches it.
+/// Instances are never freed (`instance.rs`), so a stored pointer holds no
+/// reference.
 pub struct PyIntSetObj {
     rc: Cell<u32>,
     items: Cell<Vec<i64>>,
+    hashes: Cell<Vec<i64>>,
 }
 
 /// Allocates a fresh, empty `PyIntSetObj` with refcount `1`. Never panics.
@@ -28,6 +36,7 @@ pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
     Box::into_raw(Box::new(PyIntSetObj {
         rc: Cell::new(1),
         items: Cell::new(Vec::new()),
+        hashes: Cell::new(Vec::new()),
     }))
 }
 
@@ -188,9 +197,15 @@ pub unsafe extern "C" fn pycc_rt_int_set_copy(src: *mut PyIntSetObj) -> *mut PyI
     let items = unsafe { &*src }.items.take();
     let copy = items.clone();
     unsafe { &*src }.items.set(items);
+    // #1343: an instance set's stored hashes travel with it, so
+    // `frozenset(s)` calls no user `__hash__` or `__eq__`.
+    let hashes = unsafe { &*src }.hashes.take();
+    let hashes_copy = hashes.clone();
+    unsafe { &*src }.hashes.set(hashes);
     Box::into_raw(Box::new(PyIntSetObj {
         rc: Cell::new(1),
         items: Cell::new(copy),
+        hashes: Cell::new(hashes_copy),
     }))
 }
 
@@ -221,6 +236,71 @@ pub unsafe extern "C" fn pycc_rt_int_set_from_int_list(src: *mut PyIntListObj) -
     set
 }
 
+/// #1343: the smallest index `i >= from` whose stored hash equals `hash`,
+/// or `-1` when there is none. Codegen drives an instance set's `__eq__`
+/// probe with it, because the runtime cannot call user code: it asks for a
+/// candidate, compares, and asks again from `i + 1`.
+///
+/// A set is append-only (no `remove`, `discard`, `pop` or `clear` is
+/// compiled), so an index returned here stays valid across the user
+/// `__eq__` call codegen makes next, even one that inserts into this same
+/// set; the probe then simply also sees the new entry.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer; `from >= 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_obj_set_candidate(
+    set: *mut PyIntSetObj,
+    hash: i64,
+    from: i64,
+) -> i64 {
+    let hashes = unsafe { &*set }.hashes.take();
+    let found = hashes
+        .iter()
+        .skip(from as usize)
+        .position(|stored| *stored == hash)
+        .map_or(-1, |offset| from + offset as i64);
+    unsafe { &*set }.hashes.set(hashes);
+    found
+}
+
+/// #1343: appends an instance-set entry, `word` with its reduced `hash`,
+/// once codegen's probe found no equal element.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer holding instances.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_obj_set_push(set: *mut PyIntSetObj, word: i64, hash: i64) {
+    let mut items = unsafe { &*set }.items.take();
+    items.push(word);
+    unsafe { &*set }.items.set(items);
+    let mut hashes = unsafe { &*set }.hashes.take();
+    hashes.push(hash);
+    unsafe { &*set }.hashes.set(hashes);
+}
+
+/// #1343: the insert for a class whose `__eq__` is `object.__eq__`, which is
+/// identity: appends `word` unless an entry with an equal hash and the same
+/// word is already stored. Equal hashes with different words are distinct
+/// elements.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer holding instances.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_obj_set_add_identity(set: *mut PyIntSetObj, word: i64, hash: i64) {
+    let items = unsafe { &*set }.items.take();
+    let hashes = unsafe { &*set }.hashes.take();
+    let present = items
+        .iter()
+        .zip(hashes.iter())
+        .any(|(stored, stored_hash)| *stored_hash == hash && *stored == word);
+    unsafe { &*set }.items.set(items);
+    unsafe { &*set }.hashes.set(hashes);
+    if !present {
+        unsafe { pycc_rt_obj_set_push(set, word, hash) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +318,84 @@ mod tests {
         (0..len)
             .map(|index| unsafe { pycc_rt_int_set_get(set, index) })
             .collect()
+    }
+
+    fn set_hashes(set: *mut PyIntSetObj) -> Vec<i64> {
+        let hashes = unsafe { &*set }.hashes.take();
+        let copy = hashes.clone();
+        unsafe { &*set }.hashes.set(hashes);
+        copy
+    }
+
+    #[test]
+    fn candidate_finds_no_match_the_first_match_and_a_match_from_an_offset() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            assert_eq!(pycc_rt_obj_set_candidate(set, 5, 0), -1);
+            pycc_rt_obj_set_push(set, 100, 5);
+            pycc_rt_obj_set_push(set, 200, 6);
+            pycc_rt_obj_set_push(set, 300, 5);
+            assert_eq!(pycc_rt_obj_set_candidate(set, 5, 0), 0);
+            assert_eq!(pycc_rt_obj_set_candidate(set, 5, 1), 2);
+            assert_eq!(pycc_rt_obj_set_candidate(set, 5, 3), -1);
+            assert_eq!(pycc_rt_obj_set_candidate(set, 7, 0), -1);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn push_keeps_items_and_hashes_the_same_length() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_obj_set_push(set, 100, 5);
+            pycc_rt_obj_set_push(set, 100, 5);
+            assert_eq!(set_items(set), vec![100, 100]);
+            assert_eq!(set_hashes(set), vec![5, 5]);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn add_identity_dedups_only_the_same_word_with_the_same_hash() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_obj_set_add_identity(set, 100, 5);
+            pycc_rt_obj_set_add_identity(set, 100, 5); // the same object: kept once
+            pycc_rt_obj_set_add_identity(set, 200, 5); // an equal hash, another object
+            pycc_rt_obj_set_add_identity(set, 300, 9); // a different hash
+            assert_eq!(set_items(set), vec![100, 200, 300]);
+            assert_eq!(set_hashes(set), vec![5, 5, 9]);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn copy_of_an_instance_set_keeps_its_hashes() {
+        unsafe {
+            let src = pycc_rt_int_set_new();
+            pycc_rt_obj_set_push(src, 100, 5);
+            pycc_rt_obj_set_push(src, 200, 6);
+            let copy = pycc_rt_int_set_copy(src);
+            assert_eq!(set_items(copy), vec![100, 200]);
+            assert_eq!(set_hashes(copy), vec![5, 6]);
+            assert_eq!(pycc_rt_obj_set_candidate(copy, 6, 0), 1);
+            pycc_rt_int_set_decref(src);
+            pycc_rt_int_set_decref(copy);
+        }
+    }
+
+    #[test]
+    fn an_int_set_never_stores_hashes() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_int_set_add(set, tag_smallint(4));
+            let copy = pycc_rt_int_set_copy(set);
+            let from_list = pycc_rt_int_set_from_int_list(int_list_of(&[1, 2]));
+            for each in [set, copy, from_list] {
+                assert!(set_hashes(each).is_empty());
+                pycc_rt_int_set_decref(each);
+            }
+        }
     }
 
     #[test]

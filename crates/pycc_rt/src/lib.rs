@@ -83,7 +83,8 @@ use int_encoding::*;
 pub use int_set::{
     PyIntSetObj, pycc_rt_int_set_add, pycc_rt_int_set_check_not_resized, pycc_rt_int_set_copy,
     pycc_rt_int_set_decref, pycc_rt_int_set_from_int_list, pycc_rt_int_set_get,
-    pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new,
+    pycc_rt_int_set_incref, pycc_rt_int_set_len, pycc_rt_int_set_new, pycc_rt_obj_set_add_identity,
+    pycc_rt_obj_set_candidate, pycc_rt_obj_set_push,
 };
 pub use print::pycc_rt_print_flush;
 

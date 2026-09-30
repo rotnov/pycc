@@ -136,6 +136,7 @@ fn a_buffer_slice_return_is_found_inside_every_nested_block() {
             body: vec![return_slice_of_b()],
         }],
         vec![MirStmt::ForSet {
+            var_ty: pycc_mir::Ty::Int,
             var: "k".to_string(),
             set: "s".to_string(),
             body: vec![return_slice_of_b()],

@@ -291,7 +291,7 @@ fn an_unsupported_element_type_is_t0038() {
         "e2e_1326_str_annotation",
         "x: frozenset[str] = frozenset()\n",
         "T0038",
-        "frozenset[str] is not compiled yet (D-122) -- only frozenset[int] is",
+        "frozenset[str] is not compiled yet (D-122) -- only frozenset[int] and a frozenset of a user-class instance are",
     );
     // The set literal's own gate refuses the source before `frozenset`
     // sees it.
@@ -299,7 +299,7 @@ fn an_unsupported_element_type_is_t0038() {
         "e2e_1326_str_source",
         "x = frozenset({\"a\"})\n",
         "T0038",
-        "set[str] is not compiled yet (D-122) -- only set[int] is",
+        "set[str] is not compiled yet (D-122) -- only set[int] and a set of a user-class instance are",
     );
 }
 
