@@ -170,7 +170,9 @@ an import (`TYPE_CHECKING`; the base-class markers `Enum`, `StrEnum`,
 `Protocol`, `ABC`; `auto`, `override`, `abstractmethod`, `dataclass`,
 `runtime_checkable`, `dataclass_transform`, `field`; and the annotation names
 `ClassVar`, `Final`, `Self`, `Annotated`, `Any`, `TypeAlias`, `ndarray`,
-`NDArray`) -- is refused with its own C0001 (``binding the CPython module
+`NDArray`, and since [#1378](https://github.com/rotnov/pycc/issues/1378) the
+legacy `typing` container aliases `Dict`, `List`, `Set`, `FrozenSet`,
+`Tuple`) -- is refused with its own C0001 (``binding the CPython module
 `foo` to `range`, a name pycc resolves by its spelling (a Python builtin, a
 stdlib module, or a typing, decorator or base-class marker), is not supported
 yet``), because the alias would otherwise be read as that other meaning. The
@@ -191,7 +193,8 @@ nor a project package; a dotted `X` under a project root keeps the
 ``import of module `X` is not supported yet`` C0001. A listed name pycc resolves
 by its spelling is refused with the from form's own C0001 (``binding the
 CPython object `builtins.range` to `range`, a name pycc resolves by its
-spelling (...), is not supported yet``), against the same canonical lists.
+spelling (...), is not supported yet``), against the same canonical lists --
+so `from os import List` is refused like `from os import range`.
 Every other from-import shape of such a module keeps its C0001: an aliased
 name (`from X import a as b`, [#963](https://github.com/rotnov/pycc/issues/963)),
 the wildcard, and a from-import inside a block body. (A relative import is a project import (D-222) and never reaches

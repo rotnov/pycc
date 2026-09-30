@@ -78,6 +78,23 @@ fn a_name_pycc_resolves_by_its_spelling_is_refused() {
     );
 }
 
+/// #1378: a legacy `typing` container alias is resolved by its spelling in
+/// annotations, so an unaliased foreign from-import of that name is refused
+/// too -- otherwise `List[int]` would silently mean the builtin `list`
+/// rather than the CPython object. This import was admitted before #1378.
+#[test]
+fn a_legacy_typing_container_alias_from_a_foreign_module_is_refused() {
+    let source = "from os import List\n";
+    let diagnostic = only_error(lower_foreign(source, &["os"]));
+    assert_eq!(diagnostic.code, "C0001");
+    assert_eq!(
+        diagnostic.message,
+        "binding the CPython object `os.List` to `List`, a name pycc resolves by its \
+         spelling (a Python builtin, a stdlib module, or a typing, decorator or base-class \
+         marker), is not supported yet"
+    );
+}
+
 #[test]
 fn a_spelling_later_in_the_list_refuses_the_whole_statement() {
     let diagnostic = only_error(lower_foreign(
