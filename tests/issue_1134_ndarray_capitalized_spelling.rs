@@ -376,11 +376,14 @@ fn registering_the_name_does_not_make_the_census_bindings_compile() {
     for (category, source, needle) in [
         // The foreign-import path, not the `pycc_std` registry #882 widens
         // -- numpy is not stdlib. `docs/TESTING.md`'s fifth dated
-        // correction under prerequisite 2 owns that attribution.
+        // correction under prerequisite 2 owns that attribution. Since
+        // Part 1 of #1138 the dotted module is admitted, so the refusal is
+        // the spelling guard's: `NDArray` is a name pycc resolves by its
+        // spelling (#1380).
         (
             "1134_gap_from_import",
             "from numpy.typing import NDArray\n\n\ndef f(a: NDArray) -> float:\n    return a[0]\n",
-            "import of module `numpy.typing` is not supported yet",
+            "binding the CPython object `numpy.typing.NDArray` to `NDArray`",
         ),
         // An attribute-form annotation base, #889.
         (

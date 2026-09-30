@@ -1,7 +1,9 @@
 //! #1278: an unaliased, top-level `from <undotted module> import a, b` of a
 //! CPython module binds each name to the CPython object `module.<name>`,
 //! fetched with CPython's own `IMPORT_NAME`/`IMPORT_FROM` semantics, so
-//! `from itertools import product` behaves as it does under CPython.
+//! `from itertools import product` behaves as it does under CPython. Part 1
+//! of #1138 extends the channel to a dotted module
+//! (`tests/issue_1138_dotted_foreign_from_import.rs`).
 //!
 //! Every hosted test compares against the host interpreter's own run of the
 //! same source rather than against a transcribed expectation where the two
@@ -112,8 +114,11 @@ fn the_shapes_outside_this_channel_keep_their_c0001() {
             "`from ... import *` (wildcard import) is not supported yet",
         ),
         (
-            "from_foreign_dotted",
-            "from os.path import join\n",
+            // The from form of a dotted module is a foreign import since
+            // Part 1 of #1138 (`tests/issue_1138_dotted_foreign_from_import.rs`);
+            // the plain dotted `import` keeps its `C0001` (#1381).
+            "from_foreign_plain_dotted",
+            "import os.path\n",
             "import of module `os.path` is not supported yet",
         ),
         (

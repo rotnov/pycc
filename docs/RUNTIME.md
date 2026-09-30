@@ -863,14 +863,21 @@ can never leave: an `object` parameter or return on an exported function is a
 unaliased, top-level `from <name> import a, b` of such a module binds each
 listed name to the CPython object `<name>.<a>`, typed `object` like the module
 binding, so `from itertools import product` holds CPython's own
-`itertools.product`. Only that shape is admitted. An aliased name
-(`from X import a as b`), the wildcard, a dotted module (`from X.Y import a`,
-[#1138](https://github.com/rotnov/pycc/issues/1138)) and a from-import inside a
+`itertools.product`. Part 1 of [#1138](https://github.com/rotnov/pycc/issues/1138)
+lets the module be dotted (`from json.decoder import JSONDecoder`) when its root
+is neither a project module nor a project package; the submodule is fetched
+with CPython's own `IMPORT_FROM` semantics, including the `sys.modules`
+fallback that binds `from xml.dom import minidom`, while a dotted name under a
+project root, and the plain `import X.Y`
+([#1381](https://github.com/rotnov/pycc/issues/1381)), keep their `C0001`.
+Only that shape is admitted. An aliased name
+(`from X import a as b`), the wildcard and a from-import inside a
 block body keep their `C0001` (a relative import is a project import, D-222,
 and never reaches this channel, except the entry module's top-level relative
 from-imports under `pycc build --ext --foreign-relative-imports`, #1366, below), and so does a name pycc
 already resolves by its spelling (`from builtins import range`,
-`from numpy import ndarray`), because binding it to a CPython object would
+`from numpy import ndarray`, `from numpy.typing import NDArray`;
+[#1380](https://github.com/rotnov/pycc/issues/1380)), because binding it to a CPython object would
 change what every later use of that spelling means. Each name is its own
 foreign binding, whose identity is the module *and* the name, so
 `import copy` followed by `from copy import copy` is the same shadowing refusal
@@ -967,7 +974,9 @@ CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
 1. It calls `builtins.__import__(X, None, None, fromlist, 0)`, or for a
    relative import `builtins.__import__(X, globals, None, fromlist, level)`
    (see below), with the statement's *whole* fromlist, as `IMPORT_NAME` does, so a package whose
-   submodule import sets another listed name still works. When `__import__` is
+   submodule import sets another listed name still works. A non-empty
+   fromlist makes `__import__` return the leaf module, which is why a dotted
+   `X` (`json.decoder`, Part 1 of #1138) needs no other step. When `__import__` is
    missing from the builtins it raises CPython's `ImportError("__import__ not
    found")`.
 2. It returns the module's attribute `<name>` when there is one. On an
@@ -985,7 +994,12 @@ CPython 3.14's `IMPORT_NAME` with a fromlist followed by one `IMPORT_FROM`:
 `tests/issue_1278_from_foreign_import.rs` compares the success path (in the
 entry module and in a linked dependency module), the submodule fallback (`from xml import dom`) and the missing-name `ImportError`
 (its message, `.name`, `.path` and `.name_from`) against the host
-interpreter's own run of the same source; the missing-`__import__` branch and
+interpreter's own run of the same source, and
+`tests/issue_1138_dotted_foreign_from_import.rs` does the same for a dotted
+module: the success path, the `from xml.dom import minidom` submodule
+fallback, the attribute miss on `os.path` (whose message names `posixpath` or
+`ntpath`, the module's `__name__`), a missing leaf, a non-package parent and a
+missing root; the missing-`__import__` branch and
 a non-`AttributeError` lookup failure are not exercised by a test. Like `pycc_ext_obj_import`, the
 returned reference is never released. Three narrow divergences from CPython
 remain:
@@ -1759,7 +1773,7 @@ an optional root (#1290) that is not installed, with none.
 | Policy | Behavior |
 |---|---|
 | `auto` | Default. Permit every CPython-backed import root present in the source; an embedded build bundles its pinned dependency closure from `pycc.lock` (#1242). |
-| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a dotted CPython-backed import is `C0001` today. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`. Reject another direct root with `I0402`. An allowed root's pinned transitive closure is bundled with it without separate entries (#1242); a submodule from-import (`from json.decoder import X`) is classified by its root, and a plain dotted `import` is `C0001` today. |
 | `deny` | Reject every CPython-backed import with `I0402`. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
 
 - A source-level `import` is sufficient intent under `auto`; pycc does not ask

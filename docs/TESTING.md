@@ -866,7 +866,14 @@ build, CPython 3.14.7) with `pycc build lalr_parser_state.py -o out.abi3.so
 seven errors: one `C0002` for `Dict` (row 1), three `T0021`s (row 2), one
 `C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). With #1366, the
 same build inside the copied package tree with `--foreign-relative-imports`
-(at this change's head, based on `main` `3c48dbc4`) reports four errors, rows 1, 3 and 4, and no `T0021`. Everything under them was measured by probes. A probe is a copy with the
+(at this change's head, based on `main` `3c48dbc4`) reports four errors, rows 1, 3 and 4, and no `T0021`.
+That count matches a package tree holding only the two `__init__.py` files
+on the subject's path (a skeleton tree); a copy of the whole `lark` package instead links
+`lark.exceptions` as a project import and reports 13 errors, all in
+`lark/utils.py` (#1382). Part 1 of #1138, on `main` `2e0fb67a`, clears row 3
+for the out-of-package configuration: the same `--ext
+--foreign-relative-imports` build of the subject copied alone goes from four
+errors to three (rows 1 and 4), while both in-tree counts are unchanged. Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled
@@ -876,7 +883,7 @@ whole past the first layer, so this list is a **lower bound**.
 |---|---|---|
 | `from typing import Dict, Any, Generic, List` (2); each name fails at the import, `Any` before any `T0002` | `C0002` | #882 |
 | relative sibling imports (3, 4, 6) | cleared: `T0021` "attempted relative import with no known parent package" at `05bc7805`, none under `--ext --foreign-relative-imports` | [#1366](https://github.com/rotnov/pycc/issues/1366) (the flag binds them as CPython objects of the host's package, resolved from the module's own `__package__`/`__spec__` at import time; #1161's live `__name__` is not a prerequisite) |
-| `from lark.exceptions import UnexpectedToken` (7) | `C0001` import of a dotted module | #1138 |
+| `from lark.exceptions import UnexpectedToken` (7) | cleared out of package; in a package tree `lark.exceptions` is a project import (a `C0001` in a skeleton tree; in the full tree it links and the build fails in `lark/utils.py`) | #1138 (Part 1); in-tree: [#1382](https://github.com/rotnov/pycc/issues/1382) |
 | `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
 | annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported | [#1367](https://github.com/rotnov/pycc/issues/1367) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
@@ -889,8 +896,8 @@ whole past the first layer, so this list is a **lower bound**.
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
-Fourteen rows are listed, and #1366 has cleared the relative-import row, so
-thirteen remain. Two of them are boundary questions inside the subject
+Fourteen rows are listed. #1366 has cleared the relative-import row, and
+Part 1 of #1138 the line-7 row out of package, so twelve remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by
@@ -997,7 +1004,7 @@ edit was made:
 | `C0002` `typing` has no importable `Callable` / `Generic` | 1 each | #882 |
 | `C0001` only a single module per `import` statement (`import sys, re`) | 0 (was 1) | #1280, closed: `import sys, re` is now accepted; the same `pycc build <module> -o <out>.abi3.so --ext` command (release build at the #1280 branch head `54a0fa93`, on the unedited subject module, which fails identically) reports 17 errors, all still in `lark/utils.py` |
 | `C0001` `import` inside a block body (module-level `try`/`if`) | 0 (was 3) | #1282; #1291 (Part 1) admits an undotted foreign import in a module-level `if`/`try` body, so `import regex` (line 120) and `import atomicwrites` (line 303) now compile. Both sit in `try: ... except ImportError:`; that is compile-time only for this workload, since lark still stops at `lark/utils.py`, but since #1293 such a handler runs when the module is absent, as in CPython (`tests/issue_1293_import_bridge.rs`). The same `pycc build <module> -o <out>.abi3.so --ext` command (release build of the #1291 change on top of `main` at `cb2ed87a`, which includes #1292's `ImportError` builtins, on the unedited subject module) reports 15 errors, all still in `lark/utils.py` |
-| `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 1 | #1138 (dotted foreign submodules) and #1282, whose third occurrence this is: before #1291 it was the block-body `C0001`, and the dotted name now fails on its own |
+| `C0001` import of module `re._parser` (`import re._parser as sre_parse`, line 126, in the `if` body) | 1 | [#1381](https://github.com/rotnov/pycc/issues/1381) (Part 3 of #1138, the plain dotted `import`) and #1282, whose third occurrence this is: before #1291 it was the block-body `C0001`, and the dotted name now fails on its own |
 | `C0001` attribute-expression annotation (`logging.Logger`) | 1 | #889 (v0.4) |
 | `C0001` keyword call arguments (`TypeVar("_T", bound=...)`) | 1 | #884 (v0.4) |
 | `C0001` `@dataclass` with options | 1 | #887 (v0.4) |
@@ -1643,8 +1650,10 @@ tests that cover it now, or the owner of what is still missing.
   unlisted direct root. *Covered:* acceptance and the unlisted root
   (`tests/issue_1224_interop_policy.rs`, the `interop_allowlist/` snapshots
   in `tests/diagnostics/`); the closure is bundled from `pycc.lock`
-  (`tests/issue_1242_locked_closure.rs`). *Pending:* submodules (a dotted
-  CPython-backed import is `C0001` today);
+  (`tests/issue_1242_locked_closure.rs`); a submodule from-import is
+  classified by its root (`tests/issue_1138_dotted_foreign_from_import.rs`,
+  Part 1 of #1138). *Pending:* the plain dotted `import` of a submodule
+  (`C0001` today, #1381);
 - CLI policy precedence covers every usable branch: explicit `auto` and
   `deny` each override the other and a configured `allowlist`; explicit
   `allowlist` with its configured roots accepts an allowed root and emits

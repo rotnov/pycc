@@ -202,7 +202,9 @@ pub enum ResolvedImport<'a> {
     /// `import X` or `import X as Y` (#1291), or one such name of
     /// `import X, Y` (#1280), at top level or nested in a module-level
     /// `if`/`try` block (#1291), and for a top-level `from X import a, b`
-    /// with an undotted `X` (#1278), whose names bind the module's
+    /// with an undotted `X` (#1278) -- or, since Part 1 of #1138, a dotted
+    /// `X` whose root is neither a project module nor a project package --
+    /// whose names bind the module's
     /// attributes -- see `src/modules.rs`'s own `missing` for why every
     /// other absolute foreign shape stays unanswered. Under `pycc build
     /// --ext --foreign-relative-imports` (#1366) it is also recorded for
@@ -388,8 +390,8 @@ pub(crate) fn lower_import_stmt(
                         statement_span(import.range),
                     ));
                 }
-                // #1278: an undotted foreign module's names bind CPython
-                // objects.
+                // #1278: a foreign module's names bind CPython objects (the
+                // module may be dotted since Part 1 of #1138).
                 Some(ResolvedImport::Foreign) => {
                     return lower_foreign_from_import(import, site).map(Some);
                 }
@@ -540,7 +542,9 @@ fn lower_import_alias(
 }
 
 /// The foreign arm of [`lower_import_stmt`] (#1278): `from X import a, b`
-/// where the driver answered the undotted `X` as a CPython module, or --
+/// where the driver answered `X` -- undotted, or since Part 1 of #1138 a
+/// dotted module whose root is neither a project module nor a project
+/// package -- as a CPython module, or --
 /// under `pycc build --ext --foreign-relative-imports` (#1366) -- the entry
 /// module's relative `from .x import a, b`, whose dots travel as
 /// [`FromImport::level`]. Each name binds, in source order, the opaque
@@ -555,7 +559,7 @@ fn lower_import_alias(
 /// `from builtins import range` would otherwise make `range` a CPython
 /// object in some passes and the builtin in others, and `from numpy import
 /// ndarray` would silently stop meaning the registered annotation spelling
-/// (#1138 keeps that half). The first refused name fails the whole
+/// (#1380, Part 2 of #1138, owns that half). The first refused name fails the whole
 /// statement, as every other import arm does.
 fn lower_foreign_from_import(
     import: &StmtImportFrom,
