@@ -409,11 +409,21 @@ s.add(E(1))
 print("unreachable")
 "#;
 
+/// Prefixes `source` with `from __future__ import annotations` (PEP 563,
+/// D-229). `__eq__(self, other: R)` names its own class, which CPython only
+/// evaluates lazily from 3.14 on; an older `python3` oracle (the fallback
+/// when `PYCC_PYTHON` is unset, as on the `native-build-test` legs) would
+/// otherwise raise `NameError` at class creation.
+fn with_postponed_annotations(source: &str) -> String {
+    format!("from __future__ import annotations\n{source}")
+}
+
 /// Builds `source` natively, runs it, and asserts its stdout equals
 /// CPython's run of the same file and `expected`.
 fn assert_native_matches_cpython(tag: &str, source: &str, expected: &str) {
     let dir = ScratchDir::new(tag).expect("scratch");
-    std::fs::write(dir.join("a.py"), source).expect("write the subject");
+    std::fs::write(dir.join("a.py"), with_postponed_annotations(source))
+        .expect("write the subject");
     let build = pycc()
         .arg("build")
         .arg(dir.join("a.py"))
@@ -441,7 +451,8 @@ fn assert_native_matches_cpython(tag: &str, source: &str, expected: &str) {
 /// source and `expected`.
 fn assert_ext_matches_cpython(tag: &str, module: &str, source: &str, expected: &str) {
     let dir = ScratchDir::new(tag).expect("scratch");
-    std::fs::write(dir.join("m.py"), source).expect("write the subject");
+    std::fs::write(dir.join("m.py"), with_postponed_annotations(source))
+        .expect("write the subject");
     let build = pycc()
         .arg("build")
         .arg(dir.join("m.py"))
@@ -565,7 +576,8 @@ fn set_of_instance_constraint_path_module_bodies_match_cpython_as_extensions() {
 #[test]
 fn an_uncaught_eq_raise_reports_the_exception_like_cpython() {
     let dir = ScratchDir::new("e2e_1343_uncaught").expect("scratch");
-    std::fs::write(dir.join("a.py"), UNCAUGHT).expect("write the subject");
+    std::fs::write(dir.join("a.py"), with_postponed_annotations(UNCAUGHT))
+        .expect("write the subject");
     let build = pycc()
         .arg("build")
         .arg(dir.join("a.py"))
