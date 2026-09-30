@@ -17,8 +17,8 @@ use pycc_ast::Expr;
 use pycc_diag::{Diagnostic, Span};
 
 /// Lowers a parameterized builtin container annotation -- `list[T]`,
-/// `set[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its `Ty` (D-228,
-/// issue #918).
+/// `set[T]`, `frozenset[T]`, `dict[K, V]` or `tuple[A, B, ...]` -- to its
+/// `Ty` (D-228, issue #918).
 ///
 /// `spelling` is the base as written: a builtin container name or, since
 /// #1378, one of the legacy `typing` aliases (`Dict`, `List`, ...).
@@ -37,8 +37,8 @@ use pycc_diag::{Diagnostic, Span};
 /// 1. an `...` type argument (the homogeneous-variadic `tuple[int, ...]`),
 ///    rejected with `T0053` because a runtime-length tuple has no fixed-arity
 ///    `Ty::Tuple` representation;
-/// 2. arity -- `list`/`set` take exactly one argument, `dict` exactly two,
-///    `tuple` at least one (so the empty `tuple[()]`, which reaches here as a
+/// 2. arity -- `list`/`set`/`frozenset` take exactly one argument, `dict`
+///    exactly two, `tuple` at least one (so the empty `tuple[()]`, which reaches here as a
 ///    zero-element `Expr::Tuple`, is rejected here rather than silently
 ///    lowering to a zero-field tuple);
 /// 3. each argument's own type, recursively through [`annotation_to_ty`],
