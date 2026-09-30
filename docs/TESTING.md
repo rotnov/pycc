@@ -901,7 +901,9 @@ now compiles. The
 `C0001` refusing `__slots__` on both classes (lines 12 and 33) was removed by
 [#1368](https://github.com/rotnov/pycc/issues/1368): a value-bound
 `__slots__` of string literals is admitted and checked at compile time. In the
-subject module the refusal sat under the rows above it, so the result was
+subject module the refusal sat under the rows above it (the whole-module
+`--foreign-relative-imports` build at the #1368 head, merged with `main`
+`2e0fb67a`, still reports the same four errors), so the result was
 measured on a probe, not on the workload, at the #1368 branch rebased on
 `main` `3c48dbc4`. The probe deletes the sibling and `lark.exceptions`
 imports, trims the `typing` import to `Any, List`, drops the two
