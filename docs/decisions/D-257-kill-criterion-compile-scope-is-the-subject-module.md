@@ -5,7 +5,7 @@ status: accepted
 ---
 
 ## D-257: The kill criterion's "compiles unchanged" covers the subject module, with sibling imports bound as foreign
-- Status: accepted (resolves how [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6's kill criterion scopes compilation for the #1207 workload; widens [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) rule 1 to the subject module)
+- Status: accepted (resolves how [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6's kill criterion scopes compilation, first applied to the #1207 workload; widens [D-252](./D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md) rule 1 to the subject module)
 - Context: The #1207 workload is `lark` 1.3.1. Its subject is `ParserState.feed_token` in
   `lark/parsers/lalr_parser_state.py`, annotated under D-252. The annotated module's SHA-256 is
   `4335a1995da91fa264b3f16ebbb0c882863d0aba5d7d219205752fbf8a8680d9`. Every measurement up to
@@ -41,8 +41,10 @@ status: accepted
      is hard. It is rejected because it cannot be reached: pycc refuses `T0001` outside D-252's scope
      and `T0002` inside a dependency by design, not as gaps. So under that reading row (c) would record
      a miss that no compiler work could remove, which is the attribution error D-247 was written to
-     prevent. The subject-module reading is no easier by construction. Its own by-design residue
-     stays on the blocker list:
+     prevent. The subject-module reading is no easier by construction. The by-design residue found in
+     it so far stays on the blocker list, and the list grows if the unprobed regions of the
+     module show more; that would not change this decision, because it is a statement about the
+     subject rather than about its dependencies:
      - the subject's `-> Any` return (#1285);
      - `__eq__`'s unannotated `other`, whose only faithful annotation is the unspellable `object`
        (#1367).
@@ -77,4 +79,6 @@ status: accepted
   `docs/TESTING.md`) leave the subject's critical path. They stay open as ordinary breadth work. Row
   (c)'s blocker list becomes the subject module's own frontier. `docs/TESTING.md` measures it. It was
   probed piecewise, so it is a lower bound. What the 2026-10-22 record rests on is that list. Results
-  can never be reported as whole-closure compiles.
+  can never be reported as whole-closure compiles. Rule 1 is a standing reading of D-244 rule 6,
+  not a #1207 exception: a later kill-criterion workload is scoped the same way, and it publishes
+  which sibling imports its subject module binds as foreign before any timed run.

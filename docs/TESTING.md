@@ -603,6 +603,14 @@ rule 6); only numbers are published.
   module digests, `subject_sha256` is the digest of the annotated bytes that all
   three arms then share, and the result is labelled "annotated", never
   "unchanged". The **compile-unchanged count** below is not affected by this.
+  **Subject-module scope (2026-09-30,
+  [D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)).**
+  The unit that must compile is the subject module, the module
+  `subject_sha256` digests, and not its import closure. That module's own
+  imports of sibling workload modules may bind CPython's objects from the
+  installed package, as the Cython arm's sibling modules run in the
+  interpreter. D-252's additions may be made anywhere in that module. The
+  result is labelled "subject-module scope" alongside "annotated".
 - **Workload admissibility.** The Subject bullet fixes *which* function is the
   subject once a workload is chosen, but it presumes such a function exists.
   [D-247](./decisions/D-247-pre-register-a-workload-admissibility-predicate-for-the-kill-criterion.md)
@@ -854,8 +862,8 @@ as breadth work.
 The subject module's own frontier was measured at `main` `05bc7805` (release
 build, CPython 3.14.7) with `pycc build lalr_parser_state.py -o out.abi3.so
 --ext`, on the annotated module copied out of its package. That run reports
-seven errors: the first three rows of the table below and the `Generic[...]`
-row. Everything under them was measured by probes. A probe is a copy with the
+seven errors: one `C0002` for `Dict` (row 1), three `T0021`s (row 2), one
+`C0001` (row 3) and two `C0001`s for `Generic[...]` (row 4). Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled
@@ -1039,7 +1047,9 @@ which supplies a predicate the protocol presumed rather than revising how a
 chosen subject is measured. (That count held until 2026-09-24, when
 [D-252](./decisions/D-252-admit-annotation-only-additions-to-a-kill-criterion-subject.md)
 added the Subject bullet's **Annotation-only additions** paragraph, a second
-amendment.) `subject_sha256` is still `null`; the record's
+amendment, and 2026-09-30, when
+[D-257](./decisions/D-257-kill-criterion-compile-scope-is-the-subject-module.md)
+added its **Subject-module scope** paragraph, a third.) `subject_sha256` is still `null`; the record's
 only amended field is `machine.os`, re-pinned on 2026-09-21 and recorded there
 as `machine_os_amendment` (prerequisite 3 below), and no other field has
 changed.
