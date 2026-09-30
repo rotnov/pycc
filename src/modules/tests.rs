@@ -300,20 +300,90 @@ fn a_bare_import_of_a_real_project_module_is_recognized_but_unsupported() {
     );
 }
 
+/// A plain dotted `import no.where` found nowhere is left unanswered, so
+/// `pycc_hir` keeps the single-file `C0001` (#1381, Part 3 of #1138): only
+/// the from form of a dotted module is a foreign import (the next tests).
 #[test]
-fn an_absolute_name_that_resolves_nowhere_keeps_the_single_file_diagnostic() {
-    // Dotted, because an undotted `from nowhere import thing` has been a
-    // foreign import since #1278 (the next test).
+fn a_plain_dotted_import_that_resolves_nowhere_keeps_the_single_file_diagnostic() {
     let scratch = ScratchDir::new("modules_tests").expect("scratch");
     let entry = write(
         &scratch,
         "main.py",
-        "from no.where import thing\n\n\ndef main() -> None:\n    print(1)\n",
+        "import no.where
+
+
+def main() -> None:
+    print(1)
+",
     );
     let (_, code, message) = first_diagnostic(&entry);
     assert_eq!(code, "C0001");
     assert!(
         message.contains("import of module `no.where` is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+/// Part 1 of #1138: a dotted module whose root is neither a project package
+/// nor a project module is answered as a CPython module for the from form,
+/// so the program loads with the name bound as a foreign object.
+#[test]
+fn a_dotted_from_import_that_resolves_nowhere_is_a_foreign_import() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from no.where import thing
+
+
+def main() -> None:
+    print(1)
+",
+    );
+    let program =
+        load(&entry, None).unwrap_or_else(|failure| panic!("must load: {}", describe(&failure)));
+    assert_eq!(program.modules.len(), 1, "nothing but the entry loads");
+    assert_eq!(
+        entry_foreign_from_imports(&program),
+        vec![("no.where".to_string(), "thing".to_string(), 0)]
+    );
+}
+
+/// Part 1 of #1138: a dotted name under a project *module* (`helper.py`)
+/// keeps the `C0001` -- `helper` is compiled into the artifact, so a host
+/// lookup of `helper.sub` would name a different object.
+#[test]
+fn a_dotted_from_import_under_a_project_module_keeps_the_c0001() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "helper.py", "x = 1\n");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from helper.sub import y\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("import of module `helper.sub` is not supported yet"),
+        "unexpected message: {message}"
+    );
+}
+
+/// Part 1 of #1138: a dotted name under a project *package* whose leaf is
+/// missing (the probe misses past the first segment) keeps the `C0001`.
+#[test]
+fn a_dotted_from_import_under_a_project_package_with_a_missing_leaf_keeps_the_c0001() {
+    let scratch = ScratchDir::new("modules_tests").expect("scratch");
+    write(&scratch, "pkg/__init__.py", "");
+    let entry = write(
+        &scratch,
+        "main.py",
+        "from pkg.missing import y\n\n\ndef main() -> None:\n    print(1)\n",
+    );
+    let (_, code, message) = first_diagnostic(&entry);
+    assert_eq!(code, "C0001");
+    assert!(
+        message.contains("import of module `pkg.missing` is not supported yet"),
         "unexpected message: {message}"
     );
 }

@@ -97,13 +97,17 @@ enum Resolution {
     /// The import cannot be satisfied, with the exact diagnostic to report.
     NotFound { code: &'static str, message: String },
     /// Not a project import after all (an absolute module name that
-    /// resolves nowhere on disk): left unanswered so `pycc_hir` reports it
-    /// exactly as a single-file compilation would.
+    /// resolves nowhere on disk and is not [`Resolution::Foreign`]: a plain
+    /// dotted `import X.Y`, or a dotted name under a project module or
+    /// package): left unanswered so `pycc_hir` reports it exactly as a
+    /// single-file compilation would.
     Unanswered,
     /// A bare `import X` -- or one name `X` of `import X, Y` (#1280), or
     /// `import X as Y` (#1291), or the module of `from X import a, b`
     /// (#1278) -- whose single-segment absolute root is neither a
-    /// project module nor a `pycc_std` one (Part 1 of #1026): the name is
+    /// project module nor a `pycc_std` one (Part 1 of #1026), or the dotted
+    /// module of `from X.Y import a` whose root `X` is neither a project
+    /// module nor a project package (Part 1 of #1138): the name is
     /// taken to be a CPython module the produced extension imports at
     /// module-exec time, and `pycc_hir` binds it, or each imported name of
     /// it, as an opaque object (`ImportBinding::Foreign`). Whether that module actually exists is
@@ -546,7 +550,7 @@ impl Loader {
             let init = path.join(segment).join("__init__.py");
             let init_display = display.join(segment).join("__init__.py");
             if !path.join(segment).is_dir() {
-                return Err(self.missing(base, request));
+                return Err(self.missing(base, request, position));
             }
             if last {
                 if !init.is_file() {
@@ -581,8 +585,10 @@ impl Loader {
     /// CPython-rejected relative import (`T0021`), a foreign CPython
     /// module (Part 1 of #1026), or -- for every other absolute name --
     /// no answer at all, so `pycc_hir` keeps its own
-    /// "import of module `x` is not supported yet" `C0001`.
-    fn missing(&self, base: &Base, request: &ProjectImportRequest) -> Resolution {
+    /// "import of module `x` is not supported yet" `C0001`. `position` is
+    /// the index of the segment whose directory [`Loader::probe`] did not
+    /// find.
+    fn missing(&self, base: &Base, request: &ProjectImportRequest, position: usize) -> Resolution {
         if !base.relative {
             // Part 1 of #1026 admits a foreign import of a single, undotted
             // root: a bare `import X`, one such name of a multi-name
@@ -590,15 +596,30 @@ impl Loader {
             // each alias's own span, #1280), an aliased `import X as Y`
             // (#1291; `pycc_hir` binds `Y`), and -- when `request.names` is
             // non-empty -- a top-level `from X import a, b` (#1278), whose
-            // names `pycc_hir` binds to the module's attributes. A dotted
-            // `X.Y`, in either form, keeps `pycc_hir`'s existing `C0001`
-            // (#1138): `import X.Y` binds `X` while importing `X.Y`, which
-            // no later pass models yet. A non-relative base means
-            // `request.level` is `0`.
-            if request
-                .module
-                .as_deref()
-                .is_some_and(|module| !module.contains('.'))
+            // names `pycc_hir` binds to the module's attributes. A non-relative
+            // base means `request.level` is `0` and `base.path` is the
+            // source root the probe walked.
+            let module = request.module.as_deref().unwrap_or_default();
+            if !module.is_empty() && !module.contains('.') {
+                return Resolution::Foreign;
+            }
+            // Part 1 of #1138: the from form's module may be dotted
+            // (`from X.Y import a`) when its root `X` is neither a project
+            // package (the probe missed at the first segment) nor a project
+            // module (`X.py` beside the root). A dotted name under a project
+            // root keeps the `C0001`: that root is compiled into the
+            // artifact, so a runtime lookup of `X.Y` in the host would name a
+            // different `X` than the one pycc compiled. A non-package
+            // `X/` directory that shadows a CPython root (`json/` without an
+            // `__init__.py`) is walked into, and keeps the `C0001` too --
+            // conservative, as for the undotted form's namespace-package
+            // refusal. The plain `import X.Y` (empty `names`) keeps its
+            // `C0001` as well (#1381): it binds `X` while importing `X.Y`,
+            // which no later pass models yet.
+            let root = module.split('.').next().unwrap_or_default();
+            if !request.names.is_empty()
+                && position == 0
+                && !base.path.join(format!("{root}.py")).is_file()
             {
                 return Resolution::Foreign;
             }
