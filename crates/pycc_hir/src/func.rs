@@ -152,9 +152,10 @@ pub(crate) fn lower_params(
     // every other out-of-scope construct in this file produces (self-review
     // finding, pre-merge). The checks themselves now live in `params`,
     // shared with `class::lower_method`; a *default value* is no longer one
-    // of them -- Part 2 of #884 (#1189) implements it for this path, and
-    // `lower_arg_list`'s `DefaultPolicy` below is what keeps every other
-    // path rejecting it.
+    // of them -- Part 2 of #884 (#1189) implements it for this path and
+    // the method part of #1140 for a method, and `lower_arg_list`'s
+    // `DefaultPolicy::Reject` now keeps only a `Protocol` member rejecting
+    // it.
     //
     // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
     // `/` marker) are lowered via the same `lower_arg_list` path as ordinary

@@ -86,7 +86,7 @@ pub(super) fn lower_method(
     // #1181: set by the `_ =>` arm below to the receiver's *source*
     // spelling, so the alias statement can be prepended to the lowered body
     // once the body exists. `None` for `@staticmethod` (no receiver) and
-    // `@classmethod` (its own `cls` rule, `class.rs`'s own arm).
+    // `@classmethod` (its own `cls` rule, the `ClassMethod` arm below).
     let mut receiver_name: Option<String> = None;
     // The method part of #1140: every arm below admits a default value on a
     // parameter after the receiver, under exactly the rules a module-level
@@ -272,21 +272,25 @@ pub(super) fn lower_method(
     };
     Ok((
         HirItem::Function {
-            name: mangled_name,
+            name: mangled_name.clone(),
             params: params.clone(),
             return_ty,
             body,
         },
         params,
-        defaults,
+        (mangled_name, defaults),
     ))
 }
 
 /// What [`lower_method`] produces: the lowered item, the method's full
-/// parameter list (receiver included), and -- parallel to that list -- each
-/// parameter's lowered default value, or an empty vector when no parameter
-/// has one (the method part of #1140).
-pub(super) type LoweredMethod = (HirItem, Vec<(String, Ty)>, Vec<Option<HirExpr>>);
+/// parameter list (receiver included), and the item's mangled name paired
+/// with -- parallel to that list -- each parameter's lowered default value,
+/// or an empty vector when no parameter has one (the method part of #1140).
+pub(super) type LoweredMethod = (
+    HirItem,
+    Vec<(String, Ty)>,
+    (String, Vec<Option<HirExpr>>),
+);
 
 #[cfg(test)]
 #[path = "method_tests.rs"]

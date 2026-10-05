@@ -1,6 +1,6 @@
-//! Class-definition lowering (D-154, Part 1 of #375): `lower_class`, its
-//! per-method helper `lower_method`; the `__init__`-body attribute-slot
-//! pre-scan lives in [`init_slot`].
+//! Class-definition lowering (D-154, Part 1 of #375): `lower_class`; its
+//! per-method helper `lower_method` lives in [`method`] and the
+//! `__init__`-body attribute-slot pre-scan in [`init_slot`].
 //!
 //! A single, non-generic, non-inheriting class is represented with **no**
 //! `HirItem` footprint of its own -- unlike a top-level `def`, `class Foo:
@@ -218,7 +218,7 @@ pub struct HirClassDef {
     /// least one, keyed by the same mangled name `methods`,
     /// `static_methods` and `class_methods` hold. `defaults` is parallel to
     /// that `HirItem::Function`'s full `params` (receiver included, always
-    /// `None`), each entry the lowered literal
+    /// `None`, except for a `@staticmethod`, which has no receiver), each entry the lowered literal
     /// `func::params::check_default` admitted.
     ///
     /// **Consumer.** Only the `--ext` host boundary reads it: the generated

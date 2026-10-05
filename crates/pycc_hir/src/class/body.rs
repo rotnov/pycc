@@ -548,7 +548,7 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
                 method_def.range,
             ));
         }
-        let (item, params, defaults) = lower_method(
+        let (item, params, (name, defaults)) = lower_method(
             method_def,
             class_name,
             type_param,
@@ -561,11 +561,9 @@ pub(super) fn walk_class_body(input: &ClassBodyInput<'_>) -> Result<ClassBodyOut
         // The method part of #1140: a redefinition replaces the earlier
         // entry -- or removes it, when the later `def` declares no default --
         // so the table always describes the definition that wins.
-        if let HirItem::Function { name, .. } = &item {
-            method_defaults.retain(|(held, _)| held != name);
-            if !defaults.is_empty() {
-                method_defaults.push((name.clone(), defaults));
-            }
+        method_defaults.retain(|(held, _)| *held != name);
+        if !defaults.is_empty() {
+            method_defaults.push((name, defaults));
         }
         if method_name == "__init__" {
             init_seen = true;
