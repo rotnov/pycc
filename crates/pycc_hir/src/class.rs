@@ -232,11 +232,14 @@ pub struct HirClassDef {
     ///   defaults appended, through
     ///   [`HirClassDef::omitted_method_defaults`]. A `None` default at an
     ///   `object` parameter is not filled: `pycc_types` refuses that call.
+    ///   A PEP 695 generic class's specializations carry these entries
+    ///   re-keyed to the specialized mangled names
+    ///   (`pycc_types::monomorphize::method_defaults`).
     ///
     /// Every other in-module call shape still passes every argument, and
     /// `pycc_types` keeps refusing a short one with its arity `T0021`. Those
-    /// shapes are a constructor, `super().m()`, a static method, a class
-    /// method and a protocol member.
+    /// shapes are a constructor, `super().m()`, a static method and a class
+    /// method.
     ///
     /// A redefinition of a method replaces its entry, matching the
     /// last-wins rebind of the method itself.

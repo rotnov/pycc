@@ -755,7 +755,9 @@ twin. Four rules follow from that model:
   `pycc_types` accepts it once the MRO walk has resolved the method, and
   `pycc_mir` appends the same default nodes the method's `def` recorded, from
   the class that declares the dispatched body (an override's own default, not
-  its base's). The defaults are checked as if written at the call site. A
+  its base's). A PEP 695 generic class's specializations carry the same
+  defaults, so `Box[int](1).m()` is filled like `Box(1).m()`. The defaults
+  are checked as if written at the call site. A
   short call that omits a required argument, or a call with too many, stays
   `T0021`, worded "`m` expects from 1 to 2 argument(s), got 0" when the
   method declares a default. Every other method call shape keeps the

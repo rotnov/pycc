@@ -83,3 +83,19 @@ fn filling_a_none_default_at_an_object_parameter_is_refused() {
     )
     .expect("an explicit object argument is accepted");
 }
+
+/// A PEP 695 generic class's specializations carry the origin's method
+/// defaults, re-keyed to the specialized names, so a call on an explicit
+/// specialization (`Box[int](1).get()`) is filled exactly like one on the
+/// origin (`Box(1).get()`) instead of reporting the arity `T0021` from the
+/// build entry point.
+#[test]
+fn a_generic_class_specialization_fills_the_same_defaults() {
+    let source = "class Box[T]:\n\
+        \x20   def __init__(self, v: T) -> None:\n        self.v = v\n\
+        \x20   def get(self, k: int = 1) -> int:\n        return k\n\
+        print(Box(1).get())\nprint(Box[int](1).get())\n";
+    let module = pycc_parser::parse(source).expect("test fixture must parse");
+    let hir = pycc_hir::lower_checked(&module).expect("test fixture must lower");
+    crate::check_and_resolve_all_keyed(&hir).unwrap_or_else(|err| panic!("{err:?}"));
+}

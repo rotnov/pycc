@@ -2,10 +2,14 @@
 //! of #1140).
 //!
 //! A method's default is recorded by `pycc_hir` in
-//! `HirClassDef::method_defaults` and read only here: no in-module call ever
-//! omits an argument (a short method or constructor call is still the arity
-//! `T0021`), so the host boundary is the one place a missing argument can
-//! appear. The generated `METH_FASTCALL` wrapper and `Py_tp_init` then
+//! `HirClassDef::method_defaults` and has two consumers. Since Part 1 of
+//! #1191 (#1438) an in-module regular instance-method call may omit a
+//! defaulted argument: `pycc_types` and `pycc_mir` fill it through
+//! `HirClassDef::omitted_method_defaults` by appending the default node, so
+//! that call never reaches this module. A short constructor, static-method,
+//! class-method or `super()` call is still the arity `T0021`. This module is
+//! the other consumer, the host boundary, where a host call may omit any
+//! defaulted argument. The generated `METH_FASTCALL` wrapper and `Py_tp_init` then
 //! accept any argument count from the first defaulted parameter's index up
 //! to the full arity, and hand each omitted parameter a `PyObject *` that
 //! the parameter's **unchanged** unpack helper consumes -- so an omitted
