@@ -88,7 +88,8 @@
 //! [`object_operation_unsupported`]; Part 2a of #1371 widened the admitted
 //! set with a second `Ty::Object` (packed by `pycc_ext_obj_pack_object`). The
 //! call inherits the positional bound unchanged: the base is read through
-//! the same `HirExpr::Name` arm.
+//! the same `HirExpr::Name` arm. Part 8 of #1371 admits `None` and keyword
+//! arguments (`keyword_call`).
 //!
 //! Four method names reach this arm through a second node. `pycc_hir`'s
 //! container fast paths claim `append`, `pop`, `get` and `add` while

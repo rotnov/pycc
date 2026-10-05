@@ -320,9 +320,8 @@ pub(crate) fn infer_expr_in(
             {
                 // #1313: a direct call of an `object`-typed name (a foreign
                 // binding or a `for` loop target) in a module body is an
-                // `object` producer under the method call's
-                // positional-scalar argument rule (`crate::foreign`'s module
-                // doc). `lookup` answers `None` for a maybe-bound name, so a
+                // `object` producer under the shared object-call argument
+                // rule (`crate::foreign::check_object_call_args`). `lookup` answers `None` for a maybe-bound name, so a
                 // one-arm-`if` import falls through to the `T0041` below.
                 // #1316 and Part 1 of #1333 admit the same call in a
                 // function body for any `object` callee, exactly as the
