@@ -4,7 +4,7 @@
 //! receiver's static class resolves the member to, and that body makes every
 //! receiver-dependent decision -- member bodies, class-attribute values,
 //! property accessors, `super()` targets, `isinstance(self, ...)`,
-//! `cls(...)` -- for that class.
+//! `cls(...)`, `type(self)(...)` -- for that class.
 //!
 //! pycc compiles a method body once, with `self` typed as its defining class
 //! `D`, and dispatches statically (D-006). A subclass `C` that inherits the

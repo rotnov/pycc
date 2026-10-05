@@ -38,6 +38,7 @@ mod bin_op_kind;
 mod comprehension;
 mod container_call;
 pub(crate) mod keyword_bind;
+mod receiver_class_call;
 pub(crate) mod receiver_dispatch;
 mod std_receiver;
 mod subscript_call;
@@ -627,6 +628,17 @@ pub(crate) fn lower_expr(
                     signatures,
                 );
             }
+            // #1411: `type(self)(args)` -- `receiver_class_call` owns the rule.
+            if let Some(inner) = receiver_class_call::type_call_callee(call) {
+                return receiver_class_call::lower(
+                    call,
+                    inner,
+                    in_function,
+                    class_name,
+                    imports,
+                    signatures,
+                );
+            }
             // #433: a bare `super()` not used as a method-call or
             // attribute-access base (e.g. `x = super()`) has no useful
             // static-dispatch lowering on its own — reject it here with
@@ -1040,6 +1052,7 @@ pub(crate) fn contains_named_expr(expr: &HirExpr) -> bool {
         HirExpr::ExprCall { callee, args } => {
             contains_named_expr(callee) || args.iter().any(contains_named_expr)
         }
+        HirExpr::ReceiverClassCall { args } => args.iter().any(contains_named_expr),
         HirExpr::Comprehension(comp) => comprehension::comprehension_contains_named_expr(comp),
     }
 }
