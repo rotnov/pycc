@@ -138,3 +138,60 @@ fn a_call_in_an_inherited_method_is_admitted() {
          class B(A):\n    pass\n\n\nB().m('a')\n",
     );
 }
+
+/// `snippet` through the full check-and-resolve pipeline -- the one that
+/// also runs the post-check passes (generic-call rejection in a generic
+/// body, monomorphization, protocol specialization) that [`check`] stops
+/// short of.
+fn resolve(snippet: &str) -> Result<pycc_hir::HirModule, pycc_diag::Diagnostic> {
+    crate::check_and_resolve(&lower_all_foreign(&format!("{IMPORT}{snippet}")))
+}
+
+const POST_CHECK_FIXTURE: &str = "from typing import Protocol\n\n\n\
+    class P(Protocol):\n    def m(self) -> int: ...\n\n\n\
+    class C:\n    def __init__(self) -> None:\n        self.n = 0\n\n    \
+    def m(self) -> int:\n        return 1\n\n\n\
+    class Box[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n\n    \
+    def size(self) -> int:\n        return 1\n\n\n\
+    def ident[T](x: T) -> T:\n    return x\n\n\n\
+    def use(p: P) -> int:\n    return p.m()\n\n\n";
+
+/// The post-check passes walk a call of a subscript result: a generic call
+/// in the callee and in an argument is monomorphized, a generic class
+/// instantiated inside an argument is collected, and a protocol-typed call
+/// in an argument is specialized -- the resolved module keeps no call of
+/// the unspecialized `use` or `ident`.
+#[test]
+fn the_post_check_passes_reach_the_callee_and_the_arguments() {
+    let resolved = resolve(&format!(
+        "{POST_CHECK_FIXTURE}def h(t: product) -> None:\n    \
+         print(str(t[ident('a')](ident(1), use(C()), Box[int](2).size())))\n"
+    ))
+    .unwrap_or_else(|diagnostic| panic!("{diagnostic:#?}"));
+    let debug = format!("{resolved:?}");
+    assert!(!debug.contains("callee: \"use\""), "{debug}");
+    assert!(!debug.contains("callee: \"ident\""), "{debug}");
+}
+
+/// A generic function's body is walked for generic calls through the new
+/// node before the body is checked: a call of a subscript result with no
+/// generic call in it passes the walk and the body check, and one whose
+/// argument calls a generic function is refused by the walk itself.
+#[test]
+fn a_generic_body_is_walked_through_a_call_of_a_subscript_result() {
+    resolve(&format!(
+        "{POST_CHECK_FIXTURE}def g[T](x: T, t: product) -> T:\n    t['a'](1)\n    return x\n"
+    ))
+    .unwrap_or_else(|diagnostic| panic!("{diagnostic:#?}"));
+    let diagnostic = resolve(&format!(
+        "{POST_CHECK_FIXTURE}def g[T](x: T) -> T:\n    product['a'](ident(1))\n    return x\n\n\ng(1)\n"
+    ))
+    .expect_err("a generic call in a generic body");
+    assert_eq!(diagnostic.code, "T0042", "{diagnostic:#?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("generic function `g` calls generic function `ident`"),
+        "{diagnostic:#?}"
+    );
+}
