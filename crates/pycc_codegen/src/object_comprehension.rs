@@ -1,0 +1,153 @@
+//! A list or set comprehension over a CPython object (Part 1 of #1255):
+//! `[elt for x in <object> if cond]` and `{elt for x in <object> if cond}`,
+//! producing a fresh CPython `list` or `set` (`Ty::Object`, D-258).
+//!
+//! # Shape
+//!
+//! The iterable is evaluated once in the enclosing scope, then iterated
+//! through the same two halves `for x in <object>:` uses
+//! ([`foreign_call::emit_get_iter`] and [`foreign_call::emit_iter_header`]).
+//! The result collection is created *after* `iter()` succeeds, as CPython's
+//! own comprehension does, so a non-iterable source raises before anything
+//! else happens. Each element is packed across the boundary and handed to
+//! [`EXT_OBJ_COLLECT_SYMBOL`], which consumes it on every path.
+//!
+//! Every failure -- `iter()`, `next()`, the result constructor, the
+//! condition's truth test, the element's own evaluation, packing, and the
+//! insertion itself (an unhashable set item) -- takes the current function's
+//! foreign failure edge ([`ForeignFailEdge::for_current`]): the
+//! `EXT_MODULE_EXEC_FAILED` return in the module body, the error bridge plus
+//! the enclosing handler in a compiled function.
+//!
+//! # Ownership
+//!
+//! The iterator, each item and the result are new references this boundary
+//! deliberately leaks (#1092, `docs/RUNTIME.md`): the result is the
+//! comprehension's value, and the loop variable's slot holds the borrowed
+//! item without refcount traffic, exactly as `MirStmt::ForObject`'s target.
+//! A pycc `int` temporary built by the condition or the element is released
+//! once it has been tested or packed, since the packers borrow their operand.
+
+use super::bigint_rc::release_scalar_if_int_temporary;
+use super::comprehension::{CompCx, CompElts};
+use super::foreign_call;
+use super::foreign_fail::{ForeignFailEdge, route_negative, route_null};
+use super::foreign_pack::{emit_pack, shim_fn};
+use super::{EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, ObjCollectionKind};
+use super::{Scalar, emit_expr, truthy};
+use inkwell::values::PointerValue;
+use pycc_mir::MirExpr;
+
+/// Emits the comprehension and returns its result, a `Scalar::Object`.
+/// `var_ptr` is the loop variable's pointer slot, already allocated and
+/// visible in `cx.locals`; `iterable` is the source expression.
+pub(super) fn emit_object_comprehension<'ctx>(
+    cx: &CompCx<'_, 'ctx>,
+    var_ptr: PointerValue<'ctx>,
+    iterable: &MirExpr,
+    cond: Option<&MirExpr>,
+    elts: CompElts<'_>,
+) -> Scalar<'ctx> {
+    let (context, builder, module, rt) = (cx.context, cx.builder, cx.module, cx.rt);
+    let (kind, elt) = match elts {
+        CompElts::List(elt) => (ObjCollectionKind::List, elt),
+        CompElts::Set(elt, None) => (ObjCollectionKind::Set, elt),
+        CompElts::Set(_, Some(_)) | CompElts::Dict(..) => panic!(
+            "pycc_codegen: internal error: only a list or set comprehension of packable \
+             elements may iterate a CPython object -- pycc_types::check (I0404) should have \
+             rejected this before codegen"
+        ),
+    };
+    let emit = |expr: &MirExpr| {
+        emit_expr(
+            context,
+            builder,
+            module,
+            rt,
+            cx.user_functions,
+            cx.locals,
+            expr,
+        )
+    };
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_ty = context.i64_type();
+
+    let source = emit(iterable);
+    let iterator = foreign_call::emit_get_iter(context, builder, module, rt, source);
+
+    let edge = ForeignFailEdge::for_current(builder);
+    let new_collection = shim_fn(
+        module,
+        EXT_OBJ_NEW_COLLECTION_SYMBOL,
+        ptr.fn_type(&[i64_ty.into()], false),
+    );
+    let kind_code = i64_ty.const_int(kind.shim_code(), false);
+    let collection = builder
+        .build_call(new_collection, &[kind_code.into()], "objcomp_result")
+        .expect("build_call should not fail for pycc_ext_obj_new_collection")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_new_collection returns PyObject *")
+        .into_pointer_value();
+    route_null(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        collection,
+        "objcomp_result",
+    );
+
+    let lp = foreign_call::emit_iter_header(context, builder, module, rt, iterator);
+    builder
+        .build_store(var_ptr, lp.item)
+        .expect("build_store should not fail for the loop variable's own slot");
+
+    if let Some(cond) = cond {
+        let scalar = emit(cond);
+        let test = truthy(context, builder, module, rt, scalar);
+        release_scalar_if_int_temporary(context, builder, rt, cond, &scalar);
+        let function = edge.function();
+        let keep_bb = context.append_basic_block(function, "objcomp_keep");
+        builder
+            .build_conditional_branch(test, keep_bb, lp.header_bb)
+            .expect("build_conditional_branch should not fail for an i1 condition");
+        builder.position_at_end(keep_bb);
+    }
+
+    let scalar = emit(elt);
+    let item = emit_pack(context, builder, module, scalar, "objcomp_item");
+    release_scalar_if_int_temporary(context, builder, rt, elt, &scalar);
+    let collect = shim_fn(
+        module,
+        EXT_OBJ_COLLECT_SYMBOL,
+        context
+            .i32_type()
+            .fn_type(&[ptr.into(), i64_ty.into(), ptr.into()], false),
+    );
+    let status = builder
+        .build_call(
+            collect,
+            &[collection.into(), kind_code.into(), item.into()],
+            "objcomp_collect",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_collect")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_collect returns int")
+        .into_int_value();
+    route_negative(
+        context,
+        builder,
+        module,
+        rt,
+        edge,
+        status,
+        "objcomp_collect",
+    );
+    builder
+        .build_unconditional_branch(lp.header_bb)
+        .expect("build_unconditional_branch should not fail closing the loop body");
+
+    builder.position_at_end(lp.after_bb);
+    Scalar::Object(collection)
+}

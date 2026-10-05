@@ -1130,6 +1130,13 @@ pub(crate) fn collect_expr_constraints(
                 None => Ok(None),
             }
         }
+        // Part 1 of #891: the unpacked value's own term passes through.
+        // Whether the value can be unpacked at all, and into how many
+        // names, is `crate::unpack::infer_unpack`'s check-phase gate; the
+        // element reads that follow are ordinary `Subscript`s.
+        HirExpr::Unpack { value, .. } => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, value)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
@@ -1705,6 +1712,15 @@ pub(crate) fn collect_expr_constraints(
             }
         }
         HirExpr::EmptyDict(_) => Ok(None),
+        // Part 2d of #1371: a list display built as a CPython `list` is an
+        // object whatever its elements are; their packability is
+        // `crate::foreign::list_display`'s check, run by the checker walk.
+        HirExpr::ObjectList(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, element)?;
+            }
+            Ok(Some(Ok(Ty::Object)))
+        }
         HirExpr::ListLiteral(elements) => {
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
@@ -2062,6 +2078,11 @@ pub(crate) fn collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
             }
+            // Part 1 of #1255: a comprehension over a CPython object
+            // produces a CPython object, whatever its element.
+            if let CompIter::Iterable(_) = comp.iter {
+                return Ok(Some(Ok(Ty::Object)));
+            }
             // A set comprehension's container term is chosen by
             // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
             // rule. The element is the last body expression (`body_exprs`
@@ -2179,7 +2200,7 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, operand)
         }
         HirExpr::FString(parts) => {
@@ -2190,7 +2211,10 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, e)?;
             }
@@ -2320,6 +2344,13 @@ fn bind_comp_loop_var(
                 let term = fresh_term(parents, concrete);
                 env.bindings.insert(var.to_string(), term);
             }
+        }
+        // Part 1 of #1255: the iterable's own constraints are collected
+        // against the enclosing bindings; its loop variable is a CPython
+        // object, which the check phase verifies.
+        CompIter::Iterable(iterable) => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, iterable)?;
+            env.bindings.insert(var.to_string(), Ok(Ty::Object));
         }
     }
     Ok(())
@@ -3027,6 +3058,15 @@ pub(crate) fn collect_block_constraints(
                     if env.returns_inside_finally {
                         return Err(crate::buffer::buffer_return_inside_finally(name));
                     }
+                    continue;
+                }
+                // #1387: a bare `return` / `return None` into a declared
+                // `object` slot, the check phase's own admission through the
+                // one shared predicate (`crate::object_none`). An inferred
+                // return (`Err(var)`) declines, as the buffer egress does.
+                if let Ok(declared) = &return_term
+                    && crate::object_none::admits_none_return(declared, value.as_ref())
+                {
                     continue;
                 }
                 let actual = match value {

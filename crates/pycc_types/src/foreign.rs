@@ -310,7 +310,11 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
-             `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
+             a list display of scalar or object elements bound to an object slot, \
+             `and`/`or` with an object or scalar operand, \
+             `isinstance` against a foreign class, a plain pycc class or \
+             `int`/`float`/`bool`/`str`/`list`/`dict`/`tuple`, `for` iteration, a list \
+             or set comprehension over it unless it is a bare name, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
              interpolation, the `float`, \
@@ -328,8 +332,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
 /// which has a `pycc_ext_obj_pack_*` helper in the shim
 /// (`pycc_ext_obj_pack_object` takes one new reference to the operand).
 ///
-/// The one statement of the operand rule [`check_object_call_args`] and the
-/// `Ty::Object` subscript arm in `expr.rs` share.
+/// The one statement of the operand rule [`check_object_call_args`], the
+/// `Ty::Object` subscript arm in `expr.rs` and a list display's elements
+/// ([`list_display`], Part 2d of #1371) share.
 pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object)
 }
@@ -500,6 +505,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod list_display;
 pub(crate) mod slice;
 pub(crate) mod subscript_call;
 

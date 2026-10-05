@@ -169,9 +169,9 @@ fn the_shapes_outside_part_1_are_refused() {
         ),
         (
             "obj_cmp_isinstance_pycc_class",
-            "class C:\n    pass\n\nprint(isinstance(o, C))\n",
+            "class C(Exception):\n    pass\n\nprint(isinstance(o, C))\n",
             "I0404",
-            "against the pycc class `C`",
+            "against the pycc exception class `C`",
         ),
         (
             "obj_cmp_native_general_identity",

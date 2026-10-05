@@ -61,9 +61,11 @@ fn check(dir: &Path, body: &str) -> Output {
 /// Exactly the five `reject_object_condition` refused in a module body,
 /// and the same five it refused again inside a function body -- ten call
 /// sites, five shapes. The comprehension rows spell their iterable as
-/// `range(3)` deliberately: a comprehension iterable is not a general
-/// expression, so `[i for i in gc if gc]` is `C0001` long before the guard
-/// is reached and would test the wrong thing.
+/// `range(3)` deliberately, so the filter is the comprehension's only
+/// CPython-object operation: `[i for i in gc if gc]` is `I0404` for its
+/// bare-name `object` iterable long before the guard is reached, and an
+/// object iterable expression (Part 1 of #1255) would add a second object
+/// operation, so neither would test the guard alone.
 const CONDITION_SHAPES: [(&str, &str); 5] = [
     ("if", "if gc:\n    print(1)\n"),
     ("while", "while gc:\n    print(1)\n"),

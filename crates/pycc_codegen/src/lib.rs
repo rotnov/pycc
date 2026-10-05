@@ -58,9 +58,12 @@ mod foreign_import;
 mod foreign_len;
 mod foreign_pack;
 mod foreign_slice;
+mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
+mod object_comprehension;
+mod object_return;
 mod sequence;
 /// Set insertion, length and iteration helpers, and the insert of a set of
 /// user-class instances (#1343, Part 1 of #1336).
@@ -97,15 +100,16 @@ pub use ext::{
     is_ext_exportable_name, mangle_ext_name,
 };
 use ext::{
-    EXT_NAME_ERROR_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL, EXT_OBJ_CALL_SYMBOL,
-    EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL, EXT_OBJ_ERROR_BRIDGE_SYMBOL,
-    EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL, EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL,
-    EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL,
-    EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
-    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
-    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
-    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
+    EXT_NAME_ERROR_SYMBOL, EXT_OBJ_BUILD_LIST_SYMBOL, EXT_OBJ_CALL_BORROWED_SYMBOL,
+    EXT_OBJ_CALL_SYMBOL, EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL,
+    EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
+    EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
+    EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
+    EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
+    EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
 mod tests;
@@ -3860,6 +3864,38 @@ fn emit_expr_unchecked<'ctx>(
             [start.as_deref(), stop.as_deref(), step.as_deref()],
             |base, bounds| foreign_slice::emit_slice(context, builder, module, rt, base, bounds),
         ),
+        // Part 2d of #1371: a list display bound to an object slot. Each
+        // element in source order, every evaluated `int` temporary protected
+        // across the evaluations after it and released after the call, the
+        // `ObjSlice` arm's discipline. `foreign_call::emit_list` carries the
+        // rest.
+        MirExpr::ObjList { elements } => {
+            let mut pendings = Vec::with_capacity(elements.len());
+            let mut scalars = Vec::with_capacity(elements.len());
+            for element in elements {
+                let scalar = emit_expr(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    element,
+                );
+                pendings.push(push_pending_int_release_if_scalar_temporary(
+                    rt, element, &scalar,
+                ));
+                scalars.push(scalar);
+            }
+            for pending in pendings.into_iter().rev() {
+                pop_pending_int_release(rt, pending);
+            }
+            let result = foreign_call::emit_list(context, builder, module, rt, &scalars);
+            for (element, scalar) in elements.iter().zip(&scalars) {
+                release_scalar_if_int_temporary(context, builder, rt, element, scalar);
+            }
+            result
+        }
         MirExpr::ObjIsInstance { value, class } => {
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
@@ -3877,6 +3913,9 @@ fn emit_expr_unchecked<'ctx>(
                 }
                 pycc_mir::ObjIsInstanceClass::Builtin(builtin) => {
                     foreign_compare::IsInstanceClass::Builtin(builtin.shim_code())
+                }
+                pycc_mir::ObjIsInstanceClass::Compiled(name) => {
+                    foreign_compare::IsInstanceClass::Compiled(name.clone())
                 }
             };
             foreign_compare::emit_isinstance(context, builder, module, rt, value_scalar, class)
@@ -4081,6 +4120,11 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjUnpackFloatTuple { base, arity } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_len::emit_unpack_float_tuple(context, builder, module, rt, base_scalar, *arity)
+        }
+        MirExpr::ObjUnpack { value, arity } => {
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            foreign_unpack::emit_unpack(context, builder, module, rt, value_scalar, *arity)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
@@ -7523,10 +7567,23 @@ fn emit_stmt<'ctx>(
             // set the is_returning flag, and branch to the finally block.
             // After the finally body runs, the codegen emits the `ret`.
             let finally_target = finally_stack.last().cloned();
+            // #1387: in a function returning `object` (D-258), a bare
+            // `return` means `return None`, and both hand the host CPython's
+            // `None` -- see `object_return`.
+            let bare_none = MirExpr::NoneLiteral;
+            let value = object_return::object_return_value(&expected_return_ty, value, &bare_none);
             match value {
                 Some(expr) => {
-                    let scalar =
-                        emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let scalar = object_return::object_return_none(
+                        context,
+                        builder,
+                        module,
+                        &expected_return_ty,
+                        expr,
+                    )
+                    .unwrap_or_else(|| {
+                        emit_expr(context, builder, module, rt, user_functions, locals, expr)
+                    });
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let scalar = retain_if_int_duplicate(context, builder, rt, expr, scalar);
                     let scalar =

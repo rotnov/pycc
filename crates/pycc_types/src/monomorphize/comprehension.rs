@@ -62,6 +62,8 @@ pub(super) fn rewrite_comprehension_expr(
     };
     let elt_ty = rewrite_comp_parts(env, local_names, var, iter, body, instantiations, seen)?;
     Ok(match elt {
+        // Part 1 of #1255: over a CPython object the container is one too.
+        _ if matches!(iter, CompIter::Iterable(_)) => Ty::Object,
         CompElt::Set(_) => set_comp_container(elt_ty),
         other => crate::comprehension::comp_container_of(other),
     })
@@ -115,5 +117,13 @@ pub(super) fn rewrite_comp_iter(
             // names of this pass's environment never matter here.
             _ => Ok(Ty::Infer),
         },
+        // Part 1 of #1255: the check phase proved the iterable a CPython
+        // object, so its loop variable is one. The walk is kept, as for
+        // `HirStmt::ForObject`'s iterable, so a generic call inside it
+        // cannot escape this pass.
+        CompIter::Iterable(iterable) => {
+            rewrite_generic_calls_in_expr(env, local_names, iterable, instantiations, seen)?;
+            Ok(Ty::Object)
+        }
     }
 }
