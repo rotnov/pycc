@@ -49,12 +49,18 @@ pub(crate) enum DefaultPolicy {
     Admit,
     /// [`DefaultPolicy::Admit`]'s rules plus one: `None` may default a
     /// parameter of the opaque `object` type (`Ty::Object` -- `Any` or
-    /// `object` under `--ext`, D-258). A method's default is read only by
-    /// the `--ext` host boundary, which hands the parameter the host's own
-    /// `None` object exactly as a host passing `None` explicitly does; no
-    /// in-module call ever materializes it, because a short in-module method
-    /// call is still the arity `T0021` (Part 4 of #884, #1191). A
-    /// module-level `def` gets no such relaxation: its default is spliced
+    /// `object` under `--ext`, D-258).
+    ///
+    /// Such a default is read only by the `--ext` host boundary. The
+    /// boundary hands the parameter the host's own `None` object, exactly
+    /// as it does when a host passes `None` explicitly.
+    ///
+    /// No in-module call ever materializes this default. Since Part 1 of
+    /// #1191 (#1438) an in-module instance-method call may omit a defaulted
+    /// parameter, but `pycc_types` refuses a call that would fill `None`
+    /// into an `object` parameter.
+    ///
+    /// A module-level `def` gets no such relaxation: its default is spliced
     /// into a native call, where `None` at an `object` slot is refused.
     AdmitMethod,
     /// Report the unchanged `C0001` for any default at all.
