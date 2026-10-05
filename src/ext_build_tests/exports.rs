@@ -473,11 +473,8 @@ fn an_object_tuple_element_is_still_a_capability_gap() {
         Ty::Int,
     )]);
     let gaps = collect_exports(&hir).expect_err("no `_at` shim for an object element");
-    assert!(
-        gaps[0].message.contains("`t: tuple`"),
-        "{}",
-        gaps[0].message
-    );
+    let message = &gaps[0].message;
+    assert!(message.contains("`t: tuple`"), "{message}");
 }
 
 #[test]

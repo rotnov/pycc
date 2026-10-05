@@ -2694,10 +2694,13 @@ fn the_native_frontend_keeps_t0002_for_the_same_source() {
         "from typing import Any\ndef ident(x: Any) -> Any:\n    return x\n",
     )
     .expect("write source");
-    let Err(crate::frontend::FrontendFailure::Compile { files }) =
+    // No panicking `else` arm: every line runs when the test passes, so the
+    // diff-coverage gate sees no failure-only line.
+    let mut first_code = None;
+    if let Err(crate::frontend::FrontendFailure::Compile { files }) =
         crate::frontend::resolve_frontend(&src, Some("m"))
-    else {
-        panic!("`Any` must be refused outside an ext build");
-    };
-    assert_eq!(files[0].diagnostics[0].code, "T0002");
+    {
+        first_code = Some(files[0].diagnostics[0].code.to_string());
+    }
+    assert_eq!(first_code.as_deref(), Some("T0002"));
 }
