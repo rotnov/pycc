@@ -315,6 +315,17 @@ pub const EXT_OBJ_NONE_SYMBOL: &str = "pycc_ext_obj_none";
 /// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
 pub const EXT_OBJ_ISINSTANCE_SYMBOL: &str = "pycc_ext_obj_isinstance";
 
+/// The fixed C shim's compiled-class `isinstance` helper (Part 7 of #1371):
+/// it takes a borrowed object and the NUL-terminated name of a class
+/// compiled in this module, and returns `1`/`0`, or `-1` with the CPython
+/// exception already set. The shim forwards to the artifact's generated
+/// `pycc_ext_compiled_class_isinstance`, which tests the object against the
+/// host type object of every published class whose MRO contains the named
+/// one and answers `0` when no published class does.
+///
+/// Spelled once here for the same lazy-link reason as [`EXT_OBJ_LEN_SYMBOL`].
+pub const EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL: &str = "pycc_ext_obj_isinstance_compiled";
+
 /// The fixed C shim's iterator-acquisition helper (Part 3 of #1026, PR 3c
 /// of #1082): it takes a borrowed `PyObject *` and returns a *new*
 /// reference to `iter(o)` -- `PyObject_GetIter` -- or `NULL` with the

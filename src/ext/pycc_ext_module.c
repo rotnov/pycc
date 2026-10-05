@@ -102,6 +102,18 @@ extern long long pycc_ext_module_exec(void);
 static PyObject *pycc_ext_user_exception_class(unsigned char tag);
 
 /*
+ * Part 7 of #1371: `isinstance(o, C)` for a class `C` compiled in this
+ * module. Defined in the generated companion for the same reason as the
+ * declaration above (`COMPILED_CLASS_ISINSTANCE_DECL` in `src/ext_build.rs`).
+ * Returns 1 when `o` is an instance of the host type object of any
+ * *published* class whose MRO contains `name`, -1 with the exception set
+ * when `PyObject_IsInstance` raises, and 0 otherwise. A name no published
+ * class descends from has no carrier on the CPython side at all, and is
+ * answered by `pycc_ext_unpublished_class_isinstance` below.
+ */
+static int pycc_ext_compiled_class_isinstance(PyObject *o, const char *name);
+
+/*
  * The failed-import bridge (#1293, Part 3 of #1282). A foreign import nested
  * in a module-level `if`/`try` block whose `PyImport_ImportModule` raised an
  * `ImportError` is translated into a pending pycc exception, so the block's
@@ -1990,7 +2002,8 @@ PyObject *pycc_ext_obj_none(void)
  * Part 1 of #1371: `isinstance(o, cls)` with an object `o`
  * (`EXT_OBJ_ISINSTANCE_SYMBOL`). Both operands are borrowed. A `NULL`
  * `cls` selects a builtin class by `builtin`: 0 `int`, 1 `str`, 2 `float`,
- * 3 `bool` (`pycc_mir::ObjBuiltinClass::shim_code`). Returns 1, 0, or -1
+ * 3 `bool`, and since Part 7 of #1371 4 `list`, 5 `dict`, 6 `tuple`
+ * (`pycc_mir::ObjBuiltinClass::shim_code`). Returns 1, 0, or -1
  * with the exception set (`PyObject_IsInstance` raises `TypeError` for a
  * `cls` that is not a class, and propagates a raising
  * `__instancecheck__`).
@@ -2011,6 +2024,15 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
         case 3:
             cls = (PyObject *)&PyBool_Type;
             break;
+        case 4:
+            cls = (PyObject *)&PyList_Type;
+            break;
+        case 5:
+            cls = (PyObject *)&PyDict_Type;
+            break;
+        case 6:
+            cls = (PyObject *)&PyTuple_Type;
+            break;
         default:
             PyErr_SetString(PyExc_SystemError,
                             "pycc_ext_obj_isinstance: unrecognized builtin class selector");
@@ -2022,6 +2044,44 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
         return -1;
     }
     return PyObject_IsInstance(o, cls);
+}
+
+/*
+ * The answer for a compiled class no published type descends from (a
+ * private class, one exporting no method, every class of an embedded
+ * build): no CPython object is an instance of it, but CPython's own
+ * `isinstance` does not answer False before it has looked up the object's
+ * `__class__` (`object_isinstance` in `Objects/abstract.c`), so an error
+ * raised there propagates as -1 here too. A missing `__class__` is 0, and
+ * whatever it names cannot be a subclass of a class with no type object.
+ * The generated `pycc_ext_compiled_class_isinstance` calls it by the name
+ * `UNPUBLISHED_CLASS_ISINSTANCE` in `src/ext_build/method_types.rs` spells.
+ */
+static int pycc_ext_unpublished_class_isinstance(PyObject *o)
+{
+    PyObject *cls = NULL;
+    if (PyObject_GetOptionalAttrString(o, "__class__", &cls) < 0) {
+        return -1;
+    }
+    Py_XDECREF(cls);
+    return 0;
+}
+
+/*
+ * Part 7 of #1371: `isinstance(o, C)` with an object `o` and a class `C`
+ * compiled in this module (`EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL`). `o` is
+ * borrowed; `name` is the class's NUL-terminated name, a constant string
+ * compiled code owns. Same 1/0/-1 contract as `pycc_ext_obj_isinstance`;
+ * the generated `pycc_ext_compiled_class_isinstance` declared above carries
+ * the rule.
+ */
+int pycc_ext_obj_isinstance_compiled(PyObject *o, const char *name)
+{
+    if (o == NULL || name == NULL) {
+        PyErr_SetString(PyExc_SystemError, "pycc_ext_obj_isinstance_compiled: NULL operand");
+        return -1;
+    }
+    return pycc_ext_compiled_class_isinstance(o, name);
 }
 
 /*

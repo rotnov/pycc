@@ -18,14 +18,18 @@ use std::collections::HashMap;
 
 /// The builtin class an [`MirExpr::ObjIsInstance`] tests against when the
 /// class argument is one of the scalar type names
-/// (`pycc_hir::is_builtin_type_name`), which have no binding of their own
-/// to evaluate: codegen names CPython's own type object for each.
+/// (`pycc_hir::is_builtin_type_name`) or, since Part 7 of #1371, `list`,
+/// `dict` or `tuple`, none of which has a binding of its own to evaluate:
+/// codegen names CPython's own type object for each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjBuiltinClass {
     Int,
     Str,
     Float,
     Bool,
+    List,
+    Dict,
+    Tuple,
 }
 
 impl ObjBuiltinClass {
@@ -36,6 +40,9 @@ impl ObjBuiltinClass {
             "str" => Some(Self::Str),
             "float" => Some(Self::Float),
             "bool" => Some(Self::Bool),
+            "list" => Some(Self::List),
+            "dict" => Some(Self::Dict),
+            "tuple" => Some(Self::Tuple),
             _ => None,
         }
     }
@@ -48,6 +55,9 @@ impl ObjBuiltinClass {
             Self::Str => 1,
             Self::Float => 2,
             Self::Bool => 3,
+            Self::List => 4,
+            Self::Dict => 5,
+            Self::Tuple => 6,
         }
     }
 }
@@ -59,6 +69,11 @@ pub enum ObjIsInstanceClass {
     Builtin(ObjBuiltinClass),
     /// An object-typed expression -- a foreign class such as `mod.Cls`.
     Object(Box<MirExpr>),
+    /// A class compiled in this module, by its name (Part 7 of #1371).
+    /// It has no value to evaluate: the artifact's generated
+    /// `pycc_ext_compiled_class_isinstance` answers it against the host type
+    /// object of every published class whose MRO contains it.
+    Compiled(String),
 }
 
 /// `Ok(ObjContains)` for `left in right` / `left not in right` whose
@@ -101,9 +116,12 @@ pub(super) fn lower_object_isinstance(
         HirExpr::Name(name) => ObjBuiltinClass::from_name(name),
         _ => None,
     };
-    let class = match builtin {
-        Some(builtin) => ObjIsInstanceClass::Builtin(builtin),
-        None => ObjIsInstanceClass::Object(Box::new(lower_expr(
+    let class = match (builtin, class_arg) {
+        (Some(builtin), _) => ObjIsInstanceClass::Builtin(builtin),
+        (None, HirExpr::Name(name)) if classes.contains_key(name) => {
+            ObjIsInstanceClass::Compiled(name.clone())
+        }
+        (None, _) => ObjIsInstanceClass::Object(Box::new(lower_expr(
             class_arg,
             scopes,
             classes,

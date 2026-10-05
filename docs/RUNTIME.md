@@ -1444,10 +1444,27 @@ compiled code with no failure edge; a `None` operand adds only the
 infallible `pycc_ext_obj_none` call, which returns the borrowed `Py_None`, so
 it creates no reference either. `pycc_ext_obj_isinstance(o, cls, builtin)` wraps `PyObject_IsInstance`
 and answers a C `int` (`-1` on failure); it borrows both operands, and when
-`cls` is `NULL` the `builtin` selector (`0`..`3` for `int`, `str`, `float`,
-`bool`) names CPython's own static type object instead, so it adds nothing to
+`cls` is `NULL` the `builtin` selector (`0`..`6` for `int`, `str`, `float`,
+`bool`, `list`, `dict`, `tuple`; the last three since Part 7 of #1371) names
+CPython's own static type object instead, so it adds nothing to
 the leaked set either. An out-of-range selector or a `NULL` operand raises
 `SystemError` rather than reading undefined memory.
+
+Against a class compiled in the same module (Part 7 of #1371),
+`pycc_ext_obj_isinstance_compiled(o, name)` borrows `o` and the class's
+constant NUL-terminated name, and has the same `1`/`0`/`-1` contract. It
+calls the generated `pycc_ext_compiled_class_isinstance`, which tests `o`
+against the type object of each published class whose MRO contains `name`.
+Those type objects are kept for that purpose in per-class file statics
+(`pycc_ext_type_object_<Class>`): registration moves the reference
+`PyType_FromSpec` returned into the static instead of releasing it, and a
+second exec of the module replaces it, releasing the earlier one. That is one
+strong reference per published class for the artifact's lifetime, alongside
+the module attribute's own. A name with no published descendant falls
+through to `pycc_ext_unpublished_class_isinstance`, which looks up
+`o.__class__` as CPython's own `isinstance` does, releases what it got and
+answers `0`, or `-1` if that lookup raised. No path produces a reference that
+outlives the call.
 
 **An object argument is a fifth packer; a produced callee is consumed.**
 Part 2a of [#1371](https://github.com/rotnov/pycc/issues/1371) adds

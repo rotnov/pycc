@@ -141,8 +141,55 @@ fn isinstance_with_an_object_first_argument_is_admitted_for_a_builtin_or_object_
         "b = isinstance(numpy.pi, numpy.ndarray)\n",
         "b = isinstance(numpy.pi, numpy)\n",
         "def f() -> bool:\n    o = numpy.pi\n    return isinstance(o, str)\n",
+        "b = isinstance(numpy.pi, list)\n",
+        "b = isinstance(numpy.pi, dict)\n",
+        "b = isinstance(numpy.pi, tuple)\n",
     ] {
         assert_admitted(source);
+    }
+}
+
+/// Part 7 of #1371: a plain class compiled in this module is admitted as
+/// the `isinstance` class argument -- a base, a subclass, and from a
+/// method body with an object local, the lark `__eq__` shape.
+#[test]
+fn isinstance_of_an_object_against_a_plain_compiled_class_is_admitted() {
+    for source in [
+        "class C:\n    pass\n\n\nb = isinstance(numpy.pi, C)\n",
+        "class B:\n    pass\n\n\nclass D(B):\n    pass\n\n\nb = isinstance(numpy.pi, B)\n",
+        "class C:\n    def same(self) -> bool:\n        other = numpy.pi\n        \
+         if not isinstance(other, C):\n            return False\n        \
+         return True\n",
+    ] {
+        assert_admitted(source);
+    }
+}
+
+/// Part 7 of #1371: the compiled classes that have no exported CPython type
+/// object of their own kind are refused, each naming its kind.
+#[test]
+fn isinstance_of_an_object_against_a_special_compiled_class_is_refused() {
+    for (source, phrase) in [
+        (
+            "class E(Exception):\n    pass\n\n\nb = isinstance(numpy.pi, E)\n",
+            "against the pycc exception class `E`",
+        ),
+        (
+            "from typing import Protocol\n\n\nclass P(Protocol):\n    \
+             def m(self) -> int: ...\n\n\nb = isinstance(numpy.pi, P)\n",
+            "against the pycc protocol `P`",
+        ),
+        (
+            "from enum import Enum\n\n\nclass K(Enum):\n    A = 1\n\n\n\
+             b = isinstance(numpy.pi, K)\n",
+            "against the pycc enum `K`",
+        ),
+        (
+            "class G[T]:\n    pass\n\n\nb = isinstance(numpy.pi, G)\n",
+            "against the pycc generic class `G`",
+        ),
+    ] {
+        assert_refused(source, "I0404", phrase);
     }
 }
 
@@ -152,11 +199,6 @@ fn isinstance_with_an_object_first_argument_refuses_other_class_arguments() {
         "b = isinstance(numpy.pi, (int, str))\n",
         "I0404",
         "against a tuple of classes",
-    );
-    assert_refused(
-        "class C:\n    pass\n\n\nb = isinstance(numpy.pi, C)\n",
-        "I0404",
-        "against the pycc class `C`",
     );
     assert_refused(
         "x = 3\nb = isinstance(numpy.pi, x)\n",
