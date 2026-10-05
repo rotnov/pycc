@@ -905,12 +905,12 @@ fn a_constructible_class_yields_one_constructor_descriptor_with_the_carried_tail
         vec![ExtCtor {
             class: "Grid".to_string(),
             name: "Grid.__init__".to_string(),
-            // `self` is gone; the two `int`s remain, and the slot count is
-            // `flat_attr_layout`'s, not the parameter count -- they agree
-            // here only because the fixture declares two attributes.
+            // `self` is gone; the two `int`s remain, and the slot layout is
+            // `flat_attr_layout`'s, not the parameter list -- they agree in
+            // count here only because the fixture declares two attributes.
             params: vec![Ty::Int, Ty::Int],
             param_writable: vec![false; 2],
-            slot_count: 2,
+            slot_names: vec!["w".to_string(), "h".to_string()],
         }]
     );
 }
@@ -1089,7 +1089,7 @@ fn an_implicit_object_init_is_still_resolved_when_it_is_the_only_one() {
             name: "Grid.__init__".to_string(),
             params: Vec::new(),
             param_writable: Vec::new(),
-            slot_count: 2,
+            slot_names: vec!["w".to_string(), "h".to_string()],
         }]
     );
 }

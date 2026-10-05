@@ -187,12 +187,11 @@ fn a_declared_foreign_attribute_and_an_undeclared_one_get_object_slots() {
     assert_eq!(attrs(&module, "_Box"), object_params(&["f", "q", "g"]));
 }
 
-/// The `__init__` right-hand-side shape gate stays: a declared foreign
-/// attribute is still established only from a bare parameter, so no
-/// `__init__` can read a slot it has not yet assigned (widening the gate is
-/// #1388).
+/// #1388: a declared foreign attribute is established from any expression,
+/// a foreign call or a read through a slot `__init__` has not assigned yet
+/// alike -- the latter raises `AttributeError` at run time, as in CPython.
 #[test]
-fn a_declared_foreign_attribute_keeps_the_init_shape_gate() {
+fn a_declared_foreign_attribute_is_established_from_any_expression() {
     for rhs in ["Fraction(n, 4)", "self.b.limit_denominator(3)"] {
         let source = format!(
             "from fractions import Fraction\n\
@@ -200,15 +199,8 @@ fn a_declared_foreign_attribute_keeps_the_init_shape_gate() {
              \x20   def __init__(self, n: int, b: Fraction) -> None:\n\
              \x20       self.f = {rhs}\n        self.b = b\n"
         );
-        let diagnostic = only_error(lower_foreign(&source, &["fractions"]));
-        assert_eq!(diagnostic.code, "C0001", "{rhs}");
-        assert!(
-            diagnostic
-                .message
-                .starts_with("an instance attribute's first assignment inside `__init__` must be"),
-            "{rhs}: {}",
-            diagnostic.message
-        );
+        let module = lower_ok(&source, &["fractions"]);
+        assert_eq!(attrs(&module, "_Box"), object_params(&["f", "b"]), "{rhs}");
     }
 }
 

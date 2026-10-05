@@ -142,6 +142,25 @@ every earlier tag keeps its value. It carries CPython's real parentage
 simplification: `except AssertionError:` and `except Exception:` both catch
 it, and it resolves through its fixed class-table tag.
 
+**[#1388](https://github.com/rotnov/pycc/issues/1388)** appends
+`AttributeError` (29) after `AssertionError` by the same mechanism, with
+CPython's parentage (`AttributeError` -> `Exception`), so user tags now start
+at 30. Its one runtime producer is the instance slot read. Since #1388 a
+`PyInstanceObj` slot is an `Option<i64>` that stays `None` until its first
+store -- 16 bytes per slot instead of the 8 of a bare word, because `0` is a
+valid `int`, `bool` and `float` word and no sentinel could mark the state --
+and every compiled `base.attr` read calls `pycc_rt_instance_get_slot_checked`,
+which raises `AttributeError: '<Class>' object has no attribute '<x>'` for an
+unassigned slot, as CPython does for an attribute `__init__` has not set yet.
+The unchecked `pycc_rt_instance_get_slot` remains only for releasing a slot's
+previous value before a store. To word that message without a class table at
+run time, the constructor call passes a static layout descriptor:
+`pycc_rt_instance_new(slot_count, layout, layout_len)`, where `layout` is the
+class's source name followed by each slot name, NUL-separated (a
+monomorphised generic class passes its generic class's name, and an enum
+member, which has no slots, passes `NULL`/`0`). The generated `--ext`
+`tp_init` passes the same descriptor (D-154's 2026-10-05 amendment).
+
 **The `assert` statement ([#1369](https://github.com/rotnov/pycc/issues/1369)).**
 `assert test, msg` is lowered in HIR (`crates/pycc_hir/src/stmt/assert_stmt.rs`)
 as the AST rewrite `if test: pass` / `else: raise AssertionError(msg)`, and
@@ -203,7 +222,7 @@ the builtins keep the tags below that and either carry `None` (the flat seven,
 resolved by name) or a fixed tag by array index (every builtin past them; the
 groups are always reconstructed with that fixed tag regardless of the raised
 object's dynamic subclass -- see D-202). A module declaring more than
-`MAX_USER_EXCEPTION_CLASSES` (currently 226) such classes is rejected with
+`MAX_USER_EXCEPTION_CLASSES` (currently 225) such classes is rejected with
 `C0001` -- the tag is a `u8` on `PyExceptionObj` and in every runtime entry
 point that carries one.
 
@@ -1070,15 +1089,16 @@ table above, and leaves CPython's error indicator clear. The pycc class is
 chosen by `isinstance` against a fixed list, most specific first:
 `ModuleNotFoundError` before `ImportError`, `BrokenPipeError` before
 `ConnectionError` and every `OSError` subclass before `OSError`, then
-`OverflowError`, `AssertionError` (#1369), `ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
+`OverflowError`, `AssertionError` (#1369), `AttributeError` (#1388),
+`ZeroDivisionError`, `KeyError`, `IndexError`, `ValueError`,
 `TypeError` and `RuntimeError`, and anything else that is an `Exception` —
-`AttributeError`, `NameError` and the rest, which pycc cannot name in an
+`NameError` and the rest, which pycc cannot name in an
 `except` clause (`T0021`) — as `Exception`. A `BaseException` that is not an
 `Exception` (`SystemExit`, `KeyboardInterrupt`, `GeneratorExit`) gets the
 reserved tag 255, which `except Exception` does not match and a bare `except`
 does. The message is CPython's own `str(exc)`. So `except ValueError` around
-`int(o)` catches the host's `ValueError`, `except Exception` catches a missing
-attribute, and an exception that escapes the compiled code unchanged reaches
+`int(o)` catches the host's `ValueError`, `except AttributeError` (or
+`except Exception`) catches a missing attribute, and an exception that escapes the compiled code unchanged reaches
 the host as the *original* object, keeping its class, `.name` and traceback.
 The bridge is total, with two degraded paths: a helper that failed without
 setting an exception bridges a `SystemError` saying so, and an allocation or

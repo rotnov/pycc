@@ -400,7 +400,8 @@ else:
 #[test]
 #[ignore = "requires a CPython 3.13+ with development headers on PATH"]
 fn a_host_constructed_instance_has_the_same_slot_layout_as_a_native_one() {
-    // The generated `tp_init` allocates `pycc_rt_instance_new(<slot_count>)`
+    // The generated `tp_init` allocates
+    // `pycc_rt_instance_new(<slot_count>, <layout_ptr>, <layout_len>)`
     // from `pycc_hir::flat_attr_layout`, which is the same function
     // `MirExpr::Instantiate` goes through. A disagreement would not raise --
     // it would read or write past the native allocation -- so the only way to

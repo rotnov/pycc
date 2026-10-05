@@ -38,8 +38,14 @@ impl ExceptionCodegenState<'_> {
 /// operations converted to catchable Python exceptions remain fail-closed.
 pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
     match expr {
-        // `ObjAttrGet` joins the `true` group (D-244, Part 2 of #1026):
-        // unlike `AttrGet`'s compile-time-resolved slot load below, a
+        // `AttrGet` joins the `true` group with #1388, and the dependency is
+        // live: `pycc_rt_instance_get_slot_checked` sets pycc's own D-173
+        // pending state (`AttributeError`) and returns a `0` word for a slot
+        // read before its assignment, so this guard is the whole of the
+        // failure handling.
+        //
+        // `ObjAttrGet` joins the `true` group too (D-244, Part 2 of #1026):
+        // like `AttrGet`, but unlike its compile-time-resolved slot, a
         // foreign attribute load is a real `PyObject_GetAttrString` call
         // that returns `NULL` with a CPython exception set whenever the
         // attribute is missing or its descriptor raises.
@@ -66,6 +72,7 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // classification stays correct should a future emitter defer its
         // branch to that guard instead.
         MirExpr::Call { .. }
+        | MirExpr::AttrGet { .. }
         | MirExpr::DictGet { .. }
         | MirExpr::Instantiate(_)
         | MirExpr::ObjAttrGet { .. }
@@ -183,11 +190,10 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::ListPop { .. }
         | MirExpr::DictGetOrDefault { .. }
         | MirExpr::SetAdd { .. }
-        | MirExpr::AttrGet { .. }
         | MirExpr::NullInstance { .. }
         // Part 3A of #541 (#736): reading an already-caught exception's
-        // message pointer off its object is a plain field load, exactly
-        // like `AttrGet` immediately above -- it cannot itself allocate,
+        // message pointer off its object is a plain field load -- it cannot
+        // itself allocate,
         // divide, index, or otherwise fail, so it cannot set D-173's
         // pending-exception state. The wrapped sub-expression is not
         // re-inspected here either, matching every other arm's own
@@ -207,8 +213,8 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         | MirExpr::OptionalWrap(_, _)
         // PEP 572 (#774): `target := value`. Storing an already-evaluated
         // value into a predeclared slot is a plain store, exactly as
-        // infallible as `AttrGet`'s field load or `OptionalWrap`'s re-tag
-        // above -- it cannot itself allocate, divide, index, or otherwise
+        // infallible as `ExceptionMessage`'s field load or `OptionalWrap`'s
+        // re-tag above -- it cannot itself allocate, divide, index, or otherwise
         // fail. The wrapped `value` sub-expression is not re-inspected
         // here either, matching this function's own "classify only this
         // node's operation, let child expressions guard themselves" rule;
@@ -1535,7 +1541,8 @@ mod tests {
         assert!(expression_can_set_exception(&MirExpr::Instantiate(
             Box::new(pycc_mir::InstantiateExpr {
                 ctor: "C.__init__".to_string(),
-                attr_count: 0,
+                class_name: "C".to_string(),
+                slot_names: vec![],
                 args: Vec::new(),
                 ty: pycc_mir::Ty::Instance(Box::new("C".to_string())),
             },)
@@ -1544,6 +1551,17 @@ mod tests {
         // base is a `memoryview`, so `pycc_rt_buffer_f64_get`'s bounds check
         // can always set an `IndexError`. Unlike `Subscript` above there is
         // no false direction to pin: no base shape makes it non-raising.
+        // #1388: an instance attribute read is always raising too -- the
+        // checked slot read sets `AttributeError` for a slot not yet
+        // assigned, whatever the attribute's type.
+        assert!(expression_can_set_exception(&MirExpr::AttrGet {
+            base: Box::new(MirExpr::Name {
+                name: "c".to_string(),
+                ty: pycc_mir::Ty::Instance(Box::new("C".to_string())),
+            }),
+            slot: 0,
+            ty: pycc_mir::Ty::Int,
+        }));
         assert!(expression_can_set_exception(&MirExpr::BufferGet {
             base: Box::new(MirExpr::Name {
                 name: "b".to_string(),

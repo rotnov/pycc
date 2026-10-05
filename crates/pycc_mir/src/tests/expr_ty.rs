@@ -147,7 +147,8 @@ fn mir_expr_ty_covers_every_variant() {
     assert_eq!(
         MirExpr::Instantiate(Box::new(InstantiateExpr {
             ctor: "Point.__init__".to_string(),
-            attr_count: 2,
+            class_name: "C".to_string(),
+            slot_names: vec!["s0".to_string(), "s1".to_string()],
             args: vec![],
             ty: Ty::Instance(Box::new("Point".to_string())),
         }))

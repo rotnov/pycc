@@ -11,6 +11,38 @@ use crate::rt_fns::RtFns;
 use inkwell::context::Context;
 use inkwell::values::{IntValue, PointerValue};
 
+/// The layout descriptor `pycc_rt_instance_new` takes (#1388): `class_name`
+/// then each of `slot_names`, NUL-separated, as a private constant interned
+/// once per distinct descriptor and returned with its byte length. The
+/// global is keyed on the descriptor itself, never on the constructor: a
+/// subclass that inherits `__init__` shares its base's constructor but not
+/// its class name. `pycc_rt` reads it
+/// only to word the `AttributeError` of a slot read before its assignment,
+/// so it never needs a terminating NUL.
+pub(crate) fn instance_layout_constant<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    class_name: &str,
+    slot_names: &[String],
+) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+    let mut layout = class_name.to_string();
+    for name in slot_names {
+        layout.push('\0');
+        layout.push_str(name);
+    }
+    let len = context.i64_type().const_int(layout.len() as u64, false);
+    // A NUL cannot appear in an LLVM global's name, and `/` cannot appear
+    // in a Python identifier, so the mapping keeps distinct descriptors
+    // distinct.
+    let global_name = format!("pycc_instance_layout.{}", layout.replace('\0', "/"));
+    if let Some(existing) = module.get_global(&global_name) {
+        return (existing.as_pointer_value(), len);
+    }
+    let (ptr, _) =
+        crate::exception_value::emit_str_bytes_constant(context, module, &layout, &global_name);
+    (ptr, len)
+}
+
 /// Reinterprets a raw `i64` slot word read from `pycc_rt_instance_get_slot`
 /// as the `Scalar` its declared attribute `ty` names (D-154, Part 1 of
 /// #375; see `pycc_rt::instance`'s own doc comment for the slot
@@ -25,12 +57,17 @@ use inkwell::values::{IntValue, PointerValue};
 /// D-124), so the read hands back the very object the slot holds, which is
 /// CPython's aliasing. Since Part 1 of #1367 an `object` (a class a foreign
 /// import binds) reinterprets the word as its `PyObject*` the same way. Only
-/// these seven `Ty`s can ever reach here:
-/// `pycc_hir::class::init_slot::slot_ty_from_init_rhs` admits a scalar
-/// (int/float/bool/str) parameter or literal, or a `list[int]`/`dict[str,
-/// int]`/`object` parameter, at `__init__`'s own first-assignment pre-scan,
-/// so a `Set`/`Tuple`/`Instance`/`Param`/`Infer`/`MemoryView`-typed
-/// attribute can never be constructed from real, type-checked source.
+/// these seven `Ty`s can ever reach here, because the two places a slot gets
+/// its type admit no other: an undeclared attribute's
+/// `pycc_hir::class::init_slot::slot_ty_from_init_rhs` (a scalar
+/// parameter or literal, or a `list[int]`/`dict[str, int]`/`object`
+/// parameter) and a class-body declaration's
+/// `pycc_hir::class::declared_attrs` gate (the same set plus a type
+/// parameter, which monomorphisation replaces), so a
+/// `Set`/`Tuple`/`Instance`/`Param`/`Infer`/`MemoryView`-typed attribute can
+/// never be constructed from real, type-checked source. Since #1388 a
+/// declared attribute's right-hand side may be any expression; its type is
+/// the declared one, which `pycc_types::check_attr_set` holds the value to.
 pub(crate) fn slot_word_to_scalar<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -70,9 +107,8 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
         // Every `object` producer hands back a reference that is never
         // released and `pycc_rt::instance` never releases a slot word, so
         // the read needs no refcount traffic. A slot read before its
-        // `__init__` assignment is a NULL word, which the foreign operation
-        // reports as `SystemError` where CPython raises `AttributeError`
-        // (the pre-existing uninitialised-slot hazard, #1148).
+        // `__init__` assignment never reaches here: the checked read raises
+        // `AttributeError` first (#1388).
         pycc_mir::Ty::List(_) | pycc_mir::Ty::Dict(..) | pycc_mir::Ty::Object => {
             let ptr = builder
                 .build_int_to_ptr(
@@ -89,9 +125,8 @@ pub(crate) fn slot_word_to_scalar<'ctx>(
         }
         other => panic!(
             "pycc_codegen: internal error: an instance attribute of type `{}` is not \
-             supported yet -- pycc_hir::class::init_slot::slot_ty_from_init_rhs should have \
-             rejected \
-             this before codegen",
+             supported yet -- pycc_hir's init-slot and declaration gates should have \
+             rejected this before codegen",
             other.name()
         ),
     }
@@ -139,15 +174,15 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
         // `Optional[int]` for `slot_ty_from_init_rhs` to have exercised.
         | Scalar::Optional(_)
         // Part 2 of #1027: a `memoryview` joins the same or-pattern for
-        // the identical reason -- `slot_ty_from_init_rhs` admits no
-        // `memoryview` slot. Part 2a of #1142 (#1165) gave
+        // the identical reason -- neither `slot_ty_from_init_rhs` nor a
+        // class-body declaration admits a `memoryview` slot. Part 2a of #1142 (#1165) gave
         // the type its one storable position, a *local* slot bound by
         // `a = ndarray(n)`; an instance attribute is not that position and
         // stays refused, so no such attribute is ever built.
         | Scalar::MemoryView(_) => panic!(
             "pycc_codegen: internal error: cannot store this value into an instance \
-             attribute slot -- pycc_hir::class::init_slot::slot_ty_from_init_rhs should \
-             have rejected this before codegen"
+             attribute slot -- pycc_hir's init-slot and declaration gates should have \
+             rejected this before codegen"
         ),
     }
 }
@@ -157,9 +192,10 @@ pub(crate) fn scalar_to_slot_word<'ctx>(
 /// meaningful for a `Ty::Str` attribute -- reads the slot's *current* raw
 /// word through the same opaque `pycc_rt_instance_get_slot` accessor
 /// `MirExpr::AttrGet` itself uses, reinterprets it as a `str` pointer, and
-/// decrefs it before the new value overwrites the slot. A freshly allocated
-/// instance's slots start zero-initialized (`pycc_rt::instance::new_instance`),
-/// which decodes to a null pointer whose runtime decref is a documented
+/// decrefs it before the new value overwrites the slot. The read is the
+/// unchecked one: a freshly allocated instance's slots start unassigned
+/// (`pycc_rt::instance::new_instance`), which that read returns as the `0`
+/// word -- a null pointer whose runtime decref is a documented
 /// no-op (`pycc_rt_str_decref`'s own null check) -- exactly like a local's
 /// null-initialized string slot -- so the same call is correct for both
 /// `__init__`'s first assignment and any later reassignment.
@@ -207,8 +243,9 @@ pub(crate) fn decref_str_attr_slot_before_store<'ctx>(
 /// [`decref_str_attr_slot_before_store`] directly above: reads the slot's
 /// current raw word through `pycc_rt_instance_get_slot` and releases it
 /// before the new value overwrites it. A freshly allocated instance's slots
-/// are zero-initialized (`pycc_rt::instance::new_instance`), and `0` is the
-/// word `pycc_rt_bigint_release` returns on without classifying, so the
+/// start unassigned (`pycc_rt::instance::new_instance`), which the
+/// unchecked read returns as the `0` word, and `0` is the word
+/// `pycc_rt_bigint_release` returns on without classifying, so the
 /// same call is correct for `__init__`'s first assignment and every later
 /// reassignment.
 pub(crate) fn release_int_attr_slot_before_store<'ctx>(
