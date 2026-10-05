@@ -237,28 +237,29 @@ fn an_aliased_typing_from_import_is_still_refused() {
 }
 
 #[test]
-fn a_generic_base_keeps_the_unknown_base_c0001() {
-    // `Generic` is import-only: nothing resolves it by spelling, so a bare
-    // `Generic` base is an unknown class, exactly like `class X(Final):`.
+fn a_plain_generic_base_keeps_a_c0001() {
+    // A bare `Generic` base names no type variable: #1394 admits only
+    // `Generic[T, ...]`, so the plain form keeps an explicit refusal.
     let diagnostic = lower_err("from typing import Generic\n\n\nclass X(Generic):\n    pass\n");
     assert_eq!(diagnostic.code, "C0001");
     assert_eq!(
         diagnostic.message,
-        crate::module::unknown_base_message("X", "Generic")
+        "class `X` lists a plain `Generic` base -- write `Generic[T]` with the class's type \
+         variables"
     );
 }
 
 #[test]
-fn a_subscripted_generic_base_keeps_its_c0001() {
-    // `Generic[...]` as a base stays #886's refusal: registering `Generic`
-    // makes only its import resolve.
+fn a_generic_base_over_a_concrete_type_keeps_its_c0001() {
+    // `Generic[...]` is admitted only over type variables (#1394);
+    // `Generic[int]` is a TypeError in CPython and stays refused here.
     let diagnostic =
         lower_err("from typing import Generic\n\n\nclass X(Generic[int]):\n    pass\n");
     assert_eq!(diagnostic.code, "C0001");
     assert!(
         diagnostic
             .message
-            .starts_with("a base class must be a bare name"),
+            .starts_with("`int` in a `Generic[...]` base is not a type variable"),
         "{}",
         diagnostic.message
     );

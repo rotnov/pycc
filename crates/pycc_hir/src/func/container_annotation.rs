@@ -160,6 +160,16 @@ pub(super) fn container_annotation_to_ty(
         }
         elements.push(element);
     }
+    // D-258 rule 4 (#1397): in an `ext` module one object-typed argument
+    // anywhere makes the whole value the opaque CPython container --
+    // `List[StateT]` over a foreign type variable, `Dict[str, tuple]` over a
+    // bare `tuple`, `tuple[int, Any]` -- never a native container of objects.
+    // Checked before the D-105/D-122 capability gate, which governs native
+    // containers only; a container whose arguments are all native is
+    // unaffected and still reaches that gate.
+    if super::is_ext_module(aliases) && elements.contains(&Ty::Object) {
+        return Ok(Ty::Object);
+    }
     let mut elements = elements.into_iter();
     let ty = match family {
         "list" => Ty::List(Box::new(elements.next().expect("arity checked above"))),

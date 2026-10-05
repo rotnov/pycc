@@ -80,7 +80,9 @@ pub(crate) fn lower_type_alias_stmt(
 /// kind not supported yet") diagnostic if pycc tried to require it first.
 /// There is no accepted-bare-typing-name precedent to lean on either --
 /// `Any` is the only other typing-shaped bare name `annotation_to_ty`
-/// currently recognizes, and it is rejected with `T0002`, not accepted. So
+/// currently recognizes, and it is rejected with `T0002`, not accepted
+/// (outside an `ext` module, where D-258 lowers it to the CPython object
+/// since #1397 -- still with no import verification). So
 /// this function accepts the bare annotation name `TypeAlias`
 /// unconditionally, not by analogy to an existing precedent, but because
 /// real import verification cannot be expressed with this crate's current

@@ -464,7 +464,7 @@ Each entry must produce the documented error code, tested in `tests/diagnostics/
 | `eval` / `exec` / `compile` | `E0100` | `d0100_eval.py` |
 | Monkey-patching (attribute assignment on foreign classes/modules) | `E0101` | `d0101_monkeypatch.py` |
 | Untyped public function signature | `T0001` | `d0001_missing_public_annotation.py` |
-| `Any` outside a compiler-classified CPython interop boundary (planned v0.7; the current v0.1 snapshot retains its legacy “declared boundary” wording) | `T0002` | `d0002_any_forbidden.py` |
+| `Any` outside a compiler-classified CPython interop boundary (planned v0.7; the current v0.1 snapshot retains its legacy “declared boundary” wording). A module compiled into a `pycc build --ext` artifact is such a boundary since #1397 (D-258) | `T0002` | `d0002_any_forbidden.py` |
 | Dynamic attribute injection on non-`dict`-like objects | `E0102` | `d0102_dyn_attr.py` |
 | `type()` three-arg dynamic class creation | `E0103` | `d0103_dyn_class.py` |
 | Wildcard `import *` | `E0104` | `d0104_star_import.py` |

@@ -358,7 +358,9 @@ pub(crate) fn reject_object_operand(ty: &Ty, operation: &str) -> Result<(), Diag
 /// `object` parameter accepts it, and since Part 1 of #1367 so does any
 /// parameter -- of a function, a method or a constructor -- annotated with a
 /// class a foreign import binds (`docs/TYPE_SYSTEM.md`'s `object` row;
-/// `object` itself stays unspellable). Every other declared parameter
+/// outside an `--ext` module `object` itself stays unspellable, while under
+/// D-258 an `Any`/`object` parameter of an ext build is the same object).
+/// Every other declared parameter
 /// refuses an `object` argument through the ordinary mismatch.
 pub(crate) fn reject_object_arguments(arg_tys: &[Ty]) -> Result<(), Diagnostic> {
     arg_tys
