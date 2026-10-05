@@ -8,7 +8,10 @@
 //! syntactically the `None` literal (D-197). `in`/`not in` and general
 //! identity `is` in a chain keep their `C0001`. A *single* comparison also
 //! admits general identity between two non-literal operands (Part 1 of
-//! #1371), which `pycc_types` admits only between CPython objects.
+//! #1371), which `pycc_types` admits only between CPython objects, and
+//! `in`/`not in` whose container is not a literal, display or comprehension
+//! (Part 2b of #1371), which `pycc_types` admits only for a CPython object
+//! container.
 
 use pycc_ast::{CmpOp, Expr, ExprCompare};
 use pycc_diag::Diagnostic;
@@ -72,6 +75,8 @@ pub(crate) fn lower_cmp_op(
         CmpOp::GtE => CmpOpKind::GtE,
         CmpOp::Is if is_none_operand_shape => CmpOpKind::Is,
         CmpOp::IsNot if is_none_operand_shape => CmpOpKind::IsNot,
+        CmpOp::In if general_identity && can_be_object(right) => CmpOpKind::In,
+        CmpOp::NotIn if general_identity && can_be_object(right) => CmpOpKind::NotIn,
         other => {
             return Err(unsupported(
                 format!("comparison operator not supported yet: {other:?}"),
@@ -92,6 +97,25 @@ fn is_literal(expr: &Expr) -> bool {
             | Expr::BooleanLiteral(_)
             | Expr::EllipsisLiteral(_)
     )
+}
+
+/// Whether `expr` may evaluate to a CPython object, so a membership test
+/// against it is lowered and left to `pycc_types` (Part 2b of #1371). A
+/// literal, and a list, tuple, set or dict display or comprehension, always
+/// builds a native value, so `x in [1, 2]` keeps its located `C0001` here.
+fn can_be_object(expr: &Expr) -> bool {
+    !is_literal(expr)
+        && !matches!(
+            expr,
+            Expr::List(_)
+                | Expr::Tuple(_)
+                | Expr::Set(_)
+                | Expr::Dict(_)
+                | Expr::ListComp(_)
+                | Expr::SetComp(_)
+                | Expr::DictComp(_)
+                | Expr::FString(_)
+        )
 }
 
 /// Lowers an AST comparison with `ops.len() >= 2` into

@@ -644,7 +644,11 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // or `Ty::Bool`, and `isinstance`'s is `Ty::Bool` -- never
         // `Ty::Int` -- so neither can reach this function.
         | MirExpr::ObjCompare { .. }
-        | MirExpr::ObjIsInstance { .. } => false,
+        | MirExpr::ObjIsInstance { .. }
+        // Part 2b of #1371: a membership test's `.ty()` is `Ty::Bool` and an
+        // object slice's is `Ty::Object` -- never `Ty::Int`.
+        | MirExpr::ObjContains { .. }
+        | MirExpr::ObjSlice { .. } => false,
     }
 }
 

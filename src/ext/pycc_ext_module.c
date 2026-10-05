@@ -2025,6 +2025,76 @@ int pycc_ext_obj_isinstance(PyObject *o, PyObject *cls, int builtin)
 }
 
 /*
+ * Part 2b of #1371: `item in container` with a CPython object container
+ * (`EXT_OBJ_CONTAINS_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `PySequence_Contains` is CPython's own `in`: `__contains__`, then
+ * iteration, then the old `__getitem__` protocol, raising `TypeError` when
+ * the container supports none of them. Returns 1, 0, or -1 with the
+ * exception set; compiled code flips the answer for `not in`.
+ *
+ * The container is borrowed. The item is always a packed value -- an
+ * object item too, through `pycc_ext_obj_pack_object`'s new reference -- and
+ * is consumed on every path, a `NULL` one included, exactly as
+ * `pycc_ext_obj_getitem` consumes its packed key: a `NULL` item is a failed
+ * packer whose exception is already set. A `NULL` container is defence in
+ * depth for the reason `pycc_ext_obj_getitem` records.
+ */
+int pycc_ext_obj_contains(PyObject *container, PyObject *item)
+{
+    int result;
+
+    result = (container == NULL || item == NULL) ? -1 : PySequence_Contains(container, item);
+    Py_XDECREF(item);
+    return result;
+}
+
+/*
+ * Part 2b of #1371: `o[start:stop:step]` with a CPython object `o`
+ * (`EXT_OBJ_GETSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `present` says which bounds the source spelled (bit 0 start, bit 1 stop,
+ * bit 2 step). A present bound is a packed value, consumed on every path --
+ * a `NULL` one included, which is a failed packer whose exception is
+ * already set (an `int` bound outside the packer's range raises
+ * `OverflowError` there, #1040) -- and an absent bound's pointer is ignored
+ * and handed to `PySlice_New` as `NULL`, which it reads as `None`, the
+ * value CPython's own `o[:b]` builds. The base is borrowed. The `slice`
+ * object is released after the load; the result is a *new* reference that
+ * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
+                                int present)
+{
+    PyObject *bounds[3];
+    PyObject *slice;
+    PyObject *result = NULL;
+    int failed = (o == NULL);
+    int i;
+
+    bounds[0] = (present & 1) ? start : NULL;
+    bounds[1] = (present & 2) ? stop : NULL;
+    bounds[2] = (present & 4) ? step : NULL;
+    for (i = 0; i < 3; i++) {
+        if ((present & (1 << i)) && bounds[i] == NULL) {
+            failed = 1;
+        }
+    }
+    if (!failed) {
+        slice = PySlice_New(bounds[0], bounds[1], bounds[2]);
+        if (slice != NULL) {
+            result = PyObject_GetItem(o, slice);
+            Py_DECREF(slice);
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        Py_XDECREF(bounds[i]);
+    }
+    return result;
+}
+
+/*
  * Part 3 of #1026 (PR 3c of #1082): `iter(o)` for a `for x in <object>:`
  * loop (`EXT_OBJ_GET_ITER_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
  *

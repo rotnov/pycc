@@ -164,3 +164,65 @@ fn isinstance_with_an_object_first_argument_refuses_other_class_arguments() {
         "against a `int` value",
     );
 }
+
+/// Part 2b of #1371: membership in an object container is admitted for
+/// every packable item, and its result is a `bool` -- in a module body, a
+/// function body, a `-> bool` return and an unannotated helper, the last of
+/// which only the constraint solver's `Compare` arm types.
+#[test]
+fn membership_in_an_object_container_is_a_bool_for_every_packable_item() {
+    for source in [
+        "b: bool = 1 in numpy.pi\n",
+        "b: bool = 1.5 not in numpy.pi\n",
+        "b: bool = True in numpy.pi\n",
+        "b: bool = 's' in numpy.pi\n",
+        "b: bool = numpy.e not in numpy.pi\n",
+        "def f(k: str) -> bool:\n    o = numpy.pi\n    return k in o\n",
+        "def _h():\n    return 1 in numpy.pi\n\n\nb: bool = _h()\n",
+    ] {
+        assert_admitted(source);
+    }
+}
+
+#[test]
+fn membership_with_an_object_on_the_wrong_side_is_refused() {
+    assert_refused(
+        "b = [1] in numpy.pi\n",
+        "I0404",
+        "testing membership of a `list[int]` value in a CPython object",
+    );
+    assert_refused(
+        "b = None not in numpy.pi\n",
+        "I0404",
+        "testing membership of a `None` value in a CPython object",
+    );
+    assert_refused(
+        "xs = [1]\nb = numpy.pi in xs\n",
+        "I0404",
+        "testing membership of a CPython object in a `list[int]` value",
+    );
+}
+
+/// No native membership test is lowered, so a native pair -- even two
+/// `int`s, which the numeric comparison rule would otherwise admit --
+/// keeps the HIR's `C0001` message. The type stage has no span for it, so
+/// it is reported at `Span::new(0, 0)` (1:1) until Part 5 of #1371.
+#[test]
+fn membership_between_two_native_values_keeps_its_c0001() {
+    let diagnostics = check_foreign("x = [1]\nb = 1 in x\n").expect_err("native pair");
+    assert_eq!(
+        diagnostics[0].span,
+        Some(Span::new(0, 0)),
+        "{diagnostics:?}"
+    );
+    assert_refused(
+        "x = 1\ny = 2\nb = x in y\n",
+        "C0001",
+        "comparison operator not supported yet: In",
+    );
+    assert_refused(
+        "x = 's'\ny = 's'\nb = x not in y\n",
+        "C0001",
+        "comparison operator not supported yet: NotIn",
+    );
+}
