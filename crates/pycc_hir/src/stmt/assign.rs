@@ -109,12 +109,11 @@ pub(super) fn lower_assign(
         // name). This supersedes the older, narrower invariant that
         // used to reject any non-bare-name `Stmt::Assign` target
         // outright ("only assigning to a bare name is supported so
-        // far"). The remaining unsupported `Stmt::Assign` target
-        // shape -- tuple unpacking, e.g. `a, b = 1, 2`, alone or as one
-        // piece of a chain -- still reaches the `other => ..` catch-all just below
-        // and is covered by
-        // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
-        // `crates/pycc_hir/src/tests.rs`.
+        // far"). A tuple or list target (`a, b = t`, alone or as one
+        // piece of a chain) never reaches this function:
+        // `lower_stmt_expanded` routes it to `stmt/unpack.rs` (Part 1 of
+        // #891), and no other caller lowers a `Stmt::Assign` here. The
+        // `other => ..` catch-all just below stays as a defensive refusal.
         Expr::Attribute(attr) => {
             // #448: `super().attr = value` — super() attribute
             // assignment is not implemented in this version. Without

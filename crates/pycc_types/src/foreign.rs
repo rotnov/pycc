@@ -90,16 +90,18 @@
 //! call inherits the positional bound unchanged: the base is read through
 //! the same `HirExpr::Name` arm.
 //!
-//! The arm is not reached for four method names. `pycc_hir`'s container
-//! fast paths claim `append`, `pop`, `get` and `add` while lowering, so
-//! `gc.get(1, 2)` never becomes a plain `HirExpr::MethodCall` and is refused
-//! here through a different consumer. In a module that can see a user class
-//! defining one of those names, the call is a
-//! `HirExpr::ReceiverDispatchedCall` instead (issue #1188), but
-//! `pycc_hir::receiver_takes_method_path` sends a `Ty::Object` receiver down
-//! the container path all the same, so the refusal is unchanged.
-//! `docs/TYPE_SYSTEM.md`'s `object` row owns that statement, and #1095
-//! tracks routing them to foreign dispatch.
+//! Four method names reach this arm through a second node. `pycc_hir`'s
+//! container fast paths claim `append`, `pop`, `get` and `add` while
+//! lowering, from their spelling alone. Issue #1095: in a module that can
+//! hold a CPython object -- an `ext` module (D-258) or one that has bound a
+//! foreign import (D-244 rule 3) -- such a call is a
+//! `HirExpr::ReceiverDispatchedCall` keeping both readings (the node #1188
+//! introduced for user classes), and `pycc_hir::receiver_takes_method_path`
+//! sends a `Ty::Object` receiver to the method reading, which is this arm.
+//! So `gc.get(1, 2)`, `gc.get(1)` and `value_stack.append(x)` are the
+//! foreign method call whatever their arity, while a native `list`, `dict`
+//! or `set` receiver keeps the container reading and its diagnostics.
+//! `docs/TYPE_SYSTEM.md`'s `object` row owns that statement.
 //!
 //! **PR 3a of #1082 (Part 3 of #1026) added `len` and truth testing, and
 //! deleted a whole class of refusal.** `len(o)` type-checks to `Ty::Int`
@@ -288,6 +290,8 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
              a membership test of a scalar or object item in an object, \
+             a list display of scalar or object elements bound to an object slot, \
+             `and`/`or` with an object or scalar operand, \
              `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, a list \
              or set comprehension over it unless it is a bare name, binding the \
              value to a name, returning it from and passing it to a pycc \
@@ -307,8 +311,9 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
 /// which has a `pycc_ext_obj_pack_*` helper in the shim
 /// (`pycc_ext_obj_pack_object` takes one new reference to the operand).
 ///
-/// The one statement of the operand rule [`check_object_call_args`] and the
-/// `Ty::Object` subscript arm in `expr.rs` share.
+/// The one statement of the operand rule [`check_object_call_args`], the
+/// `Ty::Object` subscript arm in `expr.rs` and a list display's elements
+/// ([`list_display`], Part 2d of #1371) share.
 pub(crate) fn is_packable_operand(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Object)
 }
@@ -479,6 +484,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod list_display;
 pub(crate) mod slice;
 pub(crate) mod subscript_call;
 
@@ -486,6 +492,8 @@ pub(crate) mod subscript_call;
 mod binding_tests;
 #[cfg(test)]
 mod call_tests;
+#[cfg(test)]
+mod container_names_tests;
 #[cfg(test)]
 mod function_local_tests;
 #[cfg(test)]

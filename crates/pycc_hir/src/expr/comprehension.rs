@@ -70,6 +70,10 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             op,
             operand: Box::new(recurse(*operand)),
         },
+        HirExpr::Unpack { value, arity } => HirExpr::Unpack {
+            value: Box::new(recurse(*value)),
+            arity,
+        },
         // `truth_only` is carried through: a renamed comprehension filter
         // stays a truth position.
         HirExpr::BoolOp {
@@ -120,6 +124,7 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
                 .collect(),
         ),
         HirExpr::ListLiteral(es) => HirExpr::ListLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::ObjectList(es) => HirExpr::ObjectList(es.into_iter().map(recurse).collect()),
         HirExpr::Subscript { base, index } => HirExpr::Subscript {
             base: Box::new(recurse(*base)),
             index: Box::new(recurse(*index)),

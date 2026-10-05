@@ -125,11 +125,16 @@ pub(crate) fn class_name_dispatch(
 /// expression, and the node's own arm then applies the same `T0033`/`T0021`
 /// checks to the result.
 ///
-/// An attribute of a CPython object (`gc.garbage.append(1)`) infers as
-/// `Ty::Object`. The node's `T0033` ("`object` does not support
-/// `.append()`") would misstate that as a type error, when CPython runs the
-/// call and pycc merely does not implement it, so this refuses it with the
-/// #1026 `I0404` family instead.
+/// An attribute of a CPython object infers as `Ty::Object`. The node's
+/// `T0033` ("`object` does not support `.append()`") would misstate that as
+/// a type error, when CPython runs the call and pycc merely does not
+/// implement it, so this refuses it with the #1026 `I0404` family instead.
+/// Since #1095 a module with its own foreign import (or an `ext` module)
+/// lowers such a call to a receiver-dispatched call whose object receiver
+/// takes the foreign method call, so the only shape that still reaches this
+/// arm is an object a native module imports from a sibling project module
+/// without a foreign import of its own (`from dep import g` then
+/// `g.garbage.append(1)`).
 fn infer_container_receiver(
     env: &Environment,
     local_names: &[&str],
@@ -277,6 +282,9 @@ pub(crate) fn infer_expr_in(
         } => crate::boolop::infer_bool_op(env, local_names, *op, left, right, *truth_only),
         HirExpr::IfExp { test, body, orelse } => {
             crate::if_exp::infer_if_exp(env, local_names, test, body, orelse)
+        }
+        HirExpr::Unpack { value, arity } => {
+            crate::unpack::infer_unpack(env, local_names, value, *arity)
         }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
@@ -880,6 +888,11 @@ pub(crate) fn infer_expr_in(
             let dict_ty = Ty::Dict(pair.clone());
             pycc_hir::check_container_ty(&dict_ty, Span::new(0, 0))?;
             Ok(dict_ty)
+        }
+        // Part 2d of #1371: a list display the empty-container pre-pass
+        // resolved to an object slot, built as a CPython `list`.
+        HirExpr::ObjectList(elements) => {
+            crate::foreign::list_display::object_list_ty(env, local_names, elements)
         }
         HirExpr::ListLiteral(elements) => {
             // #1021: reaching this arm with no elements means the

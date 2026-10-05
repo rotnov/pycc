@@ -1128,6 +1128,13 @@ pub(crate) fn collect_expr_constraints(
                 None => Ok(None),
             }
         }
+        // Part 1 of #891: the unpacked value's own term passes through.
+        // Whether the value can be unpacked at all, and into how many
+        // names, is `crate::unpack::infer_unpack`'s check-phase gate; the
+        // element reads that follow are ordinary `Subscript`s.
+        HirExpr::Unpack { value, .. } => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, value)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
@@ -1703,6 +1710,15 @@ pub(crate) fn collect_expr_constraints(
             }
         }
         HirExpr::EmptyDict(_) => Ok(None),
+        // Part 2d of #1371: a list display built as a CPython `list` is an
+        // object whatever its elements are; their packability is
+        // `crate::foreign::list_display`'s check, run by the checker walk.
+        HirExpr::ObjectList(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, element)?;
+            }
+            Ok(Some(Ok(Ty::Object)))
+        }
         HirExpr::ListLiteral(elements) => {
             let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
@@ -1944,8 +1960,20 @@ pub(crate) fn collect_expr_constraints(
         // An admitted container reading is collected exactly as the
         // container node it would have been (so a `ListPop` still yields its
         // element type); a refused one is collected as the method call.
+        // Issue #1095: so is an admitted one whose bare-name receiver is
+        // bound to a concrete `object` term, so `o.pop()` answers `object`
+        // on the `MethodCall` arm's own reasoning.
         HirExpr::ReceiverDispatchedCall { call, container } => {
             let reading = match container {
+                pycc_hir::ContainerFallback::Admitted
+                    if matches!(
+                        call.method_receiver(),
+                        Some((HirExpr::Name(name), _))
+                            if matches!(env.bindings.get(name), Some(Ok(Ty::Object)))
+                    ) =>
+                {
+                    None
+                }
                 pycc_hir::ContainerFallback::Admitted => call.container_form(),
                 pycc_hir::ContainerFallback::Refused(_) => None,
             };
@@ -2170,7 +2198,7 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, operand)
         }
         HirExpr::FString(parts) => {
@@ -2181,7 +2209,10 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, e)?;
             }
@@ -3025,6 +3056,15 @@ pub(crate) fn collect_block_constraints(
                     if env.returns_inside_finally {
                         return Err(crate::buffer::buffer_return_inside_finally(name));
                     }
+                    continue;
+                }
+                // #1387: a bare `return` / `return None` into a declared
+                // `object` slot, the check phase's own admission through the
+                // one shared predicate (`crate::object_none`). An inferred
+                // return (`Err(var)`) declines, as the buffer egress does.
+                if let Ok(declared) = &return_term
+                    && crate::object_none::admits_none_return(declared, value.as_ref())
+                {
                     continue;
                 }
                 let actual = match value {

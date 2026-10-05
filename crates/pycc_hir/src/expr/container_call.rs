@@ -9,10 +9,11 @@
 //! `pycc_types`): they recognize the *syntactic* shape `name.method(...)`
 //! and cannot tell a real `list`/`dict`/`set` receiver from a class
 //! instance whose own method shares one of the four names. In a module from
-//! which such a class is reachable, `receiver_dispatch` therefore keeps both
-//! readings in a `HirExpr::ReceiverDispatchedCall` and lets the receiver's
-//! static type choose (issue #1188); everywhere else these fast paths run
-//! exactly as they always have.
+//! which such a class is reachable (issue #1188), or which can hold a
+//! CPython object whose method may share one of the names (issue #1095),
+//! `receiver_dispatch` therefore keeps both readings in a
+//! `HirExpr::ReceiverDispatchedCall` and lets the receiver's static type
+//! choose; everywhere else these fast paths run exactly as they always have.
 //!
 //! The receiver of `.append()`/`.pop()`/`.get()` is a bare name (D-105
 //! point 3) or, since #1263 (Part 2 of #1218), an attribute read such as

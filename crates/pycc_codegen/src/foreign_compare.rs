@@ -59,7 +59,7 @@ fn rich_compare_selector(op: CmpOpKind) -> Option<u64> {
 }
 
 /// A borrowed pointer to CPython's `None`.
-fn none_pointer<'ctx>(
+pub(crate) fn none_pointer<'ctx>(
     context: &'ctx Context,
     builder: &Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,

@@ -575,6 +575,18 @@ pub enum MirExpr {
         stop: Option<Box<MirExpr>>,
         step: Option<Box<MirExpr>>,
     },
+    /// A list display `[e1, e2, ...]` bound to a CPython object slot (Part
+    /// 2d of #1371, D-258 rule 4): a fresh CPython `list` built by
+    /// `PyList_New`, each element boxed through a `pycc_ext_obj_pack_*`
+    /// helper and evaluated left to right. A node of its own rather than a
+    /// [`MirExpr::ListLiteral`], whose `ty()` answers a native `list[T]`;
+    /// [`MirExpr::ty`] answers [`Ty::Object`]. It can raise (a failed
+    /// element box or allocation), so
+    /// `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it.
+    ObjList {
+        elements: Vec<MirExpr>,
+    },
     /// `isinstance(value, class)` where `value` is a CPython object (Part 1
     /// of #1371): a run-time `PyObject_IsInstance`, which can raise (a
     /// class argument that is not a class, or a raising
@@ -582,6 +594,20 @@ pub enum MirExpr {
     ObjIsInstance {
         value: Box<MirExpr>,
         class: ObjIsInstanceClass,
+    },
+    /// The value of a tuple-unpacking assignment `t1, ..., tn = value`
+    /// whose `value` is a CPython object (Part 1 of #891): CPython's own
+    /// unpack protocol -- iterate `value`, take exactly `arity` items --
+    /// collecting the items into a fresh `tuple`. [`MirExpr::ty`] answers
+    /// [`Ty::Object`]; each target is then bound by an ordinary
+    /// [`MirExpr::ObjSubscript`] of that tuple. It can raise (a
+    /// non-iterable, a wrong item count, a raising `__iter__`/`__next__`),
+    /// so `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it. A native tuple value never reaches this node: its
+    /// arity is checked statically, and the value passes through unchanged.
+    ObjUnpack {
+        value: Box<MirExpr>,
+        arity: usize,
     },
     /// `b[i]` where `b` is a `pycc build --ext` export's `memoryview`
     /// parameter (Part 2 of #1027): a bounds-checked native `float` element
@@ -1030,7 +1056,7 @@ impl MirExpr {
             }
             MirExpr::ObjIsInstance { .. } | MirExpr::ObjContains { .. } => Ty::Bool,
             // Part 2b of #1371: CPython's own slice result, opaque.
-            MirExpr::ObjSlice { .. } => Ty::Object,
+            MirExpr::ObjSlice { .. } | MirExpr::ObjList { .. } => Ty::Object,
             // Hardcoded for `ObjLen`'s reason, not `ObjSubscript`'s: the
             // element type is known, it is just not recoverable from the
             // base. A `memoryview` parameter is one-dimensional and `"d"`-
@@ -1064,6 +1090,7 @@ impl MirExpr {
             MirExpr::ObjUnpackFloatTuple { arity, .. } => {
                 Ty::Tuple(Box::new(vec![Ty::Float; *arity]))
             }
+            MirExpr::ObjUnpack { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
@@ -1151,6 +1178,7 @@ impl MirExpr {
                 }
             }
             MirExpr::ListLiteral(elements)
+            | MirExpr::ObjList { elements }
             | MirExpr::SetLiteral { elements, .. }
             | MirExpr::TupleLiteral(elements) => {
                 for element in elements {
@@ -1227,7 +1255,9 @@ impl MirExpr {
             // PR 4c of #1083: the base is the node's only child -- `arity`
             // is a `usize`, not an expression -- so a walrus can hide only
             // there (`x: tuple[float, float] = (o := numpy).pair`).
-            | MirExpr::ObjUnpackFloatTuple { base, .. } => base.collect_named_expr_bindings(out),
+            | MirExpr::ObjUnpackFloatTuple { base, .. }
+            // Part 1 of #891: the unpacked value is the only child.
+            | MirExpr::ObjUnpack { value: base, .. } => base.collect_named_expr_bindings(out),
             // Both sides, unlike `ObjAttrGet` directly above: a walrus can
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never

@@ -100,6 +100,15 @@ pub(crate) struct SignatureTable {
     /// It lives here because this table is already threaded to every
     /// expression-lowering site of the module.
     container_method_names: BTreeSet<&'static str>,
+    /// Issue #1095: the module can hold a CPython object (`Ty::Object`) --
+    /// it is compiled into an `ext` artifact, where `Any`, `object` and an
+    /// object container annotation all spell one (D-258), or it has bound a
+    /// foreign import (D-244 rule 3). Then every one of the four container
+    /// method names lowers with both readings, so that `o.append(x)` on an
+    /// object receiver can take the foreign method-call reading. Kept apart
+    /// from `container_method_names`, which is exported to importers with
+    /// the narrower meaning "a class defines this method".
+    object_receivers: bool,
     /// Part 2a of #1371: the *class-like* names of the module -- each bound
     /// exactly once in module scope (the same [`rebound::binding_counts`]
     /// rule `by_name` uses), by either a top-level `class` statement or a
@@ -166,6 +175,7 @@ impl SignatureTable {
         Self {
             by_name,
             class_like_names,
+            object_receivers: false,
             container_method_names: crate::expr::receiver_dispatch::defined_container_method_names(
                 body,
             )
@@ -195,11 +205,21 @@ impl SignatureTable {
         &self.container_method_names
     }
 
+    /// Issue #1095: records that the module can hold a CPython object, so
+    /// every container method name dispatches on its receiver from here on
+    /// (see the `object_receivers` field).
+    pub(crate) fn admit_object_receivers(&mut self) {
+        self.object_receivers = true;
+    }
+
     /// Whether a call to `method` must be lowered with both readings, because
     /// a user class reachable from this module defines a method of that name
-    /// (issue #1188).
+    /// (issue #1188), or because the module can hold a CPython object and
+    /// `method` is one of the four container names (issue #1095).
     pub(crate) fn dispatches_on_receiver(&self, method: &str) -> bool {
         self.container_method_names.contains(method)
+            || (self.object_receivers
+                && crate::expr::receiver_dispatch::RECEIVER_DISPATCHED_NAMES.contains(&method))
     }
 
     fn get(&self, callee: &str) -> Option<&Signature> {
