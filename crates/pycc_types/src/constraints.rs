@@ -59,6 +59,7 @@
 //!
 //! [D-185]: https://github.com/rotnov/pycc/blob/main/docs/decisions/D-185-permit-a-dedicated-tracking-issue-per-oversized.md
 
+mod constructor_call;
 mod method_return;
 mod object_lift;
 mod set_comp;
@@ -1586,10 +1587,9 @@ pub(crate) fn collect_expr_constraints(
                 // carries a module `class frozenset`, which skips this arm and
                 // falls through to `is_known_callable_builtin`'s `C0001`
                 // below -- the pre-existing behavior every builtin-named
-                // class shares (`class range:` reports the same). Deferring
-                // with `Ok(None)` would only trade that for the unannotated
-                // private helper's `T0021` any user class returned from one
-                // gets; an annotated helper never reaches this solver.
+                // class shares (`class range:` reports the same), since the
+                // class-constructor term below (#1342) is consulted only
+                // after that `C0001`.
                 if callee == crate::frozenset::FROZENSET
                     && !env.shadowed_producers.contains(callee.as_str())
                 {
@@ -1613,7 +1613,10 @@ pub(crate) fn collect_expr_constraints(
                 if is_known_callable_builtin(callee) {
                     return Err(unsupported_callable_builtin(callee));
                 }
-                return Ok(None);
+                // #1342: `C(args)` on a non-generic user class answers its
+                // instance; placed last so every reading above keeps
+                // precedence (`constructor_call`'s module doc).
+                return Ok(constructor_call::constructor_call_term(env, callee));
             };
             for (index, (arg, parameter)) in arg_terms.into_iter().zip(&signature.1).enumerate() {
                 // Unify whenever either side is still an inference variable --

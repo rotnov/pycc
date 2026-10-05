@@ -26,6 +26,7 @@ mod buffer_producer;
 mod compare_chain;
 mod comprehension_expr;
 mod constraints;
+mod constructor_call;
 mod empty_container_registry;
 mod enum_unrolling;
 mod exception_handling;
