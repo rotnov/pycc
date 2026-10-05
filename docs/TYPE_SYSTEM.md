@@ -732,9 +732,24 @@ twin. Four rules follow from that model:
   Part 3 of #884 widens both to the module boundary. A `def` whose name is
   bound more than once in module scope fills no default either (see "Keyword
   arguments and default parameter values on a redefined name" below).
-- **No type is inferred from a default.** An unannotated parameter of a
-  private helper keeps its inferred type; the default does not seed it. A
-  public function's parameter still needs its annotation (`T0001`).
+- **No type is inferred from a default, except in an `ext` module.** An
+  unannotated parameter of a private helper keeps its inferred type; the
+  default does not seed it. A public function's parameter still needs its
+  annotation (`T0001`). The one exception is an `ext` module
+  ([#1409](https://github.com/rotnov/pycc/issues/1409), D-258's #1409
+  amendment): there an unannotated parameter of a public function or method,
+  `__init__` included, whose default is in the admitted subset takes the type
+  that default implies, and is then checked exactly as if it carried that
+  annotation. A literal `int`, `float`, `bool` or `str` default gives that
+  scalar type (`deepcopy_values=True` is `deepcopy_values: bool = True`, so a
+  body that branches on it stays native). A `None` default gives the opaque
+  object type (`state_stack=None` is `state_stack: Any = None`) on a method
+  only; on a module-level `def` it implies no type, for the reason the
+  previous rule gives, and stays `T0001`. A parameter with no default, or
+  with a default outside the subset (`= []`), stays `T0001`, as does every
+  `native` build. The scalar choice is stricter than CPython at the host
+  boundary: a host value of another type (`copy(0)` for a `bool` parameter)
+  raises `TypeError`, as for any annotated scalar parameter (D-244 rule 7).
 - **A mismatch is `T0021`, not `T0025`.** The def-site syntax resembles an
   annotated assignment, but by this model the default *is* a call-site
   argument, so it is checked with the call-argument rule and reported with

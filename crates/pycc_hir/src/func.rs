@@ -248,6 +248,18 @@ pub(crate) fn lower_arg_list(
             let ty = match &param.parameter.annotation {
                 Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases, class_defs)
                     .map_err(|error| with_bare_container_advice(error, ann))?,
+                // #1409: in an `--ext` module an unannotated public
+                // parameter takes the type its literal default implies.
+                // `Reject` never gets here with a default (refused above).
+                None if is_public
+                    && let Some(ty) = param
+                        .default
+                        .as_deref()
+                        .filter(|_| is_ext_module(aliases))
+                        .and_then(|default| params::unannotated_default_ty(default, policy)) =>
+                {
+                    ty
+                }
                 None if is_public => {
                     return Err(Diagnostic::error(
                         "T0001",
