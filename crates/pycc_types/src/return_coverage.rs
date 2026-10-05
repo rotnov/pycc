@@ -27,6 +27,9 @@ pub(crate) fn block_always_returns(body: &[HirStmt]) -> bool {
             | HirStmt::AttrSet { .. }
             // #1244: a `del` neither returns nor raises.
             | HirStmt::Delete { .. }
+            // Part 2c of #1371: a slice `del` never returns (a raising
+            // `__delitem__` takes the failure edge, like any object call).
+            | HirStmt::DeleteSlice { .. }
             // #1291: a nested foreign import never returns. Its failure is
             // either a pycc raise (an `ImportError`, bridged by #1293) or a
             // direct exit from `Py_mod_exec` (any other exception, #1096).

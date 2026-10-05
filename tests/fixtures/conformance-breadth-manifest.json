@@ -1406,18 +1406,17 @@
         {
           "category": "module-level function parameters and return annotated with an already-defined class and `int`, called and printed byte-identically",
           "evidence": "pep_0563_lazy_annotations.py"
+        },
+        {
+          "category": "a string annotation naming the enclosing class (`def clone(self) -> \"Node\"`), resolved exactly like its unquoted spelling (Part 1 of #889)",
+          "evidence": "pep_0563_lazy_annotations.py"
         }
       ],
       "not_proven": [
         {
-          "category": "a forward reference to a name defined *later* in the module (PEP 563's distinguishing case)",
+          "category": "a forward reference to a name defined *later* in the module, quoted or not (PEP 563's distinguishing case)",
           "kind": "core",
-          "reason": "Not exercised by the fixture because pycc rejects it today with `C0001: type annotation ... is not supported yet`; the directive is accepted as a no-op (D-229) but annotation resolution is still eager, so the later-defined name is unresolved at the annotation site."
-        },
-        {
-          "category": "a string annotation (`def f(n: \"Node\")`)",
-          "kind": "core",
-          "reason": "Rejected with `C0001` with or without the directive; tracked together with attribute-qualified annotations by #889.",
+          "reason": "Not exercised by the fixture because pycc rejects it today with `C0001: type annotation ... is not supported yet`; the directive is accepted as a no-op (D-229) but annotation resolution is still eager, so the later-defined name is unresolved at the annotation site. Quoting it does not help: a string annotation resolves exactly like its unquoted spelling, and resolving a later-defined class is deferred on #889.",
           "issue": 889
         },
         {

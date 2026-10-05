@@ -650,7 +650,10 @@ fn int_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
         // Part 2b of #1371: a membership test's `.ty()` is `Ty::Bool` and an
         // object slice's is `Ty::Object` -- never `Ty::Int`.
         | MirExpr::ObjContains { .. }
-        | MirExpr::ObjSlice { .. } => false,
+        | MirExpr::ObjSlice { .. }
+        // Part 2d of #1371: a list display built as a CPython `list` is
+        // `Ty::Object`.
+        | MirExpr::ObjList { .. } => false,
     }
 }
 

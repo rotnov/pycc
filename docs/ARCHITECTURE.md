@@ -60,7 +60,13 @@ policy gate itself is current (`src/interop_policy.rs`, #1224).
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
-the AST. `pycc_hir::lower_all` (the single-file entry, now exactly
+the AST. `pycc_parser::parse_all`, the only producer of a module AST for the
+later stages, also replaces each top-level string annotation
+(`def f() -> "C"`) with the expression the string contains, so every later
+reader sees one spelling of an annotation. A string nested in an annotation
+(`list["C"]`) is parsed where the type resolver meets it (Part 1 of
+[#889](https://github.com/rotnov/pycc/issues/889); `docs/TYPE_SYSTEM.md`,
+"Annotation semantics"). `pycc_hir::lower_all` (the single-file entry, now exactly
 `finalize(lower_module(m, &ResolvedImports::default(), None)?.hir)`; `lower_checked`
 is its first-diagnostic view) preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,

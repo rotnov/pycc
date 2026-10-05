@@ -633,7 +633,10 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_names_in_expr(e, names);
             }
@@ -690,6 +693,11 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
         }
         HirExpr::ExprCall { callee, args } => {
             collect_named_expr_names_in_expr(callee, names);
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_names_in_expr(arg, names);
             }
@@ -767,9 +775,12 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             // existing instance's attribute slot, never binds a new local
             // name.
             HirStmt::ExprStmt(expr) => collect_named_expr_names_in_expr(expr, names),
+            // A slice `del` (Part 2c of #1371) binds no name, and `pycc_hir`
+            // refuses a walrus in its operands.
             HirStmt::Return(_)
             | HirStmt::DictSet { .. }
             | HirStmt::AttrSet { .. }
+            | HirStmt::DeleteSlice { .. }
             | HirStmt::Raise { .. } => {}
             HirStmt::Match { cases, .. } => {
                 for case in cases {
@@ -1360,7 +1371,10 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_bindings(env, local_names, e)?;
             }
@@ -1422,6 +1436,12 @@ fn collect_named_expr_bindings(
         }
         HirExpr::ExprCall { callee, args } => {
             collect_named_expr_bindings(env, local_names, callee)?;
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_bindings(env, local_names, arg)?;
             }
@@ -2512,6 +2532,19 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => check_try_star_stmt(env, &[], body, handlers, orelse, finalbody, None),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, &[], exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            span,
+        } => foreign::slice::check_delete_slice(
+            env,
+            &[],
+            base,
+            [start.as_deref(), stop.as_deref(), step.as_deref()],
+            *span,
+        ),
         HirStmt::ForeignImport { bindings, .. } => {
             foreign::bind_block_import(env, bindings);
             Ok(())
@@ -3394,6 +3427,19 @@ fn check_stmt_in_function(
         ),
         HirStmt::Raise { exc, cause } => check_raise_stmt(env, local_names, exc, cause),
         HirStmt::Delete { name } => del_stmt::check_delete(env, name),
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            span,
+        } => foreign::slice::check_delete_slice(
+            env,
+            local_names,
+            base,
+            [start.as_deref(), stop.as_deref(), step.as_deref()],
+            *span,
+        ),
         // `pycc_hir` never produces this node in a function body; binding
         // it here keeps the two statement checkers in step (#1291).
         HirStmt::ForeignImport { bindings, .. } => {
@@ -3622,6 +3668,16 @@ fn reject_generic_calls_in_stmt(
         HirStmt::AnnAssign { value, .. } => exprs.extend(value.iter()),
         HirStmt::Return(value) => exprs.extend(value.iter()),
         HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            exprs.push(base);
+            exprs.extend([start, stop, step].into_iter().flatten().map(|b| &**b));
+        }
         HirStmt::If { test, body, orelse } => {
             exprs.push(test);
             blocks.push(body);
@@ -3768,6 +3824,7 @@ fn reject_generic_calls_in_expr(
             Ok(())
         }
         HirExpr::ListLiteral(elements)
+        | HirExpr::ObjectList(elements)
         | HirExpr::SetLiteral(elements)
         | HirExpr::TupleLiteral(elements) => {
             for element in elements {
@@ -3826,7 +3883,8 @@ fn reject_generic_calls_in_expr(
         // PEP 695 (#387): `C[type_arg](args)` — recurse into args only.
         // `class` is a bare name (not an expression), and `type_arg` is a
         // compile-time `Ty`, so neither needs generic-call rejection.
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // #1411: `type(self)(args)` walks its arguments the same way.
+        HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 reject_generic_calls_in_expr(module_env, own_name, arg)?;
             }

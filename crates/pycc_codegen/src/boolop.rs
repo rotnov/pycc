@@ -30,12 +30,26 @@
 //! discarded owned `Optional[int]` operand is not released, because
 //! `release_scalar_if_int_temporary` handles only a bare `int`.
 //!
+//! A CPython-object result (Part 6 of #1371): when the node's type is
+//! `object` and an operand is a native `bool`/`int`/`float`/`str`, that
+//! operand is truth-tested natively like any other and boxed only on the
+//! arm that *selects* it ([`boxed_value`]), so a discarded native operand
+//! is never packed: `n and o` over a truthy `n` evaluates to `o` and never
+//! boxes `n`, exactly as CPython never converts it. The packer's `NULL` (a
+//! bigint outside D-141's inline range raises `OverflowError`, #1040) takes
+//! the foreign failure edge immediately. An `object` operand passes through
+//! as the same pointer, with no reference-count traffic (`docs/RUNTIME.md`,
+//! #1092's leak-only rule); a boxed operand's new reference is leaked once
+//! per evaluation of its arm, like every other object producer's.
+//!
 //! The discarded left operand is released in `eval_right` *before* `right`
 //! is emitted, so the node never holds an arm-local word while `right` can
 //! raise and pushes nothing onto `pending_int_releases`, whose words would
 //! otherwise have to dominate the join.
 
 use super::bigint_rc::{BigIntRefcount, emit_bigint_refcount_call};
+use super::foreign_fail::{ForeignFailEdge, route_null};
+use super::foreign_pack::emit_pack;
 use super::{
     RtFns, Scalar, StorageSlot, UserFunction, coerce_scalar_to_type, emit_expr,
     incref_if_str_duplicate, release_scalar_if_int_temporary, retain_if_int_duplicate, truthy,
@@ -206,7 +220,11 @@ fn emit_value<'ctx>(
         &left_scalar,
     );
     let right_scalar = emitter.emit(right);
-    let right_value = owned_value(emitter, right, right_scalar, ty);
+    let right_value = if needs_boxing(right, ty) {
+        boxed_value(emitter, right, right_scalar)
+    } else {
+        owned_value(emitter, right, right_scalar, ty)
+    };
     let right_end = emitter.current_block();
     emitter.branch_to(join);
 
@@ -253,8 +271,57 @@ fn arm_value<'ctx>(
             }
             coerce_scalar_to_type(emitter.context, emitter.builder, payload, ty.clone())
         }
+        _ if needs_boxing(left, ty) => boxed_value(emitter, left, scalar),
         _ => owned_value(emitter, left, scalar, ty),
     }
+}
+
+/// Whether the selected `operand` must be boxed into the node's `object`
+/// result: the node is `object` and the operand is a native scalar
+/// (`pycc_hir::bool_op_result_ty` admits only `bool`/`int`/`float`/`str`
+/// there).
+fn needs_boxing(operand: &MirExpr, ty: &Ty) -> bool {
+    matches!(ty, Ty::Object) && !matches!(operand.ty(), Ty::Object)
+}
+
+/// The selected native `scalar` (the value of `source`) boxed into a new
+/// CPython object reference (Part 6 of #1371).
+///
+/// The packer borrows the pycc value, so an `int` temporary is released
+/// right after it, on both outcomes, and nothing is retained. A `NULL`
+/// from the packer -- `OverflowError` for a bigint outside D-141's inline
+/// range (#1040) -- takes the foreign failure edge at once, since no
+/// consuming shim helper follows to tolerate it. The new reference is
+/// never released (#1092's leak-only rule).
+fn boxed_value<'ctx>(
+    emitter: &Emitter<'_, 'ctx>,
+    source: &MirExpr,
+    scalar: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    let packed = emit_pack(
+        emitter.context,
+        emitter.builder,
+        emitter.module,
+        scalar,
+        "boolop_boxed",
+    );
+    release_scalar_if_int_temporary(
+        emitter.context,
+        emitter.builder,
+        emitter.rt,
+        source,
+        &scalar,
+    );
+    route_null(
+        emitter.context,
+        emitter.builder,
+        emitter.module,
+        emitter.rt,
+        ForeignFailEdge::for_current(emitter.builder),
+        packed,
+        "boolop_box",
+    );
+    Scalar::Object(packed)
 }
 
 /// `scalar` (the value of `source`) retained or incref'd when `source` is a
@@ -300,8 +367,9 @@ pub(super) fn basic_value(scalar: Scalar<'_>) -> BasicValueEnum<'_> {
 
 /// The joined value as the `Scalar` for the node's type. A value-context
 /// node's type is one of the shapes `pycc_hir::bool_op_result_ty` yields:
-/// `int`, `bool`, `float`, `str`, `Optional[_]` or a class instance, the
-/// last of which the final arm handles.
+/// `int`, `bool`, `float`, `str`, `Optional[_]`, the CPython `object`
+/// (Part 6 of #1371) or a class instance, the last of which the final arm
+/// handles.
 fn scalar_of<'ctx>(ty: &Ty, value: BasicValueEnum<'ctx>) -> Scalar<'ctx> {
     match ty {
         Ty::Int => Scalar::Int(value.into_int_value()),
@@ -309,6 +377,7 @@ fn scalar_of<'ctx>(ty: &Ty, value: BasicValueEnum<'ctx>) -> Scalar<'ctx> {
         Ty::Float => Scalar::Float(value.into_float_value()),
         Ty::Str => Scalar::Str(value.into_pointer_value()),
         Ty::Optional(_) => Scalar::Optional(value.into_struct_value()),
+        Ty::Object => Scalar::Object(value.into_pointer_value()),
         _ => Scalar::Instance(value.into_pointer_value()),
     }
 }
@@ -319,8 +388,8 @@ mod tests {
     use inkwell::AddressSpace;
 
     /// `basic_value` is total over `Scalar`: every variant yields the LLVM
-    /// value it wraps, including the container, object and buffer variants
-    /// the checker keeps out of an `and`/`or` operand today.
+    /// value it wraps, including the container and buffer variants the
+    /// checker keeps out of an `and`/`or` operand today.
     #[test]
     fn basic_value_returns_the_wrapped_value_for_every_scalar() {
         let context = Context::create();
@@ -354,5 +423,17 @@ mod tests {
             basic_value(Scalar::Optional(pair)),
             BasicValueEnum::from(pair)
         );
+    }
+
+    /// A node typed `object` (Part 6 of #1371) wraps its joined pointer as
+    /// `Scalar::Object`, not as the final arm's `Scalar::Instance`.
+    #[test]
+    fn scalar_of_an_object_node_is_an_object_scalar() {
+        let context = Context::create();
+        let pointer = context.ptr_type(AddressSpace::default()).const_null();
+        assert!(matches!(
+            scalar_of(&Ty::Object, pointer.into()),
+            Scalar::Object(value) if value == pointer
+        ));
     }
 }

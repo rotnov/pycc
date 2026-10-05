@@ -19,6 +19,9 @@ mod container_annotation;
 pub(crate) mod params;
 #[cfg(test)]
 mod params_tests;
+mod string_annotation;
+#[cfg(test)]
+mod string_annotation_tests;
 
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
@@ -29,6 +32,7 @@ use container_annotation::container_annotation_to_ty;
 use params::DefaultPolicy;
 use pycc_ast::{Expr, Operator};
 use pycc_diag::{Diagnostic, Span};
+use string_annotation::string_annotation_to_ty;
 
 pub(crate) fn lower_function(
     def: &pycc_ast::StmtFunctionDef,
@@ -1111,6 +1115,12 @@ pub(crate) fn annotation_to_ty(
                 ));
             }
             Ok(Ty::Optional(Box::new(inner)))
+        }
+        // Part 1 of #889: a string the parser did not already unquote --
+        // one nested in an annotation (`list["C"]`) or one that does not
+        // parse -- resolves like its unquoted spelling, in this same scope.
+        Expr::StringLiteral(literal) => {
+            string_annotation_to_ty(literal, type_param, class_name, aliases, class_defs)
         }
         other => Err(unsupported(
             format!(

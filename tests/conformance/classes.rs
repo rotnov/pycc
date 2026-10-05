@@ -75,8 +75,8 @@ fn pep_0649_deferred_ann_matches_cpython_3_14_7_byte_for_byte() {
 // compile-time no-op -- pycc already evaluates annotations statically, so the
 // directive contributes nothing and the file runs as if it were absent. The
 // fixture exercises only what pycc supports today (a method annotated with
-// its own class, a function annotated with an already-defined class); a
-// forward reference to a later-defined name, a string annotation, and
+// its own class, quoted and unquoted, and a function annotated with an
+// already-defined class); a forward reference to a later-defined name and
 // `__annotations__` introspection are the row's recorded `core` gaps in the
 // breadth manifest, so the matrix row is `◐` (#937), not `✅`.
 #[test]

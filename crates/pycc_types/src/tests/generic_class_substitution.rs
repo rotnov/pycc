@@ -277,6 +277,11 @@ fn collect_generic_class_instantiations_from_expr_covers_every_arm() {
         &HirExpr::TupleLiteral(vec![gci.clone()]),
         &mut out,
     );
+    // ObjectList (Part 2d of #1371)
+    collect_generic_class_instantiations_from_expr(
+        &HirExpr::ObjectList(vec![gci.clone()]),
+        &mut out,
+    );
     // DictLiteral
     collect_generic_class_instantiations_from_expr(
         &HirExpr::DictLiteral(vec![(gci.clone(), gci.clone())]),

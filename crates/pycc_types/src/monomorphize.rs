@@ -704,6 +704,7 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             infer_expr_in(env, local_names, expr)
         }
         HirExpr::ListLiteral(elements)
+        | HirExpr::ObjectList(elements)
         | HirExpr::SetLiteral(elements)
         | HirExpr::TupleLiteral(elements) => {
             for element in elements.iter_mut() {
@@ -817,6 +818,12 @@ pub(crate) fn rewrite_generic_calls_in_expr(
         // subscript), so it is rewritten like any argument.
         HirExpr::ExprCall { callee, args } => {
             rewrite_generic_calls_in_expr(env, local_names, callee, instantiations, seen)?;
+            for arg in args.iter_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args.iter_mut() {
                 rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
             }
@@ -1113,6 +1120,21 @@ fn rewrite_generic_calls_in_stmt(
             Ok(())
         }
         HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => Ok(()),
+        // Part 2c of #1371: a slice `del` reads its base and bounds, so a
+        // generic call in any of them is rewritten like any other read.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            rewrite_generic_calls_in_expr(env, local_names, base, instantiations, seen)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                rewrite_generic_calls_in_expr(env, local_names, bound, instantiations, seen)?;
+            }
+            Ok(())
+        }
         HirStmt::Match { subject, cases } => {
             rewrite_generic_calls_in_expr(env, local_names, subject, instantiations, seen)?;
             for case in cases.iter_mut() {
@@ -1320,7 +1342,10 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_generic_class_instantiations_from_expr(e, out);
             }
@@ -1379,6 +1404,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         }
         HirExpr::ExprCall { callee, args } => {
             collect_generic_class_instantiations_from_expr(callee, out);
+            for arg in args {
+                collect_generic_class_instantiations_from_expr(arg, out);
+            }
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
@@ -1515,6 +1545,18 @@ pub(crate) fn collect_generic_class_instantiations_from_stmt(
             }
         }
         HirStmt::Return(None) | HirStmt::Delete { .. } | HirStmt::ForeignImport { .. } => {}
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            collect_generic_class_instantiations_from_expr(base, out);
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_generic_class_instantiations_from_expr(bound, out);
+            }
+        }
         HirStmt::Return(Some(expr)) => collect_generic_class_instantiations_from_expr(expr, out),
         HirStmt::AttrSet { base, value, .. } => {
             collect_generic_class_instantiations_from_expr(base, out);
@@ -2549,6 +2591,27 @@ fn rewrite_protocol_calls_in_stmt(
                 seen,
             );
         }
+        // Part 2c of #1371: a slice `del` reads its base and bounds; an
+        // unrewritten protocol call there would dangle once the original
+        // function item is dropped.
+        HirStmt::DeleteSlice {
+            base,
+            start,
+            stop,
+            step,
+            ..
+        } => {
+            for operand in std::iter::once(base).chain([start, stop, step].into_iter().flatten()) {
+                rewrite_protocol_calls_in_expr(
+                    operand,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
         // #1254: the loop variable is bound in a scoped clone of `env`
         // before `cond` and the elements are walked, so a protocol call
         // whose argument reads it resolves; before, `infer_expr_in` failed
@@ -2766,6 +2829,21 @@ fn rewrite_protocol_calls_in_expr(
                 );
             }
         }
+        // #1411: without this arm the `_ => {}` catch-all below would leave
+        // a protocol-typed call in the constructor arguments of
+        // `type(self)(...)` unspecialized.
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args.iter_mut() {
+                rewrite_protocol_calls_in_expr(
+                    arg,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
         // Part 2a of #1371: like `IfExp` above, without this arm the
         // `_ => {}` catch-all below would leave a protocol-typed call in the
         // arguments of `table[k](args)` unspecialized.
@@ -2822,7 +2900,7 @@ fn rewrite_protocol_calls_in_expr(
                 seen,
             );
         }
-        HirExpr::ListLiteral(elements) => {
+        HirExpr::ListLiteral(elements) | HirExpr::ObjectList(elements) => {
             for e in elements.iter_mut() {
                 rewrite_protocol_calls_in_expr(
                     e,

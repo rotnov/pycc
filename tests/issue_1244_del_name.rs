@@ -286,6 +286,12 @@ fn every_del_refusal_is_named() {
             "import gc\n\nfor o in gc.garbage:\n    del o\n",
             "error[C0001]: a `del` of `o` is not supported yet: it holds a CPython object",
         ),
+        // Types: a slice target of a non-`object` base (HIR lowers every
+        // slice target since Part 2c of #1371; the type stage refuses it).
+        (
+            "xs = [1, 2]\ndel xs[0:1]\n",
+            "error[C0001]: a `del` of a slice (`del xs[a:b]`) is not supported yet",
+        ),
         // HIR: target kinds, scopes and the module-level rules.
         (
             "class C:\n    def __init__(self) -> None:\n        self.a = 1\n\n\nc = C()\ndel c.a\n",
@@ -296,10 +302,6 @@ fn every_del_refusal_is_named() {
             "d = {1: 2}\ndel d[1]\n",
             "error[C0001]: a `del` of a subscript (`del d[k]`, `del xs[i]`) is not supported yet \
              (#1245 for `dict`, #1246 for `list`)",
-        ),
-        (
-            "xs = [1, 2]\ndel xs[0:1]\n",
-            "error[C0001]: a `del` of a slice (`del xs[a:b]`) is not supported yet",
         ),
         (
             "del __name__\n",

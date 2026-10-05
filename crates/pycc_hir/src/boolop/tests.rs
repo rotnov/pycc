@@ -304,3 +304,33 @@ fn an_unsupported_operand_propagates_its_own_error() {
     assert_eq!(err.code, "C0001");
     assert!(!err.message.contains("walrus"), "{}", err.message);
 }
+
+/// Part 6 of #1371: an `object` joins an `object` or a boxable scalar, in
+/// either order, to `object`. Every other pairing with an `object` is
+/// refused, including a left `Optional` that `or` would otherwise strip.
+#[test]
+fn an_object_joins_an_object_or_a_boxable_scalar_to_object() {
+    for op in [BoolOpKind::And, BoolOpKind::Or] {
+        for other in [Ty::Object, Ty::Bool, Ty::Int, Ty::Float, Ty::Str] {
+            assert_eq!(
+                bool_op_result_ty(op, &Ty::Object, &other),
+                Some(Ty::Object),
+                "{op:?} object, {other:?}"
+            );
+            assert_eq!(
+                bool_op_result_ty(op, &other, &Ty::Object),
+                Some(Ty::Object),
+                "{op:?} {other:?}, object"
+            );
+        }
+        for other in [
+            Ty::None,
+            Ty::Optional(Box::new(Ty::Int)),
+            Ty::List(Box::new(Ty::Int)),
+            Ty::Instance(Box::new("C".to_string())),
+        ] {
+            assert_eq!(bool_op_result_ty(op, &Ty::Object, &other), None);
+            assert_eq!(bool_op_result_ty(op, &other, &Ty::Object), None);
+        }
+    }
+}

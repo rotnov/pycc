@@ -133,9 +133,13 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // Part 2b of #1371: `PySequence_Contains` runs `__contains__` (or
         // iteration), and `PyObject_GetItem` on a slice runs `__getitem__`;
         // either may raise. `foreign_compare::emit_contains` owns the `-1`
-        // check and `foreign_call::emit_slice` the `NULL` check.
+        // check and `foreign_slice::emit_slice` the `NULL` check.
         | MirExpr::ObjContains { .. }
-        | MirExpr::ObjSlice { .. } => true,
+        | MirExpr::ObjSlice { .. }
+        // Part 2d of #1371: boxing an element or allocating the CPython
+        // `list` may fail, and `foreign_call::emit_list` owns the `NULL`
+        // check.
+        | MirExpr::ObjList { .. } => true,
         // Part 1 of #1371: a rich comparison runs the operands' own
         // `__eq__`/`__lt__`/..., which may raise, and
         // `foreign_compare::emit_compare` owns the `NULL` check; an
@@ -249,7 +253,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // #1211 (Part 3 of #1018): `and`/`or` is a truth test, a branch
         // and a join, all infallible. Each operand is emitted through
         // `emit_expr` inside its own arm, which guards that operand where
-        // it is evaluated, so this node adds no edge of its own.
+        // it is evaluated, so this node adds no edge of its own. (Part 6 of
+        // #1371: an `object` operand's truth test raises through
+        // `foreign_len::emit_truthy`'s own failure edge, and boxing a native
+        // operand into an `object` node routes a packer `NULL` through
+        // `foreign_fail::route_null`, both branching immediately.)
         | MirExpr::BoolOp { .. }
         // #1395: a conditional expression is a truth test, a branch and a
         // join, all infallible; `test` and each branch are guarded by their
@@ -1579,6 +1587,12 @@ mod tests {
                 ty: pycc_mir::Ty::MemoryView,
             }),
             index: Box::new(MirExpr::IntLiteral(0)),
+        }));
+        // Part 2d of #1371: a list display built as a CPython `list` always
+        // may raise -- its elements are boxed and the list allocated --
+        // even an empty one.
+        assert!(expression_can_set_exception(&MirExpr::ObjList {
+            elements: Vec::new(),
         }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }

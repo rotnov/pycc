@@ -8,13 +8,14 @@
 //! 1. a receiver that names a class with a static or class method of that
 //!    name takes the method reading, exactly as the `MethodCall` arm would;
 //! 2. otherwise the receiver's static type decides, through the one rule
-//!    `pycc_mir` also uses, [`receiver_takes_method_path`];
-//! 3. anything else -- a container, a foreign object, a scalar, or a
-//!    receiver whose type cannot be inferred -- takes the container reading,
-//!    whose diagnostics are the ones such a call has always produced.
+//!    `pycc_mir` also uses, [`receiver_takes_method_path`]: a user class, a
+//!    protocol or (issue #1095) a CPython object takes the method reading;
+//! 3. anything else -- a container, a scalar, or a receiver whose type
+//!    cannot be inferred -- takes the container reading, whose diagnostics
+//!    are the ones such a call has always produced.
 
 use super::{class_name_dispatch, infer_expr_in};
-use crate::{Environment, class, lookup_bound_name};
+use crate::{BindingState, Environment, class, lookup_bound_name};
 use pycc_diag::Diagnostic;
 use pycc_hir::{ContainerFallback, HirExpr, Ty, receiver_takes_method_path};
 
@@ -55,6 +56,17 @@ pub(super) fn infer_receiver_dispatched_call(
         return infer_expr_in(env, local_names, call);
     }
     let receiver_ty = match base {
+        // Issue #1095: `lookup_bound_name` refuses a read of a name bound to
+        // a CPython object (`reject_object_read`), so that receiver is
+        // recognized before it; its call is the foreign method call.
+        HirExpr::Name(name)
+            if matches!(
+                env.binding_state(name),
+                Some(BindingState::Definitely(Ty::Object))
+            ) =>
+        {
+            Ok(Ty::Object)
+        }
         HirExpr::Name(name) => lookup_bound_name(env, local_names, name),
         other => infer_expr_in(env, local_names, other),
     };

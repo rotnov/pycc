@@ -1,6 +1,6 @@
 //! Lowering of comparisons and `isinstance` with a CPython object operand
-//! (Part 1 of #1371), and of membership in and slices of one (Part 2b),
-//! exercised from real HIR with `numpy` bound as a foreign import.
+//! (Part 1 of #1371), of membership in and slices of one (Part 2b), and of
+//! deleting a slice of one (Part 2c), exercised from real HIR with `numpy` bound as a foreign import.
 
 use crate::*;
 use pycc_diag::Span;
@@ -259,4 +259,94 @@ fn named_expr_bindings_are_collected_from_membership_and_slice_operands() {
     .collect_named_expr_bindings(&mut out);
     let names: Vec<&str> = out.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["a", "b", "c", "d", "e", "f"]);
+}
+
+/// Part 2d of #1371: a list display the empty-container pre-pass resolved
+/// to an object slot lowers to its own object-valued node, elements in
+/// source order, and a walrus inside an element still binds its target.
+#[test]
+fn an_object_list_display_is_an_object_valued_obj_list() {
+    let lowered = lower_discarded(HirExpr::ObjectList(vec![
+        HirExpr::IntLiteral(1),
+        HirExpr::StringLiteral("a".to_string()),
+        numpy_attr("pi"),
+    ]));
+    let MirExpr::ObjList { elements } = &lowered else {
+        panic!("expected an `ObjList`: {lowered:?}");
+    };
+    assert_eq!(elements.len(), 3);
+    assert_eq!(elements[0], MirExpr::IntLiteral(1));
+    assert!(matches!(elements[2], MirExpr::ObjAttrGet { .. }));
+    assert_eq!(lowered.ty(), Ty::Object);
+    assert_eq!(
+        lower_discarded(HirExpr::ObjectList(Vec::new())).ty(),
+        Ty::Object
+    );
+
+    let mut out = Vec::new();
+    lower_discarded(HirExpr::ObjectList(vec![HirExpr::NamedExpr {
+        name: "n".to_string(),
+        value: Box::new(HirExpr::IntLiteral(3)),
+    }]))
+    .collect_named_expr_bindings(&mut out);
+    assert_eq!(out, [("n".to_string(), Ty::Int)]);
+}
+
+/// Part 2c of #1371: `del o[a:b:c]` lowers to one `ObjDelSlice`, in a
+/// module body and in a function body (which `set_frame_function` and the
+/// receiver verifier both walk).
+#[test]
+fn a_slice_delete_of_an_object_is_one_obj_del_slice() {
+    let del = |start: Option<HirExpr>| HirStmt::DeleteSlice {
+        base: Box::new(numpy_attr("pi")),
+        start: start.map(Box::new),
+        stop: None,
+        step: Some(Box::new(HirExpr::IntLiteral(2))),
+        span: Span::new(0, 0),
+    };
+    let hir = HirModule {
+        items: vec![
+            HirItem::TopLevelStmt(del(Some(HirExpr::IntLiteral(1)))),
+            HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: pycc_hir::Ty::None,
+                body: vec![del(None), HirStmt::Return(None)],
+            },
+        ],
+        imports: vec![ImportBinding::Foreign {
+            local_name: "numpy".to_string(),
+            module_path: "numpy".to_string(),
+            from: None,
+            site: pycc_hir::ForeignImportSite::Item(0),
+            span: Span::new(0, 0),
+        }],
+        seeded_builtin_exception_classes: false,
+        type_aliases: Vec::new(),
+        class_defs: Vec::new(),
+    };
+    let mir = build(&hir);
+    let deletes: Vec<&MirStmt> = mir
+        .items
+        .iter()
+        .flat_map(|item| match item {
+            MirItem::TopLevelStmt(stmt) => std::slice::from_ref(stmt),
+            MirItem::Function { body, .. } => body.as_slice(),
+            _ => &[],
+        })
+        .filter(|stmt| matches!(stmt, MirStmt::ObjDelSlice { .. }))
+        .collect();
+    let [
+        MirStmt::ObjDelSlice {
+            base,
+            start: Some(MirExpr::IntLiteral(1)),
+            stop: None,
+            step: Some(MirExpr::IntLiteral(2)),
+        },
+        MirStmt::ObjDelSlice { start: None, .. },
+    ] = deletes.as_slice()
+    else {
+        panic!("expected two `ObjDelSlice`s: {deletes:?}");
+    };
+    assert!(matches!(base, MirExpr::ObjAttrGet { .. }), "{base:?}");
 }

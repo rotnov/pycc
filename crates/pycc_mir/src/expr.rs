@@ -26,6 +26,72 @@ pub(crate) mod set_ops;
 use instance_hash::lower_instance_hash;
 use sequence::sequence_after;
 
+/// D-154 (Part 1 of #375): lowers a construction of the class `callee`
+/// (`class_def`) from its already-lowered `args` -- the shared tail of
+/// `ClassName(args)` and of `type(self)(args)` (#1411), whose class is the
+/// one `self` is typed as in the body being lowered.
+fn lower_instantiation(
+    callee: &str,
+    class_def: &HirClassDef,
+    args: Vec<MirExpr>,
+    scopes: &[HashMap<String, Ty>],
+    classes: &HashMap<String, HirClassDef>,
+) -> MirExpr {
+    // #432: resolve `__init__` via the MRO -- a derived class
+    // without its own `__init__` inherits the base class's
+    // constructor. The MRO is ordered most-derived-first.
+    //
+    // #966: but the *first* `__init__` is not always the right
+    // one. D-225 puts an implicit zero-argument constructor in
+    // the own method table of every class that declares none,
+    // so for `class C(A, B)` with `A` init-less and `B`
+    // declaring `__init__`, `A`'s stub would win and `B`'s
+    // constructor would never run -- leaving `B`'s slots
+    // uninitialized. CPython ranks the equivalent
+    // (`object.__init__`) last, so skip flagged classes on a
+    // first pass. The `or_else` pass covers the all-implicit
+    // MRO (`class A: pass` / `class B: pass` / `class C(A, B)`),
+    // where the implicit constructor really is the one to call;
+    // only a genuinely `__init__`-less MRO reaches the panic.
+    let ctor_in = |skip_implicit: bool| {
+        class_def.mro.iter().find_map(|mro_class| {
+            let mro_def = classes.get(mro_class.as_str())?;
+            if skip_implicit && mro_def.implicit_object_init {
+                return None;
+            }
+            if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
+                Some((mro_class, format!("{mro_class}.__init__")))
+            } else {
+                None
+            }
+        })
+    };
+    let (owner, ctor) = ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
+        panic!(
+            "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
+             MRO -- pycc_hir guarantees an `__init__` for every non-enum class it \
+             lowers (D-225: by inheritance or by synthesis), and a call to an enum \
+             class is C0001 before MIR lowering -- pycc_hir's per-item scan reports \
+             it at the call (#944) with pycc_types' guard behind it (#921)"
+        )
+    });
+    // #1337 (D-254): an inherited constructor runs its
+    // receiver-exact copy when one exists.
+    let ctor = exact_callee(callee, owner, ctor, scopes, classes);
+    MirExpr::Instantiate(Box::new(InstantiateExpr {
+        ctor,
+        class_name: class_source_name(callee, classes),
+        // #432: allocate slots for all unique attributes across the
+        // MRO, not just this class's own declared attributes.
+        slot_names: mro_attrs(class_def, classes)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect(),
+        args,
+        ty: Ty::Instance(Box::new(callee.to_string())),
+    }))
+}
+
 pub(super) fn lower_expr(
     expr: &HirExpr,
     scopes: &[HashMap<String, Ty>],
@@ -76,6 +142,29 @@ pub(super) fn lower_expr(
             name: name.clone(),
             ty: lookup(scopes, name),
         },
+        // #1411: `type(self)(args)` constructs the class `self` is typed as
+        // in this body. pycc dispatches statically (D-006), and an inherited
+        // body that constructs through its receiver is lowered once more per
+        // subclass with `self` retyped (D-254), so this is the receiver's
+        // run-time class, as in CPython. Resolved straight to the class
+        // rather than through the `Call` callee path, which a local of the
+        // same name as the class could otherwise claim.
+        HirExpr::ReceiverClassCall { args } => {
+            let Ty::Instance(class) = lookup(scopes, "self") else {
+                panic!(
+                    "pycc_mir: internal error: `type(self)(...)` outside an instance method -- \
+                     pycc_types refuses it unless `self` is an instance of a class"
+                )
+            };
+            let class_def = classes.get(class.as_str()).unwrap_or_else(|| {
+                panic!("pycc_mir: internal error: `self`'s class `{class}` is not a known class")
+            });
+            let args = args
+                .iter()
+                .map(|a| lower_expr(a, scopes, classes, current_class))
+                .collect();
+            lower_instantiation(&class, class_def, args, scopes, classes)
+        }
         HirExpr::Call { callee, args } => {
             // #1313: a direct call of any name typed `Ty::Object`. The
             // admission is by type, not provenance -- the same rule
@@ -229,59 +318,7 @@ pub(super) fn lower_expr(
             // why this needs a dedicated MIR node rather than folding into
             // `MirExpr::Call` the way `MethodCall` below does.
             if let Some(class_def) = classes.get(callee.as_str()) {
-                // #432: resolve `__init__` via the MRO -- a derived class
-                // without its own `__init__` inherits the base class's
-                // constructor. The MRO is ordered most-derived-first.
-                //
-                // #966: but the *first* `__init__` is not always the right
-                // one. D-225 puts an implicit zero-argument constructor in
-                // the own method table of every class that declares none,
-                // so for `class C(A, B)` with `A` init-less and `B`
-                // declaring `__init__`, `A`'s stub would win and `B`'s
-                // constructor would never run -- leaving `B`'s slots
-                // uninitialized. CPython ranks the equivalent
-                // (`object.__init__`) last, so skip flagged classes on a
-                // first pass. The `or_else` pass covers the all-implicit
-                // MRO (`class A: pass` / `class B: pass` / `class C(A, B)`),
-                // where the implicit constructor really is the one to call;
-                // only a genuinely `__init__`-less MRO reaches the panic.
-                let ctor_in = |skip_implicit: bool| {
-                    class_def.mro.iter().find_map(|mro_class| {
-                        let mro_def = classes.get(mro_class.as_str())?;
-                        if skip_implicit && mro_def.implicit_object_init {
-                            return None;
-                        }
-                        if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
-                            Some((mro_class, format!("{mro_class}.__init__")))
-                        } else {
-                            None
-                        }
-                    })
-                };
-                let (owner, ctor) = ctor_in(true).or_else(|| ctor_in(false)).unwrap_or_else(|| {
-                    panic!(
-                        "pycc_mir: internal error: no `__init__` found in class `{callee}`'s \
-                         MRO -- pycc_hir guarantees an `__init__` for every non-enum class it \
-                         lowers (D-225: by inheritance or by synthesis), and a call to an enum \
-                         class is C0001 before MIR lowering -- pycc_hir's per-item scan reports \
-                         it at the call (#944) with pycc_types' guard behind it (#921)"
-                    )
-                });
-                // #1337 (D-254): an inherited constructor runs its
-                // receiver-exact copy when one exists.
-                let ctor = exact_callee(callee, owner, ctor, scopes, classes);
-                return MirExpr::Instantiate(Box::new(InstantiateExpr {
-                    ctor,
-                    class_name: class_source_name(callee, classes),
-                    // #432: allocate slots for all unique attributes across the
-                    // MRO, not just this class's own declared attributes.
-                    slot_names: mro_attrs(class_def, classes)
-                        .into_iter()
-                        .map(|(name, _)| name)
-                        .collect(),
-                    args,
-                    ty: Ty::Instance(Box::new(callee.clone())),
-                }));
+                return lower_instantiation(callee, class_def, args, scopes, classes);
             }
             // #1165 (Part 2a of #1142): `ndarray(n)` / `NDArray(n)`
             // produces artifact-owned buffer storage. Placed *after* the
@@ -659,6 +696,14 @@ pub(super) fn lower_expr(
                 })
                 .collect(),
         ),
+        // Part 2d of #1371: a list display the empty-container pre-pass
+        // resolved to an object slot.
+        HirExpr::ObjectList(elements) => MirExpr::ObjList {
+            elements: elements
+                .iter()
+                .map(|e| lower_expr(e, scopes, classes, current_class))
+                .collect(),
+        },
         HirExpr::ListLiteral(elements) => MirExpr::ListLiteral(
             elements
                 .iter()
@@ -1622,7 +1667,7 @@ pub(super) fn pre_bind_named_expr_targets(
         }
         // #1254 (D-250): `pycc_hir` refuses a walrus inside a comprehension.
         HirExpr::Comprehension(_) => {}
-        HirExpr::Call { args, .. } => {
+        HirExpr::Call { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 pre_bind_named_expr_targets(arg, scopes, classes, current_class);
             }
@@ -1653,7 +1698,10 @@ pub(super) fn pre_bind_named_expr_targets(
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 pre_bind_named_expr_targets(e, scopes, classes, current_class);
             }

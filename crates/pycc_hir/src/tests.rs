@@ -6130,6 +6130,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
             HirExpr::ListLiteral(vec![walrus("list_elt")]),
             HirExpr::SetLiteral(vec![walrus("set_elt")]),
             HirExpr::TupleLiteral(vec![walrus("tuple_elt")]),
+            HirExpr::ObjectList(vec![walrus("object_list_elt")]),
             HirExpr::Subscript {
                 base: Box::new(walrus("subscript_base")),
                 index: Box::new(walrus("subscript_index")),
@@ -6196,6 +6197,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
         "list_elt",
         "set_elt",
         "tuple_elt",
+        "object_list_elt",
         "subscript_base",
         "subscript_index",
         "slice_base",
@@ -6234,10 +6236,13 @@ fn an_attribute_annotation_names_its_kind() {
 }
 
 #[test]
-fn a_string_annotation_names_its_kind() {
+fn a_bytes_annotation_names_its_kind() {
+    // A *string* annotation no longer reaches the catch-all: it resolves
+    // like its unquoted spelling (Part 1 of #889). A bytes literal still
+    // does.
     assert_capability_error_message(
-        "def f(x: \"int\") -> int:\n    return x\n",
-        "only a bare name type annotation is supported so far, got a string literal",
+        "def f(x: b\"int\") -> int:\n    return x\n",
+        "only a bare name type annotation is supported so far, got a bytes literal",
     );
 }
 

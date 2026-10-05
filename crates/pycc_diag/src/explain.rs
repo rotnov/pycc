@@ -1472,7 +1472,15 @@ admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
 `PySequence_Contains` with a `bool` result, and a slice load \
 (`o[a:b:c]`, any bound omitted) whose bounds are of those same types, \
 answered by the object's own `__getitem__` with a `slice` key; the result \
-is another CPython object. The loop is \
+is another CPython object. Part 2d of #1371 builds a list display \
+bound to an object slot -- annotated `object`, `Any` or a bare `list`, \
+or an empty `[]` assigned to a name whose other binding is a CPython \
+object -- as a fresh CPython `list` of its `int`, `float`, `bool`, `str` \
+or `object` elements. Part 6 of #1371 admits `and`/`or` with an \
+object operand: as a condition the object's truth is `PyObject_IsTrue`, \
+and as a value the result is an `object` when the other operand is an \
+`object`, `int`, `float`, `bool` or `str`, a native operand boxed only \
+when it is the one selected. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1485,21 +1493,26 @@ of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods, to the \
 object itself or to a subscript result, indexing or slicing with a key \
-or bound of any other type, and testing membership of an item of any \
+or bound of any other type, joining an object with a value of any other \
+type in an `and`/`or`, and testing membership of an item of any \
 other type in an object or of an `object` item in a native container \
-(membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
+(membership between two native values keeps its `C0001`), and a list \
+display bound to an object slot with an element of any other type. A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
-subscript (`o[k] = v`) or a slice (`o[a:b] = v`, `del o[a:b]`) and \
+subscript (`o[k] = v`) or a slice (`o[a:b] = v`) and \
 iterating a direct call's result (`for x in o(...):`) are still refused \
 too, but by their own pre-existing `C0001` diagnostics rather than by \
-this code. A method named `append`, `pop`, \
-`get` or `add` is also still refused: container lowering claims those four \
-spellings before the foreign path sees them, so they do not reach it even \
-with admitted arguments. Since #1263 container lowering admits an \
-attribute receiver for `append`, `pop` and `get`, so one of those called on \
-an attribute of the object (`o.attr.append(v)`) is refused by this code; \
-`add` is still refused by `C0001`. In a module body every supported \
+this code; deleting a slice of an object (`del o[a:b]`) is admitted \
+since Part 2c of #1371, with the same bound rule as a slice load. Since \
+#1095 a method named `append`, `pop`, `get` or `add` is \
+an ordinary method call on the object too, whatever its arity \
+(`o.get(k)`, `o.attr.append(v)`): container lowering claims those four \
+spellings, but in a module that can hold an object it keeps the method \
+reading beside its own, and an object receiver takes that one. The one \
+exception is an object a module with no foreign import of its own imports \
+from a sibling project module (`from dep import g`): it keeps the container \
+reading and this code. In a module body every supported \
 operation is admitted only *below the import*. Since #1316 and Part 1 of #1333 each \
 one except the `for` loop is also admitted inside a function body, and a \
 function may bind the object to a local name, return it and pass it to \
@@ -1512,7 +1525,7 @@ parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 (the boundary conversions) and \
 of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
-a pycc class, comparison chains and `and`/`or` over an object) land, and \
+a pycc class, comparison chains over an object) land, and \
 this code is retired when they have.",
         example: "\
 import numpy
