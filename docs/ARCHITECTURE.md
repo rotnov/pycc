@@ -145,9 +145,12 @@ not introduce (see `docs/decisions/D-116-tuple-v0-2-scope-int-bool-float-element
 and, even if that solver gap closed, `pycc_codegen`'s own `emit_expr` has
 no dedicated `MirExpr::Call` result-dispatch arm for a container-typed
 return either -- it panics for `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
-alike (D-116's own further correction note). `for x in t:` iteration,
-tuple-unpacking assignment (`a, b = t`), and a `tuple[...]` annotation
-syntax remain unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
+alike (D-116's own further correction note). `for x in t:` iteration and a
+`tuple[...]` annotation syntax remain unimplemented, tracked as
+`docs/ROADMAP.md` follow-ups. Tuple-unpacking assignment (`a, b = t`) into
+bare names is implemented since Part 1 of
+[#891](https://github.com/rotnov/pycc/issues/891); `docs/TYPE_SYSTEM.md`'s
+"Tuple-unpacking assignment" section owns its rule and remaining limits.
 
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument

@@ -98,6 +98,11 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // `foreign_len::emit_unpack_float_tuple` owns the `-1` check that
         // actually stops the module body.
         | MirExpr::ObjUnpackFloatTuple { .. }
+        // Part 1 of #891: `ObjUnpack` joins them -- the shim raises
+        // CPython's own `TypeError` for a non-iterable and `ValueError` for
+        // a wrong item count, and propagates a raising `__iter__` or
+        // `__next__`; `foreign_unpack::emit_unpack` owns the `NULL` check.
+        | MirExpr::ObjUnpack { .. }
         // Part 2 of #1027: `BufferGet` joins them, and here the dependency
         // *is* live rather than conservative -- `pycc_rt_buffer_f64_get`
         // sets pycc's own D-173 pending state and returns a `0.0` sentinel

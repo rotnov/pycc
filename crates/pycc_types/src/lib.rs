@@ -28,6 +28,7 @@ mod string_conversion;
 #[cfg(test)]
 mod tests;
 mod unop;
+mod unpack;
 
 use return_coverage::block_always_returns;
 
@@ -622,7 +623,9 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(part, names);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_names_in_expr(operand, names),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_names_in_expr(operand, names)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -1346,7 +1349,9 @@ fn collect_named_expr_bindings(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => collect_named_expr_bindings(env, local_names, operand),
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+            collect_named_expr_bindings(env, local_names, operand)
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(inner) = part {
@@ -3733,7 +3738,7 @@ fn reject_generic_calls_in_expr(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             reject_generic_calls_in_expr(module_env, own_name, operand)
         }
         HirExpr::CompareChain { first, links } => {

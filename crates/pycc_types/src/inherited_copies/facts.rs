@@ -320,7 +320,9 @@ impl<'a> Walker<'a> {
                     self.expr(&link.right);
                 }
             }
-            HirExpr::UnaryOp { operand, .. } => self.expr(operand),
+            HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
+                self.expr(operand)
+            }
             HirExpr::FString(parts) => {
                 for part in parts {
                     if let FStringPart::Interpolation(expr) = part {

@@ -57,6 +57,7 @@ mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
 mod foreign_pack;
+mod foreign_unpack;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
 mod hash;
@@ -4104,6 +4105,11 @@ fn emit_expr_unchecked<'ctx>(
         MirExpr::ObjUnpackFloatTuple { base, arity } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             foreign_len::emit_unpack_float_tuple(context, builder, module, rt, base_scalar, *arity)
+        }
+        MirExpr::ObjUnpack { value, arity } => {
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            foreign_unpack::emit_unpack(context, builder, module, rt, value_scalar, *arity)
         }
         MirExpr::NullInstance { .. } => {
             let ptr_type = context.ptr_type(inkwell::AddressSpace::default());

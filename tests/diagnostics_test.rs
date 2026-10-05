@@ -926,8 +926,8 @@ fn c0001_chain_assign_empty_container() {
 }
 
 #[test]
-fn c0001_tuple_assign_target() {
-    assert_diagnostic_matches_fixture("c0001_tuple_assign_target");
+fn c0001_starred_unpack_target() {
+    assert_diagnostic_matches_fixture("c0001_starred_unpack_target");
 }
 
 #[test]
@@ -1112,6 +1112,16 @@ fn t0054_set_element_unhashable() {
 #[test]
 fn t0054_set_add_unhashable() {
     assert_diagnostic_matches_fixture("t0054_set_add_unhashable");
+}
+
+#[test]
+fn t0055_unpack_too_many_values() {
+    assert_diagnostic_matches_fixture("t0055_unpack_too_many_values");
+}
+
+#[test]
+fn t0055_unpack_not_enough_values() {
+    assert_diagnostic_matches_fixture("t0055_unpack_not_enough_values");
 }
 
 #[test]

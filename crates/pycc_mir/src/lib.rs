@@ -582,6 +582,20 @@ pub enum MirExpr {
         value: Box<MirExpr>,
         class: ObjIsInstanceClass,
     },
+    /// The value of a tuple-unpacking assignment `t1, ..., tn = value`
+    /// whose `value` is a CPython object (Part 1 of #891): CPython's own
+    /// unpack protocol -- iterate `value`, take exactly `arity` items --
+    /// collecting the items into a fresh `tuple`. [`MirExpr::ty`] answers
+    /// [`Ty::Object`]; each target is then bound by an ordinary
+    /// [`MirExpr::ObjSubscript`] of that tuple. It can raise (a
+    /// non-iterable, a wrong item count, a raising `__iter__`/`__next__`),
+    /// so `pycc_codegen::exception::expression_can_set_exception` answers
+    /// `true` for it. A native tuple value never reaches this node: its
+    /// arity is checked statically, and the value passes through unchanged.
+    ObjUnpack {
+        value: Box<MirExpr>,
+        arity: usize,
+    },
     /// `b[i]` where `b` is a `pycc build --ext` export's `memoryview`
     /// parameter (Part 2 of #1027): a bounds-checked native `float` element
     /// load out of the borrowed buffer.
@@ -1057,6 +1071,7 @@ impl MirExpr {
             MirExpr::ObjUnpackFloatTuple { arity, .. } => {
                 Ty::Tuple(Box::new(vec![Ty::Float; *arity]))
             }
+            MirExpr::ObjUnpack { .. } => Ty::Object,
             MirExpr::NullInstance { ty } => ty.clone(),
             MirExpr::ExceptionMessage(_) => Ty::Str,
             MirExpr::ExceptionTypeTest { .. } => Ty::Bool,
@@ -1220,7 +1235,9 @@ impl MirExpr {
             // PR 4c of #1083: the base is the node's only child -- `arity`
             // is a `usize`, not an expression -- so a walrus can hide only
             // there (`x: tuple[float, float] = (o := numpy).pair`).
-            | MirExpr::ObjUnpackFloatTuple { base, .. } => base.collect_named_expr_bindings(out),
+            | MirExpr::ObjUnpackFloatTuple { base, .. }
+            // Part 1 of #891: the unpacked value is the only child.
+            | MirExpr::ObjUnpack { value: base, .. } => base.collect_named_expr_bindings(out),
             // Both sides, unlike `ObjAttrGet` directly above: a walrus can
             // hide in an argument (`numpy.seed((n := 1))`) just as easily as
             // in the base, and a binding missed here is a name codegen never

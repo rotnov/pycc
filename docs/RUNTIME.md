@@ -1492,6 +1492,37 @@ one divergence: an `int` item or bound outside the inline range reaching
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
 
+**A tuple-unpacking assignment is one more producer.** Part 1 of
+[#891](https://github.com/rotnov/pycc/issues/891) unpacks a CPython object
+into names (`a, b = o`, the rule in `docs/TYPE_SYSTEM.md`'s "Tuple-unpacking
+assignment" section) with `pycc_ext_obj_unpack(o, n)`, not to be confused with
+Part 4's `pycc_ext_obj_unpack_float_tuple` below. It borrows `o`. An exact
+`tuple` of `n` items is returned as a new reference to `o` itself; any other
+iterable is iterated with `PyObject_GetIter`/`PyIter_Next` into a fresh tuple
+of exactly `n` items, every temporary the iteration owns being released on
+every exit. A count other than `n` raises `ValueError` with CPython's own
+message ("not enough values to unpack (expected 3, got 2)", "too many values
+to unpack (expected 2)", with CPython 3.14's ", got N" suffix for an exact
+`list`, `tuple` or `dict`), and a non-iterable raises CPython's `TypeError`
+("cannot unpack non-iterable builtin_function_or_method object"). A `NULL`
+result routes to the operation's failure edge -- the module-exec `-1` in a
+module body, so the remaining module-body statements never run, and the
+bridged pycc exception in a function body, which a compiled `try`/`except`
+catches -- before any target is bound. The returned tuple binds the unpacking
+temporary and is never released, and each target then reads it with
+`pycc_ext_obj_getitem`, whose new reference leaks on the same terms as any
+subscript load. `tests/issue_891_tuple_unpack.rs` pins the result inside a
+function on two distinct mortal elements over `N = 100` unpacks, where
+CPython's deltas are `1`, `1` and `0` (the live final binding):
+
+| Shape, run `N` times in a function body | element deltas | source delta |
+|---|---|---|
+| `e1, e2 = pr`, `pr` an exact 2-tuple | `N` each, one per target read | `N`, the returned tuple is `pr` itself |
+| `f1, f2 = ls`, `ls` a 2-item `list` | `2N` each, one per target read and one held by the leaked fresh tuple | `0` |
+
+When [#1092](https://github.com/rotnov/pycc/issues/1092) lands the element
+reads and the unpacked tuple stop leaking and both rows match CPython.
+
 `len`, a truth test, Part 4's four conversions and Part 4's tuple unpack are
 the operations that add nothing to that leaked set. `pycc_ext_obj_len` answers a `Py_ssize_t` and
 `pycc_ext_obj_truthy` answers a C `int`; neither creates a reference and neither

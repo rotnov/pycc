@@ -526,6 +526,20 @@ pub(super) fn lower_expr(
             lower_expr(right, scopes, classes, current_class),
             *truth_only,
         ),
+        // Part 1 of #891: a native tuple's arity was checked statically by
+        // `pycc_types`, so the tuple itself is the unpacked value; a CPython
+        // object is unpacked at run time by `MirExpr::ObjUnpack`.
+        HirExpr::Unpack { value, arity } => {
+            let value = lower_expr(value, scopes, classes, current_class);
+            if value.ty() == Ty::Object {
+                MirExpr::ObjUnpack {
+                    value: Box::new(value),
+                    arity: *arity,
+                }
+            } else {
+                value
+            }
+        }
         HirExpr::IfExp { test, body, orelse } => super::if_exp::lower_if_exp(
             lower_expr(test, scopes, classes, current_class),
             lower_expr(body, scopes, classes, current_class),
@@ -1629,7 +1643,7 @@ pub(super) fn pre_bind_named_expr_targets(
                 pre_bind_named_expr_targets(operand, scopes, classes, current_class);
             }
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             pre_bind_named_expr_targets(operand, scopes, classes, current_class)
         }
         HirExpr::FString(parts) => {

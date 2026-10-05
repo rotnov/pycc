@@ -45,8 +45,8 @@ pub const EXPLANATIONS: &[DiagnosticExplanation] = &[
 C0001 is a versioned capability diagnostic, not a rejected-by-design language \
 rule: it fires whenever HIR lowering reaches a syntactically valid Python \
 statement, expression, or annotation shape that this pycc version's frontend \
-does not yet lower -- a `with` statement, a tuple-unpacking assignment, an \
-unrecognized import shape, or a type annotation this version's lowering \
+does not yet lower -- a `with` statement, a starred or nested \
+tuple-unpacking target, an unrecognized import shape, or a type annotation this version's lowering \
 does not recognize, for example. Since D-228 (issue #918), widened by \
 issue #925, the parameterized container annotations `list[T]`, `set[T]`, \
 `dict[K, V]` and `tuple[A, B, ...]` *are* lowered in parameter, return, \
@@ -320,9 +320,10 @@ unannotated `self.xs = []` in `__init__` reports it too when no source types \
 the slot: annotate the attribute (`self.xs: list[int] = []`) or append a value \
 to it in one of the class's own methods (`self.xs.append(1)`); a renamed \
 receiver (`def __init__(this)`) is named as written. An unannotated \
-`self.d = {}` establishing the attribute in `__init__` and a tuple-unpacking \
-target (`L, R = [], []`) never reach this check: both are rejected earlier \
-with `C0001`. A class-body declaration (`d: dict[str, int]`) types an \
+`self.d = {}` establishing the attribute in `__init__` never reaches this \
+check: it is rejected earlier with `C0001`. A tuple-unpacking assignment \
+(`L, R = [], []`) does reach it: each `[]` is an element of a tuple display, \
+a nested literal, not a name's own value. A class-body declaration (`d: dict[str, int]`) types an \
 establishing `self.d = {}` instead, and an establishing `[]` or `{}` of the \
 wrong shape for its declared slot does reach this check. A later `self.d = {}` or `self.xs = {}` reset in another method \
 does reach it when the slot it stores into is not a `dict`. Where a binding \
@@ -1124,6 +1125,25 @@ class P:
 def f() -> int:
     s = {P(1)}  # T0054 -- P defines __eq__ without __hash__
     return len(s)
+",
+    },
+    DiagnosticExplanation {
+        code: "T0055",
+        severity: Severity::Error,
+        summary: "tuple-unpacking assignment names the wrong number of targets",
+        explanation: "\
+T0055 fires when a tuple-unpacking assignment (`a, b = t`, Part 1 of #891) \
+unpacks a native `tuple[...]` whose length differs from the number of target \
+names. CPython raises `ValueError` at run time with the same message; pycc \
+knows the tuple's length statically, so it reports the error before the \
+program runs, for the same reason an out-of-range literal tuple index is \
+T0040 rather than a run-time `IndexError` (D-116). Write exactly as many \
+target names as the tuple has elements. A CPython object's length is not \
+known statically: unpacking one in an `--ext` build is checked at run time \
+and raises CPython's own `ValueError`.",
+        example: "\
+t = (1, 2, 3)
+a, b = t  # T0055 -- too many values to unpack (expected 2, got 3)
 ",
     },
     DiagnosticExplanation {

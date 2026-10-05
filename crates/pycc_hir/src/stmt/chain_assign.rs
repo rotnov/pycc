@@ -16,6 +16,7 @@
 //! An empty `[]`/`{}` display is refused before either path.
 
 use super::ExceptStarCtx;
+use super::unpack::{lower_unpack, unpack_target_elements};
 use crate::class::ClassAnnotationInfo;
 use crate::expr::keyword_bind::SignatureTable;
 use crate::expr::unobservable::is_unobservable;
@@ -71,13 +72,33 @@ pub(crate) fn lower_stmt_expanded(
             signatures,
         )
     };
+    // Part 1 of #891: a tuple-unpacking piece, alone or one piece of a
+    // chain, lowers to several statements of its own.
+    let expand = |piece: &Stmt| match piece {
+        Stmt::Assign(assign) => match unpack_target_elements(&assign.targets[0]) {
+            Some(elements) => lower_unpack(
+                assign,
+                elements,
+                in_function,
+                class_name,
+                imports,
+                signatures,
+            ),
+            None => Ok(vec![lower(piece)?]),
+        },
+        _ => Ok(vec![lower(piece)?]),
+    };
     match stmt {
         Stmt::Assign(assign) if assign.targets.len() > 1 => {
-            desugar_chain_assign(assign)?.iter().map(lower).collect()
+            let mut lowered = Vec::new();
+            for piece in desugar_chain_assign(assign)? {
+                lowered.extend(expand(&piece)?);
+            }
+            Ok(lowered)
         }
         // #1244: `del a, b` deletes each name in turn, and `del ()` none.
         Stmt::Delete(del) => super::del::lower_delete(del),
-        _ => Ok(vec![lower(stmt)?]),
+        _ => expand(stmt),
     }
 }
 

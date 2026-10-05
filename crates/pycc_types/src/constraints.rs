@@ -1128,6 +1128,13 @@ pub(crate) fn collect_expr_constraints(
                 None => Ok(None),
             }
         }
+        // Part 1 of #891: the unpacked value's own term passes through.
+        // Whether the value can be unpacked at all, and into how many
+        // names, is `crate::unpack::infer_unpack`'s check-phase gate; the
+        // element reads that follow are ordinary `Subscript`s.
+        HirExpr::Unpack { value, .. } => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, value)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left =
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, left)?;
@@ -2155,7 +2162,7 @@ fn bind_named_expr_targets(
             }
             Ok(())
         }
-        HirExpr::UnaryOp { operand, .. } => {
+        HirExpr::UnaryOp { operand, .. } | HirExpr::Unpack { value: operand, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, operand)
         }
         HirExpr::FString(parts) => {
