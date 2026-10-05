@@ -751,6 +751,18 @@ pub enum HirExpr {
         callee: Box<HirExpr>,
         args: Vec<HirExpr>,
     },
+    /// #1411: `type(self)(args)` inside an instance method -- a construction
+    /// of the receiver's own class. The class is not carried here: it is the
+    /// static type of the canonical receiver `self` in the body being
+    /// compiled, recovered by `pycc_types` and `pycc_mir` exactly as
+    /// [`HirExpr::Super`] recovers its class. Because an inherited body that
+    /// constructs through its receiver is compiled once more for every
+    /// subclass with `self` retyped (D-254), each compilation builds its own
+    /// receiver's class, as CPython's run-time `type(self)` does
+    /// (`expr::receiver_class_call` owns the lowering rule).
+    ReceiverClassCall {
+        args: Vec<HirExpr>,
+    },
     /// Zero-arg `super()` (PEP 3135, #433): represents the implicit
     /// `super(__class__, self)` reference available inside a method body.
     /// Only ever appears as the `base` of a `HirExpr::MethodCall` or
