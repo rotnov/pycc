@@ -267,3 +267,4 @@ current.
 | [D-255](./D-255-set-elements-of-a-hashable-user-class-and-the-eq.md) | set/frozenset elements of a hashable user class: eq verdict, subclass refusal, and the __eq__ call-count deviation | accepted |
 | [D-256](./D-256-admit-a-foreign-callable-staticmethod-class.md) | Admit a foreign-callable `staticmethod` class attribute, re-read at each access | accepted |
 | [D-257](./D-257-kill-criterion-compile-scope-is-the-subject-module.md) | The kill criterion's "compiles unchanged" covers the subject module, with sibling imports bound as foreign | accepted |
+| [D-258](./D-258-ext-module-any-object-and-object-containers-are-opaque.md) | In an `--ext` module, `Any`, `object` and object-element container annotations are the opaque CPython object | accepted |

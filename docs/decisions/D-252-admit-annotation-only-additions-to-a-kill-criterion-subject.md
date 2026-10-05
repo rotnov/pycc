@@ -7,6 +7,7 @@ status: accepted
 ## D-252: Admit annotation-only additions to a kill-criterion subject (owner directive)
 - Status: accepted (owner directive of 2026-09-24 on [#1207](https://github.com/rotnov/pycc/issues/1207); narrows [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6's kill-criterion clause and #1207's outcome row (b))
 - Amendment (2026-09-30): [D-257](./D-257-kill-criterion-compile-scope-is-the-subject-module.md) scopes the kill criterion's compilation to the subject module, with its sibling imports bound as foreign. Because that module is the compiled unit, the annotation-only additions of rule 1 may be made anywhere in it, under rules 2 and 3 unchanged, and never outside it. A result is then labelled "subject-module scope" alongside "annotated".
+- Amendment (2026-10-05): [D-258](./D-258-ext-module-any-object-and-object-containers-are-opaque.md) settles #1285 as admitted. In an `ext` module the subject's existing `-> Any` lowers to the opaque CPython object and crosses the boundary unchanged, so rule 5's second blocker becomes implementation work rather than a boundary question. Rule 1 is unchanged: the annotation is still not replaced.
 - Context: [D-244](./D-244-add-a-hosted-cpython-extension-module-artifact-mode.md) rule 6 states the
   kill criterion as "the reference hot function compiles unchanged as an extension module and runs ≥ 5×
   faster than CPython". `docs/TESTING.md`'s protocol **Subject** bullet makes this operational: "an arm
