@@ -1570,6 +1570,18 @@ pub enum MirStmt {
     },
     /// Bare `raise` (re-raise, #382). Only valid inside an except handler.
     Reraise,
+    /// `raise value` where `value` is a CPython object (Part 9 of #1371,
+    /// from a cause-less `HirStmt::Raise` whose operand is `Ty::Object`).
+    /// CPython decides what is raised, as its own `raise` does: an
+    /// exception instance is raised, an exception class is instantiated
+    /// with no arguments, and anything else raises `TypeError`. Codegen
+    /// hands the CPython exception to the foreign-operation bridge, so it
+    /// propagates as a pending pycc exception whose original the host sees.
+    /// Carries no frame name: the bridged original keeps CPython's own
+    /// traceback, unlike [`MirStmt::Raise`]'s pycc-rendered one.
+    ObjRaise {
+        value: MirExpr,
+    },
     /// A foreign (CPython-object) import nested in a module-level `if`/`try`
     /// block (#1291), the statement counterpart of
     /// [`MirItem::ForeignImport`]: each `(local_name, module_path)` pair, in
@@ -1913,6 +1925,7 @@ fn set_frame_function(body: &mut [MirStmt], frame_name: &str) {
             | MirStmt::ReturnBufferSlice { .. }
             | MirStmt::AttrSet { .. }
             | MirStmt::ObjDelSlice { .. }
+            | MirStmt::ObjRaise { .. }
             | MirStmt::ForeignImport { .. }
             | MirStmt::Reraise => {}
         }

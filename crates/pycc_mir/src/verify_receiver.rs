@@ -241,7 +241,9 @@ impl Verifier<'_> {
 
     fn stmt(&self, stmt: &MirStmt) {
         match stmt {
-            MirStmt::ExprStmt(value) | MirStmt::Assign { value, .. } => self.expr(value),
+            MirStmt::ExprStmt(value)
+            | MirStmt::Assign { value, .. }
+            | MirStmt::ObjRaise { value } => self.expr(value),
             MirStmt::NoOp
             | MirStmt::Unreachable
             | MirStmt::Reraise

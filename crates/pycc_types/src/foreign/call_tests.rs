@@ -147,14 +147,11 @@ fn a_call_after_a_block_that_may_skip_the_import_is_t0041() {
     );
 }
 
-/// A call's `object` result is not an exception instance.
+/// Part 9 of #1371: a call's `object` result is raised the way CPython
+/// raises it; `foreign/raise_tests.rs` owns the rest of `raise o`.
 #[test]
-fn raising_a_call_result_is_refused() {
-    refused(
-        &format!("{FROM_FORM}raise product(\"a\")\n"),
-        "T0021",
-        "can only raise exception instances, got `object`",
-    );
+fn raising_a_call_result_is_admitted() {
+    admitted(&format!("{FROM_FORM}raise product(\"a\")\n"));
 }
 
 /// The result has no consumer beyond the ones every object producer has:

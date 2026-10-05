@@ -41,6 +41,7 @@ mod object_argument;
 mod object_compare;
 // Part 2b of #1371: membership in, and slices of, a CPython object.
 mod object_membership_slice;
+mod object_raise;
 
 /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
 /// shape reused by many of this file's older tests (`emit_stmt`'s

@@ -57,6 +57,7 @@ mod foreign_fail;
 mod foreign_import;
 mod foreign_len;
 mod foreign_pack;
+mod foreign_raise;
 mod foreign_slice;
 /// `frozenset(...)` construction and set truthiness (Part 1 of #1319).
 mod frozenset;
@@ -103,8 +104,8 @@ use ext::{
     EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL,
     EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NONE_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
     EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
-    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RAISE_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
@@ -8557,6 +8558,19 @@ fn emit_stmt<'ctx>(
             builder
                 .build_unreachable()
                 .expect("build_unreachable should not fail after raise");
+            Ok(())
+        }
+        // Part 9 of #1371: `raise o` with a CPython object `o`.
+        MirStmt::ObjRaise { value } => {
+            foreign_raise::emit_obj_raise(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                value,
+            );
             Ok(())
         }
         // #382: `raise ExceptionType("msg") from CauseType("cause")` —

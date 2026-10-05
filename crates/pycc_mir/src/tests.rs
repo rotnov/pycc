@@ -29,6 +29,7 @@ mod matching;
 mod narrow;
 mod obj_bind;
 mod obj_call;
+mod obj_raise;
 mod protocol;
 mod receiver_class_call;
 mod scope;
