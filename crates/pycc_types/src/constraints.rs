@@ -2048,15 +2048,15 @@ pub(crate) fn collect_expr_constraints(
                     signatures, parents, concrete, deferred, &scoped, sub,
                 )?;
             }
-            // A set comprehension's container term is chosen by
-            // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
-            // rule. The element is the last body expression (`body_exprs`
-            // puts the condition first).
             // Part 1 of #1255: a comprehension over a CPython object
             // produces a CPython object, whatever its element.
             if let CompIter::Iterable(_) = comp.iter {
                 return Ok(Some(Ok(Ty::Object)));
             }
+            // A set comprehension's container term is chosen by
+            // [`set_comp::set_comp_container`] (#1343, #1344), which owns the
+            // rule. The element is the last body expression (`body_exprs`
+            // puts the condition first).
             if let CompElt::Set(_) = comp.elt {
                 return Ok(Some(set_comp::set_comp_container(
                     elt_term, parents, concrete, deferred,
