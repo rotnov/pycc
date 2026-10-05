@@ -74,7 +74,7 @@ fn a_defaulted_method_runs_natively_when_every_argument_is_passed() {
 }
 
 #[test]
-fn a_short_in_module_constructor_call_keeps_its_arity_error() {
+fn a_short_constructor_call_keeps_its_arity_error_and_a_method_call_reports_the_range() {
     for (tail, message) in [
         ("S()\n", "`S` expects 2 argument(s), got 0"),
         ("S(1)\n", "`S` expects 2 argument(s), got 1"),
