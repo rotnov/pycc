@@ -75,6 +75,17 @@ fn nested_shapes_are_walked_for_receiver_uses() {
     assert!(!facts.bare_use);
 }
 
+/// #1395: every part of a conditional expression is walked.
+#[test]
+fn every_part_of_a_conditional_expression_is_walked() {
+    let source = "class A:\n    def __init__(self) -> None:\n        self.a = 1\n        \
+                  self.b = 2\n        self.c = True\n    \
+                  def f(self) -> int:\n        return self.a if self.c else self.b\n";
+    let (facts, _) = walk(source, "A.f", Some("self"));
+    assert_eq!(facts.self_refs, set(&["a", "b", "c"]));
+    assert!(!facts.bare_use);
+}
+
 #[test]
 fn merging_unions_every_fact() {
     let mut a = BodyFacts {

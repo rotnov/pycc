@@ -291,6 +291,13 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
             collect_named_expr_targets_in_expr(left, killed);
             collect_named_expr_targets_in_expr(right, killed);
         }
+        // #1395: every part is walked, like `BoolOp`'s operands, although
+        // lowering admits a walrus only in `test`: conservative.
+        HirExpr::IfExp { test, body, orelse } => {
+            collect_named_expr_targets_in_expr(test, killed);
+            collect_named_expr_targets_in_expr(body, killed);
+            collect_named_expr_targets_in_expr(orelse, killed);
+        }
         // Every chain operand is walked, like `BoolOp`'s: conservative.
         HirExpr::CompareChain { first, links } => {
             collect_named_expr_targets_in_expr(first, killed);

@@ -898,10 +898,11 @@ whole past the first layer, so this list is a **lower bound**.
 | `{s for s in states[state].keys() if s.isupper()}` (79) | `C0001` comprehension iterable | #1255 |
 | `raise UnexpectedToken(token, expected, state=self, ...)` (80); `is`/`==`/`!=` on objects (82, 84, 104, 108); `value_stack[-size:]` (95); `del ...[-size:]` (96-97); `callbacks[...](...)` (88, 101, misdiagnosed as a generic-class argument) | `T0021` / `C0001` / `T0033` | [#1371](https://github.com/rotnov/pycc/issues/1371) |
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
+| the conditional expression `x if c else y` (64, 88, 101) | cleared: `C0001` before #1395; the node now compiles, with both branches and the condition CPython objects (an `--ext` probe of the three shapes, with each line's other constructs replaced, runs under CPython 3.14.7, `tests/issue_1395_if_exp.rs`). The lines' other constructs stay in their own rows: `deepcopy`/`copy` of an object argument (64, `I0404` passing an `object` argument to a CPython object's call), `not in` on an object (88, #1371) and `callbacks[...](...)` (88, 101, #1371) | [#1395](https://github.com/rotnov/pycc/issues/1395) |
 
-Fourteen rows are listed. #1366 has cleared the relative-import row,
-Part 1 of #1138 the line-7 row out of package, and #1378 the `typing` import
-row, so eleven remain. Two of them are boundary questions inside the subject
+Fifteen rows are listed. #1366 has cleared the relative-import row,
+Part 1 of #1138 the line-7 row out of package, #1378 the `typing` import
+row, and #1395 the conditional-expression row, so eleven remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by

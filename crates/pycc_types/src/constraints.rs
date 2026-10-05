@@ -1008,6 +1008,40 @@ pub(crate) fn collect_expr_constraints(
                 _ => Ok(None),
             }
         }
+        // #1395: `body if test else orelse`. `test` is collected for its
+        // own constraints only; its type does not reach the result. Two
+        // concrete branch types take the one join rule `pycc_types::if_exp`
+        // and `pycc_mir` also use, and a pair with no join yields no term,
+        // so `infer_expr_in` reports the `T0021`. A branch that is still an
+        // inference variable is unified with the other branch, inferring
+        // only the equal-type case -- except against `None`, which would
+        // bind the variable to `None` where the join means `T | None`, so
+        // that pair yields no term.
+        HirExpr::IfExp { test, body, orelse } => {
+            collect_expr_constraints(signatures, parents, concrete, deferred, env, test)?;
+            let body =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, body)?;
+            let orelse =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, orelse)?;
+            match (body, orelse) {
+                (Some(Ok(body)), Some(Ok(orelse))) => {
+                    Ok(pycc_hir::if_exp_result_ty(&body, &orelse).map(Ok))
+                }
+                (Some(Ok(Ty::None)), _) | (_, Some(Ok(Ty::None))) => Ok(None),
+                (Some(body), Some(orelse)) => {
+                    unify_terms(
+                        body.clone(),
+                        orelse,
+                        parents,
+                        concrete,
+                        "T0021",
+                        "conditional expression branches",
+                    )?;
+                    Ok(Some(body))
+                }
+                _ => Ok(None),
+            }
+        }
         // #603 (Part 2 of #573). An operand whose type is already concrete
         // is typed directly by `unary_result_type`, so a bad operand keeps
         // the unary diagnostic ("unary operator USub is not defined for
@@ -2069,6 +2103,12 @@ fn bind_named_expr_targets(
         | HirExpr::BoolOp { left, right, .. } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, left)?;
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, right)
+        }
+        HirExpr::IfExp { test, body, orelse } => {
+            for part in [test, body, orelse] {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, part)?;
+            }
+            Ok(())
         }
         HirExpr::CompareChain { first, links } => {
             for operand in pycc_hir::compare_chain_operands(first, links) {

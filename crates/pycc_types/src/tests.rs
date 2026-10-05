@@ -35,6 +35,7 @@ mod generic_class_substitution;
 mod generic_method_dedup;
 mod generic_method_instantiation;
 mod generic_monomorphization_arms;
+mod if_exp;
 mod import_alias;
 mod init_rank;
 mod optional_narrowing;

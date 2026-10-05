@@ -70,7 +70,7 @@ impl<'ctx> Emitter<'_, 'ctx> {
         )
     }
 
-    fn truth(&self, scalar: Scalar<'ctx>) -> IntValue<'ctx> {
+    pub(super) fn truth(&self, scalar: Scalar<'ctx>) -> IntValue<'ctx> {
         truthy(self.context, self.builder, self.module, self.rt, scalar)
     }
 
@@ -260,7 +260,7 @@ fn arm_value<'ctx>(
 /// `scalar` (the value of `source`) retained or incref'd when `source` is a
 /// borrowed read, then converted to `ty`. The retain is decided before the
 /// conversion, on `source`'s own shape.
-fn owned_value<'ctx>(
+pub(super) fn owned_value<'ctx>(
     emitter: &Emitter<'_, 'ctx>,
     source: &MirExpr,
     scalar: Scalar<'ctx>,
@@ -283,7 +283,7 @@ fn payload_scalar<'ctx>(inner: &Ty, payload: BasicValueEnum<'ctx>) -> Scalar<'ct
 }
 
 /// The LLVM value a `Scalar` carries.
-fn basic_value(scalar: Scalar<'_>) -> BasicValueEnum<'_> {
+pub(super) fn basic_value(scalar: Scalar<'_>) -> BasicValueEnum<'_> {
     match scalar {
         Scalar::Int(v) | Scalar::Bool(v) => v.into(),
         Scalar::Float(v) => v.into(),
