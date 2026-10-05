@@ -127,31 +127,73 @@ fn a_keyword_call_of_a_non_object_keeps_the_c0001() {
     refused("missing.m(k=1)\n", "C0001", KEYWORD);
 }
 
-/// The monomorphization walkers reach both halves of a keyword call: a
-/// generic-function call, a generic-class instantiation and a
-/// protocol-parameter call in the positional half or a keyword value are
-/// each rewritten or collected, in every call shape.
+/// The monomorphization walkers reach both halves of a keyword call. They
+/// run only on the build path (`check_and_resolve_all`; `check_all`
+/// validates without monomorphizing), and only on a module that declares a
+/// generic function, generic class or protocol parameter. That pass binds
+/// no foreign *module-level* name -- a positional call of one in such a
+/// module is already refused there (`T0021` "call to undefined function"),
+/// a gap that predates Part 8 -- so a keyword call of one is walked and
+/// then refused, which the first loop pins.
 #[test]
 fn the_generic_and_protocol_walkers_reach_a_keyword_call() {
+    let walked = |tail: &str| -> Vec<pycc_diag::Diagnostic> {
+        let source = format!("{HEAD}{tail}");
+        crate::check_and_resolve_all(&lower_all_foreign(&source))
+            .expect_err("a monomorphizing module binds no foreign name")
+    };
     let ident = "def ident[T](x: T) -> T:\n    return x\n\n\n";
-    admitted(&format!("{ident}product(ident(1), repeat=ident(2))\n"));
-    admitted(&format!(
-        "{ident}s = builtins.str(\"a,b\")\nt = s.split(ident(\",\"), maxsplit=ident(1))\n"
-    ));
-    admitted(&format!(
-        "{ident}builtins.__dict__[ident(\"int\")](\"11\", base=ident(2))\n"
-    ));
-    admitted(
+    for (tail, code) in [
+        (format!("{ident}product(ident(1), repeat=ident(2))\n"), "C0001"),
+        (
+            format!("{ident}s = builtins.str(\"a,b\")\nt = s.split(ident(\",\"), maxsplit=1)\n"),
+            "T0021",
+        ),
+        (
+            format!("{ident}builtins.__dict__[ident(\"int\")](\"11\", base=ident(2))\n"),
+            "T0021",
+        ),
+        (
         "class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\n    \
          def n(self) -> int:\n        return 1\n\n\n\
-         product(Box[int](1).n(), repeat=Box[int](2).n())\n",
-    );
-    admitted(
+         product(Box[int](1).n(), repeat=Box[int](2).n())\n"
+            .to_string(),
+        "C0001",
+        ),
+        (
         "from typing import Protocol\n\n\nclass P(Protocol):\n    def m(self) -> int: ...\n\n\n\
          class C:\n    def m(self) -> int:\n        return 1\n\n\n\
-         def use(p: P) -> int:\n    return p.m()\n\n\n\
-         product(use(C()), repeat=use(C()))\n",
-    );
+         def use(p: P) -> int:\n    product(p.m(), repeat=p.m())\n    return p.m()\n\n\n\
+         print(use(C()))\n"
+            .to_string(),
+        "C0001",
+        ),
+    ] {
+        let diagnostics = walked(&tail);
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code).collect();
+        assert_eq!(codes, vec![code], "{tail:?}: {diagnostics:#?}");
+    }
+    // An `object`-annotated parameter *is* bound in that pass, so a keyword
+    // call on one is walked and admitted: under a generic call, and in a
+    // protocol-parameter function's specialization.
+    for tail in [
+        format!(
+            "from collections import OrderedDict\n{ident}\
+             def f(o: OrderedDict) -> None:\n    \
+             print(o.setdefault(ident(\"a\"), default=ident(1)))\n"
+        ),
+        "from collections import OrderedDict\nfrom typing import Protocol\n\n\n\
+         class P(Protocol):\n    def m(self) -> int: ...\n\n\n\
+         class C:\n    def m(self) -> int:\n        return 1\n\n\n\
+         def use(p: P, o: OrderedDict) -> int:\n    \
+         print(o.setdefault(p.m(), default=p.m()))\n    return p.m()\n\n\n\
+         def g(o: OrderedDict) -> int:\n    return use(C(), o)\n"
+            .to_string(),
+    ] {
+        let source = format!("{HEAD}{tail}");
+        crate::check_and_resolve_all(&lower_all_foreign(&source))
+            .unwrap_or_else(|diagnostics| panic!("{source:?}: {diagnostics:#?}"));
+    }
 }
 
 /// A generic function's body is walked for calls to generic functions into
@@ -177,4 +219,23 @@ fn only_a_call_shape_calls_an_object() {
         &[],
         &pycc_hir::HirExpr::IntLiteral(1)
     ));
+}
+
+/// The generic-call rewrite walks only the three call shapes HIR wraps; any
+/// other positional half is a front-end defect.
+#[test]
+#[should_panic(expected = "a keyword call never wraps")]
+fn the_generic_call_rewrite_refuses_a_malformed_keyword_call() {
+    let mut expr = pycc_hir::HirExpr::KeywordCall {
+        call: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
+        keywords: Vec::new(),
+        span: pycc_diag::Span::new(0, 0),
+    };
+    let _ = crate::monomorphize::rewrite_generic_calls_in_expr(
+        &mut crate::Environment::new(),
+        &[],
+        &mut expr,
+        &mut Vec::new(),
+        &mut std::collections::HashSet::new(),
+    );
 }
