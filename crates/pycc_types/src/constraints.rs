@@ -432,6 +432,8 @@ fn inference_conflict(
         );
     };
     let actual = if left == *declared { right } else { left };
+    let help = crate::foreign::object_into_scalar_help(&actual, declared)
+        .unwrap_or_else(|| format!("return a `{}` value", declared.name()));
     Diagnostic::error(
         code,
         format!(
@@ -441,7 +443,7 @@ fn inference_conflict(
         ),
         Span::new(0, 0),
     )
-    .with_help(format!("return a `{}` value", declared.name()))
+    .with_help(help)
 }
 
 pub(crate) fn unify_terms(

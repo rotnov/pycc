@@ -1100,7 +1100,7 @@ pub(crate) fn annotation_initializer_mismatch(
             annotation.name()
         ),
         Span::new(0, 0),
-    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name()))
+    ).with_help(foreign::object_into_scalar_help(inferred, annotation).unwrap_or_else(|| format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name())))
 }
 
 /// The canonical PEP 591 `T0045`: a second assignment to a `Final` name.
@@ -2977,21 +2977,25 @@ fn check_stmt_in_function(
                 }
                 // #380 (PR-20): if the mismatch involves a protocol,
                 // produce a detailed T0046 conformance error.
-                let diag =
-                    if matches!(return_ty, Ty::Protocol(_)) || matches!(actual, Ty::Protocol(_)) {
-                        class::assignable_error(env, &actual, &return_ty)
-                    } else {
-                        Diagnostic::error(
-                            "T0022",
-                            format!(
-                                "expected return type `{}`, got `{}`",
-                                return_ty.name(),
-                                actual.name()
-                            ),
-                            Span::new(0, 0),
-                        )
-                        .with_help(format!("return a `{}` value", return_ty.name()))
-                    };
+                let diag = if matches!(return_ty, Ty::Protocol(_))
+                    || matches!(actual, Ty::Protocol(_))
+                {
+                    class::assignable_error(env, &actual, &return_ty)
+                } else {
+                    Diagnostic::error(
+                        "T0022",
+                        format!(
+                            "expected return type `{}`, got `{}`",
+                            return_ty.name(),
+                            actual.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(
+                        foreign::object_into_scalar_help(&actual, &return_ty)
+                            .unwrap_or_else(|| format!("return a `{}` value", return_ty.name())),
+                    )
+                };
                 return Err(diag);
             }
             // PEP 695 (#387): `is_assignable`'s `from == Ty::Param` clause

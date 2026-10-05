@@ -109,6 +109,119 @@ fn a_rich_comparison_on_an_object_is_an_object_not_a_bool() {
     }
 }
 
+/// #1419: a `bool` slot keeps refusing an object comparison -- pycc does
+/// not coerce it with `PyObject_IsTrue` (D-258's #1419 amendment) -- and
+/// the refusal's `help` names the explicit `bool(...)` conversion. Every
+/// `bool` slot is covered: a `-> bool` return (module function and
+/// method), an annotated binding at module level and in a function, and an
+/// `and` whose operand is an object comparison.
+#[test]
+fn a_bool_slot_refuses_an_object_comparison_and_suggests_bool() {
+    const HELP: &str = "a CPython object reaches a `bool` slot only through an explicit conversion: wrap the value in `bool(...)`";
+    for (source, code, phrase) in [
+        (
+            "def f() -> bool:\n    o = numpy.pi\n    return o == 1\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "def f() -> bool:\n    return numpy.pi != numpy.e\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "class C:\n    def eq(self) -> bool:\n        return numpy.pi < 4\n",
+            "T0022",
+            "expected `bool`, found `object`",
+        ),
+        (
+            "b: bool = numpy.pi == 1\n",
+            "T0025",
+            "cannot assign `object` to `b: bool`",
+        ),
+        (
+            "def f() -> None:\n    b: bool = numpy.pi >= 1\n",
+            "T0025",
+            "cannot assign `object` to `b: bool`",
+        ),
+    ] {
+        let diagnostics = check_foreign(source).expect_err(source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?} for {source}");
+        assert_eq!(diagnostics[0].code, code, "{diagnostics:?} for {source}");
+        assert!(
+            diagnostics[0].message.contains(phrase),
+            "{diagnostics:?} for {source}"
+        );
+        assert_eq!(
+            diagnostics[0].help.as_deref(),
+            Some(HELP),
+            "{diagnostics:?} for {source}"
+        );
+    }
+    // An `and`/`or` with an object comparison operand is not coerced
+    // either: it keeps its own `I0404` until #1423, whatever slot holds it.
+    assert_refused(
+        "def f(n: int) -> bool:\n    return n == 1 and numpy.pi == n\n",
+        "I0404",
+        "as an `and` operand",
+    );
+}
+
+/// The same `help` names the matching conversion for each of the other
+/// three scalar slots, and stays the generic one for a non-scalar slot or
+/// a non-object value.
+#[test]
+fn an_object_into_a_scalar_slot_names_that_scalar_s_conversion() {
+    for (source, help) in [
+        (
+            "def f() -> int:\n    return numpy.pi\n",
+            "a CPython object reaches a `int` slot only through an explicit conversion: wrap the value in `int(...)`",
+        ),
+        (
+            "def f() -> float:\n    return numpy.pi\n",
+            "a CPython object reaches a `float` slot only through an explicit conversion: wrap the value in `float(...)`",
+        ),
+        (
+            "s: str = numpy.pi\n",
+            "a CPython object reaches a `str` slot only through an explicit conversion: wrap the value in `str(...)`",
+        ),
+        (
+            "def f() -> list[int]:\n    return numpy.pi\n",
+            "return a `list[int]` value",
+        ),
+        ("def f() -> bool:\n    return 1\n", "return a `bool` value"),
+        (
+            "b: bool = 1\n",
+            "change the value to `bool` (the expected/declared type), or the declaration/annotation to `int` (the actual type)",
+        ),
+    ] {
+        let diagnostics = check_foreign(source).expect_err(source);
+        assert_eq!(
+            diagnostics[0].help.as_deref(),
+            Some(help),
+            "{diagnostics:?} for {source}"
+        );
+    }
+}
+
+/// The helper itself: only an object value into one of the four scalar
+/// slots gets the conversion `help`.
+#[test]
+fn object_into_scalar_help_covers_every_pair_shape() {
+    use crate::foreign::object_into_scalar_help;
+    use pycc_hir::Ty;
+    for scalar in [Ty::Bool, Ty::Int, Ty::Float, Ty::Str] {
+        let help = object_into_scalar_help(&Ty::Object, &scalar).expect("scalar slot");
+        assert!(
+            help.ends_with(&format!("`{}(...)`", scalar.name())),
+            "{help}"
+        );
+        assert_eq!(object_into_scalar_help(&Ty::Int, &scalar), None);
+    }
+    assert_eq!(object_into_scalar_help(&Ty::Object, &Ty::Object), None);
+    assert_eq!(object_into_scalar_help(&Ty::Object, &Ty::None), None);
+}
+
 #[test]
 fn a_rich_comparison_with_an_unpackable_operand_is_refused() {
     assert_refused(
