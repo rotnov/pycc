@@ -1974,6 +1974,16 @@ pub(crate) fn collect_expr_constraints(
             }
             Ok(object_lift::method_call_on_object(callee_term.as_ref()))
         }
+        // #1411: `type(self)(args)` constructs the class `self` is typed
+        // as, so its term is `self`'s own; an unbound `self` (a
+        // `@classmethod` or `@staticmethod`) offers none and the check
+        // phase refuses the call (`class::receiver_class_call`).
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args {
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, arg)?;
+            }
+            Ok(env.bindings.get("self").cloned())
+        }
         // #433: `Super` carries no sub-expressions to recurse into and
         // produces no unification term — it is a compile-time marker only
         // meaningful as the base of a `MethodCall`/`AttrGet`, which the
@@ -2221,6 +2231,12 @@ fn bind_named_expr_targets(
         }
         HirExpr::ExprCall { callee, args } => {
             bind_named_expr_targets(signatures, parents, concrete, deferred, env, callee)?;
+            for arg in args {
+                bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 bind_named_expr_targets(signatures, parents, concrete, deferred, env, arg)?;
             }

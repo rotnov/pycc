@@ -691,6 +691,11 @@ pub(crate) fn collect_named_expr_names_in_expr<'a>(expr: &'a HirExpr, names: &mu
                 collect_named_expr_names_in_expr(arg, names);
             }
         }
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args {
+                collect_named_expr_names_in_expr(arg, names);
+            }
+        }
     }
 }
 
@@ -1417,6 +1422,12 @@ fn collect_named_expr_bindings(
         }
         HirExpr::ExprCall { callee, args } => {
             collect_named_expr_bindings(env, local_names, callee)?;
+            for arg in args {
+                collect_named_expr_bindings(env, local_names, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_bindings(env, local_names, arg)?;
             }
@@ -3829,6 +3840,12 @@ fn reject_generic_calls_in_expr(
         }
         HirExpr::ExprCall { callee, args } => {
             reject_generic_calls_in_expr(module_env, own_name, callee)?;
+            for arg in args {
+                reject_generic_calls_in_expr(module_env, own_name, arg)?;
+            }
+            Ok(())
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 reject_generic_calls_in_expr(module_env, own_name, arg)?;
             }

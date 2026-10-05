@@ -822,6 +822,12 @@ pub(crate) fn rewrite_generic_calls_in_expr(
             }
             infer_expr_in(env, local_names, expr)
         }
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args.iter_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
         // Issue #1188: rewrite inside the wrapped method call exactly as the
         // `MethodCall` arm does, but infer the *whole* node, so the result
         // follows the receiver's reading -- inferring `call` alone would
@@ -1379,6 +1385,11 @@ pub(crate) fn collect_generic_class_instantiations_from_expr(
         }
         HirExpr::ExprCall { callee, args } => {
             collect_generic_class_instantiations_from_expr(callee, out);
+            for arg in args {
+                collect_generic_class_instantiations_from_expr(arg, out);
+            }
+        }
+        HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_generic_class_instantiations_from_expr(arg, out);
             }
@@ -2769,6 +2780,19 @@ fn rewrite_protocol_calls_in_expr(
         // Part 2a of #1371: like `IfExp` above, without this arm the
         // `_ => {}` catch-all below would leave a protocol-typed call in the
         // arguments of `table[k](args)` unspecialized.
+        // #1411: likewise for the constructor arguments of `type(self)(...)`.
+        HirExpr::ReceiverClassCall { args } => {
+            for arg in args.iter_mut() {
+                rewrite_protocol_calls_in_expr(
+                    arg,
+                    protocol_funcs,
+                    env,
+                    local_names,
+                    specializations,
+                    seen,
+                );
+            }
+        }
         HirExpr::ExprCall { callee, args } => {
             for part in std::iter::once(callee.as_mut()).chain(args.iter_mut()) {
                 rewrite_protocol_calls_in_expr(

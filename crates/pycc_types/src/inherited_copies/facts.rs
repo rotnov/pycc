@@ -389,6 +389,16 @@ impl<'a> Walker<'a> {
                     self.expr(arg);
                 }
             }
+            // #1411: `type(self)(...)` constructs through the receiver
+            // exactly as `cls(...)` does, so a subclass needs its own copy.
+            HirExpr::ReceiverClassCall { args } => {
+                if self.receiver.is_some() {
+                    self.facts.constructs_via_receiver = true;
+                }
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
             HirExpr::NamedExpr { name, value } => {
                 self.name_use(name);
                 self.expr(value);

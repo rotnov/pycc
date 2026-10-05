@@ -1714,6 +1714,9 @@ pub(crate) fn infer_expr_in(
         HirExpr::ExprCall { callee, args } => {
             crate::foreign::subscript_call::infer_expr_call(env, local_names, callee, args)
         }
+        HirExpr::ReceiverClassCall { args } => {
+            class::infer_receiver_class_call(env, local_names, args)
+        }
         HirExpr::GenericClassInstantiate { class, .. } => {
             // Verify the class exists. Genericity (the class has a type
             // parameter) is checked later during monomorphization's rewrite
