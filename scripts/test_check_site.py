@@ -125,6 +125,8 @@ class BuildTests(SiteTestCase):
             "<code>a&lt;b&gt;</code> t x &lt;y&gt;",
         )
         self.assertEqual(build_site.inline_markdown("[`x`](u)"), "<code>x</code>")
+        self.assertEqual(build_site.inline_markdown("`list[int]()`"), "<code>list[int]()</code>")
+        self.assertEqual(build_site.inline_markdown("[a **b**](u) `c`"), "a b <code>c</code>")
 
     def test_roadmap_without_milestone_fails(self) -> None:
         with self.assertRaisesRegex(build_site.BuildError, "Current milestone"):

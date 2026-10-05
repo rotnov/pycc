@@ -48,22 +48,31 @@ class BuildError(Exception):
     """Raised when the repository data cannot produce the site."""
 
 
+INLINE_TOKEN_RE = re.compile(r"`[^`]*`|\[((?:[^\]`]|`[^`]*`)*)\]\([^)]*\)")
+
+
 def inline_markdown(text: str) -> str:
     """Render the small inline-Markdown subset the ROADMAP table cells use.
 
-    Links keep only their text (stripped first, so a link around a code span
-    keeps the span), `code` spans become <code>, bold/italic markers are
-    dropped, and everything else is HTML-escaped.
+    One left-to-right pass: a `code` span becomes <code> with its content
+    kept verbatim (so `list[int]()` is never read as a link); a link keeps
+    only its text, rendered recursively (so a code span inside it survives);
+    elsewhere bold/italic markers are dropped. Everything is HTML-escaped.
     """
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    parts = re.split(r"(`[^`]*`)", text)
+    def plain(part: str) -> str:
+        return html.escape(part.replace("**", "").replace("__", ""))
+
     out = []
-    for part in parts:
-        if len(part) >= 2 and part.startswith("`") and part.endswith("`"):
-            out.append(f"<code>{html.escape(part[1:-1])}</code>")
-            continue
-        part = part.replace("**", "").replace("__", "")
-        out.append(html.escape(part))
+    pos = 0
+    for match in INLINE_TOKEN_RE.finditer(text):
+        out.append(plain(text[pos:match.start()]))
+        token = match.group(0)
+        if token.startswith("`"):
+            out.append(f"<code>{html.escape(token[1:-1])}</code>")
+        else:
+            out.append(inline_markdown(match.group(1)))
+        pos = match.end()
+    out.append(plain(text[pos:]))
     return "".join(out)
 
 
@@ -197,7 +206,8 @@ def build(repo_root: Path, out: Path) -> None:
         # --out (the repository root, docs/, site/) can never remove sources.
         if not (out / BUILD_MARKER).is_file():
             raise BuildError(
-                f"refusing to replace {out}: it exists and was not produced by build_site.py"
+                f"refusing to replace {out}: it exists and was not produced by "
+                "build_site.py (no .build_site marker); delete it and rerun"
             )
         shutil.rmtree(out)
     if source.resolve() in out.resolve().parents:
