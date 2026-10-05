@@ -1463,7 +1463,11 @@ other evaluates CPython's own `PyObject_RichCompare` and yields an \
 `object` result usable as a condition or printed; an identity test \
 (`is`, `is not`) compares the object with another object or `None`; and \
 `isinstance(o, C)` is admitted when `C` is `int`, `float`, `bool`, `str` \
-or itself a CPython object. Part 2a of #1371 lets a second CPython \
+or itself a CPython object; since Part 7 of #1371 also when `C` is \
+`list`, `dict` or `tuple`, or a plain class compiled in the same module, \
+which is true of the host-side instances of its published family (an \
+`--ext` class with an exported method and its published subclasses). \
+Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
 argument rule; the result is another CPython object. Part 2b of #1371 \
@@ -1486,8 +1490,8 @@ admitted when the iterable is written as an attribute load \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
 a bare imported module is iterated too, and raises CPython's own \
 `TypeError` at run time. Everything else is \
-still refused, including `isinstance` against a pycc class or a tuple of \
-classes, a comparison chain with an object link (`a < o < b`), an \
+still refused, including `isinstance` against a tuple of classes or a \
+pycc exception class, protocol, enum or generic class, a comparison chain with an object link (`a < o < b`), an \
 equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
@@ -1524,8 +1528,8 @@ this code still refuses iterating the object with `for` (Part 2 of \
 parameter would be inferred as the object and then used as a method-call \
 receiver or called reports `T0021` instead (Part 3 of #1333). The \
 refusal narrows as the later parts of #1026 (the boundary conversions) and \
-of #1371 (calls, subscripts and `raise` on an object, `isinstance` against \
-a pycc class, comparison chains over an object) land, and \
+of #1371 (calls, subscripts and `raise` on an object, comparison chains \
+over an object) land, and \
 this code is retired when they have.",
         example: "\
 import numpy

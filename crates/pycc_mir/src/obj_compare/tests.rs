@@ -2,6 +2,7 @@
 //! (Part 1 of #1371), of membership in and slices of one (Part 2b), and of
 //! deleting a slice of one (Part 2c), exercised from real HIR with `numpy` bound as a foreign import.
 
+use super::lower_object_isinstance;
 use crate::*;
 use pycc_diag::Span;
 use pycc_hir::{CmpOpKind, HirExpr, HirItem, HirModule, HirStmt, ImportBinding};
@@ -20,6 +21,14 @@ fn numpy_attr(attr: &str) -> HirExpr {
 /// The lowered form of `expr` evaluated and discarded as the single
 /// statement of a module that imports `numpy` first.
 fn lower_discarded(expr: HirExpr) -> MirExpr {
+    lower_discarded_with(expr, Vec::new())
+}
+
+/// [`lower_discarded`] in a module that also defines `class_defs`.
+fn lower_discarded_with(
+    expr: HirExpr,
+    class_defs: Vec<(String, pycc_hir::HirClassDef)>,
+) -> MirExpr {
     let hir = HirModule {
         items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(expr))],
         imports: vec![ImportBinding::Foreign {
@@ -31,7 +40,7 @@ fn lower_discarded(expr: HirExpr) -> MirExpr {
         }],
         seeded_builtin_exception_classes: false,
         type_aliases: Vec::new(),
-        class_defs: Vec::new(),
+        class_defs,
     };
     build(&hir)
         .items
@@ -137,7 +146,112 @@ fn every_builtin_class_name_maps_to_its_own_shim_selector() {
         .map(|name| ObjBuiltinClass::from_name(name).expect(name).shim_code())
         .collect();
     assert_eq!(codes, [0, 1, 2, 3]);
-    assert_eq!(ObjBuiltinClass::from_name("list"), None);
+    // Part 7 of #1371: the three container classes take the next selectors.
+    let codes: Vec<u64> = ["list", "dict", "tuple"]
+        .into_iter()
+        .map(|name| ObjBuiltinClass::from_name(name).expect(name).shim_code())
+        .collect();
+    assert_eq!(codes, [4, 5, 6]);
+    assert_eq!(ObjBuiltinClass::from_name("set"), None);
+}
+
+/// A plain (non-exception) class `name` with the MRO `mro`, cloned from a
+/// seeded definition the way `exception_isinstance_tests` builds one.
+fn plain_class(name: &str, mro: &[&str]) -> pycc_hir::HirClassDef {
+    let mut def = pycc_hir::builtin_exception_class_defs()
+        .into_iter()
+        .find(|(class, _)| class == "ValueError")
+        .expect("ValueError is seeded")
+        .1;
+    def.name = name.to_string();
+    def.bases = mro
+        .get(1)
+        .map(|base| base.to_string())
+        .into_iter()
+        .collect();
+    def.mro = mro.iter().map(|class| class.to_string()).collect();
+    def.exception_type_tag = None;
+    def
+}
+
+/// Part 7 of #1371: a class compiled in this module is carried by name,
+/// for the generated published-family test; a name that is neither a
+/// builtin nor a compiled class stays an evaluated object class.
+#[test]
+fn isinstance_against_a_compiled_class_carries_the_class_name() {
+    let lowered = lower_discarded_with(
+        isinstance(numpy_attr("pi"), HirExpr::Name("Base".to_string())),
+        vec![
+            ("Base".to_string(), plain_class("Base", &["Base", "object"])),
+            (
+                "Derived".to_string(),
+                plain_class("Derived", &["Derived", "Base", "object"]),
+            ),
+        ],
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Compiled(name),
+                ..
+            } if name == "Base"
+        ),
+        "{lowered:?}"
+    );
+    assert_eq!(lowered.ty(), Ty::Bool);
+}
+
+/// A local spelled like a compiled class shadows it: the class argument is
+/// then the evaluated local, not the published family.
+#[test]
+fn a_local_shadowing_a_compiled_class_is_an_evaluated_object_class() {
+    let classes: HashMap<String, pycc_hir::HirClassDef> =
+        [("Base".to_string(), plain_class("Base", &["Base", "object"]))]
+            .into_iter()
+            .collect();
+    let scopes = vec![[("Base".to_string(), Ty::Object)].into_iter().collect()];
+    let value = lower_discarded(numpy_attr("pi"));
+    let lowered = lower_object_isinstance(
+        value,
+        &HirExpr::Name("Base".to_string()),
+        &scopes,
+        &classes,
+        None,
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Object(_),
+                ..
+            }
+        ),
+        "{lowered:?}"
+    );
+}
+
+/// A local spelled like a builtin class shadows it in the same way.
+#[test]
+fn a_local_shadowing_a_builtin_class_is_an_evaluated_object_class() {
+    let scopes = vec![[("list".to_string(), Ty::Object)].into_iter().collect()];
+    let lowered = lower_object_isinstance(
+        lower_discarded(numpy_attr("pi")),
+        &HirExpr::Name("list".to_string()),
+        &scopes,
+        &HashMap::new(),
+        None,
+    );
+    assert!(
+        matches!(
+            &lowered,
+            MirExpr::ObjIsInstance {
+                class: ObjIsInstanceClass::Object(_),
+                ..
+            }
+        ),
+        "{lowered:?}"
+    );
 }
 
 /// A walrus can hide in either operand of a comparison, and in either

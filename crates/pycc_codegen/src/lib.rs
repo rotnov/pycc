@@ -104,11 +104,11 @@ use ext::{
     EXT_OBJ_CALL_SYMBOL, EXT_OBJ_COLLECT_SYMBOL, EXT_OBJ_CONTAINS_SYMBOL, EXT_OBJ_DELSLICE_SYMBOL,
     EXT_OBJ_ERROR_BRIDGE_SYMBOL, EXT_OBJ_FORMAT_SYMBOL, EXT_OBJ_GET_ITER_SYMBOL,
     EXT_OBJ_GETATTR_SYMBOL, EXT_OBJ_GETITEM_SYMBOL, EXT_OBJ_GETSLICE_SYMBOL, EXT_OBJ_IMPORT_SYMBOL,
-    EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL, EXT_OBJ_LEN_SYMBOL,
-    EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL, EXT_OBJ_PACK_BOOL_SYMBOL,
-    EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL, EXT_OBJ_PACK_OBJECT_SYMBOL,
-    EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL, EXT_OBJ_TO_FLOAT_SYMBOL,
-    EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
+    EXT_OBJ_ISINSTANCE_COMPILED_SYMBOL, EXT_OBJ_ISINSTANCE_SYMBOL, EXT_OBJ_ITER_NEXT_SYMBOL,
+    EXT_OBJ_LEN_SYMBOL, EXT_OBJ_NEW_COLLECTION_SYMBOL, EXT_OBJ_NONE_SYMBOL,
+    EXT_OBJ_PACK_BOOL_SYMBOL, EXT_OBJ_PACK_FLOAT_SYMBOL, EXT_OBJ_PACK_INT_SYMBOL,
+    EXT_OBJ_PACK_OBJECT_SYMBOL, EXT_OBJ_PACK_STR_SYMBOL, EXT_OBJ_RICHCOMPARE_SYMBOL,
+    EXT_OBJ_TO_FLOAT_SYMBOL, EXT_OBJ_TO_INT_SYMBOL, EXT_OBJ_TO_STR_SYMBOL, EXT_OBJ_TRUTHY_SYMBOL,
     EXT_OBJ_UNPACK_FLOAT_TUPLE_SYMBOL, ObjCollectionKind, entry_fn_name, is_module_entry_symbol,
 };
 #[cfg(test)]
@@ -3913,6 +3913,9 @@ fn emit_expr_unchecked<'ctx>(
                 }
                 pycc_mir::ObjIsInstanceClass::Builtin(builtin) => {
                     foreign_compare::IsInstanceClass::Builtin(builtin.shim_code())
+                }
+                pycc_mir::ObjIsInstanceClass::Compiled(name) => {
+                    foreign_compare::IsInstanceClass::Compiled(name.clone())
                 }
             };
             foreign_compare::emit_isinstance(context, builder, module, rt, value_scalar, class)
