@@ -876,7 +876,10 @@ for the out-of-package configuration: the same `--ext
 errors to three (rows 1 and 4), while both in-tree counts are unchanged.
 #1378 then clears row 1: the same build of the subject copied alone reports
 two errors (row 4), while the whole-package copy reports 14 (the `lark/utils.py`
-table below; the skeleton tree was not re-measured). Everything under them was measured by probes. A probe is a copy with the
+table below; the skeleton tree was not re-measured). #1394 then clears row 4: the
+same build of the subject copied alone (release build of the #1394 branch,
+based on `main` `496a64f9`) reports one error, row 5's `C0001` "type annotation `tuple` is not supported
+yet" at line 20. Everything under them was measured by probes. A probe is a copy with the
 reported lines replaced (for example, the sibling imports pointed at undotted
 stand-in modules), or a minimal module holding one construct inside a method
 body. Probes are never the workload. The subject module was never compiled
@@ -887,8 +890,8 @@ whole past the first layer, so this list is a **lower bound**.
 | `from typing import Dict, Any, Generic, List` (2) | cleared: the line compiles, since each name is registered in `typing` (the subject's own `-> Any` would still meet `T0002`, #1285 -- an inference, since the measured run never reaches it). With a debug build of the #1378 branch (on top of `main` at `6114494b`, which carries Part 1 of #1138), the same `pycc build lalr_parser_state.py -o out.abi3.so --ext` command on the module copied alone reports five errors (rows 2 and 4), and two with `--foreign-relative-imports` (row 4) | [#1378](https://github.com/rotnov/pycc/issues/1378) (Part 6 of #882) |
 | relative sibling imports (3, 4, 6) | cleared: `T0021` "attempted relative import with no known parent package" at `05bc7805`, none under `--ext --foreign-relative-imports` | [#1366](https://github.com/rotnov/pycc/issues/1366) (the flag binds them as CPython objects of the host's package, resolved from the module's own `__package__`/`__spec__` at import time; #1161's live `__name__` is not a prerequisite) |
 | `from lark.exceptions import UnexpectedToken` (7) | cleared out of package; in a package tree `lark.exceptions` is a project import (a `C0001` in a skeleton tree; in the full tree it links and the build fails in `lark/utils.py`) | #1138 (Part 1); in-tree: [#1382](https://github.com/rotnov/pycc/issues/1382) |
-| `class ...(Generic[StateT])` (11, 32) | `C0001` base class must be a bare name | #886 (v0.4) |
-| annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported at `05bc7805`; Part 1 of #1367 resolves them to `object` (subscripts erased), and a probe with only the `Generic[...]` bases removed moves its first diagnostic from this row (line 14) to line 20, where `Dict[StateT, Dict[str, tuple]]` now resolves `StateT` and stops at the bare `tuple`; the whole subject still reports row 4's two errors. Still refused: the `__init__` assignments from non-parameter expressions (25-27, 43-44, [#1388](https://github.com/rotnov/pycc/issues/1388)) and `ParseConf[StateT]`, an attribute holding a pycc class instance (35, 40-41, [#1389](https://github.com/rotnov/pycc/issues/1389)) | [#1367](https://github.com/rotnov/pycc/issues/1367) (Part 1); [#1388](https://github.com/rotnov/pycc/issues/1388), [#1389](https://github.com/rotnov/pycc/issues/1389) |
+| `class ...(Generic[StateT])` (11, 32) | cleared: two `C0001` "a base class must be a bare name" at `496a64f9`; a `Generic[...]` base over type variables is erased, and the same `--ext --foreign-relative-imports` build of the module copied alone (release build of the #1394 branch, based on `main` `496a64f9`) reports one error, row 5's `C0001` on the bare `tuple` at line 20 | [#1394](https://github.com/rotnov/pycc/issues/1394) (Part 1 of #886) |
+| annotations naming a foreign class: `ParseTableBase[StateT]`, `ParserCallbacks`, `LexerThread`, `StateT`, the subject's `token: Token` (14-22, 35-40, 47, 67) | `C0001` type annotation not supported at `05bc7805`; Part 1 of #1367 resolves them to `object` (subscripts erased), and a probe with only the `Generic[...]` bases removed moves its first diagnostic from this row (line 14) to line 20, where `Dict[StateT, Dict[str, tuple]]` now resolves `StateT` and stops at the bare `tuple`; since #1394 cleared row 4, the whole subject reports exactly that error. Still refused: the `__init__` assignments from non-parameter expressions (25-27, 43-44, [#1388](https://github.com/rotnov/pycc/issues/1388)) and `ParseConf[StateT]`, an attribute holding a pycc class instance (35, 40-41, [#1389](https://github.com/rotnov/pycc/issues/1389)) | [#1367](https://github.com/rotnov/pycc/issues/1367) (Part 1); [#1388](https://github.com/rotnov/pycc/issues/1388), [#1389](https://github.com/rotnov/pycc/issues/1389) |
 | method parameter defaults, the subject's own `is_end: bool = False` included (40, 59, 67) | `C0001` default parameter values | #1140 |
 | `__eq__(self, other)`: its only faithful annotation is `object`, which Part 1 of #1367 leaves unspellable (51) | `T0021` cannot infer parameter | #1367 (Part 3, [#1387](https://github.com/rotnov/pycc/issues/1387)) |
 | `-> 'ParserState[StateT]'` string forward reference (59) | `C0001` | #889 (v0.4) |
@@ -900,8 +903,8 @@ whole past the first layer, so this list is a **lower bound**.
 | `.append` on an object stack (87, 88, 105, 106) | `I0404` | #1095 |
 
 Fourteen rows are listed. #1366 has cleared the relative-import row,
-Part 1 of #1138 the line-7 row out of package, and #1378 the `typing` import
-row, so eleven remain. Two of them are boundary questions inside the subject
+Part 1 of #1138 the line-7 row out of package, #1378 the `typing` import
+row, and #1394 the `Generic[...]` row, so ten remain. Two of them are boundary questions inside the subject
 module rather than missing features: #1285, and #1367's `object` spelling.
 A seventeenth row, the false `T0022` on the `while True:` loop at line 74
 (left only by `return` or `raise`), was removed by

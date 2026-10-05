@@ -161,17 +161,21 @@ pub enum StdSymbolKind {
     TypeCheckingMarker,
     /// A typing-form marker symbol (#1378): the pre-PEP 585 container
     /// aliases `typing.Dict`, `List`, `Set`, `FrozenSet`, `Tuple`, plus
-    /// `typing.Any` and `typing.Generic`. Like `Final`, the container
+    /// `typing.Any`, `typing.Generic` and (#1394) `typing.TypeVar`. Like
+    /// `Final`, the container
     /// aliases and `Any` are resolved by their bare spelling in annotation
     /// position (`pycc_hir::func::annotation_to_ty` lowers `Dict[K, V]` as
     /// `dict[K, V]`, and `Any` keeps its by-design `T0002`) whether or not
     /// this registry entry exists; registering the symbols here only makes
     /// `from typing import Dict, List, Any, Generic, ...` itself resolve
-    /// instead of failing with `C0002`. `Generic` is import-only: nothing
-    /// resolves it by spelling, and a `Generic` base keeps the unknown-base
-    /// `C0001`. None of them is a first-class value -- referencing one as
-    /// a value or calling it is rejected by the type checker with its own
-    /// "typing construct" message.
+    /// instead of failing with `C0002`. `Generic` and `TypeVar` are never
+    /// resolved by spelling, only through the import binding (Part 1 of
+    /// #886, #1394): `pycc_hir` erases a `Generic[T, ...]` base whose
+    /// arguments are type variables, and a module-level `T = TypeVar("T")`
+    /// statement is a compile-time-only declaration. None of them is a
+    /// first-class value -- referencing one as a value or calling it
+    /// anywhere else is rejected by the type checker with its own "typing
+    /// construct" message.
     TypingFormMarker,
 }
 
@@ -313,6 +317,11 @@ const REGISTRY: &[StdSymbol] = &[
     StdSymbol {
         module: StdModule::Typing,
         name: "Generic",
+        kind: StdSymbolKind::TypingFormMarker,
+    },
+    StdSymbol {
+        module: StdModule::Typing,
+        name: "TypeVar",
         kind: StdSymbolKind::TypingFormMarker,
     },
 ];
@@ -539,11 +548,11 @@ mod tests {
 
     #[test]
     fn resolve_symbol_rejects_unregistered_symbol_in_typing_module() {
-        assert_eq!(resolve_symbol(StdModule::Typing, "TypeVar"), None);
         assert_eq!(resolve_symbol(StdModule::Typing, "Callable"), None);
+        assert_eq!(resolve_symbol(StdModule::Typing, "AnyStr"), None);
     }
 
-    const TYPING_FORM_NAMES: [&str; 7] = [
+    const TYPING_FORM_NAMES: [&str; 8] = [
         "Dict",
         "List",
         "Set",
@@ -551,6 +560,7 @@ mod tests {
         "Tuple",
         "Any",
         "Generic",
+        "TypeVar",
     ];
 
     #[test]
