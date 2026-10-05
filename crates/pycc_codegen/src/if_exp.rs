@@ -2,7 +2,10 @@
 //! on the condition's truth and a phi join.
 //!
 //! 1. emit `test`, test its truth once, and release its `int` temporary (as
-//!    the `MirExpr::Not` arm and a truth-only `and`/`or` operand do);
+//!    the `MirExpr::Not` arm and a truth-only `and`/`or` operand do). A
+//!    `str` or owned `Optional[int]` condition temporary is only tested, not
+//!    released: the same accepted leak-only behaviour `boolop.rs` records,
+//!    since `release_scalar_if_int_temporary` handles only a bare `int`;
 //! 2. branch to `ifexp_body` or `ifexp_orelse`; exactly one runs;
 //! 3. each arm emits its branch and converts it to an owned value of the
 //!    node's type with [`owned_value`] (a borrowed `int`/`str` read is
@@ -13,13 +16,13 @@
 //! The result is therefore always owned, which is why
 //! `int_value_is_a_duplicate_reference` and
 //! `str_value_is_a_duplicate_reference` classify `MirExpr::IfExp` as
-//! owning. Each phi incoming block is read with `get_insert_block()`
+//! owning. Each phi incoming block is read with `current_block()`
 //! immediately before that arm's `br join`: a branch's own exception guard
 //! and a bigint retain each append blocks of their own.
 //!
-//! Neither arm holds a word across the other, and the condition's temporary
-//! is released before either branch runs, so the node pushes nothing onto
-//! `pending_int_releases`.
+//! Neither arm holds a word across the other, and the condition's `int`
+//! temporary is released before either branch runs, so the node pushes
+//! nothing onto `pending_int_releases`.
 
 use super::boolop::{Emitter, basic_value, owned_value};
 use super::{Scalar, release_scalar_if_int_temporary, ty_to_basic_type};
