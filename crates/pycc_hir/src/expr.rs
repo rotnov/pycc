@@ -629,9 +629,10 @@ pub(crate) fn lower_expr(
                 );
             }
             // #1411: `type(self)(args)` -- `receiver_class_call` owns the rule.
-            if receiver_class_call::is_type_call_callee(call) {
+            if let Some(inner) = receiver_class_call::type_call_callee(call) {
                 return receiver_class_call::lower(
                     call,
+                    inner,
                     in_function,
                     class_name,
                     imports,

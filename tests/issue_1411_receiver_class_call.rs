@@ -127,6 +127,32 @@ fn the_receivers_class_is_constructed_wherever_the_call_sits() {
     );
 }
 
+/// The arguments are ordinary expressions: a walrus in an `if` condition, a
+/// generic function call, a generic class instantiation and a call through
+/// a protocol-typed parameter. A `@staticmethod` whose parameter named
+/// `self` is typed as the class constructs that class.
+#[test]
+fn the_arguments_are_ordinary_expressions() {
+    assert_prints(
+        "1411_args",
+        "from __future__ import annotations\nfrom typing import Protocol\n\
+         def ident[T](x: T) -> T:\n    return x\n\
+         class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\
+         class HasN(Protocol):\n    def get(self) -> int: ...\n\
+         class G:\n    def get(self) -> int:\n        return 7\n\
+         def use(h: HasN) -> int:\n    return h.get()\n\
+         class A:\n    def __init__(self, n: int) -> None:\n        self.n = n\n\
+         \x20   def walrus(self) -> int:\n\
+         \x20       if type(self)((k := self.n + 1)).n > 0:\n            return k\n        return 0\n\
+         \x20   def generic(self) -> int:\n\
+         \x20       return type(self)(ident(self.n)).n + type(self)(Box[int](self.n + 1).v).n\n\
+         \x20   def proto(self) -> int:\n        return type(self)(use(G())).n\n\
+         \x20   @staticmethod\n    def make(self: A) -> int:\n        return type(self)(self.n * 2).n\n\
+         a = A(4)\nprint(a.walrus(), a.generic(), a.proto(), A.make(a))\n",
+        "5 9 7 8\n",
+    );
+}
+
 /// Every `type(...)(...)` but `type(self)(...)` in an instance method is
 /// refused with a message naming the construct.
 #[test]
@@ -180,8 +206,9 @@ fn every_other_type_call_shape_is_refused_by_name() {
     }
 }
 
-/// The constructor's own rules apply unchanged: a wrong argument is the
-/// ordinary constructor `T0021`.
+/// A wrong argument is the ordinary constructor `T0021`. An omitted
+/// defaulted constructor argument is not filled in (`docs/TYPE_SYSTEM.md`),
+/// so it is refused as a short call although CPython accepts it.
 #[test]
 fn a_wrong_constructor_argument_is_refused() {
     let rendered = check_fails(
@@ -191,6 +218,35 @@ fn a_wrong_constructor_argument_is_refused() {
     assert!(rendered.contains("\"T0021\""), "{rendered}");
     assert!(
         rendered.contains("argument 1 of `A` expects `int`, got `str`"),
+        "{rendered}"
+    );
+    let rendered = check_fails(
+        "1411_default_arg",
+        "class A:\n    def __init__(self, n: int, k: int = 0) -> None:\n        \
+         self.n = n\n        self.k = k\n    def m(self) -> int:\n        \
+         return type(self)(1).n\nprint(A(1).m())\n",
+    );
+    assert!(rendered.contains("\"T0021\""), "{rendered}");
+    assert!(
+        rendered.contains("`A` expects 2 argument(s), got 1"),
+        "{rendered}"
+    );
+}
+
+/// A generic function's body may not call another generic function, and a
+/// method of a generic class is one: the call in `type(self)(...)`'s
+/// arguments is found and refused like any other.
+#[test]
+fn a_generic_call_in_a_generic_method_is_refused() {
+    let rendered = check_fails(
+        "1411_generic_body",
+        "def ident[T](x: T) -> T:\n    return x\n\
+         class Box[T]:\n    def __init__(self, v: T) -> None:\n        self.v = v\n\
+         \x20   def m(self, x: T) -> T:\n        return type(self)(ident(x)).v\n",
+    );
+    assert!(rendered.contains("\"T0042\""), "{rendered}");
+    assert!(
+        rendered.contains("generic function `Box.m` calls generic function `ident`"),
         "{rendered}"
     );
 }

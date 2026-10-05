@@ -15,9 +15,9 @@
 //! the source name (`class::receiver`), and that module's guard already
 //! refuses any mention of `self` in such a body; `type(this)(...)` is
 //! refused here as "not the receiver". Lowering has no method-kind
-//! information, so a `@staticmethod` or `@classmethod` body is refused by
-//! `pycc_types` instead, where `self` is not bound to an instance of a
-//! class, as is a module whose own binding shadows the builtin `type`.
+//! information, so `pycc_types` decides a `@staticmethod` or `@classmethod`
+//! body by `self`'s type instead (refused unless `self` is an instance of a
+//! class), and refuses a module whose own binding shadows the builtin `type`.
 //!
 //! The class is deliberately not resolved here: an inherited body is
 //! compiled once more for each subclass with `self` retyped (D-254), so the
@@ -33,24 +33,26 @@ use crate::{HirExpr, ImportBinding, unsupported};
 /// The canonical receiver name `type(...)` must be applied to.
 const RECEIVER: &str = "self";
 
-/// Whether `call`'s callee is a call of the bare name `type`, the shape this
-/// module owns.
-pub(super) fn is_type_call_callee(call: &ExprCall) -> bool {
-    matches!(call.func.as_ref(), Expr::Call(inner)
-        if matches!(inner.func.as_ref(), Expr::Name(name) if name.id.as_str() == "type"))
+/// `call`'s callee when it is a call of the bare name `type`, the shape this
+/// module owns; `None` for every other callee.
+pub(super) fn type_call_callee(call: &ExprCall) -> Option<&ExprCall> {
+    match call.func.as_ref() {
+        Expr::Call(inner) if matches!(inner.func.as_ref(), Expr::Name(name) if name.id.as_str() == "type") => {
+            Some(inner)
+        }
+        _ => None,
+    }
 }
 
-/// Lowers `call`, whose callee is a call of `type` (module doc).
+/// Lowers `call`, whose callee `inner` is a call of `type` (module doc).
 pub(super) fn lower(
     call: &ExprCall,
+    inner: &ExprCall,
     in_function: bool,
     class_name: Option<&str>,
     imports: &[ImportBinding],
     signatures: &SignatureTable,
 ) -> Result<HirExpr, Diagnostic> {
-    let Expr::Call(inner) = call.func.as_ref() else {
-        unreachable!("is_type_call_callee admitted only a call callee")
-    };
     let is_receiver = inner.arguments.keywords.is_empty()
         && matches!(inner.arguments.args.as_ref(),
             [Expr::Name(name)] if name.id.as_str() == RECEIVER);

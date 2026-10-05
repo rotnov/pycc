@@ -12,9 +12,11 @@
 //!
 //! Two shapes are refused here because lowering cannot see them: a body
 //! where `self` is not bound to an instance of a class of this program (a
-//! `@classmethod` or `@staticmethod`, or a `self` that is not the receiver),
-//! and a program that rebinds the name `type`, where `type(self)` would
-//! call that binding rather than the builtin.
+//! `@classmethod`, or a `@staticmethod` whose `self` parameter has another
+//! type), and a program that rebinds the name `type`, where `type(self)`
+//! would call that binding rather than the builtin. A `@staticmethod` whose
+//! `self` parameter is typed as a class `C` constructs `C`, which is exact:
+//! an instance is assignable only to its own class.
 
 use crate::{Environment, infer_expr_in};
 use pycc_diag::{Diagnostic, Span};
@@ -45,8 +47,9 @@ pub(crate) fn infer_receiver_class_call(
         _ => {
             return Err(Diagnostic::error(
                 "C0001",
-                "`type(self)(...)` is supported only in an instance method, where `self` is the \
-                 receiver -- a `@classmethod` or `@staticmethod` has no `self` receiver"
+                "`type(self)(...)` is supported only in an instance method, or wherever `self` \
+                 is typed as an instance of a class of this program -- a `@classmethod` has no \
+                 `self` receiver"
                     .to_string(),
                 Span::new(0, 0),
             ));
