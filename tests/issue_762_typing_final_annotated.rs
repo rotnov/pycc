@@ -92,18 +92,14 @@ fn typing_final_and_annotated_import_build_and_run_succeeds() {
 #[test]
 fn typing_unregistered_symbol_import_still_rejected() {
     let dir = ScratchDir::new("762_reject").expect("failed to create scratch dir");
-    let src = write_fixture(
-        &dir,
-        "unregistered.py",
-        "from typing import TypeVar\nT = TypeVar(\"T\")\n",
-    );
+    let src = write_fixture(&dir, "unregistered.py", "from typing import Callable\n");
     let output = Command::new(pycc_bin())
         .args(["check", src.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
         !output.status.success(),
-        "pycc check should still reject `from typing import TypeVar`"
+        "pycc check should still reject `from typing import Callable`"
     );
     let combined = format!(
         "{}{}",
