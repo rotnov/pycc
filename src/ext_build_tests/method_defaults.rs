@@ -158,3 +158,61 @@ fn a_receiver_exact_copy_carries_its_origin_s_defaults() {
         .expect("the copy is exported");
     assert_eq!(copy.defaults, vec![Some(pycc_hir::HirExpr::IntLiteral(4))]);
 }
+
+/// The generated companion for `source` built as an `--ext` module (D-258,
+/// #1409), from real source through the `--ext` frontend.
+fn ext_companion(tag: &str, source: &str) -> String {
+    let dir = pycc_scratch::ScratchDir::new(tag).expect("scratch");
+    let src = dir.join("m.py");
+    std::fs::write(&src, source).expect("write source");
+    let module = crate::frontend::resolve_frontend_with(
+        &src,
+        Some("m"),
+        crate::modules::RelativeImports::Project,
+    )
+    .unwrap_or_else(|_| panic!("the fixture must type-check in an ext build: {source}"));
+    let exports = collect_exports(&module).expect("the module exports");
+    let publications = collect_class_publications(&module, &exports);
+    let ctors = collect_constructors(&module, &publications);
+    generate_exports_inc("m", &exports, &[], &publications, &ctors)
+}
+
+/// #1409: an unannotated defaulted parameter in an `--ext` module is the
+/// parameter its default implies, so the companion is byte-identical to its
+/// annotated twin's -- `None` as `Any = None`, a literal as its scalar type
+/// -- for a constructor, a method and a module-level `def` alike.
+#[test]
+fn an_unannotated_default_generates_its_annotated_twin_s_companion() {
+    let unannotated = ext_companion(
+        "1409_unannotated",
+        "class P:\n\
+         \x20   def __init__(self, n: int, state_stack=None, value_stack=None) -> None:\n\
+         \x20       self.n = n\n\
+         \x20   def copy(self, deepcopy_values=True, k=-2, r=0.5, s='\\u00e9') -> int:\n\
+         \x20       return self.n if deepcopy_values else k\n\
+         def f(a=3) -> int:\n    return a\n",
+    );
+    let annotated = ext_companion(
+        "1409_annotated",
+        "from typing import Any\n\
+         class P:\n\
+         \x20   def __init__(self, n: int, state_stack: Any = None, value_stack: Any = None) \
+         -> None:\n\
+         \x20       self.n = n\n\
+         \x20   def copy(self, deepcopy_values: bool = True, k: int = -2, r: float = 0.5, \
+         s: str = '\\u00e9') -> int:\n\
+         \x20       return self.n if deepcopy_values else k\n\
+         def f(a: int = 3) -> int:\n    return a\n",
+    );
+    assert_eq!(unannotated, annotated);
+    for needle in [
+        "PyObject *v1 = PyTuple_Size(args) > 1 ? PyTuple_GetItem(args, 1) : Py_None;",
+        "PyObject *v0 = nargs > 0 ? args[0] : Py_True;",
+        "pycc_ext_unpack_object(v1, ",
+        "pycc_ext_unpack_bool(v0, ",
+        // A module-level export keeps its exact arity (#1194).
+        "\"f() takes exactly 1 argument (%zd given)\"",
+    ] {
+        assert!(unannotated.contains(needle), "{needle}\n{unannotated}");
+    }
+}

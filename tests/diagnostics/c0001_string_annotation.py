@@ -1,2 +1,2 @@
-def f(x: "int") -> int:
-    return x
+def f(x: "not a type") -> int:
+    return 1

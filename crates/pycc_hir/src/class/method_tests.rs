@@ -170,3 +170,179 @@ fn only_none_is_admitted_at_an_object_method_parameter() {
         "default value of parameter `a` of `m` expects `object`, got `int`"
     );
 }
+
+// --- #1409: an unannotated defaulted parameter in an `--ext` module -----
+
+/// The `(name, type)` parameter list of the lowered function `name`.
+fn params_of(module: &crate::HirModule, name: &str) -> Vec<(String, crate::Ty)> {
+    module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            crate::HirItem::Function {
+                name: held, params, ..
+            } if held == name => Some(params.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no function `{name}`"))
+}
+
+/// The #1207 subject's two signatures (lark `ParserState.__init__` and
+/// `ParserState.copy`) and every other method kind: `None` gives the opaque
+/// object, a literal its scalar type, and the default is recorded exactly as
+/// its annotated twin's is.
+#[test]
+fn an_ext_methods_unannotated_default_gives_its_parameter_a_type() {
+    use crate::Ty;
+    let module = lowered(
+        "class C:\n\
+         \x20   def __init__(self, n: int, state_stack=None, value_stack=None) -> None:\n\
+         \x20       return\n\
+         \x20   def copy(self, deepcopy_values=True) -> bool:\n\
+         \x20       if deepcopy_values:\n            return True\n        return False\n\
+         \x20   @staticmethod\n    def s(a=-3, b=2.5, c='x') -> int:\n        return a\n\
+         \x20   @classmethod\n    def k(cls, a=None, /, b=False) -> None:\n        return\n",
+        true,
+    );
+    let receiver = || ("self".to_string(), Ty::Instance(Box::new("C".to_string())));
+    let named = |name: &str, ty: Ty| (name.to_string(), ty);
+    assert_eq!(
+        params_of(&module, "C.__init__"),
+        vec![
+            receiver(),
+            named("n", Ty::Int),
+            named("state_stack", Ty::Object),
+            named("value_stack", Ty::Object),
+        ]
+    );
+    assert_eq!(
+        defaults_of(&module, "C.__init__"),
+        Some(vec![
+            None,
+            None,
+            Some(HirExpr::NoneLiteral),
+            Some(HirExpr::NoneLiteral),
+        ])
+    );
+    assert_eq!(
+        params_of(&module, "C.copy"),
+        vec![receiver(), named("deepcopy_values", Ty::Bool)]
+    );
+    assert_eq!(
+        params_of(&module, "C.s.static"),
+        vec![
+            named("a", Ty::Int),
+            named("b", Ty::Float),
+            named("c", Ty::Str)
+        ]
+    );
+    assert_eq!(
+        defaults_of(&module, "C.s.static"),
+        Some(vec![
+            Some(HirExpr::IntLiteral(-3)),
+            Some(HirExpr::FloatLiteral(2.5)),
+            Some(HirExpr::StringLiteral("x".to_string())),
+        ])
+    );
+    assert_eq!(
+        params_of(&module, "C.k.classmethod"),
+        vec![
+            ("cls".to_string(), Ty::Instance(Box::new("C".to_string()))),
+            named("a", Ty::Object),
+            named("b", Ty::Bool),
+        ]
+    );
+}
+
+/// A module-level `def` takes a literal default's scalar type too, but a
+/// `None` default implies no type there (its default is spliced into
+/// in-module calls, where `None` at an object slot is refused, #1387), so it
+/// keeps `T0001`.
+#[test]
+fn an_ext_functions_literal_default_types_it_but_none_does_not() {
+    use crate::Ty;
+    let module = lowered("def f(a=1, b='s', c=True) -> int:\n    return a\n", true);
+    assert_eq!(
+        params_of(&module, "f"),
+        vec![
+            ("a".to_string(), Ty::Int),
+            ("b".to_string(), Ty::Str),
+            ("c".to_string(), Ty::Bool),
+        ]
+    );
+    let diagnostic = only_error("def f(a=None) -> None:\n    return\n", true);
+    assert_eq!(diagnostic.code, "T0001");
+    assert_eq!(
+        diagnostic.message,
+        "parameter `a` of public function `f` needs a type annotation"
+    );
+}
+
+/// Each case the rule leaves alone keeps its own unchanged diagnostic: no
+/// default, a default outside the literal subset, a `native` build, and a
+/// `Protocol` member (which refuses any default first).
+#[test]
+fn an_unannotated_parameter_the_rule_does_not_cover_keeps_its_diagnostic() {
+    for (source, ext, code, message) in [
+        (
+            "class C:\n    def m(self, a) -> None:\n        return\n",
+            true,
+            "T0001",
+            "parameter `a` of public function `m` needs a type annotation",
+        ),
+        (
+            "class C:\n    def m(self, a=[]) -> None:\n        return\n",
+            true,
+            "T0001",
+            "parameter `a` of public function `m` needs a type annotation",
+        ),
+        (
+            "class C:\n    def m(self, a=1 + 2) -> None:\n        return\n",
+            true,
+            "T0001",
+            "parameter `a` of public function `m` needs a type annotation",
+        ),
+        (
+            "class C:\n    def m(self, a=True) -> None:\n        return\n",
+            false,
+            "T0001",
+            "parameter `a` of public function `m` needs a type annotation",
+        ),
+        (
+            "class C:\n    def __init__(self, a=None) -> None:\n        return\n",
+            false,
+            "T0001",
+            "parameter `a` of public function `__init__` needs a type annotation",
+        ),
+        (
+            "def f(a=1) -> None:\n    return\n",
+            false,
+            "T0001",
+            "parameter `a` of public function `f` needs a type annotation",
+        ),
+        (
+            "from typing import Protocol\n\
+             class P(Protocol):\n    def m(self, a=True) -> None:\n        ...\n",
+            true,
+            "C0001",
+            "default parameter values are not supported yet",
+        ),
+    ] {
+        let diagnostic = only_error(source, ext);
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert_eq!(diagnostic.message, message, "{source}");
+    }
+}
+
+/// A private method's or function's unannotated parameter keeps `Ty::Infer`
+/// in an `--ext` module: only the case that was `T0001` changes.
+#[test]
+fn a_private_unannotated_defaulted_parameter_still_infers() {
+    let module = lowered(
+        "class C:\n    def _m(self, a=True) -> None:\n        return\n\
+         def _f(a=None) -> None:\n    return\n",
+        true,
+    );
+    assert_eq!(params_of(&module, "C._m")[1].1, crate::Ty::Infer);
+    assert_eq!(params_of(&module, "_f")[0].1, crate::Ty::Infer);
+}

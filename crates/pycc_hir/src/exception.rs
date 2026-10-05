@@ -3,7 +3,7 @@
 use super::{HirClassDef, HirItem, HirStmt, Ty};
 use crate::ImportBinding;
 use pycc_ast::visitor::{self, Visitor};
-use pycc_ast::{Expr, ModModule, Stmt};
+use pycc_ast::{Expr, ExprStringLiteral, ModModule, Stmt};
 
 pub const BUILTIN_EXCEPTION_CLASSES: [&str; 30] = [
     "Exception",
@@ -411,49 +411,118 @@ pub fn builtin_exception_init_item() -> HirItem {
 /// operands, `except` types, annotations, call arguments, attribute values,
 /// comprehensions, `match` patterns, f-string interpolations -- reachable by
 /// construction, and keeps new upstream AST nodes covered automatically.
-/// String forward references (`x: "ValueError"`) are not scanned because
-/// `func::annotation_to_ty` does not resolve them either.
+/// A string annotation counts wherever annotation lowering may resolve it
+/// (Part 1 of #889): a top-level one (`x: "ValueError"`) arrives already
+/// unquoted from `pycc_parser::parse_all`, and a string nested in an
+/// annotation or a type alias value (`list["ValueError"]`) is parsed here.
+/// That over-approximates harmlessly -- a string lowering discards, such as
+/// `Literal["ValueError"]`, also counts, which only seeds the classes. A
+/// string anywhere else (`x = "ValueError"`) is only a string.
 ///
 /// The one non-name reference is an `assert` statement (#1369), which
 /// raises `AssertionError` without spelling it; a `visit_stmt` override
 /// counts it and otherwise leaves the generic walk untouched.
 pub(crate) fn module_references_builtin_exception_name(module: &ModModule) -> bool {
-    struct ReferenceScan {
-        found: bool,
-    }
-    impl<'a> Visitor<'a> for ReferenceScan {
-        fn visit_expr(&mut self, expr: &'a Expr) {
-            // Once one spelling is seen the answer cannot change, so stop
-            // descending rather than walking the rest of the module.
-            if self.found {
-                return;
-            }
-            if let Expr::Name(name) = expr
-                && is_builtin_exception_class(name.id.as_str())
-            {
-                self.found = true;
-                return;
-            }
-            visitor::walk_expr(self, expr);
-        }
-        // #1369: an `assert` statement raises `AssertionError` without
-        // spelling it, and its lowering names that class by spelling, so it
-        // needs the seeded definitions exactly as `raise AssertionError(..)`
-        // would.
-        fn visit_stmt(&mut self, stmt: &'a Stmt) {
-            if self.found {
-                return;
-            }
-            if matches!(stmt, Stmt::Assert(_)) {
-                self.found = true;
-                return;
-            }
-            visitor::walk_stmt(self, stmt);
-        }
-    }
     let mut scan = ReferenceScan { found: false };
     scan.visit_body(&module.body);
     scan.found
+}
+
+/// The walk behind [`module_references_builtin_exception_name`].
+struct ReferenceScan {
+    found: bool,
+}
+
+/// Whether a string nested in `annotation` (`list["ValueError"]`), once
+/// parsed the way `func::annotation_to_ty` parses it, spells a builtin
+/// exception class. A string that does not parse spells nothing.
+fn nested_string_annotation_references(annotation: &Expr) -> bool {
+    struct Strings<'s>(Vec<&'s ExprStringLiteral>);
+    impl<'s> Visitor<'s> for Strings<'s> {
+        fn visit_expr(&mut self, expr: &'s Expr) {
+            if let Expr::StringLiteral(literal) = expr {
+                self.0.push(literal);
+            }
+            visitor::walk_expr(self, expr);
+        }
+    }
+    let mut strings = Strings(Vec::new());
+    strings.visit_expr(annotation);
+    strings.0.into_iter().any(|literal| {
+        pycc_ast::parse_string_annotation(literal).is_ok_and(|parsed| {
+            let mut scan = ReferenceScan { found: false };
+            scan.visit_annotation(&parsed);
+            scan.found
+        })
+    })
+}
+
+/// The value of a type alias statement, in either spelling: `type X =
+/// <value>` or the legacy `X: TypeAlias = <value>`, the two shapes
+/// `import::type_alias` resolves as a type.
+fn type_alias_value(stmt: &Stmt) -> Option<&Expr> {
+    match stmt {
+        Stmt::TypeAlias(alias) => Some(&alias.value),
+        Stmt::AnnAssign(assign)
+            if assign
+                .annotation
+                .as_name_expr()
+                .is_some_and(|name| name.id.as_str() == "TypeAlias") =>
+        {
+            assign.value.as_deref()
+        }
+        _ => None,
+    }
+}
+
+impl<'a> Visitor<'a> for ReferenceScan {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        // Once one spelling is seen the answer cannot change, so stop
+        // descending rather than walking the rest of the module.
+        if self.found {
+            return;
+        }
+        if let Expr::Name(name) = expr
+            && is_builtin_exception_class(name.id.as_str())
+        {
+            self.found = true;
+            return;
+        }
+        visitor::walk_expr(self, expr);
+    }
+    // #1369: an `assert` statement raises `AssertionError` without
+    // spelling it, and its lowering names that class by spelling, so it
+    // needs the seeded definitions exactly as `raise AssertionError(..)`
+    // would.
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if self.found {
+            return;
+        }
+        if matches!(stmt, Stmt::Assert(_)) {
+            self.found = true;
+            return;
+        }
+        // Part 1 of #889: a type alias's value is resolved as a type, so a
+        // string nested in it (`type E = list["ValueError"]`) is resolved
+        // too, although the generic walk visits the value as an expression.
+        if type_alias_value(stmt).is_some_and(nested_string_annotation_references) {
+            self.found = true;
+            return;
+        }
+        visitor::walk_stmt(self, stmt);
+    }
+    // Part 1 of #889: a string nested in an annotation is resolved by
+    // annotation lowering, so a builtin exception name inside it is a
+    // reference too.
+    fn visit_annotation(&mut self, annotation: &'a Expr) {
+        if self.found {
+            return;
+        }
+        visitor::walk_annotation(self, annotation);
+        if !self.found && nested_string_annotation_references(annotation) {
+            self.found = true;
+        }
+    }
 }
 
 /// The range of the first live `assert` statement anywhere in `body`,

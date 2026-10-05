@@ -1282,6 +1282,15 @@ pub(crate) fn infer_expr_in(
             step,
         } => {
             let base_ty = infer_expr_in(env, local_names, base)?;
+            // Part 2b of #1371: a CPython object base is CPython's own
+            // `PyObject_GetItem` with a `slice` key (`foreign::slice`).
+            if base_ty == Ty::Object {
+                return crate::foreign::slice::object_slice_ty(
+                    env,
+                    local_names,
+                    [start.as_deref(), stop.as_deref(), step.as_deref()],
+                );
+            }
             let Ty::List(elem_ty) = &base_ty else {
                 return Err(Diagnostic::error(
                     "T0033",

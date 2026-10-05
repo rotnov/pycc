@@ -1,6 +1,7 @@
 //! Lowering of comparisons, identity tests and `isinstance` with a CPython
 //! object operand (Part 1 of #1371) to [`MirExpr::ObjCompare`] and
-//! [`MirExpr::ObjIsInstance`].
+//! [`MirExpr::ObjIsInstance`], and of a membership test against a CPython
+//! object container (Part 2b of #1371) to [`MirExpr::ObjContains`].
 //!
 //! `pycc_types::foreign::compare` owns which shapes are admitted; this
 //! module only routes an admitted shape to its run-time node. Both nodes
@@ -60,13 +61,22 @@ pub enum ObjIsInstanceClass {
     Object(Box<MirExpr>),
 }
 
-/// `Some(ObjCompare)` when either lowered operand of `left op right` is a
-/// CPython object, so the native comparison lowering never sees one.
+/// `Ok(ObjContains)` for `left in right` / `left not in right` whose
+/// container `right` is a CPython object, `Ok(ObjCompare)` when either
+/// lowered operand of any other `left op right` is a CPython object, so the
+/// native comparison lowering never sees one; `Err` hands the operands back.
 pub(super) fn lower_object_compare(
     op: CmpOpKind,
     left: MirExpr,
     right: MirExpr,
 ) -> Result<MirExpr, Box<(MirExpr, MirExpr)>> {
+    if matches!(op, CmpOpKind::In | CmpOpKind::NotIn) && right.ty() == Ty::Object {
+        return Ok(MirExpr::ObjContains {
+            negate: op == CmpOpKind::NotIn,
+            item: Box::new(left),
+            container: Box::new(right),
+        });
+    }
     if left.ty() == Ty::Object || right.ty() == Ty::Object {
         Ok(MirExpr::ObjCompare {
             op,

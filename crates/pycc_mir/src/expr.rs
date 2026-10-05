@@ -808,23 +808,39 @@ pub(super) fn lower_expr(
         // (Task 7); this lowering does not re-validate or apply the runtime
         // clamping/panic behavior D-118 requires -- that is
         // `pycc_codegen`'s job, operating on this already-lowered shape.
+        //
+        // Part 2b of #1371: a CPython object base is split into its own
+        // `MirExpr::ObjSlice`, because `MirExpr::Slice::ty()` answers its
+        // base's type and codegen's `Slice` arm is list/str/tuple-only.
         HirExpr::Slice {
             base,
             start,
             stop,
             step,
-        } => MirExpr::Slice {
-            base: Box::new(lower_expr(base, scopes, classes, current_class)),
-            start: start
-                .as_deref()
-                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
-            stop: stop
-                .as_deref()
-                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
-            step: step
-                .as_deref()
-                .map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
-        },
+        } => {
+            let base = Box::new(lower_expr(base, scopes, classes, current_class));
+            let lower_bound = |bound: &Option<Box<HirExpr>>| {
+                bound
+                    .as_deref()
+                    .map(|e| Box::new(lower_expr(e, scopes, classes, current_class)))
+            };
+            let (start, stop, step) = (lower_bound(start), lower_bound(stop), lower_bound(step));
+            if base.ty() == Ty::Object {
+                MirExpr::ObjSlice {
+                    base,
+                    start,
+                    stop,
+                    step,
+                }
+            } else {
+                MirExpr::Slice {
+                    base,
+                    start,
+                    stop,
+                    step,
+                }
+            }
+        }
         // PR-12 Task 11 (D-119): `list`'s element type is resolved via the
         // same `lookup` mechanism every other name reference in this crate
         // uses, mirroring `HirExpr::Subscript`'s own base-type lookup above.

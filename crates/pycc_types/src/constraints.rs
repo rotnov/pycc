@@ -965,8 +965,15 @@ pub(crate) fn collect_expr_constraints(
             // Part 1 of #1371: a rich comparison with a CPython object
             // operand is an object, mirroring `compare_link_ty`.
             let is_object = |ty: &Option<Result<Ty, usize>>| matches!(ty, Some(Ok(Ty::Object)));
-            if !matches!(op, pycc_hir::CmpOpKind::Is | pycc_hir::CmpOpKind::IsNot)
-                && (is_object(&left_ty) || is_object(&right_ty))
+            // Part 2b of #1371: a membership test is `bool` whatever its
+            // operands are, mirroring `foreign::compare::membership_ty`.
+            if !matches!(
+                op,
+                pycc_hir::CmpOpKind::Is
+                    | pycc_hir::CmpOpKind::IsNot
+                    | pycc_hir::CmpOpKind::In
+                    | pycc_hir::CmpOpKind::NotIn
+            ) && (is_object(&left_ty) || is_object(&right_ty))
             {
                 return Ok(Some(Ok(Ty::Object)));
             }
@@ -1784,9 +1791,16 @@ pub(crate) fn collect_expr_constraints(
             stop,
             step,
         } => {
-            collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
+            let base_term =
+                collect_expr_constraints(signatures, parents, concrete, deferred, env, base)?;
             for bound in [start, stop, step].into_iter().flatten() {
                 collect_expr_constraints(signatures, parents, concrete, deferred, env, bound)?;
+            }
+            // Part 2b of #1371: `o[a:b]` is a term on the `Subscript` arm's
+            // own reasoning above -- an unannotated helper returning it
+            // must not ask for an annotation.
+            if matches!(base_term, Some(Ok(Ty::Object))) {
+                return Ok(Some(Ok(Ty::Object)));
             }
             Ok(None)
         }

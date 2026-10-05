@@ -50,6 +50,11 @@ pub(crate) fn compare_link_ty(
             )),
         };
     }
+    // Part 2b of #1371: membership answers for every pair, so a native
+    // pair never falls through to the numeric rule below.
+    if matches!(op, CmpOp::In | CmpOp::NotIn) {
+        return crate::foreign::compare::membership_ty(op, left_ty, right_ty);
+    }
     // Part 1 of #1371: a rich comparison with a CPython object operand is
     // CPython's own `PyObject_RichCompare`, whose result is an object.
     if let Some(result) = crate::foreign::compare::rich_compare_ty(left_ty, right_ty) {

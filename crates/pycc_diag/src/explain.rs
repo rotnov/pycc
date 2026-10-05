@@ -267,7 +267,11 @@ see into. T0001 fires separately for a missing parameter annotation \
 (\"parameter `<name>` of public function `<fn>` needs a type annotation\") \
 and a missing return annotation (\"public function `<fn>` needs a return \
 type annotation\") -- a function can trigger it more than once if both are \
-missing.",
+missing. One parameter case is exempt in a module compiled into a `pycc \
+build --ext` artifact (#1409): an unannotated parameter whose default is a \
+literal `int`, `float`, `bool` or `str` takes that literal's type, and a \
+method parameter defaulting to `None` the opaque CPython object, exactly as \
+if it carried that annotation.",
         example: "\
 def add(a: int, b: int) -> int:
     return a + b
@@ -1441,7 +1445,13 @@ other evaluates CPython's own `PyObject_RichCompare` and yields an \
 or itself a CPython object. Part 2a of #1371 lets a second CPython \
 object be a method or direct call's argument or a subscript key, and \
 admits a call of a subscript result (`callbacks[k](tok)`) under the same \
-argument rule; the result is another CPython object. The loop is \
+argument rule; the result is another CPython object. Part 2b of #1371 \
+admits a membership test (`k in o`, `k not in o`) of an `int`, `float`, \
+`bool`, `str` or `object` item in the object, evaluated by CPython's own \
+`PySequence_Contains` with a `bool` result, and a slice load \
+(`o[a:b:c]`, any bound omitted) whose bounds are of those same types, \
+answered by the object's own `__getitem__` with a `slice` key; the result \
+is another CPython object. The loop is \
 admitted when the iterable is written as an attribute load \
 (`for x in o.attr:`), a method call (`for x in o.method(...):`) or a bare \
 name bound to such a value (`x = product(\"ab\")`, then `for t in x:`); \
@@ -1453,14 +1463,16 @@ equality test against a bare `None`, a rich comparison with an operand \
 of any other type, a `match` subject, iterating over a subscript load \
 (`for x in o[k]:`) or inside a comprehension, \
 passing an argument of any other type to one of its methods, to the \
-object itself or to a subscript result, and indexing with a key of any \
-other type. A subscript call whose base is a bare name and whose key is \
+object itself or to a subscript result, indexing or slicing with a key \
+or bound of any other type, and testing membership of an item of any \
+other type in an object or of an `object` item in a native container \
+(membership between two native values keeps its `C0001`). A subscript call whose base is a bare name and whose key is \
 `int`, `float`, `bool` or `str` (`handlers[int](x)`) is still read as a \
 generic class instantiation and refused by that path's own diagnostic. Storing through a \
-subscript (`o[k] = v`), slicing (`o[a:b]`) and iterating a direct \
-call's result (`for x in o(...):`) are still refused too, but by their own \
-pre-existing diagnostics rather than by this code -- `C0001`, `T0033` and \
-`C0001` respectively. A method named `append`, `pop`, \
+subscript (`o[k] = v`) or a slice (`o[a:b] = v`, `del o[a:b]`) and \
+iterating a direct call's result (`for x in o(...):`) are still refused \
+too, but by their own pre-existing `C0001` diagnostics rather than by \
+this code. A method named `append`, `pop`, \
 `get` or `add` is also still refused: container lowering claims those four \
 spellings before the foreign path sees them, so they do not reach it even \
 with admitted arguments. Since #1263 container lowering admits an \

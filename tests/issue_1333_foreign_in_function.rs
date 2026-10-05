@@ -289,11 +289,12 @@ fn unadmitted_operations_on_a_function_local_object_are_diagnosed() {
             "I0404",
             "comparing a CPython object with a `list[int]` value",
         ),
+        // Part 2b of #1371 admits `1 in y`; a container item stays out.
         (
             "obj_fn_in",
-            "    print(1 in y)\n",
-            "C0001",
-            "comparison operator not supported yet: In",
+            "    print([1] in y)\n",
+            "I0404",
+            "testing membership of a `list[int]` value in a CPython object",
         ),
     ] {
         assert_one_error(tag, &format!("{HEAD}{tail}"), code, needle);

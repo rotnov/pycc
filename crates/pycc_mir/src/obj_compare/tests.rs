@@ -1,6 +1,6 @@
 //! Lowering of comparisons and `isinstance` with a CPython object operand
-//! (Part 1 of #1371), exercised from real HIR with `numpy` bound as a
-//! foreign import.
+//! (Part 1 of #1371), and of membership in and slices of one (Part 2b),
+//! exercised from real HIR with `numpy` bound as a foreign import.
 
 use crate::*;
 use pycc_diag::Span;
@@ -168,4 +168,95 @@ fn named_expr_bindings_are_collected_from_every_operand() {
     .collect_named_expr_bindings(&mut out);
     let names: Vec<&str> = out.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["a", "b", "c", "d", "e"]);
+}
+
+fn slice(
+    base: HirExpr,
+    start: Option<HirExpr>,
+    stop: Option<HirExpr>,
+    step: Option<HirExpr>,
+) -> HirExpr {
+    HirExpr::Slice {
+        base: Box::new(base),
+        start: start.map(Box::new),
+        stop: stop.map(Box::new),
+        step: step.map(Box::new),
+    }
+}
+
+/// Part 2b of #1371: membership in an object container is its own
+/// bool-valued node, item first, with `not in` as `negate`.
+#[test]
+fn membership_in_an_object_container_is_a_bool_valued_obj_contains() {
+    for (op, expected_negate) in [(CmpOpKind::In, false), (CmpOpKind::NotIn, true)] {
+        let lowered = lower_discarded(compare(op, HirExpr::IntLiteral(1), numpy_attr("pi")));
+        let MirExpr::ObjContains {
+            negate,
+            item,
+            container,
+        } = &lowered
+        else {
+            panic!("expected an `ObjContains`: {lowered:?}");
+        };
+        assert_eq!(*negate, expected_negate);
+        assert_eq!(**item, MirExpr::IntLiteral(1));
+        assert!(matches!(**container, MirExpr::ObjAttrGet { .. }));
+        assert_eq!(lowered.ty(), Ty::Bool);
+    }
+}
+
+/// Part 2b of #1371: a slice of an object is its own object-valued node,
+/// whatever bounds are present; a native base keeps `MirExpr::Slice`.
+#[test]
+fn a_slice_of_an_object_is_an_object_valued_obj_slice() {
+    let lowered = lower_discarded(slice(
+        numpy_attr("pi"),
+        Some(HirExpr::IntLiteral(1)),
+        None,
+        Some(HirExpr::IntLiteral(2)),
+    ));
+    let MirExpr::ObjSlice {
+        start, stop, step, ..
+    } = &lowered
+    else {
+        panic!("expected an `ObjSlice`: {lowered:?}");
+    };
+    assert_eq!(start.as_deref(), Some(&MirExpr::IntLiteral(1)));
+    assert_eq!(stop.as_deref(), None);
+    assert_eq!(step.as_deref(), Some(&MirExpr::IntLiteral(2)));
+    assert_eq!(lowered.ty(), Ty::Object);
+
+    let native = lower_discarded(slice(
+        HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+        None,
+        Some(HirExpr::IntLiteral(1)),
+        None,
+    ));
+    assert!(matches!(native, MirExpr::Slice { .. }), "{native:?}");
+}
+
+/// A walrus can hide in either operand of a membership test and in the
+/// base or any bound of an object slice.
+#[test]
+fn named_expr_bindings_are_collected_from_membership_and_slice_operands() {
+    let walrus = |name: &str, value: HirExpr| HirExpr::NamedExpr {
+        name: name.to_string(),
+        value: Box::new(value),
+    };
+    let mut out = Vec::new();
+    lower_discarded(compare(
+        CmpOpKind::In,
+        walrus("a", HirExpr::IntLiteral(1)),
+        walrus("b", numpy_attr("pi")),
+    ))
+    .collect_named_expr_bindings(&mut out);
+    lower_discarded(slice(
+        walrus("c", numpy_attr("pi")),
+        Some(walrus("d", HirExpr::IntLiteral(1))),
+        Some(walrus("e", HirExpr::IntLiteral(2))),
+        Some(walrus("f", HirExpr::IntLiteral(1))),
+    ))
+    .collect_named_expr_bindings(&mut out);
+    let names: Vec<&str> = out.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["a", "b", "c", "d", "e", "f"]);
 }
