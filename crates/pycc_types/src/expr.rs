@@ -275,6 +275,9 @@ pub(crate) fn infer_expr_in(
             right,
             truth_only,
         } => crate::boolop::infer_bool_op(env, local_names, *op, left, right, *truth_only),
+        HirExpr::IfExp { test, body, orelse } => {
+            crate::if_exp::infer_if_exp(env, local_names, test, body, orelse)
+        }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;

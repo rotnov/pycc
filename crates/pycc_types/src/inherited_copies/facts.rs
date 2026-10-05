@@ -309,6 +309,11 @@ impl<'a> Walker<'a> {
                 self.expr(left);
                 self.expr(right);
             }
+            HirExpr::IfExp { test, body, orelse } => {
+                for part in [test, body, orelse] {
+                    self.expr(part);
+                }
+            }
             HirExpr::CompareChain { first, links } => {
                 self.expr(first);
                 for link in links {

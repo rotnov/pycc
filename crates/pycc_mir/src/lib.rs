@@ -5,6 +5,7 @@ mod binop;
 use binop::binop_result_ty;
 mod boolop;
 mod compare_chain;
+mod if_exp;
 pub use compare_chain::{MirCompareKind, MirCompareLink};
 mod class;
 #[cfg(test)]
@@ -195,6 +196,16 @@ pub enum MirExpr {
         right: Box<MirExpr>,
         ty: Ty,
         truth_only: bool,
+    },
+    /// `body if test else orelse` (#1395). `test` is evaluated once, for
+    /// its truth, then exactly one branch. `ty` is
+    /// `pycc_hir::if_exp_result_ty` of the two branches, and `pycc_codegen`
+    /// joins the selected branch converted to `ty` with a phi.
+    IfExp {
+        test: Box<MirExpr>,
+        body: Box<MirExpr>,
+        orelse: Box<MirExpr>,
+        ty: Ty,
     },
     FString(Vec<MirFStringPart>),
     /// `[e1, e2, ...]`. No `ty` field: `ty()` below derives
@@ -798,7 +809,8 @@ impl MirExpr {
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
             | MirExpr::Compare { ty, .. }
-            | MirExpr::BoolOp { ty, .. } => ty.clone(),
+            | MirExpr::BoolOp { ty, .. }
+            | MirExpr::IfExp { ty, .. } => ty.clone(),
             MirExpr::Not(_) | MirExpr::CompareChain { .. } => Ty::Bool,
             MirExpr::EmptyList(element) => Ty::List(Box::new(element.clone())),
             MirExpr::EmptyDict(pair) => Ty::Dict(pair.clone()),
@@ -1025,6 +1037,13 @@ impl MirExpr {
             | MirExpr::BoolOp { left, right, .. } => {
                 left.collect_named_expr_bindings(out);
                 right.collect_named_expr_bindings(out);
+            }
+            MirExpr::IfExp {
+                test, body, orelse, ..
+            } => {
+                for part in [test, body, orelse] {
+                    part.collect_named_expr_bindings(out);
+                }
             }
             MirExpr::FString(parts) => {
                 for part in parts {
