@@ -44,7 +44,7 @@ pub(super) fn emit_compare_values<'ctx>(
     // always `False`, `is not` always `True`, independent of the
     // operand's own emitted value, so neither `l` nor `r` needs
     // inspecting for that shape).
-    // Narrows `op`'s 8 `CmpOpKind` variants down to the 6 ordinary
+    // Narrows `op`'s 10 `CmpOpKind` variants down to the 6 ordinary
     // ordering comparators in exactly one place (D-197, #763, Part 1
     // of #747): `Is`/`IsNot` are handled and returned right here,
     // inline, so the three type-dispatched matches below (float/
@@ -120,6 +120,12 @@ pub(super) fn emit_compare_values<'ctx>(
         pycc_mir::CmpOpKind::LtE => OrderedCmpOp::LtE,
         pycc_mir::CmpOpKind::Gt => OrderedCmpOp::Gt,
         pycc_mir::CmpOpKind::GtE => OrderedCmpOp::GtE,
+        // Part 2b of #1371: membership is admitted only with a CPython
+        // object container, which `pycc_mir` lowers to `ObjContains`.
+        pycc_mir::CmpOpKind::In | pycc_mir::CmpOpKind::NotIn => panic!(
+            "pycc_codegen: internal error: a native `in`/`not in` reached codegen -- \
+             pycc_types admits membership only in a CPython object"
+        ),
     };
     if left_ty == Ty::Float || right_ty == Ty::Float {
         let l = to_float(context, builder, rt, l);

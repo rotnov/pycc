@@ -539,11 +539,8 @@ fn the_operations_with_a_pre_existing_refusal_keep_it() {
             "tuple element type `object`",
             "t = (numpy.pi, 1)\n",
         ),
-        // PR 3b of #1082 admits a subscript *load* but not a slice:
-        // `HirExpr::Slice` is a different shape with its own arm, which
-        // still reports `T0033`. Pinned here so a later part cannot admit
-        // one by admitting the other.
-        ("T0033", "does not support slicing", "numpy.pi[0:2]\n"),
+        // A slice load (`numpy.pi[0:2]`) left this list in Part 2b of
+        // #1371; `foreign/slice/tests.rs` pins its admission.
     ] {
         assert_refused("`numpy.pi`", snippet, code, phrase);
     }

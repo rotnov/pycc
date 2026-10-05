@@ -131,8 +131,9 @@
 //! assigning to a bare-name subscript target") before this crate sees it.
 //! `x = o[k]` is admitted in a module body since #1325 and in a function
 //! body since Part 1 of #1333. A *slice* (`o[a:b]`) is a third shape
-//! again and keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The positional
-//! bound is inherited unchanged.
+//! again, admitted as a load since Part 2b of #1371 by [`slice`]; every
+//! non-object base keeps `expr.rs`'s `HirExpr::Slice` `T0033`. The
+//! positional bound is inherited unchanged.
 //!
 //! **PR 4a of #1083 (Part 4 of #1026) added two conversions *out* of the
 //! opaque type: `float(o)` and `bool(o)`.** Both are handled in `expr.rs`'s
@@ -283,8 +284,10 @@ pub(crate) fn object_operation_unsupported(operation: &str) -> Diagnostic {
              scalar- or object-argument method calls and direct calls \
              (including a call of a subscript result), `len`, truth \
              testing, a \
-             scalar- or object-key subscript load, a rich comparison with an object or \
+             scalar- or object-key subscript load, a slice load with scalar or object \
+             bounds, a rich comparison with an object or \
              scalar operand, an identity test against an object or `None`, \
+             a membership test of a scalar or object item in an object, \
              `isinstance` against a foreign class or `int`/`float`/`bool`/`str`, `for` iteration, binding the \
              value to a name, returning it from and passing it to a pycc \
              function, printing it and f-string \
@@ -475,6 +478,7 @@ pub(crate) fn bind_block_import(env: &mut Environment, bindings: &[(String, Stri
 
 pub(crate) mod compare;
 pub(crate) mod for_loop;
+pub(crate) mod slice;
 pub(crate) mod subscript_call;
 
 #[cfg(test)]

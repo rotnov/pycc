@@ -300,6 +300,15 @@ pub enum CmpOpKind {
     Is,
     /// `is not`. Same scoping as `Is` above.
     IsNot,
+    /// `item in container` (Part 2b of #1371). Lowered only for a single
+    /// comparison whose right operand is not syntactically a literal or a
+    /// display (see `crate::compare_chain::lower_cmp_op`); `pycc_types`
+    /// admits it only with a CPython-object container and refuses every
+    /// other pair with the same `C0001` "comparison operator not supported
+    /// yet" message. A chain keeps that `C0001` here.
+    In,
+    /// `item not in container`. Same scoping as `In` above.
+    NotIn,
 }
 
 /// The unary operators this compiler supports (#603 Part 2, #604 Part 3, of
