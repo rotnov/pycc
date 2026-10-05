@@ -19650,6 +19650,37 @@ fn walrus_nested_inside_a_list_literal_element_on_the_solver_path_propagates_a_f
 }
 
 #[test]
+fn walrus_nested_inside_an_object_list_element_on_the_solver_path_propagates_a_forward_reference_error()
+ {
+    // Part 2d of #1371: the same shared element-loop arm, entered through
+    // its `ObjectList` alternative (an object-slot list display).
+    let signatures = HashMap::new();
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut constraints = SolverConstraints::default();
+    let mut env = ConstraintEnvironment::empty(&["m"]);
+    let body = vec![HirStmt::ExprStmt(HirExpr::ObjectList(vec![
+        HirExpr::NamedExpr {
+            name: "m".to_string(),
+            value: Box::new(HirExpr::Name("m".to_string())),
+        },
+    ]))];
+
+    let err = collect_block_constraints(
+        &signatures,
+        &mut parents,
+        &mut concrete,
+        &mut constraints,
+        &mut env,
+        &body,
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "T0021");
+}
+
+#[test]
 fn walrus_nested_inside_a_subscript_base_on_the_solver_path_propagates_a_forward_reference_error() {
     // Exercises `Subscript`'s own `bind_named_expr_targets(base)?` call
     // (source line 1020). The index is a harmless literal that is never
