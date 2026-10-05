@@ -3,10 +3,14 @@
 
 These tests exercise the production-path validator through both direct
 ``validate()`` calls and the real CLI entrypoint.  The key mutation test
-``test_corrupted_ledger_status_with_unchanged_roadmap_fails`` corrupts the
-ledger status in ``SEARCH_VISIBILITY.md`` while leaving ``ROADMAP.md``
-unchanged — exactly the contradictory-indexing-status scenario from issue #163
-— and verifies the audit rejects it.
+``test_corrupted_ledger_status_fails`` corrupts the ledger status in
+``SEARCH_VISIBILITY.md`` — exactly the contradictory-indexing-status scenario
+from issue #163 — and verifies the audit rejects it.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); ``test_roadmap_content_does_not_affect_result`` and
+``test_missing_roadmap_does_not_affect_result`` prove ROADMAP.md no longer
+participates.
 """
 
 from __future__ import annotations
@@ -34,7 +38,6 @@ validate = VALIDATOR_MODULE.validate
 validate_artifact = VALIDATOR_MODULE.validate_artifact
 validate_bindings = VALIDATOR_MODULE.validate_bindings
 visibility_binding_phrases = VALIDATOR_MODULE.visibility_binding_phrases
-roadmap_binding_phrases = VALIDATOR_MODULE.roadmap_binding_phrases
 search_console_history_timestamps = VALIDATOR_MODULE.search_console_history_timestamps
 current_interpretation_section = VALIDATOR_MODULE.current_interpretation_section
 normalize_whitespace = VALIDATOR_MODULE.normalize_whitespace
@@ -46,7 +49,6 @@ def _load_repository_files(repository_root: Path) -> dict[str, str]:
     return {
         "SEARCH_CONSOLE_OBSERVATIONS.json": (docs / "SEARCH_CONSOLE_OBSERVATIONS.json").read_text(),
         "SEARCH_VISIBILITY.md": (docs / "SEARCH_VISIBILITY.md").read_text(),
-        "ROADMAP.md": (docs / "ROADMAP.md").read_text(),
     }
 
 
@@ -69,6 +71,17 @@ class SearchConsoleObservationTests(unittest.TestCase):
     # --- Positive tests ---
 
     def test_clean_tree_passes(self) -> None:
+        validate(self.root)
+
+    def test_roadmap_content_does_not_affect_result(self) -> None:
+        """ROADMAP.md is no longer a bound prose surface: arbitrary unrelated
+        content in it must not change the verdict."""
+        (self.root / "docs" / "ROADMAP.md").write_text("unrelated\n")
+        validate(self.root)
+
+    def test_missing_roadmap_does_not_affect_result(self) -> None:
+        """The checker must not read ROADMAP.md at all."""
+        self.assertFalse((self.root / "docs" / "ROADMAP.md").exists())
         validate(self.root)
 
     def test_artifact_validates_against_clean_tree(self) -> None:
@@ -166,9 +179,9 @@ class SearchConsoleObservationTests(unittest.TestCase):
 
     # --- Prose binding mutation tests ---
 
-    def test_corrupted_ledger_status_with_unchanged_roadmap_fails(self) -> None:
-        """Corrupt the URL inspection status in the ledger while leaving
-        the roadmap unchanged — the audit must reject this mutation.
+    def test_corrupted_ledger_status_fails(self) -> None:
+        """Corrupt the URL inspection status in the ledger — the audit must
+        reject this mutation.
 
         This is the core production-path negative test from issue #163:
         a contradictory indexing status must not survive the check.
@@ -177,7 +190,6 @@ class SearchConsoleObservationTests(unittest.TestCase):
         text = path.read_text()
         # Corrupt the Current interpretation: change "five canonical URLs"
         # to "four canonical URLs" so the bound phrase no longer matches.
-        # The roadmap is left unchanged.
         corrupted = text.replace(
             "All five canonical URLs now have positive URL Inspection evidence",
             "All four canonical URLs now have positive URL Inspection evidence",
@@ -191,9 +203,8 @@ class SearchConsoleObservationTests(unittest.TestCase):
         ):
             validate(self.root)
 
-    def test_corrupted_ledger_sitemap_status_with_unchanged_roadmap_fails(self) -> None:
-        """Corrupt the sitemap status in the ledger while leaving the
-        roadmap unchanged."""
+    def test_corrupted_ledger_sitemap_status_fails(self) -> None:
+        """Corrupt the sitemap status in the ledger."""
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
         text = path.read_text()
         corrupted = text.replace(
@@ -209,9 +220,8 @@ class SearchConsoleObservationTests(unittest.TestCase):
         ):
             validate(self.root)
 
-    def test_corrupted_ledger_performance_with_unchanged_roadmap_fails(self) -> None:
-        """Corrupt the performance numbers in the ledger while leaving the
-        roadmap unchanged."""
+    def test_corrupted_ledger_performance_fails(self) -> None:
+        """Corrupt the performance numbers in the ledger."""
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
         text = path.read_text()
         corrupted = text.replace(
@@ -227,44 +237,9 @@ class SearchConsoleObservationTests(unittest.TestCase):
         ):
             validate(self.root)
 
-    def test_corrupted_roadmap_with_unchanged_ledger_fails(self) -> None:
-        """Corrupt the roadmap projection while leaving the ledger unchanged."""
-        path = self.root / "docs" / "ROADMAP.md"
-        text = path.read_text()
-        corrupted = text.replace(
-            "All five canonical website URLs have positive Google URL Inspection evidence",
-            "All four canonical website URLs have positive Google URL Inspection evidence",
-            1,
-        )
-        self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(
-            ObservationError,
-            "missing bound phrase.*URL inspection canonical count",
-        ):
-            validate(self.root)
-
-    def test_corrupted_roadmap_performance_with_unchanged_ledger_fails(self) -> None:
-        """Corrupt the performance numbers in the roadmap while leaving the
-        ledger unchanged."""
-        path = self.root / "docs" / "ROADMAP.md"
-        text = path.read_text()
-        corrupted = text.replace(
-            "15 impressions, 2 clicks",
-            "10 impressions, 1 click",
-            1,
-        )
-        self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(
-            ObservationError,
-            "missing bound phrase.*impressions",
-        ):
-            validate(self.root)
-
     def test_corrupted_artifact_latest_projection_fails(self) -> None:
-        """Corrupt the latest_projection in the artifact — both documents
-        still have the correct prose, but the artifact is wrong."""
+        """Corrupt the latest_projection in the artifact — the ledger still
+        has the correct prose, but the artifact is wrong."""
         path = self.root / "docs" / "SEARCH_CONSOLE_OBSERVATIONS.json"
         artifact = json.loads(path.read_text())
         artifact["latest_projection"]["performance_impressions"] = 99
@@ -294,14 +269,6 @@ class SearchConsoleObservationTests(unittest.TestCase):
         self.assertIn("five canonical URLs", phrase_texts)
         self.assertIn("positive URL Inspection evidence", phrase_texts)
 
-    def test_roadmap_binding_phrases_include_url_inspection(self) -> None:
-        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
-        projection = validate_artifact(artifact)
-        phrases = roadmap_binding_phrases(projection)
-        phrase_texts = [p[0] for p in phrases]
-        self.assertIn("five canonical website URLs", phrase_texts)
-        self.assertIn("positive Google URL Inspection evidence", phrase_texts)
-
     def test_visibility_binding_phrases_include_performance(self) -> None:
         artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
         projection = validate_artifact(artifact)
@@ -309,14 +276,6 @@ class SearchConsoleObservationTests(unittest.TestCase):
         phrase_texts = [p[0] for p in phrases]
         self.assertIn("15 impressions", phrase_texts)
         self.assertIn("2 clicks", phrase_texts)
-
-    def test_roadmap_binding_phrases_include_ctr_and_position(self) -> None:
-        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
-        projection = validate_artifact(artifact)
-        phrases = roadmap_binding_phrases(projection)
-        phrase_texts = [p[0] for p in phrases]
-        self.assertIn("13.3% CTR", phrase_texts)
-        self.assertIn("average position 5.7", phrase_texts)
 
     def test_whitespace_normalization_detects_wrapped_phrases(self) -> None:
         text = "average\nposition 6.3"
@@ -475,33 +434,11 @@ class SearchConsoleObservationTests(unittest.TestCase):
         self.assertIn("lagging Page indexing aggregate", phrase_texts)
         self.assertIn("Crawled — currently not indexed", phrase_texts)
 
-    def test_roadmap_binding_includes_page_indexing_aggregate(self) -> None:
-        """The roadmap binding phrases must include the page indexing
-        aggregate counts and lag state."""
-        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
-        projection = validate_artifact(artifact)
-        phrases = roadmap_binding_phrases(projection)
-        phrase_texts = [p[0] for p in phrases]
-        self.assertIn("4 indexed", phrase_texts)
-        self.assertIn("1 not indexed", phrase_texts)
-        self.assertIn("lagging Page indexing aggregate", phrase_texts)
-
     def test_corrupted_visibility_page_indexing_count_fails(self) -> None:
         """Corrupting the page indexing aggregate count in the visibility
         Current interpretation while leaving the artifact unchanged must
         fail."""
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
-        text = path.read_text()
-        corrupted = text.replace("4 indexed and 1 not indexed", "3 indexed and 2 not indexed", 1)
-        self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page indexing aggregate"):
-            validate(self.root)
-
-    def test_corrupted_roadmap_page_indexing_count_fails(self) -> None:
-        """Corrupting the page indexing aggregate count in the roadmap while
-        leaving the artifact unchanged must fail."""
-        path = self.root / "docs" / "ROADMAP.md"
         text = path.read_text()
         corrupted = text.replace("4 indexed and 1 not indexed", "3 indexed and 2 not indexed", 1)
         self.assertNotEqual(text, corrupted)
@@ -714,30 +651,10 @@ class SearchConsoleObservationTests(unittest.TestCase):
         self.assertIn("4 page rows", phrase_texts)
         self.assertIn("Search appearance reports no data", phrase_texts)
 
-    def test_roadmap_binding_includes_dimension_phrases(self) -> None:
-        """The roadmap binding phrases must include dimension table phrases."""
-        artifact = json.loads(self.files["SEARCH_CONSOLE_OBSERVATIONS.json"])
-        projection = validate_artifact(artifact)
-        phrases = roadmap_binding_phrases(projection)
-        phrase_texts = [p[0] for p in phrases]
-        self.assertIn("19 page-level impressions", phrase_texts)
-        self.assertIn("4 page rows", phrase_texts)
-        self.assertIn("search appearance reports no data", phrase_texts)
-
     def test_corrupted_visibility_page_dimension_impressions_fails(self) -> None:
         """Corrupting the page-level impressions in the visibility Current
         interpretation must fail."""
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
-        text = path.read_text()
-        corrupted = text.replace("19 page-level impressions", "18 page-level impressions")
-        self.assertNotEqual(text, corrupted)
-        path.write_text(corrupted)
-        with self.assertRaisesRegex(ObservationError, "missing bound phrase.*page dimension impressions"):
-            validate(self.root)
-
-    def test_corrupted_roadmap_page_dimension_impressions_fails(self) -> None:
-        """Corrupting the page-level impressions in the roadmap must fail."""
-        path = self.root / "docs" / "ROADMAP.md"
         text = path.read_text()
         corrupted = text.replace("19 page-level impressions", "18 page-level impressions")
         self.assertNotEqual(text, corrupted)
@@ -777,8 +694,7 @@ class SearchConsoleObservationEntrypointTests(unittest.TestCase):
 
     def test_entrypoint_fails_on_corrupted_ledger_status(self) -> None:
         """Production-path negative test: corrupt the ledger status in
-        SEARCH_VISIBILITY.md while leaving the roadmap unchanged, then
-        verify the CLI entrypoint exits nonzero."""
+        SEARCH_VISIBILITY.md, then verify the CLI entrypoint exits nonzero."""
         with tempfile.TemporaryDirectory(
             prefix="pycc-search-console-entrypoint-"
         ) as temporary:
@@ -788,14 +704,13 @@ class SearchConsoleObservationEntrypointTests(unittest.TestCase):
             for name in (
                 "SEARCH_CONSOLE_OBSERVATIONS.json",
                 "SEARCH_VISIBILITY.md",
-                "ROADMAP.md",
             ):
                 (docs / name).write_text(
                     (self.repository_root / "docs" / name).read_text()
                 )
             visibility = (docs / "SEARCH_VISIBILITY.md").read_text()
             # Corrupt the URL inspection status in the Current interpretation
-            # section while leaving the roadmap unchanged.
+            # section.
             original = (
                 "All five canonical URLs now have positive URL Inspection evidence"
             )

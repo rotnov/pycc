@@ -17,11 +17,6 @@
       "sha256": "6df471fa3181419f42415525c10eb5a7fcb40247a5201ae9c044c267615a39ea"
     },
     {
-      "path": "scripts/check_pages_performance_budget.rb",
-      "source_path": "scripts/check_pages_performance_budget.rb",
-      "sha256": "848d464ffa7a3f1652cafd1faf5fc548e5b8837152f3846df9cfce76e2164392"
-    },
-    {
       "path": "scripts/check_replicated_paired_perf_regression.rb",
       "source_path": "scripts/check_replicated_paired_perf_regression.rb",
       "sha256": "d296e48859b1813685f06244c6d401119de57ec1842fe7c47d8ecbbdb1318c06"
@@ -37,39 +32,9 @@
       "sha256": "3ea740e1997c6667f815bc35a5d29cdff9efd2fd0732c76e0963be8aa11027d3"
     },
     {
-      "path": "scripts/check_site_accessibility.rb",
-      "source_path": "scripts/check_site_accessibility.rb",
-      "sha256": "a6c933c50aee32f4f0f42d3ac2c5834dff0d6523e3f1c218943a868f913dbf09"
-    },
-    {
-      "path": "scripts/check_site_aria_conformance.py",
-      "source_path": "scripts/check_site_aria_conformance.py",
-      "sha256": "b2a38f9787e89a4325002d76f528539065b6433dabdb492a30472b2939e51998"
-    },
-    {
-      "path": "scripts/check_site_reduced_motion.js",
-      "source_path": "scripts/check_site_reduced_motion.js",
-      "sha256": "f0898d14e8ff16c6f7d516d90ead16cba688f15521e7d2c1d6d163b86f4eac0b"
-    },
-    {
       "path": "scripts/check_source_aware_perf_regression.rb",
       "source_path": "scripts/check_source_aware_perf_regression.rb",
       "sha256": "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
-    },
-    {
-      "path": "scripts/run_pages_lighthouse.py",
-      "source_path": "scripts/run_pages_lighthouse.py",
-      "sha256": "47935ac1d2f3b0e23ef1e69fc8ce33e6e40d0a7d0a701a85374313316af41dce"
-    },
-    {
-      "path": "scripts/run_pages_lighthouse_accessibility.py",
-      "source_path": "scripts/run_pages_lighthouse_accessibility.py",
-      "sha256": "3b7db6789c6aafd4567d84363ec36a082a1d7c7b300ffa7adf1f83f38ffe882a"
-    },
-    {
-      "path": "scripts/serve_pages_fixture.py",
-      "source_path": "scripts/serve_pages_fixture.py",
-      "sha256": "765399a928d17375b39240c909cebe58fdf1d790a5c8f3186ff474064dee4dcd"
     },
     {
       "path": "scripts/test_classify_ci_changes.py",
@@ -80,11 +45,6 @@
       "path": "scripts/test_check_ci_permissions.rb",
       "source_path": "scripts/test_check_ci_permissions.rb",
       "sha256": "2a13b5d56f52ffe00ad5d60c305f894a8690e1857e7adb631bd682d1e1ea9055"
-    },
-    {
-      "path": "scripts/test_check_pages_performance_budget.rb",
-      "source_path": "scripts/test_check_pages_performance_budget.rb",
-      "sha256": "f2ffb51eca2d4b9f5fc3a149d362eca02ee861085648477d1d01f67ee93ca9fd"
     },
     {
       "path": "scripts/test_check_replicated_paired_perf_regression.rb",
@@ -100,11 +60,6 @@
       "path": "scripts/test_check_search_visibility_audit.py",
       "source_path": "scripts/test_check_search_visibility_audit.py",
       "sha256": "f493a8c4af08d9e0f84d42546fa76179192f20cf438ebf3efc0aea60ea166856"
-    },
-    {
-      "path": "scripts/test_check_site_accessibility.rb",
-      "source_path": "scripts/test_check_site_accessibility.rb",
-      "sha256": "cfc6663991bbb8433b46fa601fadb2f79e299f1a242832fb239f57f2f22ccf1a"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",
@@ -160,16 +115,6 @@
       "path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
       "source_path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
       "sha256": "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
-    },
-    {
-      "path": "tests/fixtures/pages-performance-budget.json",
-      "source_path": "tests/fixtures/pages-performance-budget.json",
-      "sha256": "6b19183ea898cfcf5146a88dce223daf18e2ee757cd3c28d59c47f32253053ce"
-    },
-    {
-      "path": "tests/fixtures/pages-performance-manifest.json",
-      "source_path": "tests/fixtures/pages-performance-manifest.json",
-      "sha256": "cd920a756a39d09fbb3f956fbfae9e38be9e14b3abf6294b484c22d527f2e462"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",

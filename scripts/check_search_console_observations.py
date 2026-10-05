@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Bind Google Search Console prose in SEARCH_VISIBILITY.md and ROADMAP.md to
-a sanitized immutable observation artifact.
+"""Bind Google Search Console prose in SEARCH_VISIBILITY.md to a sanitized
+immutable observation artifact.
 
 The artifact ``docs/SEARCH_CONSOLE_OBSERVATIONS.json`` is the structured source
 of truth for owner-only Google Search Console observations.  This validator
@@ -11,13 +11,13 @@ checks that:
    has one row per artifact observation, identified by timestamp.
 3. The ``Current interpretation`` prose in ``SEARCH_VISIBILITY.md`` projects
    the latest artifact observation.
-4. The ``Public evidence and discoverability`` row in ``docs/ROADMAP.md``
-   projects the same latest artifact observation.
 
-A contradictory indexing status that survives every other check — for example,
-changing ``URL is on Google`` to ``URL is not on Google`` in the ledger while
-leaving the roadmap unchanged — is rejected here because both projections are
-bound to the same immutable artifact.
+A contradictory indexing status — for example, changing ``URL is on Google``
+to ``URL is not on Google`` in the ledger — is rejected here because the
+projection is bound to the immutable artifact.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); SEARCH_VISIBILITY.md remains the bound prose surface.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from typing import Any
 
 ARTIFACT_PATH = Path("docs") / "SEARCH_CONSOLE_OBSERVATIONS.json"
 VISIBILITY_PATH = Path("docs") / "SEARCH_VISIBILITY.md"
-ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -861,109 +860,6 @@ def visibility_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, st
     return phrases
 
 
-def roadmap_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, str]]:
-    """Generate (phrase, description) pairs that must appear in ROADMAP.md."""
-    phrases: list[tuple[str, str]] = []
-    total = projection["canonical_urls_total"]
-    if projection["url_inspection_status"] == "all_on_google":
-        phrases.append((
-            f"{number_word(total)} canonical website URLs",
-            "URL inspection canonical count in roadmap",
-        ))
-        phrases.append((
-            "positive Google URL Inspection evidence",
-            "URL inspection status in roadmap",
-        ))
-    perf_impressions = projection["performance_impressions"]
-    perf_clicks = projection["performance_clicks"]
-    perf_ctr = projection["performance_ctr_percent"]
-    perf_avg_pos = projection["performance_avg_position"]
-    if perf_impressions is not None:
-        phrases.append((
-            f"{perf_impressions} impressions",
-            "performance impressions in roadmap",
-        ))
-    if perf_clicks is not None:
-        phrases.append((
-            f"{perf_clicks} clicks",
-            "performance clicks in roadmap",
-        ))
-    if perf_ctr is not None:
-        phrases.append((
-            f"{perf_ctr}% CTR",
-            "performance CTR in roadmap",
-        ))
-    if perf_avg_pos is not None:
-        phrases.append((
-            f"average position {perf_avg_pos}",
-            "performance average position in roadmap",
-        ))
-    query = projection["disclosed_query"]
-    if query is not None:
-        phrases.append((query, "disclosed query in roadmap"))
-    query_impressions = projection["disclosed_query_impressions"]
-    if query_impressions is not None:
-        phrases.append((
-            f"{query_impressions} impressions",
-            "disclosed query impressions in roadmap",
-        ))
-    query_clicks = projection["disclosed_query_clicks"]
-    if query_clicks is not None:
-        phrases.append((
-            f"{query_clicks} clicks",
-            "disclosed query clicks in roadmap",
-        ))
-    query_avg_pos = projection["disclosed_query_avg_position"]
-    if query_avg_pos is not None:
-        phrases.append((
-            f"average position {query_avg_pos}",
-            "disclosed query average position in roadmap",
-        ))
-    if projection["sitemap_search_console_status"] in ("failed", "could_not_fetch", "could_not_process"):
-        phrases.append((
-            "unsuccessful sitemap processing",
-            "sitemap status in roadmap",
-        ))
-    # Page indexing aggregate bindings: the roadmap must honestly note the
-    # lagging aggregate alongside the five positive per-URL inspections.
-    pi_indexed = projection.get("page_indexing_indexed")
-    pi_not_indexed = projection.get("page_indexing_not_indexed")
-    if pi_indexed is not None:
-        phrases.append((
-            f"{pi_indexed} indexed",
-            "page indexing aggregate indexed count in roadmap",
-        ))
-    if pi_not_indexed is not None:
-        phrases.append((
-            f"{pi_not_indexed} not indexed",
-            "page indexing aggregate not-indexed count in roadmap",
-        ))
-    if projection.get("page_indexing_data_freshness") == "report_lag_or_unreconciled":
-        phrases.append((
-            "lagging Page indexing aggregate",
-            "page indexing aggregate lag state in roadmap",
-        ))
-    page_sum = projection.get("page_dimension_impressions_sum")
-    if page_sum is not None:
-        phrases.append((
-            f"{page_sum} page-level impressions",
-            "page dimension impressions sum in roadmap",
-        ))
-    page_rows = projection.get("page_dimension_row_count")
-    if page_rows is not None:
-        phrases.append((
-            f"{page_rows} page rows",
-            "page dimension row count in roadmap",
-        ))
-    sa_state = projection.get("search_appearance_state")
-    if sa_state == "no_data":
-        phrases.append((
-            "search appearance reports no data",
-            "search appearance state in roadmap",
-        ))
-    return phrases
-
-
 def current_interpretation_section(markdown: str) -> str:
     """Extract the Current interpretation section from SEARCH_VISIBILITY.md."""
     lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -1027,10 +923,6 @@ def validate(
     interpretation = current_interpretation_section(visibility_text)
     vis_phrases = visibility_binding_phrases(projection)
     validate_bindings(interpretation, vis_phrases, "SEARCH_VISIBILITY.md Current interpretation")
-
-    roadmap_text = (repository_root / ROADMAP_PATH).read_text()
-    road_phrases = roadmap_binding_phrases(projection)
-    validate_bindings(roadmap_text, road_phrases, "ROADMAP.md")
 
     return projection
 

@@ -231,13 +231,9 @@ then `python3 -B scripts/check_diff_coverage.py --lcov "$S/coverage.lcov" --diff
 (the merge base is the right local base because the local branch is not a merge commit) —
 the `scripts/` unittest suite, the agent-asset and agent-policy validators, and clippy with
 warnings denied. When the diff
-touches any document `site/llms-txt-context-manifest.json` lists as non-optional (today
-`README.md`, `docs/SPEC.md`, `docs/ARCHITECTURE.md`, `docs/PYTHON_STANDARDS.md`,
-`docs/ROADMAP.md`, `site/index.html.md`), also run `sh scripts/check-site.sh` against the
-rebased tree: the Pages workflow enforces the manifest's aggregate byte budget on every push
-that changes those files, `origin/main` routinely sits within a few bytes of the ceiling, and a
-`docs/ROADMAP.md` changelog paragraph that passed locally pre-rebase has failed post-rebase
-often enough to be a standing retrospective theme.
+touches `site/`, `docs/ROADMAP.md`'s milestone line or status table, or the site scripts, also
+run `python3 scripts/build_site.py && python3 scripts/check_site.py _site` (D-259): the status
+page is generated from that table, and the check covers only HTML structure and links.
 
 A gate's verdict is its exit status, and a shell pipeline destroys it: `cmd | tail -2;
 echo $?` reports the pager's exit, not the gate's, which can present a failing gate as
@@ -590,11 +586,6 @@ for a closing keyword adjacent to an issue reference and does not parse the Engl
 it, so a disclaimer or a quotation containing the pattern closes the issue just as an
 instruction would (see AGENTS.md's pull-request rule). A mismatch is fixed by editing the
 body and re-running the query before merging, never by merging and reopening after.
-
-Before merging a pull request that touches any canonical page source under `site/`, satisfy
-AGENTS.md's "Rotate canonical page date pins before merging" rule (D-239) — it carries the
-literal invocation and the four-pin remediation set. Do not restate the rule here; run it and
-merge only if it exits 0.
 
 Merge with a merge commit, delete the task branch, and — for a pull request that carries
 `Fixes #N` — confirm the issue closed via that reference. For a stage, narrowing, or

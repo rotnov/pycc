@@ -1,12 +1,13 @@
 ---
 id: D-156
 title: "Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401)"
-status: accepted
+status: superseded
 ---
 
 ## D-156: Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401)
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: #401 found `site/status/index.html` and `site/index.html` stuck on stale v0.1-only
   claims: both v0.1 and v0.2 acceptance are now met, v0.3 (class model core, #385/PR-15) has
   landed, and the pages' own `>2%` performance-regression figure was superseded by D-114's

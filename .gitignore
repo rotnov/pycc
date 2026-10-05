@@ -45,3 +45,6 @@ Thumbs.db
 # CI temporary-bypass ephemeral state (scripts/manage_ci_bypass.py)
 .ci-bypass-state/
 .vscode/
+
+# Built GitHub Pages output (scripts/build_site.py)
+/_site/

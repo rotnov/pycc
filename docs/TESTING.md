@@ -275,71 +275,36 @@ help line (D-043, D-152). The existing diagnostics test remains unchanged.
 Run the focused ordinary suite with `cargo test --test site_evidence`; with
 the pinned oracle installed, use
 `cargo test --test site_evidence -- --include-ignored`. Use the isolated
-TMPDIR procedure below for repeated runs. The preserved preparation commit is
-`0d94ad8f30b27131a5da381a034d55165558e56a`; successful CI run `33969157527`
-executed the proof on all five Tier-1 targets. Language and Diagnostics now
-publish these accepted historical executions under D-230. The website gate
-remains offline: `scripts/site_execution_evidence_test.py` mutates the public
-`check-site.sh` inputs to verify closed nested fields, preserved Git blobs,
-provenance, command/status/output identity, visible transcripts, H1s and
-limitations. The shared parser omits exactly one final newline from each
-snapshot pane, never arbitrary whitespace. Page-cohort mutation tests cover
-both new canonical routes; Lighthouse and narrow-width no-JS/JS checks are
-browser evidence, not compiler conformance or field measurements. Run these
-historical-blob controls through `scripts/test-check-site.sh` in a full-history
-checkout, as the Pages workflow does. They are deliberately outside shallow
-governance's `test_*.py` discovery; `scripts/test_site_execution_wiring.py`
-checks the shell invocation, Pages validation invocation and full-history
-checkout without reading Git objects. The Pages push and pull-request path
-filters enumerate the ten direct execution-evidence dependencies exactly once
-per event; wiring controls reject independent removals and duplicates.
-Permissions, checkout depth, thresholds, required checks and `ci.yml`
-classification remain unchanged.
-The current Language/Status directive note follows D-229 and the annotation
-semantics owner separately from the immutable D-230 transcript. Positive and
-mutation controls preserve its module-prologue, no-binding, three core annotation
-gaps and partial PEP 563 acceptance boundaries after integrating issues #919 and
-#937. Public
-CLI mutations also reject each new hero's limitations or source transcript
-wrapped in `noscript`: evidence must be visible with JavaScript enabled too.
+TMPDIR procedure below for repeated runs. These tests were first written as
+the execution proofs behind the website's Language and Diagnostics evidence
+heroes; [D-259](./decisions/D-259-replace-the-pages-site-with-a-small-generated-site.md)
+retired those pages and their Python record checkers, and the tests remain as
+end-to-end checks of the two fixtures.
 
-The Architecture hero adds a third per-page contract module under
-[D-243](./decisions/D-243-architecture-hero-is-a-checked-in-re-derivable-compiler-pipeline-trace.md)
-(Part 2 of #566). `tests/architecture_trace.rs` is the only party that
-re-derives the pipeline: it drives `tests/fixtures/quick_start.py` through the
+`tests/architecture_trace.rs` (Part 2 of #566, D-243) is likewise a compiler
+regression test now: it drives `tests/fixtures/quick_start.py` through the
 public crate APIs (`pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`) and a
 native build, byte-compares every stage against the artifacts checked in under
 `tests/fixtures/architecture-trace/`, asserts the native exit status and exact
 stdout, and carries a negative control that rejects both a byte-mutated
 artifact and one stage's artifact substituted for another's. It runs under
-`cargo test --workspace` on all five Tier-1 targets. The separate guarantee
-that a stage carrying no evidence may not be presented as implemented is a
-record-level property owned by the validator, not by re-derivation, and is
-proved through the public CLI by `scripts/site_pipeline_evidence_test.py`
-described below. `scripts/site_pipeline_evidence.py` owns the record shape, the closed
-eight-stage vocabulary, the derived state and the visible projection, and never
-runs the compiler. Its controls are split by cost: the fast pure-function,
-record-internal and wiring cases live in `scripts/test_site_pipeline_wiring.py`
-and are discovered by `unittest discover -s scripts -p 'test_*.py'` in the
-depth-1 `governance` job, while the slow public-CLI mutation battery lives in
-`scripts/site_pipeline_evidence_test.py`, is invoked explicitly by
-`scripts/test-check-site.sh` beside its Part 1 siblings, and is deliberately
-not named `test_*`. Every rejection there is paired with a positive control
-against the shipped record, so a mutation cannot pass for the wrong reason.
-The Pages push and pull-request path filters enumerate
-`scripts/site_pipeline_evidence.py`,
-`scripts/site_pipeline_evidence_test.py`,
-`scripts/test_site_pipeline_wiring.py`, `tests/architecture_trace.rs`,
-`tests/architecture_manifest.rs` and `tests/fixtures/architecture-trace/**`
-exactly once per event; the wiring
-controls reject independent removals and duplicates. Regenerate the artifacts
+`cargo test --workspace` on all five Tier-1 targets. Regenerate the artifacts
 with `PYCC_ARCHITECTURE_TRACE_OUT=tests/fixtures/architecture-trace cargo test
 --test architecture_trace regeneration`; the parser, HIR and MIR artifacts are
-Rust `Debug` renderings and are expected to churn whenever those types change. `tests/architecture_manifest.rs` carries the Rust-side manifest facts
-(state, kind, page path, stable links, required-field presence) and re-runs
-nothing; it is a separate integration test because the D-230 language and
-diagnostics records pin `tests/site_evidence.rs` byte-for-byte to a preserved
-source blob, so a case added there fails the site gate.
+Rust `Debug` renderings and are expected to churn whenever those types change.
+
+## Website check
+
+The Pages site is checked for structure only (D-259, [WEBSITE.md](./WEBSITE.md)):
+`python3 scripts/build_site.py && python3 scripts/check_site.py _site` builds
+the site and checks HTML well-formedness, internal links and fragments, the
+sitemap, `robots.txt` and `llms.txt`. `scripts/test_check_site.py` holds the
+positive control and one negative control per rule; it builds inside a
+fixture repository (synthetic roadmap, placeholder link targets) and injects
+the commit through `PYCC_SITE_COMMIT`/`PYCC_SITE_DATE`, so it needs no git
+history and runs in the governance job's `unittest discover` as well as in
+the `Pages` workflow, which alone also sets `PYCC_SITE_REAL_TREE=1` for the
+real-tree positive control. There are no performance, accessibility, date-pin or wording gates.
 
 ## Differential fuzzing (planned)
 
@@ -1921,9 +1886,9 @@ arm64-to-Intel cross-host build and native execution proof, immutable Actions,
 read-only checkout credentials, event-default candidate checkouts for required
 workspace jobs, fail-closed D-171 routing, and the aggregate
 `ci-gate` truth table. Required jobs cannot inherit an alternate job-level
-`env`, `defaults`, or `container`; the native matrix and Pages jobs retain
-their reviewed runner bindings; and the Intel and Pages proof commands cannot
-be made conditional. The audit binds the commands and dependencies that
+`env`, `defaults`, or `container`; the native matrix jobs retain their
+reviewed runner bindings; and the Intel proof commands cannot be made
+conditional. The audit binds the commands and dependencies that
 produce those properties instead of authorizing a complete `ci.yml` byte
 digest. Historical workflow digests remain immutable regression fixtures only;
 they cannot force a later pull request to activate their bytes.
@@ -2244,7 +2209,15 @@ two-merge transition for general CI and checker changes: the base-owned checker
 validates named permissions, Action pins, checkout credentials, trusted-event
 guards, D-171 routing, Tier-1 coverage, and aggregate-gate properties in one
 pull request. The candidate manifest cannot authorize its own bytes, and no
-manifest entry forces a later activation. The separately pinned
+manifest entry forces a later activation. As the first stage of the Pages
+rewrite (umbrella #802), the base-owned D-171 routing validator also accepts a
+"Pages gates retired" `ci.yml` shape — both `pages-performance` and
+`pages-accessibility` absent and absent from `ci-gate`'s needs and truth table —
+while still validating the full shape in full whenever either job is present;
+hybrids fail. The Lighthouse and accessibility scripts and fixtures are
+unlisted from the manifest so the activation pull request may delete them;
+the second stage (D-259) removed both jobs and deleted those inputs. The
+separately pinned
 `workflow-policy.yml` trust anchor retains its own staged update boundary. The
 audit then runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
@@ -2633,8 +2606,8 @@ compiler-relevant pull request selected by the classifier and every push to
 denominator, the isolated `nobody`
 sandbox, tool pins, or whole-file exemption policy. Compiler-relevant changes
 still require the complete Tier-1 native matrix, cross-compilation build and
-verification, and paired frontend performance gates; Pages-relevant changes
-still require both Pages gates and their existing budgets. `audit` and the
+verification, and paired frontend performance gates; D-259 retired the two
+Pages gates and their budgets. `audit` and the
 fail-closed `ci-gate` remain required.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
@@ -2808,8 +2781,7 @@ deletions on repetitive ADR-like lines); `difflib` only prints context.
 is exact); on `push` the base is `before` and an all-zero `before` is a skip;
 any other event, or none, exits 2. The governance checkout is depth 1, so a
 missing revision is shallow-fetched once (`git fetch --no-tags --depth=1
-origin <rev>`), the `ensure_revision_available` shape from
-`scripts/check_site_pin_merge_currency.rb`. Exit codes: 0 passed or skipped,
+origin <rev>`). Exit codes: 0 passed or skipped,
 1 violation, 2 usage or plumbing error. Locally, use the merge base rather
 than `origin/main` (a two-dot diff against a base that has since merged an
 inserted amendment would report `main`'s own insertions as removals):
@@ -2896,10 +2868,9 @@ exists in the tree. Part 2
 ([#782](https://github.com/rotnov/pycc/issues/782)) then migrated every
 `ALLOWLIST`-tracked test call site onto `ScratchDir` —
 `tests/quick_start.rs` last, since the public site's versioned
-evidence-hero contract (`docs/WEBSITE.md`, enforced by
-`scripts/check-site.sh` via `site/evidence-heroes.json`) pinned that
-file's exact bytes and its migration therefore rode a full re-attestation
-of the landing hero. Part 3
+evidence-hero contract (since retired by D-259) pinned that file's exact
+bytes and its migration therefore rode a full re-attestation of the landing
+hero. Part 3
 ([#783](https://github.com/rotnov/pycc/issues/783)) finished the job by
 migrating `src/main.rs`'s two production call sites — the temp object
 `try_build` emits before linking and `run`'s built executable — onto

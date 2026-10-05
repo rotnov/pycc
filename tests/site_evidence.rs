@@ -1,6 +1,6 @@
-//! Production execution proofs prepared for the Language and Diagnostics heroes.
-//! These tests do not accept or publish a hero; D-186 still requires a reviewed
-//! immutable source/run attestation. No compiler behavior is changed here.
+//! Production execution proofs first prepared for the website's Language and
+//! Diagnostics evidence heroes. D-259 retired those pages; the tests remain as
+//! end-to-end checks of the two fixtures. No compiler behavior is changed here.
 
 use pycc_scratch::ScratchDir;
 use serde_json::json;

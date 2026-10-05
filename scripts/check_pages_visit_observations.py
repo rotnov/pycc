@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Validate the GitHub Pages visit observation artifact and its prose
-bindings in SEARCH_VISIBILITY.md, WEBSITE.md, and ROADMAP.md.
+bindings in SEARCH_VISIBILITY.md.
 
 The artifact ``docs/PAGES_VISIT_OBSERVATIONS.json`` is the structured
 source of truth for owner-facing GitHub Pages visit analytics.  It is
@@ -24,11 +24,14 @@ This validator checks that:
    treated as zero pageviews or zero visits.
 5. The ``latest_projection`` agrees with the latest observation (or the
    empty template state when there are no observations).
-6. The Pages-visit prose in ``SEARCH_VISIBILITY.md``, ``WEBSITE.md``,
-   and ``ROADMAP.md`` all reference the artifact.
-7. No prose fabricates visit data, equates GitHub repository views with
-   Pages visits, equates Search Console clicks with all-provider visits,
-   or attributes a visit to a query the evidence does not expose.
+6. The Pages-visit prose in ``SEARCH_VISIBILITY.md`` references the
+   artifact.
+7. No bound prose fabricates visit data, equates GitHub repository views
+   with Pages visits, equates Search Console clicks with all-provider
+   visits, or attributes a visit to a query the evidence does not expose.
+
+The ROADMAP.md/WEBSITE.md prose bindings were retired with the Pages rewrite
+(umbrella #802); SEARCH_VISIBILITY.md remains the bound prose surface.
 """
 
 from __future__ import annotations
@@ -43,8 +46,6 @@ from typing import Any
 
 ARTIFACT_PATH = Path("docs") / "PAGES_VISIT_OBSERVATIONS.json"
 VISIBILITY_PATH = Path("docs") / "SEARCH_VISIBILITY.md"
-WEBSITE_PATH = Path("docs") / "WEBSITE.md"
-ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -559,20 +560,6 @@ def visibility_binding_phrases() -> list[tuple[str, str]]:
     ]
 
 
-def website_binding_phrases() -> list[tuple[str, str]]:
-    return [
-        ("PAGES_VISIT_OBSERVATIONS.json", "pages-visit artifact reference in website doc"),
-        ("Pages visit", "pages-visit measurement distinction in website doc"),
-    ]
-
-
-def roadmap_binding_phrases() -> list[tuple[str, str]]:
-    return [
-        ("PAGES_VISIT_OBSERVATIONS.json", "pages-visit artifact reference in roadmap"),
-        ("Pages visit", "pages-visit measurement distinction in roadmap"),
-    ]
-
-
 def validate(repository_root: Path) -> dict[str, Any]:
     artifact = load_json(repository_root / ARTIFACT_PATH)
     projection = validate_artifact(artifact)
@@ -580,14 +567,6 @@ def validate(repository_root: Path) -> dict[str, Any]:
     visibility_text = (repository_root / VISIBILITY_PATH).read_text()
     check_forbidden_conflation_wording(visibility_text)
     validate_bindings(visibility_text, visibility_binding_phrases(), "SEARCH_VISIBILITY.md")
-
-    website_text = (repository_root / WEBSITE_PATH).read_text()
-    check_forbidden_conflation_wording(website_text)
-    validate_bindings(website_text, website_binding_phrases(), "WEBSITE.md")
-
-    roadmap_text = (repository_root / ROADMAP_PATH).read_text()
-    check_forbidden_conflation_wording(roadmap_text)
-    validate_bindings(roadmap_text, roadmap_binding_phrases(), "ROADMAP.md")
 
     return projection
 

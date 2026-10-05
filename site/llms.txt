@@ -1,130 +1,33 @@
 # pycc
 
-> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python 3.14 with an implemented native-binary path through Rust and LLVM. AI agents create it, and a human manages it.
+> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python 3.14 that produces native binaries through Rust and LLVM. AI agents create it, and a human manages it.
 
-Evaluate the implemented subset with the checked source example on Home,
-then inspect Language support, Diagnostics, and Compare compilers. Python 3.14
-is the target, not full compatibility. Not ready for production. Source builds
-require the distribution guide's pinned Rust/LLVM toolchain and platform setup.
-Benchmark evidence and a Performance page are not yet published (#567).
+pycc compiles an implemented subset of Python 3.14, not the whole language,
+and is not ready for production. Every type annotation is enforced at compile
+time; type errors are compile errors. The status page and the roadmap below
+are the current account of what works; this file deliberately repeats no
+status claims so it cannot drift from them.
 
-AI agents create the specifications, code, tests, documentation, reviews, and
-release automation. A human only manages goals, constraints, priorities, and
-product decisions. No project code is handwritten by a human. This is a
-maintainer attestation supported by the public Git history, pull requests,
-agent instructions, review artifacts, and session handoff logs — not a fact
-provable from Git author metadata alone, which identifies the accountable
-human maintainer rather than the code generator.
+AI agents write the specifications, code, tests, documentation and reviews; a
+human sets goals and constraints. pycc is not an AI or machine-learning
+compiler: "AI-native" describes how it is built.
 
-“AI-native” describes the authorship and management model. pycc is not an AI
-or machine-learning compiler.
+## Project
 
-Project status is pre-alpha. `pycc check` now parses and type-checks the v0.1
-frontend, including arithmetic, assignments, calls and returns, recursion,
-control flow, primitive values, `range`, and basic f-strings. It enforces
-public annotations, rejects `Any`, infers private helpers, and emits human or
-JSON diagnostics. `pycc build` and `pycc run` compile that implemented surface
-through MIR, LLVM, the host linker, and the native runtime. v0.1's own
-acceptance criteria are now met: `fib` and `mandelbrot-ascii` match pinned
-CPython output on all five Tier-1 targets, `pycc check` clears its
-<75ms/1000 LOC throughput floor, and diagnostic output matches the stable CLI
-specification's example. v0.2 (collections, generics) and v0.3 (classes,
-inheritance, pattern matching, exceptions) are also met, with v0.3 released
-as the `v0.3.0` tag; v0.4 is in progress. Cross-file project from imports have landed. Bare/submodule imports, namespace handling, broader project CLI behavior, and incremental compilation remain incomplete. Documented
-representation and lifetime gaps, the full multi-version conformance matrix,
-differential fuzzing, corpus testing, and production readiness remain
-roadmap work; design targets must not be interpreted as released features.
+- [README](https://raw.githubusercontent.com/rotnov/pycc/main/README.md): Positioning, quick start, build instructions and quality policy.
+- [Current status](https://rotnov.github.io/pycc/status/): Per-area implementation status, generated from the roadmap at deploy time.
+- [Roadmap](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md): Milestones, acceptance criteria, and the evidence and remaining gap for each area.
 
-## Evidence hero inventory
-
-Canonical machine-readable contract: https://rotnov.github.io/pycc/evidence-heroes.json
-Unavailable means no accepted unique hero artifact; it is not zero or failed evidence.
-
-<!-- evidence-hero: landing | landing-quick-start-v1 | native-build-output | all-Tier-1 | / -->
-<!-- evidence-hero: language | language-support-v1 | language-conformance | all-Tier-1 | /language-support/ -->
-<!-- evidence-hero: diagnostics | diagnostics-v1 | compiler-diagnostic | all-Tier-1 | /diagnostics/ -->
-<!-- evidence-hero: performance | performance-v1 | benchmark | unavailable | /performance/ -->
-<!-- evidence-hero: architecture | architecture-trace-v1 | compiler-pipeline-trace | partial | /architecture/ -->
-<!-- evidence-hero: status | status-snapshot-v1 | required-checks-snapshot | all-Tier-1 | /status/ -->
-<!-- evidence-hero: comparison | comparison-sources-v1 | source-backed-comparison | unavailable | /python-aot-compilers/ -->
-<!-- evidence-hero: provenance | ai-provenance-v1 | authorship-attestation | unavailable | /ai-native/ -->
-
-Accepted landing evidence: fixture tests/fixtures/quick_start.py; test
-tests/quick_start.rs::quick_start_fixture_builds_and_prints_the_documented_sequence;
-commands `pycc build hello.py -o hello` then `./hello`; exact stdout snapshot
-tests/fixtures/quick_start.expected.txt; commit
-8324332d5ea713bd8a56f4d08bf7e0120757d66b; CI run
-https://github.com/rotnov/pycc/actions/runs/33198103510; all five Tier-1
-targets; CPython 3.14.7; Rust 1.97.1; LLVM 22; debug profile; no extra compiler
-flags. Canonical LF SHA-256: source
-09f7f6732d6837a0e7a91298eea549b0bdcba77d4908839ce1878955f4a0f043; test
-cb7af27aab96bf468fea7ee973e00ae9d11c0054187e09f2e94e4d8b9199a766; stdout
-668cec0e1f32369a43d6f74b1e795fe37f1e46bdb8eb0d7712b35c7e95e173e6. Tier-1
-jobs: macos-14 / aarch64-apple-darwin /
-https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383105;
-macos-15-intel / x86_64-apple-darwin /
-https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383070;
-ubuntu-latest / x86_64-unknown-linux-gnu /
-https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382966;
-ubuntu-24.04-arm / aarch64-unknown-linux-gnu /
-https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940383014;
-windows-latest / x86_64-pc-windows-msvc /
-https://github.com/rotnov/pycc/actions/runs/33198103510/job/98940382973.
-Limitations: This compiles only the implemented v0.1 subset: statement-form if
-and while, recursive calls, and print. It does not prove support for classes,
-exceptions, generators, or imports.
-
-Stable landing artifacts:
-https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.py,
-https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/quick_start.rs,
-https://github.com/rotnov/pycc/blob/8324332d5ea713bd8a56f4d08bf7e0120757d66b/tests/fixtures/quick_start.expected.txt,
-https://github.com/rotnov/pycc/commit/8324332d5ea713bd8a56f4d08bf7e0120757d66b.
-
-Exact landing stdout:
-
-```text
-0
-1
-1
-2
-3
-5
-8
-13
-21
-34
-55
-```
-
-language-support-v1 — all-Tier-1: `pycc run tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr); `python3.14 tests/fixtures/pep_0526_var_annotations.py` (exit 0, empty stderr). Both stdout streams: `15\n`. One passing fixture does not establish full Python 3.14 compatibility. all-Tier-1 means platform coverage for this fixture, not whole-language acceptance. The displayed pycc run uses debug, not release. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/language-support/).
-
-diagnostics-v1 — all-Tier-1: `pycc check tests/diagnostics/d0021_range_argument_type.py` (exit 1, empty stderr); `pycc check tests/diagnostics/d0021_range_argument_type.py --error-format json` (exit 1, empty stderr). Human stdout: T0021; JSON stdout includes ``"help":["pass an `int` value"]``. Human output has no help line. The type checker uses a placeholder 1:1, zero-length span; the caret does not precisely highlight the argument. Exact serialization for this fixture does not establish diagnostic-class correctness for all inputs. [Exact source, snapshots, SHA-256 identities, toolchain and five jobs](https://rotnov.github.io/pycc/diagnostics/).
-
-architecture-trace-v1 — partial: tests/fixtures/quick_start.py traced through parser, HIR, type checking, MIR and a native build to a 26-byte stdout; LLVM IR unavailable. Re-derived by tests/architecture_trace.rs (parser e3bab36a048cba708813e94e39a0301cc4dc4934bd14d9b8fc7101a5028cf45e, HIR 8e92d002b5438d4cf8b41d2390ad1f37679a4d43c76bc1e357963ded2594c84c, MIR dc6b710e2975df6b718f2fb30d48cef4b2738d3544fecdf4b50ba826320f3d7e). One fixture is not the language. The LLVM IR stage carries no artifact at all, because pycc has no --emit flag, so this trace is partial and never all-Tier-1. The parser, HIR and MIR artifacts are Rust Debug renderings: a developer-facing format with no stability guarantee, so their SHA-256 identities change whenever those types change. The native build and its stdout were observed on one host; tests/architecture_trace.rs re-derives every stage wherever cargo test --workspace runs. [Exact stage artifacts, SHA-256 identities and excerpts](https://rotnov.github.io/pycc/architecture/).
-
-status-snapshot-v1 — all-Tier-1: main 4111208c0910c0a7588408a6ac7d2b2bad20592c (PR #1005 head 984eb6f27ca9f4809fa1277e12f8c83283bef1f6) — ci-gate success, audit success, five Tier-1 jobs success; captured 2026-09-11T16:48:51Z. A point-in-time observation of one default-branch revision; later merges are not covered until the snapshot is refreshed. all-Tier-1 means the listed jobs concluded success in that run, not release readiness. The merged pull request's head commit is not reachable from a clean checkout, so its tree equality is proven from the collector's recorded fields, not from Git. [Exact subjects, run and job links](https://rotnov.github.io/pycc/status/).
-
-## Project (Markdown-first)
-
-- [Markdown landing](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
-- [README](https://raw.githubusercontent.com/rotnov/pycc/main/README.md): Project positioning, current capabilities, build instructions, and quality policy.
-
-## Specifications (Markdown)
+## Specifications
 
 - [Specification index](https://raw.githubusercontent.com/rotnov/pycc/main/docs/SPEC.md): Map of the documents that define project behavior.
-- [Compiler architecture](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ARCHITECTURE.md): Pipeline, crate boundaries, and platform model.
-- [Python standards matrix](https://raw.githubusercontent.com/rotnov/pycc/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and implementation status.
-- [Roadmap](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ROADMAP.md): Delivery stages and acceptance criteria toward v1.0.
+- [Compiler architecture](https://raw.githubusercontent.com/rotnov/pycc/main/docs/ARCHITECTURE.md): Pipeline, crate boundaries and platform model.
+- [Python standards matrix](https://raw.githubusercontent.com/rotnov/pycc/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and their implementation status.
+- [CLI specification](https://raw.githubusercontent.com/rotnov/pycc/main/docs/CLI_SPEC.md): Commands, flags and diagnostic output.
+- [Diagnostics](https://raw.githubusercontent.com/rotnov/pycc/main/docs/DIAGNOSTICS.md): Diagnostic codes and their meaning.
 
 ## Optional
 
-- [Language support](https://rotnov.github.io/pycc/language-support/): One fixture and its current scope, not full compatibility.
-- [Diagnostics](https://rotnov.github.io/pycc/diagnostics/): Exact human and JSON output with limitations. (HTML pages and human navigation — larger context when expanded)
-
-- [Canonical website](https://rotnov.github.io/pycc/): Human-readable project overview and current status.
-- [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.
-- [Current implementation status](https://rotnov.github.io/pycc/status/): Commit-relative account of working behavior, missing v0.1 features, CI, and coverage evidence.
-- [Compiler architecture](https://rotnov.github.io/pycc/architecture/): Implemented Rust and LLVM pipeline separated from the target architecture.
-- [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/): Source-backed map of pycc, LPython, Codon, Nuitka, mypyc, and Cython by language contract, artifact, runtime model, and current positioning.
-- [AI-native experiment](https://rotnov.github.io/pycc/ai-native/): Authorship boundary, operating loop, governance, and public evidence for the fully AI-created, human-managed development model.
+- [Canonical website](https://rotnov.github.io/pycc/): Human-readable overview with a checked example.
+- [Source repository](https://github.com/rotnov/pycc): Source, tests, issues, pull requests and history.
 - [MIT license](https://raw.githubusercontent.com/rotnov/pycc/main/LICENSE): Terms for using and contributing to pycc.

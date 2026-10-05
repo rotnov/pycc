@@ -1,11 +1,12 @@
 ---
 id: D-243
 title: "Architecture hero is a checked-in, re-derivable compiler pipeline trace"
-status: accepted
+status: superseded
 ---
 
 ## D-243: Architecture hero is a checked-in, re-derivable compiler pipeline trace
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: The Architecture page was the last evidence-first page whose first
   screen showed a diagram of a pipeline rather than proof that the pipeline
   runs. Under the #564 contract (D-186/D-230) its record stayed explicitly
