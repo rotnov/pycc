@@ -1,12 +1,13 @@
 ---
 id: D-170
 title: "Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522)"
-status: accepted
+status: superseded
 ---
 
 ## D-170: Extend the status-page freshness check with a third signal: feature-landing paragraph set changes (#522)
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: D-156's two-signal design (milestone-line change, evidence-checklist
   state change) has a detection gap. A new feature-landing paragraph added under
   an existing `## vX.Y` heading in `docs/ROADMAP.md` — the

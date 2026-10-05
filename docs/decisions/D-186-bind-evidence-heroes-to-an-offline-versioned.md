@@ -1,12 +1,13 @@
 ---
 id: D-186
 title: "Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations"
-status: accepted
+status: superseded
 ---
 
 ## D-186: Bind evidence heroes to an offline versioned manifest with reviewed immutable attestations
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: The public site had no common record for the source, command,
   output, test, revision, platform, and limitations shown by an evidence hero.
   The landing page's quick-start binding closed one concrete source/output

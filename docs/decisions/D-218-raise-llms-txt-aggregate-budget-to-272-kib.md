@@ -1,12 +1,13 @@
 ---
 id: D-218
 title: "Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207)"
-status: accepted
+status: superseded
 ---
 
 ## D-218: Raise the llms.txt aggregate context budget from 264 KiB to 272 KiB (issue #207)
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: [D-200](./D-200-raise-llms-txt-aggregate-budget-to-264-kib.md) raised
   `site/llms-txt-context-manifest.json`'s `budget_kib` from `256` to `264` on 2026-08-24 for
   exactly the failure mode that recurred here: `docs/ROADMAP.md`, the largest of the six

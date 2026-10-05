@@ -120,8 +120,7 @@ the final pre-merge run has `base.sha` equal to `main`'s tip.
 The governance checkout is depth 1, so neither `base.sha` nor a pushed
 `before` is normally present: each revision is checked with
 `git cat-file -e <rev>^{commit}` and shallow-fetched
-(`git fetch --no-tags --depth=1 origin <rev>`) when missing, the same shape
-as `scripts/check_site_pin_merge_currency.rb`'s `ensure_revision_available`.
+(`git fetch --no-tags --depth=1 origin <rev>`) when missing.
 
 Blobs are read with `git show <rev>:<path>` and decoded as UTF-8 with
 `errors="surrogateescape"`, so a stray non-UTF-8 byte becomes a line

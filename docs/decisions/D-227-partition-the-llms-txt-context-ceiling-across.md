@@ -1,11 +1,12 @@
 ---
 id: D-227
 title: "Partition the llms.txt context ceiling across per-resource budgets"
-status: accepted
+status: superseded
 ---
 
 ## D-227: Partition the llms.txt context ceiling across per-resource budgets
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: [#923](https://github.com/rotnov/pycc/issues/923). Issue #207's
   bounded-expansion contract gives `site/llms-txt-context-manifest.json` an
   aggregate ceiling (`budget_kib`) and a per-resource `budget_bytes` for each
