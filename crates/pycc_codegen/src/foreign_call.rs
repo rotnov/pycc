@@ -2,8 +2,9 @@
 //! `MirExpr::ObjCall` (#1313, through the same argument marshalling; a
 //! computed callee since Part 2a of #1371, see [`callee_is_produced`]),
 //! `MirExpr::ObjSubscript` (Part 3 of #1026, PR 3b of #1082),
-//! `MirExpr::ObjSlice` (Part 2b of #1371, see [`emit_slice`]) and
-//! `MirStmt::ForObject` (PR 3c of #1082).
+//! `MirExpr::ObjList` (Part 2d of #1371, see [`emit_list`]) and
+//! `MirStmt::ForObject` (PR 3c of #1082). A slice of an object, loaded or
+//! deleted, is `foreign_slice.rs`'s (Parts 2b and 2c of #1371).
 //!
 //! They share this module because they share the *packer contract*: each
 //! marshals a pycc operand into a `PyObject *` through a `pycc_ext_obj_pack_*`
@@ -78,6 +79,94 @@ fn alloca_in_entry_block<'ctx>(
         )
         .expect("build_array_alloca should not fail")
     })
+}
+
+/// Packs every scalar of `values` through its `pycc_ext_obj_pack_*` helper
+/// into a `PyObject *` array hoisted into `entry_fn`'s entry block, in
+/// order, and answers the array.
+///
+/// The one spelling of the array half of the packer contract, shared by a
+/// call's arguments ([`emit_call_with`]) and a list display's elements
+/// ([`emit_list`]): the helper each array is handed to consumes every slot
+/// on every path, a failed packer's `NULL` included, so no slot is checked
+/// here.
+///
+/// A zero-length array would be `alloca [0 x ptr]`, a pointer it is not
+/// meaningful to GEP into -- and `gc.disable()` and an empty `[]` are both
+/// zero-length shapes. One slot is always allocated and simply left
+/// unread; the consumer reads only the count it is passed.
+fn emit_packed_array<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    entry_fn: FunctionValue<'ctx>,
+    values: &[Scalar<'ctx>],
+) -> inkwell::values::PointerValue<'ctx> {
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_type = context.i64_type();
+    let slots = values.len().max(1);
+    let array = alloca_in_entry_block(context, builder, entry_fn, slots);
+    for (index, value) in values.iter().enumerate() {
+        let packed = emit_pack(context, builder, module, *value, "foreign_call_arg");
+        let slot = unsafe {
+            builder
+                .build_in_bounds_gep(
+                    ptr,
+                    array,
+                    &[i64_type.const_int(index as u64, false)],
+                    "foreign_call_arg_slot",
+                )
+                .expect("build_in_bounds_gep should not fail")
+        };
+        builder
+            .build_store(slot, packed)
+            .expect("build_store should not fail");
+    }
+    array
+}
+
+/// Emits one list display bound to a CPython object slot (Part 2d of
+/// #1371), yielding the fresh CPython `list` as an opaque
+/// [`Scalar::Object`].
+///
+/// The elements are already evaluated, left to right, by `emit_expr`'s own
+/// arm. Each is packed into a hoisted array ([`emit_packed_array`]) and
+/// handed to `pycc_ext_obj_build_list`, which consumes every packed
+/// reference on every path -- a failed packer's `NULL` and a failed
+/// `PyList_New` included -- so the display keeps exactly one failure edge,
+/// on a `NULL` result. The list is a new reference, leaked on the same
+/// leak-only rule as every other object this boundary produces (#1092).
+pub(super) fn emit_list<'ctx>(
+    context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    elements: &[Scalar<'ctx>],
+) -> Scalar<'ctx> {
+    let edge = ForeignFailEdge::for_current(builder);
+    let ptr = context.ptr_type(inkwell::AddressSpace::default());
+    let i64_type = context.i64_type();
+    let items = emit_packed_array(context, builder, module, edge.function(), elements);
+    let build_list = shim_fn(
+        module,
+        EXT_OBJ_BUILD_LIST_SYMBOL,
+        ptr.fn_type(&[ptr.into(), i64_type.into()], false),
+    );
+    let result = builder
+        .build_call(
+            build_list,
+            &[
+                items.into(),
+                i64_type.const_int(elements.len() as u64, false).into(),
+            ],
+            "foreign_list",
+        )
+        .expect("build_call should not fail for pycc_ext_obj_build_list")
+        .try_as_basic_value()
+        .expect_basic("pycc_ext_obj_build_list returns PyObject *")
+        .into_pointer_value();
+    route_null(context, builder, module, rt, edge, result, "foreign_list");
+    Scalar::Object(result)
 }
 
 /// The blocks and per-iteration item of a lowered `for x in <object>:`
@@ -404,29 +493,7 @@ fn emit_call_with<'ctx>(
     let ptr = context.ptr_type(inkwell::AddressSpace::default());
     let i64_type = context.i64_type();
 
-    // `PyObject_Vectorcall` reads `nargs` slots, so a zero-argument call
-    // needs no storage at all -- but LLVM's `alloca [0 x ptr]` yields a
-    // pointer it is not meaningful to GEP into, and `gc.disable()` is
-    // exactly the zero-argument shape this PR's acceptance test exercises.
-    // One slot is always allocated and simply left unread.
-    let slots = args.len().max(1);
-    let arg_array = alloca_in_entry_block(context, builder, entry_fn, slots);
-    for (index, arg) in args.iter().enumerate() {
-        let packed = emit_pack(context, builder, module, *arg, "foreign_call_arg");
-        let slot = unsafe {
-            builder
-                .build_in_bounds_gep(
-                    ptr,
-                    arg_array,
-                    &[i64_type.const_int(index as u64, false)],
-                    "foreign_call_arg_slot",
-                )
-                .expect("build_in_bounds_gep should not fail")
-        };
-        builder
-            .build_store(slot, packed)
-            .expect("build_store should not fail");
-    }
+    let arg_array = emit_packed_array(context, builder, module, entry_fn, args);
 
     let call = shim_fn(
         module,
@@ -504,65 +571,6 @@ pub(super) fn emit_subscript<'ctx>(
         result,
         "foreign_subscript",
     );
-    Scalar::Object(result)
-}
-
-/// Emits one `o[start:stop:step]` load (Part 2b of #1371), yielding the
-/// result as an opaque [`Scalar::Object`]; `None` is an absent bound.
-///
-/// The same packer contract as [`emit_subscript`]: every present bound is
-/// packed and handed to `pycc_ext_obj_getslice`, which consumes it on every
-/// path -- a failed packer's `NULL` included -- so the operation keeps
-/// exactly one failure edge, on a `NULL` result. An absent bound is passed
-/// as a null pointer with its presence bit clear, and the helper hands
-/// `PySlice_New` CPython's `None` for it. The result is a new reference,
-/// leaked on the same leak-only rule.
-pub(super) fn emit_slice<'ctx>(
-    context: &'ctx Context,
-    builder: &Builder<'ctx>,
-    module: &inkwell::module::Module<'ctx>,
-    rt: &RtFns<'ctx>,
-    base: Scalar<'ctx>,
-    bounds: [Option<Scalar<'ctx>>; 3],
-) -> Scalar<'ctx> {
-    let edge = ForeignFailEdge::for_current(builder);
-    let base_ptr = expect_object_pointer(base);
-    let ptr = context.ptr_type(inkwell::AddressSpace::default());
-    let i32_type = context.i32_type();
-    let mut present = 0u64;
-    let mut args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![base_ptr.into()];
-    for (bit, bound) in bounds.into_iter().enumerate() {
-        let pointer = match bound {
-            Some(scalar) => {
-                present |= 1 << bit;
-                emit_pack(context, builder, module, scalar, "foreign_slice_bound")
-            }
-            None => ptr.const_null(),
-        };
-        args.push(pointer.into());
-    }
-    args.push(i32_type.const_int(present, false).into());
-    let getslice = shim_fn(
-        module,
-        EXT_OBJ_GETSLICE_SYMBOL,
-        ptr.fn_type(
-            &[
-                ptr.into(),
-                ptr.into(),
-                ptr.into(),
-                ptr.into(),
-                i32_type.into(),
-            ],
-            false,
-        ),
-    );
-    let result = builder
-        .build_call(getslice, &args, "foreign_slice")
-        .expect("build_call should not fail for pycc_ext_obj_getslice")
-        .try_as_basic_value()
-        .expect_basic("pycc_ext_obj_getslice returns PyObject *")
-        .into_pointer_value();
-    route_null(context, builder, module, rt, edge, result, "foreign_slice");
     Scalar::Object(result)
 }
 

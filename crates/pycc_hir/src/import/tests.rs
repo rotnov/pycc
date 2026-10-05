@@ -14,6 +14,7 @@ mod annotations_foreign;
 mod block;
 mod from_foreign;
 mod multi;
+mod object_receivers;
 
 const DEP: &str = "dep.py";
 

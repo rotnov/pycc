@@ -128,9 +128,13 @@ pub(super) fn expression_can_set_exception(expr: &MirExpr) -> bool {
         // Part 2b of #1371: `PySequence_Contains` runs `__contains__` (or
         // iteration), and `PyObject_GetItem` on a slice runs `__getitem__`;
         // either may raise. `foreign_compare::emit_contains` owns the `-1`
-        // check and `foreign_call::emit_slice` the `NULL` check.
+        // check and `foreign_slice::emit_slice` the `NULL` check.
         | MirExpr::ObjContains { .. }
-        | MirExpr::ObjSlice { .. } => true,
+        | MirExpr::ObjSlice { .. }
+        // Part 2d of #1371: boxing an element or allocating the CPython
+        // `list` may fail, and `foreign_call::emit_list` owns the `NULL`
+        // check.
+        | MirExpr::ObjList { .. } => true,
         // Part 1 of #1371: a rich comparison runs the operands' own
         // `__eq__`/`__lt__`/..., which may raise, and
         // `foreign_compare::emit_compare` owns the `NULL` check; an
@@ -1578,6 +1582,12 @@ mod tests {
                 ty: pycc_mir::Ty::MemoryView,
             }),
             index: Box::new(MirExpr::IntLiteral(0)),
+        }));
+        // Part 2d of #1371: a list display built as a CPython `list` always
+        // may raise -- its elements are boxed and the list allocated --
+        // even an empty one.
+        assert!(expression_can_set_exception(&MirExpr::ObjList {
+            elements: Vec::new(),
         }));
         assert!(!expression_can_set_exception(&MirExpr::IntLiteral(1)));
     }

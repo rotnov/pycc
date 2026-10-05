@@ -345,18 +345,26 @@ fn a_module_body_read_above_its_foreign_import_is_refused() {
 /// `Ty::Object` branch added ahead of that call answers `Ty::Object`, so
 /// the program type-checks and lowers to a `MirExpr::ObjMethodCall`.
 ///
-/// `numpy.append(1)` stays in the refusal table above and is unaffected --
-/// the four D-105 String-keyed container spellings
-/// (`append`/`pop`/`get`/`add`) are stolen ahead of the generic
-/// `MethodCall` fallback and reach `lookup_bound_name`, which still refuses
-/// a `Ty::Object` read with `I0404`. Admitting other method names does not
-/// reach that path, so the theft stays as narrow as it was.
+/// Since #1095 that includes the four D-105 String-keyed container
+/// spellings (`append`/`pop`/`get`/`add`): the foreign import keeps the
+/// method reading beside the container one, and the object receiver takes
+/// it, so `numpy.append(1)` left the refusal table below.
 #[test]
 fn a_general_method_call_on_a_foreign_object_is_accepted() {
     let dir = ScratchDir::new("foreign_method_call_ok").expect("scratch");
-    let output = check(&dir, "import numpy\n\nnumpy.sqrt(2.0)\n");
-    assert_eq!(output.status.code(), Some(0), "{}", stdout_of(&output));
-    assert_eq!(stdout_of(&output), "");
+    for body in [
+        "import numpy\n\nnumpy.sqrt(2.0)\n",
+        "import numpy\n\nnumpy.append(1)\n",
+    ] {
+        let output = check(&dir, body);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{body}: {}",
+            stdout_of(&output)
+        );
+        assert_eq!(stdout_of(&output), "", "{body}");
+    }
 }
 
 /// Every shape that *consumes* the binding, one row per refusing site.
@@ -372,14 +380,14 @@ fn a_general_method_call_on_a_foreign_object_is_accepted() {
 fn every_operation_on_a_foreign_module_is_refused_with_i0404() {
     let dir = ScratchDir::new("foreign_i0404").expect("scratch");
     let bodies = [
-        // An expression-position read: a `match` subject and a D-105
-        // String-keyed method spelling. A module-body direct call
+        // An expression-position read: a `match` subject. A D-105
+        // String-keyed method spelling (`numpy.append(1)`) is admitted since
+        // #1095 (the test above). A module-body direct call
         // (`numpy(1)`) is admitted since #1313 and raises CPython's own
         // `TypeError` at run time; `tests/issue_1313_foreign_direct_call.rs`
         // pins it. `print(numpy)` and `f"{numpy}"` are admitted since #1340
         // (the test below).
         "import numpy\n\nmatch numpy:\n    case 1:\n        pass\n",
-        "import numpy\n\nnumpy.append(1)\n",
         // The iterable of a comprehension.
         "import numpy\n\nxs = [e for e in numpy]\n",
     ];

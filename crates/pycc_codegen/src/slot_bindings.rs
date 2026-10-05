@@ -210,6 +210,9 @@ pub(super) fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<Stri
         // existing instance's attribute slot, not a name -- same reasoning
         // as `DictSet` immediately above.
         MirStmt::AttrSet { .. } => {}
+        // `del o[a:b]` (Part 2c of #1371) binds no name, and `pycc_hir`
+        // refuses a walrus in its operands.
+        MirStmt::ObjDelSlice { .. } => {}
         // `MirStmt::ForDict`, produced when a `for k in d:` HIR loop's
         // base resolves to a dict-typed binding (mirrors `MirStmt::ForList`
         // above, which is produced for the list-typed case). `Ty::Str` for

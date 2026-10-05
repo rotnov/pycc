@@ -160,7 +160,9 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             }
             // #1244: a `del` unbinds a name rather than binding it, so it is
             // not a kill -- it narrows nothing and adds no definition. The
-            // type checker tracks it separately (`deleted_names`).
+            // type checker tracks it separately (`deleted_names`). A slice
+            // `del` (Part 2c of #1371) binds and unbinds nothing; a walrus
+            // in its operands is refused by `stmt::del::lower_delete`.
             // #1291: a nested foreign import's name lives in
             // `HirModule::imports`, not `definition_spans`, exactly like a
             // top-level foreign import, so it is not a kill either;
@@ -170,6 +172,7 @@ fn collect_killed_names(body: &[HirStmt], killed: &mut HashSet<String>) {
             | HirStmt::AttrSet { .. }
             | HirStmt::Return(_)
             | HirStmt::Delete { .. }
+            | HirStmt::DeleteSlice { .. }
             | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }
@@ -313,7 +316,10 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
                 }
             }
         }
-        HirExpr::ListLiteral(es) | HirExpr::SetLiteral(es) | HirExpr::TupleLiteral(es) => {
+        HirExpr::ListLiteral(es)
+        | HirExpr::ObjectList(es)
+        | HirExpr::SetLiteral(es)
+        | HirExpr::TupleLiteral(es) => {
             for e in es {
                 collect_named_expr_targets_in_expr(e, killed);
             }
@@ -365,7 +371,8 @@ fn collect_named_expr_targets_in_expr(expr: &HirExpr, killed: &mut HashSet<Strin
         HirExpr::ReceiverDispatchedCall { call, .. } => {
             collect_named_expr_targets_in_expr(call, killed);
         }
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // #1411: `type(self)(args)` walks its arguments the same way.
+        HirExpr::GenericClassInstantiate { args, .. } | HirExpr::ReceiverClassCall { args } => {
             for arg in args {
                 collect_named_expr_targets_in_expr(arg, killed);
             }

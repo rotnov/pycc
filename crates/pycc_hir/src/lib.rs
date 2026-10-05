@@ -498,6 +498,19 @@ pub enum HirExpr {
     /// literal is empty (`MirExpr::ty()`); carrying the resolved type on the
     /// node itself is what lets a resolved `[]` survive into MIR and codegen.
     EmptyList(Ty),
+    /// A list display `[e1, e2, ...]`, empty or not, assigned to a name
+    /// whose type is the opaque CPython object (Part 2d of #1371, D-258
+    /// rule 4): it builds a fresh CPython `list`, each element packed into a
+    /// `PyObject *`, and its own type is `Ty::Object`.
+    ///
+    /// **Construction invariant:** like [`HirExpr::EmptyList`], `lower_expr`
+    /// never builds this variant. Its only construction site is
+    /// `pycc_types::empty_container::resolve_empty_containers`, which
+    /// rewrites a `ListLiteral` into it before either checker walks the
+    /// module, so `pycc check` and `pycc build` consume the same node. Each
+    /// element must have a packable type (`int`, `float`, `bool`, `str` or
+    /// `object`); `pycc_types` refuses anything else with `I0404`.
+    ObjectList(Vec<HirExpr>),
     /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
     /// handling below special-cases an `Expr::Subscript` target on a bare
     /// name into a dedicated `HirStmt::DictSet` node instead of ever
@@ -749,6 +762,18 @@ pub enum HirExpr {
     /// to `MirExpr::ObjCall` with the subscript as the callee.
     ExprCall {
         callee: Box<HirExpr>,
+        args: Vec<HirExpr>,
+    },
+    /// #1411: `type(self)(args)` inside an instance method -- a construction
+    /// of the receiver's own class. The class is not carried here: it is the
+    /// static type of the canonical receiver `self` in the body being
+    /// compiled, recovered by `pycc_types` and `pycc_mir` exactly as
+    /// [`HirExpr::Super`] recovers its class. Because an inherited body that
+    /// constructs through its receiver is compiled once more for every
+    /// subclass with `self` retyped (D-254), each compilation builds its own
+    /// receiver's class, as CPython's run-time `type(self)` does
+    /// (`expr::receiver_class_call` owns the lowering rule).
+    ReceiverClassCall {
         args: Vec<HirExpr>,
     },
     /// Zero-arg `super()` (PEP 3135, #433): represents the implicit
@@ -1097,6 +1122,24 @@ pub enum HirStmt {
     /// statement of the rule.
     Delete {
         name: String,
+    },
+    /// `del base[start:stop:step]`, any bound omitted (Part 2c of #1371),
+    /// one per slice target of a `del` statement, in the statement's
+    /// left-to-right target order. Unlike [`HirStmt::Delete`] it unbinds no
+    /// name: it *reads* `base` and every present bound, and at run time asks
+    /// the base to delete the slice. `pycc_hir` cannot see types, so every
+    /// slice target lowers here; `pycc_types` admits only a CPython-object
+    /// base (`PyObject_DelItem` with a `slice` key, `foreign::slice`) and
+    /// refuses every other base with this node's `span` -- the slice
+    /// target's own range -- so the native refusal stays located.
+    /// `docs/TYPE_SYSTEM.md`'s "`del` statement" section is the canonical
+    /// statement of the rule.
+    DeleteSlice {
+        base: Box<HirExpr>,
+        start: Option<Box<HirExpr>>,
+        stop: Option<Box<HirExpr>>,
+        step: Option<Box<HirExpr>>,
+        span: Span,
     },
     /// A CPython-backed `import X` or `import X as Y` nested in a
     /// module-level `if`/`try` block (Part 1 of #1282, #1291). Each

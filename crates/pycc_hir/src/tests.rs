@@ -6132,6 +6132,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
             HirExpr::ListLiteral(vec![walrus("list_elt")]),
             HirExpr::SetLiteral(vec![walrus("set_elt")]),
             HirExpr::TupleLiteral(vec![walrus("tuple_elt")]),
+            HirExpr::ObjectList(vec![walrus("object_list_elt")]),
             HirExpr::Subscript {
                 base: Box::new(walrus("subscript_base")),
                 index: Box::new(walrus("subscript_index")),
@@ -6198,6 +6199,7 @@ fn killed_names_finds_a_walrus_nested_inside_every_expression_kind() {
         "list_elt",
         "set_elt",
         "tuple_elt",
+        "object_list_elt",
         "subscript_base",
         "subscript_index",
         "slice_base",

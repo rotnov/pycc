@@ -4,7 +4,9 @@
 //! statement of the rule. This module owns the HIR half of it:
 //!
 //! - [`lower_delete`] expands `del a, (b, [c])` left to right into one
-//!   [`HirStmt::Delete`] per name and refuses every other target kind;
+//!   [`HirStmt::Delete`] per name and one [`HirStmt::DeleteSlice`] per slice
+//!   target (`del o[a:b]`, Part 2c of #1371), and refuses every other target
+//!   kind;
 //! - [`deleted_names`] is the recursive walk the type checker's deletion
 //!   prescan and the import resolver use;
 //! - [`check_module_deletions`] closes the module-level late-binding hole: a
@@ -15,7 +17,7 @@
 //! - [`mentioned_names`] feeds `program::link`'s cross-module rule, since the
 //!   linked program shares one flat top-level namespace.
 
-use crate::{HirItem, HirStmt, unsupported};
+use crate::{HirExpr, HirItem, HirStmt, unsupported};
 use pycc_ast::visitor::{self, Visitor};
 use pycc_ast::{Expr, ModModule, Stmt, StmtDelete};
 use pycc_diag::{Diagnostic, Span};
@@ -24,18 +26,28 @@ use std::collections::{BTreeSet, HashSet};
 /// Lowers `del t1, t2, ...` into one [`HirStmt::Delete`] per deleted name, in
 /// CPython's left-to-right order. A tuple or list target (`del (a, b)`,
 /// `del [a, [b]]`) is flattened the same way; an empty one (`del ()`) deletes
-/// nothing, exactly as in CPython. Every other target kind is refused: the
+/// nothing, exactly as in CPython. A slice target (`del o[a:b:c]`) becomes one
+/// [`HirStmt::DeleteSlice`], its base and bounds lowered by `lower_expr`
+/// (Part 2c of #1371); whether its base admits the deletion is a type
+/// question `pycc_types` answers. Every other target kind is refused: the
 /// parser already rejects starred, call and literal targets (`L0001`), so what
 /// reaches here is a name, a tuple/list, a subscript or an attribute.
-pub(crate) fn lower_delete(del: &StmtDelete) -> Result<Vec<HirStmt>, Diagnostic> {
+pub(crate) fn lower_delete(
+    del: &StmtDelete,
+    lower_expr: &dyn Fn(&Expr) -> Result<HirExpr, Diagnostic>,
+) -> Result<Vec<HirStmt>, Diagnostic> {
     let mut lowered = Vec::new();
     for target in &del.targets {
-        lower_target(target, &mut lowered)?;
+        lower_target(target, lower_expr, &mut lowered)?;
     }
     Ok(lowered)
 }
 
-fn lower_target(target: &Expr, lowered: &mut Vec<HirStmt>) -> Result<(), Diagnostic> {
+fn lower_target(
+    target: &Expr,
+    lower_expr: &dyn Fn(&Expr) -> Result<HirExpr, Diagnostic>,
+    lowered: &mut Vec<HirStmt>,
+) -> Result<(), Diagnostic> {
     match target {
         Expr::Name(name) => {
             if name.id.as_str() == crate::DUNDER_NAME {
@@ -50,26 +62,50 @@ fn lower_target(target: &Expr, lowered: &mut Vec<HirStmt>) -> Result<(), Diagnos
         }
         Expr::Tuple(tuple) => {
             for elt in &tuple.elts {
-                lower_target(elt, lowered)?;
+                lower_target(elt, lower_expr, lowered)?;
             }
         }
         Expr::List(list) => {
             for elt in &list.elts {
-                lower_target(elt, lowered)?;
+                lower_target(elt, lower_expr, lowered)?;
             }
         }
-        Expr::Subscript(subscript) if matches!(subscript.slice.as_ref(), Expr::Slice(_)) => {
-            return Err(unsupported(
-                "a `del` of a slice (`del xs[a:b]`) is not supported yet",
-                subscript.range,
-            ));
-        }
         Expr::Subscript(subscript) => {
-            return Err(unsupported(
-                "a `del` of a subscript (`del d[k]`, `del xs[i]`) is not supported yet \
-                 (#1245 for `dict`, #1246 for `list`)",
-                subscript.range,
-            ));
+            let Expr::Slice(slice) = subscript.slice.as_ref() else {
+                return Err(unsupported(
+                    "a `del` of a subscript (`del d[k]`, `del xs[i]`) is not supported yet \
+                     (#1245 for `dict`, #1246 for `list`)",
+                    subscript.range,
+                ));
+            };
+            // CPython's order: the base, then each present bound.
+            let base = Box::new(lower_expr(&subscript.value)?);
+            let lower_bound = |bound: &Option<Box<Expr>>| {
+                bound
+                    .as_deref()
+                    .map(|bound| lower_expr(bound).map(Box::new))
+                    .transpose()
+            };
+            let start = lower_bound(&slice.lower)?;
+            let stop = lower_bound(&slice.upper)?;
+            let step = lower_bound(&slice.step)?;
+            // `lower_stmt`'s walrus-placement rule never sees a `del`, and
+            // the kill prescan (`killed_names`) records no binding for this
+            // statement, so a walrus in its operands is refused here.
+            let mut operands = std::iter::once(&base).chain(start.iter().chain(&stop).chain(&step));
+            if operands.any(|operand| crate::expr::contains_named_expr(operand)) {
+                return Err(unsupported(
+                    super::WALRUS_PLACEMENT_MESSAGE,
+                    subscript.range,
+                ));
+            }
+            lowered.push(HirStmt::DeleteSlice {
+                base,
+                start,
+                stop,
+                step,
+                span: Span::new(subscript.range.start().into(), subscript.range.end().into()),
+            });
         }
         other => {
             return Err(unsupported(
@@ -141,6 +177,7 @@ fn collect_deleted_names(body: &[HirStmt], deleted: &mut HashSet<String>) {
             | HirStmt::SetCompAssign { .. }
             | HirStmt::Return(_)
             | HirStmt::AttrSet { .. }
+            | HirStmt::DeleteSlice { .. }
             | HirStmt::ForeignImport { .. }
             | HirStmt::Raise { .. } => {}
         }
@@ -307,3 +344,6 @@ pub fn mentioned_names(module: &ModModule) -> BTreeSet<String> {
     scan.visit_body(&module.body);
     scan.names.into_iter().map(str::to_owned).collect()
 }
+
+#[cfg(test)]
+mod tests;

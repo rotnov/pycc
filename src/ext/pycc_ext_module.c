@@ -2050,26 +2050,26 @@ int pycc_ext_obj_contains(PyObject *container, PyObject *item)
 }
 
 /*
- * Part 2b of #1371: `o[start:stop:step]` with a CPython object `o`
- * (`EXT_OBJ_GETSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ * Parts 2b and 2c of #1371: builds the `slice` object for `o[start:stop:step]`
+ * and `del o[start:stop:step]`, the shared half of `pycc_ext_obj_getslice`
+ * and `pycc_ext_obj_delslice`.
  *
  * `present` says which bounds the source spelled (bit 0 start, bit 1 stop,
- * bit 2 step). A present bound is a packed value, consumed on every path --
- * a `NULL` one included, which is a failed packer whose exception is
+ * bit 2 step). A present bound is a packed value, consumed here on every
+ * path -- a `NULL` one included, which is a failed packer whose exception is
  * already set (an `int` bound outside the packer's range raises
  * `OverflowError` there, #1040) -- and an absent bound's pointer is ignored
  * and handed to `PySlice_New` as `NULL`, which it reads as `None`, the
- * value CPython's own `o[:b]` builds. The base is borrowed. The `slice`
- * object is released after the load; the result is a *new* reference that
- * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
- * records, or `NULL` with the exception set.
+ * value CPython's own `o[:b]` builds. A `NULL` base is defence in depth for
+ * the reason `pycc_ext_obj_getitem` records. Returns a new reference to the
+ * slice, or `NULL` with the exception set (or, for a `NULL` base, with
+ * whatever exception produced it).
  */
-PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
-                                int present)
+static PyObject *pycc_ext_obj_slice_of(PyObject *o, PyObject *start, PyObject *stop,
+                                       PyObject *step, int present)
 {
     PyObject *bounds[3];
-    PyObject *slice;
-    PyObject *result = NULL;
+    PyObject *slice = NULL;
     int failed = (o == NULL);
     int i;
 
@@ -2083,15 +2083,109 @@ PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, Py
     }
     if (!failed) {
         slice = PySlice_New(bounds[0], bounds[1], bounds[2]);
-        if (slice != NULL) {
-            result = PyObject_GetItem(o, slice);
-            Py_DECREF(slice);
-        }
     }
     for (i = 0; i < 3; i++) {
         Py_XDECREF(bounds[i]);
     }
+    return slice;
+}
+
+/*
+ * Part 2b of #1371: `o[start:stop:step]` with a CPython object `o`
+ * (`EXT_OBJ_GETSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * The bounds follow `pycc_ext_obj_slice_of`'s contract, and the base is
+ * borrowed. The `slice` object is released after the load. The result is a
+ * *new* reference that is deliberately never released, on the leak-only
+ * rule `docs/RUNTIME.md` records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_getslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
+                                int present)
+{
+    PyObject *slice = pycc_ext_obj_slice_of(o, start, stop, step, present);
+    PyObject *result;
+
+    if (slice == NULL) {
+        return NULL;
+    }
+    result = PyObject_GetItem(o, slice);
+    Py_DECREF(slice);
     return result;
+}
+
+/*
+ * Part 2d of #1371: a list display bound to an object slot, `x: object =
+ * [a, b]` (`EXT_OBJ_BUILD_LIST_SYMBOL` in `crates/pycc_codegen/src/ext.rs`).
+ *
+ * `items` holds `n` *packed* elements, in source order, each a new
+ * reference a `pycc_ext_obj_pack_*` helper produced. Every one is consumed
+ * on every path, exactly as `pycc_ext_obj_call` consumes its arguments: a
+ * `NULL` element is a packer that already set the exception, so the list is
+ * never built and the rest are released; a failed `PyList_New` releases
+ * them all. Otherwise each reference moves into the fresh list through
+ * `PyList_SetItem`, which steals it -- the limited API (abi3) has no
+ * `PyList_SET_ITEM`. The index is always in range of a list just built
+ * with `n` slots, so it cannot fail; the check is defence in depth and
+ * releases what has not moved yet. The result is a *new* reference that
+ * is deliberately never released, on the leak-only rule `docs/RUNTIME.md`
+ * records, or `NULL` with the exception set.
+ */
+PyObject *pycc_ext_obj_build_list(PyObject **items, long long n)
+{
+    PyObject *list = NULL;
+    int failed = 0;
+    long long i;
+
+    for (i = 0; i < n; i++) {
+        if (items[i] == NULL) {
+            failed = 1;
+        }
+    }
+    if (!failed) {
+        list = PyList_New((Py_ssize_t)n);
+    }
+    if (list == NULL) {
+        for (i = 0; i < n; i++) {
+            Py_XDECREF(items[i]);
+        }
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        if (PyList_SetItem(list, (Py_ssize_t)i, items[i]) < 0) {
+            for (i = i + 1; i < n; i++) {
+                Py_DECREF(items[i]);
+            }
+            Py_DECREF(list);
+            return NULL;
+        }
+    }
+    return list;
+}
+
+/*
+ * Part 2c of #1371: `del o[start:stop:step]` with a CPython object `o`
+ * (`EXT_OBJ_DELSLICE_SYMBOL` in `crates/pycc_codegen/src/ext.rs`), the
+ * statement twin of `pycc_ext_obj_getslice`.
+ *
+ * The bounds follow `pycc_ext_obj_slice_of`'s contract, and the base is
+ * borrowed. `PyObject_DelItem` runs the base's own `__delitem__` with the
+ * `slice`, which is released afterwards; nothing else outlives the call.
+ * Returns `0`, or `-1` with the exception set: a `tuple` raises
+ * `TypeError`, and a `dict` raises `KeyError` for the (hashable since
+ * 3.12) slice key, exactly as CPython's own `del` does.
+ */
+int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject *step,
+                          int present)
+{
+    PyObject *slice = pycc_ext_obj_slice_of(o, start, stop, step, present);
+    int status;
+
+    if (slice == NULL) {
+        return -1;
+    }
+    status = PyObject_DelItem(o, slice);
+    Py_DECREF(slice);
+    return status;
 }
 
 /*

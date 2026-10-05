@@ -1495,6 +1495,40 @@ one divergence: an `int` item or bound outside the inline range reaching
 membership or slice normally, until
 [#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
 
+**A slice deletion produces nothing.** Part 2c of
+[#1371](https://github.com/rotnov/pycc/issues/1371) adds
+`pycc_ext_obj_delslice(o, start, stop, step, present)` for `del o[a:b:c]`.
+It builds the `slice` exactly as `pycc_ext_obj_getslice` does (the two share
+the static `pycc_ext_obj_slice_of`), calls `PyObject_DelItem`, and returns
+`0`, or `-1` with the exception set, which is routed to the statement's
+failure edge. The base is borrowed, each present bound is consumed on every
+path, and the `slice` is released before the helper returns, so the
+deletion adds nothing to the leaked set. The hosted test runs it 200 times
+inside a function and pins `sys.getrefcount` of the list and of a large `int`
+bound unchanged afterwards (`tests/issue_1371_object_slice_del.rs`). It
+shares the packers' `OverflowError` divergence.
+
+**A list display bound to an object slot is one more producer.** Part 2d of
+[#1371](https://github.com/rotnov/pycc/issues/1371) builds `x: object = [a,
+b]` (and an empty `[]` assigned to a name bound to an object elsewhere, see
+`TYPE_SYSTEM.md` "Object slots") as a fresh CPython `list`. The elements are
+evaluated left to right, each packed by one of the five packers into an array
+hoisted into the entry block, and handed to
+`pycc_ext_obj_build_list(items, n)`. The helper **consumes every packed
+element on every path**: when a packer already failed with `NULL` it builds
+no list and releases the rest; when `PyList_New` fails it releases them all;
+otherwise each reference moves into the list through `PyList_SetItem` (the
+limited API has no `PyList_SET_ITEM`). The list is a new reference, leaked on
+the same terms as every other producer, so each successful display leaks the
+list and the one reference it holds per element. An element that raises
+before packing (`[o, 1 // z]`) leaves nothing to release. The hosted test
+`tests/issue_1371_object_list_display.rs` pins `sys.getrefcount` of a mortal
+element across 100 calls: `+2` per call for a discarded `[probe, probe]`,
+unchanged for a packer failure and for a raising element. The display shares
+the packers' divergence: an `int` element outside the inline range raises
+`OverflowError` where CPython would build the list, until
+[#1040](https://github.com/rotnov/pycc/issues/1040) widens the packer.
+
 **`and`/`or` boxes a selected native operand and leaks it.** Part 6 of
 [#1371](https://github.com/rotnov/pycc/issues/1371) types `n or o` and
 `o and n` (`n` an `int`, `float`, `bool` or `str`) as `object`

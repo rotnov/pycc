@@ -203,7 +203,10 @@ fn inference_through_a_helper_result_local_or_a_parameter_is_part_3() {
 
 const USING_Y: &str = "using `y`, which is bound to a CPython object";
 
-/// The shapes Part 1 does not admit keep their diagnostics.
+/// The shapes Part 1 does not admit keep their diagnostics. A D-105
+/// container spelling on a local object (`y.append(1)`) left this table
+/// with #1095: it is the foreign method call now, pinned by
+/// `a_container_spelling_on_a_function_local_object_is_admitted` below.
 #[test]
 fn the_shapes_outside_part_1_are_refused() {
     assert_one_error(
@@ -250,11 +253,15 @@ fn the_shapes_outside_part_1_are_refused() {
         "I0404",
         "passing a `list[int]` argument to a CPython object's method",
     );
-    assert_one_error(
-        "obj_fn_container_method",
+}
+
+/// #1095: `append` on a function-local object is the foreign method call.
+#[test]
+fn a_container_spelling_on_a_function_local_object_is_admitted() {
+    let dir = ScratchDir::new("obj_fn_container_method").expect("scratch");
+    assert_checks(
+        &dir,
         "import json\n\ndef f() -> None:\n    y = json.loads(\"[1]\")\n    y.append(1)\n",
-        "I0404",
-        USING_Y,
     );
 }
 

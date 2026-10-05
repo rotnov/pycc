@@ -120,6 +120,7 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
                 .collect(),
         ),
         HirExpr::ListLiteral(es) => HirExpr::ListLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::ObjectList(es) => HirExpr::ObjectList(es.into_iter().map(recurse).collect()),
         HirExpr::Subscript { base, index } => HirExpr::Subscript {
             base: Box::new(recurse(*base)),
             index: Box::new(recurse(*index)),
@@ -191,6 +192,9 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         },
         HirExpr::ExprCall { callee, args } => HirExpr::ExprCall {
             callee: Box::new(recurse(*callee)),
+            args: args.into_iter().map(recurse).collect(),
+        },
+        HirExpr::ReceiverClassCall { args } => HirExpr::ReceiverClassCall {
             args: args.into_iter().map(recurse).collect(),
         },
         // #433: `Super` carries no names to rename — it is a compile-time

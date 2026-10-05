@@ -19,6 +19,7 @@ mod attr_set;
 mod binding;
 pub(crate) mod foreign_static;
 mod method_call;
+mod receiver_class_call;
 mod static_call;
 mod super_call;
 
@@ -44,6 +45,8 @@ pub(crate) use attr_set::check_attr_set;
 // (`expr.rs`'s `HirExpr::MethodCall` arm) keeps working across the
 // `class/method_call.rs` extraction (#815, Part 1 of #737).
 pub(crate) use method_call::resolve_method_call;
+// #1411: `expr.rs`'s `HirExpr::ReceiverClassCall` arm.
+pub(crate) use receiver_class_call::infer_receiver_class_call;
 // Re-exports for the same reason, across the `class/static_call.rs` and
 // `class/super_call.rs` extractions (#549): `expr.rs` and
 // `crates/pycc_types/src/tests/init_rank.rs` both name these through

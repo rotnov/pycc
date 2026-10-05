@@ -10,7 +10,8 @@
 //! - **super** -- a `super().x` in it selects a different class for `C` than
 //!   for `D` (the cooperative diamond);
 //! - **identity** -- it tests `isinstance(self, T)` for a `T` in `C`'s MRO but
-//!   not `D`'s, constructs through `cls(...)`, or is a dataclass-synthesized
+//!   not `D`'s, constructs through `cls(...)` or `type(self)(...)`, or is a
+//!   dataclass-synthesized
 //!   `__repr__`/`__eq__` (both observe the exact class);
 //! - **escape** -- `Δ(C, D)` is non-empty and the body uses its receiver
 //!   bare (returns it, passes it on, prints it, compares it).
