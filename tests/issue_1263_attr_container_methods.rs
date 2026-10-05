@@ -275,6 +275,10 @@ fn an_imported_object_s_attribute_receiver_is_refused() {
     }
 }
 
+/// Known limit: an unannotated private helper returning an attribute
+/// `.pop()` or `.get()` cannot have its return type inferred, exactly like
+/// the bare-name forms; annotating it works, and a `None`-returning helper
+/// needs no annotation.
 #[test]
 fn an_unannotated_private_helper_needs_a_return_annotation() {
     for (category, helper, name) in [
