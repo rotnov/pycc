@@ -10,7 +10,8 @@ enforce the normal delivery path.
 - Required status checks: `ci-gate` and the trusted `audit` context. `ci-gate`
   (D-032/D-171) is a single stable-named, fail-closed job: it always requires
   `classify-changes` and `governance` to succeed, requires every selected
-  compiler or Pages job to succeed, runs agent-dependent checks inside
+  compiler job to succeed (D-259 retired the two Pages jobs; the classifier's
+  `pages` output no longer selects any job), runs agent-dependent checks inside
   `governance`, and requires every unselected conditional job to be skipped.
   `governance` is where unconditional repository-policy gates live, so a new
   one is added as a step there rather than as its own required context --
@@ -45,7 +46,7 @@ enforce the normal delivery path.
   #109 with five fixed runs per revision and a median-of-five aggregate. D-171
   keeps that reviewed performance boundary inside change-aware routing, while
   the base-owned D-172 audit validates named security, coverage, Tier-1,
-  performance, Pages/accessibility, and aggregate-gate properties instead of a
+  performance, and aggregate-gate properties instead of a
   complete `ci.yml` digest. Historical whole-workflow digests remain audit
   evidence only. The reviewed search-ledger trust anchor remains active. It
   fetches protected head inputs as regular, non-executable Git data, rejects

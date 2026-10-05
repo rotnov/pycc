@@ -37,11 +37,16 @@ status: accepted
   3. `scripts/check_site.py` is the only site gate. It checks structure, never
      wording, dates, sizes or performance: every page has a doctype and
      balanced tags; every internal link, asset and same-page fragment
-     resolves; sitemap URLs are unique, under the site root and resolve;
+     resolves; every link into the repository's `main` branch names an
+     existing file; sitemap URLs are unique, under the site root and resolve;
      `robots.txt` names the sitemap; `llms.txt` has its title and summary and
-     its site and repository links resolve; `404.html` exists.
+     its site links resolve; `404.html` exists.
      `scripts/test_check_site.py` carries the positive and negative controls
-     and runs in the governance job's unittest discovery.
+     and runs in the governance job's unittest discovery against a fixture
+     repository (a synthetic roadmap and placeholder link targets), so the
+     required governance check never depends on the real roadmap table or
+     document names; the real-tree positive control runs in the `Pages`
+     workflow only.
   4. The `Pages` workflow builds, checks and deploys `_site/`. Its deploy job
      keeps the exact `push` + `refs/heads/main` guard and the protected
      `github-pages` environment, and `notify-indexnow` keeps its existing
@@ -96,4 +101,12 @@ status: accepted
   stay as compiler regression tests. The fail-closed classifier still names
   the retired Pages inputs and still emits a `pages` output that no job
   consumes; retiring those strings needs another checker-first round and is
-  tracked as a follow-up under umbrella #802.
+  tracked as a follow-up under umbrella #802. Likewise the Pages-visit
+  measurement contract (`docs/PAGES_VISIT_OBSERVATIONS.json` and
+  `scripts/check_pages_visit_observations.py`, D-168) still names the five
+  retired routes as canonical pages; narrowing it to `/` and `/status/` is an
+  evidence-contract change left to the same umbrella, as is correcting two
+  prose sentences in `docs/SEARCH_VISIBILITY.md` that still mention the
+  dropped roadmap bindings (that ledger is pinned by the base-owned
+  search-visibility audit's reviewed bootstrap, so it changes in its own
+  reviewed round).

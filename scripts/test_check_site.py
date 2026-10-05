@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Tests for scripts/build_site.py and scripts/check_site.py (D-259).
 
-Positive control: the real `site/` and `docs/ROADMAP.md` build and pass.
-Negative controls: each check rejects a minimal broken input. The tests
-inject the commit through PYCC_SITE_COMMIT/PYCC_SITE_DATE so they never
-need a git checkout.
+The tests build the real `site/` sources inside a fixture repository whose
+`docs/ROADMAP.md` is synthetic and whose linked repository files are empty
+placeholders, so an ordinary change to the real roadmap table or a renamed
+document never turns this governance-discovered suite red (D-259: compiler
+pull requests do not touch site machinery). Positive control: that fixture
+builds and passes. Negative controls: each check rejects a minimal broken
+input. The real-tree positive control runs only with PYCC_SITE_REAL_TREE=1,
+which the `Pages` workflow sets. The tests inject the commit through
+PYCC_SITE_COMMIT/PYCC_SITE_DATE so they never need a git checkout.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import urlsplit
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -39,6 +45,22 @@ After.
 """
 
 
+def make_fixture_repo(root: Path) -> Path:
+    """Copy the real site sources beside a synthetic roadmap and placeholder targets."""
+    repo = root / "repo"
+    shutil.copytree(REPO_ROOT / "site", repo / "site")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "ROADMAP.md").write_text(ROADMAP)
+    for source in (repo / "site").rglob("*"):
+        if source.suffix not in (".html", ".txt"):
+            continue
+        for path in check_site.REPO_LINK_RE.findall(source.read_text(encoding="utf-8")):
+            target = repo / urlsplit(path).path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+    return repo
+
+
 class SiteTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
@@ -46,31 +68,53 @@ class SiteTestCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, FAKE_COMMIT)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.repo = make_fixture_repo(self.tmp)
 
-    def build_real(self) -> Path:
+    def build_fixture(self) -> Path:
         out = self.tmp / "_site"
-        build_site.build(REPO_ROOT, out)
+        build_site.build(self.repo, out)
         return out
 
     def assert_rejected(self, site: Path, fragment: str) -> None:
-        errors = check_site.check(site, REPO_ROOT)
+        errors = check_site.check(site, self.repo)
         self.assertTrue(any(fragment in e for e in errors), f"expected {fragment!r} in {errors}")
 
 
 class BuildTests(SiteTestCase):
-    def test_real_site_builds_and_passes(self) -> None:
-        out = self.build_real()
-        self.assertEqual(check_site.check(out, REPO_ROOT), [])
+    def test_fixture_site_builds_and_passes(self) -> None:
+        out = self.build_fixture()
+        self.assertEqual(check_site.check(out, self.repo), [])
         status = (out / "status" / "index.html").read_text()
         self.assertIn("0123456789ab", status)
         self.assertIn("2026-01-02", status)
+        self.assertIn("Current milestone: v9", status)
         for route in build_site.RETIRED_ROUTES:
             self.assertIn("noindex", (out / route / "index.html").read_text())
 
+    @unittest.skipUnless(os.environ.get("PYCC_SITE_REAL_TREE") == "1", "set by the Pages workflow")
+    def test_real_tree_builds_and_passes(self) -> None:
+        out = self.tmp / "real"
+        build_site.build(REPO_ROOT, out)
+        self.assertEqual(check_site.check(out, REPO_ROOT), [])
+
     def test_main_entry_point(self) -> None:
         out = self.tmp / "via_main"
-        self.assertEqual(build_site.main(["--repo-root", str(REPO_ROOT), "--out", str(out)]), 0)
-        self.assertEqual(check_site.main([str(out), str(REPO_ROOT)]), 0)
+        self.assertEqual(build_site.main(["--repo-root", str(self.repo), "--out", str(out)]), 0)
+        # A rebuild replaces the earlier output, recognised by its marker file.
+        self.assertEqual(build_site.main(["--repo-root", str(self.repo), "--out", str(out)]), 0)
+        self.assertEqual(check_site.main([str(out), str(self.repo)]), 0)
+
+    def test_existing_unmarked_output_is_not_deleted(self) -> None:
+        out = self.tmp / "precious"
+        out.mkdir()
+        (out / "keep.txt").write_text("source")
+        with self.assertRaisesRegex(build_site.BuildError, "not produced by build_site.py"):
+            build_site.build(self.repo, out)
+        self.assertTrue((out / "keep.txt").is_file())
+
+    def test_output_inside_site_sources_is_refused(self) -> None:
+        with self.assertRaisesRegex(build_site.BuildError, "inside site/"):
+            build_site.build(self.repo, self.repo / "site" / "_out")
 
     def test_parse_roadmap_renders_inline_markdown(self) -> None:
         milestone, rows = build_site.parse_roadmap(ROADMAP)
@@ -80,6 +124,7 @@ class BuildTests(SiteTestCase):
             build_site.inline_markdown("`a<b>` [t](u) **x** <y>"),
             "<code>a&lt;b&gt;</code> t x &lt;y&gt;",
         )
+        self.assertEqual(build_site.inline_markdown("[`x`](u)"), "<code>x</code>")
 
     def test_roadmap_without_milestone_fails(self) -> None:
         with self.assertRaisesRegex(build_site.BuildError, "Current milestone"):
@@ -99,10 +144,7 @@ class BuildTests(SiteTestCase):
             build_site.parse_roadmap(ROADMAP.replace("| Pipes | a \\| b | c |", "| | x |"))
 
     def test_generated_route_in_source_is_rejected(self) -> None:
-        repo = self.tmp / "repo"
-        shutil.copytree(REPO_ROOT / "site", repo / "site")
-        (repo / "docs").mkdir()
-        (repo / "docs" / "ROADMAP.md").write_text(ROADMAP)
+        repo = self.repo
         (repo / "site" / "status").mkdir()
         with self.assertRaisesRegex(build_site.BuildError, "generated at build time"):
             build_site.build(repo, self.tmp / "out")
@@ -121,7 +163,7 @@ class BuildTests(SiteTestCase):
 class CheckTests(SiteTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.site = self.build_real()
+        self.site = self.build_fixture()
 
     def edit(self, rel: str, old: str, new: str) -> None:
         path = self.site / rel
@@ -130,7 +172,7 @@ class CheckTests(SiteTestCase):
         path.write_text(text.replace(old, new, 1))
 
     def test_missing_site_directory(self) -> None:
-        self.assertIn("not a directory", check_site.check(self.tmp / "nope", REPO_ROOT)[0])
+        self.assertIn("not a directory", check_site.check(self.tmp / "nope", self.repo)[0])
         self.assertEqual(check_site.main([str(self.tmp / "nope")]), 1)
 
     def test_missing_doctype(self) -> None:
@@ -153,9 +195,17 @@ class CheckTests(SiteTestCase):
         self.edit("404.html", "<main>", "<main><br></br>")
         self.assert_rejected(self.site, "void element <br>")
 
-    def test_self_closing_syntax_is_accepted(self) -> None:
-        self.edit("404.html", "<main>", "<main><br/><span/>")
-        self.assertEqual(check_site.check(self.site, REPO_ROOT), [])
+    def test_self_closing_syntax_on_void_element_is_accepted(self) -> None:
+        self.edit("404.html", "<main>", "<main><br/>")
+        self.assertEqual(check_site.check(self.site, self.repo), [])
+
+    def test_self_closing_syntax_on_non_void_element_is_rejected(self) -> None:
+        self.edit("404.html", "<main>", "<main><span/>")
+        self.assert_rejected(self.site, "self-closing syntax on non-void element <span>")
+
+    def test_html_link_to_missing_repository_file(self) -> None:
+        self.edit("index.html", 'href="status/"', 'href="https://github.com/rotnov/pycc/blob/main/docs/GONE.md#x"')
+        self.assert_rejected(self.site, "index.html links to docs/GONE.md, which does not exist")
 
     def test_broken_relative_link(self) -> None:
         self.edit("index.html", 'href="status/"', 'href="missing/"')

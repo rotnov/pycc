@@ -7,9 +7,11 @@ performance. Run it on the output of `scripts/build_site.py`:
     python3 scripts/build_site.py && python3 scripts/check_site.py _site
 
 Checks:
-  * every HTML page starts with a doctype and has balanced tags;
-  * every internal href/src resolves to a built file, and every same-page
-    `#fragment` names an element id on that page;
+  * every HTML page starts with a doctype and has balanced tags (self-closing
+    syntax only on void elements);
+  * every internal href/src resolves to a built file, every same-page
+    `#fragment` names an element id on that page, and every link into the
+    repository's `main` branch names a file that exists in the checkout;
   * every sitemap `<loc>` is a unique URL under the site root that resolves;
   * robots.txt names the sitemap;
   * llms.txt starts with `# pycc` and a blockquote summary, its site links
@@ -29,7 +31,8 @@ from urllib.parse import unquote, urlsplit
 
 SITE_URL = "https://rotnov.github.io/pycc/"
 REPO_LINK_RE = re.compile(
-    r"https://(?:raw\.githubusercontent\.com/rotnov/pycc/main|github\.com/rotnov/pycc/blob/main)/([^\s)>\]]+)"
+    r"https://(?:raw\.githubusercontent\.com/rotnov/pycc/main|github\.com/rotnov/pycc/blob/main)/"
+    r"""([^\s)>\]"'<]+)"""
 )
 MARKDOWN_LINK_RE = re.compile(r"\]\((https?://[^)\s]+)\)")
 VOID_ELEMENTS = {
@@ -57,10 +60,14 @@ class PageParser(HTMLParser):
             self.stack.append((tag, self.getpos()[0]))
 
     def handle_startendtag(self, tag, attrs):
-        # `<br/>`-style syntax: record attributes without opening an element.
+        # `<br/>` is valid only on a void element; on any other element HTML
+        # ignores the slash and opens the element, so treat it as an error.
         self.handle_starttag(tag, attrs)
         if tag not in VOID_ELEMENTS:
             self.stack.pop()
+            self.errors.append(
+                f"line {self.getpos()[0]}: self-closing syntax on non-void element <{tag}>"
+            )
 
     def handle_endtag(self, tag):
         if tag in VOID_ELEMENTS:
@@ -90,7 +97,7 @@ def resolve_target(site: Path, page: Path, path: str) -> Path | None:
     return target
 
 
-def check_html(site: Path, page: Path, errors: list[str]) -> None:
+def check_html(site: Path, repo_root: Path, page: Path, errors: list[str]) -> None:
     rel = page.relative_to(site)
     text = page.read_text(encoding="utf-8")
     if not text.lstrip().lower().startswith("<!doctype html>"):
@@ -109,6 +116,7 @@ def check_html(site: Path, page: Path, errors: list[str]) -> None:
         if parts.scheme or parts.netloc:
             if link.startswith(SITE_URL):
                 check_site_url(site, link, f"{rel}", errors)
+            check_repo_links(link, repo_root, f"{rel}", errors)
             continue
         if not parts.path:
             if parts.fragment and parts.fragment not in parser.ids:
@@ -170,9 +178,15 @@ def check_llms(site: Path, repo_root: Path, errors: list[str]) -> None:
     for url in MARKDOWN_LINK_RE.findall(text):
         if url.startswith(SITE_URL):
             check_site_url(site, url, "llms.txt", errors)
+    check_repo_links(text, repo_root, "llms.txt", errors)
+
+
+def check_repo_links(text: str, repo_root: Path, where: str, errors: list[str]) -> None:
+    """Every link into the repository's `main` branch must name an existing path."""
     for path in REPO_LINK_RE.findall(text):
+        path = urlsplit(path).path
         if not (repo_root / unquote(path)).exists():
-            errors.append(f"llms.txt links to {path}, which does not exist in the repository")
+            errors.append(f"{where} links to {path}, which does not exist in the repository")
 
 
 def check(site: Path, repo_root: Path) -> list[str]:
@@ -182,7 +196,7 @@ def check(site: Path, repo_root: Path) -> list[str]:
     if not (site / "404.html").is_file():
         errors.append("404.html is missing")
     for page in sorted(site.rglob("*.html")):
-        check_html(site, page, errors)
+        check_html(site, repo_root, page, errors)
     check_sitemap(site, errors)
     check_robots(site, errors)
     check_llms(site, repo_root, errors)

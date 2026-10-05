@@ -299,10 +299,12 @@ The Pages site is checked for structure only (D-259, [WEBSITE.md](./WEBSITE.md))
 `python3 scripts/build_site.py && python3 scripts/check_site.py _site` builds
 the site and checks HTML well-formedness, internal links and fragments, the
 sitemap, `robots.txt` and `llms.txt`. `scripts/test_check_site.py` holds the
-positive control and one negative control per rule; it injects the commit
-through `PYCC_SITE_COMMIT`/`PYCC_SITE_DATE`, so it needs no git history and
-runs in the governance job's `unittest discover` as well as in the `Pages`
-workflow. There are no performance, accessibility, date-pin or wording gates.
+positive control and one negative control per rule; it builds inside a
+fixture repository (synthetic roadmap, placeholder link targets) and injects
+the commit through `PYCC_SITE_COMMIT`/`PYCC_SITE_DATE`, so it needs no git
+history and runs in the governance job's `unittest discover` as well as in
+the `Pages` workflow, which alone also sets `PYCC_SITE_REAL_TREE=1` for the
+real-tree positive control. There are no performance, accessibility, date-pin or wording gates.
 
 ## Differential fuzzing (planned)
 

@@ -207,12 +207,12 @@ fn type_checking_returns_hir_byte_identical_to_the_finalized_hir() {
     assert_eq!(
         derived.typed, derived.hir,
         "type-checked HIR is no longer byte-identical to the finalized HIR; \
-         the architecture hero's identity claim must be replaced by its own artifact"
+         the trace's identity claim must be replaced by its own artifact"
     );
 }
 
 #[test]
-fn the_page_excerpts_are_exact_prefixes_of_the_artifacts() {
+fn the_recorded_excerpts_are_exact_prefixes_of_the_artifacts() {
     for name in ["parser-ast.txt", "hir-module.txt", "mir-items.txt"] {
         let bytes = canonical_lf(&read_artifact(name));
         let text = String::from_utf8(bytes).expect("stage artifacts are UTF-8");

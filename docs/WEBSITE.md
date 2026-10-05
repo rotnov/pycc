@@ -39,17 +39,23 @@ generates the rest:
   keep resolving while search engines drop the URLs.
 
 Set `PYCC_SITE_COMMIT` and `PYCC_SITE_DATE` to build without git (the tests
-do this).
+do this). The build writes a `.build_site` marker into its output and
+refuses to replace an existing directory that lacks it, so a mistyped
+`--out` can never delete sources.
 
 ## The site check
 
 `python3 scripts/check_site.py _site` is the only site gate. It checks
 structure, never wording, dates, sizes or performance:
 
-- every HTML page starts with a doctype and has balanced tags (void elements
-  excepted);
-- every internal `href` and `src` resolves to a built file, and every
-  same-page `#fragment` names an element `id`;
+- every HTML page starts with a doctype and has balanced tags, with
+  self-closing syntax only on void elements; an implicitly closed `<p>` or
+  `<li>` is reported too, so pages close every element explicitly;
+- every internal `href` and `src` resolves to a built file, every same-page
+  `#fragment` names an element `id`, and every link into the repository's
+  `main` branch (`github.com/rotnov/pycc/blob/main/...` or
+  `raw.githubusercontent.com/rotnov/pycc/main/...`) names a file that exists
+  in the checkout;
 - every sitemap `<loc>` is unique, under `https://rotnov.github.io/pycc/`,
   and resolves;
 - `robots.txt` names the sitemap;
@@ -58,9 +64,12 @@ structure, never wording, dates, sizes or performance:
 - `404.html` exists.
 
 External links are not fetched. `scripts/test_check_site.py` holds the
-positive control (the real site builds and passes) and one negative control
-per rule; it runs in the governance job's unittest discovery and in the
-`Pages` workflow.
+positive control and one negative control per rule. It builds the real
+`site/` sources inside a fixture repository with a synthetic roadmap and
+placeholder link targets, so it runs in the governance job's unittest
+discovery without coupling compiler pull requests to the real roadmap table
+or document names; its real-tree positive control runs only in the `Pages`
+workflow (`PYCC_SITE_REAL_TREE=1`).
 
 To preview locally:
 
@@ -110,7 +119,11 @@ cookie or external beacon
 
 Because a roadmap change triggers a deploy, the status page is always
 generated from the latest roadmap on `main`. `Pages` is not a required
-status check; a red `Pages` run never blocks a compiler pull request.
+status check; a red `Pages` run never blocks a compiler pull request. A
+roadmap edit that drops the "Current milestone" line or breaks the status
+table's shape turns that pull request's `Pages` run red and stops the next
+deploy, so the published status page stays at the last good build until
+the table is fixed.
 
 ## Citation metadata
 
