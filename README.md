@@ -46,7 +46,7 @@ standard Python language levels may enter only through explicit versioned
 conformance gates and superseding design decisions; pycc never adds its own
 syntax or dialect.
 
-[Project website](https://rotnov.github.io/pycc/) · [Current status](https://rotnov.github.io/pycc/status/) · [Architecture](https://rotnov.github.io/pycc/architecture/) · [Language support](https://rotnov.github.io/pycc/language-support/) · [Diagnostics](https://rotnov.github.io/pycc/diagnostics/) · [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/) · [AI-native experiment](https://rotnov.github.io/pycc/ai-native/) · [Search visibility](./docs/SEARCH_VISIBILITY.md) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
+[Project website](https://rotnov.github.io/pycc/) · [Current status](https://rotnov.github.io/pycc/status/) · [Architecture](./docs/ARCHITECTURE.md) · [Language support](./docs/PYTHON_STANDARDS.md) · [Diagnostics](./docs/DIAGNOSTICS.md) · [Search visibility](./docs/SEARCH_VISIBILITY.md) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
 
 ## The experiment
 
@@ -72,9 +72,7 @@ claim that pycc is ready to replace released tools:
 | Cython | ⚠️ optional | ❌ extension or embedded CPython | ⚠️ Python superset |
 | mypy / pyright | ✅ | ❌ checker only | ✅ |
 
-See the [source-backed Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/)
-for the language, artifact, runtime, and positioning boundaries behind this
-summary. No performance ranking is claimed without a shared reproducible
+No performance ranking is claimed without a shared reproducible
 benchmark.
 
 ## Quick start

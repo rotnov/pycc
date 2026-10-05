@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Validate the engine-qualified visibility observation artifact and its
-prose bindings in SEARCH_VISIBILITY.md and ROADMAP.md.
+prose bindings in SEARCH_VISIBILITY.md.
 
 The artifact ``docs/ENGINE_VISIBILITY_OBSERVATIONS.json`` is the structured
 source of truth for engine-qualified web-search and LLM answer-engine
@@ -22,10 +22,13 @@ This validator checks that:
    citation evidence.
 7. The ``latest_projection`` agrees with the latest observation (or the
    empty template state when there are no observations).
-8. The engine-visibility prose in ``SEARCH_VISIBILITY.md`` and the
-   ``Public evidence and discoverability`` projection in ``docs/ROADMAP.md``
-   both reference the artifact.
-9. No prose fabricates visibility data or treats indexability as visibility.
+8. The engine-visibility prose in ``SEARCH_VISIBILITY.md`` references the
+   artifact.
+9. No bound prose fabricates visibility data or treats indexability as
+   visibility.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); SEARCH_VISIBILITY.md remains the bound prose surface.
 """
 
 from __future__ import annotations
@@ -40,7 +43,6 @@ from typing import Any
 
 ARTIFACT_PATH = Path("docs") / "ENGINE_VISIBILITY_OBSERVATIONS.json"
 VISIBILITY_PATH = Path("docs") / "SEARCH_VISIBILITY.md"
-ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 
@@ -403,13 +405,6 @@ def visibility_binding_phrases() -> list[tuple[str, str]]:
     ]
 
 
-def roadmap_binding_phrases() -> list[tuple[str, str]]:
-    return [
-        ("ENGINE_VISIBILITY_OBSERVATIONS.json", "engine-visibility artifact reference in roadmap"),
-        ("engine-qualified", "engine-qualified visibility distinction in roadmap"),
-    ]
-
-
 def validate(repository_root: Path) -> dict[str, Any]:
     artifact = load_json(repository_root / ARTIFACT_PATH)
     projection = validate_artifact(artifact)
@@ -418,11 +413,6 @@ def validate(repository_root: Path) -> dict[str, Any]:
     check_forbidden_indexability_wording(visibility_text)
     vis_phrases = visibility_binding_phrases()
     validate_bindings(visibility_text, vis_phrases, "SEARCH_VISIBILITY.md")
-
-    roadmap_text = (repository_root / ROADMAP_PATH).read_text()
-    check_forbidden_indexability_wording(roadmap_text)
-    road_phrases = roadmap_binding_phrases()
-    validate_bindings(roadmap_text, road_phrases, "ROADMAP.md")
 
     return projection
 

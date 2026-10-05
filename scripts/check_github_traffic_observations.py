@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Bind GitHub Traffic API prose in SEARCH_VISIBILITY.md and ROADMAP.md to
-a sanitized immutable daily traffic observation artifact.
+"""Bind GitHub Traffic API prose in SEARCH_VISIBILITY.md to a sanitized
+immutable daily traffic observation artifact.
 
 The artifact ``docs/GITHUB_TRAFFIC_OBSERVATIONS.json`` is the structured source
 of truth for owner-only GitHub Traffic API observations.  GitHub's traffic
@@ -24,10 +24,13 @@ This validator checks that:
    value — that would encode the same attribution error into CI.
 6. The GitHub traffic history table in ``docs/SEARCH_VISIBILITY.md`` has one
    row per artifact observation, identified by timestamp.
-7. The traffic interpretation prose in ``SEARCH_VISIBILITY.md`` and the
-   ``Public evidence and discoverability`` projection in ``docs/ROADMAP.md``
-   both reflect the latest artifact observation.
-8. No prose equates clones with humans, visits, clicks, or SEO acquisition.
+7. The traffic interpretation prose in ``SEARCH_VISIBILITY.md`` reflects the
+   latest artifact observation.
+8. No bound prose equates clones with humans, visits, clicks, or SEO
+   acquisition.
+
+The ROADMAP.md prose binding was retired with the Pages rewrite (umbrella
+#802); SEARCH_VISIBILITY.md remains the bound prose surface.
 """
 
 from __future__ import annotations
@@ -42,7 +45,6 @@ from typing import Any
 
 ARTIFACT_PATH = Path("docs") / "GITHUB_TRAFFIC_OBSERVATIONS.json"
 VISIBILITY_PATH = Path("docs") / "SEARCH_VISIBILITY.md"
-ROADMAP_PATH = Path("docs") / "ROADMAP.md"
 
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 UTC_DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
@@ -462,22 +464,6 @@ def visibility_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, st
     return phrases
 
 
-def roadmap_binding_phrases(projection: dict[str, Any]) -> list[tuple[str, str]]:
-    """Generate (phrase, description) pairs for ROADMAP.md traffic projection."""
-    phrases: list[tuple[str, str]] = []
-    label = projection["interpretation_label"]
-    if label == "automation-heavy / unattributed":
-        phrases.append((
-            "automation-heavy",
-            "traffic interpretation label in roadmap",
-        ))
-    phrases.append((
-        "GITHUB_TRAFFIC_OBSERVATIONS.json",
-        "traffic artifact reference in roadmap",
-    ))
-    return phrases
-
-
 def validate(repository_root: Path) -> dict[str, Any]:
     """Validate the GitHub traffic artifact and its prose projections."""
     artifact = load_json(repository_root / ARTIFACT_PATH)
@@ -496,11 +482,6 @@ def validate(repository_root: Path) -> dict[str, Any]:
     check_forbidden_clone_wording(interpretation)
     vis_phrases = visibility_binding_phrases(projection)
     validate_bindings(interpretation, vis_phrases, "SEARCH_VISIBILITY.md Current interpretation")
-
-    roadmap_text = (repository_root / ROADMAP_PATH).read_text()
-    check_forbidden_clone_wording(roadmap_text)
-    road_phrases = roadmap_binding_phrases(projection)
-    validate_bindings(roadmap_text, road_phrases, "ROADMAP.md")
 
     return projection
 

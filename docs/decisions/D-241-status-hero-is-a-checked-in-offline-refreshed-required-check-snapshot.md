@@ -1,15 +1,16 @@
 ---
 id: D-241
 title: "Status hero is a checked-in, offline-refreshed required-check snapshot bound to one default-branch revision"
-status: accepted
+status: superseded
 ---
 
 ## D-241: Status hero is a checked-in, offline-refreshed required-check snapshot bound to one default-branch revision
 
-- Status: accepted (Part 1 of #566, issue #1006, is the pull request that
+- Status: superseded by D-259; it was accepted (Part 1 of #566, issue #1006, is the pull request that
   depends on it; it narrowly supersedes D-230's "Landing and the five
   unavailable heroes remain intact" consequence -- four heroes now remain
   `unavailable` -- and leaves everything else in D-230 in force)
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: D-186 made every public evidence hero a commit-bound, offline
   proof and left the Status page's hero explicitly `unavailable` until #566
   accepted a real artifact. The page is the one place the site claims the

@@ -1,12 +1,13 @@
 ---
 id: D-230
 title: "Bind public evidence to ordered immutable executions"
-status: accepted
+status: superseded
 ---
 
 ## D-230: Bind public evidence to ordered immutable executions
 
-- Status: accepted
+- Status: superseded by D-259
+- Amendment (2026-10-05): superseded by [D-259](./D-259-replace-the-pages-site-with-a-small-generated-site.md), which replaces the Pages site with a small generated site checked only for structure (umbrella #802).
 - Context: D-186's single build/run/output shape cannot represent either an
   independent pycc/CPython comparison or paired human/JSON diagnostics. Issue
   #565 supplies real execution tests in an earlier commit, allowing publication

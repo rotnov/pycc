@@ -5,147 +5,67 @@ on:
     branches: [main]
     paths:
       - "site/**"
-      - "scripts/check-site.sh"
-      - "scripts/test-check-site.sh"
-      - "scripts/check_site_evidence.py"
-      - "scripts/site_execution_evidence.py"
-      - "scripts/site_execution_evidence_test.py"
-      - "scripts/site_status_evidence.py"
-      - "scripts/site_status_evidence_test.py"
-      - "scripts/site_pipeline_evidence.py"
-      - "scripts/site_pipeline_evidence_test.py"
-      - "scripts/test_site_pipeline_wiring.py"
-      - "tests/architecture_trace.rs"
-      - "tests/architecture_manifest.rs"
-      - "tests/fixtures/architecture-trace/**"
-      - "scripts/check_status_snapshot.py"
-      - "scripts/test_check_status_snapshot.py"
-      - "scripts/collect_status_snapshot.py"
-      - "tests/site_evidence.rs"
-      - "tests/fixtures/pep_0526_var_annotations.py"
-      - "tests/fixtures/pep_0526_var_annotations.expected.txt"
-      - "tests/diagnostics/d0021_range_argument_type.py"
-      - "tests/diagnostics/d0021_range_argument_type.expected.txt"
-      - "tests/diagnostics/d0021_range_argument_type.expected.json"
-      - "tests/fixtures/conformance-breadth-manifest.json"
+      - "docs/ROADMAP.md"
+      - "README.md"
+      - "CITATION.cff"
+      - "docs/WEBSITE.md"
+      - "docs/SEARCH_VISIBILITY.md"
+      - "docs/*_OBSERVATIONS.json"
+      - "docs/EARNED_AUTHORITY_EVIDENCE.json"
+      - "scripts/build_site.py"
+      - "scripts/check_site.py"
+      - "scripts/test_check_site.py"
       - "scripts/notify-indexnow.sh"
       - "scripts/test-notify-indexnow.py"
-      - ".github/workflows/pages.yml"
-      - "README.md"
-      - "tests/fixtures/quick_start.py"
-      - "tests/fixtures/quick_start.expected.txt"
-      - "tests/quick_start.rs"
-      - "tests/diagnostics/quick_start_type_error.py"
-      - "tests/diagnostics/quick_start_type_error.expected.txt"
-      - "docs/WEBSITE.md"
-      - "scripts/check_readme_testing_claims.rb"
-      - "scripts/test_check_readme_testing_claims.rb"
-      - "scripts/check_readme_milestone_projection.rb"
-      - "scripts/test_check_readme_milestone_projection.rb"
-      - "scripts/check_search_console_observations.py"
-      - "scripts/test_check_search_console_observations.py"
-      - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
-      - "scripts/check_github_traffic_observations.py"
-      - "scripts/test_check_github_traffic_observations.py"
-      - "docs/GITHUB_TRAFFIC_OBSERVATIONS.json"
-      - "scripts/check_engine_visibility_observations.py"
-      - "scripts/test_check_engine_visibility_observations.py"
-      - "docs/ENGINE_VISIBILITY_OBSERVATIONS.json"
+      - "scripts/check_pages_workflow.rb"
+      - "scripts/test_check_pages_workflow.rb"
+      - "scripts/check_citation_cff.rb"
+      - "scripts/test_check_citation_cff.rb"
+      - "scripts/check_readme_*.rb"
+      - "scripts/test_check_readme_*.rb"
+      - "scripts/check_search_visibility.rb"
+      - "scripts/test_check_search_visibility.rb"
+      - "scripts/check_*_observations.py"
+      - "scripts/test_check_*_observations.py"
       - "scripts/check_earned_authority_evidence.py"
       - "scripts/test_check_earned_authority_evidence.py"
-      - "docs/EARNED_AUTHORITY_EVIDENCE.json"
-      - "scripts/check_pages_visit_observations.py"
-      - "scripts/test_check_pages_visit_observations.py"
-      - "docs/PAGES_VISIT_OBSERVATIONS.json"
-      - "docs/SEARCH_VISIBILITY.md"
-      - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
       - "scripts/test_check_package_identity.rb"
       - "scripts/check_indexnow_test_binding.rb"
       - "scripts/test_check_indexnow_test_binding.rb"
-      - "scripts/check_markdown_landing.rb"
-      - "scripts/test_check_markdown_landing.rb"
-      - "scripts/check_sitemap_lastmod.rb"
-      - "scripts/test_check_sitemap_lastmod.rb"
-      - "scripts/site_canonical_pages.rb"
-      - "scripts/check_site_pin_merge_currency.rb"
-      - "scripts/test_check_site_pin_merge_currency.rb"
-      - "scripts/check_source_links_registry.rb"
-      - "scripts/test_check_source_links_registry.rb"
-      - "site/python-aot-compilers/source-link-registry.json"
-      - "site/python-aot-compilers/claims.json"
+      - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "site/**"
-      - "scripts/check-site.sh"
-      - "scripts/test-check-site.sh"
-      - "scripts/check_site_evidence.py"
-      - "scripts/site_execution_evidence.py"
-      - "scripts/site_execution_evidence_test.py"
-      - "scripts/site_status_evidence.py"
-      - "scripts/site_status_evidence_test.py"
-      - "scripts/site_pipeline_evidence.py"
-      - "scripts/site_pipeline_evidence_test.py"
-      - "scripts/test_site_pipeline_wiring.py"
-      - "tests/architecture_trace.rs"
-      - "tests/architecture_manifest.rs"
-      - "tests/fixtures/architecture-trace/**"
-      - "scripts/check_status_snapshot.py"
-      - "scripts/test_check_status_snapshot.py"
-      - "scripts/collect_status_snapshot.py"
-      - "tests/site_evidence.rs"
-      - "tests/fixtures/pep_0526_var_annotations.py"
-      - "tests/fixtures/pep_0526_var_annotations.expected.txt"
-      - "tests/diagnostics/d0021_range_argument_type.py"
-      - "tests/diagnostics/d0021_range_argument_type.expected.txt"
-      - "tests/diagnostics/d0021_range_argument_type.expected.json"
-      - "tests/fixtures/conformance-breadth-manifest.json"
+      - "docs/ROADMAP.md"
+      - "README.md"
+      - "CITATION.cff"
+      - "docs/WEBSITE.md"
+      - "docs/SEARCH_VISIBILITY.md"
+      - "docs/*_OBSERVATIONS.json"
+      - "docs/EARNED_AUTHORITY_EVIDENCE.json"
+      - "scripts/build_site.py"
+      - "scripts/check_site.py"
+      - "scripts/test_check_site.py"
       - "scripts/notify-indexnow.sh"
       - "scripts/test-notify-indexnow.py"
-      - ".github/workflows/pages.yml"
-      - "README.md"
-      - "tests/fixtures/quick_start.py"
-      - "tests/fixtures/quick_start.expected.txt"
-      - "tests/quick_start.rs"
-      - "tests/diagnostics/quick_start_type_error.py"
-      - "tests/diagnostics/quick_start_type_error.expected.txt"
-      - "docs/WEBSITE.md"
-      - "scripts/check_readme_testing_claims.rb"
-      - "scripts/test_check_readme_testing_claims.rb"
-      - "scripts/check_readme_milestone_projection.rb"
-      - "scripts/test_check_readme_milestone_projection.rb"
-      - "scripts/check_search_console_observations.py"
-      - "scripts/test_check_search_console_observations.py"
-      - "docs/SEARCH_CONSOLE_OBSERVATIONS.json"
-      - "scripts/check_github_traffic_observations.py"
-      - "scripts/test_check_github_traffic_observations.py"
-      - "docs/GITHUB_TRAFFIC_OBSERVATIONS.json"
-      - "scripts/check_engine_visibility_observations.py"
-      - "scripts/test_check_engine_visibility_observations.py"
-      - "docs/ENGINE_VISIBILITY_OBSERVATIONS.json"
+      - "scripts/check_pages_workflow.rb"
+      - "scripts/test_check_pages_workflow.rb"
+      - "scripts/check_citation_cff.rb"
+      - "scripts/test_check_citation_cff.rb"
+      - "scripts/check_readme_*.rb"
+      - "scripts/test_check_readme_*.rb"
+      - "scripts/check_search_visibility.rb"
+      - "scripts/test_check_search_visibility.rb"
+      - "scripts/check_*_observations.py"
+      - "scripts/test_check_*_observations.py"
       - "scripts/check_earned_authority_evidence.py"
       - "scripts/test_check_earned_authority_evidence.py"
-      - "docs/EARNED_AUTHORITY_EVIDENCE.json"
-      - "scripts/check_pages_visit_observations.py"
-      - "scripts/test_check_pages_visit_observations.py"
-      - "docs/PAGES_VISIT_OBSERVATIONS.json"
-      - "docs/SEARCH_VISIBILITY.md"
-      - "docs/ROADMAP.md"
       - "scripts/check_package_identity.rb"
       - "scripts/test_check_package_identity.rb"
       - "scripts/check_indexnow_test_binding.rb"
       - "scripts/test_check_indexnow_test_binding.rb"
-      - "scripts/check_markdown_landing.rb"
-      - "scripts/test_check_markdown_landing.rb"
-      - "scripts/check_sitemap_lastmod.rb"
-      - "scripts/test_check_sitemap_lastmod.rb"
-      - "scripts/site_canonical_pages.rb"
-      - "scripts/check_site_pin_merge_currency.rb"
-      - "scripts/test_check_site_pin_merge_currency.rb"
-      - "scripts/check_source_links_registry.rb"
-      - "scripts/test_check_source_links_registry.rb"
-      - "site/python-aot-compilers/source-link-registry.json"
-      - "site/python-aot-compilers/claims.json"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -163,15 +83,17 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          fetch-depth: 0
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
+      - name: Build website
+        run: python3 scripts/build_site.py --out _site
+
       - name: Validate website
         run: |
-          ./scripts/check-site.sh
-          ./scripts/test-check-site.sh
+          python3 scripts/check_site.py _site
+          python3 scripts/test_check_site.py
           python3 ./scripts/test-notify-indexnow.py
           ruby scripts/check_pages_workflow.rb
           ruby scripts/test_check_pages_workflow.rb
@@ -185,11 +107,6 @@ jobs:
           ruby scripts/test_check_readme_milestone_projection.rb
           ruby scripts/check_readme_coverage_badge.rb
           ruby scripts/test_check_readme_coverage_badge.rb
-          ruby scripts/check_sitemap_lastmod.rb
-          ruby scripts/test_check_sitemap_lastmod.rb
-          ruby scripts/test_check_site_pin_merge_currency.rb
-          ruby scripts/check_source_links_registry.rb
-          ruby scripts/test_check_source_links_registry.rb
           ruby scripts/check_search_visibility.rb
           ruby scripts/test_check_search_visibility.rb
           python3 scripts/check_search_console_observations.py
@@ -206,54 +123,11 @@ jobs:
           ruby scripts/test_check_package_identity.rb
           ruby scripts/check_indexnow_test_binding.rb
           ruby scripts/test_check_indexnow_test_binding.rb
-          ruby scripts/check_markdown_landing.rb
-          ruby scripts/test_check_markdown_landing.rb
-
-      - name: Check canonical page pins against the predicted merge date (issue #990)
-        # Defense in depth for the same check that .github/workflows/ci.yml's
-        # `governance` job runs; that job is the load-bearing one, since
-        # `ci-gate` (a required context) fails when it fails, while `Pages` is
-        # not a required context.
-        #
-        # Pull-request leg only, deliberately: on the push leg the merge has
-        # already happened, so there is no date left to predict and the
-        # committed state is validated by scripts/check_sitemap_lastmod.rb in
-        # the Validate website step above.
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "Not a pull_request event (or no usable base revision); skipping."
-            exit 0
-          fi
-          ruby scripts/check_site_pin_merge_currency.rb "${BASE_SHA}" "${HEAD_SHA}" .
-
-      - name: Check the status snapshot's currency against the pull request (issue #1006)
-        # Pull-request leg only: the status hero pins one default-branch
-        # commit, and this step bounds how far behind the pull request's base
-        # that commit may fall (first-parent distance) so a stale snapshot is
-        # refreshed before it is published rather than after. The push leg
-        # validates the committed record itself through the Validate website
-        # step above (scripts/check_status_snapshot.py --verify-git via
-        # scripts/check-site.sh). Full history is required (fetch-depth: 0).
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "Not a pull_request event (or no usable base revision); skipping."
-            exit 0
-          fi
-          python3 scripts/check_status_snapshot.py --currency --base "${BASE_SHA}" --head "${HEAD_SHA}" \
-            --max-first-parent-distance 20 site/evidence-heroes.json . .
 
       - name: Upload website
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
-          path: site
+          path: _site
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
