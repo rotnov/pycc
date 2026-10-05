@@ -1517,7 +1517,12 @@ called with no arguments: a constructor that fails raises its own exception,
 and one that returns a non-exception raises CPython's `TypeError` ("calling
 ... should have returned an instance of BaseException"). Any other value
 raises `TypeError: exceptions must derive from BaseException`. A `NULL`
-operand raises `SystemError` as a defence. Every path ends in
+operand raises `SystemError` as a defence. The instance is set with
+`PyErr_SetObject`, as CPython's `raise` does. That keeps its identity, and
+sets its implicit `__context__` from the exception CPython is handling, such
+as the host's own `except` around the call. A pycc `except` handler is not a
+CPython handler, so an object raised inside one gets no `__context__` from
+the pycc exception it handles. Every path ends in
 `pycc_ext_obj_error_bridge()`, so the raise always becomes the pending pycc
 exception through the same tag map as a failed object operation, and the
 original object is kept for `pycc_ext_raise_pending` to restore. An uncaught

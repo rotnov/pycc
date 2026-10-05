@@ -2153,6 +2153,13 @@ int pycc_ext_obj_delslice(PyObject *o, PyObject *start, PyObject *stop, PyObject
  *  - anything else raises `TypeError: exceptions must derive from
  *    BaseException`.
  *
+ * The instance is set with `PyErr_SetObject`, as CPython's `raise` does,
+ * not `PyErr_SetRaisedException`: it keeps the instance's identity and also
+ * sets its implicit `__context__` from the exception CPython is handling,
+ * such as the host's own `except` block around the call. A pycc `except`
+ * handler is not a CPython handler, so an object raised inside one gets no
+ * `__context__` from the pycc exception it handles.
+ *
  * It then hands the CPython exception to `pycc_ext_obj_error_bridge`, which
  * makes it a pending pycc exception and keeps the original in the bridge
  * table. The caller branches to its innermost exception target, so an
@@ -2179,10 +2186,11 @@ void pycc_ext_obj_raise(PyObject *o)
                          o, (PyObject *)Py_TYPE(instance));
             Py_DECREF(instance);
         } else {
-            PyErr_SetRaisedException(instance);
+            PyErr_SetObject((PyObject *)Py_TYPE(instance), instance);
+            Py_DECREF(instance);
         }
     } else if (PyExceptionInstance_Check(o)) {
-        PyErr_SetRaisedException(Py_NewRef(o));
+        PyErr_SetObject((PyObject *)Py_TYPE(o), o);
     } else {
         PyErr_SetString(PyExc_TypeError, "exceptions must derive from BaseException");
     }

@@ -305,6 +305,59 @@ fn an_uncaught_object_raise_escapes_as_the_original_object() {
     }
 }
 
+/// An object raised while the host is handling an exception gets that
+/// exception as its implicit `__context__`, as CPython's `raise` sets it:
+/// an instance, an instantiated class, and the `TypeError` for a
+/// non-exception alike.
+const CONTEXT: &str = "import builtins\n\
+    from errs import Boom\n\
+    \n\
+    \n\
+    def raise_instance() -> None:\n    \
+    raise Boom(\"c\", builtins.set())\n\
+    \n\
+    \n\
+    def raise_class() -> None:\n    \
+    raise builtins.ValueError\n\
+    \n\
+    \n\
+    def raise_other() -> None:\n    \
+    raise builtins.str(\"s\")\n";
+
+fn context_report(setup: &str) -> String {
+    format!(
+        "import runpy\n\
+         {setup}\n\
+         for name in ('raise_instance', 'raise_class', 'raise_other'):\n\
+         \x20   try:\n\
+         \x20       raise KeyError('host')\n\
+         \x20   except KeyError:\n\
+         \x20       try:\n\
+         \x20           ns[name]()\n\
+         \x20       except BaseException as e:\n\
+         \x20           print(type(e).__name__, type(e.__context__).__name__)\n"
+    )
+}
+
+#[test]
+#[ignore = "requires a CPython 3.13+ with development headers on PATH"]
+fn an_object_raised_inside_a_host_handler_chains_its_context_like_cpython() {
+    let dir = ScratchDir::new("obj_raise_context").expect("scratch");
+    build_ext(&dir, "pycc_obj_raise_context", CONTEXT);
+    let compiled = python(
+        &dir,
+        &context_report("import pycc_obj_raise_context\nns = vars(pycc_obj_raise_context)"),
+    );
+    assert_ok(&compiled);
+    let oracle = python(&dir, &context_report("ns = runpy.run_path('m.py')"));
+    assert_ok(&oracle);
+    assert_eq!(stdout_of(&compiled), stdout_of(&oracle));
+    assert_eq!(
+        stdout_of(&compiled),
+        "Boom KeyError\nValueError KeyError\nTypeError KeyError\n"
+    );
+}
+
 /// lark `lalr_parser_state.py` line 80 in a function of its own, with the
 /// keyword arguments and `state=self` removed: `raise UnexpectedToken(token,
 /// expected)`, spelled `Boom` here, on an `object`-annotated token and a
