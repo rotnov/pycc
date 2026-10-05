@@ -384,12 +384,15 @@ main()
 fn list_and_dict_comprehensions_over_a_set_of_instances_match_cpython() {
     assert_native_matches_cpython("e2e_1344_list_dict", LIST_AND_DICT, "2\n2 1\n");
     // An annotated return that disagrees with the comprehension keeps its
-    // honest `T0022`; only an inferred return is relabelled `C0001`.
+    // honest `T0022`; only an inferred return is relabelled `C0001`. Since
+    // #1342 the solver types the constructor element too, so its own
+    // declared-return wording is the one reported, exactly as for any other
+    // annotated return it can type (`def f() -> int: return "x"`).
     assert_one_error(
         "e2e_1344_annotated_mismatch",
         "class R:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n\ndef bad() -> set[int]:\n    return {R(i) for i in range(3)}\n",
         "T0022",
-        "expected return type `set[int]`, got `set[R]`",
+        "return type mismatch: expected `set[int]`, found `set[R]`",
         "return a `set[int]` value",
     );
 }
@@ -800,19 +803,15 @@ fn the_solver_derives_a_set_of_instances_from_a_typed_element() {
     assert_native_matches_cpython("e2e_1344_solver_mk", &source, "3\n2\n4\n5\n");
 }
 
-/// The shapes the solver cannot type yet: a class-constructor element
-/// (#1342) and a set-typed name's element (#1360). Each is one honest
-/// `C0001`, never a `T0022` about a `set[int]` nobody wrote.
+/// The shape the solver cannot type yet: a set-typed name's element
+/// (#1360). It is one honest `C0001`, never a `T0022` about a `set[int]`
+/// nobody wrote. A class-constructor element is typed since #1342; see
+/// `an_inferred_set_of_constructed_instances_matches_cpython`.
 #[test]
 fn an_untypable_inferred_set_return_is_c0001() {
     let r = "class R:\n    def __init__(self, v: int) -> None:\n        self.v = v\n\n    def m(self) -> R:\n        return R(self.v + 1)\n\n\n";
     let global = "G: set[R] = {R(1)}\n\n\n";
     for (tag, body) in [
-        ("expr", "def _h(n):\n    return {R(i) for i in range(n)}\n"),
-        (
-            "stmt",
-            "def _h(n):\n    t = {R(i) for i in range(n)}\n    return t\n",
-        ),
         ("global", "def _h(n):\n    return {p for p in G}\n"),
         (
             "global_method",
@@ -824,9 +823,40 @@ fn an_untypable_inferred_set_return_is_c0001() {
             &format!("{r}{global}{body}\n\nprint(len(_h(3)))\n"),
             "C0001",
             "cannot infer an unannotated private helper's `set[R]` return yet",
-            "#1342",
+            "#1360",
         );
     }
+}
+
+/// `inferred_set_return_limit`'s `frozenset` arm: `frozenset(...)` of an
+/// untypable set comprehension is the same honest `C0001`, never a `T0022`.
+#[test]
+fn an_untypable_inferred_frozenset_return_is_c0001() {
+    assert_one_error(
+        "e2e_1344_inferred_frozenset_global",
+        &format!(
+            "{HASHED_R}G: set[R] = {{R(1)}}\n\n\n\
+             def _h(n):\n    return frozenset({{p for p in G}})\n\n\nprint(len(_h(3)))\n"
+        ),
+        "C0001",
+        "cannot infer an unannotated private helper's `frozenset[R]` return yet",
+        "#1360",
+    );
+}
+
+/// #1342: an unannotated helper's set comprehension (or `frozenset(...)`
+/// of one) whose element is a class-constructor call infers `set[R]` /
+/// `frozenset[R]`, in the expression and the statement forms.
+#[test]
+fn an_inferred_set_of_constructed_instances_matches_cpython() {
+    let source = format!(
+        "{HASHED_R}def _h(n):\n    return {{R(i) for i in range(n)}}\n\n\n\
+         def _h2(n):\n    t = {{R(i) for i in range(n)}}\n    return t\n\n\n\
+         def _f(n):\n    return frozenset({{R(i) for i in range(n)}})\n\n\n\
+         def _f2(n):\n    t = {{R(i) for i in range(n)}}\n    return frozenset(t)\n\n\n\
+         s: set[R] = _h(4)\nprint(len(s), len(_h2(3)), len(_f(5)), len(_f2(2)))\n"
+    );
+    assert_native_matches_cpython("e2e_1342_inferred_set", &source, "4 3 5 2\n");
 }
 
 /// A helper whose untypable `set[R]` local never escapes: it returns an
@@ -842,34 +872,10 @@ fn an_untypable_local_used_only_inside_its_helper_matches_cpython() {
     assert_native_matches_cpython("e2e_1344_internal_local", &source, "6\n10\n");
 }
 
-/// `inferred_set_return_limit`'s `frozenset` arm: `frozenset(...)` of an
-/// untypable set comprehension is the same honest `C0001`, never a `T0022`,
-/// in the expression and the statement forms.
-#[test]
-fn an_untypable_inferred_frozenset_return_is_c0001() {
-    for (tag, body) in [
-        (
-            "expr",
-            "def _h(n):\n    return frozenset({R(i) for i in range(n)})\n",
-        ),
-        (
-            "stmt",
-            "def _h(n):\n    t = {R(i) for i in range(n)}\n    return frozenset(t)\n",
-        ),
-    ] {
-        assert_one_error(
-            &format!("e2e_1344_inferred_frozenset_{tag}"),
-            &format!("{HASHED_R}{body}\n\nprint(len(_h(3)))\n"),
-            "C0001",
-            "cannot infer an unannotated private helper's `frozenset[R]` return yet",
-            "#1342",
-        );
-    }
-}
-
-/// The annotated-return workaround the `C0001` help names, for every shape
-/// it refuses: a constructor element (#1342) as a `frozenset[R]`, and a
-/// set-typed name's element (#1360), bare and through a method call.
+/// The annotated-return workaround the `C0001` help names: a set-typed
+/// name's element (#1360), bare and through a method call. The
+/// constructor-element `frozenset[R]` helpers keep their annotations here
+/// although #1342 infers them now.
 #[test]
 fn the_annotated_return_workaround_compiles_every_refused_shape() {
     let source = format!(
@@ -886,12 +892,14 @@ fn the_annotated_return_workaround_compiles_every_refused_shape() {
 }
 
 /// The D-255 residual: an annotated caller of a helper that hits the
-/// #1342 `C0001` also reports a `T0025` against the helper's still-`set[int]`
+/// #1360 `C0001` also reports a `T0025` against the helper's still-`set[int]`
 /// inferred signature. Inside a function the `C0001` comes first; a
 /// module-scope caller's `T0025` is reported alone.
 #[test]
 fn an_annotated_caller_of_an_untypable_helper_reports_the_d255_residual() {
-    let helper = format!("{HASHED_R}def _h(n):\n    return {{R(i) for i in range(n)}}\n\n\n");
+    let helper = format!(
+        "{HASHED_R}G: set[R] = {{R(1)}}\n\n\ndef _h(n):\n    return {{p for p in G}}\n\n\n"
+    );
     let codes = |tag: &str, source: &str| {
         let dir = ScratchDir::new(tag).expect("scratch");
         std::fs::write(dir.join("a.py"), with_postponed_annotations(source))

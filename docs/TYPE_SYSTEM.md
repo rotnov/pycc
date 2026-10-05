@@ -67,7 +67,12 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   (`T0021` on a mistyped or miscounted argument). It also still refuses an
   abstract, protocol or enum class with its own `C0001`, which the solver's
   answer no longer hides behind "cannot infer return type". As with a method
-  call, the arguments are not unified with `__init__`'s parameters.
+  call, the arguments are not unified with `__init__`'s parameters. A set
+  comprehension of constructor calls (`{R(i) for i in range(n)}`) therefore
+  infers `set[R]`, and `frozenset(...)` of one `frozenset[R]`. An annotated
+  return the solver can now type (`def f() -> set[int]: return {R(i) ...}`)
+  reports the solver's own `T0022` "return type mismatch" wording, as every
+  annotated return it types already did.
 - **An inherited copy must agree with its origin's return.** A D-254
   receiver-exact copy of an inherited method is solved per receiver class,
   while a caller types `recv.m()` through the origin's signature. With
@@ -1674,11 +1679,10 @@ exactly as `.add` does (one `__hash__` call, identity before
 `stored.__eq__(new)`, the refusals above), and a list or dict comprehension
 over a set of instances follows its own element rules (`list[int]`,
 `dict[str, int]`, ...). The constraint solver types the container from the
-element's resolved type, for example an annotated factory's return. It
-cannot type a class-constructor element
-([#1342](https://github.com/rotnov/pycc/issues/1342)) or a set-typed name's
-element in the loop ([#1360](https://github.com/rotnov/pycc/issues/1360))
-yet, so an unannotated private helper returning such a comprehension is
+element's resolved type, for example an annotated factory's return or,
+since [#1342](https://github.com/rotnov/pycc/issues/1342), a
+class-constructor call. It cannot type a set-typed name's element in the
+loop ([#1360](https://github.com/rotnov/pycc/issues/1360)) yet, so an unannotated private helper returning such a comprehension is
 `C0001` "cannot infer an unannotated private helper's `set[C]` return yet";
 annotate its return (`-> set[C]`). An annotated caller of that helper also
 reports a `T0025` against its still-`set[int]` inferred signature (D-255's

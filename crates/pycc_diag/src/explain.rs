@@ -116,8 +116,8 @@ definition because a raised exception value would silently ignore that \
 dunder (Part 3 of #541). Since #1344 an unannotated private helper that \
 returns a set comprehension whose user-class instance element the \
 constraint solver cannot type yet is C0001 too, \"cannot infer an \
-unannotated private helper's `set[C]` return yet\", with help naming #1342 \
-and #1360; annotating the helper's return (`-> set[C]`) compiles today. \
+unannotated private helper's `set[C]` return yet\", with help naming \
+#1360; annotating the helper's return (`-> set[C]`) compiles today. \
 Apart from the two permanent refusals above, the \
 construct remains reserved and stops \
 producing C0001 the moment the corresponding roadmap slice is implemented; \

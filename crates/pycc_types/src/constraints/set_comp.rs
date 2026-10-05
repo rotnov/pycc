@@ -13,7 +13,8 @@
 //!
 //! #1344 (Part 2 of #1336) types a set comprehension's container from its
 //! element: `set[C]` for an element the solver resolved to an instance of
-//! `C`. An element it has no term for still ends as `set[int]`, and the
+//! `C`, including a class-constructor call `C(...)` since #1342. An element
+//! it has no term for (#1360) still ends as `set[int]`, and the
 //! check phase relabels the mismatch that leaves
 //! (`crate::comprehension::inferred_set_return_limit`).
 

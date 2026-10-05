@@ -69,6 +69,28 @@ fn a_subclass_with_an_inherited_init_infers_the_subclass() {
 }
 
 #[test]
+fn a_constructed_instance_passed_to_a_helper_types_its_parameter() {
+    // The call site's `R(2)` unifies into `_g`'s parameter term, and the
+    // parameter flows to the return; a module-level binding from a
+    // constructor call compiles alongside it.
+    let source =
+        format!("{CLASS}\n\ndef _g(r):\n    return r\n\nx = R(1)\nprint(_g(R(2)).v, x.v)\n");
+    assert_eq!(return_of(&source, "_g"), instance("R"));
+}
+
+#[test]
+fn a_subclass_instance_returned_as_its_base_stays_refused() {
+    // Neither phase admits returning a subclass instance as its base
+    // (pre-existing); the solver now types `D(2)` and so reports its own
+    // declared-return wording, as it already did for `def f(d: D) -> R:
+    // return d`.
+    let source = format!(
+        "{CLASS}\n\nclass D(R):\n    pass\n\ndef make() -> R:\n    return D(2)\n\nprint(make().v)\n"
+    );
+    refused(&source, "T0022", "expected `R`, found `D`");
+}
+
+#[test]
 fn a_method_returning_a_constructor_call_infers_the_class() {
     let source = format!("{CLASS}\n    def __copy__(self):\n        return R(self.v)\n");
     assert_eq!(return_of(&source, "R.__copy__"), instance("R"));
