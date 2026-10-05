@@ -18,6 +18,7 @@ fn class(name: &str, is_dataclass: bool) -> HirClassDef {
         class_methods: Vec::new(),
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: Vec::new(),
         is_dataclass,
         dataclass_fields: Vec::new(),

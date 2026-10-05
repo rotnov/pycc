@@ -66,6 +66,7 @@ fn module(with_hash: bool, extra: Vec<HirItem>) -> HirModule {
                 class_methods: Vec::new(),
                 is_enum: false,
                 implicit_object_init: false,
+                method_defaults: Vec::new(),
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

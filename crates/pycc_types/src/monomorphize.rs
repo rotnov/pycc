@@ -2044,6 +2044,7 @@ pub(crate) fn instantiate_generic_class_methods(
             class_methods: mangled_class_methods,
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: class_def.is_dataclass,
             dataclass_fields: substituted_dataclass_fields,

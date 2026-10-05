@@ -440,6 +440,7 @@ mod tests {
             class_methods: Vec::new(),
             is_enum: false,
             implicit_object_init: false,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: true,
             dataclass_fields: vec![("value".to_string(), param)],

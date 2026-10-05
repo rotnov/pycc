@@ -68,6 +68,7 @@ mod enum_class;
 mod exception_dunders;
 pub(crate) mod generic_base;
 mod inherited_copy;
+mod method;
 pub use inherited_copy::{
     CopiedMemberKind, InheritedCopy, SUPER_TARGET_MARKER, binds_member, first_definer,
     inherited_copy_name, inherited_copy_origin,
@@ -100,7 +101,7 @@ pub(crate) mod slots;
 pub use shadow::declares_name_outside_class_attrs;
 
 use crate::expr::keyword_bind::SignatureTable;
-use crate::{HirItem, ImportBinding, Ty, lower_arg_list, unsupported};
+use crate::{HirExpr, HirItem, ImportBinding, Ty, unsupported};
 use attrs::{
     ClassAttrCollisionInput, reject_class_attr_collisions,
     reject_dataclass_field_class_var_collisions,
@@ -109,6 +110,7 @@ use body::{ClassBodyInput, ClassBodyOutput, walk_class_body};
 use enum_class::lower_enum_class;
 use init::{ensure_init, synthesize_dataclass_init};
 use init_slot::collect_init_attrs;
+use method::lower_method;
 use mro::{resolve_mro, validate_bases, validate_mro_slot_layout};
 use protocol::lower_protocol_class;
 use pycc_ast::{Decorator, Expr, Stmt};
@@ -210,6 +212,23 @@ pub struct HirClassDef {
     /// (typed `Ty::Instance(class_name)`) as their first parameter, and
     /// can be called on both the class and an instance.
     pub class_methods: Vec<(String, String)>,
+    /// Default parameter values of this class's own methods (the method part
+    /// of #1140): `(mangled_name, defaults)` for each method -- regular,
+    /// `__init__`, `@staticmethod` or `@classmethod` -- that declares at
+    /// least one, keyed by the same mangled name `methods`,
+    /// `static_methods` and `class_methods` hold. `defaults` is parallel to
+    /// that `HirItem::Function`'s full `params` (receiver included, always
+    /// `None`), each entry the lowered literal
+    /// `func::params::check_default` admitted.
+    ///
+    /// **Consumer.** Only the `--ext` host boundary reads it: the generated
+    /// `METH_FASTCALL` wrapper and `Py_tp_init` supply a default for an
+    /// argument the host omitted. An in-module method or constructor call
+    /// still passes every argument -- `pycc_types` keeps refusing a short
+    /// one with its arity `T0021` -- so no native call site ever reads a
+    /// default. A redefinition of a method replaces its entry, matching the
+    /// last-wins rebind of the method itself.
+    pub method_defaults: Vec<(String, Vec<Option<HirExpr>>)>,
     /// PEP 695 (#387): the class's single type parameter name, if it is a
     /// generic class (`class C[T]:`). `None` for a non-generic class. At
     /// instantiation site (`C[int](args)`), this parameter is substituted
@@ -1125,6 +1144,7 @@ pub(crate) fn lower_class(
         mut dataclass_fields,
         abstract_methods,
         class_attrs,
+        method_defaults,
     } = walk_class_body(&ClassBodyInput {
         body: &def.body,
         class_name: &class_name,
@@ -1381,6 +1401,7 @@ pub(crate) fn lower_class(
         type_param,
         is_enum: false,
         implicit_object_init,
+        method_defaults,
         enum_members,
         is_dataclass,
         dataclass_fields,
@@ -1402,296 +1423,6 @@ pub(crate) fn lower_class(
         def.range.into(),
     )?;
     Ok((class_def, items))
-}
-
-/// Lowers a single method definition into an ordinary `HirItem::Function`
-/// under its mangled `<ClassName>.<method_name>` name, plus that method's
-/// own full parameter list (including `self`) -- returned alongside so
-/// `lower_class` can build the `__init__`-specific attribute-slot pre-scan's
-/// parameter-name -> `Ty` lookup table without re-deriving it.
-///
-/// `self`'s type never goes through `annotation_to_ty` -- it is assigned
-/// `Ty::Instance(Box::new(class_name))` directly (mirroring how the type
-/// itself carries only the class's name, not its shape), bypassing the
-/// class-typed-annotation restriction entirely. An explicit annotation on
-/// `self` is rejected rather than silently ignored, so a user-written
-/// (and unchecked) annotation there can never appear to be honored.
-///
-/// `__init__`'s own (non-`self`) parameters are *always* required to carry
-/// an explicit type annotation, regardless of the ordinary "only a public
-/// name requires one" rule (D-038) every other function/method follows --
-/// a deliberate, narrower rule than D-038's, not an oversight: those
-/// parameter types are the only source `init_slot::collect_init_attrs` has for
-/// deriving an attribute slot's `Ty` structurally, at HIR-lowering time,
-/// with no type-inference pass of its own (this crate never runs one --
-/// see `Ty::Infer`'s own doc comment). An unannotated `__init__` parameter
-/// referenced by a `self.<attr> = <param>` assignment would otherwise seed
-/// the slot with `Ty::Infer`, which must never reach `pycc_mir` unresolved.
-#[allow(clippy::too_many_arguments)]
-fn lower_method(
-    def: &pycc_ast::StmtFunctionDef,
-    class_name: &str,
-    type_param: Option<&str>,
-    aliases: &[(String, Ty)],
-    kind: &MethodKind,
-    class_defs: &[ClassAnnotationInfo],
-    imports: &[ImportBinding],
-    signatures: &SignatureTable,
-) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
-    if def.is_async {
-        return Err(unsupported(
-            "an async method is not supported yet",
-            def.range,
-        ));
-    }
-    // #377: decorators are now classified by `classify_decorator` in
-    // `lower_class` before this function is called -- the `kind` parameter
-    // carries the result. No additional decorator check is needed here.
-    if def.type_params.is_some() {
-        return Err(unsupported(
-            "a generic method is not supported yet",
-            def.range,
-        ));
-    }
-    let parameters = &def.parameters;
-    // PEP 570 (#383): positional-only parameters (`posonlyargs`, before the
-    // `/` marker) are now lowered. For `@staticmethod`, posonlyargs come
-    // first (no implicit `self`/`cls`). For regular/classmethod methods,
-    // `self`/`cls` is always the first parameter, so posonlyargs follow it.
-    // A method's parameters stay effectively positional-only: Part 1 of
-    // #884 (#1125) made keyword call arguments bindable for a module-level
-    // `def` only, and a method call keeps the unchanged `C0001` — so
-    // accepting posonlyargs still changes nothing about call-site checking
-    // here. `reject_unsupported_parameter_shapes` holds the shape checks
-    // this shares with `func::lower_params` (Part 2 of #884, #1189).
-    crate::func::params::reject_unsupported_parameter_shapes(parameters)?;
-    let method_name = def.name.as_str();
-    let is_public = crate::is_public_name(method_name); // D-038
-    let params_is_public = is_public || method_name == "__init__";
-    // #436: a `@staticmethod` takes no implicit `self`/`cls` -- the
-    // method's own parameter list is exactly what the user wrote. A
-    // `@classmethod` takes an implicit `cls` (typed
-    // `Ty::Instance(class_name)`, matching `self`'s own type in this
-    // compiler's static-dispatch model) as its first parameter. A
-    // regular/property method takes `self` as before.
-    // #1181: set by the `_ =>` arm below to the receiver's *source*
-    // spelling, so the alias statement can be prepended to the lowered body
-    // once the body exists. `None` for `@staticmethod` (no receiver) and
-    // `@classmethod` (its own `cls` rule, `class.rs`'s own arm).
-    let mut receiver_name: Option<String> = None;
-    let params = match kind {
-        MethodKind::StaticMethod => {
-            // PEP 570 (#383): for `@staticmethod`, posonlyargs come first
-            // (no implicit `self`/`cls`), then ordinary `args`.
-            let mut p = lower_arg_list(
-                &parameters.posonlyargs,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?;
-            p.extend(lower_arg_list(
-                &parameters.args,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?);
-            p
-        }
-        MethodKind::ClassMethod => {
-            // PEP 570 (#383): `cls` is the first parameter overall — it
-            // may be in `posonlyargs` (if `/` follows it) or in `args`.
-            // Extract it from the combined list, then lower the rest.
-            if parameters.posonlyargs.is_empty() && parameters.args.is_empty() {
-                return Err(unsupported(
-                    "a `@classmethod` must take `cls` as its first parameter",
-                    def.range,
-                ));
-            }
-            let (cls_param, posonly_rest, args_rest) = if !parameters.posonlyargs.is_empty() {
-                let (cls, rest_pos) = parameters.posonlyargs.split_first().unwrap();
-                (cls, rest_pos, parameters.args.as_slice())
-            } else {
-                let (cls, rest_args) = parameters.args.split_first().unwrap();
-                (cls, &[][..], rest_args)
-            };
-            if cls_param.parameter.name.as_str() != "cls" {
-                return Err(unsupported(
-                    "a `@classmethod`'s first parameter must be named `cls`",
-                    parameters.range,
-                ));
-            }
-            if cls_param.default.is_some() {
-                return Err(unsupported(
-                    "`cls` cannot have a default value",
-                    parameters.range,
-                ));
-            }
-            if cls_param.parameter.annotation.is_some() {
-                return Err(unsupported(
-                    "an explicit type annotation on `cls` is not supported yet",
-                    parameters.range,
-                ));
-            }
-            receiver::check_receiver_not_deleted(&def.body, "cls", parameters.range.into())?;
-            let cls_ty = Ty::Instance(Box::new(class_name.to_string()));
-            let mut p = vec![("cls".to_string(), cls_ty)];
-            // PEP 570 (#383): remaining posonlyargs follow `cls`, before
-            // ordinary `args`.
-            p.extend(lower_arg_list(
-                posonly_rest,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?);
-            p.extend(lower_arg_list(
-                args_rest,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?);
-            p
-        }
-        _ => {
-            // #1181: the receiver is the first positional parameter whatever
-            // it is spelled; `class::receiver` owns every part of that
-            // decision (see its own module doc comment for the rule and for
-            // why the two guards below exist). Both guards run *here*,
-            // before the `stmt::lower_body` call further down: `global` and
-            // `nonlocal` each report their own `C0001` from that pass, so a
-            // scan placed after it would never reach those shapes with the
-            // receiver's own message. A `del` of the receiver gets its own
-            // refusal (#1244), whatever the receiver's spelling.
-            let split = receiver::split_receiver(parameters, def.range.into())?;
-            receiver::check_receiver_param(&split, parameters.range.into())?;
-            receiver::check_property_arity(kind, &split, parameters.range.into())?;
-            receiver::check_receiver_not_deleted(&def.body, split.name(), parameters.range.into())?;
-            receiver::check_renamed_receiver(def, method_name, &split)?;
-            receiver_name = Some(split.name().to_string());
-            let (posonly_rest, args_rest) = (split.posonly_rest, split.args_rest);
-            let self_ty = Ty::Instance(Box::new(class_name.to_string()));
-            let mut p = vec![(receiver::CANONICAL_RECEIVER.to_string(), self_ty)];
-            // PEP 570 (#383): remaining posonlyargs follow the receiver,
-            // before ordinary `args`.
-            p.extend(lower_arg_list(
-                posonly_rest,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?);
-            p.extend(lower_arg_list(
-                args_rest,
-                params_is_public,
-                method_name,
-                type_param,
-                Some(class_name),
-                aliases,
-                class_defs,
-                crate::func::params::DefaultPolicy::Reject,
-            )?);
-            p
-        }
-    };
-    let return_ty = crate::lower_return_annotation(
-        def.returns.as_deref(),
-        is_public,
-        method_name,
-        type_param,
-        Some(class_name),
-        aliases,
-        class_defs,
-    )?;
-    let body = if matches!(kind, MethodKind::AbstractMethod) {
-        // #380 (PR-20): an `@abstractmethod` has a declaration-style
-        // body (`...` or `pass`) that is already validated in
-        // `lower_class`. Skip body lowering — the abstract method is
-        // registered as a function (for dispatch/mangling purposes)
-        // but its body is never called. Use a `Return(None)` so the
-        // function has a terminator for codegen; the type checker
-        // skips the return-value check for abstract methods (see
-        // `check_stmt_in_function`'s `Return(None)` arm).
-        vec![crate::HirStmt::Return(None)]
-    } else {
-        crate::stmt::lower_body(
-            &def.body,
-            aliases,
-            false,
-            true,
-            false,
-            // #795 (PEP 654): a method body always starts `Outside` any
-            // enclosing `except*` clause -- see `func.rs`'s own constant.
-            crate::stmt::ExceptStarCtx::Outside,
-            Some(class_name),
-            type_param,
-            class_defs,
-            imports,
-            signatures,
-        )?
-    };
-    // #1181: when the source spells the receiver anything other than the
-    // canonical `self`, open the lowered body with `<name> = self` so the
-    // user's spelling is an ordinary local bound to the canonical receiver
-    // (see `class::receiver`'s module doc comment). Applied uniformly,
-    // including to `MethodKind::AbstractMethod`'s synthesized
-    // `Return(None)` body above: an abstract method is registered as a
-    // function but never called, so an unused alias there is inert, and a
-    // separate branch would only be a second thing to keep in step.
-    let body = match receiver_name.as_deref() {
-        Some(name) if name != receiver::CANONICAL_RECEIVER => {
-            let mut aliased = vec![receiver::alias_stmt(name)];
-            aliased.extend(body);
-            aliased
-        }
-        _ => body,
-    };
-    // #377/#436: compute the mangled name based on the method kind. A
-    // regular method uses `<Class>.<name>`. A property getter uses the
-    // same `<Class>.<name>`. A property setter uses
-    // `<Class>.<name>.setter`. A static method uses
-    // `<Class>.<name>.static`. A class method uses
-    // `<Class>.<name>.classmethod`. The `.static`/`.classmethod` suffixes
-    // prevent collision with a regular method of the same name, since a
-    // real Python identifier can never contain a `.`.
-    let mangled_name = match kind {
-        MethodKind::Regular { .. }
-        | MethodKind::PropertyGetter { .. }
-        | MethodKind::AbstractMethod => {
-            format!("{class_name}.{method_name}")
-        }
-        MethodKind::PropertySetter { prop_name } => {
-            format!("{class_name}.{prop_name}.setter")
-        }
-        MethodKind::StaticMethod => format!("{class_name}.{method_name}.static"),
-        MethodKind::ClassMethod => format!("{class_name}.{method_name}.classmethod"),
-    };
-    Ok((
-        HirItem::Function {
-            name: mangled_name,
-            params: params.clone(),
-            return_ty,
-            body,
-        },
-        params,
-    ))
 }
 
 /// #378 (PR-18): Returns `true` if `ty` is a scalar slot type -- one that
@@ -2181,28 +1912,19 @@ mod tests {
     }
 
     #[test]
-    fn a_positional_only_method_parameter_with_a_default_is_rejected() {
-        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
-        // on methods (default values are unsupported) must fire.
-        assert_c0001("class C:\n    def __init__(self, x: int = 0, /) -> None:\n        return\n");
-    }
-
-    #[test]
-    fn a_positional_only_classmethod_parameter_with_a_default_is_rejected() {
-        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
-        // on classmethods (default values are unsupported) must fire.
-        assert_c0001(
+    fn a_positional_only_method_parameter_may_have_a_default() {
+        // PEP 570 (#383) with the method part of #1140: a defaulted
+        // positional-only parameter lowers on every method kind, exactly as
+        // on a module-level `def` (`class::method_tests` pins what is
+        // recorded).
+        for source in [
+            "class C:\n    def __init__(self, x: int = 0, /) -> None:\n        return\n",
             "class C:\n    def __init__(self) -> None:\n        return\n    @classmethod\n    def m(cls, x: int = 0, /) -> None:\n        return\n",
-        );
-    }
-
-    #[test]
-    fn a_positional_only_staticmethod_parameter_with_a_default_is_rejected() {
-        // PEP 570 (#383): the `lower_arg_list` error path for posonlyargs
-        // on static methods (default values are unsupported) must fire.
-        assert_c0001(
             "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def m(x: int = 0, /) -> None:\n        return\n",
-        );
+        ] {
+            let module = lower_ok(source);
+            assert_eq!(module.class_defs[0].1.method_defaults.len(), 1, "{source}");
+        }
     }
 
     #[test]
@@ -2327,6 +2049,7 @@ mod tests {
                 class_methods: Vec::new(),
                 is_enum: false,
                 implicit_object_init: false,
+                method_defaults: Vec::new(),
                 enum_members: Vec::new(),
                 is_dataclass: false,
                 dataclass_fields: Vec::new(),

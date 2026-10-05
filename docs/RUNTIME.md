@@ -643,14 +643,34 @@ today, and of which calls D-244 rule 7 treats as conforming; `docs/CLI_SPEC.md`,
 `docs/DIAGNOSTICS.md` and the `C0003` explanation cross-reference it rather than
 restating it.
 
-A default parameter value is filled at compile time, spliced into the call's
-positional argument vector while the calling module is lowered (Part 2 of #884,
+A module-level function's default parameter value is filled at compile time,
+spliced into the call's positional argument vector while the calling module is
+lowered (Part 2 of #884,
 [#1189](https://github.com/rotnov/pycc/issues/1189)), so it never reaches the
-generated wrapper and D-244 rule 7 is unchanged by it: the wrapper's arity check
-counts every declared parameter, a defaulted one included, so a host call that
-omits a defaulted argument raises the wrapper's arity-mismatch `TypeError`.
+generated wrapper: that wrapper's arity check counts every declared parameter, a
+defaulted one included, so a host call that omits a defaulted argument raises
+the wrapper's arity-mismatch `TypeError`.
 [#1194](https://github.com/rotnov/pycc/issues/1194) tracks widening the host
-boundary to serve defaults.
+boundary to serve those defaults.
+
+A **method's** default (the method part of
+[#1140](https://github.com/rotnov/pycc/issues/1140); `docs/TYPE_SYSTEM.md`,
+"Call surface") is served at the host boundary. The method's `METH_FASTCALL`
+wrapper -- and, for `__init__`, the class's `Py_tp_init` -- accepts any
+positional argument count from the number of leading parameters without a
+default up to the full count, and otherwise raises
+`TypeError: <Class>.<method>() takes from <m> to <n> arguments (<k> given)`.
+An omitted argument is handed to the parameter's **unchanged** unpack helper as
+a `PyObject *`: `Py_None`, `Py_True` or `Py_False` for those literals, and
+otherwise one object per defaulted parameter, created by the wrapper on first
+use and kept for the life of the process (a default is an immutable literal, so
+this create-once rule and CPython's evaluate-once-at-`def`-time rule are
+indistinguishable). An omitted argument therefore converts exactly as the same
+literal passed explicitly by the host would -- including the `int` row's
+`OverflowError` outside the inline range, and a `bool` default at an `int`
+parameter reading back as the `bool` itself, as in CPython. A receiver-exact inherited copy (#1337, D-254)
+serves its origin's defaults. Keywords stay refused (D-244 rule 7), and an
+export with no default keeps the exact check and byte-identical C.
 
 | Annotation | As a parameter | As a return type |
 |---|---|---|

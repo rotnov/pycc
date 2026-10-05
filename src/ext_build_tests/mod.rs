@@ -95,6 +95,7 @@ fn class_def(name: &str, exception_type_tag: Option<u8>) -> pycc_hir::HirClassDe
         type_param: None,
         is_enum: false,
         implicit_object_init: false,
+        method_defaults: Vec::new(),
         enum_members: Vec::new(),
         class_attrs: Vec::new(),
         is_dataclass: false,
@@ -164,6 +165,7 @@ mod bridge_watermark;
 mod buffer_slice_parity;
 mod exports;
 mod generated_c;
+mod method_defaults;
 mod object_text;
 mod refusal_completeness;
 mod toolchain;

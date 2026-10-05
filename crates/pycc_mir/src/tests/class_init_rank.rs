@@ -44,6 +44,7 @@ fn cdef(
             type_param: None,
             is_enum: false,
             implicit_object_init,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             class_attrs: Vec::new(),
             is_dataclass: false,

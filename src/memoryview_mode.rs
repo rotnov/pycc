@@ -727,6 +727,7 @@ mod tests {
     /// walk asks whether a name is present, never how it is carried.
     fn export(name: &str, return_ty: Ty) -> crate::ext_build::ExtExport {
         crate::ext_build::ExtExport {
+            defaults: Vec::new(),
             name: name.to_string(),
             class: None,
             method: None,
@@ -903,6 +904,7 @@ mod tests {
             class_methods: Vec::new(),
             is_enum: false,
             implicit_object_init: true,
+            method_defaults: Vec::new(),
             enum_members: Vec::new(),
             is_dataclass: false,
             dataclass_fields: Vec::new(),
